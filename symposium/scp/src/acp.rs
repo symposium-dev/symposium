@@ -1,5 +1,5 @@
-pub mod client;
-pub mod server;
+pub mod agent;
+pub mod editor;
 
-pub use client::AcpClient;
-pub use server::{AcpServer, AcpServerCallbacks};
+pub use agent::{AcpAgent, AcpAgentCallbacks};
+pub use editor::{AcpEditor, AcpEditorCallbacks};

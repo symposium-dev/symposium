@@ -14,17 +14,22 @@ use crate::{
 mod notifications;
 mod requests;
 
-pub struct AcpServer<CB: AcpServerCallbacks> {
+/// ACP handler for agent-side messages (requests that agents receive from editors).
+///
+/// This implements `JsonRpcHandler` to route incoming ACP requests to your callback
+/// implementation. These are the messages an agent receives: initialize, prompt,
+/// new_session, etc.
+pub struct AcpAgent<CB: AcpAgentCallbacks> {
     callbacks: CB,
 }
 
-impl<CB: AcpServerCallbacks> AcpServer<CB> {
+impl<CB: AcpAgentCallbacks> AcpAgent<CB> {
     pub fn new(callbacks: CB) -> Self {
         Self { callbacks }
     }
 }
 
-impl<CB: AcpServerCallbacks> JsonRpcHandler for AcpServer<CB> {
+impl<CB: AcpAgentCallbacks> JsonRpcHandler for AcpAgent<CB> {
     async fn handle_request(
         &mut self,
         method: &str,
@@ -91,44 +96,55 @@ impl<CB: AcpServerCallbacks> JsonRpcHandler for AcpServer<CB> {
     }
 }
 
+/// Callbacks for handling agent-side ACP messages.
+///
+/// Implement this trait to define how your agent responds to requests from editors.
+/// These are the standard ACP methods that editors call on agents.
 #[allow(async_fn_in_trait)]
-pub trait AcpServerCallbacks {
+pub trait AcpAgentCallbacks {
+    /// Handle agent initialization request from editor.
     async fn initialize(
         &mut self,
         args: InitializeRequest,
         response: jsonrpc::JsonRpcRequestCx<InitializeResponse>,
     ) -> Result<(), acp::Error>;
 
+    /// Handle authentication request from editor.
     async fn authenticate(
         &mut self,
         args: AuthenticateRequest,
         response: jsonrpc::JsonRpcRequestCx<AuthenticateResponse>,
     ) -> Result<(), acp::Error>;
 
+    /// Handle session cancellation notification from editor.
     async fn session_cancel(
         &mut self,
         args: CancelNotification,
         cx: &JsonRpcCx,
     ) -> Result<(), acp::Error>;
 
+    /// Handle new session creation request from editor.
     async fn new_session(
         &mut self,
         args: NewSessionRequest,
         response: jsonrpc::JsonRpcRequestCx<NewSessionResponse>,
     ) -> Result<(), acp::Error>;
 
+    /// Handle session loading request from editor.
     async fn load_session(
         &mut self,
         args: LoadSessionRequest,
         response: jsonrpc::JsonRpcRequestCx<LoadSessionResponse>,
     ) -> Result<(), acp::Error>;
 
+    /// Handle prompt request from editor.
     async fn prompt(
         &mut self,
         args: PromptRequest,
         response: jsonrpc::JsonRpcRequestCx<PromptResponse>,
     ) -> Result<(), acp::Error>;
 
+    /// Handle session mode change request from editor.
     async fn set_session_mode(
         &mut self,
         args: SetSessionModeRequest,

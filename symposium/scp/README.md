@@ -1,6 +1,6 @@
 # SCP - Symposium Component Protocol
 
-A Rust library providing foundational building blocks for implementing the Symposium Component Protocol. Currently provides a generic JSON-RPC 2.0 implementation and ACP (Agent Client Protocol) server support.
+A Rust library providing foundational building blocks for implementing the Symposium Component Protocol. Currently provides a generic JSON-RPC 2.0 implementation and ACP (Agent Client Protocol) support for both agents and editors.
 
 ## Architecture Overview
 
@@ -9,7 +9,7 @@ The library is structured in three layers:
 ```
 ┌─────────────────────────────────────┐
 │  ACP Protocol Layer                 │  ← Agent Client Protocol support
-│  (acp/server.rs, acp/client.rs)    │
+│  (acp/agent.rs, acp/editor.rs)     │
 ├─────────────────────────────────────┤
 │  JSON-RPC 2.0 Layer                 │  ← Generic JSON-RPC implementation
 │  (jsonrpc.rs, jsonrpc/actors.rs)   │
@@ -153,41 +153,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 The connection serves messages in the background while your client function runs, then cleanly shuts down when the client function returns.
 
-## ACP Server Layer
+## ACP Protocol Layer
 
-The ACP layer builds on the JSON-RPC foundation to implement the Agent Client Protocol, which defines standard methods for AI agent communication with editors.
+The ACP layer builds on the JSON-RPC foundation to implement the Agent Client Protocol, which defines bidirectional communication between agents and editors.
 
 ### Core Types
 
-- **`AcpServer<CB>`**: Implements `JsonRpcHandler` for ACP protocol methods.
-- **`AcpServerCallbacks`**: Trait you implement to handle ACP requests.
+**For implementing agents:**
+- **`AcpAgent<CB>`**: Handler for agent-side messages (requests from editors).
+- **`AcpAgentCallbacks`**: Trait you implement to handle requests agents receive.
+
+**For implementing editors:**
+- **`AcpEditor<CB>`**: Handler for editor-side messages (requests from agents).
+- **`AcpEditorCallbacks`**: Trait you implement to handle requests editors receive.
+
+**For proxies:** Implement both `AcpAgentCallbacks` and `AcpEditorCallbacks` to sit in the middle of the communication chain.
 
 ### ACP Protocol Methods
 
-The ACP protocol defines these standard methods:
-
-**Requests** (expect responses):
+**Agent-side methods** (editors → agents):
 - `initialize` - Protocol negotiation and capability exchange
 - `authenticate` - Authentication flow
 - `session/new` - Create a new agent session
 - `session/load` - Load an existing session
 - `session/prompt` - Send a user prompt to the agent
 - `session/set_mode` - Change session mode
+- `session/cancel` - Cancel an in-progress request (notification)
 
-**Notifications** (no response):
-- `session/cancel` - Cancel an in-progress request
+**Editor-side methods** (agents → editors):
+- `session/request_permission` - Ask user for permission to execute tools
+- `fs/read_text_file` - Read file contents
+- `fs/write_text_file` - Write to files
+- `terminal/create` - Start a terminal command
+- `terminal/output` - Get terminal output
+- `terminal/wait_for_exit` - Wait for command completion
+- `terminal/kill` - Terminate running command
+- `terminal/release` - Release terminal resources
+- `session/update` - Stream progress updates (notification)
 
-### Example: Minimal ACP Server
+### Example: Minimal ACP Agent
 
 ```rust
-use scp::acp::AcpServer;
+use scp::acp::{AcpAgent, AcpAgentCallbacks};
 use scp::jsonrpc::{JsonRpcConnection, JsonRpcRequestCx};
 use agent_client_protocol as acp;
 
 // Implement the callbacks
 struct MyAgent;
 
-impl AcpServerCallbacks for MyAgent {
+impl AcpAgentCallbacks for MyAgent {
     async fn initialize(&mut self, args: acp::InitializeRequest,
                        response: JsonRpcRequestCx<acp::InitializeResponse>)
                        -> Result<(), acp::Error> {
@@ -239,7 +253,7 @@ impl AcpServerCallbacks for MyAgent {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let agent = MyAgent;
-    let acp_handler = AcpServer::new(agent);
+    let acp_handler = AcpAgent::new(agent);
     
     JsonRpcConnection::new(tokio::io::stdout(), tokio::io::stdin())
         .add_handler(acp_handler)
@@ -266,15 +280,15 @@ impl JsonRpcHandler for CustomHandler {
     }
 }
 
-// Chain handlers: try CustomHandler first, then AcpServer
+// Chain handlers: try CustomHandler first, then AcpAgent
 JsonRpcConnection::new(stdout, stdin)
     .add_handler(CustomHandler)
-    .add_handler(AcpServer::new(my_agent))
+    .add_handler(AcpAgent::new(my_agent))
     .serve()
     .await
 ```
 
-This pattern enables the proxy architecture described in the SCP protocol: each proxy can add its own handler to the chain while forwarding unhandled messages downstream.
+This pattern enables the proxy architecture: each proxy can add its own handler to the chain while forwarding unhandled messages downstream.
 
 ## Using the Library
 
@@ -288,16 +302,25 @@ This pattern enables the proxy architecture described in the SCP protocol: each 
 ### As an ACP Agent
 
 1. Create a struct to hold your agent state
-2. Implement `AcpServerCallbacks` trait with your agent logic
-3. Wrap it in `AcpServer::new(your_agent)`
+2. Implement `AcpAgentCallbacks` trait with your agent logic
+3. Wrap it in `AcpAgent::new(your_agent)`
 4. Add to a `JsonRpcConnection` and serve
+5. Use `cx.send_request()` directly to make requests to the editor
 
-### As an ACP Proxy (Future)
+### As an ACP Editor
 
-The library is designed to support proxy implementations where you:
-1. Implement `AcpServerCallbacks` to receive messages from upstream
-2. Use `JsonRpcCx` to forward messages downstream
-3. Transform requests/responses as they flow through
+1. Create a struct to hold your editor state
+2. Implement `AcpEditorCallbacks` trait to handle agent requests
+3. Wrap it in `AcpEditor::new(your_editor)`
+4. Add to a `JsonRpcConnection` and serve
+5. Use `cx.send_request()` directly to make requests to the agent
+
+### As an ACP Proxy
+
+Proxies implement both callback traits:
+1. Implement `AcpAgentCallbacks` to receive messages from upstream (editor)
+2. Implement `AcpEditorCallbacks` to receive messages from downstream (agent)
+3. Use `cx.send_request()` to forward and transform messages in both directions
 4. Add custom handlers for proxy-specific extensions
 
 ## Type Safety Patterns
@@ -357,12 +380,12 @@ let jsonrpc_err = acp_to_jsonrpc_error(acp_err);
 - ✅ JSON-RPC 2.0 server and client implementation
 - ✅ Actor-based message routing
 - ✅ Handler chain pattern
-- ✅ ACP server support
+- ✅ ACP agent-side support (handling requests from editors)
+- ✅ ACP editor-side support (handling requests from agents)
 - ✅ Type-safe request/response correlation
 
 ### In Progress
-- 🚧 ACP client support (stubbed but not implemented)
-- 🚧 SCP-specific protocol extensions
+- 🚧 SCP-specific protocol extensions (`_scp/successor/*` messages)
 
 ### Planned
 - ⏳ Orchestrator binary for managing proxy chains
