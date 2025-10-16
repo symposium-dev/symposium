@@ -10,7 +10,7 @@ use futures::StreamExt;
 use futures::channel::mpsc;
 use futures::channel::oneshot;
 use futures::io::BufReader;
-use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use uuid::Uuid;
 
 #[must_use]
@@ -72,7 +72,9 @@ impl JsonRpcServer {
                 ReplyMessage::Dispatch(id, value) => {
                     let id = serde_json::to_value(&id).unwrap();
                     if let Some(message_tx) = map.remove(&id) {
-                        ignore_err(message_tx.send(value));
+                        // If the receiver is no longer interested in the reply,
+                        // that's ok with us.
+                        let _: Result<_, _> = message_tx.send(value);
                     }
                 }
             }
@@ -96,14 +98,15 @@ impl JsonRpcServer {
             match message {
                 Ok(msg) => match msg {
                     jsonrpcmsg::Message::Request(request) => {
-                        Self::dispatch_request(request, &outgoing_tx, &layers);
+                        Self::dispatch_request(request, &outgoing_tx, &layers)
+                            .map_err(|err| err.message)?
                     }
                     jsonrpcmsg::Message::Response(response) => {
                         if let Some(id) = response.id {
                             if let Some(value) = response.result {
-                                reply_tx.unbounded_send(ReplyMessage::Dispatch(id, Ok(value)));
+                                reply_tx.unbounded_send(ReplyMessage::Dispatch(id, Ok(value)))?;
                             } else if let Some(error) = response.error {
-                                reply_tx.unbounded_send(ReplyMessage::Dispatch(id, Err(error)));
+                                reply_tx.unbounded_send(ReplyMessage::Dispatch(id, Err(error)))?;
                             }
                         }
                     }
@@ -123,31 +126,32 @@ impl JsonRpcServer {
         request: jsonrpcmsg::Request,
         outgoing_tx: &mpsc::UnboundedSender<OutgoingMessage>,
         layers: &[Box<dyn JsonRpcReceiver>],
-    ) {
+    ) -> Result<(), jsonrpcmsg::Error> {
         if let Some(id) = request.id {
             // Create the respond object with the request id
-            let mut response = JsonRpcResponse::new(id, outgoing_tx.clone());
+            let mut request_cx = JsonRpcRequestCx::new(id, outgoing_tx.clone());
 
             // Search for a layer that can handle this kind of request
             for layer in layers {
-                match layer.try_handle_request(&request.method, &request.params, response) {
-                    Ok(()) => return,
-                    Err(t) => response = t,
+                match layer.try_handle_request(&request.method, &request.params, request_cx) {
+                    Ok(()) => return Ok(()),
+                    Err(t) => request_cx = t,
                 }
             }
 
             // If none found, send an error response
-            response.respond_with_error(jsonrpcmsg::Error::method_not_found());
+            request_cx.respond_with_error(jsonrpcmsg::Error::method_not_found())
         } else {
             // Search for a layer that can handle this kind of notification
             for layer in layers {
                 match layer.try_handle_notification(&request.method, &request.params) {
-                    Ok(()) => return,
+                    Ok(()) => return Ok(()),
                     Err(()) => (),
                 }
             }
 
             // If none found, ignore.
+            Ok(())
         }
     }
 
@@ -203,7 +207,7 @@ impl JsonRpcServer {
 
                 Err(_) => {
                     match json_rpc_message {
-                        jsonrpcmsg::Message::Request(request) => {
+                        jsonrpcmsg::Message::Request(_request) => {
                             // If we failed to serialize a request,
                             // just ignore it.
                             //
@@ -281,8 +285,8 @@ pub trait JsonRpcReceiver {
         &self,
         method: &str,
         params: &Option<jsonrpcmsg::Params>,
-        response: JsonRpcResponse<jsonrpcmsg::Response>,
-    ) -> Result<(), JsonRpcResponse<jsonrpcmsg::Response>>;
+        response: JsonRpcRequestCx<jsonrpcmsg::Response>,
+    ) -> Result<(), JsonRpcRequestCx<jsonrpcmsg::Response>>;
 
     fn try_handle_notification(
         &self,
@@ -291,14 +295,16 @@ pub trait JsonRpcReceiver {
     ) -> Result<(), ()>;
 }
 
+/// The context given when an incoming message arrives.
+/// Used to respond a response of type `T`.
 #[must_use]
-pub struct JsonRpcResponse<T: serde::Serialize> {
+pub struct JsonRpcRequestCx<T: serde::Serialize> {
     id: jsonrpcmsg::Id,
     tx: mpsc::UnboundedSender<OutgoingMessage>,
-    data: PhantomData<T>,
+    data: PhantomData<mpsc::UnboundedSender<T>>,
 }
 
-impl<T: serde::Serialize> JsonRpcResponse<T> {
+impl<T: serde::Serialize> JsonRpcRequestCx<T> {
     fn new(id: jsonrpcmsg::Id, tx: mpsc::UnboundedSender<OutgoingMessage>) -> Self {
         Self {
             id,
@@ -307,9 +313,9 @@ impl<T: serde::Serialize> JsonRpcResponse<T> {
         }
     }
 
-    /// Return a new JsonRpcResponse that expects a response of type U
-    pub fn expect<U: serde::Serialize>(self) -> JsonRpcResponse<U> {
-        JsonRpcResponse {
+    /// Return a new JsonRpcResponse that expects a response of type U.
+    pub fn expect<U: serde::Serialize>(self) -> JsonRpcRequestCx<U> {
+        JsonRpcRequestCx {
             id: self.id,
             tx: self.tx,
             data: PhantomData,
@@ -317,29 +323,159 @@ impl<T: serde::Serialize> JsonRpcResponse<T> {
     }
 
     /// Respond to the JSON-RPC request with a value.
-    pub fn respond(self, response: T) {
+    pub fn respond(self, response: T) -> Result<(), jsonrpcmsg::Error> {
         let Ok(value) = serde_json::to_value(response) else {
             return self.respond_with_internal_error();
         };
 
-        ignore_err(self.tx.unbounded_send(OutgoingMessage::Response {
-            id: self.id,
-            response: Ok(value),
-        }));
+        self.tx
+            .unbounded_send(OutgoingMessage::Response {
+                id: self.id,
+                response: Ok(value),
+            })
+            .map_err(communication_failure)
     }
 
     /// Respond to the JSON-RPC request with an internal error.
-    pub fn respond_with_internal_error(self) {
-        self.respond_with_error(jsonrpcmsg::Error::internal_error());
+    pub fn respond_with_internal_error(self) -> Result<(), jsonrpcmsg::Error> {
+        self.respond_with_error(jsonrpcmsg::Error::internal_error())
     }
 
     /// Respond to the JSON-RPC request with an error.
-    pub fn respond_with_error(self, error: jsonrpcmsg::Error) {
-        ignore_err(self.tx.unbounded_send(OutgoingMessage::Response {
-            id: self.id,
-            response: Err(error),
-        }));
+    pub fn respond_with_error(self, error: jsonrpcmsg::Error) -> Result<(), jsonrpcmsg::Error> {
+        self.tx
+            .unbounded_send(OutgoingMessage::Response {
+                id: self.id,
+                response: Err(error),
+            })
+            .map_err(communication_failure)
+    }
+
+    /// Send an outgoing request and await the reply.
+    pub fn request<R>(&self, request: impl JsonRpcRequest<Response = R>) -> JsonRpcResponse<R>
+    where
+        R: DeserializeOwned,
+    {
+        let (response_tx, response_rx) = oneshot::channel();
+        let method = request.method();
+        let result = serde_json::to_value(request.into_params())
+            .and_then(|json| serde_json::from_value::<Option<jsonrpcmsg::Params>>(json));
+
+        match result {
+            Ok(params) => {
+                let message = OutgoingMessage::Request {
+                    method,
+                    params,
+                    response_tx,
+                };
+                match self.tx.unbounded_send(message) {
+                    Ok(()) => (),
+                    Err(error) => {
+                        let OutgoingMessage::Request {
+                            method,
+                            response_tx,
+                            ..
+                        } = error.into_inner()
+                        else {
+                            unreachable!();
+                        };
+
+                        response_tx
+                            .send(Err(communication_failure(format!(
+                                "failed to send outgoing request `{method}"
+                            ))))
+                            .unwrap();
+                    }
+                }
+            }
+
+            Err(_) => {
+                response_tx
+                    .send(Err(communication_failure(format!(
+                        "failed to send outgoing request `{method}"
+                    ))))
+                    .unwrap();
+            }
+        }
+
+        JsonRpcResponse::new(response_rx)
+    }
+
+    /// Send an outgoing notification (no reply expected).)
+    pub fn notification<R>(
+        &self,
+        notification: impl JsonRpcNotification,
+    ) -> Result<(), jsonrpcmsg::Error> {
+        let method = notification.method();
+        let params: Option<jsonrpcmsg::Params> = serde_json::to_value(notification.into_params())
+            .and_then(|json| serde_json::from_value(json))
+            .map_err(|err| jsonrpcmsg::Error::new(JSONRPC_INVALID_PARAMS, err.to_string()))?;
+
+        let message = OutgoingMessage::Notification { method, params };
+        self.tx
+            .unbounded_send(message)
+            .map_err(communication_failure)
     }
 }
 
-fn ignore_err<E>(_: Result<(), E>) {}
+///A struct that serializes to the paramcontaining the parameters
+pub trait JsonRpcNotification {
+    /// The method name for the request.
+    fn method(&self) -> String;
+
+    /// Value which will be serialized to product the request parameters.
+    fn into_params(self) -> impl serde::Serialize;
+}
+
+///A struct that serializes to the paramcontaining the parameters
+pub trait JsonRpcRequest {
+    /// The type of data expected in response.
+    type Response: serde::de::DeserializeOwned;
+
+    /// The method name for the request.
+    fn method(&self) -> String;
+
+    /// Value which will be serialized to product the request parameters.
+    fn into_params(self) -> impl serde::Serialize;
+}
+
+/// Represents a pending response of type `R` from an outgoing request.
+pub struct JsonRpcResponse<R: DeserializeOwned> {
+    response_rx: oneshot::Receiver<Result<serde_json::Value, jsonrpcmsg::Error>>,
+    data: PhantomData<oneshot::Receiver<Result<R, jsonrpcmsg::Error>>>,
+}
+
+impl<R: DeserializeOwned> JsonRpcResponse<R> {
+    fn new(response_rx: oneshot::Receiver<Result<serde_json::Value, jsonrpcmsg::Error>>) -> Self {
+        Self {
+            response_rx,
+            data: PhantomData,
+        }
+    }
+
+    /// Wait for the response to arrive.
+    pub async fn recv(self) -> Result<R, jsonrpcmsg::Error> {
+        // Wait for the JSON to be sent by the other side.
+        let json_value = self.response_rx.await.map_err(|_| {
+            // If the sender is dropped without a message...
+            jsonrpcmsg::Error::server_error(
+                COMMUNICATION_FAILURE,
+                format!(
+                    "reply of type `{}` never arrived",
+                    std::any::type_name::<R>()
+                ),
+            )
+        })??;
+
+        // Deserialize into the expected type R
+        serde_json::from_value(json_value)
+            .map_err(|err| jsonrpcmsg::Error::new(JSONRPC_INVALID_PARAMS, err.to_string()))
+    }
+}
+
+const JSONRPC_INVALID_PARAMS: i32 = -32602;
+const COMMUNICATION_FAILURE: i32 = -32000;
+
+fn communication_failure(err: impl ToString) -> jsonrpcmsg::Error {
+    jsonrpcmsg::Error::new(COMMUNICATION_FAILURE, err.to_string())
+}
