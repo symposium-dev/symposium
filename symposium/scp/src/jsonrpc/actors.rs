@@ -19,6 +19,8 @@ use crate::jsonrpc::JsonRpcRequestCx;
 use crate::jsonrpc::OutgoingMessage;
 use crate::jsonrpc::ReplyMessage;
 
+use super::Handled;
+
 /// The "reply actor" manages a queue of pending replies.
 pub(super) async fn reply_actor(
     mut reply_rx: mpsc::UnboundedReceiver<ReplyMessage>,
@@ -79,7 +81,7 @@ pub(super) async fn incoming_actor(
     incoming_bytes: Pin<Box<dyn AsyncRead>>,
     reply_tx: mpsc::UnboundedSender<ReplyMessage>,
     mut cancellation_tx: oneshot::Sender<()>,
-    layers: Vec<Box<dyn JsonRpcHandler>>,
+    mut handler: impl JsonRpcHandler,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let buffered_incoming_bytes = BufReader::new(incoming_bytes);
     let mut incoming_lines = buffered_incoming_bytes.lines();
@@ -89,7 +91,9 @@ pub(super) async fn incoming_actor(
         match message {
             Ok(msg) => match msg {
                 jsonrpcmsg::Message::Request(request) => {
-                    dispatch_request(json_rpc_cx, request, &layers).map_err(|err| err.message)?
+                    dispatch_request(json_rpc_cx, request, &mut handler)
+                        .await
+                        .map_err(|err| err.message)?
                 }
                 jsonrpcmsg::Message::Response(response) => {
                     if let Some(id) = response.id {
@@ -111,39 +115,39 @@ pub(super) async fn incoming_actor(
     Ok(())
 }
 
-/// Dispatches a JSON-RPC request to the first layer to claim it.
-/// If no layer claims it, responds with an error.
-fn dispatch_request(
+/// Dispatches a JSON-RPC request to the handler.
+/// Report an error back to the server if it does not get handled.
+async fn dispatch_request(
     json_rpc_cx: &JsonRpcCx,
     request: jsonrpcmsg::Request,
-    layers: &[Box<dyn JsonRpcHandler>],
+    handler: &mut impl JsonRpcHandler,
 ) -> Result<(), jsonrpcmsg::Error> {
     if let Some(id) = request.id {
-        // Create the respond object with the request id
-        let mut request_cx = JsonRpcRequestCx::new(json_rpc_cx.clone(), id);
+        let request_cx = JsonRpcRequestCx::new(json_rpc_cx.clone(), id);
+        let handled = handler
+            .handle_request(&request.method, &request.params, request_cx)
+            .await?;
 
-        // Search for a layer that can handle this kind of request
-        for layer in layers {
-            match layer.claim_request(&request.method, &request.params, request_cx) {
-                Ok(()) => return Ok(()),
-                Err(t) => request_cx = t,
+        match handled {
+            Handled::Yes => (),
+            Handled::No(request_cx) => {
+                request_cx.respond_with_error(jsonrpcmsg::Error::method_not_found())?;
             }
         }
-
-        // If none found, send an error response
-        request_cx.respond_with_error(jsonrpcmsg::Error::method_not_found())
     } else {
-        // Search for a layer that can handle this kind of notification
-        for layer in layers {
-            match layer.claim_notification(&request.method, &request.params) {
-                Ok(()) => return Ok(()),
-                Err(()) => (),
+        let handled = handler
+            .handle_notification(&request.method, &request.params, json_rpc_cx)
+            .await?;
+
+        match handled {
+            Handled::Yes => (),
+            Handled::No(()) => {
+                json_rpc_cx.send_error_notification(jsonrpcmsg::Error::method_not_found())?;
             }
         }
-
-        // If none found, ignore.
-        Ok(())
     }
+
+    Ok(())
 }
 
 /// Actor processing outgoing messages and serializing them onto the transport.

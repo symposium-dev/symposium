@@ -1,3 +1,5 @@
+//! Core JSON-RPC server support.
+
 use std::marker::PhantomData;
 use std::pin::Pin;
 
@@ -6,19 +8,35 @@ use futures::future::Either;
 use futures::{AsyncRead, AsyncWrite};
 use serde::de::DeserializeOwned;
 
+use crate::jsonrpc::handlers::{ChainHandler, NullHandler};
+use crate::util::json_cast;
+
 mod actors;
+mod handlers;
 
 /// Create a JsonRpcConnection. This can be the basis for either a server or a client.
 #[must_use]
-pub struct JsonRpcConnection {
+pub struct JsonRpcConnection<H: JsonRpcHandler> {
+    /// Where to send bytes to communicate to the other side
     outgoing_bytes: Pin<Box<dyn AsyncWrite>>,
+
+    /// Where to read bytes from the other side
     incoming_bytes: Pin<Box<dyn AsyncRead>>,
+
+    /// Where the "outgoing messages" actor will receive messages.
     outgoing_rx: mpsc::UnboundedReceiver<OutgoingMessage>,
+
+    /// Sender to send messages to the "outgoing message" actor.
     outgoing_tx: mpsc::UnboundedSender<OutgoingMessage>,
-    layers: Vec<Box<dyn JsonRpcHandler>>,
+
+    /// Handler for incoming messages.
+    handler: H,
 }
 
-impl JsonRpcConnection {
+impl JsonRpcConnection<NullHandler> {
+    /// Create a new JsonRpcConnection that will read and write from the given streams.
+    /// This type follows a builder pattern; use other methods to configure and then invoke
+    /// [`Self:serve`] (to use as a server) or [`Self::with_client`] to use as a client.
     pub fn new(
         outgoing_bytes: impl AsyncWrite + 'static,
         incoming_bytes: impl AsyncRead + 'static,
@@ -29,20 +47,34 @@ impl JsonRpcConnection {
             incoming_bytes: Box::pin(incoming_bytes),
             outgoing_rx,
             outgoing_tx,
-            layers: Vec::new(),
+            handler: NullHandler::default(),
         }
     }
+}
 
+impl<H: JsonRpcHandler> JsonRpcConnection<H> {
     /// Adds a message handler that will have the opportunity to process incoming messages.
     /// When a new message arrives, handlers are tried in the order they were added, and
     /// the first to "claim" the message "wins".
-    pub fn add_handler(mut self, layer: impl JsonRpcHandler + 'static) -> Self {
-        self.layers.push(Box::new(layer));
-        self
+    pub fn add_handler<H1>(self, handler: H1) -> JsonRpcConnection<ChainHandler<H, H1>>
+    where
+        H1: JsonRpcHandler,
+    {
+        JsonRpcConnection {
+            handler: ChainHandler::new(self.handler, handler),
+            outgoing_bytes: self.outgoing_bytes,
+            incoming_bytes: self.incoming_bytes,
+            outgoing_rx: self.outgoing_rx,
+            outgoing_tx: self.outgoing_tx,
+        }
     }
 
     /// Returns a [`JsonRpcCx`] that allows you to send requests over the connection
     /// and receive responses.
+    ///
+    /// This is private because it would give people a footgun if they had it,
+    /// since they might try to use it when the server is not running and deadlock,
+    /// and I don't really think they need it.
     fn json_rpc_cx(&self) -> JsonRpcCx {
         JsonRpcCx::new(self.outgoing_tx.clone())
     }
@@ -64,7 +96,7 @@ impl JsonRpcConnection {
                 self.incoming_bytes,
                 reply_tx,
                 incoming_cancel_tx,
-                self.layers
+                self.handler,
             ),
             actors::reply_actor(reply_rx),
         );
@@ -149,25 +181,60 @@ enum OutgoingMessage {
 /// Handlers are invoked when new messages arrive at the [`JsonRpcServer`].
 /// They have a chance to inspect the method and parameters and decide whether to "claim" the request
 /// (i.e., handle it). If they do not claim it, the request will be passed to the next handler.
+#[allow(async_fn_in_trait)]
 pub trait JsonRpcHandler {
     /// Attempt to claim the incoming request (`method`/`params`).
-    /// Returns `Ok(())` if the request was claimed, `Err(cx)` if not.
-    /// If the request was claimed, the handler should send a response using the provided context.
-    /// If the request is not claimed, the handler should return the request context so it can be passed to the next handler.
-    fn claim_request(
-        &self,
+    ///
+    /// # Important
+    ///
+    /// The server will not process new messages until this handler returns.
+    /// You should avoid blocking in this callback unless you wish to block the server (e.g., for rate limiting).
+    /// The recommended approach to manage expensive operations is to use a channel or spawn tasks.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Handled::Yes)` if the request was claimed.
+    /// * `Ok(Handled::No(response))` if not.
+    /// * `Err` if an internal error occurs (this will bring down the server).
+    #[allow(unused_variables)]
+    async fn handle_request(
+        &mut self,
         method: &str,
         params: &Option<jsonrpcmsg::Params>,
         response: JsonRpcRequestCx<jsonrpcmsg::Response>,
-    ) -> Result<(), JsonRpcRequestCx<jsonrpcmsg::Response>>;
+    ) -> Result<Handled<JsonRpcRequestCx<jsonrpcmsg::Response>>, jsonrpcmsg::Error> {
+        Ok(Handled::No(response))
+    }
 
     /// Attempt to claim a notification (`method`/`params`).
-    /// Returns `Ok(())` if the notification was handled, `Err(())` if not.
-    fn claim_notification(
-        &self,
+    ///
+    /// # Important
+    ///
+    /// The server will not process new messages until this handler returns.
+    /// You should avoid blocking in this callback unless you wish to block the server (e.g., for rate limiting).
+    /// The recommended approach to manage expensive operations is to use a channel or spawn tasks.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Handled::Yes)` if the request was claimed.
+    /// * `Ok(Handled::No(()))` if not.
+    /// * `Err` if an internal error occurs (this will bring down the server).
+    #[allow(unused_variables)]
+    async fn handle_notification(
+        &mut self,
         method: &str,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<(), ()>;
+        cx: &JsonRpcCx,
+    ) -> Result<Handled<()>, jsonrpcmsg::Error> {
+        Ok(Handled::No(()))
+    }
+}
+
+/// Return type from JsonRpcHandler; indicates whether the request was handled or not.
+#[must_use]
+pub enum Handled<T> {
+    Yes,
+    No(T),
 }
 
 /// The context given when an incoming message arrives.
@@ -183,14 +250,13 @@ impl JsonRpcCx {
     }
 
     /// Send an outgoing request and await the reply.
-    pub fn send_request<R>(&self, request: impl JsonRpcRequest<Response = R>) -> JsonRpcResponse<R>
+    pub fn send_request<Req>(&self, request: Req) -> JsonRpcResponse<Req::Response>
     where
-        R: DeserializeOwned,
+        Req: JsonRpcRequest,
     {
         let (response_tx, response_rx) = oneshot::channel();
-        let method = request.method();
-        let result = serde_json::to_value(request.into_params())
-            .and_then(|json| serde_json::from_value::<Option<jsonrpcmsg::Params>>(json));
+        let method = Req::METHOD.to_string();
+        let result: Result<Option<jsonrpcmsg::Params>, _> = json_cast(request);
 
         match result {
             Ok(params) => {
@@ -288,7 +354,7 @@ impl<T: serde::Serialize> JsonRpcRequestCx<T> {
     }
 
     /// Return a new JsonRpcResponse that expects a response of type U.
-    pub fn expect<U: serde::Serialize>(self) -> JsonRpcRequestCx<U> {
+    pub fn cast<U: serde::Serialize>(self) -> JsonRpcRequestCx<U> {
         JsonRpcRequestCx {
             id: self.id,
             cx: self.cx,
@@ -337,15 +403,12 @@ pub trait JsonRpcNotification {
 }
 
 ///A struct that serializes to the paramcontaining the parameters
-pub trait JsonRpcRequest {
+pub trait JsonRpcRequest: serde::de::DeserializeOwned + serde::Serialize {
     /// The type of data expected in response.
-    type Response: serde::de::DeserializeOwned;
+    type Response: serde::de::DeserializeOwned + serde::Serialize;
 
     /// The method name for the request.
-    fn method(&self) -> String;
-
-    /// Value which will be serialized to product the request parameters.
-    fn into_params(self) -> impl serde::Serialize;
+    const METHOD: &'static str;
 }
 
 /// Represents a pending response of type `R` from an outgoing request.

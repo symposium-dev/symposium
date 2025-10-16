@@ -5,3 +5,6 @@
 //! like walkthroughs, collaboration patterns, and IDE integrations.
 
 pub mod jsonrpc;
+
+pub mod acp;
+mod util;
