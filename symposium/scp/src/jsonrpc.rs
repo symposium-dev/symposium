@@ -1,34 +1,12 @@
-use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::pin::Pin;
 
-use futures::AsyncBufReadExt as _;
-use futures::AsyncRead;
-use futures::AsyncWrite;
-use futures::AsyncWriteExt as _;
-use futures::Stream;
-use futures::StreamExt;
-use futures::channel::mpsc;
-use futures::channel::oneshot;
-use futures::io::BufReader;
+use futures::channel::{mpsc, oneshot};
+use futures::future::Either;
+use futures::{AsyncRead, AsyncWrite};
 use serde::de::DeserializeOwned;
-use uuid::Uuid;
 
 mod actors;
-
-pub struct JsonRpcServer {
-    connection: JsonRpcConnection,
-}
-
-impl JsonRpcServer {
-    pub fn new(
-        outgoing_bytes: impl AsyncWrite + 'static,
-        incoming_bytes: impl AsyncRead + 'static,
-    ) -> Self {
-        let connection = JsonRpcConnection::new(outgoing_bytes, incoming_bytes);
-        Self { connection }
-    }
-}
 
 /// Create a JsonRpcConnection. This can be the basis for either a server or a client.
 #[must_use]
@@ -63,8 +41,10 @@ impl JsonRpcConnection {
         self
     }
 
-    pub fn json_rpc_cx(&self) -> JsonRpcCx {
-        JsonRpcCx::new(self.outgoing_tx)
+    /// Returns a [`JsonRpcCx`] that allows you to send requests over the connection
+    /// and receive responses.
+    fn json_rpc_cx(&self) -> JsonRpcCx {
+        JsonRpcCx::new(self.outgoing_tx.clone())
     }
 
     /// Runs a server that listens for incoming requests and handles them according to the added handlers.
@@ -101,28 +81,23 @@ impl JsonRpcConnection {
     /// and receive responses.
     ///
     /// Errors if the server terminates before `main_fn` returns.
-    pub async fn with_client(self, main_fn: impl AsyncFnOnce(JsonRpcCx) -> Result<(), Box<dyn std::error::Error>>) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn with_client(
+        self,
+        main_fn: impl AsyncFnOnce(JsonRpcCx) -> Result<(), Box<dyn std::error::Error>>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let cx = self.json_rpc_cx();
 
         // Run the server + the main function until one terminates.
         // We EXPECT the main function to be the one to terminate
         // except in case of error.
-        let result = futures::future::select(
-            self.serve(),
-            main_fn(cx),
-        ).await;
+        let result = futures::future::select(Box::pin(self.serve()), Box::pin(main_fn(cx))).await;
 
         match result {
-            Either::Left((Ok(()), _)) => {
-                Err(format!("server unexpectedly shut down"))
-            }
+            Either::Left((Ok(()), _)) => Err(format!("server unexpectedly shut down").into()),
 
             Either::Left((result, _)) | Either::Right((result, _)) => result,
         }
     }
-
-    /// Runs a server that listens for incoming requests and
-    pub async fn with_client(self, main_fn: impl AsyncFnOnce(JsonRpcCx) -> Result<(), Box<dyn std::error::Error>>) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Message sent to the reply management actor
@@ -169,9 +144,6 @@ enum OutgoingMessage {
 
     /// Send a generalized error message
     Error { error: jsonrpcmsg::Error },
-
-    /// Close down the connection
-    Shutdown,
 }
 
 /// Handlers are invoked when new messages arrive at the [`JsonRpcServer`].
