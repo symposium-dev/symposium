@@ -8,11 +8,11 @@ use futures::future::Either;
 use futures::{AsyncRead, AsyncWrite};
 use serde::de::DeserializeOwned;
 
-use crate::jsonrpc::handlers::{ChainHandler, NullHandler};
 use crate::util::json_cast;
 
 mod actors;
 mod handlers;
+pub use handlers::*;
 
 /// Create a JsonRpcConnection. This can be the basis for either a server or a client.
 #[must_use]
@@ -56,7 +56,7 @@ impl<H: JsonRpcHandler> JsonRpcConnection<H> {
     /// Adds a message handler that will have the opportunity to process incoming messages.
     /// When a new message arrives, handlers are tried in the order they were added, and
     /// the first to "claim" the message "wins".
-    pub fn add_handler<H1>(self, handler: H1) -> JsonRpcConnection<ChainHandler<H, H1>>
+    pub fn on_receive<H1>(self, handler: H1) -> JsonRpcConnection<ChainHandler<H, H1>>
     where
         H1: JsonRpcHandler,
     {

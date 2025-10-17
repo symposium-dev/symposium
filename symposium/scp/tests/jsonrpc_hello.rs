@@ -27,7 +27,7 @@ fn setup_test_connections(
     let client_reader = client_reader.compat();
     let client_writer = client_writer.compat_write();
 
-    let server = JsonRpcConnection::new(server_writer, server_reader).add_handler(server_handler);
+    let server = JsonRpcConnection::new(server_writer, server_reader).on_receive(server_handler);
     let client = JsonRpcConnection::new(client_writer, client_reader);
 
     (server, client)
