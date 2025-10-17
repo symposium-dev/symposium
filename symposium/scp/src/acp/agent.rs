@@ -1,12 +1,17 @@
 use agent_client_protocol::{
-    self as acp, AuthenticateRequest, AuthenticateResponse, CancelNotification, InitializeRequest,
-    InitializeResponse, LoadSessionRequest, LoadSessionResponse, NewSessionRequest,
-    NewSessionResponse, PromptRequest, PromptResponse, SetSessionModeRequest,
-    SetSessionModeResponse,
+    self as acp, AuthenticateRequest, AuthenticateResponse, CancelNotification,
+    CreateTerminalRequest, CreateTerminalResponse, InitializeRequest, InitializeResponse,
+    KillTerminalCommandRequest, KillTerminalCommandResponse, LoadSessionRequest,
+    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
+    ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
+    RequestPermissionRequest, RequestPermissionResponse, SessionNotification,
+    SetSessionModeRequest, SetSessionModeResponse, TerminalOutputRequest, TerminalOutputResponse,
+    WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
+    WriteTextFileResponse,
 };
 
 use crate::{
-    jsonrpc::{self, JsonRpcCx, JsonRpcHandler},
+    jsonrpc::{self, JsonRpcCx, JsonRpcHandler, JsonRpcResponse},
     util::acp_to_jsonrpc_error,
     util::json_cast,
 };
@@ -150,4 +155,201 @@ pub trait AcpAgentCallbacks {
         args: SetSessionModeRequest,
         response: jsonrpc::JsonRpcRequestCx<SetSessionModeResponse>,
     ) -> Result<(), acp::Error>;
+}
+
+/// Extension trait providing convenient methods for agents to call editors.
+///
+/// This trait extends `JsonRpcCx` with ergonomic methods for making ACP requests
+/// to editors without manually constructing request structs.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Inside an AcpAgentCallbacks implementation
+/// async fn prompt(&mut self, args: PromptRequest, response: JsonRpcRequestCx<PromptResponse>) {
+///     let cx = response.json_rpc_cx();
+///
+///     // Convenient methods instead of manual struct construction
+///     let content = cx.read_text_file("src/main.rs").recv().await?;
+///     cx.session_update(args.session_id, /* ... */).await?;
+///
+///     response.respond(PromptResponse { /* ... */ })?;
+///     Ok(())
+/// }
+/// ```
+pub trait AcpAgentExt {
+    /// Request permission from the user for a tool call operation.
+    fn request_permission(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        tool_call: acp::ToolCallUpdate,
+        options: Vec<acp::PermissionOption>,
+    ) -> JsonRpcResponse<RequestPermissionResponse>;
+
+    /// Read content from a text file in the editor's file system.
+    fn read_text_file(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        path: impl Into<std::path::PathBuf>,
+    ) -> JsonRpcResponse<ReadTextFileResponse>;
+
+    /// Write content to a text file in the editor's file system.
+    fn write_text_file(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        path: impl Into<std::path::PathBuf>,
+        content: impl Into<String>,
+    ) -> JsonRpcResponse<WriteTextFileResponse>;
+
+    /// Execute a command in a new terminal.
+    fn create_terminal(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        command: impl Into<String>,
+        args: Vec<String>,
+    ) -> JsonRpcResponse<CreateTerminalResponse>;
+
+    /// Get the terminal output and exit status.
+    fn terminal_output(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        terminal_id: impl Into<acp::TerminalId>,
+    ) -> JsonRpcResponse<TerminalOutputResponse>;
+
+    /// Wait for the terminal command to exit and return its exit status.
+    fn wait_for_terminal_exit(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        terminal_id: impl Into<acp::TerminalId>,
+    ) -> JsonRpcResponse<WaitForTerminalExitResponse>;
+
+    /// Kill the terminal command without releasing the terminal.
+    fn kill_terminal_command(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        terminal_id: impl Into<acp::TerminalId>,
+    ) -> JsonRpcResponse<KillTerminalCommandResponse>;
+
+    /// Release a terminal (kills command if still running).
+    fn release_terminal(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        terminal_id: impl Into<acp::TerminalId>,
+    ) -> JsonRpcResponse<ReleaseTerminalResponse>;
+
+    /// Send a session notification to the editor.
+    fn session_update(&self, notification: SessionNotification) -> Result<(), jsonrpcmsg::Error>;
+}
+
+impl AcpAgentExt for JsonRpcCx {
+    fn request_permission(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        tool_call: acp::ToolCallUpdate,
+        options: Vec<acp::PermissionOption>,
+    ) -> JsonRpcResponse<RequestPermissionResponse> {
+        self.send_request(RequestPermissionRequest {
+            session_id: session_id.into(),
+            tool_call,
+            options,
+            meta: None,
+        })
+    }
+
+    fn read_text_file(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        path: impl Into<std::path::PathBuf>,
+    ) -> JsonRpcResponse<ReadTextFileResponse> {
+        self.send_request(ReadTextFileRequest {
+            session_id: session_id.into(),
+            path: path.into(),
+            line: None,
+            limit: None,
+            meta: None,
+        })
+    }
+
+    fn write_text_file(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        path: impl Into<std::path::PathBuf>,
+        content: impl Into<String>,
+    ) -> JsonRpcResponse<WriteTextFileResponse> {
+        self.send_request(WriteTextFileRequest {
+            session_id: session_id.into(),
+            path: path.into(),
+            content: content.into(),
+            meta: None,
+        })
+    }
+
+    fn create_terminal(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        command: impl Into<String>,
+        args: Vec<String>,
+    ) -> JsonRpcResponse<CreateTerminalResponse> {
+        self.send_request(CreateTerminalRequest {
+            session_id: session_id.into(),
+            command: command.into(),
+            args,
+            env: Vec::new(),
+            cwd: None,
+            output_byte_limit: None,
+            meta: None,
+        })
+    }
+
+    fn terminal_output(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        terminal_id: impl Into<acp::TerminalId>,
+    ) -> JsonRpcResponse<TerminalOutputResponse> {
+        self.send_request(TerminalOutputRequest {
+            session_id: session_id.into(),
+            terminal_id: terminal_id.into(),
+            meta: None,
+        })
+    }
+
+    fn wait_for_terminal_exit(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        terminal_id: impl Into<acp::TerminalId>,
+    ) -> JsonRpcResponse<WaitForTerminalExitResponse> {
+        self.send_request(WaitForTerminalExitRequest {
+            session_id: session_id.into(),
+            terminal_id: terminal_id.into(),
+            meta: None,
+        })
+    }
+
+    fn kill_terminal_command(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        terminal_id: impl Into<acp::TerminalId>,
+    ) -> JsonRpcResponse<KillTerminalCommandResponse> {
+        self.send_request(KillTerminalCommandRequest {
+            session_id: session_id.into(),
+            terminal_id: terminal_id.into(),
+            meta: None,
+        })
+    }
+
+    fn release_terminal(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        terminal_id: impl Into<acp::TerminalId>,
+    ) -> JsonRpcResponse<ReleaseTerminalResponse> {
+        self.send_request(ReleaseTerminalRequest {
+            session_id: session_id.into(),
+            terminal_id: terminal_id.into(),
+            meta: None,
+        })
+    }
+
+    fn session_update(&self, notification: SessionNotification) -> Result<(), jsonrpcmsg::Error> {
+        self.send_notification::<SessionNotification>(notification)
+    }
 }

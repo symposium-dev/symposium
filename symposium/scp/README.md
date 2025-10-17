@@ -305,7 +305,23 @@ This pattern enables the proxy architecture: each proxy can add its own handler 
 2. Implement `AcpAgentCallbacks` trait with your agent logic
 3. Wrap it in `AcpAgent::new(your_agent)`
 4. Add to a `JsonRpcConnection` and serve
-5. Use `cx.send_request()` directly to make requests to the editor
+5. Use `AcpAgentExt` trait methods to make requests to the editor:
+
+```rust
+use scp::acp::AcpAgentExt;  // Import the extension trait
+
+async fn prompt(&mut self, args: PromptRequest, response: JsonRpcRequestCx<PromptResponse>) {
+    let cx = response.json_rpc_cx();
+    
+    // Extension trait provides convenient methods
+    let content = cx.read_text_file(ReadTextFileRequest { 
+        path: "src/main.rs".into(),
+        ..Default::default()
+    }).recv().await?;
+    
+    cx.session_update(SessionNotification { /* ... */ })?;
+}
+```
 
 ### As an ACP Editor
 
@@ -313,7 +329,18 @@ This pattern enables the proxy architecture: each proxy can add its own handler 
 2. Implement `AcpEditorCallbacks` trait to handle agent requests
 3. Wrap it in `AcpEditor::new(your_editor)`
 4. Add to a `JsonRpcConnection` and serve
-5. Use `cx.send_request()` directly to make requests to the agent
+5. Use `AcpEditorExt` trait methods to make requests to the agent:
+
+```rust
+use scp::acp::AcpEditorExt;  // Import the extension trait
+
+async fn read_text_file(&mut self, args: ReadTextFileRequest, response: JsonRpcRequestCx<ReadTextFileResponse>) {
+    let cx = response.json_rpc_cx();
+    
+    // Extension trait provides convenient methods
+    let result = cx.prompt(PromptRequest { /* ... */ }).recv().await?;
+}
+```
 
 ### As an ACP Proxy
 

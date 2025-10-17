@@ -1,5 +1,5 @@
 pub mod agent;
 pub mod editor;
 
-pub use agent::{AcpAgent, AcpAgentCallbacks};
-pub use editor::{AcpEditor, AcpEditorCallbacks};
+pub use agent::{AcpAgent, AcpAgentCallbacks, AcpAgentExt};
+pub use editor::{AcpEditor, AcpEditorCallbacks, AcpEditorExt};

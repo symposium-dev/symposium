@@ -1,13 +1,17 @@
 use agent_client_protocol::{
-    self as acp, CreateTerminalRequest, CreateTerminalResponse, KillTerminalCommandRequest,
-    KillTerminalCommandResponse, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
-    ReleaseTerminalResponse, RequestPermissionRequest, RequestPermissionResponse,
-    SessionNotification, TerminalOutputRequest, TerminalOutputResponse, WaitForTerminalExitRequest,
-    WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
+    self as acp, AuthenticateRequest, AuthenticateResponse, CancelNotification,
+    CreateTerminalRequest, CreateTerminalResponse, InitializeRequest, InitializeResponse,
+    KillTerminalCommandRequest, KillTerminalCommandResponse, LoadSessionRequest,
+    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
+    ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
+    RequestPermissionRequest, RequestPermissionResponse, SessionNotification,
+    SetSessionModeRequest, SetSessionModeResponse, TerminalOutputRequest, TerminalOutputResponse,
+    WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
+    WriteTextFileResponse,
 };
 
 use crate::{
-    jsonrpc::{self, JsonRpcCx, JsonRpcHandler},
+    jsonrpc::{self, JsonRpcCx, JsonRpcHandler, JsonRpcResponse},
     util::acp_to_jsonrpc_error,
     util::json_cast,
 };
@@ -186,4 +190,151 @@ pub trait AcpEditorCallbacks {
         args: SessionNotification,
         cx: &JsonRpcCx,
     ) -> Result<(), acp::Error>;
+}
+
+/// Extension trait providing convenient methods for editors to call agents.
+///
+/// This trait extends `JsonRpcCx` with ergonomic methods for making ACP requests
+/// to agents without manually constructing request structs.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// // Inside an AcpEditorCallbacks implementation
+/// async fn read_text_file(&mut self, args: ReadTextFileRequest, response: JsonRpcRequestCx<ReadTextFileResponse>) {
+///     let cx = response.json_rpc_cx();
+///
+///     // Convenient methods instead of manual struct construction
+///     let result = cx.prompt(args.session_id, prompt).recv().await?;
+///
+///     response.respond(ReadTextFileResponse { /* ... */ })?;
+///     Ok(())
+/// }
+/// ```
+pub trait AcpEditorExt {
+    /// Initialize the agent connection.
+    fn initialize(
+        &self,
+        protocol_version: acp::ProtocolVersion,
+        client_capabilities: acp::ClientCapabilities,
+    ) -> JsonRpcResponse<InitializeResponse>;
+
+    /// Authenticate with the agent.
+    fn authenticate(&self, method_id: acp::AuthMethodId) -> JsonRpcResponse<AuthenticateResponse>;
+
+    /// Create a new agent session.
+    fn new_session(
+        &self,
+        mcp_servers: Vec<acp::McpServer>,
+        cwd: std::path::PathBuf,
+    ) -> JsonRpcResponse<NewSessionResponse>;
+
+    /// Load an existing agent session.
+    fn load_session(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        mcp_servers: Vec<acp::McpServer>,
+        cwd: std::path::PathBuf,
+    ) -> JsonRpcResponse<LoadSessionResponse>;
+
+    /// Send a prompt to the agent.
+    fn prompt(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        prompt: impl IntoIterator<Item = acp::ContentBlock>,
+    ) -> JsonRpcResponse<PromptResponse>;
+
+    /// Set the session mode.
+    fn set_session_mode(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        mode_id: acp::SessionModeId,
+    ) -> JsonRpcResponse<SetSessionModeResponse>;
+
+    /// Cancel an in-progress request.
+    fn session_cancel(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+    ) -> Result<(), jsonrpcmsg::Error>;
+}
+
+impl AcpEditorExt for JsonRpcCx {
+    fn initialize(
+        &self,
+        protocol_version: acp::ProtocolVersion,
+        client_capabilities: acp::ClientCapabilities,
+    ) -> JsonRpcResponse<InitializeResponse> {
+        self.send_request(InitializeRequest {
+            protocol_version,
+            client_capabilities,
+            meta: None,
+        })
+    }
+
+    fn authenticate(&self, method_id: acp::AuthMethodId) -> JsonRpcResponse<AuthenticateResponse> {
+        self.send_request(AuthenticateRequest {
+            method_id,
+            meta: None,
+        })
+    }
+
+    fn new_session(
+        &self,
+        mcp_servers: Vec<acp::McpServer>,
+        cwd: std::path::PathBuf,
+    ) -> JsonRpcResponse<NewSessionResponse> {
+        self.send_request(NewSessionRequest {
+            mcp_servers,
+            cwd,
+            meta: None,
+        })
+    }
+
+    fn load_session(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        mcp_servers: Vec<acp::McpServer>,
+        cwd: std::path::PathBuf,
+    ) -> JsonRpcResponse<LoadSessionResponse> {
+        self.send_request(LoadSessionRequest {
+            session_id: session_id.into(),
+            mcp_servers,
+            cwd,
+            meta: None,
+        })
+    }
+
+    fn prompt(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        prompt: impl IntoIterator<Item = acp::ContentBlock>,
+    ) -> JsonRpcResponse<PromptResponse> {
+        self.send_request(PromptRequest {
+            session_id: session_id.into(),
+            prompt: prompt.into_iter().collect(),
+            meta: None,
+        })
+    }
+
+    fn set_session_mode(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+        mode_id: acp::SessionModeId,
+    ) -> JsonRpcResponse<SetSessionModeResponse> {
+        self.send_request(SetSessionModeRequest {
+            session_id: session_id.into(),
+            mode_id,
+            meta: None,
+        })
+    }
+
+    fn session_cancel(
+        &self,
+        session_id: impl Into<acp::SessionId>,
+    ) -> Result<(), jsonrpcmsg::Error> {
+        self.send_notification::<CancelNotification>(CancelNotification {
+            session_id: session_id.into(),
+            meta: None,
+        })
+    }
 }
