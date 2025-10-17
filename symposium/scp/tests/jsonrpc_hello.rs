@@ -41,7 +41,10 @@ struct PingRequest {
 
 impl scp::jsonrpc::JsonRpcRequest for PingRequest {
     type Response = PongResponse;
-    const METHOD: &'static str = "ping";
+
+    fn method(&self) -> &str {
+        "ping"
+    }
 }
 
 /// A simple "pong" response.
@@ -129,7 +132,9 @@ struct LogNotification {
 }
 
 impl JsonRpcNotification for LogNotification {
-    const METHOD: &'static str = "log";
+    fn method(&self) -> &str {
+        "log"
+    }
 }
 
 /// Handler that collects log notifications

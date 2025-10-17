@@ -9,35 +9,47 @@ use crate::jsonrpc::JsonRpcRequest;
 impl JsonRpcRequest for InitializeRequest {
     type Response = InitializeResponse;
 
-    const METHOD: &'static str = "initialize";
+    fn method(&self) -> &str {
+        "initialize"
+    }
 }
 
 impl JsonRpcRequest for AuthenticateRequest {
     type Response = AuthenticateResponse;
 
-    const METHOD: &'static str = "authenticate";
+    fn method(&self) -> &str {
+        "authenticate"
+    }
 }
 
 impl JsonRpcRequest for LoadSessionRequest {
     type Response = LoadSessionResponse;
 
-    const METHOD: &'static str = "session/load";
+    fn method(&self) -> &str {
+        "session/load"
+    }
 }
 
 impl JsonRpcRequest for NewSessionRequest {
     type Response = NewSessionResponse;
 
-    const METHOD: &'static str = "session/new";
+    fn method(&self) -> &str {
+        "session/new"
+    }
 }
 
 impl JsonRpcRequest for PromptRequest {
     type Response = PromptResponse;
 
-    const METHOD: &'static str = "session/prompt";
+    fn method(&self) -> &str {
+        "session/prompt"
+    }
 }
 
 impl JsonRpcRequest for SetSessionModeRequest {
     type Response = SetSessionModeResponse;
 
-    const METHOD: &'static str = "session/set_mode";
+    fn method(&self) -> &str {
+        "session/set_mode"
+    }
 }

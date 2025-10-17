@@ -255,7 +255,7 @@ impl JsonRpcCx {
         Req: JsonRpcRequest,
     {
         let (response_tx, response_rx) = oneshot::channel();
-        let method = Req::METHOD.to_string();
+        let method = request.method().to_string();
         let result: Result<Option<jsonrpcmsg::Params>, _> = json_cast(request);
 
         match result {
@@ -304,7 +304,7 @@ impl JsonRpcCx {
         &self,
         notification: N,
     ) -> Result<(), jsonrpcmsg::Error> {
-        let method = N::METHOD.to_string();
+        let method = notification.method().to_string();
         let params: Option<jsonrpcmsg::Params> = serde_json::to_value(notification)
             .and_then(|json| serde_json::from_value(json))
             .map_err(|err| jsonrpcmsg::Error::new(JSONRPC_INVALID_PARAMS, err.to_string()))?;
@@ -395,8 +395,8 @@ impl<T: serde::Serialize> JsonRpcRequestCx<T> {
 
 ///A struct that serializes to the paramcontaining the parameters
 pub trait JsonRpcNotification: serde::de::DeserializeOwned + serde::Serialize {
-    /// The method name for the request.
-    const METHOD: &'static str;
+    /// The method name for the notification.
+    fn method(&self) -> &str;
 }
 
 ///A struct that serializes to the paramcontaining the parameters
@@ -405,7 +405,7 @@ pub trait JsonRpcRequest: serde::de::DeserializeOwned + serde::Serialize {
     type Response: serde::de::DeserializeOwned + serde::Serialize;
 
     /// The method name for the request.
-    const METHOD: &'static str;
+    fn method(&self) -> &str;
 }
 
 /// Represents a pending response of type `R` from an outgoing request.

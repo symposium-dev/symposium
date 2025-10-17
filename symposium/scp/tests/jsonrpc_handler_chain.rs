@@ -45,7 +45,10 @@ struct FooRequest {
 
 impl scp::jsonrpc::JsonRpcRequest for FooRequest {
     type Response = FooResponse;
-    const METHOD: &'static str = "foo";
+
+    fn method(&self) -> &str {
+        "foo"
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -60,7 +63,10 @@ struct BarRequest {
 
 impl scp::jsonrpc::JsonRpcRequest for BarRequest {
     type Response = BarResponse;
-    const METHOD: &'static str = "bar";
+
+    fn method(&self) -> &str {
+        "bar"
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -192,7 +198,10 @@ struct TrackRequest {
 
 impl scp::jsonrpc::JsonRpcRequest for TrackRequest {
     type Response = FooResponse;
-    const METHOD: &'static str = "track";
+
+    fn method(&self) -> &str {
+        "track"
+    }
 }
 
 struct TrackingHandler {
@@ -302,7 +311,10 @@ struct Method1Request {
 
 impl scp::jsonrpc::JsonRpcRequest for Method1Request {
     type Response = FooResponse;
-    const METHOD: &'static str = "method1";
+
+    fn method(&self) -> &str {
+        "method1"
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -312,7 +324,10 @@ struct Method2Request {
 
 impl scp::jsonrpc::JsonRpcRequest for Method2Request {
     type Response = FooResponse;
-    const METHOD: &'static str = "method2";
+
+    fn method(&self) -> &str {
+        "method2"
+    }
 }
 
 struct SelectiveHandler {
@@ -482,7 +497,9 @@ struct EventNotification {
 }
 
 impl JsonRpcNotification for EventNotification {
-    const METHOD: &'static str = "event";
+    fn method(&self) -> &str {
+        "event"
+    }
 }
 
 struct EventHandler {

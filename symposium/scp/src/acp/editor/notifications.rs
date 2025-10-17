@@ -6,5 +6,7 @@ use crate::jsonrpc::JsonRpcNotification;
 // These are one-way messages that agents send to clients/editors
 
 impl JsonRpcNotification for SessionNotification {
-    const METHOD: &'static str = "session/update";
+    fn method(&self) -> &str {
+        "session/update"
+    }
 }
