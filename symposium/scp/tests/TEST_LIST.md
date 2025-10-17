@@ -11,11 +11,11 @@ This document tracks the test coverage for the JSON-RPC layer.
 
 ## Handler Chain Behavior
 
-- [ ] **Multiple handlers with different methods** - Handler1 handles "foo", Handler2 handles "bar"
-- [ ] **Handler priority/ordering** - First handler in chain gets first chance to claim
-- [ ] **Fallthrough behavior** - Request passes through Handler1 (doesn't claim) to Handler2 (claims)
-- [ ] **No handler claims** - What happens when no handler claims a request?
-- [ ] **Handler can claim notifications** - Test notification handling in chain
+- [x] **Multiple handlers with different methods** - Handler1 handles "foo", Handler2 handles "bar"
+- [x] **Handler priority/ordering** - First handler in chain gets first chance to claim
+- [x] **Fallthrough behavior** - Request passes through Handler1 (doesn't claim) to Handler2 (claims)
+- [x] **No handler claims** - What happens when no handler claims a request?
+- [x] **Handler can claim notifications** - Test notification handling in chain
 
 ## Error Handling
 
