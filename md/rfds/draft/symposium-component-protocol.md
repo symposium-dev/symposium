@@ -179,22 +179,42 @@ Agents don't need special SCP capabilities - they're just normal ACP agents.
 
 Proxies communicate with their downstream component (next proxy or agent) through special extension messages handled by the orchestrator:
 
-**`_proxy/successor/send`** - Proxy wants to send a message downstream:
+**`_proxy/successor/send/request`** - Proxy wants to send a request downstream:
 ```json
 {
-  "method": "_proxy/successor/send",
+  "method": "_proxy/successor/send/request",
   "params": {
-    "message": <ACP_MESSAGE>
+    "message": <ACP_REQUEST>
   }
 }
 ```
 
-**`_proxy/successor/receive`** - Orchestrator delivers a response from downstream:
+**`_proxy/successor/send/notification`** - Proxy wants to send a notification downstream:
 ```json
 {
-  "method": "_proxy/successor/receive",
+  "method": "_proxy/successor/send/notification",
   "params": {
-    "message": <ACP_MESSAGE>
+    "message": <ACP_NOTIFICATION>
+  }
+}
+```
+
+**`_proxy/successor/receive/request`** - Orchestrator delivers a request from downstream:
+```json
+{
+  "method": "_proxy/successor/receive/request",
+  "params": {
+    "message": <ACP_REQUEST>
+  }
+}
+```
+
+**`_proxy/successor/receive/notification`** - Orchestrator delivers a notification from downstream:
+```json
+{
+  "method": "_proxy/successor/receive/notification",
+  "params": {
+    "message": <ACP_NOTIFICATION>
   }
 }
 ```
@@ -202,20 +222,24 @@ Proxies communicate with their downstream component (next proxy or agent) throug
 **Message flow example:**
 1. Editor sends ACP `prompt` request to orchestrator
 2. Orchestrator forwards to Proxy1 as normal ACP message
-3. Proxy1 transforms and sends `_proxy/successor/send { message: <modified_prompt> }`
+3. Proxy1 transforms and sends `_proxy/successor/send/request { message: <modified_prompt> }`
 4. Orchestrator routes that to Proxy2 as normal ACP `prompt`
 5. Eventually reaches agent, response flows back through chain
-6. Orchestrator wraps responses in `_proxy/successor/receive` going upstream
+6. Orchestrator wraps responses going upstream appropriately
 
 **Transparent proxy pattern:**
 A pass-through proxy is trivial - just forward everything:
 ```rust
 match message {
-    // Forward from editor to successor
-    AcpRequest(req) => send_to_successor(req),
+    // Forward requests from editor to successor
+    AcpRequest(req) => send_to_successor_request(req),
+    
+    // Forward notifications from editor to successor
+    AcpNotification(notif) => send_to_successor_notification(notif),
 
-    // Forward from successor to editor
-    ExtNotification("_proxy/successor/receive", msg) => respond_to_editor(msg),
+    // Forward from successor back to editor
+    ExtRequest("_proxy/successor/receive/request", msg) => respond_to_editor(msg),
+    ExtNotification("_proxy/successor/receive/notification", msg) => forward_to_editor(msg),
 }
 ```
 
