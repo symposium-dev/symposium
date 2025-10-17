@@ -129,13 +129,7 @@ struct LogNotification {
 }
 
 impl JsonRpcNotification for LogNotification {
-    fn method(&self) -> String {
-        "log".to_string()
-    }
-
-    fn into_params(self) -> impl Serialize {
-        self
-    }
+    const METHOD: &'static str = "log";
 }
 
 /// Handler that collects log notifications

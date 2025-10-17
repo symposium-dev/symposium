@@ -300,12 +300,12 @@ impl JsonRpcCx {
     }
 
     /// Send an outgoing notification (no reply expected).)
-    pub fn send_notification(
+    pub fn send_notification<N: JsonRpcNotification>(
         &self,
-        notification: impl JsonRpcNotification,
+        notification: N,
     ) -> Result<(), jsonrpcmsg::Error> {
-        let method = notification.method();
-        let params: Option<jsonrpcmsg::Params> = serde_json::to_value(notification.into_params())
+        let method = N::METHOD.to_string();
+        let params: Option<jsonrpcmsg::Params> = serde_json::to_value(notification)
             .and_then(|json| serde_json::from_value(json))
             .map_err(|err| jsonrpcmsg::Error::new(JSONRPC_INVALID_PARAMS, err.to_string()))?;
 
@@ -394,12 +394,9 @@ impl<T: serde::Serialize> JsonRpcRequestCx<T> {
 }
 
 ///A struct that serializes to the paramcontaining the parameters
-pub trait JsonRpcNotification {
+pub trait JsonRpcNotification: serde::de::DeserializeOwned + serde::Serialize {
     /// The method name for the request.
-    fn method(&self) -> String;
-
-    /// Value which will be serialized to product the request parameters.
-    fn into_params(self) -> impl serde::Serialize;
+    const METHOD: &'static str;
 }
 
 ///A struct that serializes to the paramcontaining the parameters
