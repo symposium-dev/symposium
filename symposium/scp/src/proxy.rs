@@ -283,7 +283,7 @@ where
 /// # }
 /// ```
 pub trait JsonRpcCxExt {
-    /// Send a request to the successor component and await the response.
+    /// Send a request to the successor component.
     ///
     /// The request is automatically wrapped in a `ToSuccessorRequest` and sent
     /// using the `_proxy/successor/send/request` method. The orchestrator routes
@@ -291,17 +291,30 @@ pub trait JsonRpcCxExt {
     ///
     /// # Returns
     ///
-    /// Returns the inner response from the successor component, unwrapped from
-    /// the `FromSuccessorResponse` protocol wrapper.
+    /// Returns a [`JsonRpcResponse`] that can be awaited to get the successor's
+    /// response. The response will be a `FromSuccessorResponse` containing the
+    /// inner `jsonrpcmsg::Response`.
     ///
-    /// # Errors
+    /// # Example
     ///
-    /// Returns an error if the request fails to send, if the successor returns
-    /// an error, or if the response cannot be deserialized.
+    /// ```rust,no_run
+    /// # use scp::proxy::JsonRpcCxExt;
+    /// # use scp::jsonrpc::{JsonRpcCx, JsonRpcResponse};
+    /// # async fn example(cx: &JsonRpcCx) -> Result<(), jsonrpcmsg::Error> {
+    /// let request = jsonrpcmsg::Request::new(
+    ///     "some_method".to_string(),
+    ///     None,
+    ///     Some(jsonrpcmsg::Id::Number(1)),
+    /// );
+    /// let response = cx.send_request_to_successor(request).recv().await?;
+    /// // response.message contains the inner jsonrpcmsg::Response
+    /// # Ok(())
+    /// # }
+    /// ```
     fn send_request_to_successor(
         &self,
         request: jsonrpcmsg::Request,
-    ) -> impl std::future::Future<Output = Result<jsonrpcmsg::Response, jsonrpcmsg::Error>> + Send;
+    ) -> crate::jsonrpc::JsonRpcResponse<FromSuccessorResponse>;
 
     /// Send a notification to the successor component.
     ///
@@ -321,13 +334,12 @@ pub trait JsonRpcCxExt {
 }
 
 impl JsonRpcCxExt for JsonRpcCx {
-    async fn send_request_to_successor(
+    fn send_request_to_successor(
         &self,
         request: jsonrpcmsg::Request,
-    ) -> Result<jsonrpcmsg::Response, jsonrpcmsg::Error> {
+    ) -> crate::jsonrpc::JsonRpcResponse<FromSuccessorResponse> {
         let wrapper = ToSuccessorRequest { message: request };
-        let response: FromSuccessorResponse = self.send_request(wrapper).recv().await?;
-        Ok(response.message)
+        self.send_request(wrapper)
     }
 
     fn send_notification_to_successor(
