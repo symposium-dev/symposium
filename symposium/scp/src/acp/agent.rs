@@ -11,9 +11,8 @@ use agent_client_protocol::{
 };
 
 use crate::{
-    jsonrpc::{self, JsonRpcCx, JsonRpcHandler, JsonRpcResponse},
-    util::acp_to_jsonrpc_error,
-    util::json_cast,
+    jsonrpc::{self, Handled, JsonRpcCx, JsonRpcHandler, JsonRpcRequestCx, JsonRpcResponse},
+    util::{acp_to_jsonrpc_error, json_cast},
 };
 
 mod notifications;
@@ -39,9 +38,8 @@ impl<CB: AcpAgentCallbacks> JsonRpcHandler for AcpAgent<CB> {
         &mut self,
         method: &str,
         params: &Option<jsonrpcmsg::Params>,
-        response: jsonrpc::JsonRpcRequestCx<jsonrpcmsg::Response>,
-    ) -> Result<jsonrpc::Handled<jsonrpc::JsonRpcRequestCx<jsonrpcmsg::Response>>, jsonrpcmsg::Error>
-    {
+        response: JsonRpcRequestCx<serde_json::Value>,
+    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
         match method {
             "initialize" => {
                 self.callbacks

@@ -35,8 +35,8 @@ where
         &mut self,
         method: &str,
         params: &Option<jsonrpcmsg::Params>,
-        response: JsonRpcRequestCx<jsonrpcmsg::Response>,
-    ) -> Result<Handled<JsonRpcRequestCx<jsonrpcmsg::Response>>, jsonrpcmsg::Error> {
+        response: JsonRpcRequestCx<serde_json::Value>,
+    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
         match self
             .handler1
             .handle_request(method, params, response)

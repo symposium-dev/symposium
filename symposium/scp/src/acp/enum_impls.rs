@@ -29,8 +29,6 @@ impl JsonRpcRequest for ClientRequest {
             ClientRequest::LoadSessionRequest(_) => "session/load",
             ClientRequest::SetSessionModeRequest(_) => "session/set_mode",
             ClientRequest::PromptRequest(_) => "session/prompt",
-            #[cfg(feature = "unstable")]
-            ClientRequest::SetSessionModeRequest(_) => "session/set_model",
             ClientRequest::ExtMethodRequest(ext) => &ext.method,
         }
     }
