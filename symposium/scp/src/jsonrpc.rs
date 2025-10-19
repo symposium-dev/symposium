@@ -1,13 +1,11 @@
 //! Core JSON-RPC server support.
 
-use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
 
 use futures::channel::{mpsc, oneshot};
 use futures::future::Either;
 use futures::{AsyncRead, AsyncWrite};
-use serde::de::DeserializeOwned;
 
 use crate::util::json_cast;
 
@@ -251,15 +249,13 @@ impl JsonRpcCx {
     }
 
     /// Send an outgoing request and await the reply.
-    pub fn send_request<Req>(&self, request: Req) -> JsonRpcResponse<Req::Response>
-    where
-        Req: JsonRpcRequest,
-    {
+    pub fn send_request<Req: JsonRpcRequest>(
+        &self,
+        request: Req,
+    ) -> JsonRpcResponse<Req::Response> {
         let (response_tx, response_rx) = oneshot::channel();
         let method = request.method().to_string();
-        let result: Result<Option<jsonrpcmsg::Params>, _> = json_cast(request);
-
-        match result {
+        match json_cast::<Req, Option<jsonrpcmsg::Params>>(request) {
             Ok(params) => {
                 let message = OutgoingMessage::Request {
                     method,
@@ -297,7 +293,9 @@ impl JsonRpcCx {
             }
         }
 
-        JsonRpcResponse::new(response_rx)
+        JsonRpcResponse::new(response_rx).map(move |json| {
+            serde_json::from_value(json).map_err(|_err| jsonrpcmsg::Error::parse_error())
+        })
     }
 
     /// Send an outgoing notification (no reply expected).)
@@ -448,16 +446,32 @@ pub trait JsonRpcRequest: JsonRpcMessage {
 }
 
 /// Represents a pending response of type `R` from an outgoing request.
-pub struct JsonRpcResponse<R: DeserializeOwned> {
+pub struct JsonRpcResponse<R> {
     response_rx: oneshot::Receiver<Result<serde_json::Value, jsonrpcmsg::Error>>,
-    data: PhantomData<oneshot::Receiver<Result<R, jsonrpcmsg::Error>>>,
+    to_result: Box<dyn Fn(serde_json::Value) -> Result<R, jsonrpcmsg::Error>>,
 }
 
-impl<R: DeserializeOwned> JsonRpcResponse<R> {
+impl JsonRpcResponse<serde_json::Value> {
     fn new(response_rx: oneshot::Receiver<Result<serde_json::Value, jsonrpcmsg::Error>>) -> Self {
         Self {
             response_rx,
-            data: PhantomData,
+            to_result: Box::new(Ok),
+        }
+    }
+}
+
+impl<R: JsonRpcMessage> JsonRpcResponse<R> {
+    /// Create a new response that maps the result of the response to a new type.
+    pub fn map<U>(
+        self,
+        map_fn: impl Fn(R) -> Result<U, jsonrpcmsg::Error> + 'static,
+    ) -> JsonRpcResponse<U>
+    where
+        U: JsonRpcMessage,
+    {
+        JsonRpcResponse {
+            response_rx: self.response_rx,
+            to_result: Box::new(move |value| map_fn((self.to_result)(value)?)),
         }
     }
 
@@ -476,8 +490,7 @@ impl<R: DeserializeOwned> JsonRpcResponse<R> {
         })??;
 
         // Deserialize into the expected type R
-        serde_json::from_value(json_value)
-            .map_err(|err| jsonrpcmsg::Error::new(JSONRPC_INVALID_PARAMS, err.to_string()))
+        (self.to_result)(json_value)
     }
 }
 

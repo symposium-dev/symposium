@@ -81,8 +81,8 @@ impl JsonRpcHandler for FooHandler {
         &mut self,
         method: &str,
         params: &Option<jsonrpcmsg::Params>,
-        response: JsonRpcRequestCx<jsonrpcmsg::Response>,
-    ) -> std::result::Result<Handled<JsonRpcRequestCx<jsonrpcmsg::Response>>, jsonrpcmsg::Error>
+        response: JsonRpcRequestCx<serde_json::Value>,
+    ) -> std::result::Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error>
     {
         if method == "foo" {
             let request: FooRequest =
@@ -105,8 +105,8 @@ impl JsonRpcHandler for BarHandler {
         &mut self,
         method: &str,
         params: &Option<jsonrpcmsg::Params>,
-        response: JsonRpcRequestCx<jsonrpcmsg::Response>,
-    ) -> std::result::Result<Handled<JsonRpcRequestCx<jsonrpcmsg::Response>>, jsonrpcmsg::Error>
+        response: JsonRpcRequestCx<serde_json::Value>,
+    ) -> std::result::Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error>
     {
         if method == "bar" {
             let request: BarRequest =
@@ -214,8 +214,8 @@ impl JsonRpcHandler for TrackingHandler {
         &mut self,
         method: &str,
         params: &Option<jsonrpcmsg::Params>,
-        response: JsonRpcRequestCx<jsonrpcmsg::Response>,
-    ) -> std::result::Result<Handled<JsonRpcRequestCx<jsonrpcmsg::Response>>, jsonrpcmsg::Error>
+        response: JsonRpcRequestCx<serde_json::Value>,
+    ) -> std::result::Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error>
     {
         if method == "track" {
             self.handled.lock().unwrap().push(self.name.clone());
@@ -340,8 +340,8 @@ impl JsonRpcHandler for SelectiveHandler {
         &mut self,
         method: &str,
         params: &Option<jsonrpcmsg::Params>,
-        response: JsonRpcRequestCx<jsonrpcmsg::Response>,
-    ) -> std::result::Result<Handled<JsonRpcRequestCx<jsonrpcmsg::Response>>, jsonrpcmsg::Error>
+        response: JsonRpcRequestCx<serde_json::Value>,
+    ) -> std::result::Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error>
     {
         if method == self.method_to_handle {
             self.handled.lock().unwrap().push(method.to_string());

@@ -61,9 +61,8 @@ impl JsonRpcHandler for PingHandler {
         &mut self,
         method: &str,
         params: &Option<jsonrpcmsg::Params>,
-        response: JsonRpcRequestCx<jsonrpcmsg::Response>,
-    ) -> std::result::Result<Handled<JsonRpcRequestCx<jsonrpcmsg::Response>>, jsonrpcmsg::Error>
-    {
+        response: JsonRpcRequestCx<serde_json::Value>,
+    ) -> std::result::Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
         if method == "ping" {
             // Parse the request
             let request: PingRequest =

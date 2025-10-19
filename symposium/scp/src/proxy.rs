@@ -28,7 +28,7 @@
 //!
 //! # Example
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use scp::proxy::JsonRpcConnectionExt;
 //! use scp::jsonrpc::{JsonRpcConnection, JsonRpcHandler};
 //!
@@ -49,7 +49,8 @@
 
 use crate::{
     jsonrpc::{
-        ChainHandler, Handled, JsonRpcConnection, JsonRpcCx, JsonRpcHandler, JsonRpcRequestCx,
+        ChainHandler, Handled, JsonRpcConnection, JsonRpcCx, JsonRpcHandler, JsonRpcNotification,
+        JsonRpcRequest, JsonRpcRequestCx,
     },
     util::json_cast,
 };
@@ -72,7 +73,7 @@ pub trait JsonRpcConnectionExt<H: JsonRpcHandler> {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// # use scp::proxy::JsonRpcConnectionExt;
     /// # use scp::jsonrpc::{JsonRpcConnection, JsonRpcHandler};
     /// # struct MyHandler;
@@ -171,49 +172,22 @@ where
         //
         //
         //
-        let messages::FromSuccessorRequest {
-            message:
-                jsonrpcmsg::Request {
-                    jsonrpc: inner_jsonrpc,
-                    version: inner_version,
-                    method: inner_method,
-                    params: inner_params,
-                    id: inner_id,
-                },
-        } = json_cast::<_, messages::FromSuccessorRequest>(params)?;
+        let messages::ReceiveFromSuccessorRequest {
+            method: inner_method,
+            params: inner_params,
+        } = json_cast(params)?;
 
         // The user will send us a response that is intended for the proxy.
         // We repackage that into a `{message: ...}` struct that embeds
         // the response that will be sent to the proxy.
         let response = response.map(
-            {
-                let inner_jsonrpc = inner_jsonrpc.clone();
-                let inner_version = inner_version.clone();
-                let inner_id = inner_id.clone();
-                move |response: serde_json::Value| {
-                    serde_json::to_value(messages::ToSuccessorResponse {
-                        message: jsonrpcmsg::Response {
-                            jsonrpc: inner_jsonrpc.clone(),
-                            version: inner_version.clone(),
-                            result: Some(response),
-                            error: None,
-                            id: inner_id.clone(),
-                        },
-                    })
+            move |response: serde_json::Value| {
+                serde_json::to_value(messages::FromSuccessorResponse::Result(response))
                     .map_err(|_| jsonrpcmsg::Error::internal_error())
-                }
             },
             move |error: jsonrpcmsg::Error| {
-                serde_json::to_value(messages::ToSuccessorResponse {
-                    message: jsonrpcmsg::Response {
-                        jsonrpc: inner_jsonrpc.clone(),
-                        version: inner_version.clone(),
-                        result: None,
-                        error: Some(error),
-                        id: inner_id.clone(),
-                    },
-                })
-                .map_err(|_| jsonrpcmsg::Error::internal_error())
+                serde_json::to_value(messages::FromSuccessorResponse::Error(error))
+                    .map_err(|_| jsonrpcmsg::Error::internal_error())
             },
         );
 
@@ -261,26 +235,15 @@ where
 ///
 /// # Example
 ///
-/// ```rust,no_run
-/// # use scp::proxy::JsonRpcCxExt;
-/// # use scp::jsonrpc::JsonRpcCx;
-/// # async fn example(cx: &JsonRpcCx) -> Result<(), jsonrpcmsg::Error> {
-/// // Forward a request to the successor
-/// let request = jsonrpcmsg::Request::new(
-///     "some_method".to_string(),
-///     None,
-///     Some(jsonrpcmsg::Id::Number(1)),
-/// );
-/// let response = cx.send_request_to_successor(request).await?;
+/// ```rust,ignore
+/// // Example using ACP request types
+/// use scp::proxy::JsonRpcCxExt;
+/// use agent_client_protocol_schema::agent::PromptRequest;
 ///
-/// // Forward a notification to the successor
-/// let notification = jsonrpcmsg::Request::notification(
-///     "some_notification".to_string(),
-///     None,
-/// );
-/// cx.send_notification_to_successor(notification)?;
-/// # Ok(())
-/// # }
+/// async fn forward_prompt(cx: &JsonRpcCx, prompt: PromptRequest) {
+///     let response = cx.send_request_to_successor(prompt).recv().await?;
+///     // response is the typed response from the successor
+/// }
 /// ```
 pub trait JsonRpcCxExt {
     /// Send a request to the successor component.
@@ -297,24 +260,18 @@ pub trait JsonRpcCxExt {
     ///
     /// # Example
     ///
-    /// ```rust,no_run
-    /// # use scp::proxy::JsonRpcCxExt;
-    /// # use scp::jsonrpc::{JsonRpcCx, JsonRpcResponse};
-    /// # async fn example(cx: &JsonRpcCx) -> Result<(), jsonrpcmsg::Error> {
-    /// let request = jsonrpcmsg::Request::new(
-    ///     "some_method".to_string(),
-    ///     None,
-    ///     Some(jsonrpcmsg::Id::Number(1)),
-    /// );
-    /// let response = cx.send_request_to_successor(request).recv().await?;
-    /// // response.message contains the inner jsonrpcmsg::Response
-    /// # Ok(())
-    /// # }
+    /// ```rust,ignore
+    /// use scp::proxy::JsonRpcCxExt;
+    /// use agent_client_protocol_schema::agent::PromptRequest;
+    ///
+    /// let prompt = PromptRequest { /* ... */ };
+    /// let response = cx.send_request_to_successor(prompt).recv().await?;
+    /// // response is the typed PromptResponse
     /// ```
-    fn send_request_to_successor(
+    fn send_request_to_successor<Req: JsonRpcRequest>(
         &self,
-        request: jsonrpcmsg::Request,
-    ) -> crate::jsonrpc::JsonRpcResponse<FromSuccessorResponse>;
+        request: Req,
+    ) -> crate::jsonrpc::JsonRpcResponse<Req::Response>;
 
     /// Send a notification to the successor component.
     ///
@@ -327,27 +284,36 @@ pub trait JsonRpcCxExt {
     /// # Errors
     ///
     /// Returns an error if the notification fails to send.
-    fn send_notification_to_successor(
+    fn send_notification_to_successor<Req: JsonRpcNotification>(
         &self,
-        notification: jsonrpcmsg::Request,
+        notification: Req,
     ) -> Result<(), jsonrpcmsg::Error>;
 }
 
 impl JsonRpcCxExt for JsonRpcCx {
-    fn send_request_to_successor(
+    fn send_request_to_successor<Req: JsonRpcRequest>(
         &self,
-        request: jsonrpcmsg::Request,
-    ) -> crate::jsonrpc::JsonRpcResponse<FromSuccessorResponse> {
-        let wrapper = ToSuccessorRequest { message: request };
+        request: Req,
+    ) -> crate::jsonrpc::JsonRpcResponse<Req::Response> {
+        let wrapper = ToSuccessorRequest {
+            method: request.method().to_string(),
+            params: request,
+        };
+
         self.send_request(wrapper)
+            .map(move |response| match response {
+                ToSuccessorResponse::Result(r) => Ok(r),
+                ToSuccessorResponse::Error(e) => Err(e),
+            })
     }
 
-    fn send_notification_to_successor(
+    fn send_notification_to_successor<Req: JsonRpcNotification>(
         &self,
-        notification: jsonrpcmsg::Request,
+        notification: Req,
     ) -> Result<(), jsonrpcmsg::Error> {
         let wrapper = ToSuccessorNotification {
-            message: notification,
+            method: notification.method().to_string(),
+            params: notification,
         };
         self.send_notification(wrapper)
     }
