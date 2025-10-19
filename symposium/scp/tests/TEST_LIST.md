@@ -19,11 +19,11 @@ This document tracks the test coverage for the JSON-RPC layer.
 
 ## Error Handling
 
-- [ ] **Invalid JSON** - Send malformed JSON and verify error response
-- [ ] **Unknown method** - Send request with method no handler claims
-- [ ] **Handler returns error** - Handler explicitly returns an error
-- [ ] **Serialization errors** - Response that can't be serialized
-- [ ] **Request without required params** - Missing or invalid parameters
+- [ ] **Invalid JSON** - Send malformed JSON and verify error response (IGNORED - hangs, needs investigation)
+- [x] **Unknown method** - Send request with method no handler claims
+- [x] **Handler returns error** - Handler explicitly returns an error
+- [ ] **Serialization errors** - Response that can't be serialized (TODO)
+- [ ] **Request without required params** - Missing or invalid parameters (IGNORED - hangs, needs investigation)
 
 ## Edge Cases
 
