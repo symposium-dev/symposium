@@ -18,6 +18,32 @@ Key changes:
 
 Today's AI agent ecosystem is dominated by monolithic agents. We want people to be able to combine independent components to build custom agents targeting their specific needs. We want them to be able to use these with whatever editors and tooling they have. This is aligned with Symposium's core values of openness, interoperability, and extensibility.
 
+# Motivating Example: Sparkle Integration
+
+Consider integrating Sparkle (a collaborative AI framework) into a coding session with Zed and Claude. Users want Sparkle's collaborative patterns without modifying Zed's code or Claude's ACP implementation.
+
+**Without S/ACP:**
+- Fork Zed to add Sparkle-specific code
+- Or fork Claude's agent to inject Sparkle
+- Or build a custom editor from scratch
+- Result: Fragmentation, maintenance burden, incompatibility
+
+**With S/ACP:**
+```
+Zed → Fiedler → Sparkle Component → Claude
+               ↓
+          Sparkle MCP Server
+```
+
+The Sparkle component:
+1. Injects Sparkle MCP server into Claude's tool list during `initialize`
+2. Intercepts the first `prompt` and prepends Sparkle embodiment sequence
+3. Passes all other messages through transparently
+
+From Zed's perspective, it talks to a normal ACP agent. From Claude's perspective, it has Sparkle tools available. No code changes required on either side.
+
+This demonstrates S/ACP's core value: adding capabilities through composition rather than modification.
+
 # What we propose to do about it
 
 > What are you proposing to improve the situation?
@@ -56,26 +82,29 @@ SCP defines three kinds of actors:
 
 The orchestrator handles message routing, making the proxy chain transparent to editors. Proxies can transform requests, responses, or add side-effects without editors or agents needing SCP awareness.
 
-## The Orchestrator Component
+## The Orchestrator: Fiedler
 
-SCP introduces an **orchestrator** component that sits between the editor and the proxy chain. The orchestrator:
+S/ACP's orchestrator is called **Fiedler** (after Arthur Fiedler, conductor of the Boston Pops). Fiedler has three responsibilities:
 
-* Spawns and manages all proxies and the final agent based on command-line configuration
-* Routes messages through the proxy chain transparently
-* Appears as a standard ACP agent to the editor
-* Handles the `_proxy/successor/*` protocol messages that proxies use for downstream communication
+1. **Process Management** - Creates and manages component processes based on command-line configuration
+2. **Message Routing** - Routes messages between editor, components, and agent through the proxy chain
+3. **Capability Adaptation** - Observes component capabilities and adapts between them
 
-**From the editor's perspective**, it simply spawns one orchestrator process and communicates with it using normal ACP over stdio. The editor doesn't need to know about the proxy chain at all.
+**Example adaptation:** Session pre-population
+- If the agent supports native session pre-population, Fiedler uses it
+- If not, Fiedler synthesizes a dummy prompt with history in XML/markdown, intercepts the response, discards it, then starts the real session
+- Result: Components can use session pre-population even with agents that don't support it
 
-**Command-line orchestration:**
+Other adaptations include translating streaming support, content types, and tool formats.
+
+**From the editor's perspective**, it spawns one Fiedler process and communicates using normal ACP over stdio. The editor doesn't know about the proxy chain.
+
+**Command-line usage:**
 ```bash
-symposium-orchestrator \
-  --proxy ./walkthrough-proxy \
-  --proxy ./collaborator-proxy \
-  --agent ./claude-acp-agent
+fiedler sparkle-acp claude-code-acp
 ```
 
-The orchestrator advertises an `"orchestrator"` capability during ACP initialization to signal its role, but editors can treat it as any other ACP agent.
+Fiedler advertises an `"orchestrator"` capability during ACP initialization, but editors can treat it as any other ACP agent.
 
 
 # Shiny future
@@ -111,13 +140,23 @@ As the ecosystem matures, successful patterns may be:
 * Adopted by other agent protocols
 * Used as reference implementations for proxy architectures
 
-**Future Extensions:** Additional protocol extensions can add capabilities like proxy-to-proxy communication, dynamic chain reconfiguration, or state sharing between proxies. These will be designed based on real-world usage patterns.
+## Protocol Extensions
+
+Near-term extensions under consideration:
+
+**Tool Interception** - Route MCP tool calls through the proxy chain instead of directly to external servers. Fiedler registers as a dummy MCP server, and tool calls route back through components for handling. This enables components to provide tools without agents needing S/ACP awareness.
+
+**Agent-Initiated Messages** - Allow components to send messages after the agent has sent end-turn, outside the normal request-response cycle. Use cases include background task completion notifications, time-based reminders, or autonomous checkpoint creation.
+
+**Session Pre-Population** - Create sessions with existing conversation history. Fiedler adapts based on agent capabilities: uses native support if available, otherwise synthesizes a dummy prompt containing the history, intercepts the response, and starts the real session.
+
+**Rich Content Types** - Extend content types beyond text to include HTML panels, interactive GUI components, or other structured formats. Components can transform between content types based on what downstream agents support.
 
 # Implementation details and plan
 
 > Tell me more about your implementation. What is your detailed implementaton plan?
 
-**TODO:** Add concrete implementation plan with phases and deliverables.
+The implementation focuses on building Fiedler and demonstrating the Sparkle integration use case.
 
 ## SCP protocol
 
@@ -259,61 +298,56 @@ These extensions are beyond the scope of this initial RFD and will be defined as
 
 > What is the current status of implementation and what are the next steps?
 
-## Current Status: Design Phase
+## Current Status: Implementation Phase
 
 **Completed:**
-- ✅ SCP protocol design with orchestrator architecture
+- ✅ S/ACP protocol design with Fiedler orchestrator architecture
 - ✅ `_proxy/successor/{send,receive}` message protocol defined
-- ✅ Basic `scp` Rust crate with foundational types
-- ✅ Reuse of ACP's `McpServer` for process configuration
+- ✅ `scp` Rust crate with JSON-RPC layer and ACP message types
+- ✅ Comprehensive JSON-RPC test suite (21 tests)
+- ✅ Proxy message type definitions (`ToSuccessorRequest`, etc.)
 
-**Next Steps:**
-- Implement orchestrator CLI tool in Rust
-- Build simple pass-through proxy as proof of concept
-- Create protocol message types in scp crate
-- Test end-to-end proxy chain with real ACP agents
+**In Progress:**
+- Fiedler orchestrator implementation
+- Sparkle S/ACP component
 
-## Phase 1: Core Orchestrator (NEXT)
+## Phase 1: Minimal Sparkle Demo (CURRENT)
 
-**Goal:** Build the orchestrator that manages proxy chains and presents as an ACP agent.
+**Goal:** Demonstrate Sparkle integration through S/ACP composition.
 
-**Implementation:**
-- Create `symposium-orchestrator` binary
-- Parse CLI arguments for proxy chain configuration
-- Spawn proxy and agent processes using tokio
-- Implement ACP protocol handling (present as agent to editor)
-- Route `_proxy/successor/*` messages between proxies
-- Handle process lifecycle and cleanup
+**Components:**
+1. **Fiedler orchestrator** - Process management, message routing, capability adaptation
+2. **Sparkle S/ACP component** - Injects Sparkle MCP server, handles embodiment sequence
+3. **Integration test** - Validates end-to-end flow with mock editor/agent
 
-**Key Test:** Echo through chain
-- Editor → Orchestrator → Echo Agent
-- Validates basic message routing works
+**Demo flow:**
+```
+Zed → Fiedler → Sparkle Component → Claude
+               ↓
+          Sparkle MCP Server
+```
 
-## Phase 2: Simple Proxy (VALIDATION)
+**Success criteria:**
+- Sparkle MCP server appears in Claude's tool list
+- First prompt triggers Sparkle embodiment sequence
+- Subsequent prompts work normally
+- All other ACP messages pass through unchanged
 
-**Goal:** Prove the protocol works with a minimal proxy implementation.
+## Phase 2: Tool Interception (FUTURE)
 
-**Implementation:**
-- Create a pass-through proxy that forwards all messages
-- Test with orchestrator and real ACP agent
-- Add logging proxy that records messages without transforming
+**Goal:** Route MCP tool calls through the proxy chain.
 
-**Key Test:** Logging proxy
-- Editor → Orchestrator → Logging Proxy → Agent
-- Verify messages flow through correctly
-- Confirm proxy sees all traffic
+Fiedler registers as a dummy MCP server. When Claude calls a Sparkle tool, the call routes back through the proxy chain to the Sparkle component for handling. This enables richer component interactions without requiring agents to understand S/ACP.
 
-## Phase 3: Real Proxy Use Cases (FUTURE)
+## Phase 3: Additional Components (FUTURE)
 
-**Goal:** Implement practical proxies that demonstrate value.
+Build additional S/ACP components that demonstrate different use cases:
+- Session history/context management
+- Logging and observability
+- Rate limiting
+- Content filtering
 
-**Possible implementations:**
-- Rate limiting proxy
-- Caching proxy
-- Metrics collection proxy
-- Content filtering proxy
-
-These implementations will inform future protocol refinements.
+These will validate the protocol design and inform refinements.
 
 ## Testing Strategy
 
