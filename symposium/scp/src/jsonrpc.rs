@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use futures::channel::{mpsc, oneshot};
 use futures::future::Either;
-use futures::{AsyncRead, AsyncWrite};
+use futures::{AsyncRead, AsyncWrite, FutureExt};
 
 use crate::util::json_cast;
 
@@ -81,27 +81,21 @@ impl<H: JsonRpcHandler> JsonRpcConnection<H> {
     /// Runs a server that listens for incoming requests and handles them according to the added handlers.
     pub async fn serve(self) -> Result<(), Box<dyn std::error::Error>> {
         let (reply_tx, reply_rx) = mpsc::unbounded();
-        let (incoming_cancel_tx, incoming_cancel_rx) = oneshot::channel();
         let json_rpc_cx = JsonRpcCx::new(self.outgoing_tx);
-        let (r1, r2, r3) = futures::join!(
-            actors::outgoing_actor(
+        futures::select!(
+            r = actors::outgoing_actor(
                 self.outgoing_rx,
                 reply_tx.clone(),
                 self.outgoing_bytes,
-                incoming_cancel_rx
-            ),
-            actors::incoming_actor(
+            ).fuse() => r?,
+            r = actors::incoming_actor(
                 &json_rpc_cx,
                 self.incoming_bytes,
                 reply_tx,
-                incoming_cancel_tx,
                 self.handler,
-            ),
-            actors::reply_actor(reply_rx),
+            ).fuse() => r?,
+            r = actors::reply_actor(reply_rx).fuse() => r?,
         );
-        r1?;
-        r2?;
-        r3?;
         Ok(())
     }
 

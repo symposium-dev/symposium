@@ -59,7 +59,6 @@ struct SimpleResponse {
 // ============================================================================
 
 #[tokio::test]
-#[ignore] // TODO: This test hangs - needs investigation
 async fn test_invalid_json() {
     use futures::io::Cursor;
 

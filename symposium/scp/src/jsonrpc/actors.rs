@@ -5,11 +5,8 @@ use futures::AsyncBufReadExt as _;
 use futures::AsyncRead;
 use futures::AsyncWrite;
 use futures::AsyncWriteExt as _;
-use futures::Stream;
 use futures::StreamExt;
 use futures::channel::mpsc;
-use futures::channel::oneshot;
-use futures::future::Either;
 use futures::io::BufReader;
 use uuid::Uuid;
 
@@ -48,22 +45,6 @@ pub(super) async fn reply_actor(
     Ok(())
 }
 
-/// Read a single line from the input.
-/// Return None if the input is closed or cancelled.
-async fn read_next_line(
-    incoming_lines: &mut (impl Stream<Item = Result<String, std::io::Error>> + Unpin),
-    cancellation_tx: &mut oneshot::Sender<()>,
-) -> Option<Result<String, Box<dyn std::error::Error>>> {
-    let race_result =
-        futures::future::select(incoming_lines.next(), cancellation_tx.cancellation()).await;
-
-    match race_result {
-        Either::Left((Some(Ok(next_line)), _)) => Some(Ok(next_line)),
-        Either::Left((Some(Err(err)), _)) => Some(Err(err.into())),
-        Either::Left((None, _)) | Either::Right(_) => None,
-    }
-}
-
 /// Parsing incoming messages from `incoming_bytes`.
 /// Each message will be dispatched to the appropriate layer.
 ///
@@ -80,12 +61,11 @@ pub(super) async fn incoming_actor(
     json_rpc_cx: &JsonRpcCx,
     incoming_bytes: Pin<Box<dyn AsyncRead>>,
     reply_tx: mpsc::UnboundedSender<ReplyMessage>,
-    mut cancellation_tx: oneshot::Sender<()>,
     mut handler: impl JsonRpcHandler,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let buffered_incoming_bytes = BufReader::new(incoming_bytes);
     let mut incoming_lines = buffered_incoming_bytes.lines();
-    while let Some(line) = read_next_line(&mut incoming_lines, &mut cancellation_tx).await {
+    while let Some(line) = incoming_lines.next().await {
         let line = line?;
         let message: Result<jsonrpcmsg::Message, _> = serde_json::from_str(&line);
         match message {
@@ -157,12 +137,10 @@ async fn dispatch_request(
 /// * `outgoing_rx`: Receiver for outgoing messages.
 /// * `reply_tx`: Sender for reply messages.
 /// * `outgoing_bytes`: AsyncWrite for sending messages.
-/// * `_incoming_cancel_rx`: Dropped when we return, which signals the incoming message actor to stop.
 pub(super) async fn outgoing_actor(
     mut outgoing_rx: mpsc::UnboundedReceiver<OutgoingMessage>,
     reply_tx: mpsc::UnboundedSender<ReplyMessage>,
     mut outgoing_bytes: Pin<Box<dyn AsyncWrite>>,
-    _incoming_cancel_rx: oneshot::Receiver<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     while let Some(message) = outgoing_rx.next().await {
         // Create the message to be sent over the transport
