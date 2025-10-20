@@ -115,7 +115,7 @@ Other adaptations include translating streaming support, content types, and tool
 fiedler sparkle-acp claude-code-acp
 ```
 
-Fiedler advertises an `"orchestrator"` capability during ACP initialization, but editors can treat it as any other ACP agent.
+To editors, Fiedler is a normal ACP agent - no special capabilities are advertised upstream. However, Fiedler advertises a `"proxy"` capability to its downstream components, and expects them to respond with a `"proxy"` capability to confirm they are S/ACP-aware.
 
 
 # Shiny future
@@ -339,10 +339,283 @@ Zed → Fiedler → Sparkle Component → Claude
 ```
 
 **Success criteria:**
-- Sparkle MCP server appears in Claude's tool list
+- Sparkle MCP server appears in agent's tool list
 - First prompt triggers Sparkle embodiment sequence
 - Subsequent prompts work normally
 - All other ACP messages pass through unchanged
+
+### Detailed MVP Walkthrough
+
+This section shows the exact message flows for the minimal Sparkle demo.
+
+#### Scenario 1: Initialization
+
+The editor spawns Fiedler, which spawns the component chain.
+
+```mermaid
+sequenceDiagram
+    participant Editor as Editor<br/>(Zed)
+    participant Fiedler as Fiedler<br/>Orchestrator
+    participant Sparkle as Sparkle<br/>Component
+    participant Agent as Base<br/>Agent
+
+    Editor->>Fiedler: spawn process
+    activate Fiedler
+    Fiedler->>Sparkle: spawn process
+    activate Sparkle
+    Sparkle->>Agent: spawn process
+    activate Agent
+    
+    Note over Fiedler,Agent: Initialization flows upstream
+    
+    Editor->>Fiedler: initialize request
+    Fiedler->>Sparkle: initialize request<br/>(with "proxy" capability)
+    Sparkle->>Agent: initialize request<br/>(with "proxy" capability)
+    
+    Agent-->>Sparkle: initialize response<br/>(with agent capabilities + "proxy")
+    Note over Sparkle: Injects Sparkle MCP server<br/>into tools list
+    Sparkle-->>Fiedler: initialize response<br/>(modified tools + "proxy")
+    Fiedler-->>Editor: initialize response<br/>(normal ACP response)
+    
+    Note over Editor,Agent: All components initialized,<br/>Sparkle tools available to agent
+```
+
+**Key messages:**
+
+1. **Editor → Fiedler:** Standard ACP `initialize` request
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": 1,
+     "method": "initialize",
+     "params": {
+       "protocolVersion": "0.1.0",
+       "capabilities": {},
+       "clientInfo": {"name": "Zed", "version": "0.1.0"}
+     }
+   }
+   ```
+
+2. **Fiedler → Sparkle:** Same request, but adds `"proxy"` capability in `_meta`
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": 1,
+     "method": "initialize",
+     "params": {
+       "protocolVersion": "0.1.0",
+       "capabilities": {
+         "_meta": {
+           "symposium": {
+             "version": "1.0",
+             "proxy": true
+           }
+         }
+       },
+       "clientInfo": {"name": "Fiedler", "version": "0.1.0"}
+     }
+   }
+   ```
+
+3. **Agent → Sparkle:** Response with agent capabilities and `"proxy"` confirmation
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": 1,
+     "result": {
+       "protocolVersion": "0.1.0",
+       "capabilities": {
+         "tools": {},
+         "_meta": {
+           "symposium": {
+             "version": "1.0",
+             "proxy": true
+           }
+         }
+       },
+       "serverInfo": {"name": "claude-code-acp", "version": "0.1.0"}
+     }
+   }
+   ```
+
+4. **Sparkle → Fiedler:** Modified response with Sparkle MCP server injected
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": 1,
+     "result": {
+       "protocolVersion": "0.1.0",
+       "capabilities": {
+         "tools": {
+           "mcpServers": {
+             "sparkle": {
+               "command": "sparkle-mcp",
+               "args": []
+             }
+           }
+         },
+         "_meta": {
+           "symposium": {
+             "version": "1.0",
+             "proxy": true
+           }
+         }
+       },
+       "serverInfo": {"name": "Fiedler + Sparkle", "version": "0.1.0"}
+     }
+   }
+   ```
+
+5. **Fiedler → Editor:** Same as previous, but strips `_meta.symposium`
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": 1,
+     "result": {
+       "protocolVersion": "0.1.0",
+       "capabilities": {
+         "tools": {
+           "mcpServers": {
+             "sparkle": {
+               "command": "sparkle-mcp",
+               "args": []
+             }
+           }
+         }
+       },
+       "serverInfo": {"name": "Fiedler + Sparkle", "version": "0.1.0"}
+     }
+   }
+   ```
+
+#### Scenario 2: First Prompt (Sparkle Embodiment)
+
+When the first prompt arrives, Sparkle intercepts it and runs the embodiment sequence before forwarding the actual user prompt.
+
+```mermaid
+sequenceDiagram
+    participant Editor as Editor<br/>(Zed)
+    participant Fiedler as Fiedler<br/>Orchestrator
+    participant Sparkle as Sparkle<br/>Component
+    participant Agent as Base<br/>Agent
+
+    Editor->>Fiedler: session/prompt<br/>(user's first message)
+    Fiedler->>Sparkle: session/prompt
+    
+    Note over Sparkle: First prompt detected!<br/>Run embodiment sequence
+    
+    Sparkle->>Agent: session/prompt<br/>(Sparkle embodiment sequence)
+    Agent-->>Sparkle: response<br/>(embodiment complete)
+    Sparkle-->>Fiedler: response<br/>(proxy back to editor)
+    Fiedler-->>Editor: response
+    
+    Note over Sparkle: Embodiment complete,<br/>now send real prompt
+    
+    Sparkle->>Agent: session/prompt<br/>(actual user message)
+    Agent-->>Sparkle: response
+    Sparkle-->>Fiedler: response
+    Fiedler-->>Editor: response
+    
+    Note over Editor,Agent: Sparkle initialized,<br/>user sees response
+```
+
+**Key messages:**
+
+1. **Editor → Fiedler:** User's first prompt
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": 2,
+     "method": "session/prompt",
+     "params": {
+       "sessionId": "session-1",
+       "messages": [
+         {"role": "user", "content": "Hello! Can you help me with my code?"}
+       ]
+     }
+   }
+   ```
+
+2. **Sparkle → Agent:** Embodiment sequence (before user prompt)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": 100,
+     "method": "session/prompt",
+     "params": {
+       "sessionId": "session-1",
+       "messages": [
+         {
+           "role": "user",
+           "content": "Please use the embody_sparkle tool to load your collaborative patterns."
+         }
+       ]
+     }
+   }
+   ```
+
+3. **Agent → Sparkle:** Embodiment response (agent calls tool)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": 100,
+     "result": {
+       "role": "assistant",
+       "content": [
+         {
+           "type": "tool_use",
+           "id": "tool-1",
+           "name": "embody_sparkle",
+           "input": {}
+         }
+       ]
+     }
+   }
+   ```
+
+4. **Sparkle → Fiedler → Editor:** Forward embodiment response
+   (This gets proxied back to editor so they see the tool call happening)
+
+5. **Sparkle → Agent:** Now send the actual user prompt
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": 2,
+     "method": "session/prompt",
+     "params": {
+       "sessionId": "session-1",
+       "messages": [
+         {"role": "user", "content": "Hello! Can you help me with my code?"}
+       ]
+     }
+   }
+   ```
+
+6. **Agent → Editor:** User sees the normal response
+
+#### Scenario 3: Subsequent Prompts (Pass-Through)
+
+After embodiment, Sparkle passes all messages through transparently.
+
+```mermaid
+sequenceDiagram
+    participant Editor as Editor<br/>(Zed)
+    participant Fiedler as Fiedler<br/>Orchestrator
+    participant Sparkle as Sparkle<br/>Component
+    participant Agent as Base<br/>Agent
+
+    Editor->>Fiedler: session/prompt<br/>(subsequent message)
+    Fiedler->>Sparkle: session/prompt
+    Note over Sparkle: Already embodied,<br/>pass through
+    Sparkle->>Agent: session/prompt<br/>(unchanged)
+    Agent-->>Sparkle: response
+    Sparkle-->>Fiedler: response<br/>(unchanged)
+    Fiedler-->>Editor: response
+    
+    Note over Editor,Agent: Normal ACP flow
+```
+
+All messages pass through unchanged - Sparkle and Fiedler are transparent.
 
 ## Phase 2: Tool Interception (FUTURE)
 
