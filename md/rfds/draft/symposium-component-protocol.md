@@ -29,18 +29,29 @@ Consider integrating Sparkle (a collaborative AI framework) into a coding sessio
 - Result: Manual intervention required, agent-specific configuration, no generic solution
 
 **With S/ACP:**
-```
-Zed → Fiedler → Sparkle Component → Claude
-               ↓
-          Sparkle MCP Server
+
+```mermaid
+flowchart LR
+    Editor[Editor<br/>Zed]
+    
+    subgraph Fiedler[Fiedler Orchestrator]
+        Sparkle[Sparkle Component]
+        Agent[Base Agent]
+        MCP[Sparkle MCP Server]
+        
+        Sparkle -->|proxy chain| Agent
+        Sparkle -.->|provides tools| MCP
+    end
+    
+    Editor <-->|ACP| Fiedler
 ```
 
 The Sparkle component:
-1. Injects Sparkle MCP server into Claude's tool list during `initialize`
+1. Injects Sparkle MCP server into the agent's tool list during `initialize`
 2. Intercepts the first `prompt` and prepends Sparkle embodiment sequence
 3. Passes all other messages through transparently
 
-From Zed's perspective, it talks to a normal ACP agent. From Claude's perspective, it has Sparkle tools available. No code changes required on either side.
+From the editor's perspective, it talks to a normal ACP agent. From the base agent's perspective, it has Sparkle tools available. No code changes required on either side.
 
 This demonstrates S/ACP's core value: adding capabilities through composition rather than modification.
 
