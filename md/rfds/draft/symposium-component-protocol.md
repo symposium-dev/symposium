@@ -20,13 +20,13 @@ Today's AI agent ecosystem is dominated by monolithic agents. We want people to 
 
 # Motivating Example: Sparkle Integration
 
-Consider integrating Sparkle (a collaborative AI framework) into a coding session with Zed and Claude. Users want Sparkle's collaborative patterns without modifying Zed's code or Claude's ACP implementation.
+Consider integrating Sparkle (a collaborative AI framework) into a coding session with Zed and Claude. Sparkle provides an MCP server with tools, but requires an initialization sequence to load patterns and set up collaborative context.
 
 **Without S/ACP:**
-- Fork Zed to add Sparkle-specific code
-- Or fork Claude's agent to inject Sparkle
-- Or build a custom editor from scratch
-- Result: Fragmentation, maintenance burden, incompatibility
+- Users must manually run the initialization sequence each session
+- Or use agent-specific hooks (Claude Code has them, but not standardized across agents)
+- Or modify the agent to handle initialization automatically
+- Result: Manual intervention required, agent-specific configuration, no generic solution
 
 **With S/ACP:**
 ```
