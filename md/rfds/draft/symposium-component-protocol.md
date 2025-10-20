@@ -348,9 +348,26 @@ Zed → Fiedler → Sparkle Component → Claude
 
 This section shows the exact message flows for the minimal Sparkle demo.
 
-#### Scenario 1: Initialization
+**Understanding UUIDs in the flow:**
 
-The editor spawns Fiedler, which spawns the component chain.
+There are two distinct types of UUIDs in these sequences:
+
+1. **Message IDs (JSON-RPC request IDs)**: These identify individual JSON-RPC requests and must be tracked to route responses correctly. When a component forwards a message using `_proxy/successor/request`, it creates a fresh message ID for the downstream request and remembers the mapping to route the response back.
+
+2. **Session IDs (ACP session identifiers)**: These identify ACP sessions and flow through the chain unchanged. The agent creates a session ID, and all components pass it back unmodified.
+
+**Fiedler's routing rules:**
+
+1. Message from Editor → Forward "as is" to first component (same message ID)
+2. `_proxy/successor/request` from component → Unwrap payload and send to next component (using message ID from the wrapper)
+3. Response from downstream → Send back to whoever made the `_proxy` request
+4. First component's response → Send back to Editor
+
+Components don't talk directly to each other - all communication flows through Fiedler via the `_proxy` protocol.
+
+#### Scenario 1: Initialization and Session Creation
+
+The editor spawns Fiedler with component names, Fiedler spawns the components, and initialization flows through the chain.
 
 ```mermaid
 sequenceDiagram
@@ -359,34 +376,58 @@ sequenceDiagram
     participant Sparkle as Sparkle<br/>Component
     participant Agent as Base<br/>Agent
 
+    Note over Editor: Spawns Fiedler with args:<br/>"sparkle-acp agent-acp"
     Editor->>Fiedler: spawn process
     activate Fiedler
-    Fiedler->>Sparkle: spawn process
+    
+    Note over Fiedler: Spawns both components
+    Fiedler->>Sparkle: spawn "sparkle-acp"
     activate Sparkle
-    Sparkle->>Agent: spawn process
+    Fiedler->>Agent: spawn "agent-acp"
     activate Agent
     
-    Note over Fiedler,Agent: Initialization flows upstream
+    Note over Editor,Agent: === Initialization Phase ===
     
-    Editor->>Fiedler: initialize request
-    Fiedler->>Sparkle: initialize request<br/>(with "proxy" capability)
-    Sparkle->>Agent: initialize request<br/>(with "proxy" capability)
+    Editor->>Fiedler: initialize (id: I0)
     
-    Agent-->>Sparkle: initialize response<br/>(with agent capabilities + "proxy")
-    Note over Sparkle: Injects Sparkle MCP server<br/>into tools list
-    Sparkle-->>Fiedler: initialize response<br/>(modified tools + "proxy")
-    Fiedler-->>Editor: initialize response<br/>(normal ACP response)
+    par Concurrent initialization
+        Fiedler->>Sparkle: initialize (id: I0)<br/>(with PROXY capability)
+        Sparkle-->>Fiedler: initialize response (id: I0)<br/>(no extra capabilities)
+    and
+        Fiedler->>Agent: initialize (id: I0)<br/>(without PROXY capability)
+        Agent-->>Fiedler: initialize response (id: I0)<br/>(no extra capabilities)
+    end
     
-    Note over Editor,Agent: All components initialized,<br/>Sparkle tools available to agent
+    Fiedler-->>Editor: initialize response (id: I0)
+    
+    Note over Editor,Agent: === Session Creation ===
+    
+    Editor->>Fiedler: session/new (id: U0, tools: M0)
+    Fiedler->>Sparkle: session/new (id: U0, tools: M0)
+    
+    Note over Sparkle: Wants to inject Sparkle MCP server
+    
+    Sparkle->>Fiedler: _proxy/successor/request (id: U1)<br/>payload: session/new with tools (M0, sparkle-mcp)
+    Fiedler->>Agent: session/new (id: U1, tools: M0 + sparkle-mcp)
+    
+    Agent-->>Fiedler: response (id: U1, sessionId: S1)
+    Fiedler-->>Sparkle: response to _proxy request (id: U1, sessionId: S1)
+    
+    Note over Sparkle: Remembers mapping U0 → U1
+    
+    Sparkle-->>Fiedler: response (id: U0, sessionId: S1)
+    Fiedler-->>Editor: response (id: U0, sessionId: S1)
+    
+    Note over Editor,Agent: Session S1 created,<br/>Sparkle MCP server available to agent
 ```
 
 **Key messages:**
 
-1. **Editor → Fiedler:** Standard ACP `initialize` request
+1. **Editor → Fiedler: initialize** (id: I0)
    ```json
    {
      "jsonrpc": "2.0",
-     "id": 1,
+     "id": "I0",
      "method": "initialize",
      "params": {
        "protocolVersion": "0.1.0",
@@ -396,11 +437,11 @@ sequenceDiagram
    }
    ```
 
-2. **Fiedler → Sparkle:** Same request, but adds `"proxy"` capability in `_meta`
+2. **Fiedler → Sparkle: initialize** (id: I0, with PROXY capability)
    ```json
    {
      "jsonrpc": "2.0",
-     "id": 1,
+     "id": "I0",
      "method": "initialize",
      "params": {
        "protocolVersion": "0.1.0",
@@ -417,72 +458,110 @@ sequenceDiagram
    }
    ```
 
-3. **Agent → Sparkle:** Response with agent capabilities and `"proxy"` confirmation
+3. **Fiedler → Agent: initialize** (id: I0, without PROXY capability)
    ```json
    {
      "jsonrpc": "2.0",
-     "id": 1,
-     "result": {
+     "id": "I0",
+     "method": "initialize",
+     "params": {
        "protocolVersion": "0.1.0",
-       "capabilities": {
-         "tools": {},
-         "_meta": {
-           "symposium": {
-             "version": "1.0",
-             "proxy": true
+       "capabilities": {},
+       "clientInfo": {"name": "Fiedler", "version": "0.1.0"}
+     }
+   }
+   ```
+
+4. **Editor → Fiedler: session/new** (id: U0)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": "U0",
+     "method": "session/new",
+     "params": {
+       "tools": {
+         "mcpServers": {
+           "filesystem": {"command": "mcp-filesystem", "args": []}
+         }
+       }
+     }
+   }
+   ```
+
+5. **Fiedler → Sparkle: session/new** (id: U0, forwarded as-is)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": "U0",
+     "method": "session/new",
+     "params": {
+       "tools": {
+         "mcpServers": {
+           "filesystem": {"command": "mcp-filesystem", "args": []}
+         }
+       }
+     }
+   }
+   ```
+
+6. **Sparkle → Fiedler: _proxy/successor/request** (id: U1, with injected Sparkle MCP)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": "U1",
+     "method": "_proxy/successor/request",
+     "params": {
+       "message": {
+         "method": "session/new",
+         "params": {
+           "tools": {
+             "mcpServers": {
+               "filesystem": {"command": "mcp-filesystem", "args": []},
+               "sparkle": {"command": "sparkle-mcp", "args": []}
+             }
            }
          }
-       },
+       }
+     }
+   }
+   ```
+
+7. **Fiedler → Agent: session/new** (id: U1, unwrapped from _proxy message)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": "U1",
+     "method": "session/new",
+     "params": {
+       "tools": {
+         "mcpServers": {
+           "filesystem": {"command": "mcp-filesystem", "args": []},
+           "sparkle": {"command": "sparkle-mcp", "args": []}
+         }
+       }
+     }
+   }
+   ```
+
+8. **Agent → Fiedler: response** (id: U1, with new session S1)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": "U1",
+     "result": {
+       "sessionId": "S1",
        "serverInfo": {"name": "claude-code-acp", "version": "0.1.0"}
      }
    }
    ```
 
-4. **Sparkle → Fiedler:** Modified response with Sparkle MCP server injected
+9. **Sparkle → Fiedler: response** (id: U0, with session S1)
    ```json
    {
      "jsonrpc": "2.0",
-     "id": 1,
+     "id": "U0",
      "result": {
-       "protocolVersion": "0.1.0",
-       "capabilities": {
-         "tools": {
-           "mcpServers": {
-             "sparkle": {
-               "command": "sparkle-mcp",
-               "args": []
-             }
-           }
-         },
-         "_meta": {
-           "symposium": {
-             "version": "1.0",
-             "proxy": true
-           }
-         }
-       },
-       "serverInfo": {"name": "Fiedler + Sparkle", "version": "0.1.0"}
-     }
-   }
-   ```
-
-5. **Fiedler → Editor:** Same as previous, but strips `_meta.symposium`
-   ```json
-   {
-     "jsonrpc": "2.0",
-     "id": 1,
-     "result": {
-       "protocolVersion": "0.1.0",
-       "capabilities": {
-         "tools": {
-           "mcpServers": {
-             "sparkle": {
-               "command": "sparkle-mcp",
-               "args": []
-             }
-           }
-         }
-       },
+       "sessionId": "S1",
        "serverInfo": {"name": "Fiedler + Sparkle", "version": "0.1.0"}
      }
    }
@@ -499,36 +578,45 @@ sequenceDiagram
     participant Sparkle as Sparkle<br/>Component
     participant Agent as Base<br/>Agent
 
-    Editor->>Fiedler: session/prompt<br/>(user's first message)
-    Fiedler->>Sparkle: session/prompt
+    Note over Editor,Agent: === First Prompt Flow ===
     
-    Note over Sparkle: First prompt detected!<br/>Run embodiment sequence
+    Editor->>Fiedler: session/prompt (id: P0, sessionId: S1)
+    Fiedler->>Sparkle: session/prompt (id: P0, sessionId: S1)
     
-    Sparkle->>Agent: session/prompt<br/>(Sparkle embodiment sequence)
-    Agent-->>Sparkle: response<br/>(embodiment complete)
-    Sparkle-->>Fiedler: response<br/>(proxy back to editor)
-    Fiedler-->>Editor: response
+    Note over Sparkle: First prompt detected!<br/>Run embodiment sequence first
+    
+    Sparkle->>Fiedler: _proxy/successor/request (id: P1)<br/>payload: session/prompt (embodiment)
+    Fiedler->>Agent: session/prompt (id: P1, embodiment)
+    
+    Agent-->>Fiedler: response (id: P1, tool_use: embody_sparkle)
+    Fiedler-->>Sparkle: response to _proxy request (id: P1)
     
     Note over Sparkle: Embodiment complete,<br/>now send real prompt
     
-    Sparkle->>Agent: session/prompt<br/>(actual user message)
-    Agent-->>Sparkle: response
-    Sparkle-->>Fiedler: response
-    Fiedler-->>Editor: response
+    Sparkle->>Fiedler: _proxy/successor/request (id: P2)<br/>payload: session/prompt (user message)
+    Fiedler->>Agent: session/prompt (id: P2, user message)
     
-    Note over Editor,Agent: Sparkle initialized,<br/>user sees response
+    Agent-->>Fiedler: response (id: P2, actual answer)
+    Fiedler-->>Sparkle: response to _proxy request (id: P2)
+    
+    Note over Sparkle: Maps P2 → P0
+    
+    Sparkle-->>Fiedler: response (id: P0, actual answer)
+    Fiedler-->>Editor: response (id: P0, actual answer)
+    
+    Note over Editor,Agent: User sees response,<br/>Sparkle initialized
 ```
 
 **Key messages:**
 
-1. **Editor → Fiedler:** User's first prompt
+1. **Editor → Fiedler: session/prompt** (id: P0, user's first message)
    ```json
    {
      "jsonrpc": "2.0",
-     "id": 2,
+     "id": "P0",
      "method": "session/prompt",
      "params": {
-       "sessionId": "session-1",
+       "sessionId": "S1",
        "messages": [
          {"role": "user", "content": "Hello! Can you help me with my code?"}
        ]
@@ -536,14 +624,52 @@ sequenceDiagram
    }
    ```
 
-2. **Sparkle → Agent:** Embodiment sequence (before user prompt)
+2. **Fiedler → Sparkle: session/prompt** (id: P0, forwarded as-is)
    ```json
    {
      "jsonrpc": "2.0",
-     "id": 100,
+     "id": "P0",
      "method": "session/prompt",
      "params": {
-       "sessionId": "session-1",
+       "sessionId": "S1",
+       "messages": [
+         {"role": "user", "content": "Hello! Can you help me with my code?"}
+       ]
+     }
+   }
+   ```
+
+3. **Sparkle → Fiedler: _proxy/successor/request** (id: P1, embodiment sequence)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": "P1",
+     "method": "_proxy/successor/request",
+     "params": {
+       "message": {
+         "method": "session/prompt",
+         "params": {
+           "sessionId": "S1",
+           "messages": [
+             {
+               "role": "user",
+               "content": "Please use the embody_sparkle tool to load your collaborative patterns."
+             }
+           ]
+         }
+       }
+     }
+   }
+   ```
+
+4. **Fiedler → Agent: session/prompt** (id: P1, unwrapped embodiment)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": "P1",
+     "method": "session/prompt",
+     "params": {
+       "sessionId": "S1",
        "messages": [
          {
            "role": "user",
@@ -554,11 +680,11 @@ sequenceDiagram
    }
    ```
 
-3. **Agent → Sparkle:** Embodiment response (agent calls tool)
+5. **Agent → Fiedler: response** (id: P1, embodiment tool call)
    ```json
    {
      "jsonrpc": "2.0",
-     "id": 100,
+     "id": "P1",
      "result": {
        "role": "assistant",
        "content": [
@@ -573,17 +699,34 @@ sequenceDiagram
    }
    ```
 
-4. **Sparkle → Fiedler → Editor:** Forward embodiment response
-   (This gets proxied back to editor so they see the tool call happening)
-
-5. **Sparkle → Agent:** Now send the actual user prompt
+6. **Sparkle → Fiedler: _proxy/successor/request** (id: P2, actual user prompt)
    ```json
    {
      "jsonrpc": "2.0",
-     "id": 2,
+     "id": "P2",
+     "method": "_proxy/successor/request",
+     "params": {
+       "message": {
+         "method": "session/prompt",
+         "params": {
+           "sessionId": "S1",
+           "messages": [
+             {"role": "user", "content": "Hello! Can you help me with my code?"}
+           ]
+         }
+       }
+     }
+   }
+   ```
+
+7. **Fiedler → Agent: session/prompt** (id: P2, unwrapped user prompt)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": "P2",
      "method": "session/prompt",
      "params": {
-       "sessionId": "session-1",
+       "sessionId": "S1",
        "messages": [
          {"role": "user", "content": "Hello! Can you help me with my code?"}
        ]
@@ -591,7 +734,17 @@ sequenceDiagram
    }
    ```
 
-6. **Agent → Editor:** User sees the normal response
+8. **Sparkle → Fiedler: response** (id: P0, forwarded to editor)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": "P0",
+     "result": {
+       "role": "assistant",
+       "content": "I'd be happy to help you with your code! What would you like to work on?"
+     }
+   }
+   ```
 
 #### Scenario 3: Subsequent Prompts (Pass-Through)
 
@@ -604,18 +757,92 @@ sequenceDiagram
     participant Sparkle as Sparkle<br/>Component
     participant Agent as Base<br/>Agent
 
-    Editor->>Fiedler: session/prompt<br/>(subsequent message)
-    Fiedler->>Sparkle: session/prompt
-    Note over Sparkle: Already embodied,<br/>pass through
-    Sparkle->>Agent: session/prompt<br/>(unchanged)
-    Agent-->>Sparkle: response
-    Sparkle-->>Fiedler: response<br/>(unchanged)
-    Fiedler-->>Editor: response
+    Note over Editor,Agent: === Subsequent Prompt Flow ===
     
-    Note over Editor,Agent: Normal ACP flow
+    Editor->>Fiedler: session/prompt (id: P3, sessionId: S1)
+    Fiedler->>Sparkle: session/prompt (id: P3, sessionId: S1)
+    
+    Note over Sparkle: Already embodied,<br/>pass through unchanged
+    
+    Sparkle->>Fiedler: _proxy/successor/request (id: P4)<br/>payload: session/prompt (unchanged)
+    Fiedler->>Agent: session/prompt (id: P4, unchanged)
+    
+    Agent-->>Fiedler: response (id: P4)
+    Fiedler-->>Sparkle: response to _proxy request (id: P4)
+    
+    Note over Sparkle: Maps P4 → P3
+    
+    Sparkle-->>Fiedler: response (id: P3)
+    Fiedler-->>Editor: response (id: P3)
+    
+    Note over Editor,Agent: Normal ACP flow,<br/>Sparkle and Fiedler transparent
 ```
 
-All messages pass through unchanged - Sparkle and Fiedler are transparent.
+**Key messages:**
+
+1. **Editor → Fiedler: session/prompt** (id: P3)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": "P3",
+     "method": "session/prompt",
+     "params": {
+       "sessionId": "S1",
+       "messages": [
+         {"role": "user", "content": "Can you refactor the authenticate function?"}
+       ]
+     }
+   }
+   ```
+
+2. **Sparkle → Fiedler: _proxy/successor/request** (id: P4, message unchanged)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": "P4",
+     "method": "_proxy/successor/request",
+     "params": {
+       "message": {
+         "method": "session/prompt",
+         "params": {
+           "sessionId": "S1",
+           "messages": [
+             {"role": "user", "content": "Can you refactor the authenticate function?"}
+           ]
+         }
+       }
+     }
+   }
+   ```
+
+3. **Fiedler → Agent: session/prompt** (id: P4, unwrapped)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": "P4",
+     "method": "session/prompt",
+     "params": {
+       "sessionId": "S1",
+       "messages": [
+         {"role": "user", "content": "Can you refactor the authenticate function?"}
+       ]
+     }
+   }
+   ```
+
+4. **Sparkle → Fiedler: response** (id: P3, forwarded to editor)
+   ```json
+   {
+     "jsonrpc": "2.0",
+     "id": "P3",
+     "result": {
+       "role": "assistant",
+       "content": "I'll help you refactor the authenticate function..."
+     }
+   }
+   ```
+
+Note that even though Sparkle is passing messages through "transparently", it still uses the `_proxy/successor/request` protocol. This maintains the consistent routing pattern where all downstream communication flows through Fiedler.
 
 ## Phase 2: Tool Interception (FUTURE)
 
