@@ -844,6 +844,10 @@ sequenceDiagram
 
 Note that even though Sparkle is passing messages through "transparently", it still uses the `_proxy/successor/request` protocol. This maintains the consistent routing pattern where all downstream communication flows through Fiedler.
 
+**Implementation Note on Embodiment Responses:**
+
+For the MVP, when Sparkle runs the embodiment sequence before the user's actual prompt, it will buffer both responses and concatenate them before sending back to the editor. This makes the embodiment transparent but loses some structure. A future RFD will explore richer content types (like `subconversation`) that would allow editors to distinguish between nested exchanges and main responses.
+
 ## Phase 2: Tool Interception (FUTURE)
 
 **Goal:** Route MCP tool calls through the proxy chain.
