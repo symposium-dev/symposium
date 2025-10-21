@@ -62,7 +62,7 @@
 
 use std::pin::Pin;
 
-use agent_client_protocol::InitializeRequest;
+use agent_client_protocol::{ClientRequest, InitializeRequest};
 use futures::{AsyncRead, AsyncWrite, SinkExt, StreamExt, channel::mpsc};
 use scp::{
     AcpAgentToClientMessages, AcpClientToAgentMessages, JsonRpcConnection, JsonRpcCx,
@@ -74,37 +74,56 @@ use tracing::{debug, error, info, warn};
 
 use crate::component::Component;
 
-/// Adds the P/ACP proxy capability to an InitializeRequest's meta field.
-/// This signals to the component that it has a successor in the proxy chain.
-fn add_proxy_capability(mut request: InitializeRequest) -> InitializeRequest {
-    let mut meta = request.meta.take().unwrap_or(json!({}));
+/// Manages the P/ACP proxy capability based on component position in the chain.
+///
+/// The proxy capability (`_meta.symposium.proxy`) signals to a component whether
+/// it has a successor in the proxy chain:
+/// - **Has successor**: Add the proxy capability
+/// - **No successor (last component)**: Remove/omit the proxy capability
+///
+/// # Arguments
+///
+/// - `request`: The InitializeRequest to modify
+/// - `component_index`: The index of the component receiving this request (0-based)
+/// - `total_components`: Total number of components in the chain
+///
+/// # Returns
+///
+/// The modified InitializeRequest with capability added or removed as appropriate
+fn manage_proxy_capability(
+    mut request: InitializeRequest,
+    component_index: usize,
+    total_components: usize,
+) -> InitializeRequest {
+    let is_last_component = component_index == total_components - 1;
 
-    // Ensure the structure exists: _meta.symposium.proxy = true
-    if let Some(obj) = meta.as_object_mut() {
-        let symposium = obj.entry("symposium").or_insert_with(|| json!({}));
-
-        if let Some(symposium_obj) = symposium.as_object_mut() {
-            symposium_obj.insert("version".to_string(), json!("1.0"));
-            symposium_obj.insert("proxy".to_string(), json!(true));
-        }
-    }
-
-    request.meta = Some(meta);
-    request
-}
-
-/// Removes the P/ACP proxy capability from an InitializeRequest's meta field.
-/// This indicates to the component that it is the last in the chain (no successor).
-fn remove_proxy_capability(mut request: InitializeRequest) -> InitializeRequest {
-    if let Some(ref mut meta) = request.meta {
-        if let Some(obj) = meta.as_object_mut() {
-            if let Some(symposium) = obj.get_mut("symposium") {
-                if let Some(symposium_obj) = symposium.as_object_mut() {
-                    symposium_obj.remove("proxy");
+    if is_last_component {
+        // Last component - remove proxy capability if present
+        if let Some(ref mut meta) = request.meta {
+            if let Some(obj) = meta.as_object_mut() {
+                if let Some(symposium) = obj.get_mut("symposium") {
+                    if let Some(symposium_obj) = symposium.as_object_mut() {
+                        symposium_obj.remove("proxy");
+                    }
                 }
             }
         }
+    } else {
+        // Has successor - add proxy capability
+        let mut meta = request.meta.take().unwrap_or(json!({}));
+
+        if let Some(obj) = meta.as_object_mut() {
+            let symposium = obj.entry("symposium").or_insert_with(|| json!({}));
+
+            if let Some(symposium_obj) = symposium.as_object_mut() {
+                symposium_obj.insert("version".to_string(), json!("1.0"));
+                symposium_obj.insert("proxy".to_string(), json!(true));
+            }
+        }
+
+        request.meta = Some(meta);
     }
+
     request
 }
 
@@ -275,6 +294,39 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                         // When we receive messages from the client, forward to the first item
                         // the proxy chain.
                         ConductorMessage::ClientToAgentViaProxyChain { message } => match message {
+                            // Special handling for initialize: manage proxy capability based on chain position
+                            scp::AcpClientToAgentMessage::Request(
+                                ClientRequest::InitializeRequest(init_req),
+                                json_rpc_request_cx,
+                            ) => {
+                                let method = init_req.method();
+                                let total_components = self.components.len();
+                                let has_successor = total_components > 1;
+
+                                debug!(
+                                    method,
+                                    target = "component_0",
+                                    has_successor,
+                                    total_components,
+                                    "Routing initialization request to first component"
+                                );
+
+                                let modified_req = manage_proxy_capability(init_req, 0, total_components);
+                                info!(
+                                    target = "component_0",
+                                    has_successor,
+                                    "Managed proxy capability for first component"
+                                );
+
+                                send_request_and_forward_response(
+                                    &self.components[0].jsonrpccx,
+                                    ClientRequest::InitializeRequest(modified_req),
+                                    json_rpc_request_cx,
+                                    conductor_tx.clone(),
+                                )
+                                .await;
+                            }
+
                             scp::AcpClientToAgentMessage::Request(
                                 client_request,
                                 json_rpc_request_cx,
@@ -287,24 +339,6 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                                     "Routing editor request to first component"
                                 );
 
-                                // Special handling for initialize: add proxy capability if component has successor
-                                if method == "initialize" && self.components.len() > 1 {
-                                    if let agent_client_protocol::ClientRequest::InitializeRequest(init_req) = client_request {
-                                        let modified_req = add_proxy_capability(init_req);
-                                        info!(
-                                            target = "component_0",
-                                            "Added proxy capability to initialize request"
-                                        );
-                                        send_request_and_forward_response(
-                                            &self.components[0].jsonrpccx,
-                                            agent_client_protocol::ClientRequest::InitializeRequest(modified_req),
-                                            json_rpc_request_cx,
-                                            conductor_tx.clone(),
-                                        )
-                                        .await;
-                                        continue;
-                                    }
-                                }
 
                                 send_request_and_forward_response(
                                     &self.components[0].jsonrpccx,
@@ -398,28 +432,26 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                                     "Routing _proxy/successor/request to successor component"
                                 );
 
-                                // Special handling for initialize: modify proxy capability based on successor position
+                                // Special handling for initialize: manage proxy capability based on successor position
                                 let (final_method, final_params) = if method == "initialize" {
                                     // Try to parse params as InitializeRequest
-                                    if let Ok(mut init_req) = serde_json::from_value::<InitializeRequest>(params.clone()) {
-                                        if is_last_component {
-                                            // Last component - remove proxy capability
-                                            init_req = remove_proxy_capability(init_req);
-                                            info!(
-                                                successor_index,
-                                                "Removed proxy capability from initialize (last component)"
-                                            );
-                                        } else {
-                                            // Intermediate component - ensure proxy capability is present
-                                            init_req = add_proxy_capability(init_req);
-                                            info!(
-                                                successor_index,
-                                                "Added proxy capability to initialize (has successor)"
-                                            );
-                                        }
+                                    if let Ok(init_req) = serde_json::from_value::<InitializeRequest>(params.clone()) {
+                                        let total_components = self.components.len();
+                                        let modified_req = manage_proxy_capability(
+                                            init_req,
+                                            successor_index,
+                                            total_components
+                                        );
+
+                                        info!(
+                                            successor_index,
+                                            is_last_component,
+                                            total_components,
+                                            "Managed proxy capability for successor component"
+                                        );
 
                                         // Serialize back to params
-                                        let modified_params = serde_json::to_value(init_req)
+                                        let modified_params = serde_json::to_value(modified_req)
                                             .unwrap_or(params.clone());
                                         (method, modified_params)
                                     } else {
