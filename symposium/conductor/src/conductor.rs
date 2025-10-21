@@ -1,14 +1,50 @@
 use std::pin::Pin;
 
+use agent_client_protocol::InitializeRequest;
 use futures::{AsyncRead, AsyncWrite, SinkExt, StreamExt, channel::mpsc};
 use scp::{
     AcpAgentToClientMessages, AcpClientToAgentMessages, JsonRpcConnection, JsonRpcCx,
     JsonRpcNotification, JsonRpcRequest, JsonRpcRequestCx, ProxyToConductorMessages,
 };
+use serde_json::json;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::{debug, error, info, warn};
 
 use crate::component::Component;
+
+/// Adds the P/ACP proxy capability to an InitializeRequest's meta field.
+/// This signals to the component that it has a successor in the proxy chain.
+fn add_proxy_capability(mut request: InitializeRequest) -> InitializeRequest {
+    let mut meta = request.meta.take().unwrap_or(json!({}));
+
+    // Ensure the structure exists: _meta.symposium.proxy = true
+    if let Some(obj) = meta.as_object_mut() {
+        let symposium = obj.entry("symposium").or_insert_with(|| json!({}));
+
+        if let Some(symposium_obj) = symposium.as_object_mut() {
+            symposium_obj.insert("version".to_string(), json!("1.0"));
+            symposium_obj.insert("proxy".to_string(), json!(true));
+        }
+    }
+
+    request.meta = Some(meta);
+    request
+}
+
+/// Removes the P/ACP proxy capability from an InitializeRequest's meta field.
+/// This indicates to the component that it is the last in the chain (no successor).
+fn remove_proxy_capability(mut request: InitializeRequest) -> InitializeRequest {
+    if let Some(ref mut meta) = request.meta {
+        if let Some(obj) = meta.as_object_mut() {
+            if let Some(symposium) = obj.get_mut("symposium") {
+                if let Some(symposium_obj) = symposium.as_object_mut() {
+                    symposium_obj.remove("proxy");
+                }
+            }
+        }
+    }
+    request
+}
 
 pub struct Conductor<OB: AsyncWrite, IB: AsyncRead> {
     outgoing_bytes: OB,
@@ -134,11 +170,33 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                                 client_request,
                                 json_rpc_request_cx,
                             ) => {
+                                let method = client_request.method();
                                 debug!(
-                                    method = client_request.method(),
+                                    method,
                                     target = "component_0",
+                                    has_successor = self.components.len() > 1,
                                     "Routing editor request to first component"
                                 );
+
+                                // Special handling for initialize: add proxy capability if component has successor
+                                if method == "initialize" && self.components.len() > 1 {
+                                    if let agent_client_protocol::ClientRequest::InitializeRequest(init_req) = client_request {
+                                        let modified_req = add_proxy_capability(init_req);
+                                        info!(
+                                            target = "component_0",
+                                            "Added proxy capability to initialize request"
+                                        );
+                                        send_request_and_forward_response(
+                                            &self.components[0].jsonrpccx,
+                                            agent_client_protocol::ClientRequest::InitializeRequest(modified_req),
+                                            json_rpc_request_cx,
+                                            conductor_tx.clone(),
+                                        )
+                                        .await;
+                                        continue;
+                                    }
+                                }
+
                                 send_request_and_forward_response(
                                     &self.components[0].jsonrpccx,
                                     client_request,
@@ -221,16 +279,50 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                             let successor_index = component_index + 1;
                             if let Some(successor_component) = self.components.get(successor_index)
                             {
+                                let is_last_component = successor_index == self.components.len() - 1;
+
                                 debug!(
                                     component_index,
                                     successor_index,
                                     method = %method,
+                                    is_last_component,
                                     "Routing _proxy/successor/request to successor component"
                                 );
 
+                                // Special handling for initialize: modify proxy capability based on successor position
+                                let (final_method, final_params) = if method == "initialize" {
+                                    // Try to parse params as InitializeRequest
+                                    if let Ok(mut init_req) = serde_json::from_value::<InitializeRequest>(params.clone()) {
+                                        if is_last_component {
+                                            // Last component - remove proxy capability
+                                            init_req = remove_proxy_capability(init_req);
+                                            info!(
+                                                successor_index,
+                                                "Removed proxy capability from initialize (last component)"
+                                            );
+                                        } else {
+                                            // Intermediate component - ensure proxy capability is present
+                                            init_req = add_proxy_capability(init_req);
+                                            info!(
+                                                successor_index,
+                                                "Added proxy capability to initialize (has successor)"
+                                            );
+                                        }
+
+                                        // Serialize back to params
+                                        let modified_params = serde_json::to_value(init_req)
+                                            .unwrap_or(params.clone());
+                                        (method, modified_params)
+                                    } else {
+                                        (method, params)
+                                    }
+                                } else {
+                                    (method, params)
+                                };
+
                                 let successor_response = successor_component
                                     .jsonrpccx
-                                    .send_json_request(method, params);
+                                    .send_json_request(final_method, final_params);
 
                                 let mut conductor_tx = conductor_tx.clone();
                                 tokio::task::spawn_local(async move {
