@@ -70,7 +70,7 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                     let mut conductor_tx = conductor_tx.clone();
                     async move |message| {
                         conductor_tx
-                            .send(ConductorMessage::ComnponentToItsClientMessage {
+                            .send(ConductorMessage::ComponentToItsClientMessage {
                                 component_index,
                                 message,
                             })
@@ -129,7 +129,7 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                                 .send_notification(client_notification)?,
                         },
 
-                        ConductorMessage::ComnponentToItsClientMessage {
+                        ConductorMessage::ComponentToItsClientMessage {
                             component_index,
                             message,
                         } => {
@@ -279,7 +279,7 @@ pub enum ConductorMessage {
         message: scp::AcpClientToAgentMessage,
     },
 
-    ComnponentToItsClientMessage {
+    ComponentToItsClientMessage {
         component_index: usize,
         message: scp::AcpAgentToClientMessage,
     },
