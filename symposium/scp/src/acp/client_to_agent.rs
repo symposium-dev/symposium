@@ -18,22 +18,22 @@ use crate::{
 mod notifications;
 mod requests;
 
-/// ACP handler for agent-side messages (requests that agents receive from editors).
+/// ACP handler for agent-side messages (requests that agents receive from clients).
 ///
 /// This implements `JsonRpcHandler` to route incoming ACP requests to your callback
 /// implementation. These are the messages an agent receives: initialize, prompt,
 /// new_session, etc.
-pub struct AcpAgentMessages<CB: AcpAgentCallbacks> {
+pub struct AcpClientToAgentMessages<CB: AcpClientToAgentCallbacks> {
     callbacks: CB,
 }
 
-impl<CB: AcpAgentCallbacks> AcpAgentMessages<CB> {
-    pub fn new(callbacks: CB) -> Self {
+impl<CB: AcpClientToAgentCallbacks> AcpClientToAgentMessages<CB> {
+    pub fn callback(callbacks: CB) -> Self {
         Self { callbacks }
     }
 }
 
-impl<CB: AcpAgentCallbacks> JsonRpcHandler for AcpAgentMessages<CB> {
+impl<CB: AcpClientToAgentCallbacks> JsonRpcHandler for AcpClientToAgentMessages<CB> {
     async fn handle_request(
         &mut self,
         method: &str,
@@ -101,53 +101,53 @@ impl<CB: AcpAgentCallbacks> JsonRpcHandler for AcpAgentMessages<CB> {
 
 /// Callbacks for handling agent-side ACP messages.
 ///
-/// Implement this trait to define how your agent responds to requests from editors.
-/// These are the standard ACP methods that editors call on agents.
+/// Implement this trait to define how your agent responds to requests from clients.
+/// These are the standard ACP methods that clients call on agents.
 #[allow(async_fn_in_trait)]
-pub trait AcpAgentCallbacks {
-    /// Handle agent initialization request from editor.
+pub trait AcpClientToAgentCallbacks {
+    /// Handle agent initialization request from client.
     async fn initialize(
         &mut self,
         args: InitializeRequest,
         response: jsonrpc::JsonRpcRequestCx<InitializeResponse>,
     ) -> Result<(), acp::Error>;
 
-    /// Handle authentication request from editor.
+    /// Handle authentication request from client.
     async fn authenticate(
         &mut self,
         args: AuthenticateRequest,
         response: jsonrpc::JsonRpcRequestCx<AuthenticateResponse>,
     ) -> Result<(), acp::Error>;
 
-    /// Handle session cancellation notification from editor.
+    /// Handle session cancellation notification from client.
     async fn session_cancel(
         &mut self,
         args: CancelNotification,
         cx: &JsonRpcCx,
     ) -> Result<(), acp::Error>;
 
-    /// Handle new session creation request from editor.
+    /// Handle new session creation request from client.
     async fn new_session(
         &mut self,
         args: NewSessionRequest,
         response: jsonrpc::JsonRpcRequestCx<NewSessionResponse>,
     ) -> Result<(), acp::Error>;
 
-    /// Handle session loading request from editor.
+    /// Handle session loading request from client.
     async fn load_session(
         &mut self,
         args: LoadSessionRequest,
         response: jsonrpc::JsonRpcRequestCx<LoadSessionResponse>,
     ) -> Result<(), acp::Error>;
 
-    /// Handle prompt request from editor.
+    /// Handle prompt request from client.
     async fn prompt(
         &mut self,
         args: PromptRequest,
         response: jsonrpc::JsonRpcRequestCx<PromptResponse>,
     ) -> Result<(), acp::Error>;
 
-    /// Handle session mode change request from editor.
+    /// Handle session mode change request from client.
     async fn set_session_mode(
         &mut self,
         args: SetSessionModeRequest,
@@ -155,10 +155,10 @@ pub trait AcpAgentCallbacks {
     ) -> Result<(), acp::Error>;
 }
 
-/// Extension trait providing convenient methods for agents to call editors.
+/// Extension trait providing convenient methods for agents to call clients.
 ///
 /// This trait extends `JsonRpcCx` with ergonomic methods for making ACP requests
-/// to editors without manually constructing request structs.
+/// to clients without manually constructing request structs.
 ///
 /// # Example
 ///
@@ -175,7 +175,7 @@ pub trait AcpAgentCallbacks {
 ///     Ok(())
 /// }
 /// ```
-pub trait AcpAgentExt {
+pub trait AcpAgentToClientExt {
     /// Request permission from the user for a tool call operation.
     fn request_permission(
         &self,
@@ -184,14 +184,14 @@ pub trait AcpAgentExt {
         options: Vec<acp::PermissionOption>,
     ) -> JsonRpcResponse<RequestPermissionResponse>;
 
-    /// Read content from a text file in the editor's file system.
+    /// Read content from a text file in the client's file system.
     fn read_text_file(
         &self,
         session_id: impl Into<acp::SessionId>,
         path: impl Into<std::path::PathBuf>,
     ) -> JsonRpcResponse<ReadTextFileResponse>;
 
-    /// Write content to a text file in the editor's file system.
+    /// Write content to a text file in the client's file system.
     fn write_text_file(
         &self,
         session_id: impl Into<acp::SessionId>,
@@ -235,11 +235,11 @@ pub trait AcpAgentExt {
         terminal_id: impl Into<acp::TerminalId>,
     ) -> JsonRpcResponse<ReleaseTerminalResponse>;
 
-    /// Send a session notification to the editor.
+    /// Send a session notification to the client.
     fn session_update(&self, notification: SessionNotification) -> Result<(), jsonrpcmsg::Error>;
 }
 
-impl AcpAgentExt for JsonRpcCx {
+impl AcpAgentToClientExt for JsonRpcCx {
     fn request_permission(
         &self,
         session_id: impl Into<acp::SessionId>,

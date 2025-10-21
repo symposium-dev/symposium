@@ -22,7 +22,7 @@ mod requests;
 
 /// Messages that editors receive from agents via the ACP protocol.
 /// Unifies both requests (which expect responses) and notifications (fire-and-forget).
-pub enum AcpEditorMessage {
+pub enum AcpAgentToClientMessage {
     /// A request from the agent that expects a response.
     Request(acp::AgentRequest, JsonRpcRequestCx<acp::ClientResponse>),
     /// A notification from the agent (no response expected).
@@ -34,17 +34,17 @@ pub enum AcpEditorMessage {
 /// This implements `JsonRpcHandler` to route incoming ACP requests to your callback
 /// implementation. These are the messages an editor receives from agents: request_permission,
 /// read_text_file, write_text_file, terminal operations, and session notifications.
-pub struct AcpEditorMessages<CB: AcpEditorCallbacks> {
+pub struct AcpAgentToClientMessages<CB: AcpAgentToClientCallbacks> {
     callbacks: CB,
 }
 
-impl<CB: AcpEditorCallbacks> AcpEditorMessages<CB> {
+impl<CB: AcpAgentToClientCallbacks> AcpAgentToClientMessages<CB> {
     pub fn callback(callbacks: CB) -> Self {
         Self { callbacks }
     }
 }
 
-impl<CB: AcpEditorCallbacks> JsonRpcHandler for AcpEditorMessages<CB> {
+impl<CB: AcpAgentToClientCallbacks> JsonRpcHandler for AcpAgentToClientMessages<CB> {
     async fn handle_request(
         &mut self,
         method: &str,
@@ -136,7 +136,7 @@ impl<CB: AcpEditorCallbacks> JsonRpcHandler for AcpEditorMessages<CB> {
 /// Implement this trait to define how your editor responds to requests from agents.
 /// These are the messages that agents send to editors to interact with the environment.
 #[allow(async_fn_in_trait)]
-pub trait AcpEditorCallbacks {
+pub trait AcpAgentToClientCallbacks {
     /// Handle permission request from agent.
     async fn request_permission(
         &mut self,
@@ -209,7 +209,7 @@ pub trait AcpEditorCallbacks {
 /// # Example
 ///
 /// ```rust,ignore
-/// // Inside an AcpEditorCallbacks implementation
+/// // Inside an AcpClientCallbacks implementation
 /// async fn read_text_file(&mut self, args: ReadTextFileRequest, response: JsonRpcRequestCx<ReadTextFileResponse>) {
 ///     let cx = response.json_rpc_cx();
 ///
@@ -220,7 +220,7 @@ pub trait AcpEditorCallbacks {
 ///     Ok(())
 /// }
 /// ```
-pub trait AcpEditorExt {
+pub trait AcpClientToAgentExt {
     /// Initialize the agent connection.
     fn initialize(
         &self,
@@ -267,7 +267,7 @@ pub trait AcpEditorExt {
     ) -> Result<(), jsonrpcmsg::Error>;
 }
 
-impl AcpEditorExt for JsonRpcCx {
+impl AcpClientToAgentExt for JsonRpcCx {
     fn initialize(
         &self,
         protocol_version: acp::ProtocolVersion,
@@ -348,34 +348,34 @@ impl AcpEditorExt for JsonRpcCx {
     }
 }
 
-impl<TX, E> AcpEditorMessages<AcpEditorSendTo<TX, E>>
+impl<TX, E> AcpAgentToClientMessages<AcpClientSendTo<TX, E>>
 where
-    TX: AsyncFnMut(AcpEditorMessage) -> Result<(), E>,
+    TX: AsyncFnMut(AcpAgentToClientMessage) -> Result<(), E>,
     E: Error,
 {
     pub fn send_to(tx: TX) -> Self {
-        Self::callback(AcpEditorSendTo { tx })
+        Self::callback(AcpClientSendTo { tx })
     }
 }
 
-pub struct AcpEditorSendTo<TX, E>
+pub struct AcpClientSendTo<TX, E>
 where
-    TX: AsyncFnMut(AcpEditorMessage) -> Result<(), E>,
+    TX: AsyncFnMut(AcpAgentToClientMessage) -> Result<(), E>,
     E: Error,
 {
     tx: TX,
 }
 
-impl<TX, E> AcpEditorSendTo<TX, E>
+impl<TX, E> AcpClientSendTo<TX, E>
 where
-    TX: AsyncFnMut(AcpEditorMessage) -> Result<(), E>,
+    TX: AsyncFnMut(AcpAgentToClientMessage) -> Result<(), E>,
     E: Error,
 {
 }
 
-impl<TX, E> AcpEditorCallbacks for AcpEditorSendTo<TX, E>
+impl<TX, E> AcpAgentToClientCallbacks for AcpClientSendTo<TX, E>
 where
-    TX: AsyncFnMut(AcpEditorMessage) -> Result<(), E>,
+    TX: AsyncFnMut(AcpAgentToClientMessage) -> Result<(), E>,
     E: Error,
 {
     async fn request_permission(
@@ -383,7 +383,7 @@ where
         args: RequestPermissionRequest,
         response: jsonrpc::JsonRpcRequestCx<RequestPermissionResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        (self.tx)(AcpEditorMessage::Request(
+        (self.tx)(AcpAgentToClientMessage::Request(
             acp::AgentRequest::RequestPermissionRequest(args),
             response.map(
                 move |client_response: ClientResponse| match client_response {
@@ -404,7 +404,7 @@ where
         args: WriteTextFileRequest,
         response: jsonrpc::JsonRpcRequestCx<WriteTextFileResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        (self.tx)(AcpEditorMessage::Request(
+        (self.tx)(AcpAgentToClientMessage::Request(
             acp::AgentRequest::WriteTextFileRequest(args),
             response.map(
                 move |client_response: ClientResponse| match client_response {
@@ -425,7 +425,7 @@ where
         args: ReadTextFileRequest,
         response: jsonrpc::JsonRpcRequestCx<ReadTextFileResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        (self.tx)(AcpEditorMessage::Request(
+        (self.tx)(AcpAgentToClientMessage::Request(
             acp::AgentRequest::ReadTextFileRequest(args),
             response.map(
                 move |client_response: ClientResponse| match client_response {
@@ -446,7 +446,7 @@ where
         args: CreateTerminalRequest,
         response: jsonrpc::JsonRpcRequestCx<CreateTerminalResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        (self.tx)(AcpEditorMessage::Request(
+        (self.tx)(AcpAgentToClientMessage::Request(
             acp::AgentRequest::CreateTerminalRequest(args),
             response.map(
                 move |client_response: ClientResponse| match client_response {
@@ -467,7 +467,7 @@ where
         args: TerminalOutputRequest,
         response: jsonrpc::JsonRpcRequestCx<TerminalOutputResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        (self.tx)(AcpEditorMessage::Request(
+        (self.tx)(AcpAgentToClientMessage::Request(
             acp::AgentRequest::TerminalOutputRequest(args),
             response.map(
                 move |client_response: ClientResponse| match client_response {
@@ -488,7 +488,7 @@ where
         args: ReleaseTerminalRequest,
         response: jsonrpc::JsonRpcRequestCx<ReleaseTerminalResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        (self.tx)(AcpEditorMessage::Request(
+        (self.tx)(AcpAgentToClientMessage::Request(
             acp::AgentRequest::ReleaseTerminalRequest(args),
             response.map(
                 move |client_response: ClientResponse| match client_response {
@@ -509,7 +509,7 @@ where
         args: WaitForTerminalExitRequest,
         response: jsonrpc::JsonRpcRequestCx<WaitForTerminalExitResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        (self.tx)(AcpEditorMessage::Request(
+        (self.tx)(AcpAgentToClientMessage::Request(
             acp::AgentRequest::WaitForTerminalExitRequest(args),
             response.map(
                 move |client_response: ClientResponse| match client_response {
@@ -531,7 +531,7 @@ where
         _response: jsonrpc::JsonRpcRequestCx<KillTerminalCommandResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
         panic!("FIXME: kill_terminal_command is missing entries in the enum")
-        // (self.tx)(AcpEditorMessage::Request(
+        // (self.tx)(AcpClientMessage::Request(
         //     acp::AgentRequest::KillTerminalCommandRequest(args),
         //     response.map(
         //         move |client_response: ClientResponse| match client_response {
@@ -552,7 +552,7 @@ where
         args: SessionNotification,
         cx: &JsonRpcCx,
     ) -> Result<(), agent_client_protocol::Error> {
-        (self.tx)(AcpEditorMessage::Notification(
+        (self.tx)(AcpAgentToClientMessage::Notification(
             acp::AgentNotification::SessionNotification(args),
             cx.clone(),
         ))

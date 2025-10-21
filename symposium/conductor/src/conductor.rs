@@ -1,23 +1,32 @@
 use std::pin::Pin;
 
-use futures::{SinkExt, channel::mpsc};
+use futures::{SinkExt, StreamExt, channel::mpsc};
 use scp::{
-    AcpEditorMessages, JsonRpcConnection, JsonRpcCx, JsonRpcRequestCx, ProxyToConductorMessages,
+    AcpAgentToClientMessages, JsonRpcConnection, JsonRpcCx, JsonRpcRequestCx, ProxyToConductorMessages,
 };
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::component::Component;
 
-pub struct Conductor {
+pub struct Conductor<OB: AsyncWrite, IB: AsyncRead> {
+    outgoing_bytes: OB,
+    incoming_bytes: IB,
     conductor_rx: mpsc::Receiver<ConductorMessage>,
     components: Vec<Component>,
 }
 
-impl Conductor {
-    pub async fn run(mut proxies: Vec<String>) -> anyhow::Result<()> {
+impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
+    pub async fn run(
+        outgoing_bytes: OB,
+        incoming_bytes: IB,
+        mut proxies: Vec<String>,
+    ) -> anyhow::Result<()> {
         proxies.reverse();
         let (conductor_tx, conductor_rx) = mpsc::channel(128 /* chosen arbitrarily */);
         Conductor {
+            outgoing_bytes,
+            incoming_bytes,
             components: Default::default(),
             conductor_rx,
         }
@@ -49,7 +58,7 @@ impl Conductor {
 
             JsonRpcConnection::new(stdin.compat_write(), stdout.compat())
                 // The proxy can send *editor* messages to us
-                .on_receive(AcpEditorMessages::send_to({
+                .on_receive(AcpAgentToClientMessages::send_to({
                     let mut conductor_tx = conductor_tx.clone();
                     async move |message| {
                         conductor_tx
@@ -76,7 +85,23 @@ impl Conductor {
     }
 
     async fn serve(self) -> anyhow::Result<()> {
-        Ok(())
+        JsonRpcConnection::new(self.outgoing_bytes, self.incoming_bytes)
+            .on_receive(handler)
+        while let Some(message) = self.conductor_rx.next().await {
+            match message {
+                ConductorMessage::Initialize { args, response } => todo!(),
+                ConductorMessage::ToEditorMessage {
+                    component_index,
+                    message,
+                } => todo!(),
+                ConductorMessage::ToSuccessorSendRequest {
+                    component_index,
+                    args,
+                    response,
+                } => todo!(),
+                ConductorMessage::ToSuccessorSendNotification { index, args, cx } => todo!(),
+            }
+        }
     }
 }
 
@@ -125,7 +150,7 @@ pub enum ConductorMessage {
 
     ToEditorMessage {
         component_index: usize,
-        message: scp::AcpEditorMessage,
+        message: scp::AcpAgentToClientMessage,
     },
 
     ToSuccessorSendRequest {
