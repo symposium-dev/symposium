@@ -1,5 +1,5 @@
 use crate::{
-    jsonrpc::{self, Handled, JsonRpcCx, JsonRpcHandler, JsonRpcRequestCx},
+    jsonrpc::{Handled, JsonRpcCx, JsonRpcHandler, JsonRpcRequestCx},
     proxy::{ToSuccessorNotification, ToSuccessorRequest, ToSuccessorResponse},
     util::{acp_to_jsonrpc_error, json_cast},
 };

@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcRequest};
+use crate::jsonrpc::{JsonRpcNotification, JsonRpcRequest};
 
 // ============================================================================
 // Requests and notifications send TO successor (and the response we receieve)

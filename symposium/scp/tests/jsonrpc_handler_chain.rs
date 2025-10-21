@@ -13,28 +13,6 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-/// Helper to set up a client-server pair for testing.
-/// Returns (server_connection, client_connection).
-fn setup_test_connections(
-    server_handler: impl JsonRpcHandler + 'static,
-) -> (
-    JsonRpcConnection<impl JsonRpcHandler>,
-    JsonRpcConnection<impl JsonRpcHandler>,
-) {
-    let (client_writer, server_reader) = tokio::io::duplex(1024);
-    let (server_writer, client_reader) = tokio::io::duplex(1024);
-
-    let server_reader = server_reader.compat();
-    let server_writer = server_writer.compat_write();
-    let client_reader = client_reader.compat();
-    let client_writer = client_writer.compat_write();
-
-    let server = JsonRpcConnection::new(server_writer, server_reader).on_receive(server_handler);
-    let client = JsonRpcConnection::new(client_writer, client_reader);
-
-    (server, client)
-}
-
 // ============================================================================
 // Test 1: Multiple handlers with different methods
 // ============================================================================

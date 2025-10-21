@@ -1,15 +1,15 @@
 use std::error::Error;
 
 use agent_client_protocol::{
-    self as acp, AgentNotification, AgentRequest, AuthenticateRequest, AuthenticateResponse,
-    CancelNotification, ClientResponse, CreateTerminalRequest, CreateTerminalResponse,
-    InitializeRequest, InitializeResponse, KillTerminalCommandRequest, KillTerminalCommandResponse,
-    LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
-    ReleaseTerminalResponse, RequestPermissionRequest, RequestPermissionResponse,
-    SessionNotification, SetSessionModeRequest, SetSessionModeResponse, TerminalOutputRequest,
-    TerminalOutputResponse, WaitForTerminalExitRequest, WaitForTerminalExitResponse,
-    WriteTextFileRequest, WriteTextFileResponse,
+    self as acp, AuthenticateRequest, AuthenticateResponse, CancelNotification, ClientResponse,
+    CreateTerminalRequest, CreateTerminalResponse, InitializeRequest, InitializeResponse,
+    KillTerminalCommandRequest, KillTerminalCommandResponse, LoadSessionRequest,
+    LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
+    ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest, ReleaseTerminalResponse,
+    RequestPermissionRequest, RequestPermissionResponse, SessionNotification,
+    SetSessionModeRequest, SetSessionModeResponse, TerminalOutputRequest, TerminalOutputResponse,
+    WaitForTerminalExitRequest, WaitForTerminalExitResponse, WriteTextFileRequest,
+    WriteTextFileResponse,
 };
 
 use crate::{

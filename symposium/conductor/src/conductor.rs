@@ -32,6 +32,7 @@ impl Conductor {
     ) -> Pin<Box<impl Future<Output = anyhow::Result<()>>>> {
         Box::pin(async move {
             let Some(next_proxy) = proxies.pop() else {
+                drop(conductor_tx);
                 return self.serve().await;
             };
 
@@ -49,7 +50,7 @@ impl Conductor {
             JsonRpcConnection::new(stdin.compat_write(), stdout.compat())
                 // The proxy can send *editor* messages to us
                 .on_receive(AcpEditorMessages::send_to({
-                    let conductor_tx = conductor_tx.clone();
+                    let mut conductor_tx = conductor_tx.clone();
                     async move |message| {
                         conductor_tx
                             .send(ConductorMessage::ToEditorMessage {
@@ -61,11 +62,11 @@ impl Conductor {
                 }))
                 .on_receive(ProxyToConductorMessages::callback(SuccessorSendCallbacks {
                     component_index,
-                    conductor_tx,
+                    conductor_tx: conductor_tx.clone(),
                 }))
                 .with_client(async move |jsonrpccx| {
                     self.components.push(Component { child, jsonrpccx });
-                    self.launch_proxy(proxies)
+                    self.launch_proxy(proxies, conductor_tx)
                         .await
                         .map_err(scp::util::internal_error)
                 })
