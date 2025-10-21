@@ -2,6 +2,7 @@ use crate::{
     jsonrpc::{
         ChainHandler, Handled, JsonRpcConnection, JsonRpcCx, JsonRpcHandler, JsonRpcRequestCx,
     },
+    proxy::messages,
     util::json_cast,
 };
 
@@ -21,7 +22,7 @@ pub trait JsonRpcConnectionExt<H: JsonRpcHandler> {
     ///
     /// ```rust,ignore
     /// # use scp::proxy::JsonRpcConnectionExt;
-    /// # use scp::jsonrpc::{JsonRpcConnection, JsonRpcHandler};
+    /// # use scp::{JsonRpcConnection, JsonRpcHandler};
     /// # struct MyHandler;
     /// # impl JsonRpcHandler for MyHandler {}
     /// # async fn example() -> Result<(), jsonrpcmsg::Error> {

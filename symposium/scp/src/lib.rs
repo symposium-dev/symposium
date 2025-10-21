@@ -4,7 +4,11 @@
 //! Each proxy in the chain can intercept and transform messages, adding capabilities
 //! like walkthroughs, collaboration patterns, and IDE integrations.
 
-pub mod acp;
-pub mod jsonrpc;
-pub mod proxy;
+mod acp;
+mod jsonrpc;
+mod proxy;
 pub mod util;
+
+pub use acp::*;
+pub use jsonrpc::*;
+pub use proxy::*;

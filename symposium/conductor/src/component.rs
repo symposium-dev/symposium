@@ -1,4 +1,4 @@
-use scp::jsonrpc::JsonRpcCx;
+use scp::JsonRpcCx;
 use tokio::process::Child;
 
 pub struct Component {

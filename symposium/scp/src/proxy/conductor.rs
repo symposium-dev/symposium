@@ -6,6 +6,7 @@ use crate::{
 use agent_client_protocol as acp;
 
 /// Callbacks for the conductor who receives requests from proxies to forward messages over to their successor.
+#[allow(async_fn_in_trait)]
 pub trait ConductorCallbacks {
     /// Name of the method to be invoked
     /// Parameters for the method invocation
@@ -25,18 +26,18 @@ pub trait ConductorCallbacks {
 }
 
 /// Message handler for messages targeting the conductor.
-pub struct AcpConductorMessages<CB: ConductorCallbacks> {
+pub struct ProxyToConductorMessages<CB: ConductorCallbacks> {
     callbacks: CB,
 }
 
-impl<CB: ConductorCallbacks> AcpConductorMessages<CB> {
+impl<CB: ConductorCallbacks> ProxyToConductorMessages<CB> {
     /// Create new handler that invokes `callbacks` when requests from proxies are received.
-    pub fn new(callbacks: CB) -> Self {
+    pub fn callback(callbacks: CB) -> Self {
         Self { callbacks }
     }
 }
 
-impl<CB: ConductorCallbacks> JsonRpcHandler for AcpConductorMessages<CB> {
+impl<CB: ConductorCallbacks> JsonRpcHandler for ProxyToConductorMessages<CB> {
     async fn handle_request(
         &mut self,
         method: &str,

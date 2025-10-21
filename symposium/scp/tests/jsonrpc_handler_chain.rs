@@ -4,10 +4,10 @@
 //! and that requests/notifications are routed correctly based on which
 //! handler claims them.
 
-use scp::jsonrpc::{
+use scp::util::internal_error;
+use scp::{
     Handled, JsonRpcConnection, JsonRpcCx, JsonRpcHandler, JsonRpcNotification, JsonRpcRequestCx,
 };
-use scp::util::internal_error;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -44,7 +44,7 @@ struct FooRequest {
     value: String,
 }
 
-impl scp::jsonrpc::JsonRpcRequest for FooRequest {
+impl scp::JsonRpcRequest for FooRequest {
     type Response = FooResponse;
 
     fn method(&self) -> &str {
@@ -62,7 +62,7 @@ struct BarRequest {
     value: String,
 }
 
-impl scp::jsonrpc::JsonRpcRequest for BarRequest {
+impl scp::JsonRpcRequest for BarRequest {
     type Response = BarResponse;
 
     fn method(&self) -> &str {
@@ -193,7 +193,7 @@ struct TrackRequest {
     value: String,
 }
 
-impl scp::jsonrpc::JsonRpcRequest for TrackRequest {
+impl scp::JsonRpcRequest for TrackRequest {
     type Response = FooResponse;
 
     fn method(&self) -> &str {
@@ -303,7 +303,7 @@ struct Method1Request {
     value: String,
 }
 
-impl scp::jsonrpc::JsonRpcRequest for Method1Request {
+impl scp::JsonRpcRequest for Method1Request {
     type Response = FooResponse;
 
     fn method(&self) -> &str {
@@ -316,7 +316,7 @@ struct Method2Request {
     value: String,
 }
 
-impl scp::jsonrpc::JsonRpcRequest for Method2Request {
+impl scp::JsonRpcRequest for Method2Request {
     type Response = FooResponse;
 
     fn method(&self) -> &str {

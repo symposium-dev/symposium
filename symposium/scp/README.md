@@ -81,7 +81,7 @@ Handlers are added via `add_handler()` and tried in order until one returns `Han
 ### Example: JSON-RPC Echo Server
 
 ```rust
-use scp::jsonrpc::{JsonRpcConnection, JsonRpcHandler, JsonRpcRequestCx, Handled};
+use scp::{JsonRpcConnection, JsonRpcHandler, JsonRpcRequestCx, Handled};
 use futures::io::{AsyncRead, AsyncWrite};
 
 // Define request/response types
@@ -131,7 +131,7 @@ async fn main() -> Result<(), jsonrpcmsg::Error> {
 ### Example: JSON-RPC Client
 
 ```rust
-use scp::jsonrpc::{JsonRpcConnection, JsonRpcCx};
+use scp::{JsonRpcConnection, JsonRpcCx};
 
 #[tokio::main]
 async fn main() -> Result<(), jsonrpcmsg::Error> {
@@ -195,7 +195,7 @@ The ACP layer builds on the JSON-RPC foundation to implement the Agent Client Pr
 
 ```rust
 use scp::acp::{AcpAgent, AcpAgentCallbacks};
-use scp::jsonrpc::{JsonRpcConnection, JsonRpcRequestCx};
+use scp::{JsonRpcConnection, JsonRpcRequestCx};
 use agent_client_protocol as acp;
 
 // Implement the callbacks

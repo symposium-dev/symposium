@@ -30,7 +30,7 @@
 //!
 //! ```rust,ignore
 //! use scp::proxy::JsonRpcConnectionExt;
-//! use scp::jsonrpc::{JsonRpcConnection, JsonRpcHandler};
+//! use scp::{JsonRpcConnection, JsonRpcHandler};
 //!
 //! // Your handler processes normal ACP messages
 //! struct MyProxyHandler;

@@ -1,11 +1,8 @@
 use std::pin::Pin;
 
 use futures::{SinkExt, channel::mpsc};
-use jsonrpcmsg::Params;
 use scp::{
-    acp::AcpEditorMessages,
-    jsonrpc::{JsonRpcConnection, JsonRpcRequestCx},
-    proxy::{AcpConductorMessages, JsonRpcConnectionExt},
+    AcpEditorMessages, JsonRpcConnection, JsonRpcCx, JsonRpcRequestCx, ProxyToConductorMessages,
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
@@ -31,7 +28,7 @@ impl Conductor {
     fn launch_proxy(
         mut self,
         mut proxies: Vec<String>,
-        conductor_tx: mpsc::UnboundedSender<ConductorMessage>,
+        conductor_tx: mpsc::Sender<ConductorMessage>,
     ) -> Pin<Box<impl Future<Output = anyhow::Result<()>>>> {
         Box::pin(async move {
             let Some(next_proxy) = proxies.pop() else {
@@ -47,10 +44,25 @@ impl Conductor {
             let stdin = child.stdin.take().expect("Failed to open stdin");
             let stdout = child.stdout.take().expect("Failed to open stdout");
 
+            let component_index = self.components.len();
+
             JsonRpcConnection::new(stdin.compat_write(), stdout.compat())
                 // The proxy can send *editor* messages to us
-                .on_receive(AcpEditorMessages(xxx))
-                .on_receive(AcpConductorMessages(xxx))
+                .on_receive(AcpEditorMessages::send_to({
+                    let conductor_tx = conductor_tx.clone();
+                    async move |message| {
+                        conductor_tx
+                            .send(ConductorMessage::ToEditorMessage {
+                                component_index,
+                                message,
+                            })
+                            .await
+                    }
+                }))
+                .on_receive(ProxyToConductorMessages::callback(SuccessorSendCallbacks {
+                    component_index,
+                    conductor_tx,
+                }))
                 .with_client(async move |jsonrpccx| {
                     self.components.push(Component { child, jsonrpccx });
                     self.launch_proxy(proxies)
@@ -67,38 +79,40 @@ impl Conductor {
     }
 }
 
-struct EditorCallbacks {
-    conductor_tx: mpsc::Sender<ConductorMessage>,
-}
-
 struct SuccessorSendCallbacks {
-    index: usize,
+    component_index: usize,
     conductor_tx: mpsc::Sender<ConductorMessage>,
 }
 
-impl scp::proxy::ConductorCallbacks for SuccessorSendCallbacks {
+impl scp::ConductorCallbacks for SuccessorSendCallbacks {
     async fn successor_send_request(
         &mut self,
-        args: scp::proxy::ToSuccessorRequest<serde_json::Value>,
-        response: JsonRpcRequestCx<scp::proxy::ToSuccessorResponse<serde_json::Value>>,
+        args: scp::ToSuccessorRequest<serde_json::Value>,
+        response: JsonRpcRequestCx<scp::ToSuccessorResponse<serde_json::Value>>,
     ) -> Result<(), agent_client_protocol::Error> {
-        self.conductor_tx.send(ConductorMessage::ProxyToSuccessor {
-            index: self.index,
-            args,
-            response,
-        });
+        self.conductor_tx
+            .send(ConductorMessage::ToSuccessorSendRequest {
+                component_index: self.component_index,
+                args,
+                response,
+            })
+            .await
+            .map_err(agent_client_protocol::Error::into_internal_error)
     }
 
     async fn successor_send_notification(
         &mut self,
-        args: scp::proxy::ToSuccessorNotification<serde_json::Value>,
-        cx: &scp::jsonrpc::JsonRpcCx,
+        args: scp::ToSuccessorNotification<serde_json::Value>,
+        cx: &scp::JsonRpcCx,
     ) -> Result<(), agent_client_protocol::Error> {
-        self.conductor_tx.send(ConductorMessage::ProxyToSuccessor {
-            index: self.index,
-            args,
-            response,
-        });
+        self.conductor_tx
+            .send(ConductorMessage::ToSuccessorSendNotification {
+                index: self.component_index,
+                args,
+                cx: cx.clone(),
+            })
+            .await
+            .map_err(agent_client_protocol::Error::into_internal_error)
     }
 }
 
@@ -108,14 +122,20 @@ pub enum ConductorMessage {
         response: JsonRpcRequestCx<agent_client_protocol::InitializeResponse>,
     },
 
+    ToEditorMessage {
+        component_index: usize,
+        message: scp::AcpEditorMessage,
+    },
+
     ToSuccessorSendRequest {
-        index: usize,
-        args: scp::proxy::ToSuccessorRequest<serde_json::Value>,
-        response: JsonRpcRequestCx<serde_json::Value>,
+        component_index: usize,
+        args: scp::ToSuccessorRequest<serde_json::Value>,
+        response: JsonRpcRequestCx<scp::ToSuccessorResponse<serde_json::Value>>,
     },
 
     ToSuccessorSendNotification {
         index: usize,
-        args: scp::proxy::ToSuccessorNotification<serde_json::Value>,
+        args: scp::ToSuccessorNotification<serde_json::Value>,
+        cx: JsonRpcCx,
     },
 }

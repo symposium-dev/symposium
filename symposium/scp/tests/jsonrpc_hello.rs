@@ -3,7 +3,7 @@
 //! This test sets up two JSON-RPC connections and verifies they can
 //! exchange simple "hello world" messages.
 
-use scp::jsonrpc::{
+use scp::{
     Handled, JsonRpcConnection, JsonRpcCx, JsonRpcHandler, JsonRpcNotification, JsonRpcRequestCx,
 };
 use serde::{Deserialize, Serialize};
@@ -39,7 +39,7 @@ struct PingRequest {
     message: String,
 }
 
-impl scp::jsonrpc::JsonRpcRequest for PingRequest {
+impl scp::JsonRpcRequest for PingRequest {
     type Response = PongResponse;
 
     fn method(&self) -> &str {

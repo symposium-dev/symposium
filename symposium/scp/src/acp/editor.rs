@@ -2,7 +2,7 @@ use std::error::Error;
 
 use agent_client_protocol::{
     self as acp, AgentNotification, AgentRequest, AuthenticateRequest, AuthenticateResponse,
-    CancelNotification, Client, ClientResponse, CreateTerminalRequest, CreateTerminalResponse,
+    CancelNotification, ClientResponse, CreateTerminalRequest, CreateTerminalResponse,
     InitializeRequest, InitializeResponse, KillTerminalCommandRequest, KillTerminalCommandResponse,
     LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
     PromptResponse, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
@@ -348,6 +348,16 @@ impl AcpEditorExt for JsonRpcCx {
     }
 }
 
+impl<TX, E> AcpEditorMessages<AcpEditorSendTo<TX, E>>
+where
+    TX: AsyncFnMut(AcpEditorMessage) -> Result<(), E>,
+    E: Error,
+{
+    pub fn send_to(tx: TX) -> Self {
+        Self::callback(AcpEditorSendTo { tx })
+    }
+}
+
 pub struct AcpEditorSendTo<TX, E>
 where
     TX: AsyncFnMut(AcpEditorMessage) -> Result<(), E>,
@@ -380,7 +390,7 @@ where
                     ClientResponse::RequestPermissionResponse(request_permission_response) => {
                         Ok(request_permission_response)
                     }
-                    _ => Err(agent_client_protocol::Error::internal_error()),
+                    _ => Err(jsonrpcmsg::Error::internal_error()),
                 },
                 move |error| Err(error),
             ),
@@ -517,23 +527,24 @@ where
 
     async fn kill_terminal_command(
         &mut self,
-        args: KillTerminalCommandRequest,
-        response: jsonrpc::JsonRpcRequestCx<KillTerminalCommandResponse>,
+        _args: KillTerminalCommandRequest,
+        _response: jsonrpc::JsonRpcRequestCx<KillTerminalCommandResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        (self.tx)(AcpEditorMessage::Request(
-            acp::AgentRequest::KillTerminalCommandRequest(args),
-            response.map(
-                move |client_response: ClientResponse| match client_response {
-                    ClientResponse::KillTerminalCommandResponse(kill_terminal_command_response) => {
-                        Ok(kill_terminal_command_response)
-                    }
-                    _ => Err(jsonrpcmsg::Error::internal_error()),
-                },
-                move |error| Err(error),
-            ),
-        ))
-        .await
-        .map_err(acp::Error::into_internal_error)
+        panic!("FIXME: kill_terminal_command is missing entries in the enum")
+        // (self.tx)(AcpEditorMessage::Request(
+        //     acp::AgentRequest::KillTerminalCommandRequest(args),
+        //     response.map(
+        //         move |client_response: ClientResponse| match client_response {
+        //             ClientResponse::KillTerminalCommandResponse(kill_terminal_command_response) => {
+        //                 Ok(kill_terminal_command_response)
+        //             }
+        //             _ => Err(jsonrpcmsg::Error::internal_error()),
+        //         },
+        //         move |error| Err(error),
+        //     ),
+        // ))
+        // .await
+        // .map_err(acp::Error::into_internal_error)
     }
 
     async fn session_notification(

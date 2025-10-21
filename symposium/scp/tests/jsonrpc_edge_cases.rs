@@ -6,7 +6,7 @@
 //! - Server shutdown scenarios
 //! - Client disconnect handling
 
-use scp::jsonrpc::{Handled, JsonRpcConnection, JsonRpcHandler, JsonRpcRequest, JsonRpcRequestCx};
+use scp::{Handled, JsonRpcConnection, JsonRpcHandler, JsonRpcRequest, JsonRpcRequestCx};
 use serde::{Deserialize, Serialize};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
