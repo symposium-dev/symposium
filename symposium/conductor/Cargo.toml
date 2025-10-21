@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 scp = { path = "../scp" }
-agent-client-protocol = "0.4.7"
+agent-client-protocol = "0.5.0"
 anyhow.workspace = true
 clap = { version = "4.5", features = ["derive"] }
 futures = "0.3.31"

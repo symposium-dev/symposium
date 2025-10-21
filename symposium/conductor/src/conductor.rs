@@ -19,7 +19,7 @@ pub struct Conductor {
 impl Conductor {
     pub async fn run(mut proxies: Vec<String>) -> anyhow::Result<()> {
         proxies.reverse();
-        let (conductor_tx, conductor_rx) = mpsc::channel();
+        let (conductor_tx, conductor_rx) = mpsc::channel(128 /* chosen arbitrarily */);
         Conductor {
             components: Default::default(),
             conductor_rx,

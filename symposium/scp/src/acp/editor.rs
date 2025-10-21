@@ -1,9 +1,9 @@
 use std::error::Error;
 
 use agent_client_protocol::{
-    self as acp, AuthenticateRequest, AuthenticateResponse, CancelNotification, Client,
-    ClientResponse, CreateTerminalRequest, CreateTerminalResponse, InitializeRequest,
-    InitializeResponse, KillTerminalCommandRequest, KillTerminalCommandResponse,
+    self as acp, AgentNotification, AgentRequest, AuthenticateRequest, AuthenticateResponse,
+    CancelNotification, Client, ClientResponse, CreateTerminalRequest, CreateTerminalResponse,
+    InitializeRequest, InitializeResponse, KillTerminalCommandRequest, KillTerminalCommandResponse,
     LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
     PromptResponse, ReadTextFileRequest, ReadTextFileResponse, ReleaseTerminalRequest,
     ReleaseTerminalResponse, RequestPermissionRequest, RequestPermissionResponse,
@@ -19,6 +19,15 @@ use crate::{
 
 mod notifications;
 mod requests;
+
+/// Messages that editors receive from agents via the ACP protocol.
+/// Unifies both requests (which expect responses) and notifications (fire-and-forget).
+pub enum AcpEditorMessage {
+    /// A request from the agent that expects a response.
+    Request(acp::AgentRequest, JsonRpcRequestCx<acp::ClientResponse>),
+    /// A notification from the agent (no response expected).
+    Notification(acp::AgentNotification, JsonRpcCx),
+}
 
 /// ACP handler for editor-side messages (requests that editors receive from agents).
 ///
@@ -341,21 +350,22 @@ impl AcpEditorExt for JsonRpcCx {
 
 pub struct AcpEditorSendTo<TX, E>
 where
-    TX: AsyncFnMut(acp::AgentRequest, JsonRpcRequestCx<ClientResponse>) -> Result<(), E>,
+    TX: AsyncFnMut(AcpEditorMessage) -> Result<(), E>,
     E: Error,
 {
     tx: TX,
 }
 
-impl<TX> AcpEditorSendTo<TX, E> where
-    TX: AsyncFnMut(acp::AgentRequest, JsonRpcRequestCx<ClientResponse>) -> Result<(), E>
+impl<TX, E> AcpEditorSendTo<TX, E>
+where
+    TX: AsyncFnMut(AcpEditorMessage) -> Result<(), E>,
     E: Error,
 {
 }
 
-impl<TX, E> AcpEditorCallbacks for AcpEditorSendTo<TX>
+impl<TX, E> AcpEditorCallbacks for AcpEditorSendTo<TX, E>
 where
-    TX: AsyncFnMut(acp::AgentRequest, JsonRpcRequestCx<ClientResponse>) -> Result<(), E>,
+    TX: AsyncFnMut(AcpEditorMessage) -> Result<(), E>,
     E: Error,
 {
     async fn request_permission(
@@ -363,7 +373,7 @@ where
         args: RequestPermissionRequest,
         response: jsonrpc::JsonRpcRequestCx<RequestPermissionResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        (self.tx)(
+        (self.tx)(AcpEditorMessage::Request(
             acp::AgentRequest::RequestPermissionRequest(args),
             response.map(
                 move |client_response: ClientResponse| match client_response {
@@ -374,9 +384,9 @@ where
                 },
                 move |error| Err(error),
             ),
-        )
+        ))
         .await
-        .map_err(crate::util::internal_error)
+        .map_err(acp::Error::into_internal_error)
     }
 
     async fn write_text_file(
@@ -384,7 +394,20 @@ where
         args: WriteTextFileRequest,
         response: jsonrpc::JsonRpcRequestCx<WriteTextFileResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        todo!()
+        (self.tx)(AcpEditorMessage::Request(
+            acp::AgentRequest::WriteTextFileRequest(args),
+            response.map(
+                move |client_response: ClientResponse| match client_response {
+                    ClientResponse::WriteTextFileResponse(write_text_file_response) => {
+                        Ok(write_text_file_response)
+                    }
+                    _ => Err(jsonrpcmsg::Error::internal_error()),
+                },
+                move |error| Err(error),
+            ),
+        ))
+        .await
+        .map_err(acp::Error::into_internal_error)
     }
 
     async fn read_text_file(
@@ -392,7 +415,20 @@ where
         args: ReadTextFileRequest,
         response: jsonrpc::JsonRpcRequestCx<ReadTextFileResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        todo!()
+        (self.tx)(AcpEditorMessage::Request(
+            acp::AgentRequest::ReadTextFileRequest(args),
+            response.map(
+                move |client_response: ClientResponse| match client_response {
+                    ClientResponse::ReadTextFileResponse(read_text_file_response) => {
+                        Ok(read_text_file_response)
+                    }
+                    _ => Err(jsonrpcmsg::Error::internal_error()),
+                },
+                move |error| Err(error),
+            ),
+        ))
+        .await
+        .map_err(acp::Error::into_internal_error)
     }
 
     async fn create_terminal(
@@ -400,7 +436,20 @@ where
         args: CreateTerminalRequest,
         response: jsonrpc::JsonRpcRequestCx<CreateTerminalResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        todo!()
+        (self.tx)(AcpEditorMessage::Request(
+            acp::AgentRequest::CreateTerminalRequest(args),
+            response.map(
+                move |client_response: ClientResponse| match client_response {
+                    ClientResponse::CreateTerminalResponse(create_terminal_response) => {
+                        Ok(create_terminal_response)
+                    }
+                    _ => Err(jsonrpcmsg::Error::internal_error()),
+                },
+                move |error| Err(error),
+            ),
+        ))
+        .await
+        .map_err(acp::Error::into_internal_error)
     }
 
     async fn terminal_output(
@@ -408,7 +457,20 @@ where
         args: TerminalOutputRequest,
         response: jsonrpc::JsonRpcRequestCx<TerminalOutputResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        todo!()
+        (self.tx)(AcpEditorMessage::Request(
+            acp::AgentRequest::TerminalOutputRequest(args),
+            response.map(
+                move |client_response: ClientResponse| match client_response {
+                    ClientResponse::TerminalOutputResponse(terminal_output_response) => {
+                        Ok(terminal_output_response)
+                    }
+                    _ => Err(jsonrpcmsg::Error::internal_error()),
+                },
+                move |error| Err(error),
+            ),
+        ))
+        .await
+        .map_err(acp::Error::into_internal_error)
     }
 
     async fn release_terminal(
@@ -416,7 +478,20 @@ where
         args: ReleaseTerminalRequest,
         response: jsonrpc::JsonRpcRequestCx<ReleaseTerminalResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        todo!()
+        (self.tx)(AcpEditorMessage::Request(
+            acp::AgentRequest::ReleaseTerminalRequest(args),
+            response.map(
+                move |client_response: ClientResponse| match client_response {
+                    ClientResponse::ReleaseTerminalResponse(release_terminal_response) => {
+                        Ok(release_terminal_response)
+                    }
+                    _ => Err(jsonrpcmsg::Error::internal_error()),
+                },
+                move |error| Err(error),
+            ),
+        ))
+        .await
+        .map_err(acp::Error::into_internal_error)
     }
 
     async fn wait_for_terminal_exit(
@@ -424,7 +499,20 @@ where
         args: WaitForTerminalExitRequest,
         response: jsonrpc::JsonRpcRequestCx<WaitForTerminalExitResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        todo!()
+        (self.tx)(AcpEditorMessage::Request(
+            acp::AgentRequest::WaitForTerminalExitRequest(args),
+            response.map(
+                move |client_response: ClientResponse| match client_response {
+                    ClientResponse::WaitForTerminalExitResponse(
+                        wait_for_terminal_exit_response,
+                    ) => Ok(wait_for_terminal_exit_response),
+                    _ => Err(jsonrpcmsg::Error::internal_error()),
+                },
+                move |error| Err(error),
+            ),
+        ))
+        .await
+        .map_err(acp::Error::into_internal_error)
     }
 
     async fn kill_terminal_command(
@@ -432,7 +520,20 @@ where
         args: KillTerminalCommandRequest,
         response: jsonrpc::JsonRpcRequestCx<KillTerminalCommandResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
-        todo!()
+        (self.tx)(AcpEditorMessage::Request(
+            acp::AgentRequest::KillTerminalCommandRequest(args),
+            response.map(
+                move |client_response: ClientResponse| match client_response {
+                    ClientResponse::KillTerminalCommandResponse(kill_terminal_command_response) => {
+                        Ok(kill_terminal_command_response)
+                    }
+                    _ => Err(jsonrpcmsg::Error::internal_error()),
+                },
+                move |error| Err(error),
+            ),
+        ))
+        .await
+        .map_err(acp::Error::into_internal_error)
     }
 
     async fn session_notification(
@@ -440,6 +541,11 @@ where
         args: SessionNotification,
         cx: &JsonRpcCx,
     ) -> Result<(), agent_client_protocol::Error> {
-        todo!()
+        (self.tx)(AcpEditorMessage::Notification(
+            acp::AgentNotification::SessionNotification(args),
+            cx.clone(),
+        ))
+        .await
+        .map_err(acp::Error::into_internal_error)
     }
 }
