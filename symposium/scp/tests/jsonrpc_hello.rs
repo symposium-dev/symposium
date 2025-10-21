@@ -3,6 +3,7 @@
 //! This test sets up two JSON-RPC connections and verifies they can
 //! exchange simple "hello world" messages.
 
+use futures::{AsyncRead, AsyncWrite};
 use scp::{
     Handled, JsonRpcConnection, JsonRpcCx, JsonRpcHandler, JsonRpcNotification, JsonRpcRequestCx,
 };
@@ -13,11 +14,11 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// Helper to set up a client-server pair for testing.
 /// Returns (server_connection, client_connection).
-fn setup_test_connections(
-    server_handler: impl JsonRpcHandler + 'static,
+fn setup_test_connections<H: JsonRpcHandler + 'static>(
+    server_handler: H,
 ) -> (
-    JsonRpcConnection<impl JsonRpcHandler>,
-    JsonRpcConnection<impl JsonRpcHandler>,
+    JsonRpcConnection<impl AsyncWrite, impl AsyncRead, impl JsonRpcHandler>,
+    JsonRpcConnection<impl AsyncWrite, impl AsyncRead, impl JsonRpcHandler>,
 ) {
     let (client_writer, server_reader) = tokio::io::duplex(1024);
     let (server_writer, client_reader) = tokio::io::duplex(1024);

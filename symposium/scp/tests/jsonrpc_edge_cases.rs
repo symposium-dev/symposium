@@ -6,16 +6,17 @@
 //! - Server shutdown scenarios
 //! - Client disconnect handling
 
+use futures::{AsyncRead, AsyncWrite};
 use scp::{Handled, JsonRpcConnection, JsonRpcHandler, JsonRpcRequest, JsonRpcRequestCx};
 use serde::{Deserialize, Serialize};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// Helper to set up a client-server pair for testing.
-fn setup_test_connections(
-    server_handler: impl JsonRpcHandler + 'static,
+fn setup_test_connections<H: JsonRpcHandler + 'static>(
+    server_handler: H,
 ) -> (
-    JsonRpcConnection<impl JsonRpcHandler>,
-    JsonRpcConnection<impl JsonRpcHandler>,
+    JsonRpcConnection<impl AsyncWrite, impl AsyncRead, impl JsonRpcHandler>,
+    JsonRpcConnection<impl AsyncWrite, impl AsyncRead, impl JsonRpcHandler>,
 ) {
     let (client_writer, server_reader) = tokio::io::duplex(1024);
     let (server_writer, client_reader) = tokio::io::duplex(1024);
