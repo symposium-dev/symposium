@@ -1,5 +1,6 @@
 //! Core JSON-RPC server support.
 
+use std::fmt::Debug;
 use std::sync::Arc;
 
 use futures::channel::{mpsc, oneshot};
@@ -328,6 +329,13 @@ impl JsonRpcCx {
     }
 
     fn send_raw_message(&self, message: OutgoingMessage) -> Result<(), jsonrpcmsg::Error> {
+        match &message {
+            OutgoingMessage::Response { id, response } => match response {
+                Ok(_) => tracing::debug!(?id, "send_raw_message: queuing success response"),
+                Err(e) => tracing::warn!(?id, ?e, "send_raw_message: queuing error response"),
+            },
+            _ => {}
+        }
         self.tx
             .unbounded_send(message)
             .map_err(communication_failure)
@@ -412,19 +420,31 @@ impl<T: JsonRpcMessage> JsonRpcRequestCx<T> {
         self.cx.clone()
     }
 
+    /// Get the ID of the request being responded to.
+    pub fn id(&self) -> &jsonrpcmsg::Id {
+        &self.id
+    }
+
     /// Respond to the JSON-RPC request with a value.
     pub fn respond_with_result(
         self,
         response: Result<T, jsonrpcmsg::Error>,
     ) -> Result<(), jsonrpcmsg::Error> {
         match response {
-            Ok(r) => self.respond(r),
-            Err(e) => self.respond_with_error(e),
+            Ok(r) => {
+                tracing::debug!(id = ?self.id, "respond_with_result: Ok, calling respond");
+                self.respond(r)
+            }
+            Err(e) => {
+                tracing::debug!(id = ?self.id, ?e, "respond_with_result: Err, calling respond_with_error");
+                self.respond_with_error(e)
+            }
         }
     }
 
     /// Respond to the JSON-RPC request with a value.
     pub fn respond(self, response: T) -> Result<(), jsonrpcmsg::Error> {
+        tracing::debug!(id = ?self.id, "respond called");
         self.cx.send_raw_message(OutgoingMessage::Response {
             id: self.id,
             response: (self.on_success)(response),
@@ -438,6 +458,7 @@ impl<T: JsonRpcMessage> JsonRpcRequestCx<T> {
 
     /// Respond to the JSON-RPC request with an error.
     pub fn respond_with_error(self, error: jsonrpcmsg::Error) -> Result<(), jsonrpcmsg::Error> {
+        tracing::debug!(id = ?self.id, ?error, "respond_with_error called");
         self.cx.send_raw_message(OutgoingMessage::Response {
             id: self.id,
             response: (self.on_error)(error),
@@ -446,8 +467,8 @@ impl<T: JsonRpcMessage> JsonRpcRequestCx<T> {
 }
 
 /// Alias for "serialize + deserialize + 'static".
-pub trait JsonRpcMessage: serde::de::DeserializeOwned + serde::Serialize + 'static {}
-impl<T: serde::de::DeserializeOwned + serde::Serialize + 'static> JsonRpcMessage for T {}
+pub trait JsonRpcMessage: serde::de::DeserializeOwned + serde::Serialize + 'static + Debug {}
+impl<T: serde::de::DeserializeOwned + serde::Serialize + Debug + 'static> JsonRpcMessage for T {}
 
 /// A struct that serializes to the paramcontaining the parameters
 pub trait JsonRpcNotification: JsonRpcMessage {
@@ -458,7 +479,7 @@ pub trait JsonRpcNotification: JsonRpcMessage {
 /// A struct that serializes to the paramcontaining the parameters
 pub trait JsonRpcRequest: JsonRpcMessage {
     /// The type of data expected in response.
-    type Response: serde::de::DeserializeOwned + serde::Serialize;
+    type Response: JsonRpcMessage;
 
     /// The method name for the request.
     fn method(&self) -> &str;

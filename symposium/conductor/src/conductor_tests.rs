@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use agent_client_protocol::ContentBlock;
 use agent_client_protocol::{InitializeRequest, InitializeResponse};
-use scp::JsonRpcCxExt;
+use scp::{AcpAgentToClientCallbacks, JsonRpcCxExt};
 use scp::{AcpClientToAgentCallbacks, AcpClientToAgentMessages, JsonRpcConnection, JsonRpcCx};
 use tokio::{io::duplex, sync::Mutex};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use tracing::Instrument;
 
 use crate::{
     component::{ComponentProvider, MockComponentImpl},
@@ -23,6 +24,7 @@ fn capturing_mock_component() -> (MockComponentImpl, Arc<Mutex<Option<Initialize
                 captured_init: captured_init_clone,
             }))
             .serve()
+            .instrument(tracing::info_span!("actor", id = "mock_component"))
             .await;
     });
 
@@ -103,6 +105,8 @@ impl AcpClientToAgentCallbacks for CapturingCallbacks {
 
 #[cfg(test)]
 mod tests {
+    use scp::{AcpAgentToClientMessages, JsonRpcConnectionExt};
+
     use super::*;
 
     #[tokio::test]
@@ -208,15 +212,16 @@ mod tests {
                 let c1_init = component1_init.clone();
                 let c1_prompt = component1_prompt.clone();
                 let component1 = MockComponentImpl::new(move |connection| async move {
-                    let c1_init = c1_init.clone();
-                    let c1_prompt = c1_prompt.clone();
+                    let callbacks = Component1Callbacks {
+                        captured_init: c1_init,
+                        captured_prompt: c1_prompt,
+                    };
 
                     let _ = connection
-                        .on_receive(AcpClientToAgentMessages::callback(Component1Callbacks {
-                            captured_init: c1_init,
-                            captured_prompt: c1_prompt,
-                        }))
+                        .on_receive(AcpClientToAgentMessages::callback(callbacks.clone()))
+                        .on_receive_from_successor(AcpAgentToClientMessages::callback(callbacks))
                         .serve()
+                        .instrument(tracing::info_span!("actor", id = "C1"))
                         .await;
                 });
 
@@ -233,6 +238,7 @@ mod tests {
                             captured_prompt: c2_prompt,
                         }))
                         .serve()
+                        .instrument(tracing::info_span!("actor", id = "C2"))
                         .await;
                 });
 
@@ -250,12 +256,14 @@ mod tests {
                             ComponentProvider::Mock(Box::new(component2)),
                         ],
                     )
+                    .instrument(tracing::info_span!("actor", id = "conductor"))
                     .await
                 });
 
                 // Editor-side test
                 let editor_task = tokio::task::spawn_local(async move {
                     JsonRpcConnection::new(editor_out.compat_write(), editor_in.compat())
+                        .on_receive(AcpAgentToClientMessages::callback(EditorCallbacks))
                         .with_client(async move |client| {
                             // 1. Initialize
                             let init_request = InitializeRequest {
@@ -277,9 +285,6 @@ mod tests {
                                 "Initialize should succeed: {:?}",
                                 init_response
                             );
-
-                            // Give components time to process initialization
-                            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
                             // 2. Send a prompt
                             let prompt_request = PromptRequest {
@@ -308,14 +313,12 @@ mod tests {
 
                             Ok::<(), jsonrpcmsg::Error>(())
                         })
+                        .instrument(tracing::info_span!("actor", id = "Editor"))
                         .await
                 });
 
                 // Wait for editor to complete
                 let _ = editor_task.await.expect("Editor task should complete");
-
-                // Give everything time to settle
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
                 // Verify initialization
                 let c1_init_req = component1_init.lock().await;
@@ -387,6 +390,7 @@ mod tests {
 }
 
 /// Callbacks for Component 1 (proxy component that forwards)
+#[derive(Clone, Debug)]
 struct Component1Callbacks {
     captured_init: Arc<Mutex<Option<InitializeRequest>>>,
     captured_prompt: Arc<Mutex<Option<agent_client_protocol::PromptRequest>>>,
@@ -402,10 +406,14 @@ impl AcpClientToAgentCallbacks for Component1Callbacks {
 
         let successor_response = response.send_request_to_successor(args);
 
-        tokio::task::spawn_local(async move {
-            let r = successor_response.recv().await;
-            let _ = response.respond_with_result(r);
-        });
+        let current_span = tracing::Span::current();
+        tokio::task::spawn_local(
+            async move {
+                let r = successor_response.recv().await;
+                let _ = response.respond_with_result(r);
+            }
+            .instrument(current_span),
+        );
 
         Ok(())
     }
@@ -429,10 +437,14 @@ impl AcpClientToAgentCallbacks for Component1Callbacks {
             .json_rpc_cx()
             .send_request_to_successor(modified_prompt);
 
-        tokio::task::spawn_local(async move {
-            let prompt_response = successor_response.recv().await;
-            let _ = response.respond_with_result(prompt_response);
-        });
+        let current_span = tracing::Span::current();
+        tokio::task::spawn_local(
+            async move {
+                let prompt_response = successor_response.recv().await;
+                let _ = response.respond_with_result(prompt_response);
+            }
+            .instrument(current_span),
+        );
 
         Ok(())
     }
@@ -475,6 +487,98 @@ impl AcpClientToAgentCallbacks for Component1Callbacks {
         _response: scp::JsonRpcRequestCx<agent_client_protocol::SetSessionModeResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
         Err(agent_client_protocol::Error::internal_error())
+    }
+}
+
+impl AcpAgentToClientCallbacks for Component1Callbacks {
+    async fn request_permission(
+        &mut self,
+        _args: agent_client_protocol::RequestPermissionRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::RequestPermissionResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn write_text_file(
+        &mut self,
+        _args: agent_client_protocol::WriteTextFileRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::WriteTextFileResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn read_text_file(
+        &mut self,
+        _args: agent_client_protocol::ReadTextFileRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::ReadTextFileResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn create_terminal(
+        &mut self,
+        _args: agent_client_protocol::CreateTerminalRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::CreateTerminalResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn terminal_output(
+        &mut self,
+        _args: agent_client_protocol::TerminalOutputRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::TerminalOutputResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn release_terminal(
+        &mut self,
+        _args: agent_client_protocol::ReleaseTerminalRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::ReleaseTerminalResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn wait_for_terminal_exit(
+        &mut self,
+        _args: agent_client_protocol::WaitForTerminalExitRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::WaitForTerminalExitResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn kill_terminal_command(
+        &mut self,
+        _args: agent_client_protocol::KillTerminalCommandRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::KillTerminalCommandResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn session_notification(
+        &mut self,
+        args: agent_client_protocol::SessionNotification,
+        cx: &JsonRpcCx,
+    ) -> Result<(), agent_client_protocol::Error> {
+        use agent_client_protocol::{ContentBlock, SessionUpdate, TextContent};
+
+        // Modify the notification to show it passed through C1
+        let mut modified_notification = args.clone();
+        if let SessionUpdate::AgentMessageChunk { content } = &modified_notification.update {
+            if let ContentBlock::Text(text) = content {
+                let mut modified_text = text.clone();
+                modified_text.text = format!("{} + C1", text.text);
+                modified_notification.update = SessionUpdate::AgentMessageChunk {
+                    content: ContentBlock::Text(modified_text),
+                };
+            }
+        }
+
+        // Forward the notification from successor to our client
+        cx.send_notification(
+            agent_client_protocol::AgentNotification::SessionNotification(modified_notification),
+        )
+        .map_err(scp::util::jsonrpc_to_acp_error)
     }
 }
 
@@ -577,5 +681,83 @@ impl AcpClientToAgentCallbacks for Component2Callbacks {
         _response: scp::JsonRpcRequestCx<agent_client_protocol::SetSessionModeResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
         Ok(())
+    }
+}
+
+/// Callbacks for the editor (receives notifications from components)
+struct EditorCallbacks;
+
+impl AcpAgentToClientCallbacks for EditorCallbacks {
+    async fn session_notification(
+        &mut self,
+        _args: agent_client_protocol::SessionNotification,
+        _cx: &JsonRpcCx,
+    ) -> Result<(), agent_client_protocol::Error> {
+        // Just receive the notification - we verify the content in the test assertions
+        Ok(())
+    }
+
+    async fn request_permission(
+        &mut self,
+        _args: agent_client_protocol::RequestPermissionRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::RequestPermissionResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn write_text_file(
+        &mut self,
+        _args: agent_client_protocol::WriteTextFileRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::WriteTextFileResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn read_text_file(
+        &mut self,
+        _args: agent_client_protocol::ReadTextFileRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::ReadTextFileResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn create_terminal(
+        &mut self,
+        _args: agent_client_protocol::CreateTerminalRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::CreateTerminalResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn terminal_output(
+        &mut self,
+        _args: agent_client_protocol::TerminalOutputRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::TerminalOutputResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn release_terminal(
+        &mut self,
+        _args: agent_client_protocol::ReleaseTerminalRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::ReleaseTerminalResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn wait_for_terminal_exit(
+        &mut self,
+        _args: agent_client_protocol::WaitForTerminalExitRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::WaitForTerminalExitResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
+    }
+
+    async fn kill_terminal_command(
+        &mut self,
+        _args: agent_client_protocol::KillTerminalCommandRequest,
+        _response: scp::JsonRpcRequestCx<agent_client_protocol::KillTerminalCommandResponse>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        Err(agent_client_protocol::Error::internal_error())
     }
 }

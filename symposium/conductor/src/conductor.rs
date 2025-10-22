@@ -70,7 +70,7 @@ use scp::{
 };
 use serde_json::json;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-use tracing::{debug, error, info, warn};
+use tracing::{Instrument, debug, error, info, warn};
 
 use crate::component::{Component, ComponentProvider};
 
@@ -427,7 +427,31 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                                         target,
                                         "Routing component notification to its client"
                                     );
-                                    its_client.send_notification(agent_notification)?;
+
+                                    // If sending to a predecessor component (not the editor), wrap in FromSuccessorNotification
+                                    if component_index > 0 {
+                                        // Wrap the notification in the proxy format expected by on_receive_from_successor
+                                        let params = serde_json::to_value(&agent_notification)
+                                            .ok()
+                                            .map(|v| match v {
+                                                serde_json::Value::Object(map) => jsonrpcmsg::Params::Object(map),
+                                                serde_json::Value::Array(arr) => jsonrpcmsg::Params::Array(arr),
+                                                other => jsonrpcmsg::Params::Object(
+                                                    vec![("value".to_string(), other)].into_iter().collect()
+                                                ),
+                                            });
+
+                                        let wrapped = scp::FromSuccessorNotification {
+                                            message: jsonrpcmsg::Request::notification_v2(
+                                                agent_notification.method().to_string(),
+                                                params,
+                                            ),
+                                        };
+                                        its_client.send_notification(wrapped)?;
+                                    } else {
+                                        // Send directly to editor
+                                        its_client.send_notification(agent_notification)?;
+                                    }
                                 }
                             }
                         }
@@ -483,19 +507,34 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                                     .jsonrpccx
                                     .send_json_request(final_method, final_params);
 
+                                let component_request_id = component_response_cx.id().clone();
                                 let mut conductor_tx = conductor_tx.clone();
-                                tokio::task::spawn_local(async move {
-                                    let v = successor_response.recv().await;
-                                    if let Err(error) = component_response_cx
-                                        .respond(scp::ToSuccessorResponse::from(v))
-                                    {
-                                        ignore_send_err(
-                                            conductor_tx
-                                                .send(ConductorMessage::Error { error })
-                                                .await,
-                                        );
+                                let current_span = tracing::Span::current();
+                                tokio::task::spawn_local(
+                                    async move {
+                                        debug!("Waiting for successor response to forward");
+                                        let v = successor_response.recv().await;
+                                        let is_ok = v.is_ok();
+                                        debug!(is_ok, "Received successor response, forwarding");
+                                        if let Err(error) = component_response_cx
+                                            .respond(scp::ToSuccessorResponse::from(v))
+                                        {
+                                            error!(?error, "Failed to forward successor response");
+                                            ignore_send_err(
+                                                conductor_tx
+                                                    .send(ConductorMessage::Error { error })
+                                                    .await,
+                                            );
+                                        } else {
+                                            debug!("Successfully forwarded successor response");
+                                        }
                                     }
-                                });
+                                    .instrument(tracing::info_span!(
+                                        "forward_successor_response",
+                                        component_request_id = ?component_request_id
+                                    ))
+                                    .instrument(current_span),
+                                );
                             } else {
                                 warn!(
                                     component_index,
@@ -558,11 +597,24 @@ async fn send_request_and_forward_response<Req: JsonRpcRequest>(
     mut conductor_tx: mpsc::Sender<ConductorMessage>,
 ) {
     let response = to_cx.send_request(req);
-    tokio::task::spawn_local(async move {
-        if let Err(error) = response_cx.respond_with_result(response.recv().await) {
-            ignore_send_err(conductor_tx.send(ConductorMessage::Error { error }).await);
+    let request_id = response_cx.id().clone();
+    let current_span = tracing::Span::current();
+    tokio::task::spawn_local(
+        async move {
+            debug!("Waiting for response to forward");
+            let result = response.recv().await;
+            let is_ok = result.is_ok();
+            debug!(is_ok, ?result, "Received response, forwarding");
+            if let Err(error) = response_cx.respond_with_result(result) {
+                error!(?error, "Failed to forward response");
+                ignore_send_err(conductor_tx.send(ConductorMessage::Error { error }).await);
+            } else {
+                debug!("Successfully forwarded response");
+            }
         }
-    });
+        .instrument(tracing::info_span!("forward_response", request_id = ?request_id))
+        .instrument(current_span),
+    );
 }
 
 struct SuccessorSendCallbacks {

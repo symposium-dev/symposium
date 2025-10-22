@@ -30,15 +30,35 @@ pub(super) async fn reply_actor(
         match message {
             ReplyMessage::Subscribe(id, message_tx) => {
                 // total hack: id's don't implement Eq
+                tracing::trace!(?id, "reply_actor: subscribing to response");
                 let id = serde_json::to_value(&id).unwrap();
                 map.insert(id, message_tx);
             }
             ReplyMessage::Dispatch(id, value) => {
+                let id_debug = &id;
+                let is_ok = value.is_ok();
+                tracing::trace!(?id_debug, is_ok, "reply_actor: dispatching response");
                 let id = serde_json::to_value(&id).unwrap();
                 if let Some(message_tx) = map.remove(&id) {
                     // If the receiver is no longer interested in the reply,
                     // that's ok with us.
-                    let _: Result<_, _> = message_tx.send(value);
+                    let result = message_tx.send(value);
+                    if result.is_err() {
+                        tracing::warn!(
+                            ?id,
+                            "reply_actor: failed to send response, receiver dropped"
+                        );
+                    } else {
+                        tracing::trace!(
+                            ?id,
+                            "reply_actor: successfully dispatched response to receiver"
+                        );
+                    }
+                } else {
+                    tracing::warn!(
+                        ?id,
+                        "reply_actor: received response for unknown id, no subscriber found"
+                    );
                 }
             }
         }
@@ -108,14 +128,18 @@ async fn dispatch_request(
     handler: &mut impl JsonRpcHandler,
 ) -> Result<(), jsonrpcmsg::Error> {
     if let Some(id) = request.id {
-        let request_cx = JsonRpcRequestCx::new(json_rpc_cx.clone(), id);
+        let request_cx = JsonRpcRequestCx::new(json_rpc_cx.clone(), id.clone());
+        tracing::debug!(method = %request.method, ?id, "Dispatching request to handler");
         let handled = handler
             .handle_request(&request.method, &request.params, request_cx)
             .await?;
 
         match handled {
-            Handled::Yes => (),
+            Handled::Yes => {
+                tracing::debug!(method = %request.method, ?id, "Handler reported: Handled::Yes");
+            }
             Handled::No(request_cx) => {
+                tracing::debug!(method = %request.method, ?id, "Handler reported: Handled::No, sending method_not_found");
                 request_cx.respond_with_error(jsonrpcmsg::Error::method_not_found())?;
             }
         }
@@ -174,11 +198,17 @@ pub(super) async fn outgoing_actor(
             OutgoingMessage::Response {
                 id,
                 response: Ok(value),
-            } => jsonrpcmsg::Message::Response(jsonrpcmsg::Response::success_v2(value, Some(id))),
+            } => {
+                tracing::debug!(?id, "Sending success response");
+                jsonrpcmsg::Message::Response(jsonrpcmsg::Response::success_v2(value, Some(id)))
+            }
             OutgoingMessage::Response {
                 id,
                 response: Err(error),
-            } => jsonrpcmsg::Message::Response(jsonrpcmsg::Response::error_v2(error, Some(id))),
+            } => {
+                tracing::warn!(?id, ?error, "Sending error response");
+                jsonrpcmsg::Message::Response(jsonrpcmsg::Response::error_v2(error, Some(id)))
+            }
             OutgoingMessage::Error { error } => {
                 jsonrpcmsg::Message::Response(jsonrpcmsg::Response::error_v2(error, None))
             }
@@ -196,17 +226,22 @@ pub(super) async fn outgoing_actor(
                     .map_err(internal_error)?;
             }
 
-            Err(_) => {
+            Err(serialization_error) => {
                 match json_rpc_message {
                     jsonrpcmsg::Message::Request(_request) => {
                         // If we failed to serialize a request,
                         // just ignore it.
                         //
                         // Q: (Maybe it'd be nice to "reply" with an error?)
+                        tracing::error!(
+                            ?serialization_error,
+                            "Failed to serialize request, ignoring"
+                        );
                     }
                     jsonrpcmsg::Message::Response(response) => {
                         // If we failed to serialize a *response*,
                         // send an error in response.
+                        tracing::error!(?serialization_error, id = ?response.id, "Failed to serialize response, sending internal_error instead");
                         outgoing_bytes
                             .write_all(
                                 &serde_json::to_vec(&jsonrpcmsg::Response::error(
