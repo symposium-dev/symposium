@@ -1,19 +1,34 @@
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use agent_client_protocol::{InitializeRequest, InitializeResponse};
 use futures::{AsyncRead, AsyncWrite};
-use scp::{AcpClientToAgentMessages, JsonRpcConnection, JsonRpcCx};
-use tokio::io::duplex;
+use scp::{AcpClientToAgentCallbacks, AcpClientToAgentMessages, JsonRpcConnection, JsonRpcCx};
+use tokio::{io::duplex, sync::Mutex};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use crate::component::MockComponent;
+use crate::{
+    component::{ComponentProvider, MockComponent},
+    conductor::Conductor,
+};
 
-/// A mock component that implements ACP protocol for testing.
-///
-/// Spawns a local task with a JsonRpcConnection to handle the component side.
-struct PassthroughMockComponent;
+/// A mock component that captures initialize requests for test verification.
+struct CapturingMockComponent {
+    captured_init: Arc<Mutex<Option<InitializeRequest>>>,
+}
 
-impl MockComponent for PassthroughMockComponent {
+impl CapturingMockComponent {
+    fn new() -> (Self, Arc<Mutex<Option<InitializeRequest>>>) {
+        let captured = Arc::new(Mutex::new(None));
+        (
+            Self {
+                captured_init: captured.clone(),
+            },
+            captured,
+        )
+    }
+}
+
+impl MockComponent for CapturingMockComponent {
     fn create(
         &self,
     ) -> Pin<
@@ -26,6 +41,7 @@ impl MockComponent for PassthroughMockComponent {
                 > + Send,
         >,
     > {
+        let captured_init = self.captured_init.clone();
         Box::pin(async move {
             // Create two duplex pairs for bidirectional communication
             let (conductor_out, component_in) = duplex(1024);
@@ -34,7 +50,9 @@ impl MockComponent for PassthroughMockComponent {
             // Spawn local task to run the mock component's JSON-RPC handler
             tokio::task::spawn_local(async move {
                 let _ = JsonRpcConnection::new(component_out.compat_write(), component_in.compat())
-                    .on_receive(AcpClientToAgentMessages::callback(PassthroughCallbacks))
+                    .on_receive(AcpClientToAgentMessages::callback(CapturingCallbacks {
+                        captured_init,
+                    }))
                     .serve()
                     .await;
             });
@@ -48,15 +66,20 @@ impl MockComponent for PassthroughMockComponent {
     }
 }
 
-/// Simple callbacks that respond to initialize requests with minimal responses
-struct PassthroughCallbacks;
+/// Callbacks that capture initialize requests and respond
+struct CapturingCallbacks {
+    captured_init: Arc<Mutex<Option<InitializeRequest>>>,
+}
 
-impl scp::AcpClientToAgentCallbacks for PassthroughCallbacks {
+impl AcpClientToAgentCallbacks for CapturingCallbacks {
     async fn initialize(
         &mut self,
-        _args: InitializeRequest,
+        args: InitializeRequest,
         response: scp::JsonRpcRequestCx<InitializeResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
+        // Capture the request for test verification
+        *self.captured_init.lock().await = Some(args);
+
         let _ = response.respond(InitializeResponse {
             protocol_version: Default::default(),
             agent_capabilities: Default::default(),
@@ -121,11 +144,84 @@ mod tests {
 
     #[tokio::test]
     async fn test_single_component_no_proxy_capability() {
-        // TODO: Test that a single component chain doesn't add proxy capability
-    }
+        let local = tokio::task::LocalSet::new();
 
-    #[tokio::test]
-    async fn test_two_component_chain_capabilities() {
-        // TODO: Test that first component gets proxy capability, last doesn't
+        local
+            .run_until(async {
+                // Create mock component that will capture the initialize request
+                let (mock, captured_init) = CapturingMockComponent::new();
+
+                // Create duplex streams for editor <-> conductor communication
+                let (editor_out, conductor_in) = duplex(1024);
+                let (conductor_out, editor_in) = duplex(1024);
+
+                // Spawn conductor in a local task
+                let conductor_handle = tokio::task::spawn_local(async move {
+                    Conductor::run(
+                        conductor_out.compat_write(),
+                        conductor_in.compat(),
+                        vec![ComponentProvider::Mock(Box::new(mock))],
+                    )
+                    .await
+                });
+
+                // Create editor-side JSON-RPC connection
+                let editor_task = tokio::task::spawn_local(async move {
+                    JsonRpcConnection::new(editor_out.compat_write(), editor_in.compat())
+                        .with_client(async move |client| {
+                            // Send initialize request as the editor
+                            let init_request = InitializeRequest {
+                                protocol_version: Default::default(),
+                                client_capabilities: Default::default(),
+                                meta: None,
+                            };
+
+                            let response = client
+                                .send_json_request(
+                                    "initialize".to_string(),
+                                    serde_json::to_value(init_request).unwrap(),
+                                )
+                                .recv()
+                                .await;
+
+                            // Should get a successful response
+                            assert!(
+                                response.is_ok(),
+                                "Initialize request should succeed: {:?}",
+                                response
+                            );
+
+                            Ok::<(), jsonrpcmsg::Error>(())
+                        })
+                        .await
+                });
+
+                // Wait for the editor side to complete
+                let _ = editor_task.await.expect("Editor task should complete");
+
+                // Check what the component received
+                let received = captured_init.lock().await;
+                assert!(
+                    received.is_some(),
+                    "Component should have received initialize request"
+                );
+
+                let init_req = received.as_ref().unwrap();
+
+                // Verify proxy capability is NOT present (single component chain)
+                if let Some(meta) = &init_req.meta {
+                    if let Some(symposium) = meta.get("symposium") {
+                        assert!(
+                            symposium.get("proxy").is_none()
+                                || symposium.get("proxy") == Some(&serde_json::Value::Bool(false)),
+                            "Single component should not have proxy capability"
+                        );
+                    }
+                }
+
+                // Clean up - conductor task will run until editor closes connection
+                conductor_handle.abort();
+            })
+            .await;
     }
 }
