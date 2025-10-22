@@ -127,8 +127,9 @@ async fn connect_with_retry(port: u16) -> Result<TcpStream> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio::process::Command;
 
     #[tokio::test]
     async fn test_connect_with_retry_success() {
@@ -228,5 +229,177 @@ mod tests {
         assert_eq!(response["result"], "pong");
 
         server_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_mcp_bridge_integration() {
+        // Initialize tracing for test debugging
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::from_default_env()
+                    .add_directive("conductor=debug".parse().unwrap()),
+            )
+            .with_test_writer()
+            .try_init();
+
+        // This test simulates the full scenario:
+        // Agent (test) ← stdio → conductor mcp ← TCP → Main conductor (mock server)
+
+        // Step 1: Set up mock main conductor (TCP listener)
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // Step 2: Spawn mock main conductor that will handle TCP messages
+        let server_task = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let (tcp_read, mut tcp_write) = socket.into_split();
+            let mut reader = BufReader::new(tcp_read);
+
+            // Expect an MCP initialize request from agent
+            let mut line = String::new();
+            reader.read_line(&mut line).await.unwrap();
+            tracing::info!("Mock conductor received: {}", line.trim());
+
+            let msg: Value = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(msg["method"], "initialize");
+            assert_eq!(msg["id"], "init-1");
+
+            // Send initialize response
+            let response = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "init-1",
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "capabilities": {},
+                    "serverInfo": {"name": "test-server", "version": "1.0.0"}
+                }
+            });
+            tcp_write
+                .write_all(format!("{}\n", serde_json::to_string(&response).unwrap()).as_bytes())
+                .await
+                .unwrap();
+            tcp_write.flush().await.unwrap();
+
+            // Expect a tools/list request
+            line.clear();
+            reader.read_line(&mut line).await.unwrap();
+            tracing::info!("Mock conductor received: {}", line.trim());
+
+            let msg: Value = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(msg["method"], "tools/list");
+            assert_eq!(msg["id"], "tools-1");
+
+            // Send tools/list response
+            let response = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": "tools-1",
+                "result": {
+                    "tools": []
+                }
+            });
+            tcp_write
+                .write_all(format!("{}\n", serde_json::to_string(&response).unwrap()).as_bytes())
+                .await
+                .unwrap();
+            tcp_write.flush().await.unwrap();
+
+            // Keep connection alive briefly
+            tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
+        });
+
+        // Step 3: Build path to conductor binary
+        let cargo_manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let conductor_binary = format!("{}/../../target/debug/conductor", cargo_manifest_dir);
+
+        // Step 4: Spawn `conductor mcp $port` subprocess
+        tracing::info!(
+            "Spawning conductor binary: {} mcp {}",
+            conductor_binary,
+            port
+        );
+
+        let mut child = Command::new(&conductor_binary)
+            .arg("mcp")
+            .arg(port.to_string())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit())
+            .spawn()
+            .expect("Failed to spawn conductor mcp");
+
+        tracing::info!("Conductor mcp spawned with PID: {:?}", child.id());
+
+        let mut stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut stdout_reader = BufReader::new(stdout);
+
+        // Give the bridge time to connect
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Step 5: Send MCP initialize request via stdin (simulating agent)
+        let init_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "init-1",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "test-client", "version": "1.0.0"}
+            }
+        });
+        stdin
+            .write_all(format!("{}\n", serde_json::to_string(&init_request).unwrap()).as_bytes())
+            .await
+            .unwrap();
+        stdin.flush().await.unwrap();
+
+        // Step 6: Read initialize response from stdout
+        let mut response_line = String::new();
+        let n = stdout_reader.read_line(&mut response_line).await.unwrap();
+        tracing::info!("Agent received {} bytes: {:?}", n, response_line.trim());
+
+        if response_line.trim().is_empty() {
+            panic!("Received empty response from bridge");
+        }
+
+        let response: Value = serde_json::from_str(response_line.trim())
+            .expect(&format!("Failed to parse JSON: {}", response_line));
+        assert_eq!(response["id"], "init-1");
+        assert_eq!(response["result"]["protocolVersion"], "2024-11-05");
+
+        // Step 7: Send tools/list request
+        let tools_request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": "tools-1",
+            "method": "tools/list",
+            "params": {}
+        });
+        stdin
+            .write_all(format!("{}\n", serde_json::to_string(&tools_request).unwrap()).as_bytes())
+            .await
+            .unwrap();
+        stdin.flush().await.unwrap();
+
+        // Step 8: Read tools/list response
+        response_line.clear();
+        stdout_reader.read_line(&mut response_line).await.unwrap();
+        tracing::info!("Agent received: {}", response_line.trim());
+
+        let response: Value = serde_json::from_str(response_line.trim()).unwrap();
+        assert_eq!(response["id"], "tools-1");
+        assert!(response["result"]["tools"].is_array());
+
+        // Clean up
+        drop(stdin);
+        drop(stdout_reader);
+
+        // Wait for server task to complete
+        server_task.await.unwrap();
+
+        // Wait briefly for bridge to shut down gracefully
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        // Try to kill child if still running
+        let _ = child.kill().await;
     }
 }
