@@ -8,6 +8,9 @@ mod mcp_bridge;
 mod conductor_tests;
 
 #[cfg(test)]
+mod mcp_bridge_rmcp_test;
+
+#[cfg(test)]
 mod test_util;
 
 use clap::{Parser, Subcommand};

@@ -494,6 +494,7 @@ dependencies = [
  "clap",
  "futures",
  "jsonrpcmsg",
+ "rmcp",
  "scp",
  "serde",
  "serde_json",
