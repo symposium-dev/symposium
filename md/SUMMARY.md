@@ -81,6 +81,7 @@ People can propose an RFD by create a PR adding a new file into the early drafts
         - [IPC message type reference](./design/ipc_message_type_reference.md)
     - [P/ACP Components](./design/pacp-components.md)
         - [Fiedler: ACP Conductor](./design/fiedler-conductor.md)
+        - [MCP Bridge](./design/mcp-bridge.md)
     - [Symposium MCP server + IDE extension specifics](./design/mcp-server-ide.md)
         - [MCP Server Actor Architecture](./design/mcp-server-actor-architecture.md)
         - [Guidance and Initialization](./design/guidance-and-initialization.md)

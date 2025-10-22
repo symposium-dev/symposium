@@ -1,8 +1,10 @@
-# Fiedler: ACP Conductor
+# Conductor: P/ACP Orchestrator
 
 {{#rfd: proxying-acp}}
 
-**Fiedler** is the orchestrator for P/ACP proxy chains. Named after Arthur Fiedler, conductor of the Boston Pops, it coordinates the flow of ACP messages through a chain of proxy components.
+The **Conductor** (binary name: `conductor`) is the orchestrator for P/ACP proxy chains. Named after Arthur Fiedler, conductor of the Boston Pops, it coordinates the flow of ACP messages through a chain of proxy components.
+
+**Note:** This binary was previously called "Fiedler" and you may see that name in older documentation or code.
 
 ## Overview
 
@@ -33,7 +35,7 @@ flowchart LR
 
 ## Responsibilities
 
-Fiedler has three core responsibilities:
+The conductor has four core responsibilities:
 
 ### 1. Process Management
 
@@ -43,10 +45,16 @@ Fiedler has three core responsibilities:
 
 **Command-line interface:**
 ```bash
-fiedler sparkle-acp claude-code-acp
+# Agent mode - manages proxy chain
+conductor agent sparkle-acp claude-code-acp
+
+# MCP mode - bridges stdio to TCP for MCP-over-ACP
+conductor mcp 54321
 ```
 
-This creates a chain: `Editor → Fiedler → sparkle-acp → claude-code-acp`
+**Agent mode** creates a chain: `Editor → Conductor → sparkle-acp → claude-code-acp`
+
+**MCP mode** bridges MCP JSON-RPC (stdio) to raw JSON-RPC (TCP connection to main conductor)
 
 ### 2. Message Routing
 
@@ -67,17 +75,40 @@ Routes messages between editor and components:
 
 ### 3. Capability Management
 
-Fiedler modifies capability advertisements during initialization:
+The conductor modifies capability advertisements during initialization:
 
 **When forwarding `acp/initialize` to first component:**
 - Adds `_proxy/successor/*` capability if component has a successor
 - Removes `_proxy/successor/*` capability if component is the last in chain
 - Passes through all other capabilities from editor's request
 
+**MCP bridge capability (`mcp_acp_transport`):**
+- Check if final agent advertises `mcp_acp_transport: true`
+- If agent lacks capability, conductor activates MCP bridging
+- Always advertise `mcp_acp_transport: true` to intermediate components
+
 This allows:
 - Each component to see what capabilities its successor offers
 - Each component to decide what capabilities to advertise to its predecessor
 - The chain to be transparent to the editor
+
+### 4. MCP Bridge Adaptation
+
+When components provide MCP servers with ACP transport (`"url": "acp:$UUID"`):
+
+**If agent has `mcp_acp_transport` capability:**
+- Pass through MCP server declarations unchanged
+- Agent handles `_mcp/*` messages natively
+
+**If agent lacks `mcp_acp_transport` capability:**
+- Bind TCP port for each ACP-transport MCP server
+- Transform MCP server spec to use `conductor mcp $port`
+- Spawn `conductor mcp $port` bridge processes
+- Route MCP tool calls:
+  - Agent → stdio → bridge → TCP → conductor → `_mcp/*` messages backward up chain
+  - Component responses flow back: component → conductor → TCP → bridge → stdio → agent
+
+See [MCP Bridge](./mcp-bridge.md) for full implementation details.
 
 ## Initialization Flow
 

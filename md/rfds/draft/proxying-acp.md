@@ -95,29 +95,34 @@ P/ACP defines three kinds of actors:
 
 The orchestrator handles message routing, making the proxy chain transparent to editors. Proxies can transform requests, responses, or add side-effects without editors or agents needing P/ACP awareness.
 
-## The Orchestrator: Fiedler
+## The Orchestrator: Conductor
 
-P/ACP's orchestrator is called **Fiedler** (after Arthur Fiedler, conductor of the Boston Pops). Fiedler has three responsibilities:
+P/ACP's orchestrator is called the **Conductor** (binary name: `conductor`, inspired by Arthur Fiedler, conductor of the Boston Pops). The conductor has three core responsibilities:
 
 1. **Process Management** - Creates and manages component processes based on command-line configuration
 2. **Message Routing** - Routes messages between editor, components, and agent through the proxy chain
 3. **Capability Adaptation** - Observes component capabilities and adapts between them
 
-**Example adaptation:** Session pre-population
-- If the agent supports native session pre-population, Fiedler uses it
-- If not, Fiedler synthesizes a dummy prompt with history in XML/markdown, intercepts the response, discards it, then starts the real session
-- Result: Components can use session pre-population even with agents that don't support it
+**Key adaptation: MCP Bridge**
+- If the agent supports `mcp_acp_transport`, conductor passes MCP servers with ACP transport through unchanged
+- If not, conductor spawns `conductor mcp $port` processes to bridge between stdio (MCP) and ACP messages
+- Components can provide MCP servers without requiring agent modifications
+- See "MCP Bridge" section in Implementation Details for full protocol
 
-Other adaptations include translating streaming support, content types, and tool formats.
+**Other adaptations** include session pre-population, streaming support, content types, and tool formats.
 
-**From the editor's perspective**, it spawns one Fiedler process and communicates using normal ACP over stdio. The editor doesn't know about the proxy chain.
+**From the editor's perspective**, it spawns one conductor process and communicates using normal ACP over stdio. The editor doesn't know about the proxy chain.
 
 **Command-line usage:**
 ```bash
-fiedler sparkle-acp claude-code-acp
+# Agent mode - manages proxy chain
+conductor agent sparkle-acp claude-code-acp
+
+# MCP mode - bridges stdio to TCP for MCP-over-ACP
+conductor mcp 54321
 ```
 
-To editors, Fiedler is a normal ACP agent - no special capabilities are advertised upstream. However, Fiedler advertises a `"proxy"` capability to its downstream components, and expects them to respond with a `"proxy"` capability to confirm they are P/ACP-aware.
+To editors, the conductor is a normal ACP agent - no special capabilities are advertised upstream. However, the conductor advertises a `"proxy"` capability to its downstream components, and expects them to respond with a `"proxy"` capability to confirm they are P/ACP-aware.
 
 
 # Shiny future
@@ -153,15 +158,17 @@ As the ecosystem matures, successful patterns may be:
 * Adopted by other agent protocols
 * Used as reference implementations for proxy architectures
 
-## Protocol Extensions
+## Implemented Extensions
 
-Near-term extensions under consideration:
+**MCP Bridge** - ✅ Implemented via the `_mcp/*` protocol (see "Implementation details and plan" section). Components can provide MCP servers using ACP transport, enabling tool provision without agents needing P/ACP awareness. The conductor bridges between agents lacking native support and components.
 
-**Tool Interception** - Route MCP tool calls through the proxy chain instead of directly to external servers. Fiedler registers as a dummy MCP server, and tool calls route back through components for handling. This enables components to provide tools without agents needing P/ACP awareness.
+## Future Protocol Extensions
+
+Extensions under consideration for future development:
 
 **Agent-Initiated Messages** - Allow components to send messages after the agent has sent end-turn, outside the normal request-response cycle. Use cases include background task completion notifications, time-based reminders, or autonomous checkpoint creation.
 
-**Session Pre-Population** - Create sessions with existing conversation history. Fiedler adapts based on agent capabilities: uses native support if available, otherwise synthesizes a dummy prompt containing the history, intercepts the response, and starts the real session.
+**Session Pre-Population** - Create sessions with existing conversation history. Conductor adapts based on agent capabilities: uses native support if available, otherwise synthesizes a dummy prompt containing the history, intercepts the response, and starts the real session.
 
 **Rich Content Types** - Extend content types beyond text to include HTML panels, interactive GUI components, or other structured formats. Components can transform between content types based on what downstream agents support.
 
@@ -294,6 +301,204 @@ match message {
     ExtNotification("_proxy/successor/receive/notification", msg) => forward_to_editor(msg),
 }
 ```
+
+### The MCP Bridge: `_mcp/*` Protocol
+
+P/ACP enables components to provide MCP servers that communicate over ACP messages rather than traditional stdio. This allows components to handle MCP tool calls without agents needing special P/ACP awareness.
+
+#### MCP Server Declaration with ACP Transport
+
+Components declare MCP servers with ACP transport by using the HTTP MCP server format with a special URL scheme:
+
+```json
+{
+  "tools": {
+    "mcpServers": {
+      "sparkle": {
+        "transport": "http",
+        "url": "acp:550e8400-e29b-41d4-a716-446655440000",
+        "headers": {}
+      }
+    }
+  }
+}
+```
+
+The `acp:$UUID` URL signals ACP transport. The component generates the UUID to identify which component handles calls to this MCP server.
+
+#### Agent Capability: `mcp_acp_transport`
+
+Agents that natively support MCP-over-ACP declare this capability:
+
+```json
+{
+  "_meta": {
+    "mcp_acp_transport": true
+  }
+}
+```
+
+**Conductor behavior:**
+- If the final agent has `mcp_acp_transport: true`, conductor passes MCP server declarations through unchanged
+- If the final agent lacks this capability, conductor performs **bridging adaptation**:
+  1. Binds a fresh TCP port (e.g., `localhost:54321`)
+  2. Transforms the MCP server declaration to use `conductor mcp $port` as the command
+  3. Spawns `conductor mcp $port` which connects back via TCP and bridges to ACP messages
+  4. Always advertises `mcp_acp_transport: true` to intermediate components
+
+#### Bridging Transformation Example
+
+**Original MCP server spec (from component):**
+```json
+{
+  "sparkle": {
+    "transport": "http",
+    "url": "acp:550e8400-e29b-41d4-a716-446655440000",
+    "headers": {}
+  }
+}
+```
+
+**Transformed spec (passed to agent without `mcp_acp_transport`):**
+```json
+{
+  "sparkle": {
+    "command": "conductor",
+    "args": ["mcp", "54321"],
+    "transport": "stdio"
+  }
+}
+```
+
+The agent thinks it's talking to a normal MCP server over stdio. The `conductor mcp` process bridges between stdio (MCP JSON-RPC) and TCP (connection to main conductor), which then translates to ACP `_mcp/*` messages.
+
+#### MCP Message Flow Protocol
+
+When MCP tool calls occur, they flow as ACP extension messages:
+
+**`_mcp/client_to_server/request`** - Agent calling an MCP tool (flows backward up chain):
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "T1",
+  "method": "_mcp/client_to_server/request",
+  "params": {
+    "url": "acp:550e8400-e29b-41d4-a716-446655440000",
+    "message": {
+      "jsonrpc": "2.0",
+      "id": "mcp-123",
+      "method": "tools/call",
+      "params": {
+        "name": "embody_sparkle",
+        "arguments": {}
+      }
+    }
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "T1",
+  "result": {
+    "message": {
+      "jsonrpc": "2.0",
+      "id": "mcp-123",
+      "result": {
+        "content": [
+          {"type": "text", "text": "Embodiment complete"}
+        ]
+      }
+    }
+  }
+}
+```
+
+**`_mcp/client_to_server/notification`** - Agent sending notification to MCP server:
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "_mcp/client_to_server/notification",
+  "params": {
+    "url": "acp:550e8400-e29b-41d4-a716-446655440000",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "notifications/cancelled",
+      "params": {}
+    }
+  }
+}
+```
+
+**`_mcp/server_to_client/request`** - MCP server calling back to agent (flows forward down chain):
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "S1",
+  "method": "_mcp/server_to_client/request",
+  "params": {
+    "url": "acp:550e8400-e29b-41d4-a716-446655440000",
+    "message": {
+      "jsonrpc": "2.0",
+      "id": "mcp-456",
+      "method": "sampling/createMessage",
+      "params": {
+        "messages": [...],
+        "modelPreferences": {...}
+      }
+    }
+  }
+}
+```
+
+**`_mcp/server_to_client/notification`** - MCP server sending notification to agent:
+```json
+{
+  "jsonrpc": "2.0",
+  "method": "_mcp/server_to_client/notification",
+  "params": {
+    "url": "acp:550e8400-e29b-41d4-a716-446655440000",
+    "message": {
+      "jsonrpc": "2.0",
+      "method": "notifications/progress",
+      "params": {
+        "progressToken": "token-1",
+        "progress": 50,
+        "total": 100
+      }
+    }
+  }
+}
+```
+
+#### Message Routing
+
+**Client→Server messages** (agent calling MCP tools):
+- Flow **backward** up the proxy chain (agent → conductor → components)
+- Component matches on `params.url` to identify which MCP server
+- Component extracts `params.message`, handles the MCP call, responds
+
+**Server→Client messages** (MCP server callbacks):
+- Flow **forward** down the proxy chain (component → conductor → agent)
+- Component initiates when its MCP server needs to call back (sampling, logging, progress)
+- Conductor routes to agent (or via bridge if needed)
+
+#### Conductor MCP Mode
+
+The conductor binary has two modes:
+
+1. **Agent mode**: `conductor agent [proxies...] agent`
+   - Manages P/ACP proxy chain
+   - Routes ACP messages
+
+2. **MCP mode**: `conductor mcp $port`
+   - Acts as MCP server over stdio
+   - Connects to `localhost:$port` via TCP
+   - Bridges MCP JSON-RPC (stdio) ↔ raw JSON-RPC (TCP to main conductor)
+
+When bridging is needed, the main conductor spawns `conductor mcp $port` as the child process that the agent communicates with via stdio.
 
 ### Additional Extension Messages
 
