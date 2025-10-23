@@ -785,3 +785,257 @@ impl AcpAgentToClientCallbacks for EditorCallbacks {
         Err(agent_client_protocol::Error::internal_error())
     }
 }
+
+#[cfg(test)]
+mod mcp_capability_tests {
+    use super::*;
+    use scp::{InitializeResponseExt, McpAcpTransport};
+
+    /// Helper to create a mock component that responds with or without mcp_acp_transport capability
+    fn mock_component_with_capability(
+        has_capability: bool,
+    ) -> (MockComponentImpl, Arc<Mutex<Option<InitializeResponse>>>) {
+        let captured_response = Arc::new(Mutex::new(None));
+        let captured_response_clone = captured_response.clone();
+
+        let mock = MockComponentImpl::new(move |connection| {
+            let captured = captured_response_clone.clone();
+            async move {
+                let _ = connection
+                    .on_receive(AcpClientToAgentMessages::callback(
+                        MockComponentWithCapability {
+                            has_capability,
+                            captured_response: captured,
+                        },
+                    ))
+                    .serve()
+                    .instrument(tracing::info_span!("actor", id = "mock_agent"))
+                    .await;
+            }
+        });
+
+        (mock, captured_response)
+    }
+
+    struct MockComponentWithCapability {
+        has_capability: bool,
+        captured_response: Arc<Mutex<Option<InitializeResponse>>>,
+    }
+
+    impl AcpClientToAgentCallbacks for MockComponentWithCapability {
+        async fn initialize(
+            &mut self,
+            _args: InitializeRequest,
+            response: scp::JsonRpcRequestCx<InitializeResponse>,
+        ) -> Result<(), agent_client_protocol::Error> {
+            let mut init_response = InitializeResponse {
+                protocol_version: Default::default(),
+                agent_capabilities: Default::default(),
+                auth_methods: vec![],
+                meta: None,
+            };
+
+            // Add capability if requested
+            if self.has_capability {
+                init_response = init_response.add_meta_capability(McpAcpTransport);
+            }
+
+            // Capture what we're sending for test verification
+            *self.captured_response.lock().await = Some(init_response.clone());
+
+            let _ = response.respond(init_response);
+            Ok(())
+        }
+
+        async fn authenticate(
+            &mut self,
+            _args: agent_client_protocol::AuthenticateRequest,
+            _response: scp::JsonRpcRequestCx<agent_client_protocol::AuthenticateResponse>,
+        ) -> Result<(), agent_client_protocol::Error> {
+            Ok(())
+        }
+
+        async fn session_cancel(
+            &mut self,
+            _args: agent_client_protocol::CancelNotification,
+            _cx: &JsonRpcCx,
+        ) -> Result<(), agent_client_protocol::Error> {
+            Ok(())
+        }
+
+        async fn new_session(
+            &mut self,
+            _args: agent_client_protocol::NewSessionRequest,
+            _response: scp::JsonRpcRequestCx<agent_client_protocol::NewSessionResponse>,
+        ) -> Result<(), agent_client_protocol::Error> {
+            Ok(())
+        }
+
+        async fn load_session(
+            &mut self,
+            _args: agent_client_protocol::LoadSessionRequest,
+            _response: scp::JsonRpcRequestCx<agent_client_protocol::LoadSessionResponse>,
+        ) -> Result<(), agent_client_protocol::Error> {
+            Ok(())
+        }
+
+        async fn prompt(
+            &mut self,
+            _args: agent_client_protocol::PromptRequest,
+            _response: scp::JsonRpcRequestCx<agent_client_protocol::PromptResponse>,
+        ) -> Result<(), agent_client_protocol::Error> {
+            Ok(())
+        }
+
+        async fn set_session_mode(
+            &mut self,
+            _args: agent_client_protocol::SetSessionModeRequest,
+            _response: scp::JsonRpcRequestCx<agent_client_protocol::SetSessionModeResponse>,
+        ) -> Result<(), agent_client_protocol::Error> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_agent_without_mcp_capability() {
+        crate::test_util::init_test_tracing();
+
+        let local = tokio::task::LocalSet::new();
+
+        local
+            .run_until(async {
+                // Create mock agent that does NOT have mcp_acp_transport capability
+                let (mock_agent, agent_response) = mock_component_with_capability(false);
+
+                // Set up duplex streams for editor ↔ conductor communication
+                let (editor_write, conductor_read) = duplex(1024);
+                let (conductor_write, editor_read) = duplex(1024);
+
+                // Start conductor with the mock agent
+                let conductor_handle = tokio::task::spawn_local(async move {
+                    Conductor::run(
+                        conductor_write.compat_write(),
+                        conductor_read.compat(),
+                        vec![ComponentProvider::Mock(Box::new(mock_agent))],
+                    )
+                    .await
+                });
+
+                // Editor side - send initialize request
+                let editor_task = tokio::task::spawn_local(async move {
+                    JsonRpcConnection::new(editor_write.compat_write(), editor_read.compat())
+                        .with_client(async move |client| {
+                            let response = client
+                                .send_request(agent_client_protocol::InitializeRequest {
+                                    protocol_version: Default::default(),
+                                    client_capabilities: Default::default(),
+                                    meta: None,
+                                })
+                                .recv()
+                                .await;
+
+                            assert!(
+                                response.is_ok(),
+                                "Initialize should succeed: {:?}",
+                                response
+                            );
+
+                            let init_response = response.unwrap();
+
+                            // Verify the editor receives the response WITH the capability added
+                            assert!(
+                                init_response.has_meta_capability(McpAcpTransport),
+                                "Editor should see mcp_acp_transport capability added by conductor"
+                            );
+
+                            Ok::<(), jsonrpcmsg::Error>(())
+                        })
+                        .await
+                });
+
+                let _ = editor_task.await.expect("Editor task should complete");
+
+                // Verify the agent sent response WITHOUT the capability
+                let agent_resp = agent_response.lock().await;
+                assert!(agent_resp.is_some(), "Agent should have responded");
+                let resp = agent_resp.as_ref().unwrap();
+                assert!(
+                    !resp.has_meta_capability(McpAcpTransport),
+                    "Agent's original response should not have mcp_acp_transport"
+                );
+
+                conductor_handle.abort();
+            })
+            .await;
+    }
+
+    #[tokio::test]
+    async fn test_agent_with_mcp_capability() {
+        crate::test_util::init_test_tracing();
+
+        let local = tokio::task::LocalSet::new();
+
+        local
+            .run_until(async {
+                // Create mock agent that DOES have mcp_acp_transport capability
+                let (mock_agent, agent_response) = mock_component_with_capability(true);
+
+                let (editor_write, conductor_read) = duplex(1024);
+                let (conductor_write, editor_read) = duplex(1024);
+
+                let conductor_handle = tokio::task::spawn_local(async move {
+                    Conductor::run(
+                        conductor_write.compat_write(),
+                        conductor_read.compat(),
+                        vec![ComponentProvider::Mock(Box::new(mock_agent))],
+                    )
+                    .await
+                });
+
+                let editor_task = tokio::task::spawn_local(async move {
+                    JsonRpcConnection::new(editor_write.compat_write(), editor_read.compat())
+                        .with_client(async move |client| {
+                            let response = client
+                                .send_request(agent_client_protocol::InitializeRequest {
+                                    protocol_version: Default::default(),
+                                    client_capabilities: Default::default(),
+                                    meta: None,
+                                })
+                                .recv()
+                                .await;
+
+                            assert!(
+                                response.is_ok(),
+                                "Initialize should succeed: {:?}",
+                                response
+                            );
+
+                            let init_response = response.unwrap();
+
+                            // Verify capability is still present
+                            assert!(
+                                init_response.has_meta_capability(McpAcpTransport),
+                                "Editor should see mcp_acp_transport capability from agent"
+                            );
+
+                            Ok::<(), jsonrpcmsg::Error>(())
+                        })
+                        .await
+                });
+
+                let _ = editor_task.await.expect("Editor task should complete");
+
+                // Verify the agent sent response WITH the capability
+                let agent_resp = agent_response.lock().await;
+                assert!(agent_resp.is_some(), "Agent should have responded");
+                let resp = agent_resp.as_ref().unwrap();
+                assert!(
+                    resp.has_meta_capability(McpAcpTransport),
+                    "Agent's response should have mcp_acp_transport"
+                );
+
+                conductor_handle.abort();
+            })
+            .await;
+    }
+}

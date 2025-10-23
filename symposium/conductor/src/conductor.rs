@@ -299,6 +299,7 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                             ) => {
                                 let total_components = self.components.len();
                                 let has_successor = total_components > 1;
+                                let is_last_component = total_components == 1;
                                 let method = "initialize";
 
                                 debug!(
@@ -322,7 +323,7 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                                     json_rpc_request_cx.cast(),
                                     conductor_tx.clone(),
                                     method.to_string(),
-                                    false, // Not from last component
+                                    is_last_component,
                                 )
                                 .await;
                             }
@@ -563,12 +564,38 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                         }
 
                         ConductorMessage::ResponseReceived {
-                            result,
+                            mut result,
                             response_cx,
                             method,
                             from_last_component,
                         } => {
                             debug!(method, from_last_component, "Forwarding response received from component");
+
+                            // If this is an InitializeResponse from the last component (agent),
+                            // check for mcp_acp_transport capability
+                            if from_last_component && method == "initialize" {
+                                if let Ok(ref mut response_value) = result {
+                                    if let Ok(mut init_response) = serde_json::from_value::<agent_client_protocol::InitializeResponse>(response_value.clone()) {
+                                        // Check if agent has mcp_acp_transport capability
+                                        let has_capability = init_response.has_meta_capability(scp::McpAcpTransport);
+                                        self.agent_needs_mcp_bridging = Some(!has_capability);
+
+                                        info!(
+                                            has_capability,
+                                            agent_needs_mcp_bridging = !has_capability,
+                                            "Detected agent MCP capability from InitializeResponse"
+                                        );
+
+                                        // Add the capability if agent doesn't have it
+                                        if !has_capability {
+                                            init_response = init_response.add_meta_capability(scp::McpAcpTransport);
+                                            *response_value = serde_json::to_value(&init_response).unwrap();
+                                            info!("Added mcp_acp_transport capability to agent's InitializeResponse");
+                                        }
+                                    }
+                                }
+                            }
+
                             if let Err(error) = response_cx.respond_with_result(result) {
                                 error!(?error, "Failed to forward response");
                             } else {
