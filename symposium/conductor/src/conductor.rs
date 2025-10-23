@@ -60,9 +60,9 @@
 //! The message flow ensures bidirectional communication while maintaining the
 //! abstraction that each component only knows about its immediate successor.
 
-use std::pin::Pin;
+use std::{collections::HashMap, pin::Pin};
 
-use agent_client_protocol::{ClientRequest, InitializeRequest};
+use agent_client_protocol::{ClientRequest, InitializeRequest, NewSessionRequest};
 use futures::{AsyncRead, AsyncWrite, SinkExt, StreamExt, channel::mpsc};
 use scp::{
     AcpAgentToClientMessages, AcpClientToAgentMessages, InitializeRequestExt,
@@ -73,6 +73,28 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::{Instrument, debug, error, info, warn};
 
 use crate::component::{Component, ComponentProvider};
+
+/// Information about an MCP bridge for routing messages.
+///
+/// When a component provides an MCP server with ACP transport (`acp:$UUID`),
+/// and the agent lacks native `mcp_acp_transport` support, the conductor
+/// spawns a TCP listener and transforms the server spec to use stdio transport.
+#[derive(Debug)]
+struct McpBridgeInfo {
+    /// The original acp:$UUID URL from the MCP server specification
+    acp_url: String,
+    /// The TCP port we bound for this bridge
+    tcp_port: u16,
+}
+
+/// Arguments for the serve method, containing I/O streams.
+///
+/// These are kept separate from the Conductor struct to avoid partial move issues.
+struct ServeArgs<OB: AsyncWrite, IB: AsyncRead> {
+    conductor_tx: mpsc::Sender<ConductorMessage>,
+    outgoing_bytes: OB,
+    incoming_bytes: IB,
+}
 
 /// Manages the P/ACP proxy capability based on component position in the chain.
 ///
@@ -109,25 +131,19 @@ fn manage_proxy_capability(
 /// It maintains connections to all components in the chain and routes messages
 /// bidirectionally between the editor, components, and agent.
 ///
-/// # Type Parameters
-///
-/// - `OB`: Outgoing byte stream (to editor)
-/// - `IB`: Incoming byte stream (from editor)
-pub struct Conductor<OB: AsyncWrite, IB: AsyncRead> {
-    /// Stream for sending messages back to the editor
-    outgoing_bytes: OB,
-    /// Stream for receiving messages from the editor
-    incoming_bytes: IB,
+pub struct Conductor {
     /// Channel for receiving internal conductor messages from spawned tasks
     conductor_rx: mpsc::Receiver<ConductorMessage>,
     /// The chain of spawned components, ordered from first (index 0) to last
     components: Vec<Component>,
     /// Whether the agent (last component) needs MCP bridging (lacks mcp_acp_transport capability)
     agent_needs_mcp_bridging: Option<bool>,
+    /// Mapping of acp:$UUID URLs to TCP bridge information for MCP message routing
+    mcp_bridges: HashMap<String, McpBridgeInfo>,
 }
 
-impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
-    pub async fn run(
+impl Conductor {
+    pub async fn run<OB: AsyncWrite, IB: AsyncRead>(
         outgoing_bytes: OB,
         incoming_bytes: IB,
         mut providers: Vec<ComponentProvider>,
@@ -146,14 +162,19 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
 
         tokio::task::LocalSet::new()
             .run_until(async move {
-                Conductor {
+                let serve_args = ServeArgs {
+                    conductor_tx: conductor_tx.clone(),
                     outgoing_bytes,
                     incoming_bytes,
+                };
+
+                Conductor {
                     components: Default::default(),
                     conductor_rx,
                     agent_needs_mcp_bridging: None,
+                    mcp_bridges: HashMap::new(),
                 }
-                .launch_proxy(providers, conductor_tx)
+                .launch_proxy(providers, serve_args)
                 .await
             })
             .await
@@ -174,16 +195,16 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
     /// # Arguments
     ///
     /// - `providers`: Stack of component providers (reversed, so we pop from the end)
-    /// - `conductor_tx`: Channel for components to send messages back to conductor
-    fn launch_proxy(
+    /// - `serve_args`: I/O streams and conductor channel for the serve method
+    fn launch_proxy<OB: AsyncWrite, IB: AsyncRead>(
         mut self,
         mut providers: Vec<ComponentProvider>,
-        conductor_tx: mpsc::Sender<ConductorMessage>,
+        serve_args: ServeArgs<OB, IB>,
     ) -> Pin<Box<impl Future<Output = anyhow::Result<()>>>> {
         Box::pin(async move {
             let Some(next_provider) = providers.pop() else {
                 info!("All components spawned, starting message routing");
-                return self.serve(conductor_tx).await;
+                return self.serve(serve_args).await;
             };
 
             let component_index = self.components.len();
@@ -233,7 +254,7 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
             JsonRpcConnection::new(stdin, stdout)
                 // The proxy can send *editor* messages to use
                 .on_receive(AcpAgentToClientMessages::send_to({
-                    let mut conductor_tx = conductor_tx.clone();
+                    let mut conductor_tx = serve_args.conductor_tx.clone();
                     async move |message| {
                         conductor_tx
                             .send(ConductorMessage::ComponentToItsClientMessage {
@@ -245,11 +266,11 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                 }))
                 .on_receive(ProxyToConductorMessages::callback(SuccessorSendCallbacks {
                     component_index,
-                    conductor_tx: conductor_tx.clone(),
+                    conductor_tx: serve_args.conductor_tx.clone(),
                 }))
                 .with_client(async move |jsonrpccx| {
                     self.components.push(Component { child, jsonrpccx });
-                    self.launch_proxy(providers, conductor_tx)
+                    self.launch_proxy(providers, serve_args)
                         .await
                         .map_err(scp::util::internal_error)
                 })
@@ -275,9 +296,13 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
     ///
     /// # Arguments
     ///
-    /// - `conductor_tx`: Channel for spawned tasks to send messages back to this loop
-    async fn serve(mut self, conductor_tx: mpsc::Sender<ConductorMessage>) -> anyhow::Result<()> {
-        JsonRpcConnection::new(self.outgoing_bytes, self.incoming_bytes)
+    /// - `serve_args`: I/O streams and conductor channel
+    async fn serve<OB: AsyncWrite, IB: AsyncRead>(
+        mut self,
+        serve_args: ServeArgs<OB, IB>,
+    ) -> anyhow::Result<()> {
+        let conductor_tx = serve_args.conductor_tx;
+        JsonRpcConnection::new(serve_args.outgoing_bytes, serve_args.incoming_bytes)
             .on_receive(AcpClientToAgentMessages::send_to({
                 let mut conductor_tx_clone = conductor_tx.clone();
                 async move |message| {
@@ -329,10 +354,22 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                             }
 
                             scp::AcpClientToAgentMessage::Request(
-                                client_request,
+                                mut client_request,
                                 json_rpc_request_cx,
                             ) => {
                                 let method = client_request.method().to_string();
+
+                                // Special handling for NewSessionRequest: transform MCP servers if needed
+                                if method == "newSession" && self.agent_needs_mcp_bridging == Some(true) {
+                                    if let ClientRequest::NewSessionRequest(new_session_req) =
+                                        client_request
+                                    {
+                                        info!("Intercepted new session request from editor, transforming MCP servers");
+                                        let transformed = self.transform_mcp_servers(new_session_req).await;
+                                        client_request = ClientRequest::NewSessionRequest(transformed);
+                                    }
+                                }
+
                                 debug!(
                                     method,
                                     target = "component_0",
@@ -450,6 +487,53 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                             component_response_cx,
                         } => {
                             let successor_index = component_index + 1;
+
+                            // Do transformations that require &mut self BEFORE borrowing from self.components
+                            let (final_method, final_params) = if method == "initialize" {
+                                // Try to parse params as InitializeRequest
+                                if let Ok(init_req) = serde_json::from_value::<InitializeRequest>(params.clone()) {
+                                    let total_components = self.components.len();
+                                    let is_last_component = successor_index == total_components - 1;
+                                    let modified_req = manage_proxy_capability(
+                                        init_req,
+                                        successor_index,
+                                        total_components
+                                    );
+
+                                    info!(
+                                        successor_index,
+                                        is_last_component,
+                                        total_components,
+                                        "Managed proxy capability for successor component"
+                                    );
+
+                                    // Serialize back to params
+                                    let modified_params = serde_json::to_value(modified_req)
+                                        .unwrap_or(params.clone());
+                                    (method, modified_params)
+                                } else {
+                                    (method, params)
+                                }
+                            } else if method == "newSession" && self.agent_needs_mcp_bridging == Some(true) {
+                                // Try to parse params as NewSessionRequest
+                                if let Ok(new_session_req) = serde_json::from_value::<NewSessionRequest>(params.clone()) {
+                                    info!(
+                                        component_index,
+                                        successor_index,
+                                        "Intercepted new session request from component, transforming MCP servers"
+                                    );
+                                    let transformed = self.transform_mcp_servers(new_session_req).await;
+                                    let modified_params = serde_json::to_value(transformed)
+                                        .unwrap_or(params.clone());
+                                    (method, modified_params)
+                                } else {
+                                    (method, params)
+                                }
+                            } else {
+                                (method, params)
+                            };
+
+                            // Now we can safely borrow from self.components
                             if let Some(successor_component) = self.components.get(successor_index)
                             {
                                 let is_last_component = successor_index == self.components.len() - 1;
@@ -457,39 +541,10 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                                 debug!(
                                     component_index,
                                     successor_index,
-                                    method = %method,
+                                    method = %final_method,
                                     is_last_component,
                                     "Routing _proxy/successor/request to successor component"
                                 );
-
-                                // Special handling for initialize: manage proxy capability based on successor position
-                                let (final_method, final_params) = if method == "initialize" {
-                                    // Try to parse params as InitializeRequest
-                                    if let Ok(init_req) = serde_json::from_value::<InitializeRequest>(params.clone()) {
-                                        let total_components = self.components.len();
-                                        let modified_req = manage_proxy_capability(
-                                            init_req,
-                                            successor_index,
-                                            total_components
-                                        );
-
-                                        info!(
-                                            successor_index,
-                                            is_last_component,
-                                            total_components,
-                                            "Managed proxy capability for successor component"
-                                        );
-
-                                        // Serialize back to params
-                                        let modified_params = serde_json::to_value(modified_req)
-                                            .unwrap_or(params.clone());
-                                        (method, modified_params)
-                                    } else {
-                                        (method, params)
-                                    }
-                                } else {
-                                    (method, params)
-                                };
 
                                 let successor_response = successor_component
                                     .jsonrpccx
@@ -659,6 +714,104 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
             })
             .await
             .map_err(|err| anyhow::anyhow!("{err:?}"))
+    }
+
+    /// Transforms MCP servers with `acp:$UUID` URLs for agents that need bridging.
+    ///
+    /// For each MCP server with an `acp:` URL:
+    /// 1. Spawns a TCP listener on an ephemeral port
+    /// 2. Stores the mapping for message routing
+    /// 3. Transforms the server to use stdio transport pointing to `conductor mcp $PORT`
+    ///
+    /// Returns the modified NewSessionRequest with transformed MCP servers.
+    async fn transform_mcp_servers(&mut self, mut request: NewSessionRequest) -> NewSessionRequest {
+        use agent_client_protocol::McpServer;
+
+        let mut transformed_servers = Vec::new();
+
+        for server in request.mcp_servers {
+            match server {
+                McpServer::Http { name, url, headers } if url.starts_with("acp:") => {
+                    info!(
+                        server_name = name,
+                        acp_url = url,
+                        "Detected MCP server with ACP transport, spawning TCP bridge"
+                    );
+
+                    // Spawn TCP listener on ephemeral port
+                    match self.spawn_tcp_listener(url.clone()).await {
+                        Ok(tcp_port) => {
+                            info!(
+                                server_name = name,
+                                acp_url = url,
+                                tcp_port,
+                                "Spawned TCP listener for MCP bridge"
+                            );
+
+                            // Transform to stdio transport pointing to conductor mcp process
+                            let transformed = McpServer::Stdio {
+                                name,
+                                command: std::path::PathBuf::from("conductor"),
+                                args: vec!["mcp".to_string(), tcp_port.to_string()],
+                                env: vec![],
+                            };
+                            transformed_servers.push(transformed);
+                        }
+                        Err(e) => {
+                            warn!(
+                                server_name = name,
+                                acp_url = url,
+                                error = ?e,
+                                "Failed to spawn TCP listener, keeping original server"
+                            );
+                            // Keep original server on error
+                            transformed_servers.push(McpServer::Http { name, url, headers });
+                        }
+                    }
+                }
+                // Pass through other server types unchanged
+                other_server => {
+                    transformed_servers.push(other_server);
+                }
+            }
+        }
+
+        request.mcp_servers = transformed_servers;
+        request
+    }
+
+    /// Spawns a TCP listener for an MCP bridge and stores the mapping.
+    ///
+    /// Binds to `localhost:0` to get an ephemeral port, then stores the
+    /// `acp_url → tcp_port` mapping in `self.mcp_bridges`.
+    ///
+    /// Returns the bound port number.
+    async fn spawn_tcp_listener(&mut self, acp_url: String) -> anyhow::Result<u16> {
+        use tokio::net::TcpListener;
+
+        // Bind to ephemeral port
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let tcp_port = listener.local_addr()?.port();
+
+        info!(
+            acp_url = acp_url,
+            tcp_port, "Bound TCP listener for MCP bridge"
+        );
+
+        // Store mapping for message routing (Phase 3)
+        self.mcp_bridges.insert(
+            acp_url.clone(),
+            McpBridgeInfo {
+                acp_url: acp_url.clone(),
+                tcp_port,
+            },
+        );
+
+        // TODO Phase 2b: Accept connections from `conductor mcp $PORT`
+        // For now, just drop the listener - we'll implement connection handling later
+        drop(listener);
+
+        Ok(tcp_port)
     }
 }
 
