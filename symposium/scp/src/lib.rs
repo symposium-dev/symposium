@@ -5,10 +5,12 @@
 //! like walkthroughs, collaboration patterns, and IDE integrations.
 
 mod acp;
+mod capabilities;
 mod jsonrpc;
 mod proxy;
 pub mod util;
 
 pub use acp::*;
+pub use capabilities::*;
 pub use jsonrpc::*;
 pub use proxy::*;

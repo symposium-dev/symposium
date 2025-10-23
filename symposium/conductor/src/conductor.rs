@@ -65,10 +65,10 @@ use std::pin::Pin;
 use agent_client_protocol::{ClientRequest, InitializeRequest};
 use futures::{AsyncRead, AsyncWrite, SinkExt, StreamExt, channel::mpsc};
 use scp::{
-    AcpAgentToClientMessages, AcpClientToAgentMessages, JsonRpcConnection, JsonRpcCx,
-    JsonRpcNotification, JsonRpcRequest, JsonRpcRequestCx, ProxyToConductorMessages,
+    AcpAgentToClientMessages, AcpClientToAgentMessages, InitializeRequestExt, JsonRpcConnection,
+    JsonRpcCx, JsonRpcNotification, JsonRpcRequest, JsonRpcRequestCx, Proxy,
+    ProxyToConductorMessages,
 };
-use serde_json::json;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::{Instrument, debug, error, info, warn};
 
@@ -91,40 +91,17 @@ use crate::component::{Component, ComponentProvider};
 ///
 /// The modified InitializeRequest with capability added or removed as appropriate
 fn manage_proxy_capability(
-    mut request: InitializeRequest,
+    request: InitializeRequest,
     component_index: usize,
     total_components: usize,
 ) -> InitializeRequest {
     let is_last_component = component_index == total_components - 1;
 
     if is_last_component {
-        // Last component - remove proxy capability if present
-        if let Some(ref mut meta) = request.meta {
-            if let Some(obj) = meta.as_object_mut() {
-                if let Some(symposium) = obj.get_mut("symposium") {
-                    if let Some(symposium_obj) = symposium.as_object_mut() {
-                        symposium_obj.remove("proxy");
-                    }
-                }
-            }
-        }
+        request.remove_meta_capability(Proxy)
     } else {
-        // Has successor - add proxy capability
-        let mut meta = request.meta.take().unwrap_or(json!({}));
-
-        if let Some(obj) = meta.as_object_mut() {
-            let symposium = obj.entry("symposium").or_insert_with(|| json!({}));
-
-            if let Some(symposium_obj) = symposium.as_object_mut() {
-                symposium_obj.insert("version".to_string(), json!("1.0"));
-                symposium_obj.insert("proxy".to_string(), json!(true));
-            }
-        }
-
-        request.meta = Some(meta);
+        request.add_meta_capability(Proxy)
     }
-
-    request
 }
 
 /// The conductor manages the proxy chain lifecycle and message routing.
