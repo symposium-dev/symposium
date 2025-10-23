@@ -113,17 +113,19 @@ impl AcpClientToAgentCallbacks for ProxyCallbacks {
         tracing::info!("Proxy: received new_session");
 
         // Inject our MCP server into the request before forwarding to agent
-        // The proxy provides a "go_go_gadget_shoes" tool via MCP
-        let mcp_server = McpServer::Stdio {
+        // The proxy provides a "go_go_gadget_shoes" tool via MCP with ACP transport
+        // Use the UUID we generated during proxy creation
+        let mcp_url = format!("acp:{}", self.state.mcp_server_uuid);
+        let mcp_server = McpServer::Http {
             name: "go_go_gadget_shoes".to_string(),
-            command: std::path::PathBuf::from("/usr/bin/env"),
-            args: vec!["echo".to_string(), "go_go_gadget".to_string()],
-            env: vec![],
+            url: mcp_url.clone(),
+            headers: vec![],
         };
 
         args.mcp_servers.push(mcp_server);
         tracing::info!(
-            "Proxy: injected MCP server, total count = {}",
+            "Proxy: injected MCP server with ACP transport, url = {}, total count = {}",
+            mcp_url,
             args.mcp_servers.len()
         );
 
