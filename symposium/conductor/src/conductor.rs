@@ -549,6 +549,18 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                             }
                         }
 
+                        ConductorMessage::ResponseReceived {
+                            result,
+                            response_cx,
+                        } => {
+                            debug!("Forwarding response received from component");
+                            if let Err(error) = response_cx.respond_with_result(result) {
+                                error!(?error, "Failed to forward response");
+                            } else {
+                                debug!("Successfully forwarded response");
+                            }
+                        }
+
                         ConductorMessage::Error { error } => {
                             error!(
                                 error_code = error.code,
@@ -567,10 +579,10 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
 
 fn ignore_send_err<T>(_: Result<T, mpsc::SendError>) {}
 
-async fn send_request_and_forward_response<Req: JsonRpcRequest>(
+async fn send_request_and_forward_response<Req: JsonRpcRequest<Response = serde_json::Value>>(
     to_cx: &JsonRpcCx,
     req: Req,
-    response_cx: JsonRpcRequestCx<Req::Response>,
+    response_cx: JsonRpcRequestCx<serde_json::Value>,
     mut conductor_tx: mpsc::Sender<ConductorMessage>,
 ) {
     let response = to_cx.send_request(req);
@@ -578,18 +590,23 @@ async fn send_request_and_forward_response<Req: JsonRpcRequest>(
     let current_span = tracing::Span::current();
     tokio::task::spawn_local(
         async move {
-            debug!("Waiting for response to forward");
+            debug!("Waiting for response");
             let result = response.recv().await;
             let is_ok = result.is_ok();
-            debug!(is_ok, ?result, "Received response, forwarding");
-            if let Err(error) = response_cx.respond_with_result(result) {
-                error!(?error, "Failed to forward response");
-                ignore_send_err(conductor_tx.send(ConductorMessage::Error { error }).await);
+            debug!(is_ok, ?result, "Received response, sending to conductor");
+            if let Err(error) = conductor_tx
+                .send(ConductorMessage::ResponseReceived {
+                    result,
+                    response_cx,
+                })
+                .await
+            {
+                error!(?error, "Failed to send response to conductor");
             } else {
-                debug!("Successfully forwarded response");
+                debug!("Sent response to conductor for forwarding");
             }
         }
-        .instrument(tracing::info_span!("forward_response", request_id = ?request_id))
+        .instrument(tracing::info_span!("receive_response", request_id = ?request_id))
         .instrument(current_span),
     );
 }
@@ -680,6 +697,17 @@ pub enum ConductorMessage {
         component_index: usize,
         args: scp::ToSuccessorNotification<serde_json::Value>,
         component_cx: JsonRpcCx,
+    },
+
+    /// Response received from a request that needs to be forwarded.
+    ///
+    /// Responses are routed back through the conductor to enable centralized
+    /// inspection and modification (e.g., adding capabilities to InitializeResponse).
+    ResponseReceived {
+        /// The response result (Ok with JSON value or Err with error)
+        result: Result<serde_json::Value, jsonrpcmsg::Error>,
+        /// Context to send the response to
+        response_cx: JsonRpcRequestCx<serde_json::Value>,
     },
 
     /// Error from a spawned task that couldn't be handled locally.
