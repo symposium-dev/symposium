@@ -106,7 +106,12 @@ async fn test_basic_mcp_tool_invocation() {
                     .await
             });
 
-            let _ = tokio::try_join!(conductor_handle, editor_task);
+            // Wait for editor task to complete - conductor will keep running
+            let _ = editor_task.await.expect("Editor task should complete");
+
+            // Conductor is still running but we're done with our test
+            // Drop the handle to let it clean up
+            drop(conductor_handle);
         })
         .await;
 }

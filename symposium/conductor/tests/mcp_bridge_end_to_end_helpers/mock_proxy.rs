@@ -7,7 +7,9 @@ use agent_client_protocol::{
     PromptResponse,
 };
 use conductor::component::MockComponentImpl;
-use scp::{AcpClientToAgentCallbacks, AcpClientToAgentMessages, JsonRpcCx, JsonRpcRequestCx};
+use scp::{
+    AcpClientToAgentCallbacks, AcpClientToAgentMessages, JsonRpcCx, JsonRpcCxExt, JsonRpcRequestCx,
+};
 use tokio::sync::Mutex;
 use tracing::Instrument;
 
@@ -44,16 +46,45 @@ impl AcpClientToAgentCallbacks for ProxyCallbacks {
 
         tracing::info!("Proxy: has_proxy_capability = {}", has_proxy_capability);
 
-        // TODO: If we have proxy capability, we need to initialize our successor
-        // For now, just respond
-        let _ = response.respond(InitializeResponse {
-            protocol_version: Default::default(),
-            agent_capabilities: Default::default(),
-            auth_methods: vec![],
-            meta: Some(serde_json::json!({
-                "mcp_acp_transport": true
-            })),
-        });
+        if has_proxy_capability {
+            // Forward initialize to successor
+            tracing::info!("Proxy: forwarding initialize to successor");
+
+            let successor_response = response.json_rpc_cx().send_request_to_successor(args);
+
+            let current_span = tracing::Span::current();
+            tokio::task::spawn_local(
+                async move {
+                    let result = successor_response.recv().await;
+
+                    tracing::info!("Proxy: received response from successor");
+
+                    // Add our mcp_acp_transport capability to the response
+                    let modified_result = result.map(|mut successor_resp| {
+                        let mut meta = successor_resp.meta.unwrap_or_else(|| serde_json::json!({}));
+
+                        if let Some(obj) = meta.as_object_mut() {
+                            obj.insert("mcp_acp_transport".to_string(), serde_json::json!(true));
+                        }
+                        successor_resp.meta = Some(meta);
+                        successor_resp
+                    });
+
+                    let _ = response.respond_with_result(modified_result);
+                }
+                .instrument(current_span),
+            );
+        } else {
+            // No proxy capability means we're not in a chain
+            let _ = response.respond(InitializeResponse {
+                protocol_version: Default::default(),
+                agent_capabilities: Default::default(),
+                auth_methods: vec![],
+                meta: Some(serde_json::json!({
+                    "mcp_acp_transport": true
+                })),
+            });
+        }
 
         Ok(())
     }
@@ -82,21 +113,20 @@ impl AcpClientToAgentCallbacks for ProxyCallbacks {
         tracing::info!("Proxy: received new_session");
 
         // TODO: Inject our MCP server into the tool list
-        // TODO: Forward this to the successor using _proxy/successor/request
+        // For now, just forward unchanged - actual MCP server injection
+        // requires constructing McpServer struct properly
 
-        // Build modified MCP servers with our server
-        let _mcp_servers = args.mcp_servers;
+        let successor_response = response.json_rpc_cx().send_request_to_successor(args);
 
-        // TODO: Parse and add our MCP server with ACP transport
-        // This requires constructing an McpServer struct properly
-
-        // TODO: Send this via _proxy/successor/request to the agent
-        // For now, just respond with dummy session ID
-        let _ = response.respond(NewSessionResponse {
-            session_id: "test-session-123".to_string().into(),
-            modes: Default::default(),
-            meta: None,
-        });
+        let current_span = tracing::Span::current();
+        tokio::task::spawn_local(
+            async move {
+                let result = successor_response.recv().await;
+                tracing::info!("Proxy: received new_session response from successor");
+                let _ = response.respond_with_result(result);
+            }
+            .instrument(current_span),
+        );
 
         Ok(())
     }
@@ -111,16 +141,23 @@ impl AcpClientToAgentCallbacks for ProxyCallbacks {
 
     async fn prompt(
         &mut self,
-        _args: PromptRequest,
+        args: PromptRequest,
         response: JsonRpcRequestCx<PromptResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
         tracing::info!("Proxy: received prompt");
 
-        // TODO: Forward to successor
-        let _ = response.respond(PromptResponse {
-            stop_reason: agent_client_protocol::StopReason::EndTurn,
-            meta: None,
-        });
+        // Forward to successor
+        let successor_response = response.json_rpc_cx().send_request_to_successor(args);
+
+        let current_span = tracing::Span::current();
+        tokio::task::spawn_local(
+            async move {
+                let result = successor_response.recv().await;
+                tracing::info!("Proxy: received prompt response from successor");
+                let _ = response.respond_with_result(result);
+            }
+            .instrument(current_span),
+        );
 
         Ok(())
     }
