@@ -728,6 +728,40 @@ impl Conductor {
                             }
                         }
 
+                        ConductorMessage::BridgeRequestReceived { acp_url, method, params, response_cx } => {
+                            info!(
+                                acp_url = acp_url,
+                                method = method,
+                                "Bridge request received, routing to proxy via successor chain"
+                            );
+
+                            // Find which component owns this MCP server
+                            // For now, we'll route to the first component (component 0)
+                            // which should be the proxy that injected the MCP server
+                            // TODO: Track which component owns which MCP server UUID
+
+                            // Send the MCP request directly to the component via JSON-RPC
+                            // The component should handle MCP methods like tools/call, tools/list, etc.
+                            let params_value = params.and_then(|p| match p {
+                                jsonrpcmsg::Params::Object(map) => Some(serde_json::Value::Object(map)),
+                                jsonrpcmsg::Params::Array(arr) => Some(serde_json::Value::Array(arr)),
+                            });
+
+                            debug!(
+                                method = method,
+                                "Sending MCP request to component 0"
+                            );
+
+                            let response = self.components[0].jsonrpccx.send_json_request(method.clone(), params_value);
+                            let method_for_task = method.clone();
+
+                            tokio::task::spawn_local(async move {
+                                let result = response.recv().await;
+                                debug!(is_ok = result.is_ok(), "Received MCP response from component");
+                                let _ = response_cx.respond_with_result(result);
+                            }.instrument(tracing::info_span!("bridge_request", method = %method_for_task)));
+                        }
+
                         ConductorMessage::BridgeConnected { acp_url, bridge_cx } => {
                             info!(
                                 acp_url = acp_url,
@@ -933,7 +967,7 @@ impl Conductor {
     async fn spawn_tcp_listener(
         &mut self,
         acp_url: String,
-        conductor_tx: mpsc::Sender<ConductorMessage>,
+        mut conductor_tx: mpsc::Sender<ConductorMessage>,
     ) -> anyhow::Result<u16> {
         use tokio::net::TcpListener;
 
@@ -976,25 +1010,59 @@ impl Conductor {
 
                     let (read_half, write_half) = stream.into_split();
 
-                    // Establish JSON-RPC connection
-                    JsonRpcConnection::new(write_half.compat_write(), read_half.compat())
+                    // Establish bidirectional JSON-RPC connection
+                    // The bridge will send MCP requests (tools/call, etc.) to the conductor
+                    // The conductor can also send responses back
+                    let connection =
+                        JsonRpcConnection::new(write_half.compat_write(), read_half.compat());
+
+                    // Handle incoming requests from the bridge AND keep the connection alive
+                    let _ = connection
+                        .on_receive(scp::GenericHandler::send_to({
+                            let conductor_tx = conductor_tx.clone();
+                            let acp_url_inner = acp_url_for_task.clone();
+                            move |method, params, response_cx| {
+                                let mut conductor_tx = conductor_tx.clone();
+                                let acp_url = acp_url_inner.clone();
+                                async move {
+                                    info!(
+                                        method = method,
+                                        acp_url = acp_url,
+                                        "Received request from bridge, forwarding to proxy"
+                                    );
+
+                                    // Forward the MCP request to the proxy via conductor
+                                    let _ = conductor_tx
+                                        .send(ConductorMessage::BridgeRequestReceived {
+                                            acp_url,
+                                            method,
+                                            params,
+                                            response_cx,
+                                        })
+                                        .await;
+
+                                    Ok::<(), std::convert::Infallible>(())
+                                }
+                            }
+                        }))
                         .with_client(async move |bridge_cx| {
                             // Notify conductor that bridge is connected
+                            // This allows the conductor to send requests TO the bridge if needed
                             let _ = conductor_tx
-                                .clone()
                                 .send(ConductorMessage::BridgeConnected {
                                     acp_url: acp_url_for_task.clone(),
                                     bridge_cx: bridge_cx.clone(),
                                 })
                                 .await;
 
-                            // Keep connection alive - messages will be routed via ConductorMessage
-                            // The connection stays open until bridge disconnects
+                            // Keep connection alive until bridge disconnects
                             futures::future::pending::<()>().await;
 
-                            Ok::<_, jsonrpcmsg::Error>(())
+                            Ok::<(), jsonrpcmsg::Error>(())
                         })
-                        .await
+                        .await;
+
+                    Ok::<(), jsonrpcmsg::Error>(())
                 }
                 Err(e) => {
                     warn!(
@@ -1170,6 +1238,21 @@ pub enum ConductorMessage {
     ///
     /// Currently logged as a warning. Future versions may trigger chain shutdown.
     Error { error: jsonrpcmsg::Error },
+
+    /// MCP request received from a bridge that needs to be routed to the proxy.
+    ///
+    /// Sent when the bridge receives an MCP tool call from the agent and forwards it
+    /// to the conductor via TCP. The conductor routes this to the appropriate proxy component.
+    BridgeRequestReceived {
+        /// The acp:$UUID URL identifying which MCP server this request is for
+        acp_url: String,
+        /// The MCP method being called (e.g., "tools/call", "tools/list")
+        method: String,
+        /// The parameters for the MCP request
+        params: Option<jsonrpcmsg::Params>,
+        /// Context to send the response back to the bridge
+        response_cx: JsonRpcRequestCx<serde_json::Value>,
+    },
 
     /// MCP bridge connected and ready for message routing.
     ///

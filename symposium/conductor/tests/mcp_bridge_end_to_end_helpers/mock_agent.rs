@@ -5,11 +5,16 @@ use agent_client_protocol::{
     PromptResponse,
 };
 use conductor::component::MockComponentImpl;
+use rmcp::{ClientHandler, Peer, RoleClient, ServiceExt, model::*};
 use scp::{AcpClientToAgentCallbacks, AcpClientToAgentMessages, JsonRpcCx, JsonRpcRequestCx};
+use tokio::process::Command;
 use tracing::Instrument;
 
 /// Callbacks for the mock agent component
-struct AgentCallbacks;
+struct AgentCallbacks {
+    /// Connection to the MCP bridge via rmcp
+    mcp_peer: Option<Peer<RoleClient>>,
+}
 
 impl AcpClientToAgentCallbacks for AgentCallbacks {
     async fn initialize(
@@ -71,9 +76,66 @@ impl AcpClientToAgentCallbacks for AgentCallbacks {
         // Agent should receive modified MCP server list with stdio transport
         // pointing to "conductor mcp $PORT"
 
-        // TODO: Extract MCP server info
-        // TODO: Use rmcp to connect to the server
-        // TODO: Store rmcp connection for later use in prompt
+        // Extract MCP server info from the first server
+        if let Some(mcp_server) = args.mcp_servers.first() {
+            if let agent_client_protocol::McpServer::Stdio {
+                command,
+                args: cmd_args,
+                ..
+            } = mcp_server
+            {
+                tracing::info!("Agent: Spawning MCP bridge: {} {:?}", command, cmd_args);
+
+                // Spawn the bridge process
+                let mut child = Command::new(command)
+                    .args(cmd_args)
+                    .stdin(std::process::Stdio::piped())
+                    .stdout(std::process::Stdio::piped())
+                    .stderr(std::process::Stdio::inherit())
+                    .spawn()
+                    .expect("Failed to spawn MCP bridge");
+
+                let stdin = child.stdin.take().unwrap();
+                let stdout = child.stdout.take().unwrap();
+
+                // Give the bridge a moment to start
+                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+                // Create rmcp client
+                #[derive(Clone)]
+                struct MockClient;
+
+                impl ClientHandler for MockClient {
+                    fn get_info(&self) -> ClientInfo {
+                        ClientInfo {
+                            protocol_version: ProtocolVersion::default(),
+                            capabilities: ClientCapabilities::default(),
+                            client_info: Implementation {
+                                name: "test-agent".to_string(),
+                                version: "1.0.0".to_string(),
+                            },
+                        }
+                    }
+                }
+
+                let client = MockClient;
+                let running = client
+                    .serve((stdout, stdin))
+                    .await
+                    .expect("Failed to start rmcp client");
+
+                // Store the peer for later tool invocation
+                self.mcp_peer = Some(running.peer());
+
+                // Spawn a task to keep the service running
+                tokio::spawn(async move {
+                    let _ = running.waiting().await;
+                    let _ = child.kill().await;
+                });
+
+                tracing::info!("Agent: Successfully connected to MCP bridge via rmcp");
+            }
+        }
 
         let _ = response.respond(NewSessionResponse {
             session_id: "agent-session-456".to_string().into(),
@@ -99,9 +161,27 @@ impl AcpClientToAgentCallbacks for AgentCallbacks {
     ) -> Result<(), agent_client_protocol::Error> {
         tracing::info!("Agent: received prompt");
 
-        // TODO: Use rmcp to invoke go_go_gadget_shoes tool
-        // TODO: Wait for response
-        // TODO: Send back response
+        // Use rmcp to invoke go_go_gadget_shoes tool
+        if let Some(peer) = &self.mcp_peer {
+            tracing::info!("Agent: Invoking go_go_gadget_shoes tool via rmcp");
+
+            let tool_result = peer
+                .call_tool(CallToolRequestParam {
+                    name: "go_go_gadget_shoes".to_string(),
+                    arguments: Some(serde_json::json!({})),
+                })
+                .await
+                .expect("Failed to call tool");
+
+            tracing::info!("Agent: Tool result: {:?}", tool_result);
+
+            assert!(
+                !tool_result.is_error.unwrap_or(false),
+                "Tool invocation should not error"
+            );
+        } else {
+            tracing::warn!("Agent: No MCP peer available to invoke tool");
+        }
 
         let _ = response.respond(PromptResponse {
             stop_reason: agent_client_protocol::StopReason::EndTurn,
@@ -123,7 +203,7 @@ impl AcpClientToAgentCallbacks for AgentCallbacks {
 /// Create a mock agent component that uses rmcp to invoke MCP tools
 pub fn create_mock_agent() -> MockComponentImpl {
     MockComponentImpl::new(move |connection| async move {
-        let callbacks = AgentCallbacks;
+        let callbacks = AgentCallbacks { mcp_peer: None };
 
         let _ = connection
             .on_receive(AcpClientToAgentMessages::callback(callbacks))
