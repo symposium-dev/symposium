@@ -65,9 +65,9 @@ use std::pin::Pin;
 use agent_client_protocol::{ClientRequest, InitializeRequest};
 use futures::{AsyncRead, AsyncWrite, SinkExt, StreamExt, channel::mpsc};
 use scp::{
-    AcpAgentToClientMessages, AcpClientToAgentMessages, InitializeRequestExt, JsonRpcConnection,
-    JsonRpcCx, JsonRpcNotification, JsonRpcRequest, JsonRpcRequestCx, Proxy,
-    ProxyToConductorMessages,
+    AcpAgentToClientMessages, AcpClientToAgentMessages, InitializeRequestExt,
+    InitializeResponseExt, JsonRpcConnection, JsonRpcCx, JsonRpcNotification, JsonRpcRequest,
+    JsonRpcRequestCx, Proxy, ProxyToConductorMessages,
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::{Instrument, debug, error, info, warn};
@@ -122,6 +122,8 @@ pub struct Conductor<OB: AsyncWrite, IB: AsyncRead> {
     conductor_rx: mpsc::Receiver<ConductorMessage>,
     /// The chain of spawned components, ordered from first (index 0) to last
     components: Vec<Component>,
+    /// Whether the agent (last component) needs MCP bridging (lacks mcp_acp_transport capability)
+    agent_needs_mcp_bridging: Option<bool>,
 }
 
 impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
@@ -149,6 +151,7 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                     incoming_bytes,
                     components: Default::default(),
                     conductor_rx,
+                    agent_needs_mcp_bridging: None,
                 }
                 .launch_proxy(providers, conductor_tx)
                 .await
@@ -294,9 +297,9 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                                 ClientRequest::InitializeRequest(init_req),
                                 json_rpc_request_cx,
                             ) => {
-                                let method = init_req.method();
                                 let total_components = self.components.len();
                                 let has_successor = total_components > 1;
+                                let method = "initialize";
 
                                 debug!(
                                     method,
@@ -318,6 +321,8 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                                     ClientRequest::InitializeRequest(modified_req),
                                     json_rpc_request_cx.cast(),
                                     conductor_tx.clone(),
+                                    method.to_string(),
+                                    false, // Not from last component
                                 )
                                 .await;
                             }
@@ -326,7 +331,7 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                                 client_request,
                                 json_rpc_request_cx,
                             ) => {
-                                let method = client_request.method();
+                                let method = client_request.method().to_string();
                                 debug!(
                                     method,
                                     target = "component_0",
@@ -340,6 +345,8 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                                     client_request,
                                     json_rpc_request_cx,
                                     conductor_tx.clone(),
+                                    method,
+                                    false, // Not from last component
                                 )
                                 .await;
                             }
@@ -380,9 +387,10 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                                     agent_request,
                                     json_rpc_request_cx,
                                 ) => {
+                                    let method = agent_request.method().to_string();
                                     debug!(
                                         component_index,
-                                        method = agent_request.method(),
+                                        method,
                                         target,
                                         "Routing component request to its client"
                                     );
@@ -391,6 +399,8 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                                         agent_request,
                                         json_rpc_request_cx,
                                         conductor_tx.clone(),
+                                        method,
+                                        false, // Not from last component
                                     )
                                     .await;
                                 }
@@ -482,32 +492,35 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
 
                                 let successor_response = successor_component
                                     .jsonrpccx
-                                    .send_json_request(final_method, final_params);
+                                    .send_json_request(final_method.clone(), final_params);
 
                                 let component_request_id = component_response_cx.id().clone();
-                                let mut conductor_tx = conductor_tx.clone();
+                                let mut conductor_tx_clone = conductor_tx.clone();
                                 let current_span = tracing::Span::current();
+                                let method_clone = final_method.to_string();
                                 tokio::task::spawn_local(
                                     async move {
-                                        debug!("Waiting for successor response to forward");
-                                        let v = successor_response.recv().await;
-                                        let is_ok = v.is_ok();
-                                        debug!(is_ok, "Received successor response, forwarding");
-                                        if let Err(error) = component_response_cx
-                                            .respond(scp::ToSuccessorResponse::from(v))
+                                        debug!("Waiting for successor response");
+                                        let result = successor_response.recv().await;
+                                        let is_ok = result.is_ok();
+                                        debug!(is_ok, "Received successor response, sending to conductor");
+
+                                        if let Err(error) = conductor_tx_clone
+                                            .send(ConductorMessage::SuccessorResponseReceived {
+                                                result,
+                                                component_response_cx,
+                                                method: method_clone,
+                                                from_last_component: is_last_component,
+                                            })
+                                            .await
                                         {
-                                            error!(?error, "Failed to forward successor response");
-                                            ignore_send_err(
-                                                conductor_tx
-                                                    .send(ConductorMessage::Error { error })
-                                                    .await,
-                                            );
+                                            error!(?error, "Failed to send successor response to conductor");
                                         } else {
-                                            debug!("Successfully forwarded successor response");
+                                            debug!("Sent successor response to conductor for forwarding");
                                         }
                                     }
                                     .instrument(tracing::info_span!(
-                                        "forward_successor_response",
+                                        "receive_successor_response",
                                         component_request_id = ?component_request_id
                                     ))
                                     .instrument(current_span),
@@ -552,12 +565,57 @@ impl<OB: AsyncWrite, IB: AsyncRead> Conductor<OB, IB> {
                         ConductorMessage::ResponseReceived {
                             result,
                             response_cx,
+                            method,
+                            from_last_component,
                         } => {
-                            debug!("Forwarding response received from component");
+                            debug!(method, from_last_component, "Forwarding response received from component");
                             if let Err(error) = response_cx.respond_with_result(result) {
                                 error!(?error, "Failed to forward response");
                             } else {
                                 debug!("Successfully forwarded response");
+                            }
+                        }
+
+                        ConductorMessage::SuccessorResponseReceived {
+                            mut result,
+                            component_response_cx,
+                            method,
+                            from_last_component,
+                        } => {
+                            debug!(method, from_last_component, "Processing successor response");
+
+                            // If this is an InitializeResponse from the last component (agent),
+                            // check for mcp_acp_transport capability
+                            if from_last_component && method == "initialize" {
+                                if let Ok(ref mut response_value) = result {
+                                    if let Ok(mut init_response) = serde_json::from_value::<agent_client_protocol::InitializeResponse>(response_value.clone()) {
+                                        // Check if agent has mcp_acp_transport capability
+                                        let has_capability = init_response.has_meta_capability(scp::McpAcpTransport);
+                                        self.agent_needs_mcp_bridging = Some(!has_capability);
+
+                                        info!(
+                                            has_mcp_acp_transport = has_capability,
+                                            agent_needs_mcp_bridging = !has_capability,
+                                            "Detected agent MCP bridging capability"
+                                        );
+
+                                        // Add capability if not present so earlier components see it
+                                        if !has_capability {
+                                            init_response = init_response.add_meta_capability(scp::McpAcpTransport);
+                                            *response_value = serde_json::to_value(&init_response).unwrap();
+                                            info!("Added mcp_acp_transport capability to response");
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Forward the (possibly modified) response
+                            if let Err(error) = component_response_cx
+                                .respond(scp::ToSuccessorResponse::from(result))
+                            {
+                                error!(?error, "Failed to forward successor response");
+                            } else {
+                                debug!("Successfully forwarded successor response");
                             }
                         }
 
@@ -584,6 +642,8 @@ async fn send_request_and_forward_response<Req: JsonRpcRequest<Response = serde_
     req: Req,
     response_cx: JsonRpcRequestCx<serde_json::Value>,
     mut conductor_tx: mpsc::Sender<ConductorMessage>,
+    method: String,
+    from_last_component: bool,
 ) {
     let response = to_cx.send_request(req);
     let request_id = response_cx.id().clone();
@@ -598,6 +658,8 @@ async fn send_request_and_forward_response<Req: JsonRpcRequest<Response = serde_
                 .send(ConductorMessage::ResponseReceived {
                     result,
                     response_cx,
+                    method,
+                    from_last_component,
                 })
                 .await
             {
@@ -708,6 +770,24 @@ pub enum ConductorMessage {
         result: Result<serde_json::Value, jsonrpcmsg::Error>,
         /// Context to send the response to
         response_cx: JsonRpcRequestCx<serde_json::Value>,
+        /// The method that was called (e.g., "initialize")
+        method: String,
+        /// Whether this response is from the last component (the agent)
+        from_last_component: bool,
+    },
+
+    /// Response received from a successor component that needs to be forwarded.
+    ///
+    /// Similar to ResponseReceived but for responses from _proxy/successor/* requests.
+    SuccessorResponseReceived {
+        /// The response result (Ok with JSON value or Err with error)
+        result: Result<serde_json::Value, jsonrpcmsg::Error>,
+        /// Context to send the response to (wrapped in ToSuccessorResponse)
+        component_response_cx: JsonRpcRequestCx<scp::ToSuccessorResponse<serde_json::Value>>,
+        /// The method that was called (e.g., "initialize")
+        method: String,
+        /// Whether this response is from the last component (the agent)
+        from_last_component: bool,
     },
 
     /// Error from a spawned task that couldn't be handled locally.
