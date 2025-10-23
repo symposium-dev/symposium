@@ -435,6 +435,7 @@ impl Conductor {
                                             &method,
                                             agent_request,
                                             json_rpc_request_cx,
+                                            conductor_tx.clone(),
                                         ).is_some() {
                                             debug!(
                                                 component_index,
@@ -840,12 +841,15 @@ impl Conductor {
     /// Extracts the UUID from `_mcp/$UUID/$method` pattern, looks up the bridge,
     /// strips the `_mcp/$UUID/` prefix, and forwards to the bridge.
     ///
+    /// Spawns a task to await the bridge's response and forward it back to the agent.
+    ///
     /// Returns Some(()) if routing succeeded, None if bridge not found/connected.
     fn route_to_mcp_bridge_request(
         &self,
         method: &str,
         request: impl serde::Serialize,
-        _response_cx: JsonRpcRequestCx<serde_json::Value>,
+        response_cx: JsonRpcRequestCx<serde_json::Value>,
+        mut conductor_tx: mpsc::Sender<ConductorMessage>,
     ) -> Option<()> {
         // Parse _mcp/$UUID/$actual_method
         let parts: Vec<&str> = method.splitn(4, '/').collect();
@@ -872,12 +876,50 @@ impl Conductor {
         );
 
         // Forward request with stripped method
-        // TODO: Handle response routing back to agent
         let params = serde_json::to_value(&request).ok()?;
-        let _response = bridge_cx.send_json_request(actual_method.to_string(), params);
+        let response = bridge_cx.send_json_request(actual_method.to_string(), params);
 
-        // TODO Phase 3: Route response back to agent
-        warn!("MCP bridge response routing not yet implemented");
+        // Spawn task to await response and forward back to agent
+        let request_id = response_cx.id().clone();
+        let method_string = method.to_string();
+        let current_span = tracing::Span::current();
+
+        tokio::task::spawn_local(
+            async move {
+                debug!(method = method_string, "Waiting for MCP bridge response");
+                let result = response.recv().await;
+                let is_ok = result.is_ok();
+                debug!(
+                    method = method_string,
+                    is_ok, "Received bridge response, forwarding to agent"
+                );
+
+                if let Err(error) = conductor_tx
+                    .send(ConductorMessage::ResponseReceived {
+                        result,
+                        response_cx,
+                        method: method_string.clone(),
+                        from_last_component: false, // Response is from bridge, not agent
+                    })
+                    .await
+                {
+                    error!(
+                        method = method_string,
+                        ?error,
+                        "Failed to send bridge response to conductor"
+                    );
+                } else {
+                    debug!(
+                        method = method_string,
+                        "Sent bridge response to conductor for forwarding"
+                    );
+                }
+            }
+            .instrument(
+                tracing::info_span!("receive_mcp_bridge_response", request_id = ?request_id),
+            )
+            .instrument(current_span),
+        );
 
         Some(())
     }
