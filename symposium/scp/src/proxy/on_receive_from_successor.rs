@@ -1,9 +1,8 @@
 use futures::{AsyncRead, AsyncWrite};
 
 use crate::{
-    jsonrpc::{
-        ChainHandler, Handled, JsonRpcConnection, JsonRpcCx, JsonRpcHandler, JsonRpcRequestCx,
-    },
+    JsonRpcNotificationCx,
+    jsonrpc::{ChainHandler, Handled, JsonRpcConnection, JsonRpcHandler, JsonRpcRequestCx},
     proxy::messages,
     util::json_cast,
 };
@@ -95,12 +94,11 @@ where
 {
     async fn handle_request(
         &mut self,
-        method: &str,
+        cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-        response: JsonRpcRequestCx<serde_json::Value>,
     ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
-        if method != "_proxy/successor/receive/request" {
-            return Ok(Handled::No(response));
+        if cx.method() != "_proxy/successor/receive/request" {
+            return Ok(Handled::No(cx));
         }
 
         // We have just received a request from the successor which looks like
@@ -131,12 +129,12 @@ where
         // The user will send us a response that is intended for the proxy.
         // We repackage that into a `{message: ...}` struct that embeds
         // the response that will be sent to the proxy.
-        let response = response.map(
-            move |response: serde_json::Value| {
+        let response = cx.map(
+            move |_, response: serde_json::Value| {
                 serde_json::to_value(messages::FromSuccessorResponse::Result(response))
                     .map_err(|_| jsonrpcmsg::Error::internal_error())
             },
-            move |error: jsonrpcmsg::Error| {
+            move |_, error: jsonrpcmsg::Error| {
                 serde_json::to_value(messages::FromSuccessorResponse::Error(error))
                     .map_err(|_| jsonrpcmsg::Error::internal_error())
             },
@@ -149,31 +147,21 @@ where
 
     async fn handle_notification(
         &mut self,
-        method: &str,
+        cx: &JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-        cx: &JsonRpcCx,
     ) -> Result<Handled<()>, jsonrpcmsg::Error> {
-        if method != "_proxy/successor/receive/notification" {
+        if cx.method() != "_proxy/successor/receive/notification" {
             return Ok(Handled::No(()));
         }
 
         let messages::FromSuccessorNotification {
-            message:
-                jsonrpcmsg::Request {
-                    jsonrpc: _,
-                    version: _,
-                    method: inner_method,
-                    params: inner_params,
-                    id: None,
-                },
-        } = json_cast::<_, messages::FromSuccessorNotification>(params)?
-        else {
-            // We don't expect an `id` on a notification.
-            return Err(jsonrpcmsg::Error::invalid_request());
-        };
+            method: inner_method,
+            params: inner_params,
+        } = json_cast::<_, messages::FromSuccessorNotification>(params)?;
 
+        let inner_cx = JsonRpcNotificationCx::new(cx, inner_method);
         self.handler
-            .handle_notification(&inner_method, &inner_params, cx)
+            .handle_notification(&inner_cx, &inner_params)
             .await
     }
 }

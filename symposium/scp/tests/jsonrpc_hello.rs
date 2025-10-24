@@ -5,7 +5,8 @@
 
 use futures::{AsyncRead, AsyncWrite};
 use scp::{
-    Handled, JsonRpcConnection, JsonRpcCx, JsonRpcHandler, JsonRpcNotification, JsonRpcRequestCx,
+    Handled, JsonRpcConnection, JsonRpcConnectionCx, JsonRpcHandler, JsonRpcNotification,
+    JsonRpcRequestCx,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -143,7 +144,7 @@ impl JsonRpcHandler for LogHandler {
         &mut self,
         method: &str,
         params: &Option<jsonrpcmsg::Params>,
-        _cx: &JsonRpcCx,
+        _cx: &JsonRpcConnectionCx,
     ) -> std::result::Result<Handled<()>, jsonrpcmsg::Error> {
         if method == "log" {
             let log: LogNotification =

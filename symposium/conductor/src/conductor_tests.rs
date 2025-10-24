@@ -3,7 +3,9 @@ use std::sync::Arc;
 use agent_client_protocol::ContentBlock;
 use agent_client_protocol::{InitializeRequest, InitializeResponse};
 use scp::{AcpAgentToClientCallbacks, JsonRpcCxExt};
-use scp::{AcpClientToAgentCallbacks, AcpClientToAgentMessages, JsonRpcConnection, JsonRpcCx};
+use scp::{
+    AcpClientToAgentCallbacks, AcpClientToAgentMessages, JsonRpcConnection, JsonRpcConnectionCx,
+};
 use tokio::{io::duplex, sync::Mutex};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::Instrument;
@@ -65,7 +67,7 @@ impl AcpClientToAgentCallbacks for CapturingCallbacks {
     async fn session_cancel(
         &mut self,
         _args: agent_client_protocol::CancelNotification,
-        _cx: &JsonRpcCx,
+        _cx: &JsonRpcConnectionCx,
     ) -> Result<(), agent_client_protocol::Error> {
         Ok(())
     }
@@ -472,7 +474,7 @@ impl AcpClientToAgentCallbacks for Component1Callbacks {
     async fn session_cancel(
         &mut self,
         _args: agent_client_protocol::CancelNotification,
-        _cx: &JsonRpcCx,
+        _cx: &JsonRpcConnectionCx,
     ) -> Result<(), agent_client_protocol::Error> {
         Err(agent_client_protocol::Error::internal_error())
     }
@@ -570,7 +572,7 @@ impl AcpAgentToClientCallbacks for Component1Callbacks {
     async fn session_notification(
         &mut self,
         args: agent_client_protocol::SessionNotification,
-        cx: &JsonRpcCx,
+        cx: &JsonRpcConnectionCx,
     ) -> Result<(), agent_client_protocol::Error> {
         use agent_client_protocol::{ContentBlock, SessionUpdate};
 
@@ -666,7 +668,7 @@ impl AcpClientToAgentCallbacks for Component2Callbacks {
     async fn session_cancel(
         &mut self,
         _args: agent_client_protocol::CancelNotification,
-        _cx: &JsonRpcCx,
+        _cx: &JsonRpcConnectionCx,
     ) -> Result<(), agent_client_protocol::Error> {
         Ok(())
     }
@@ -705,7 +707,7 @@ impl AcpAgentToClientCallbacks for EditorCallbacks {
     async fn session_notification(
         &mut self,
         args: agent_client_protocol::SessionNotification,
-        _cx: &JsonRpcCx,
+        _cx: &JsonRpcConnectionCx,
     ) -> Result<(), agent_client_protocol::Error> {
         use agent_client_protocol::{ContentBlock, SessionUpdate, TextContent};
 
@@ -858,7 +860,7 @@ mod mcp_capability_tests {
         async fn session_cancel(
             &mut self,
             _args: agent_client_protocol::CancelNotification,
-            _cx: &JsonRpcCx,
+            _cx: &JsonRpcConnectionCx,
         ) -> Result<(), agent_client_protocol::Error> {
             Ok(())
         }

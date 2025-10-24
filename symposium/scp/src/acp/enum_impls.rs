@@ -9,14 +9,20 @@
 
 use agent_client_protocol::{AgentNotification, AgentRequest, ClientNotification, ClientRequest};
 
-use crate::jsonrpc::{JsonRpcNotification, JsonRpcOutgoingMessage, JsonRpcRequest};
+use crate::jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcOutgoingMessage, JsonRpcRequest};
 use crate::util::json_cast;
 
 // ============================================================================
 // Agent side (messages that agents receive)
 // ============================================================================
 
+impl JsonRpcMessage for ClientRequest {}
+
 impl JsonRpcOutgoingMessage for ClientRequest {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+        json_cast(self)
+    }
+
     fn method(&self) -> &str {
         match self {
             ClientRequest::InitializeRequest(_) => "initialize",
@@ -28,26 +34,24 @@ impl JsonRpcOutgoingMessage for ClientRequest {
             ClientRequest::ExtMethodRequest(ext) => &ext.method,
         }
     }
-
-    fn params(&self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
-        json_cast(self)
-    }
 }
 
 impl JsonRpcRequest for ClientRequest {
     type Response = serde_json::Value;
 }
 
+impl JsonRpcMessage for ClientNotification {}
+
 impl JsonRpcOutgoingMessage for ClientNotification {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+        json_cast(self)
+    }
+
     fn method(&self) -> &str {
         match self {
             ClientNotification::CancelNotification(_) => "session/cancel",
             ClientNotification::ExtNotification(ext) => &ext.method,
         }
-    }
-
-    fn params(&self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
-        json_cast(self)
     }
 }
 
@@ -57,7 +61,13 @@ impl JsonRpcNotification for ClientNotification {}
 // Client side (messages that clients/editors receive)
 // ============================================================================
 
+impl JsonRpcMessage for AgentRequest {}
+
 impl JsonRpcOutgoingMessage for AgentRequest {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+        json_cast(self)
+    }
+
     fn method(&self) -> &str {
         match self {
             AgentRequest::WriteTextFileRequest(_) => "fs/write_text_file",
@@ -71,26 +81,24 @@ impl JsonRpcOutgoingMessage for AgentRequest {
             AgentRequest::ExtMethodRequest(ext) => &ext.method,
         }
     }
-
-    fn params(&self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
-        json_cast(self)
-    }
 }
 
 impl JsonRpcRequest for AgentRequest {
     type Response = serde_json::Value;
 }
 
+impl JsonRpcMessage for AgentNotification {}
+
 impl JsonRpcOutgoingMessage for AgentNotification {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+        json_cast(self)
+    }
+
     fn method(&self) -> &str {
         match self {
             AgentNotification::SessionNotification(_) => "session/update",
             AgentNotification::ExtNotification(ext) => &ext.method,
         }
-    }
-
-    fn params(&self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
-        json_cast(self)
     }
 }
 

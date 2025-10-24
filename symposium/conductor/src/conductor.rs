@@ -66,7 +66,7 @@ use agent_client_protocol::{ClientRequest, InitializeRequest, NewSessionRequest}
 use futures::{AsyncRead, AsyncWrite, SinkExt, StreamExt, channel::mpsc};
 use scp::{
     AcpAgentToClientMessages, AcpClientToAgentMessages, InitializeRequestExt,
-    InitializeResponseExt, JsonRpcConnection, JsonRpcCx, JsonRpcNotification, JsonRpcRequest,
+    InitializeResponseExt, JsonRpcConnection, JsonRpcConnectionCx, JsonRpcNotification, JsonRpcRequest,
     JsonRpcRequestCx, Proxy, ProxyToConductorMessages,
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -86,7 +86,7 @@ struct McpBridgeInfo {
     /// The TCP port we bound for this bridge
     tcp_port: u16,
     /// The JSON-RPC connection to the bridge process (once connected)
-    bridge_cx: Option<JsonRpcCx>,
+    bridge_cx: Option<JsonRpcConnectionCx>,
 }
 
 /// Arguments for the serve method, containing I/O streams.
@@ -339,7 +339,7 @@ impl Conductor {
                             component_index,
                             message,
                         } => {
-                            let its_client: &JsonRpcCx = if component_index == 0 {
+                            let its_client: &JsonRpcConnectionCx = if component_index == 0 {
                                 &client
                             } else {
                                 &self.components[component_index - 1].jsonrpccx
@@ -1058,7 +1058,7 @@ impl scp::ConductorCallbacks for SuccessorSendCallbacks {
     async fn successor_send_notification(
         &mut self,
         args: scp::ToSuccessorNotification<serde_json::Value>,
-        cx: &scp::JsonRpcCx,
+        cx: &scp::JsonRpcConnectionCx,
     ) -> Result<(), agent_client_protocol::Error> {
         self.conductor_tx
             .send(ConductorMessage::ComponentToItsSuccessorSendNotification {
@@ -1119,7 +1119,7 @@ pub enum ConductorMessage {
     ComponentToItsSuccessorSendNotification {
         component_index: usize,
         args: scp::ToSuccessorNotification<serde_json::Value>,
-        component_cx: JsonRpcCx,
+        component_cx: JsonRpcConnectionCx,
     },
 
     /// Response received from a request that needs to be forwarded.
@@ -1165,6 +1165,6 @@ pub enum ConductorMessage {
         /// The acp:$UUID URL identifying this bridge
         acp_url: String,
         /// The JSON-RPC connection to the bridge
-        bridge_cx: JsonRpcCx,
+        bridge_cx: JsonRpcConnectionCx,
     },
 }

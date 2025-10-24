@@ -13,7 +13,10 @@ use agent_client_protocol::{
 };
 
 use crate::{
-    jsonrpc::{self, Handled, JsonRpcCx, JsonRpcHandler, JsonRpcRequestCx, JsonRpcResponse},
+    JsonRpcNotificationCx,
+    jsonrpc::{
+        self, Handled, JsonRpcConnectionCx, JsonRpcHandler, JsonRpcRequestCx, JsonRpcResponse,
+    },
     util::{acp_to_jsonrpc_error, json_cast},
 };
 
@@ -26,7 +29,7 @@ pub enum AcpAgentToClientMessage {
     /// A request from the agent that expects a response.
     Request(acp::AgentRequest, JsonRpcRequestCx<serde_json::Value>),
     /// A notification from the agent (no response expected).
-    Notification(acp::AgentNotification, JsonRpcCx),
+    Notification(acp::AgentNotification, JsonRpcConnectionCx),
 }
 
 /// ACP handler for editor-side messages (requests that editors receive from agents).
@@ -47,11 +50,10 @@ impl<CB: AcpAgentToClientCallbacks> AcpAgentToClientMessages<CB> {
 impl<CB: AcpAgentToClientCallbacks> JsonRpcHandler for AcpAgentToClientMessages<CB> {
     async fn handle_request(
         &mut self,
-        method: &str,
+        cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-        response: JsonRpcRequestCx<serde_json::Value>,
     ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
-        match method {
+        match cx.method() {
             "session/request_permission" => {
                 self.callbacks
                     .request_permission(json_cast(params)?, response.cast())
@@ -114,11 +116,10 @@ impl<CB: AcpAgentToClientCallbacks> JsonRpcHandler for AcpAgentToClientMessages<
 
     async fn handle_notification(
         &mut self,
-        method: &str,
+        cx: jsonrpc::JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-        cx: &jsonrpc::JsonRpcCx,
-    ) -> Result<jsonrpc::Handled<()>, jsonrpcmsg::Error> {
-        match method {
+    ) -> Result<jsonrpc::Handled<jsonrpc::JsonRpcNotificationCx>, jsonrpcmsg::Error> {
+        match cx.method() {
             "session/update" => {
                 self.callbacks
                     .session_notification(json_cast(params)?, cx)
@@ -126,7 +127,7 @@ impl<CB: AcpAgentToClientCallbacks> JsonRpcHandler for AcpAgentToClientMessages<
                     .map_err(acp_to_jsonrpc_error)?;
                 Ok(jsonrpc::Handled::Yes)
             }
-            _ => Ok(jsonrpc::Handled::No(())),
+            _ => Ok(jsonrpc::Handled::No(cx)),
         }
     }
 }
@@ -197,7 +198,7 @@ pub trait AcpAgentToClientCallbacks {
     async fn session_notification(
         &mut self,
         args: SessionNotification,
-        cx: &JsonRpcCx,
+        cx: JsonRpcNotificationCx,
     ) -> Result<(), acp::Error>;
 }
 
@@ -267,7 +268,7 @@ pub trait AcpClientToAgentExt {
     ) -> Result<(), jsonrpcmsg::Error>;
 }
 
-impl AcpClientToAgentExt for JsonRpcCx {
+impl AcpClientToAgentExt for JsonRpcConnectionCx {
     fn initialize(
         &self,
         protocol_version: acp::ProtocolVersion,
@@ -385,7 +386,7 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpAgentToClientMessage::Request(
             acp::AgentRequest::RequestPermissionRequest(args),
-            response.cast(),
+            response.erase_to_json(),
         ))
         .await
         .map_err(acp::Error::into_internal_error)
@@ -398,7 +399,7 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpAgentToClientMessage::Request(
             acp::AgentRequest::WriteTextFileRequest(args),
-            response.cast(),
+            response.erase_to_json(),
         ))
         .await
         .map_err(acp::Error::into_internal_error)
@@ -411,7 +412,7 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpAgentToClientMessage::Request(
             acp::AgentRequest::ReadTextFileRequest(args),
-            response.cast(),
+            response.erase_to_json(),
         ))
         .await
         .map_err(acp::Error::into_internal_error)
@@ -424,7 +425,7 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpAgentToClientMessage::Request(
             acp::AgentRequest::CreateTerminalRequest(args),
-            response.cast(),
+            response.erase_to_json(),
         ))
         .await
         .map_err(acp::Error::into_internal_error)
@@ -437,7 +438,7 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpAgentToClientMessage::Request(
             acp::AgentRequest::TerminalOutputRequest(args),
-            response.cast(),
+            response.erase_to_json(),
         ))
         .await
         .map_err(acp::Error::into_internal_error)
@@ -450,7 +451,7 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpAgentToClientMessage::Request(
             acp::AgentRequest::ReleaseTerminalRequest(args),
-            response.cast(),
+            response.erase_to_json(),
         ))
         .await
         .map_err(acp::Error::into_internal_error)
@@ -463,7 +464,7 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpAgentToClientMessage::Request(
             acp::AgentRequest::WaitForTerminalExitRequest(args),
-            response.cast(),
+            response.erase_to_json(),
         ))
         .await
         .map_err(acp::Error::into_internal_error)
@@ -494,7 +495,7 @@ where
     async fn session_notification(
         &mut self,
         args: SessionNotification,
-        cx: &JsonRpcCx,
+        cx: JsonRpcNotificationCx,
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpAgentToClientMessage::Notification(
             acp::AgentNotification::SessionNotification(args),

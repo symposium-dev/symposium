@@ -10,7 +10,8 @@ use futures::channel::mpsc;
 use futures::io::BufReader;
 use uuid::Uuid;
 
-use crate::jsonrpc::JsonRpcCx;
+use crate::JsonRpcNotificationCx;
+use crate::jsonrpc::JsonRpcConnectionCx;
 use crate::jsonrpc::JsonRpcHandler;
 use crate::jsonrpc::JsonRpcRequestCx;
 use crate::jsonrpc::OutgoingMessage;
@@ -79,7 +80,7 @@ pub(super) async fn reply_actor(
 /// # Returns
 /// - `Result<(), jsonrpcmsg::Error>`: an error if something unrecoverable occurred
 pub(super) async fn incoming_actor(
-    json_rpc_cx: &JsonRpcCx,
+    json_rpc_cx: &JsonRpcConnectionCx,
     incoming_bytes: impl AsyncRead,
     reply_tx: mpsc::UnboundedSender<ReplyMessage>,
     mut handler: impl JsonRpcHandler,
@@ -123,35 +124,34 @@ pub(super) async fn incoming_actor(
 /// Dispatches a JSON-RPC request to the handler.
 /// Report an error back to the server if it does not get handled.
 async fn dispatch_request(
-    json_rpc_cx: &JsonRpcCx,
+    json_rpc_cx: &JsonRpcConnectionCx,
     request: jsonrpcmsg::Request,
     handler: &mut impl JsonRpcHandler,
 ) -> Result<(), jsonrpcmsg::Error> {
     if let Some(id) = request.id {
-        let request_cx = JsonRpcRequestCx::new(json_rpc_cx.clone(), id.clone());
-        tracing::debug!(method = %request.method, ?id, "Dispatching request to handler");
-        let handled = handler
-            .handle_request(&request.method, &request.params, request_cx)
-            .await?;
+        let method = request.method;
+        let request_cx = JsonRpcRequestCx::new(json_rpc_cx, method.clone(), id.clone(), |_, r| r);
+        let handled = handler.handle_request(request_cx, &request.params).await?;
 
         match handled {
             Handled::Yes => {
-                tracing::debug!(method = %request.method, ?id, "Handler reported: Handled::Yes");
+                tracing::debug!(method = %method, ?id, "Handler reported: Handled::Yes");
             }
             Handled::No(request_cx) => {
-                tracing::debug!(method = %request.method, ?id, "Handler reported: Handled::No, sending method_not_found");
+                tracing::debug!(method = %method, ?id, "Handler reported: Handled::No, sending method_not_found");
                 request_cx.respond_with_error(jsonrpcmsg::Error::method_not_found())?;
             }
         }
     } else {
+        let notification_cx = JsonRpcNotificationCx::new(json_rpc_cx, request.method);
         let handled = handler
-            .handle_notification(&request.method, &request.params, json_rpc_cx)
+            .handle_notification(notification_cx, &request.params)
             .await?;
 
         match handled {
             Handled::Yes => (),
-            Handled::No(()) => {
-                json_rpc_cx.send_error_notification(jsonrpcmsg::Error::method_not_found())?;
+            Handled::No(notification_cx) => {
+                notification_cx.send_error_notification(jsonrpcmsg::Error::method_not_found())?;
             }
         }
     }

@@ -1,6 +1,7 @@
 use crate::{
-    jsonrpc::{Handled, JsonRpcCx, JsonRpcHandler, JsonRpcRequestCx},
-    proxy::{ToSuccessorNotification, ToSuccessorRequest, ToSuccessorResponse},
+    JsonRpcNotificationCx,
+    jsonrpc::{Handled, JsonRpcConnectionCx, JsonRpcHandler, JsonRpcRequestCx},
+    proxy::{ToSuccessorNotification, ToSuccessorRequest},
     util::{acp_to_jsonrpc_error, json_cast},
 };
 use agent_client_protocol as acp;
@@ -13,7 +14,7 @@ pub trait ConductorCallbacks {
     async fn successor_send_request(
         &mut self,
         args: ToSuccessorRequest<serde_json::Value>,
-        response: JsonRpcRequestCx<ToSuccessorResponse<serde_json::Value>>,
+        response: JsonRpcRequestCx<serde_json::Value>,
     ) -> Result<(), acp::Error>;
 
     /// Name of the method to be invoked
@@ -21,7 +22,7 @@ pub trait ConductorCallbacks {
     async fn successor_send_notification(
         &mut self,
         args: ToSuccessorNotification<serde_json::Value>,
-        cx: &JsonRpcCx,
+        cx: &JsonRpcConnectionCx,
     ) -> Result<(), acp::Error>;
 }
 
@@ -40,32 +41,30 @@ impl<CB: ConductorCallbacks> ProxyToConductorMessages<CB> {
 impl<CB: ConductorCallbacks> JsonRpcHandler for ProxyToConductorMessages<CB> {
     async fn handle_request(
         &mut self,
-        method: &str,
+        cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-        response: JsonRpcRequestCx<serde_json::Value>,
     ) -> Result<crate::jsonrpc::Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error>
     {
-        match method {
+        match cx.method() {
             "_proxy/successor/send/request" => {
                 // Proxy is requesting us to send this message to their successor.
                 self.callbacks
-                    .successor_send_request(json_cast(params)?, response.cast())
+                    .successor_send_request(json_cast(params)?, cx.parse_from_json())
                     .await
                     .map_err(acp_to_jsonrpc_error)?;
                 Ok(Handled::Yes)
             }
 
-            _ => Ok(Handled::No(response)),
+            _ => Ok(Handled::No(cx)),
         }
     }
 
     async fn handle_notification(
         &mut self,
-        method: &str,
+        cx: &JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-        cx: &JsonRpcCx,
     ) -> Result<crate::jsonrpc::Handled<()>, jsonrpcmsg::Error> {
-        match method {
+        match cx.method() {
             "_proxy/successor/send/notification" => {
                 // Proxy is requesting us to send this message to their successor.
                 self.callbacks

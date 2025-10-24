@@ -13,7 +13,9 @@ use agent_client_protocol::{
 };
 
 use crate::{
-    jsonrpc::{self, Handled, JsonRpcCx, JsonRpcHandler, JsonRpcRequestCx, JsonRpcResponse},
+    jsonrpc::{
+        self, Handled, JsonRpcConnectionCx, JsonRpcHandler, JsonRpcRequestCx, JsonRpcResponse,
+    },
     util::{acp_to_jsonrpc_error, json_cast},
 };
 
@@ -26,7 +28,7 @@ pub enum AcpClientToAgentMessage {
     /// A request from the agent that expects a response.
     Request(acp::ClientRequest, JsonRpcRequestCx<serde_json::Value>),
     /// A notification from the agent (no response expected).
-    Notification(acp::ClientNotification, JsonRpcCx),
+    Notification(acp::ClientNotification, JsonRpcConnectionCx),
 }
 
 /// ACP handler for agent-side messages (requests that agents receive from clients).
@@ -47,11 +49,10 @@ impl<CB: AcpClientToAgentCallbacks> AcpClientToAgentMessages<CB> {
 impl<CB: AcpClientToAgentCallbacks> JsonRpcHandler for AcpClientToAgentMessages<CB> {
     async fn handle_request(
         &mut self,
-        method: &str,
+        cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-        response: JsonRpcRequestCx<serde_json::Value>,
     ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
-        match method {
+        match cx.method() {
             "initialize" => {
                 self.callbacks
                     .initialize(json_cast(params)?, response.cast())
@@ -93,11 +94,10 @@ impl<CB: AcpClientToAgentCallbacks> JsonRpcHandler for AcpClientToAgentMessages<
 
     async fn handle_notification(
         &mut self,
-        method: &str,
+        cx: &JsonRpcConnectionCx,
         params: &Option<jsonrpcmsg::Params>,
-        cx: &jsonrpc::JsonRpcCx,
     ) -> Result<jsonrpc::Handled<()>, jsonrpcmsg::Error> {
-        match method {
+        match cx.method() {
             "session/cancel" => {
                 self.callbacks
                     .session_cancel(json_cast(params)?, cx)
@@ -162,7 +162,7 @@ where
     async fn session_cancel(
         &mut self,
         args: CancelNotification,
-        cx: &JsonRpcCx,
+        cx: &JsonRpcConnectionCx,
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpClientToAgentMessage::Notification(
             acp::ClientNotification::CancelNotification(args),
@@ -249,7 +249,7 @@ pub trait AcpClientToAgentCallbacks {
     async fn session_cancel(
         &mut self,
         args: CancelNotification,
-        cx: &JsonRpcCx,
+        cx: &JsonRpcConnectionCx,
     ) -> Result<(), acp::Error>;
 
     /// Handle new session creation request from client.
@@ -365,7 +365,7 @@ pub trait AcpAgentToClientExt {
     fn session_update(&self, notification: SessionNotification) -> Result<(), jsonrpcmsg::Error>;
 }
 
-impl AcpAgentToClientExt for JsonRpcCx {
+impl AcpAgentToClientExt for JsonRpcConnectionCx {
     fn request_permission(
         &self,
         session_id: impl Into<acp::SessionId>,

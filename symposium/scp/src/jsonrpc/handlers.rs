@@ -1,4 +1,5 @@
-use crate::jsonrpc::{Handled, JsonRpcCx, JsonRpcHandler};
+use crate::JsonRpcNotificationCx;
+use crate::jsonrpc::{Handled, JsonRpcHandler};
 use std::error::Error;
 use std::ops::AsyncFnMut;
 
@@ -35,33 +36,23 @@ where
 {
     async fn handle_request(
         &mut self,
-        method: &str,
+        cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-        response: JsonRpcRequestCx<serde_json::Value>,
     ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
-        match self
-            .handler1
-            .handle_request(method, params, response)
-            .await?
-        {
+        match self.handler1.handle_request(cx, params).await? {
             Handled::Yes => Ok(Handled::Yes),
-            Handled::No(response) => self.handler2.handle_request(method, params, response).await,
+            Handled::No(cx) => self.handler2.handle_request(cx, params).await,
         }
     }
 
     async fn handle_notification(
         &mut self,
-        method: &str,
+        cx: JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-        cx: &JsonRpcCx,
-    ) -> Result<Handled<()>, jsonrpcmsg::Error> {
-        match self
-            .handler1
-            .handle_notification(method, params, cx)
-            .await?
-        {
+    ) -> Result<Handled<JsonRpcNotificationCx>, jsonrpcmsg::Error> {
+        match self.handler1.handle_notification(cx, params).await? {
             Handled::Yes => Ok(Handled::Yes),
-            Handled::No(()) => self.handler2.handle_notification(method, params, cx).await,
+            Handled::No(cx) => self.handler2.handle_notification(cx, params).await,
         }
     }
 }
@@ -125,11 +116,10 @@ where
 {
     async fn handle_request(
         &mut self,
-        method: &str,
+        cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-        response: JsonRpcRequestCx<serde_json::Value>,
     ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
-        (self.tx)(method.to_string(), params.clone(), response)
+        (self.tx)(cx.method().to_string(), params.clone(), cx)
             .await
             .map_err(|e| {
                 jsonrpcmsg::Error::with_data(
@@ -145,12 +135,11 @@ where
 
     async fn handle_notification(
         &mut self,
-        _method: &str,
+        cx: JsonRpcNotificationCx,
         _params: &Option<jsonrpcmsg::Params>,
-        _cx: &JsonRpcCx,
-    ) -> Result<Handled<()>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcNotificationCx>, jsonrpcmsg::Error> {
         // Generic handler only handles requests, not notifications
         // (notifications don't need responses, so they don't fit the bridge use case)
-        Ok(Handled::No(()))
+        Ok(Handled::No(cx))
     }
 }

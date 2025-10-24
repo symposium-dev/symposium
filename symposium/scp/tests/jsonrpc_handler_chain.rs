@@ -6,7 +6,8 @@
 
 use scp::util::internal_error;
 use scp::{
-    Handled, JsonRpcConnection, JsonRpcCx, JsonRpcHandler, JsonRpcNotification, JsonRpcRequestCx,
+    Handled, JsonRpcConnection, JsonRpcConnectionCx, JsonRpcHandler, JsonRpcNotification,
+    JsonRpcRequestCx,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
@@ -478,7 +479,7 @@ impl JsonRpcHandler for EventHandler {
         &mut self,
         method: &str,
         params: &Option<jsonrpcmsg::Params>,
-        _cx: &JsonRpcCx,
+        _cx: &JsonRpcConnectionCx,
     ) -> std::result::Result<Handled<()>, jsonrpcmsg::Error> {
         if method == "event" {
             let notification: EventNotification =
@@ -499,7 +500,7 @@ impl JsonRpcHandler for IgnoreHandler {
         &mut self,
         _method: &str,
         _params: &Option<jsonrpcmsg::Params>,
-        _cx: &JsonRpcCx,
+        _cx: &JsonRpcConnectionCx,
     ) -> std::result::Result<Handled<()>, jsonrpcmsg::Error> {
         // Never claims anything, always passes through
         Ok(Handled::No(()))

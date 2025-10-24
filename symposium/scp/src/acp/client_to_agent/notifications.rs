@@ -1,15 +1,17 @@
 use agent_client_protocol::CancelNotification;
 
-use crate::jsonrpc::{JsonRpcNotification, JsonRpcOutgoingMessage};
+use crate::jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcOutgoingMessage};
 use crate::util::json_cast;
 
+impl JsonRpcMessage for CancelNotification {}
+
 impl JsonRpcOutgoingMessage for CancelNotification {
-    fn method(&self) -> &str {
-        "session/cancel"
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+        json_cast(self)
     }
 
-    fn params(&self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
-        json_cast(self)
+    fn method(&self) -> &str {
+        "session/cancel"
     }
 }
 

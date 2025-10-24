@@ -2,7 +2,7 @@ use std::{future::Future, pin::Pin};
 
 use futures::{AsyncRead, AsyncWrite};
 
-use scp::JsonRpcCx;
+use scp::JsonRpcConnectionCx;
 use tokio::process::Child;
 
 /// A spawned component in the proxy chain.
@@ -14,7 +14,7 @@ pub struct Component {
     /// None for mock components used in tests.
     #[expect(dead_code)]
     pub child: Option<Child>,
-    pub jsonrpccx: JsonRpcCx,
+    pub jsonrpccx: JsonRpcConnectionCx,
 }
 
 /// Specifies how to create a component in the proxy chain.

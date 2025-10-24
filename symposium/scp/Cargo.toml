@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 agent-client-protocol = "0.5.0"
 anyhow.workspace = true
+boxfnonce = "0.1.1"
 futures = "0.3.31"
 jsonrpcmsg = "0.1.2"
 serde.workspace = true
