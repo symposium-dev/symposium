@@ -61,20 +61,20 @@ impl<CB: ConductorCallbacks> JsonRpcHandler for ProxyToConductorMessages<CB> {
 
     async fn handle_notification(
         &mut self,
-        cx: &JsonRpcNotificationCx,
+        cx: JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<crate::jsonrpc::Handled<()>, jsonrpcmsg::Error> {
+    ) -> Result<crate::jsonrpc::Handled<JsonRpcNotificationCx>, jsonrpcmsg::Error> {
         match cx.method() {
             "_proxy/successor/send/notification" => {
                 // Proxy is requesting us to send this message to their successor.
                 self.callbacks
-                    .successor_send_notification(json_cast(params)?, cx)
+                    .successor_send_notification(json_cast(params)?, &cx)
                     .await
                     .map_err(acp_to_jsonrpc_error)?;
                 Ok(Handled::Yes)
             }
 
-            _ => Ok(Handled::No(())),
+            _ => Ok(Handled::No(cx)),
         }
     }
 }

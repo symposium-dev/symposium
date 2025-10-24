@@ -42,7 +42,41 @@ impl<Req: JsonRpcOutgoingMessage> JsonRpcOutgoingMessage for ToSuccessorRequest<
 }
 
 impl<Req: JsonRpcRequest> JsonRpcRequest for ToSuccessorRequest<Req> {
-    type Response = Req::Response;
+    type Response = ToSuccessorResponse<Req::Response>;
+}
+
+/// A response received from a [`ToSuccessorRequest`].
+///
+/// Returned as the response to a `ToSuccessorRequest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToSuccessorResponse<Response> {
+    /// Result of the method invocation (on success)
+    Result(Response),
+
+    /// Error object (on failure)
+    Error(jsonrpcmsg::Error),
+}
+
+impl<Response: JsonRpcMessage> JsonRpcMessage for ToSuccessorResponse<Response> {}
+
+impl<Response: JsonRpcIncomingMessage> JsonRpcIncomingMessage for ToSuccessorResponse<Response> {
+    fn into_json(self, _method: &str) -> Result<serde_json::Value, jsonrpcmsg::Error> {
+        serde_json::to_value(self).map_err(crate::util::internal_error)
+    }
+
+    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, jsonrpcmsg::Error> {
+        json_cast(&value)
+    }
+}
+
+impl<R> From<Result<R, jsonrpcmsg::Error>> for ToSuccessorResponse<R> {
+    fn from(value: Result<R, jsonrpcmsg::Error>) -> Self {
+        match value {
+            Ok(v) => ToSuccessorResponse::Result(v),
+            Err(e) => ToSuccessorResponse::Error(e),
+        }
+    }
 }
 
 /// A notification being sent to the successor component.

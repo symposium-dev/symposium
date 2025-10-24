@@ -147,11 +147,11 @@ where
 
     async fn handle_notification(
         &mut self,
-        cx: &JsonRpcNotificationCx,
+        cx: JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<()>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcNotificationCx>, jsonrpcmsg::Error> {
         if cx.method() != "_proxy/successor/receive/notification" {
-            return Ok(Handled::No(()));
+            return Ok(Handled::No(cx));
         }
 
         let messages::FromSuccessorNotification {
@@ -159,9 +159,9 @@ where
             params: inner_params,
         } = json_cast::<_, messages::FromSuccessorNotification>(params)?;
 
-        let inner_cx = JsonRpcNotificationCx::new(cx, inner_method);
+        let inner_cx = JsonRpcNotificationCx::new(&cx, inner_method);
         self.handler
-            .handle_notification(&inner_cx, &inner_params)
+            .handle_notification(inner_cx, &inner_params)
             .await
     }
 }

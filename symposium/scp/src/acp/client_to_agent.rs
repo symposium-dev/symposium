@@ -14,7 +14,8 @@ use agent_client_protocol::{
 
 use crate::{
     jsonrpc::{
-        self, Handled, JsonRpcConnectionCx, JsonRpcHandler, JsonRpcRequestCx, JsonRpcResponse,
+        self, Handled, JsonRpcConnectionCx, JsonRpcHandler, JsonRpcNotificationCx,
+        JsonRpcRequestCx, JsonRpcResponse,
     },
     util::{acp_to_jsonrpc_error, json_cast},
 };
@@ -55,57 +56,57 @@ impl<CB: AcpClientToAgentCallbacks> JsonRpcHandler for AcpClientToAgentMessages<
         match cx.method() {
             "initialize" => {
                 self.callbacks
-                    .initialize(json_cast(params)?, response.cast())
+                    .initialize(json_cast(params)?, cx.parse_from_json())
                     .await
                     .map_err(acp_to_jsonrpc_error)?;
                 Ok(jsonrpc::Handled::Yes)
             }
             "session/load" => {
                 self.callbacks
-                    .load_session(json_cast(params)?, response.cast())
+                    .load_session(json_cast(params)?, cx.parse_from_json())
                     .await
                     .map_err(acp_to_jsonrpc_error)?;
                 Ok(jsonrpc::Handled::Yes)
             }
             "session/new" => {
                 self.callbacks
-                    .new_session(json_cast(params)?, response.cast())
+                    .new_session(json_cast(params)?, cx.parse_from_json())
                     .await
                     .map_err(acp_to_jsonrpc_error)?;
                 Ok(jsonrpc::Handled::Yes)
             }
             "session/prompt" => {
                 self.callbacks
-                    .prompt(json_cast(params)?, response.cast())
+                    .prompt(json_cast(params)?, cx.parse_from_json())
                     .await
                     .map_err(acp_to_jsonrpc_error)?;
                 Ok(jsonrpc::Handled::Yes)
             }
             "session/set_mode" => {
                 self.callbacks
-                    .set_session_mode(json_cast(params)?, response.cast())
+                    .set_session_mode(json_cast(params)?, cx.parse_from_json())
                     .await
                     .map_err(acp_to_jsonrpc_error)?;
                 Ok(jsonrpc::Handled::Yes)
             }
-            _ => Ok(jsonrpc::Handled::No(response)),
+            _ => Ok(jsonrpc::Handled::No(cx)),
         }
     }
 
     async fn handle_notification(
         &mut self,
-        cx: &JsonRpcConnectionCx,
+        cx: JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<jsonrpc::Handled<()>, jsonrpcmsg::Error> {
+    ) -> Result<jsonrpc::Handled<JsonRpcNotificationCx>, jsonrpcmsg::Error> {
         match cx.method() {
             "session/cancel" => {
                 self.callbacks
-                    .session_cancel(json_cast(params)?, cx)
+                    .session_cancel(json_cast(params)?, &cx)
                     .await
                     .map_err(acp_to_jsonrpc_error)?;
                 Ok(jsonrpc::Handled::Yes)
             }
-            _ => Ok(jsonrpc::Handled::No(())),
+            _ => Ok(jsonrpc::Handled::No(cx)),
         }
     }
 }
@@ -140,7 +141,7 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpClientToAgentMessage::Request(
             acp::ClientRequest::InitializeRequest(args),
-            response.cast(),
+            response.erase_to_json(),
         ))
         .await
         .map_err(acp::Error::into_internal_error)
@@ -153,7 +154,7 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpClientToAgentMessage::Request(
             acp::ClientRequest::AuthenticateRequest(args),
-            response.cast(),
+            response.erase_to_json(),
         ))
         .await
         .map_err(acp::Error::into_internal_error)
@@ -179,7 +180,7 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpClientToAgentMessage::Request(
             acp::ClientRequest::NewSessionRequest(args),
-            response.cast(),
+            response.erase_to_json(),
         ))
         .await
         .map_err(acp::Error::into_internal_error)
@@ -192,7 +193,7 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpClientToAgentMessage::Request(
             acp::ClientRequest::LoadSessionRequest(args),
-            response.cast(),
+            response.erase_to_json(),
         ))
         .await
         .map_err(acp::Error::into_internal_error)
@@ -205,7 +206,7 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpClientToAgentMessage::Request(
             acp::ClientRequest::PromptRequest(args),
-            response.cast(),
+            response.erase_to_json(),
         ))
         .await
         .map_err(acp::Error::into_internal_error)
@@ -218,7 +219,7 @@ where
     ) -> Result<(), agent_client_protocol::Error> {
         (self.tx)(AcpClientToAgentMessage::Request(
             acp::ClientRequest::SetSessionModeRequest(args),
-            response.cast(),
+            response.erase_to_json(),
         ))
         .await
         .map_err(acp::Error::into_internal_error)

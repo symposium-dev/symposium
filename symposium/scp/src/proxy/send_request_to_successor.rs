@@ -1,6 +1,6 @@
 use crate::{
     jsonrpc::{JsonRpcConnectionCx, JsonRpcNotification, JsonRpcRequest},
-    proxy::{ToSuccessorNotification, ToSuccessorRequest},
+    proxy::{ToSuccessorNotification, ToSuccessorRequest, ToSuccessorResponse},
 };
 
 /// Extension trait for [`JsonRpcCx`] that adds methods for sending to successor.
