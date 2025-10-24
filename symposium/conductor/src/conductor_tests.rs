@@ -5,6 +5,7 @@ use agent_client_protocol::{InitializeRequest, InitializeResponse};
 use scp::{AcpAgentToClientCallbacks, JsonRpcCxExt};
 use scp::{
     AcpClientToAgentCallbacks, AcpClientToAgentMessages, JsonRpcConnection, JsonRpcConnectionCx,
+    JsonRpcNotificationCx,
 };
 use tokio::{io::duplex, sync::Mutex};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -145,13 +146,10 @@ mod tests {
                                 meta: None,
                             };
 
-                            let response = client
-                                .send_json_request(
-                                    "initialize".to_string(),
-                                    serde_json::to_value(init_request).unwrap(),
-                                )
-                                .recv()
-                                .await;
+                            let request = agent_client_protocol::ClientRequest::InitializeRequest(
+                                init_request,
+                            );
+                            let response = client.send_request(request).recv().await;
 
                             // Should get a successful response
                             assert!(
@@ -278,13 +276,10 @@ mod tests {
                                 meta: None,
                             };
 
-                            let init_response = client
-                                .send_json_request(
-                                    "initialize".to_string(),
-                                    serde_json::to_value(&init_request).unwrap(),
-                                )
-                                .recv()
-                                .await;
+                            let request = agent_client_protocol::ClientRequest::InitializeRequest(
+                                init_request,
+                            );
+                            let init_response = client.send_request(request).recv().await;
 
                             assert!(
                                 init_response.is_ok(),
@@ -303,13 +298,9 @@ mod tests {
                                 meta: None,
                             };
 
-                            let prompt_response = client
-                                .send_json_request(
-                                    "session/prompt".to_string(),
-                                    serde_json::to_value(&prompt_request).unwrap(),
-                                )
-                                .recv()
-                                .await;
+                            let request =
+                                agent_client_protocol::ClientRequest::PromptRequest(prompt_request);
+                            let prompt_response = client.send_request(request).recv().await;
 
                             assert!(
                                 prompt_response.is_ok(),
@@ -572,7 +563,7 @@ impl AcpAgentToClientCallbacks for Component1Callbacks {
     async fn session_notification(
         &mut self,
         args: agent_client_protocol::SessionNotification,
-        cx: &JsonRpcConnectionCx,
+        cx: JsonRpcNotificationCx,
     ) -> Result<(), agent_client_protocol::Error> {
         use agent_client_protocol::{ContentBlock, SessionUpdate};
 
@@ -707,7 +698,7 @@ impl AcpAgentToClientCallbacks for EditorCallbacks {
     async fn session_notification(
         &mut self,
         args: agent_client_protocol::SessionNotification,
-        _cx: &JsonRpcConnectionCx,
+        _cx: JsonRpcNotificationCx,
     ) -> Result<(), agent_client_protocol::Error> {
         use agent_client_protocol::{ContentBlock, SessionUpdate, TextContent};
 

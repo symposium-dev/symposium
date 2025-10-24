@@ -560,6 +560,12 @@ pub struct JsonRpcUntypedRequest {
     params: Option<Params>,
 }
 
+impl JsonRpcUntypedRequest {
+    pub fn new(method: String, params: Option<Params>) -> Self {
+        Self { method, params }
+    }
+}
+
 impl JsonRpcMessage for JsonRpcUntypedRequest {}
 
 impl JsonRpcOutgoingMessage for JsonRpcUntypedRequest {
