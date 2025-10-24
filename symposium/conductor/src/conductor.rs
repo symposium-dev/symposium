@@ -386,12 +386,11 @@ impl Conductor {
                                     );
 
                                     let response = its_client.send_request(agent_request);
-                                    tokio::task::spawn_local(async move {
-                                        let result = response.recv().await;
+                                    let _ = response.spawn_upon_receipt(move |result| async move {
                                         if let Err(error) = json_rpc_request_cx.respond_with_result(result) {
                                             error!(?error, "Failed to forward response to component");
                                         }
-                                    });
+                                    }).await;
                                 }
 
                                 scp::AcpAgentToClientMessage::Notification(
@@ -483,10 +482,8 @@ impl Conductor {
                             let component_request_id = component_response_cx.id().clone();
                             let current_span = tracing::Span::current();
                             let mut conductor_tx_clone = conductor_tx.clone();
-                            tokio::task::spawn_local(
+                            let _ = successor_response.spawn_upon_receipt(move |result| {
                                 async move {
-                                    debug!("Waiting for successor response");
-                                    let result = successor_response.recv().await;
                                     let is_ok = result.is_ok();
                                     debug!(is_ok, "Received successor response, sending to conductor");
 
@@ -508,8 +505,8 @@ impl Conductor {
                                     "receive_successor_response",
                                     component_request_id = ?component_request_id
                                 ))
-                                .instrument(current_span),
-                            );
+                                .instrument(current_span)
+                            }).await;
                         } else {
                             // Now we can safely borrow from self.components
                             let successor_index = component_index + 1;
@@ -538,10 +535,8 @@ impl Conductor {
                             let component_request_id = component_response_cx.id().clone();
                             let current_span = tracing::Span::current();
                             let mut conductor_tx_clone = conductor_tx.clone();
-                            tokio::task::spawn_local(
+                            let _ = successor_response.spawn_upon_receipt(move |result| {
                                 async move {
-                                    debug!("Waiting for successor response");
-                                    let result = successor_response.recv().await;
                                     let is_ok = result.is_ok();
                                     debug!(is_ok, "Received successor response, sending to conductor");
 
@@ -563,8 +558,8 @@ impl Conductor {
                                     "receive_successor_response",
                                     component_request_id = ?component_request_id
                                 ))
-                                .instrument(current_span),
-                            );
+                                .instrument(current_span)
+                            }).await;
                         }
 
                         ConductorMessage::ComponentToItsSuccessorSendNotification {
@@ -661,11 +656,12 @@ impl Conductor {
                             let response = self.components[0].jsonrpccx.send_request(request);
                             let method_for_task = method.clone();
 
-                            tokio::task::spawn_local(async move {
-                                let result = response.recv().await;
-                                debug!(is_ok = result.is_ok(), "Received MCP response from component");
-                                let _ = response_cx.respond_with_result(result);
-                            }.instrument(tracing::info_span!("bridge_request", method = %method_for_task)));
+                            let _ = response.spawn_upon_receipt(move |result| {
+                                async move {
+                                    debug!(is_ok = result.is_ok(), "Received MCP response from component");
+                                    let _ = response_cx.respond_with_result(result);
+                                }.instrument(tracing::info_span!("bridge_request", method = %method_for_task))
+                            }).await;
                         }
 
                         ConductorMessage::BridgeConnected { acp_url, bridge_cx } => {
@@ -745,12 +741,13 @@ impl Conductor {
             .jsonrpccx
             .send_request(ClientRequest::InitializeRequest(initialize_req));
 
-        tokio::task::spawn_local(async move {
-            let result = response.recv().await;
-            if let Err(error) = json_rpc_request_cx.respond_with_result(result) {
-                error!(?error, "Failed to forward initialize response");
-            }
-        });
+        let _ = response
+            .spawn_upon_receipt(move |result| async move {
+                if let Err(error) = json_rpc_request_cx.respond_with_result(result) {
+                    error!(?error, "Failed to forward initialize response");
+                }
+            })
+            .await;
     }
 
     /// Transforms MCP servers with `acp:$UUID` URLs for agents that need bridging.
@@ -832,7 +829,7 @@ impl Conductor {
     /// Spawns a task to await the bridge's response and forward it back to the agent.
     ///
     /// Returns Some(()) if routing succeeded, None if bridge not found/connected.
-    fn route_to_mcp_bridge_request(
+    async fn route_to_mcp_bridge_request(
         &self,
         method: &str,
         request: impl serde::Serialize,
@@ -877,42 +874,42 @@ impl Conductor {
         let method_string = method.to_string();
         let current_span = tracing::Span::current();
 
-        tokio::task::spawn_local(
-            async move {
-                debug!(method = method_string, "Waiting for MCP bridge response");
-                let result = response.recv().await;
-                let is_ok = result.is_ok();
-                debug!(
-                    method = method_string,
-                    is_ok, "Received bridge response, forwarding to agent"
-                );
-
-                if let Err(error) = conductor_tx
-                    .send(ConductorMessage::ResponseReceived {
-                        result,
-                        response_cx,
-                        method: method_string.clone(),
-                        target_component_index: 0, // Response is from bridge to component 0
-                    })
-                    .await
-                {
-                    error!(
-                        method = method_string,
-                        ?error,
-                        "Failed to send bridge response to conductor"
-                    );
-                } else {
+        let _ = response
+            .spawn_upon_receipt(move |result| {
+                async move {
+                    let is_ok = result.is_ok();
                     debug!(
                         method = method_string,
-                        "Sent bridge response to conductor for forwarding"
+                        is_ok, "Received bridge response, forwarding to agent"
                     );
+
+                    if let Err(error) = conductor_tx
+                        .send(ConductorMessage::ResponseReceived {
+                            result,
+                            response_cx,
+                            method: method_string.clone(),
+                            target_component_index: 0, // Response is from bridge to component 0
+                        })
+                        .await
+                    {
+                        error!(
+                            method = method_string,
+                            ?error,
+                            "Failed to send bridge response to conductor"
+                        );
+                    } else {
+                        debug!(
+                            method = method_string,
+                            "Sent bridge response to conductor for forwarding"
+                        );
+                    }
                 }
-            }
-            .instrument(
-                tracing::info_span!("receive_mcp_bridge_response", request_id = ?request_id),
-            )
-            .instrument(current_span),
-        );
+                .instrument(
+                    tracing::info_span!("receive_mcp_bridge_response", request_id = ?request_id),
+                )
+                .instrument(current_span)
+            })
+            .await;
 
         Some(())
     }
@@ -1051,29 +1048,29 @@ impl Conductor {
             .send_request(req);
         let request_id = response_cx.id().clone();
         let current_span = tracing::Span::current();
-        tokio::task::spawn_local(
-            async move {
-                debug!("Waiting for response");
-                let result = response.recv().await;
-                let is_ok = result.is_ok();
-                debug!(is_ok, ?result, "Received response, sending to conductor");
-                if let Err(error) = conductor_tx
-                    .send(ConductorMessage::ResponseReceived {
-                        result,
-                        response_cx,
-                        method,
-                        target_component_index,
-                    })
-                    .await
-                {
-                    error!(?error, "Failed to send response to conductor");
-                } else {
-                    debug!("Sent response to conductor for forwarding");
+        let _ = response
+            .spawn_upon_receipt(move |result| {
+                async move {
+                    let is_ok = result.is_ok();
+                    debug!(is_ok, ?result, "Received response, sending to conductor");
+                    if let Err(error) = conductor_tx
+                        .send(ConductorMessage::ResponseReceived {
+                            result,
+                            response_cx,
+                            method,
+                            target_component_index,
+                        })
+                        .await
+                    {
+                        error!(?error, "Failed to send response to conductor");
+                    } else {
+                        debug!("Sent response to conductor for forwarding");
+                    }
                 }
-            }
-            .instrument(tracing::info_span!("receive_response", request_id = ?request_id))
-            .instrument(current_span),
-        );
+                .instrument(tracing::info_span!("receive_response", request_id = ?request_id))
+                .instrument(current_span)
+            })
+            .await;
     }
 }
 

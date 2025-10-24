@@ -16,6 +16,22 @@ use crate::{
     conductor::Conductor,
 };
 
+/// Test helper to block and wait for a JSON-RPC response.
+///
+/// This is a convenience wrapper around `spawn_upon_receipt` that blocks
+/// until the response is received, making test code more readable.
+async fn recv<R: scp::JsonRpcMessage + Send>(
+    response: scp::JsonRpcResponse<R>,
+) -> Result<R, jsonrpcmsg::Error> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    response
+        .spawn_upon_receipt(move |result| async move {
+            let _ = tx.send(result);
+        })
+        .await?;
+    rx.await.map_err(|_| jsonrpcmsg::Error::internal_error())?
+}
+
 /// Helper to create a mock component that captures initialize requests.
 fn capturing_mock_component() -> (MockComponentImpl, Arc<Mutex<Option<InitializeRequest>>>) {
     let captured_init = Arc::new(Mutex::new(None));
@@ -149,7 +165,7 @@ mod tests {
                             let request = agent_client_protocol::ClientRequest::InitializeRequest(
                                 init_request,
                             );
-                            let response = client.send_request(request).recv().await;
+                            let response = recv(client.send_request(request)).await;
 
                             // Should get a successful response
                             assert!(
@@ -279,7 +295,7 @@ mod tests {
                             let request = agent_client_protocol::ClientRequest::InitializeRequest(
                                 init_request,
                             );
-                            let init_response = client.send_request(request).recv().await;
+                            let init_response = recv(client.send_request(request)).await;
 
                             assert!(
                                 init_response.is_ok(),
@@ -300,7 +316,7 @@ mod tests {
 
                             let request =
                                 agent_client_protocol::ClientRequest::PromptRequest(prompt_request);
-                            let prompt_response = client.send_request(request).recv().await;
+                            let prompt_response = recv(client.send_request(request)).await;
 
                             assert!(
                                 prompt_response.is_ok(),
@@ -412,13 +428,14 @@ impl AcpClientToAgentCallbacks for Component1Callbacks {
         let successor_response = response.send_request_to_successor(args);
 
         let current_span = tracing::Span::current();
-        tokio::task::spawn_local(
-            async move {
-                let r = successor_response.recv().await;
-                let _ = response.respond_with_result(r);
-            }
-            .instrument(current_span),
-        );
+        let _ = successor_response
+            .spawn_upon_receipt(|r| {
+                async move {
+                    let _ = response.respond_with_result(r);
+                }
+                .instrument(current_span)
+            })
+            .await;
 
         Ok(())
     }
@@ -443,13 +460,14 @@ impl AcpClientToAgentCallbacks for Component1Callbacks {
             .send_request_to_successor(modified_prompt);
 
         let current_span = tracing::Span::current();
-        tokio::task::spawn_local(
-            async move {
-                let prompt_response = successor_response.recv().await;
-                let _ = response.respond_with_result(prompt_response);
-            }
-            .instrument(current_span),
-        );
+        let _ = successor_response
+            .spawn_upon_receipt(|prompt_response| {
+                async move {
+                    let _ = response.respond_with_result(prompt_response);
+                }
+                .instrument(current_span)
+            })
+            .await;
 
         Ok(())
     }
@@ -918,14 +936,14 @@ mod mcp_capability_tests {
                 let editor_task = tokio::task::spawn_local(async move {
                     JsonRpcConnection::new(editor_write.compat_write(), editor_read.compat())
                         .with_client(async move |client| {
-                            let response = client
-                                .send_request(agent_client_protocol::InitializeRequest {
+                            let response = recv(client.send_request(
+                                agent_client_protocol::InitializeRequest {
                                     protocol_version: Default::default(),
                                     client_capabilities: Default::default(),
                                     meta: None,
-                                })
-                                .recv()
-                                .await;
+                                },
+                            ))
+                            .await;
 
                             assert!(
                                 response.is_ok(),
@@ -988,14 +1006,14 @@ mod mcp_capability_tests {
                 let editor_task = tokio::task::spawn_local(async move {
                     JsonRpcConnection::new(editor_write.compat_write(), editor_read.compat())
                         .with_client(async move |client| {
-                            let response = client
-                                .send_request(agent_client_protocol::InitializeRequest {
+                            let response = recv(client.send_request(
+                                agent_client_protocol::InitializeRequest {
                                     protocol_version: Default::default(),
                                     client_capabilities: Default::default(),
                                     meta: None,
-                                })
-                                .recv()
-                                .await;
+                                },
+                            ))
+                            .await;
 
                             assert!(
                                 response.is_ok(),

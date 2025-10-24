@@ -7,7 +7,10 @@ use futures::AsyncWrite;
 use futures::AsyncWriteExt as _;
 use futures::StreamExt;
 use futures::channel::mpsc;
+use futures::future::BoxFuture;
 use futures::io::BufReader;
+use futures::stream::FusedStream;
+use futures::stream::FuturesUnordered;
 use uuid::Uuid;
 
 use crate::JsonRpcNotificationCx;
@@ -19,6 +22,40 @@ use crate::jsonrpc::ReplyMessage;
 use crate::util::internal_error;
 
 use super::Handled;
+
+/// The "task actor" manages other tasks
+pub(super) async fn task_actor(
+    mut task_rx: mpsc::UnboundedReceiver<BoxFuture<'static, ()>>,
+) -> Result<(), jsonrpcmsg::Error> {
+    let mut futures = FuturesUnordered::new();
+
+    loop {
+        // If we have no futures to run, wait until we do.
+        if futures.is_empty() {
+            match task_rx.next().await {
+                Some(future) => futures.push(future),
+                None => return Ok(()),
+            }
+            continue;
+        }
+
+        // If there are no more tasks coming in, just drain our queue and return.
+        if task_rx.is_terminated() {
+            while let Some(()) = futures.next().await {}
+            return Ok(());
+        }
+
+        // Otherwise, run futures until we get a request for a new task.
+        futures::select! {
+            _ = futures.next() => {}
+            task = task_rx.next() => {
+                if let Some(future) = task {
+                    futures.push(future);
+                }
+            }
+        }
+    }
+}
 
 /// The "reply actor" manages a queue of pending replies.
 pub(super) async fn reply_actor(

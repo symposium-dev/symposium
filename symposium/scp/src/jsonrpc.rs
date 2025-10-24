@@ -5,8 +5,8 @@ use std::ops::Deref;
 
 use boxfnonce::SendBoxFnOnce;
 use futures::channel::{mpsc, oneshot};
-use futures::future::Either;
-use futures::{AsyncRead, AsyncWrite, FutureExt};
+use futures::future::{BoxFuture, Either};
+use futures::{AsyncRead, AsyncWrite, FutureExt, SinkExt};
 use jsonrpcmsg::Params;
 
 mod actors;
@@ -30,6 +30,12 @@ pub struct JsonRpcConnection<OB: AsyncWrite, IB: AsyncRead, H: JsonRpcHandler> {
 
     /// Handler for incoming messages.
     handler: H,
+
+    /// Receiver for new tasks.
+    new_task_rx: mpsc::UnboundedReceiver<BoxFuture<'static, ()>>,
+
+    /// Sender to send messages to the "new task" actor.
+    new_task_tx: mpsc::UnboundedSender<BoxFuture<'static, ()>>,
 }
 
 impl<OB: AsyncWrite, IB: AsyncRead> JsonRpcConnection<OB, IB, NullHandler> {
@@ -38,12 +44,15 @@ impl<OB: AsyncWrite, IB: AsyncRead> JsonRpcConnection<OB, IB, NullHandler> {
     /// [`Self:serve`] (to use as a server) or [`Self::with_client`] to use as a client.
     pub fn new(outgoing_bytes: OB, incoming_bytes: IB) -> Self {
         let (outgoing_tx, outgoing_rx) = mpsc::unbounded();
+        let (new_task_tx, new_task_rx) = mpsc::unbounded();
         Self {
             outgoing_bytes,
             incoming_bytes,
             outgoing_rx,
             outgoing_tx,
             handler: NullHandler::default(),
+            new_task_rx,
+            new_task_tx,
         }
     }
 }
@@ -62,6 +71,8 @@ impl<OB: AsyncWrite, IB: AsyncRead, H: JsonRpcHandler> JsonRpcConnection<OB, IB,
             incoming_bytes: self.incoming_bytes,
             outgoing_rx: self.outgoing_rx,
             outgoing_tx: self.outgoing_tx,
+            new_task_rx: self.new_task_rx,
+            new_task_tx: self.new_task_tx,
         }
     }
 
@@ -72,13 +83,13 @@ impl<OB: AsyncWrite, IB: AsyncRead, H: JsonRpcHandler> JsonRpcConnection<OB, IB,
     /// since they might try to use it when the server is not running and deadlock,
     /// and I don't really think they need it.
     fn json_rpc_cx(&self) -> JsonRpcConnectionCx {
-        JsonRpcConnectionCx::new(self.outgoing_tx.clone())
+        JsonRpcConnectionCx::new(self.outgoing_tx.clone(), self.new_task_tx.clone())
     }
 
     /// Runs a server that listens for incoming requests and handles them according to the added handlers.
     pub async fn serve(self) -> Result<(), jsonrpcmsg::Error> {
         let (reply_tx, reply_rx) = mpsc::unbounded();
-        let json_rpc_cx = JsonRpcConnectionCx::new(self.outgoing_tx);
+        let json_rpc_cx = JsonRpcConnectionCx::new(self.outgoing_tx, self.new_task_tx);
         futures::select!(
             r = actors::outgoing_actor(
                 self.outgoing_rx,
@@ -92,6 +103,7 @@ impl<OB: AsyncWrite, IB: AsyncRead, H: JsonRpcHandler> JsonRpcConnection<OB, IB,
                 self.handler,
             ).fuse() => r?,
             r = actors::reply_actor(reply_rx).fuse() => r?,
+            r = actors::task_actor(self.new_task_rx).fuse() => r?,
         );
         Ok(())
     }
@@ -238,12 +250,19 @@ pub enum Handled<T> {
 /// Connection context used to send requests/notifications of the other side.
 #[derive(Clone)]
 pub struct JsonRpcConnectionCx {
-    tx: mpsc::UnboundedSender<OutgoingMessage>,
+    message_tx: mpsc::UnboundedSender<OutgoingMessage>,
+    task_tx: mpsc::UnboundedSender<BoxFuture<'static, ()>>,
 }
 
 impl JsonRpcConnectionCx {
-    fn new(tx: mpsc::UnboundedSender<OutgoingMessage>) -> Self {
-        Self { tx }
+    fn new(
+        tx: mpsc::UnboundedSender<OutgoingMessage>,
+        task_tx: mpsc::UnboundedSender<BoxFuture<'static, ()>>,
+    ) -> Self {
+        Self {
+            message_tx: tx,
+            task_tx,
+        }
     }
 
     /// Send an outgoing request and await the reply.
@@ -261,7 +280,7 @@ impl JsonRpcConnectionCx {
                     response_tx,
                 };
 
-                match self.tx.unbounded_send(message) {
+                match self.message_tx.unbounded_send(message) {
                     Ok(()) => (),
                     Err(error) => {
                         let OutgoingMessage::Request {
@@ -291,7 +310,7 @@ impl JsonRpcConnectionCx {
             }
         }
 
-        JsonRpcResponse::new(response_rx)
+        JsonRpcResponse::new(response_rx, self.task_tx.clone())
             .map(move |json| <Req::Response>::from_value(&method, json))
     }
 
@@ -321,7 +340,7 @@ impl JsonRpcConnectionCx {
             },
             _ => {}
         }
-        self.tx
+        self.message_tx
             .unbounded_send(message)
             .map_err(communication_failure)
     }
@@ -585,13 +604,18 @@ impl JsonRpcRequest for JsonRpcUntypedRequest {
 /// Represents a pending response of type `R` from an outgoing request.
 pub struct JsonRpcResponse<R> {
     response_rx: oneshot::Receiver<Result<serde_json::Value, jsonrpcmsg::Error>>,
-    to_result: Box<dyn Fn(serde_json::Value) -> Result<R, jsonrpcmsg::Error>>,
+    task_tx: mpsc::UnboundedSender<BoxFuture<'static, ()>>,
+    to_result: Box<dyn Fn(serde_json::Value) -> Result<R, jsonrpcmsg::Error> + Send>,
 }
 
 impl JsonRpcResponse<serde_json::Value> {
-    fn new(response_rx: oneshot::Receiver<Result<serde_json::Value, jsonrpcmsg::Error>>) -> Self {
+    fn new(
+        response_rx: oneshot::Receiver<Result<serde_json::Value, jsonrpcmsg::Error>>,
+        task_tx: mpsc::UnboundedSender<BoxFuture<'static, ()>>,
+    ) -> Self {
         Self {
             response_rx,
+            task_tx,
             to_result: Box::new(Ok),
         }
     }
@@ -601,33 +625,51 @@ impl<R: JsonRpcMessage> JsonRpcResponse<R> {
     /// Create a new response that maps the result of the response to a new type.
     pub fn map<U>(
         self,
-        map_fn: impl Fn(R) -> Result<U, jsonrpcmsg::Error> + 'static,
+        map_fn: impl Fn(R) -> Result<U, jsonrpcmsg::Error> + 'static + Send,
     ) -> JsonRpcResponse<U>
     where
         U: JsonRpcMessage,
     {
         JsonRpcResponse {
             response_rx: self.response_rx,
+            task_tx: self.task_tx,
             to_result: Box::new(move |value| map_fn((self.to_result)(value)?)),
         }
     }
 
-    /// Wait for the response to arrive.
-    pub async fn recv(self) -> Result<R, jsonrpcmsg::Error> {
-        // Wait for the JSON to be sent by the other side.
-        let json_value = self.response_rx.await.map_err(|_| {
-            // If the sender is dropped without a message...
-            jsonrpcmsg::Error::server_error(
-                COMMUNICATION_FAILURE,
-                format!(
-                    "reply of type `{}` never arrived",
-                    std::any::type_name::<R>()
-                ),
-            )
-        })??;
+    /// Schedule an async task to run when the response is received.
+    ///
+    /// It is intentionally not possible to block until the response is received
+    /// because doing so can easily stall the event loop if done directly in the `on_receive` callback.
+    pub async fn spawn_upon_receipt<F>(
+        mut self,
+        task: impl FnOnce(Result<R, jsonrpcmsg::Error>) -> F + 'static + Send,
+    ) -> Result<(), jsonrpcmsg::Error>
+    where
+        F: Future<Output = ()> + 'static + Send,
+    {
+        self.task_tx
+            .send(Box::pin(async move {
+                let result = match self.response_rx.await {
+                    // We received a JSON value; transform it to our result type
+                    Ok(Ok(json_value)) => (self.to_result)(json_value),
 
-        // Deserialize into the expected type R
-        (self.to_result)(json_value)
+                    // We got sent an error
+                    Ok(Err(e)) => Err(e),
+
+                    // if the `response_tx` is dropped before we get a chance, that's weird
+                    Err(e) => Err(jsonrpcmsg::Error::server_error(
+                        COMMUNICATION_FAILURE,
+                        format!(
+                            "reply of type `{}` never arrived: {e}",
+                            std::any::type_name::<R>()
+                        ),
+                    )),
+                };
+                task(result).await;
+            }))
+            .await
+            .map_err(crate::util::internal_error)
     }
 }
 
