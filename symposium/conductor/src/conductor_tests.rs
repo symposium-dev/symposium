@@ -22,14 +22,13 @@ use crate::{
 /// until the response is received, making test code more readable.
 async fn recv<R: scp::JsonRpcMessage + Send>(
     response: scp::JsonRpcResponse<R>,
-) -> Result<R, acp::Error> {
+) -> Result<R, agent_client_protocol::Error> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    response
-        .when_response_received_spawn(move |result| async move {
-            let _ = tx.send(result);
-        })
-        .await?;
-    rx.await.map_err(|_| acp::Error::internal_error())?
+    response.when_response_received_spawn(move |result| async move {
+        let _ = tx.send(result);
+    })?;
+    rx.await
+        .map_err(|_| agent_client_protocol::Error::internal_error())?
 }
 
 /// Helper to create a mock component that captures initialize requests.
@@ -174,7 +173,7 @@ mod tests {
                                 response
                             );
 
-                            Ok::<(), acp::Error>(())
+                            Ok::<(), agent_client_protocol::Error>(())
                         })
                         .await
                 });
@@ -324,7 +323,7 @@ mod tests {
                                 prompt_response
                             );
 
-                            Ok::<(), acp::Error>(())
+                            Ok::<(), agent_client_protocol::Error>(())
                         })
                         .instrument(tracing::info_span!("actor", id = "Editor"))
                         .await
@@ -428,15 +427,13 @@ impl AcpClientToAgentCallbacks for Component1Callbacks {
         let successor_response = response.send_request_to_successor(args);
 
         let current_span = tracing::Span::current();
-        let _ = successor_response
-            .when_response_received_spawn(async |r| {
-                async {
-                    let _ = response.respond_with_result(r);
-                }
-                .instrument(current_span)
-                .await
-            })
-            .await;
+        let _ = successor_response.when_response_received_spawn(async |r| {
+            async {
+                let _ = response.respond_with_result(r);
+            }
+            .instrument(current_span)
+            .await
+        });
 
         Ok(())
     }
@@ -461,15 +458,13 @@ impl AcpClientToAgentCallbacks for Component1Callbacks {
             .send_request_to_successor(modified_prompt);
 
         let current_span = tracing::Span::current();
-        let _ = successor_response
-            .when_response_received_spawn(async |prompt_response| {
-                async {
-                    let _ = response.respond_with_result(prompt_response);
-                }
-                .instrument(current_span)
-                .await
-            })
-            .await;
+        let _ = successor_response.when_response_received_spawn(async |prompt_response| {
+            async {
+                let _ = response.respond_with_result(prompt_response);
+            }
+            .instrument(current_span)
+            .await
+        });
 
         Ok(())
     }
@@ -603,7 +598,7 @@ impl AcpAgentToClientCallbacks for Component1Callbacks {
         cx.send_notification(
             agent_client_protocol::AgentNotification::SessionNotification(modified_notification),
         )
-        .map_err(scp::util::jsonrpc_to_acp_error)
+        .map_err(agent_client_protocol::Error::into_internal_error)
     }
 }
 
@@ -961,7 +956,7 @@ mod mcp_capability_tests {
                                 "Editor should see mcp_acp_transport capability added by conductor"
                             );
 
-                            Ok::<(), acp::Error>(())
+                            Ok::<(), agent_client_protocol::Error>(())
                         })
                         .await
                 });
@@ -1031,7 +1026,7 @@ mod mcp_capability_tests {
                                 "Editor should see mcp_acp_transport capability from agent"
                             );
 
-                            Ok::<(), acp::Error>(())
+                            Ok::<(), agent_client_protocol::Error>(())
                         })
                         .await
                 });

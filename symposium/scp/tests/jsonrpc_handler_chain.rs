@@ -4,7 +4,6 @@
 //! and that requests/notifications are routed correctly based on which
 //! handler claims them.
 
-use scp::util::internal_error;
 use scp::{
     Handled, JsonRpcConnection, JsonRpcHandler, JsonRpcIncomingMessage, JsonRpcMessage,
     JsonRpcNotification, JsonRpcNotificationCx, JsonRpcOutgoingMessage, JsonRpcRequest,
@@ -16,14 +15,15 @@ use std::time::Duration;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// Test helper to block and wait for a JSON-RPC response.
-async fn recv<R: JsonRpcMessage + Send>(response: JsonRpcResponse<R>) -> Result<R, acp::Error> {
+async fn recv<R: JsonRpcMessage + Send>(
+    response: JsonRpcResponse<R>,
+) -> Result<R, agent_client_protocol::Error> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    response
-        .when_response_received_spawn(move |result| async move {
-            let _ = tx.send(result);
-        })
-        .await?;
-    rx.await.map_err(|_| acp::Error::internal_error())?
+    response.when_response_received_spawn(move |result| async move {
+        let _ = tx.send(result);
+    })?;
+    rx.await
+        .map_err(|_| agent_client_protocol::Error::internal_error())?
 }
 
 // ============================================================================
@@ -38,7 +38,7 @@ struct FooRequest {
 impl JsonRpcMessage for FooRequest {}
 
 impl JsonRpcOutgoingMessage for FooRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
         scp::util::json_cast(self)
     }
 
@@ -59,11 +59,14 @@ struct FooResponse {
 impl JsonRpcMessage for FooResponse {}
 
 impl JsonRpcIncomingMessage for FooResponse {
-    fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
-        serde_json::to_value(self).map_err(scp::util::internal_error)
+    fn into_json(self, _method: &str) -> Result<serde_json::Value, agent_client_protocol::Error> {
+        serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)
     }
 
-    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
+    fn from_value(
+        _method: &str,
+        value: serde_json::Value,
+    ) -> Result<Self, agent_client_protocol::Error> {
         scp::util::json_cast(&value)
     }
 }
@@ -76,7 +79,7 @@ struct BarRequest {
 impl JsonRpcMessage for BarRequest {}
 
 impl JsonRpcOutgoingMessage for BarRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
         scp::util::json_cast(self)
     }
 
@@ -97,11 +100,14 @@ struct BarResponse {
 impl JsonRpcMessage for BarResponse {}
 
 impl JsonRpcIncomingMessage for BarResponse {
-    fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
-        serde_json::to_value(self).map_err(scp::util::internal_error)
+    fn into_json(self, _method: &str) -> Result<serde_json::Value, agent_client_protocol::Error> {
+        serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)
     }
 
-    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
+    fn from_value(
+        _method: &str,
+        value: serde_json::Value,
+    ) -> Result<Self, agent_client_protocol::Error> {
         scp::util::json_cast(&value)
     }
 }
@@ -113,10 +119,13 @@ impl JsonRpcHandler for FooHandler {
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> std::result::Result<Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
+    ) -> std::result::Result<
+        Handled<JsonRpcRequestCx<serde_json::Value>>,
+        agent_client_protocol::Error,
+    > {
         if cx.method() == "foo" {
-            let request: FooRequest =
-                scp::util::json_cast(params).map_err(|_| acp::Error::invalid_params())?;
+            let request: FooRequest = scp::util::json_cast(params)
+                .map_err(|_| agent_client_protocol::Error::invalid_params())?;
 
             cx.cast().respond(FooResponse {
                 result: format!("foo: {}", request.value),
@@ -135,10 +144,13 @@ impl JsonRpcHandler for BarHandler {
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> std::result::Result<Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
+    ) -> std::result::Result<
+        Handled<JsonRpcRequestCx<serde_json::Value>>,
+        agent_client_protocol::Error,
+    > {
         if cx.method() == "bar" {
-            let request: BarRequest =
-                scp::util::json_cast(params).map_err(|_| acp::Error::invalid_params())?;
+            let request: BarRequest = scp::util::json_cast(params)
+                .map_err(|_| agent_client_protocol::Error::invalid_params())?;
 
             cx.cast().respond(BarResponse {
                 result: format!("bar: {}", request.value),
@@ -179,29 +191,39 @@ async fn test_multiple_handlers_different_methods() {
             });
 
             let result = client
-                .with_client(async |cx| -> std::result::Result<(), acp::Error> {
-                    // Test foo request
-                    let foo_response = recv(cx.send_request(FooRequest {
-                        value: "test1".to_string(),
-                    }))
-                    .await
-                    .map_err(|e| -> acp::Error {
-                        internal_error(format!("Foo request failed: {e:?}"))
-                    })?;
-                    assert_eq!(foo_response.result, "foo: test1");
+                .with_client(
+                    async |cx| -> std::result::Result<(), agent_client_protocol::Error> {
+                        // Test foo request
+                        let foo_response = recv(cx.send_request(FooRequest {
+                            value: "test1".to_string(),
+                        }))
+                        .await
+                        .map_err(
+                            |e| -> agent_client_protocol::Error {
+                                agent_client_protocol::Error::into_internal_error(
+                                    std::io::Error::other(format!("Foo request failed: {e:?}")),
+                                )
+                            },
+                        )?;
+                        assert_eq!(foo_response.result, "foo: test1");
 
-                    // Test bar request
-                    let bar_response = recv(cx.send_request(BarRequest {
-                        value: "test2".to_string(),
-                    }))
-                    .await
-                    .map_err(|e| -> acp::Error {
-                        internal_error(format!("Bar request failed: {:?}", e))
-                    })?;
-                    assert_eq!(bar_response.result, "bar: test2");
+                        // Test bar request
+                        let bar_response = recv(cx.send_request(BarRequest {
+                            value: "test2".to_string(),
+                        }))
+                        .await
+                        .map_err(
+                            |e| -> agent_client_protocol::Error {
+                                agent_client_protocol::Error::into_internal_error(
+                                    std::io::Error::other(format!("Bar request failed: {:?}", e)),
+                                )
+                            },
+                        )?;
+                        assert_eq!(bar_response.result, "bar: test2");
 
-                    Ok(())
-                })
+                        Ok(())
+                    },
+                )
                 .await;
 
             assert!(result.is_ok(), "Test failed: {:?}", result);
@@ -221,7 +243,7 @@ struct TrackRequest {
 impl JsonRpcMessage for TrackRequest {}
 
 impl JsonRpcOutgoingMessage for TrackRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
         scp::util::json_cast(self)
     }
 
@@ -244,12 +266,15 @@ impl JsonRpcHandler for TrackingHandler {
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> std::result::Result<Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
+    ) -> std::result::Result<
+        Handled<JsonRpcRequestCx<serde_json::Value>>,
+        agent_client_protocol::Error,
+    > {
         if cx.method() == "track" {
             self.handled.lock().unwrap().push(self.name.clone());
 
-            let request: TrackRequest =
-                scp::util::json_cast(params).map_err(|_| acp::Error::invalid_params())?;
+            let request: TrackRequest = scp::util::json_cast(params)
+                .map_err(|_| agent_client_protocol::Error::invalid_params())?;
 
             cx.cast().respond(FooResponse {
                 result: format!("{}: {}", self.name, request.value),
@@ -298,20 +323,24 @@ async fn test_handler_priority_ordering() {
             });
 
             let result = client
-                .with_client(async |cx| -> std::result::Result<(), acp::Error> {
-                    let response = recv(cx.send_request(TrackRequest {
-                        value: "test".to_string(),
-                    }))
-                    .await
-                    .map_err(|e| {
-                        scp::util::internal_error(format!("Track request failed: {:?}", e))
-                    })?;
+                .with_client(
+                    async |cx| -> std::result::Result<(), agent_client_protocol::Error> {
+                        let response = recv(cx.send_request(TrackRequest {
+                            value: "test".to_string(),
+                        }))
+                        .await
+                        .map_err(|e| {
+                            agent_client_protocol::Error::into_internal_error(
+                                std::io::Error::other(format!("Track request failed: {:?}", e)),
+                            )
+                        })?;
 
-                    // First handler should have handled it
-                    assert_eq!(response.result, "handler1: test");
+                        // First handler should have handled it
+                        assert_eq!(response.result, "handler1: test");
 
-                    Ok(())
-                })
+                        Ok(())
+                    },
+                )
                 .await;
 
             assert!(result.is_ok(), "Test failed: {:?}", result);
@@ -336,7 +365,7 @@ struct Method1Request {
 impl JsonRpcMessage for Method1Request {}
 
 impl JsonRpcOutgoingMessage for Method1Request {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
         scp::util::json_cast(self)
     }
 
@@ -357,7 +386,7 @@ struct Method2Request {
 impl JsonRpcMessage for Method2Request {}
 
 impl JsonRpcOutgoingMessage for Method2Request {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
         scp::util::json_cast(self)
     }
 
@@ -380,7 +409,10 @@ impl JsonRpcHandler for SelectiveHandler {
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> std::result::Result<Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
+    ) -> std::result::Result<
+        Handled<JsonRpcRequestCx<serde_json::Value>>,
+        agent_client_protocol::Error,
+    > {
         if cx.method() == self.method_to_handle {
             let method = cx.method().to_string();
             self.handled.lock().unwrap().push(method.clone());
@@ -390,8 +422,8 @@ impl JsonRpcHandler for SelectiveHandler {
             struct GenericRequest {
                 value: String,
             }
-            let request: GenericRequest =
-                scp::util::json_cast(params).map_err(|_| acp::Error::invalid_params())?;
+            let request: GenericRequest = scp::util::json_cast(params)
+                .map_err(|_| agent_client_protocol::Error::invalid_params())?;
 
             cx.cast().respond(FooResponse {
                 result: format!("{}: {}", method, request.value),
@@ -441,20 +473,24 @@ async fn test_fallthrough_behavior() {
             });
 
             let result = client
-                .with_client(async |cx| -> std::result::Result<(), acp::Error> {
-                    // Send method2 - should fallthrough handler1 to handler2
-                    let response = recv(cx.send_request(Method2Request {
-                        value: "fallthrough".to_string(),
-                    }))
-                    .await
-                    .map_err(|e| {
-                        scp::util::internal_error(format!("Method2 request failed: {:?}", e))
-                    })?;
+                .with_client(
+                    async |cx| -> std::result::Result<(), agent_client_protocol::Error> {
+                        // Send method2 - should fallthrough handler1 to handler2
+                        let response = recv(cx.send_request(Method2Request {
+                            value: "fallthrough".to_string(),
+                        }))
+                        .await
+                        .map_err(|e| {
+                            agent_client_protocol::Error::into_internal_error(
+                                std::io::Error::other(format!("Method2 request failed: {:?}", e)),
+                            )
+                        })?;
 
-                    assert_eq!(response.result, "method2: fallthrough");
+                        assert_eq!(response.result, "method2: fallthrough");
 
-                    Ok(())
-                })
+                        Ok(())
+                    },
+                )
                 .await;
 
             assert!(result.is_ok(), "Test failed: {:?}", result);
@@ -499,18 +535,20 @@ async fn test_no_handler_claims() {
             });
 
             let result = client
-                .with_client(async |cx| -> std::result::Result<(), acp::Error> {
-                    // Send "bar" request which no handler claims
-                    let response_result = recv(cx.send_request(BarRequest {
-                        value: "unclaimed".to_string(),
-                    }))
-                    .await;
+                .with_client(
+                    async |cx| -> std::result::Result<(), agent_client_protocol::Error> {
+                        // Send "bar" request which no handler claims
+                        let response_result = recv(cx.send_request(BarRequest {
+                            value: "unclaimed".to_string(),
+                        }))
+                        .await;
 
-                    // Should get an error (method not found)
-                    assert!(response_result.is_err());
+                        // Should get an error (method not found)
+                        assert!(response_result.is_err());
 
-                    Ok(())
-                })
+                        Ok(())
+                    },
+                )
                 .await;
 
             assert!(result.is_ok(), "Test failed: {:?}", result);
@@ -530,7 +568,7 @@ struct EventNotification {
 impl JsonRpcMessage for EventNotification {}
 
 impl JsonRpcOutgoingMessage for EventNotification {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
         scp::util::json_cast(self)
     }
 
@@ -550,10 +588,10 @@ impl JsonRpcHandler for EventHandler {
         &mut self,
         cx: JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> std::result::Result<Handled<JsonRpcNotificationCx>, acp::Error> {
+    ) -> std::result::Result<Handled<JsonRpcNotificationCx>, agent_client_protocol::Error> {
         if cx.method() == "event" {
-            let notification: EventNotification =
-                scp::util::json_cast(params).map_err(|_| acp::Error::invalid_params())?;
+            let notification: EventNotification = scp::util::json_cast(params)
+                .map_err(|_| agent_client_protocol::Error::invalid_params())?;
 
             self.events.lock().unwrap().push(notification.event);
             Ok(Handled::Yes)
@@ -570,7 +608,7 @@ impl JsonRpcHandler for IgnoreHandler {
         &mut self,
         cx: JsonRpcNotificationCx,
         _params: &Option<jsonrpcmsg::Params>,
-    ) -> std::result::Result<Handled<JsonRpcNotificationCx>, acp::Error> {
+    ) -> std::result::Result<Handled<JsonRpcNotificationCx>, agent_client_protocol::Error> {
         // Never claims anything, always passes through
         Ok(Handled::No(cx))
     }
@@ -609,19 +647,26 @@ async fn test_handler_claims_notification() {
             });
 
             let result = client
-                .with_client(async |cx| -> std::result::Result<(), acp::Error> {
-                    cx.send_notification(EventNotification {
-                        event: "test_event".to_string(),
-                    })
-                    .map_err(|e| {
-                        scp::util::internal_error(format!("Failed to send notification: {:?}", e))
-                    })?;
+                .with_client(
+                    async |cx| -> std::result::Result<(), agent_client_protocol::Error> {
+                        cx.send_notification(EventNotification {
+                            event: "test_event".to_string(),
+                        })
+                        .map_err(|e| {
+                            agent_client_protocol::Error::into_internal_error(
+                                std::io::Error::other(format!(
+                                    "Failed to send notification: {:?}",
+                                    e
+                                )),
+                            )
+                        })?;
 
-                    // Give server time to process
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                        // Give server time to process
+                        tokio::time::sleep(Duration::from_millis(100)).await;
 
-                    Ok(())
-                })
+                        Ok(())
+                    },
+                )
                 .await;
 
             assert!(result.is_ok(), "Test failed: {:?}", result);

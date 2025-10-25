@@ -15,14 +15,15 @@ use std::time::Duration;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// Test helper to block and wait for a JSON-RPC response.
-async fn recv<R: JsonRpcMessage + Send>(response: JsonRpcResponse<R>) -> Result<R, acp::Error> {
+async fn recv<R: JsonRpcMessage + Send>(
+    response: JsonRpcResponse<R>,
+) -> Result<R, agent_client_protocol::Error> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    response
-        .when_response_received_spawn(move |result| async move {
-            let _ = tx.send(result);
-        })
-        .await?;
-    rx.await.map_err(|_| acp::Error::internal_error())?
+    response.when_response_received_spawn(move |result| async move {
+        let _ = tx.send(result);
+    })?;
+    rx.await
+        .map_err(|_| agent_client_protocol::Error::internal_error())?
 }
 
 /// Helper to set up a client-server pair for testing.
@@ -56,7 +57,7 @@ struct PingRequest {
 impl JsonRpcMessage for PingRequest {}
 
 impl JsonRpcOutgoingMessage for PingRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
         scp::util::json_cast(self)
     }
 
@@ -78,11 +79,14 @@ struct PongResponse {
 impl JsonRpcMessage for PongResponse {}
 
 impl JsonRpcIncomingMessage for PongResponse {
-    fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
-        serde_json::to_value(self).map_err(scp::util::internal_error)
+    fn into_json(self, _method: &str) -> Result<serde_json::Value, agent_client_protocol::Error> {
+        serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)
     }
 
-    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
+    fn from_value(
+        _method: &str,
+        value: serde_json::Value,
+    ) -> Result<Self, agent_client_protocol::Error> {
         scp::util::json_cast(&value)
     }
 }
@@ -95,11 +99,14 @@ impl JsonRpcHandler for PingHandler {
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> std::result::Result<Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
+    ) -> std::result::Result<
+        Handled<JsonRpcRequestCx<serde_json::Value>>,
+        agent_client_protocol::Error,
+    > {
         if cx.method() == "ping" {
             // Parse the request
-            let request: PingRequest =
-                scp::util::json_cast(params).map_err(|_| acp::Error::invalid_params())?;
+            let request: PingRequest = scp::util::json_cast(params)
+                .map_err(|_| agent_client_protocol::Error::invalid_params())?;
 
             // Send back a pong
             let pong = PongResponse {
@@ -133,19 +140,23 @@ async fn test_hello_world() {
 
             // Use the client to send a ping and wait for a pong
             let result = client
-                .with_client(async |cx| -> std::result::Result<(), acp::Error> {
-                    let request = PingRequest {
-                        message: "hello world".to_string(),
-                    };
+                .with_client(
+                    async |cx| -> std::result::Result<(), agent_client_protocol::Error> {
+                        let request = PingRequest {
+                            message: "hello world".to_string(),
+                        };
 
-                    let response = recv(cx.send_request(request)).await.map_err(|e| {
-                        scp::util::internal_error(format!("Request failed: {:?}", e))
-                    })?;
+                        let response = recv(cx.send_request(request)).await.map_err(|e| {
+                            agent_client_protocol::Error::into_internal_error(
+                                std::io::Error::other(format!("Request failed: {:?}", e)),
+                            )
+                        })?;
 
-                    assert_eq!(response.echo, "pong: hello world");
+                        assert_eq!(response.echo, "pong: hello world");
 
-                    Ok(())
-                })
+                        Ok(())
+                    },
+                )
                 .await;
 
             assert!(result.is_ok(), "Test failed: {:?}", result);
@@ -162,7 +173,7 @@ struct LogNotification {
 impl JsonRpcMessage for LogNotification {}
 
 impl JsonRpcOutgoingMessage for LogNotification {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
         scp::util::json_cast(self)
     }
 
@@ -183,10 +194,10 @@ impl JsonRpcHandler for LogHandler {
         &mut self,
         cx: JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> std::result::Result<Handled<JsonRpcNotificationCx>, acp::Error> {
+    ) -> std::result::Result<Handled<JsonRpcNotificationCx>, agent_client_protocol::Error> {
         if cx.method() == "log" {
-            let log: LogNotification =
-                scp::util::json_cast(params).map_err(|_| acp::Error::invalid_params())?;
+            let log: LogNotification = scp::util::json_cast(params)
+                .map_err(|_| agent_client_protocol::Error::invalid_params())?;
 
             self.logs.lock().unwrap().push(log.message);
             Ok(Handled::Yes)
@@ -216,27 +227,39 @@ async fn test_notification() {
             });
 
             let result = client
-                .with_client(async |cx| -> std::result::Result<(), acp::Error> {
-                    // Send a notification (no response expected)
-                    cx.send_notification(LogNotification {
-                        message: "test log 1".to_string(),
-                    })
-                    .map_err(|e| {
-                        scp::util::internal_error(format!("Failed to send notification: {:?}", e))
-                    })?;
+                .with_client(
+                    async |cx| -> std::result::Result<(), agent_client_protocol::Error> {
+                        // Send a notification (no response expected)
+                        cx.send_notification(LogNotification {
+                            message: "test log 1".to_string(),
+                        })
+                        .map_err(|e| {
+                            agent_client_protocol::Error::into_internal_error(
+                                std::io::Error::other(format!(
+                                    "Failed to send notification: {:?}",
+                                    e
+                                )),
+                            )
+                        })?;
 
-                    cx.send_notification(LogNotification {
-                        message: "test log 2".to_string(),
-                    })
-                    .map_err(|e| {
-                        scp::util::internal_error(format!("Failed to send notification: {:?}", e))
-                    })?;
+                        cx.send_notification(LogNotification {
+                            message: "test log 2".to_string(),
+                        })
+                        .map_err(|e| {
+                            agent_client_protocol::Error::into_internal_error(
+                                std::io::Error::other(format!(
+                                    "Failed to send notification: {:?}",
+                                    e
+                                )),
+                            )
+                        })?;
 
-                    // Give the server time to process notifications
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                        // Give the server time to process notifications
+                        tokio::time::sleep(Duration::from_millis(100)).await;
 
-                    Ok(())
-                })
+                        Ok(())
+                    },
+                )
                 .await;
 
             assert!(result.is_ok(), "Test failed: {:?}", result);
@@ -266,22 +289,26 @@ async fn test_multiple_sequential_requests() {
             });
 
             let result = client
-                .with_client(async |cx| -> std::result::Result<(), acp::Error> {
-                    // Send multiple requests sequentially
-                    for i in 1..=5 {
-                        let request = PingRequest {
-                            message: format!("message {}", i),
-                        };
+                .with_client(
+                    async |cx| -> std::result::Result<(), agent_client_protocol::Error> {
+                        // Send multiple requests sequentially
+                        for i in 1..=5 {
+                            let request = PingRequest {
+                                message: format!("message {}", i),
+                            };
 
-                        let response = recv(cx.send_request(request)).await.map_err(|e| {
-                            scp::util::internal_error(format!("Request {} failed: {:?}", i, e))
-                        })?;
+                            let response = recv(cx.send_request(request)).await.map_err(|e| {
+                                agent_client_protocol::Error::into_internal_error(
+                                    std::io::Error::other(format!("Request {} failed: {:?}", i, e)),
+                                )
+                            })?;
 
-                        assert_eq!(response.echo, format!("pong: message {}", i));
-                    }
+                            assert_eq!(response.echo, format!("pong: message {}", i));
+                        }
 
-                    Ok(())
-                })
+                        Ok(())
+                    },
+                )
                 .await;
 
             assert!(result.is_ok(), "Test failed: {:?}", result);
@@ -306,30 +333,34 @@ async fn test_concurrent_requests() {
             });
 
             let result = client
-                .with_client(async |cx| -> std::result::Result<(), acp::Error> {
-                    // Send multiple requests concurrently
-                    let mut responses = Vec::new();
+                .with_client(
+                    async |cx| -> std::result::Result<(), agent_client_protocol::Error> {
+                        // Send multiple requests concurrently
+                        let mut responses = Vec::new();
 
-                    for i in 1..=5 {
-                        let request = PingRequest {
-                            message: format!("concurrent message {}", i),
-                        };
+                        for i in 1..=5 {
+                            let request = PingRequest {
+                                message: format!("concurrent message {}", i),
+                            };
 
-                        // Start all requests without awaiting
-                        responses.push((i, cx.send_request(request)));
-                    }
+                            // Start all requests without awaiting
+                            responses.push((i, cx.send_request(request)));
+                        }
 
-                    // Now await all responses
-                    for (i, response_future) in responses {
-                        let response = recv(response_future).await.map_err(|e| {
-                            scp::util::internal_error(format!("Request {} failed: {:?}", i, e))
-                        })?;
+                        // Now await all responses
+                        for (i, response_future) in responses {
+                            let response = recv(response_future).await.map_err(|e| {
+                                agent_client_protocol::Error::into_internal_error(
+                                    std::io::Error::other(format!("Request {} failed: {:?}", i, e)),
+                                )
+                            })?;
 
-                        assert_eq!(response.echo, format!("pong: concurrent message {}", i));
-                    }
+                            assert_eq!(response.echo, format!("pong: concurrent message {}", i));
+                        }
 
-                    Ok(())
-                })
+                        Ok(())
+                    },
+                )
                 .await;
 
             assert!(result.is_ok(), "Test failed: {:?}", result);
