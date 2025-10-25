@@ -14,16 +14,14 @@ use serde::{Deserialize, Serialize};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// Test helper to block and wait for a JSON-RPC response.
-async fn recv<R: JsonRpcMessage + Send>(
-    response: JsonRpcResponse<R>,
-) -> Result<R, jsonrpcmsg::Error> {
+async fn recv<R: JsonRpcMessage + Send>(response: JsonRpcResponse<R>) -> Result<R, acp::Error> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     response
         .on_receiving_response(move |result| async move {
             let _ = tx.send(result);
         })
         .await?;
-    rx.await.map_err(|_| jsonrpcmsg::Error::internal_error())?
+    rx.await.map_err(|_| acp::Error::internal_error())?
 }
 
 /// Helper to set up a client-server pair for testing.
@@ -59,7 +57,7 @@ struct PingRequest {
 impl JsonRpcMessage for PingRequest {}
 
 impl JsonRpcOutgoingMessage for PingRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
         scp::util::json_cast(self)
     }
 
@@ -80,11 +78,11 @@ struct PongResponse {
 impl JsonRpcMessage for PongResponse {}
 
 impl JsonRpcIncomingMessage for PongResponse {
-    fn into_json(self, _method: &str) -> Result<serde_json::Value, jsonrpcmsg::Error> {
+    fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
         serde_json::to_value(self).map_err(scp::util::internal_error)
     }
 
-    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, jsonrpcmsg::Error> {
+    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
         scp::util::json_cast(&value)
     }
 }
@@ -98,7 +96,7 @@ struct SlowRequest {
 impl JsonRpcMessage for SlowRequest {}
 
 impl JsonRpcOutgoingMessage for SlowRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
         scp::util::json_cast(self)
     }
 
@@ -119,11 +117,11 @@ struct SlowResponse {
 impl JsonRpcMessage for SlowResponse {}
 
 impl JsonRpcIncomingMessage for SlowResponse {
-    fn into_json(self, _method: &str) -> Result<serde_json::Value, jsonrpcmsg::Error> {
+    fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
         serde_json::to_value(self).map_err(scp::util::internal_error)
     }
 
-    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, jsonrpcmsg::Error> {
+    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
         scp::util::json_cast(&value)
     }
 }
@@ -139,10 +137,10 @@ impl JsonRpcHandler for PingHandler {
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
         if cx.method() == "ping" {
             let request: PingRequest =
-                scp::util::json_cast(params).map_err(|_| jsonrpcmsg::Error::invalid_params())?;
+                scp::util::json_cast(params).map_err(|_| acp::Error::invalid_params())?;
 
             cx.cast().respond(PongResponse {
                 value: request.value + 1,
@@ -172,7 +170,7 @@ async fn test_bidirectional_communication() {
 
             // Use side_b as client
             let result = side_b
-                .with_client(async |cx| -> Result<(), jsonrpcmsg::Error> {
+                .with_client(async |cx| -> Result<(), acp::Error> {
                     let request = PingRequest { value: 10 };
                     let response_future = recv(cx.send_request(request));
                     let response: Result<PongResponse, _> = response_future.await;
@@ -209,7 +207,7 @@ async fn test_request_ids() {
             });
 
             let result = client
-                .with_client(async |cx| -> Result<(), jsonrpcmsg::Error> {
+                .with_client(async |cx| -> Result<(), acp::Error> {
                     // Send multiple requests and verify responses match
                     let req1 = PingRequest { value: 1 };
                     let req2 = PingRequest { value: 2 };
@@ -248,10 +246,10 @@ impl JsonRpcHandler for SlowHandler {
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
         if cx.method() == "slow" {
             let request: SlowRequest =
-                scp::util::json_cast(params).map_err(|_| jsonrpcmsg::Error::invalid_params())?;
+                scp::util::json_cast(params).map_err(|_| acp::Error::invalid_params())?;
 
             // Simulate delay
             tokio::time::sleep(tokio::time::Duration::from_millis(request.delay_ms)).await;
@@ -279,7 +277,7 @@ async fn test_out_of_order_responses() {
             });
 
             let result = client
-                .with_client(async |cx| -> Result<(), jsonrpcmsg::Error> {
+                .with_client(async |cx| -> Result<(), acp::Error> {
                     // Send requests with different delays
                     // Request 1: 100ms delay
                     // Request 2: 50ms delay

@@ -27,7 +27,7 @@ pub trait JsonRpcConnectionExt<OB: AsyncWrite, IB: AsyncRead, H: JsonRpcHandler>
     /// # use scp::{JsonRpcConnection, JsonRpcHandler};
     /// # struct MyHandler;
     /// # impl JsonRpcHandler for MyHandler {}
-    /// # async fn example() -> Result<(), jsonrpcmsg::Error> {
+    /// # async fn example() -> Result<(), acp::Error> {
     /// JsonRpcConnection::new(tokio::io::stdin(), tokio::io::stdout())
     ///     .on_receive_from_successor(MyHandler)
     ///     .serve()
@@ -97,7 +97,7 @@ where
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, agent_client_protocol::Error> {
         if cx.method() != "_proxy/successor/receive/request" {
             return Ok(Handled::No(cx));
         }
@@ -137,7 +137,7 @@ where
         &mut self,
         cx: JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcNotificationCx>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcNotificationCx>, agent_client_protocol::Error> {
         if cx.method() != "_proxy/successor/receive/notification" {
             return Ok(Handled::No(cx));
         }

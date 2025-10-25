@@ -38,7 +38,7 @@ where
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, agent_client_protocol::Error> {
         match self.handler1.handle_request(cx, params).await? {
             Handled::Yes => Ok(Handled::Yes),
             Handled::No(cx) => self.handler2.handle_request(cx, params).await,
@@ -49,7 +49,7 @@ where
         &mut self,
         cx: JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcNotificationCx>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcNotificationCx>, agent_client_protocol::Error> {
         match self.handler1.handle_notification(cx, params).await? {
             Handled::Yes => Ok(Handled::Yes),
             Handled::No(cx) => self.handler2.handle_notification(cx, params).await,
@@ -118,15 +118,12 @@ where
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, agent_client_protocol::Error> {
         (self.tx)(cx.method().to_string(), params.clone(), cx)
             .await
             .map_err(|e| {
-                jsonrpcmsg::Error::with_data(
-                    -32603, // Internal error
-                    "Internal error".to_string(),
-                    serde_json::json!({"error": e.to_string()}),
-                )
+                agent_client_protocol::Error::new((-32603, "Internal error".to_string()))
+                    .with_data(serde_json::json!({"error": e.to_string()}))
             })?;
 
         // Always claim the message (GenericHandler handles everything)
@@ -137,7 +134,7 @@ where
         &mut self,
         cx: JsonRpcNotificationCx,
         _params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcNotificationCx>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcNotificationCx>, agent_client_protocol::Error> {
         // Generic handler only handles requests, not notifications
         // (notifications don't need responses, so they don't fit the bridge use case)
         Ok(Handled::No(cx))

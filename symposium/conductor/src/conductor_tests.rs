@@ -22,14 +22,14 @@ use crate::{
 /// until the response is received, making test code more readable.
 async fn recv<R: scp::JsonRpcMessage + Send>(
     response: scp::JsonRpcResponse<R>,
-) -> Result<R, jsonrpcmsg::Error> {
+) -> Result<R, acp::Error> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     response
         .on_receiving_response(move |result| async move {
             let _ = tx.send(result);
         })
         .await?;
-    rx.await.map_err(|_| jsonrpcmsg::Error::internal_error())?
+    rx.await.map_err(|_| acp::Error::internal_error())?
 }
 
 /// Helper to create a mock component that captures initialize requests.
@@ -174,7 +174,7 @@ mod tests {
                                 response
                             );
 
-                            Ok::<(), jsonrpcmsg::Error>(())
+                            Ok::<(), acp::Error>(())
                         })
                         .await
                 });
@@ -324,7 +324,7 @@ mod tests {
                                 prompt_response
                             );
 
-                            Ok::<(), jsonrpcmsg::Error>(())
+                            Ok::<(), acp::Error>(())
                         })
                         .instrument(tracing::info_span!("actor", id = "Editor"))
                         .await
@@ -430,10 +430,11 @@ impl AcpClientToAgentCallbacks for Component1Callbacks {
         let current_span = tracing::Span::current();
         let _ = successor_response
             .on_receiving_response(async |r| {
-                {
+                async {
                     let _ = response.respond_with_result(r);
                 }
                 .instrument(current_span)
+                .await
             })
             .await;
 
@@ -462,10 +463,11 @@ impl AcpClientToAgentCallbacks for Component1Callbacks {
         let current_span = tracing::Span::current();
         let _ = successor_response
             .on_receiving_response(async |prompt_response| {
-                {
+                async {
                     let _ = response.respond_with_result(prompt_response);
                 }
                 .instrument(current_span)
+                .await
             })
             .await;
 
@@ -959,7 +961,7 @@ mod mcp_capability_tests {
                                 "Editor should see mcp_acp_transport capability added by conductor"
                             );
 
-                            Ok::<(), jsonrpcmsg::Error>(())
+                            Ok::<(), acp::Error>(())
                         })
                         .await
                 });
@@ -1029,7 +1031,7 @@ mod mcp_capability_tests {
                                 "Editor should see mcp_acp_transport capability from agent"
                             );
 
-                            Ok::<(), jsonrpcmsg::Error>(())
+                            Ok::<(), acp::Error>(())
                         })
                         .await
                 });

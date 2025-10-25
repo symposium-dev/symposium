@@ -2,6 +2,7 @@
 //!
 //! These types wrap JSON-RPC messages for the `_proxy/successor/*` protocol.
 
+use agent_client_protocol as acp;
 use serde::{Deserialize, Serialize};
 
 use crate::jsonrpc::{
@@ -29,7 +30,7 @@ pub struct ToSuccessorRequest<Req> {
 impl<Req: JsonRpcMessage> JsonRpcMessage for ToSuccessorRequest<Req> {}
 
 impl<Req: JsonRpcOutgoingMessage> JsonRpcOutgoingMessage for ToSuccessorRequest<Req> {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
         json_cast(ToSuccessorRequest {
             method: self.method,
             params: self.params.params()?,
@@ -60,7 +61,7 @@ pub struct ToSuccessorNotification<Req> {
 impl<Req: JsonRpcMessage> JsonRpcMessage for ToSuccessorNotification<Req> {}
 
 impl<Req: JsonRpcOutgoingMessage> JsonRpcOutgoingMessage for ToSuccessorNotification<Req> {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
         json_cast(ToSuccessorNotification {
             method: self.method,
             params: self.params.params()?,
@@ -95,7 +96,7 @@ pub struct ReceiveFromSuccessorRequest {
 impl JsonRpcMessage for ReceiveFromSuccessorRequest {}
 
 impl JsonRpcOutgoingMessage for ReceiveFromSuccessorRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
         json_cast(self)
     }
 
@@ -116,17 +117,17 @@ pub enum FromSuccessorResponse {
     Result(serde_json::Value),
 
     /// Error object (on failure)
-    Error(jsonrpcmsg::Error),
+    Error(acp::Error),
 }
 
 impl JsonRpcMessage for FromSuccessorResponse {}
 
 impl JsonRpcIncomingMessage for FromSuccessorResponse {
-    fn into_json(self, _method: &str) -> Result<serde_json::Value, jsonrpcmsg::Error> {
-        serde_json::to_value(self).map_err(crate::util::internal_error)
+    fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
+        serde_json::to_value(self).map_err(acp::Error::into_internal_error)
     }
 
-    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, jsonrpcmsg::Error> {
+    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
         json_cast(&value)
     }
 }
@@ -146,7 +147,7 @@ pub struct FromSuccessorNotification<N> {
 impl<N: JsonRpcNotification> JsonRpcMessage for FromSuccessorNotification<N> {}
 
 impl<N: JsonRpcNotification> JsonRpcOutgoingMessage for FromSuccessorNotification<N> {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
         json_cast(FromSuccessorNotification {
             method: self.method,
             params: self.params.params()?,

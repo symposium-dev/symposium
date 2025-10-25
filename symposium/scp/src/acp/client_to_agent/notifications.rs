@@ -6,7 +6,7 @@ use crate::util::json_cast;
 impl JsonRpcMessage for CancelNotification {}
 
 impl JsonRpcOutgoingMessage for CancelNotification {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
         json_cast(self)
     }
 

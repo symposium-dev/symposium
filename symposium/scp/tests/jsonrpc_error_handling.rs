@@ -17,16 +17,14 @@ use serde::{Deserialize, Serialize};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// Test helper to block and wait for a JSON-RPC response.
-async fn recv<R: JsonRpcMessage + Send>(
-    response: JsonRpcResponse<R>,
-) -> Result<R, jsonrpcmsg::Error> {
+async fn recv<R: JsonRpcMessage + Send>(response: JsonRpcResponse<R>) -> Result<R, acp::Error> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     response
         .on_receiving_response(move |result| async move {
             let _ = tx.send(result);
         })
         .await?;
-    rx.await.map_err(|_| jsonrpcmsg::Error::internal_error())?
+    rx.await.map_err(|_| acp::Error::internal_error())?
 }
 
 /// Helper to set up a client-server pair for testing.
@@ -62,7 +60,7 @@ struct SimpleRequest {
 impl JsonRpcMessage for SimpleRequest {}
 
 impl JsonRpcOutgoingMessage for SimpleRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
         scp::util::json_cast(self)
     }
 
@@ -83,11 +81,11 @@ struct SimpleResponse {
 impl JsonRpcMessage for SimpleResponse {}
 
 impl JsonRpcIncomingMessage for SimpleResponse {
-    fn into_json(self, _method: &str) -> Result<serde_json::Value, jsonrpcmsg::Error> {
+    fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
         serde_json::to_value(self).map_err(scp::util::internal_error)
     }
 
-    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, jsonrpcmsg::Error> {
+    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
         scp::util::json_cast(&value)
     }
 }
@@ -187,7 +185,7 @@ impl JsonRpcHandler for NoOpHandler {
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         _params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
         // This handler never claims any requests
         Ok(Handled::No(cx))
     }
@@ -210,7 +208,7 @@ async fn test_unknown_method() {
 
             // Send request from client
             let result = client
-                .with_client(async |cx| -> Result<(), jsonrpcmsg::Error> {
+                .with_client(async |cx| -> Result<(), acp::Error> {
                     let request = SimpleRequest {
                         message: "test".to_string(),
                     };
@@ -243,10 +241,10 @@ impl JsonRpcHandler for ErrorReturningHandler {
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         _params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
         if cx.method() == "error_method" {
             // Explicitly return an error
-            cx.respond_with_error(jsonrpcmsg::Error::new(
+            cx.respond_with_error(acp::Error::new(
                 -32000,
                 "This is an intentional error".to_string(),
             ))?;
@@ -265,7 +263,7 @@ struct ErrorRequest {
 impl JsonRpcMessage for ErrorRequest {}
 
 impl JsonRpcOutgoingMessage for ErrorRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
         scp::util::json_cast(self)
     }
 
@@ -293,7 +291,7 @@ async fn test_handler_returns_error() {
             });
 
             let result = client
-                .with_client(async |cx| -> Result<(), jsonrpcmsg::Error> {
+                .with_client(async |cx| -> Result<(), acp::Error> {
                     let request = ErrorRequest {
                         value: "trigger error".to_string(),
                     };
@@ -326,7 +324,7 @@ impl JsonRpcHandler for StrictParamHandler {
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
         if cx.method() == "strict_method" {
             // Try to parse params - should fail if missing/invalid
             match scp::util::json_cast::<_, SimpleRequest>(params) {
@@ -337,7 +335,7 @@ impl JsonRpcHandler for StrictParamHandler {
                 }
                 Err(_) => {
                     // Send error response instead of returning Err from handler
-                    cx.respond_with_error(jsonrpcmsg::Error::invalid_params())?;
+                    cx.respond_with_error(acp::Error::invalid_params())?;
                 }
             }
             Ok(Handled::Yes)
@@ -353,7 +351,7 @@ struct EmptyRequest;
 impl JsonRpcMessage for EmptyRequest {}
 
 impl JsonRpcOutgoingMessage for EmptyRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
         scp::util::json_cast(self)
     }
 
@@ -381,7 +379,7 @@ async fn test_missing_required_params() {
             });
 
             let result = client
-                .with_client(async |cx| -> Result<(), jsonrpcmsg::Error> {
+                .with_client(async |cx| -> Result<(), acp::Error> {
                     // Send request with no params (EmptyRequest has no fields)
                     let request = EmptyRequest;
 

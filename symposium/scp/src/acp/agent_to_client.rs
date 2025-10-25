@@ -17,7 +17,7 @@ use crate::{
     jsonrpc::{
         self, Handled, JsonRpcConnectionCx, JsonRpcHandler, JsonRpcRequestCx, JsonRpcResponse,
     },
-    util::{acp_to_jsonrpc_error, json_cast},
+    util::json_cast,
 };
 
 mod notifications;
@@ -52,62 +52,54 @@ impl<CB: AcpAgentToClientCallbacks> JsonRpcHandler for AcpAgentToClientMessages<
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
         match cx.method() {
             "session/request_permission" => {
                 self.callbacks
                     .request_permission(json_cast(params)?, cx.cast())
-                    .await
-                    .map_err(acp_to_jsonrpc_error)?;
+                    .await?;
                 Ok(jsonrpc::Handled::Yes)
             }
             "fs/write_text_file" => {
                 self.callbacks
                     .write_text_file(json_cast(params)?, cx.cast())
-                    .await
-                    .map_err(acp_to_jsonrpc_error)?;
+                    .await?;
                 Ok(jsonrpc::Handled::Yes)
             }
             "fs/read_text_file" => {
                 self.callbacks
                     .read_text_file(json_cast(params)?, cx.cast())
-                    .await
-                    .map_err(acp_to_jsonrpc_error)?;
+                    .await?;
                 Ok(jsonrpc::Handled::Yes)
             }
             "terminal/create" => {
                 self.callbacks
                     .create_terminal(json_cast(params)?, cx.cast())
-                    .await
-                    .map_err(acp_to_jsonrpc_error)?;
+                    .await?;
                 Ok(jsonrpc::Handled::Yes)
             }
             "terminal/output" => {
                 self.callbacks
                     .terminal_output(json_cast(params)?, cx.cast())
-                    .await
-                    .map_err(acp_to_jsonrpc_error)?;
+                    .await?;
                 Ok(jsonrpc::Handled::Yes)
             }
             "terminal/release" => {
                 self.callbacks
                     .release_terminal(json_cast(params)?, cx.cast())
-                    .await
-                    .map_err(acp_to_jsonrpc_error)?;
+                    .await?;
                 Ok(jsonrpc::Handled::Yes)
             }
             "terminal/wait_for_exit" => {
                 self.callbacks
                     .wait_for_terminal_exit(json_cast(params)?, cx.cast())
-                    .await
-                    .map_err(acp_to_jsonrpc_error)?;
+                    .await?;
                 Ok(jsonrpc::Handled::Yes)
             }
             "terminal/kill" => {
                 self.callbacks
                     .kill_terminal_command(json_cast(params)?, cx.cast())
-                    .await
-                    .map_err(acp_to_jsonrpc_error)?;
+                    .await?;
                 Ok(jsonrpc::Handled::Yes)
             }
             _ => Ok(jsonrpc::Handled::No(cx)),
@@ -118,13 +110,12 @@ impl<CB: AcpAgentToClientCallbacks> JsonRpcHandler for AcpAgentToClientMessages<
         &mut self,
         cx: jsonrpc::JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<jsonrpc::Handled<jsonrpc::JsonRpcNotificationCx>, jsonrpcmsg::Error> {
+    ) -> Result<jsonrpc::Handled<jsonrpc::JsonRpcNotificationCx>, acp::Error> {
         match cx.method() {
             "session/update" => {
                 self.callbacks
                     .session_notification(json_cast(params)?, cx)
-                    .await
-                    .map_err(acp_to_jsonrpc_error)?;
+                    .await?;
                 Ok(jsonrpc::Handled::Yes)
             }
             _ => Ok(jsonrpc::Handled::No(cx)),
@@ -262,10 +253,7 @@ pub trait AcpClientToAgentExt {
     ) -> JsonRpcResponse<SetSessionModeResponse>;
 
     /// Cancel an in-progress request.
-    fn session_cancel(
-        &self,
-        session_id: impl Into<acp::SessionId>,
-    ) -> Result<(), jsonrpcmsg::Error>;
+    fn session_cancel(&self, session_id: impl Into<acp::SessionId>) -> Result<(), acp::Error>;
 }
 
 impl AcpClientToAgentExt for JsonRpcConnectionCx {
@@ -338,10 +326,7 @@ impl AcpClientToAgentExt for JsonRpcConnectionCx {
         })
     }
 
-    fn session_cancel(
-        &self,
-        session_id: impl Into<acp::SessionId>,
-    ) -> Result<(), jsonrpcmsg::Error> {
+    fn session_cancel(&self, session_id: impl Into<acp::SessionId>) -> Result<(), acp::Error> {
         self.send_notification(CancelNotification {
             session_id: session_id.into(),
             meta: None,
@@ -483,7 +468,7 @@ where
         //             ClientResponse::KillTerminalCommandResponse(kill_terminal_command_response) => {
         //                 Ok(kill_terminal_command_response)
         //             }
-        //             _ => Err(jsonrpcmsg::Error::internal_error()),
+        //             _ => Err(acp::Error::internal_error()),
         //         },
         //         move |error| Err(error),
         //     ),

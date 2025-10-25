@@ -15,16 +15,14 @@ use std::time::Duration;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// Test helper to block and wait for a JSON-RPC response.
-async fn recv<R: JsonRpcMessage + Send>(
-    response: JsonRpcResponse<R>,
-) -> Result<R, jsonrpcmsg::Error> {
+async fn recv<R: JsonRpcMessage + Send>(response: JsonRpcResponse<R>) -> Result<R, acp::Error> {
     let (tx, rx) = tokio::sync::oneshot::channel();
     response
         .on_receiving_response(move |result| async move {
             let _ = tx.send(result);
         })
         .await?;
-    rx.await.map_err(|_| jsonrpcmsg::Error::internal_error())?
+    rx.await.map_err(|_| acp::Error::internal_error())?
 }
 
 /// Helper to set up a client-server pair for testing.
@@ -58,7 +56,7 @@ struct PingRequest {
 impl JsonRpcMessage for PingRequest {}
 
 impl JsonRpcOutgoingMessage for PingRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
         scp::util::json_cast(self)
     }
 
@@ -80,11 +78,11 @@ struct PongResponse {
 impl JsonRpcMessage for PongResponse {}
 
 impl JsonRpcIncomingMessage for PongResponse {
-    fn into_json(self, _method: &str) -> Result<serde_json::Value, jsonrpcmsg::Error> {
+    fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
         serde_json::to_value(self).map_err(scp::util::internal_error)
     }
 
-    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, jsonrpcmsg::Error> {
+    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
         scp::util::json_cast(&value)
     }
 }
@@ -97,11 +95,11 @@ impl JsonRpcHandler for PingHandler {
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> std::result::Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
+    ) -> std::result::Result<Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
         if cx.method() == "ping" {
             // Parse the request
             let request: PingRequest =
-                scp::util::json_cast(params).map_err(|_| jsonrpcmsg::Error::invalid_params())?;
+                scp::util::json_cast(params).map_err(|_| acp::Error::invalid_params())?;
 
             // Send back a pong
             let pong = PongResponse {
@@ -135,7 +133,7 @@ async fn test_hello_world() {
 
             // Use the client to send a ping and wait for a pong
             let result = client
-                .with_client(async |cx| -> std::result::Result<(), jsonrpcmsg::Error> {
+                .with_client(async |cx| -> std::result::Result<(), acp::Error> {
                     let request = PingRequest {
                         message: "hello world".to_string(),
                     };
@@ -164,7 +162,7 @@ struct LogNotification {
 impl JsonRpcMessage for LogNotification {}
 
 impl JsonRpcOutgoingMessage for LogNotification {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
         scp::util::json_cast(self)
     }
 
@@ -185,10 +183,10 @@ impl JsonRpcHandler for LogHandler {
         &mut self,
         cx: JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> std::result::Result<Handled<JsonRpcNotificationCx>, jsonrpcmsg::Error> {
+    ) -> std::result::Result<Handled<JsonRpcNotificationCx>, acp::Error> {
         if cx.method() == "log" {
             let log: LogNotification =
-                scp::util::json_cast(params).map_err(|_| jsonrpcmsg::Error::invalid_params())?;
+                scp::util::json_cast(params).map_err(|_| acp::Error::invalid_params())?;
 
             self.logs.lock().unwrap().push(log.message);
             Ok(Handled::Yes)
@@ -218,7 +216,7 @@ async fn test_notification() {
             });
 
             let result = client
-                .with_client(async |cx| -> std::result::Result<(), jsonrpcmsg::Error> {
+                .with_client(async |cx| -> std::result::Result<(), acp::Error> {
                     // Send a notification (no response expected)
                     cx.send_notification(LogNotification {
                         message: "test log 1".to_string(),
@@ -268,7 +266,7 @@ async fn test_multiple_sequential_requests() {
             });
 
             let result = client
-                .with_client(async |cx| -> std::result::Result<(), jsonrpcmsg::Error> {
+                .with_client(async |cx| -> std::result::Result<(), acp::Error> {
                     // Send multiple requests sequentially
                     for i in 1..=5 {
                         let request = PingRequest {
@@ -308,7 +306,7 @@ async fn test_concurrent_requests() {
             });
 
             let result = client
-                .with_client(async |cx| -> std::result::Result<(), jsonrpcmsg::Error> {
+                .with_client(async |cx| -> std::result::Result<(), acp::Error> {
                     // Send multiple requests concurrently
                     let mut responses = Vec::new();
 

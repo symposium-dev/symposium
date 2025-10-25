@@ -1,12 +1,13 @@
 //! Core JSON-RPC server support.
 
+use agent_client_protocol as acp;
 use std::fmt::Debug;
 use std::ops::Deref;
 
 use boxfnonce::SendBoxFnOnce;
 use futures::channel::{mpsc, oneshot};
 use futures::future::{BoxFuture, Either};
-use futures::{AsyncRead, AsyncWrite, FutureExt, SinkExt};
+use futures::{AsyncRead, AsyncWrite, FutureExt};
 use jsonrpcmsg::Params;
 
 mod actors;
@@ -87,7 +88,7 @@ impl<OB: AsyncWrite, IB: AsyncRead, H: JsonRpcHandler> JsonRpcConnection<OB, IB,
     }
 
     /// Runs a server that listens for incoming requests and handles them according to the added handlers.
-    pub async fn serve(self) -> Result<(), jsonrpcmsg::Error> {
+    pub async fn serve(self) -> Result<(), acp::Error> {
         let (reply_tx, reply_rx) = mpsc::unbounded();
         let json_rpc_cx = JsonRpcConnectionCx::new(self.outgoing_tx, self.new_task_tx);
         futures::select!(
@@ -117,8 +118,8 @@ impl<OB: AsyncWrite, IB: AsyncRead, H: JsonRpcHandler> JsonRpcConnection<OB, IB,
     /// Errors if the server terminates before `main_fn` returns.
     pub async fn with_client(
         self,
-        main_fn: impl AsyncFnOnce(JsonRpcConnectionCx) -> Result<(), jsonrpcmsg::Error>,
-    ) -> Result<(), jsonrpcmsg::Error> {
+        main_fn: impl AsyncFnOnce(JsonRpcConnectionCx) -> Result<(), acp::Error>,
+    ) -> Result<(), acp::Error> {
         let cx = self.json_rpc_cx();
 
         // Run the server + the main function until one terminates.
@@ -127,7 +128,7 @@ impl<OB: AsyncWrite, IB: AsyncRead, H: JsonRpcHandler> JsonRpcConnection<OB, IB,
         let result = futures::future::select(Box::pin(self.serve()), Box::pin(main_fn(cx))).await;
 
         match result {
-            Either::Left((Ok(()), _)) => Err(jsonrpcmsg::Error::internal_error()),
+            Either::Left((Ok(()), _)) => Err(acp::Error::internal_error()),
 
             Either::Left((result, _)) | Either::Right((result, _)) => result,
         }
@@ -139,11 +140,11 @@ enum ReplyMessage {
     /// Wait for a response to the given id and then send it to the given receiver
     Subscribe(
         jsonrpcmsg::Id,
-        oneshot::Sender<Result<serde_json::Value, jsonrpcmsg::Error>>,
+        oneshot::Sender<Result<serde_json::Value, acp::Error>>,
     ),
 
     /// Dispatch a response to the given id and value
-    Dispatch(jsonrpcmsg::Id, Result<serde_json::Value, jsonrpcmsg::Error>),
+    Dispatch(jsonrpcmsg::Id, Result<serde_json::Value, acp::Error>),
 }
 
 /// Messages send to be serialized over the transport.
@@ -157,7 +158,7 @@ enum OutgoingMessage {
         params: Option<jsonrpcmsg::Params>,
 
         /// where to send the response when it arrives
-        response_tx: oneshot::Sender<Result<serde_json::Value, jsonrpcmsg::Error>>,
+        response_tx: oneshot::Sender<Result<serde_json::Value, acp::Error>>,
     },
 
     /// Send a notification to the server.
@@ -173,11 +174,11 @@ enum OutgoingMessage {
     Response {
         id: jsonrpcmsg::Id,
 
-        response: Result<serde_json::Value, jsonrpcmsg::Error>,
+        response: Result<serde_json::Value, acp::Error>,
     },
 
     /// Send a generalized error message
-    Error { error: jsonrpcmsg::Error },
+    Error { error: acp::Error },
 }
 
 /// Handlers are invoked when new messages arrive at the [`JsonRpcServer`].
@@ -208,7 +209,7 @@ pub trait JsonRpcHandler {
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
         Ok(Handled::No(cx))
     }
 
@@ -235,7 +236,7 @@ pub trait JsonRpcHandler {
         &mut self,
         cx: JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcNotificationCx>, jsonrpcmsg::Error> {
+    ) -> Result<Handled<JsonRpcNotificationCx>, acp::Error> {
         Ok(Handled::No(cx))
     }
 }
@@ -318,21 +319,18 @@ impl JsonRpcConnectionCx {
     pub fn send_notification<N: JsonRpcNotification>(
         &self,
         notification: N,
-    ) -> Result<(), jsonrpcmsg::Error> {
+    ) -> Result<(), acp::Error> {
         let method = notification.method().to_string();
         let params = notification.params()?;
         self.send_raw_message(OutgoingMessage::Notification { method, params })
     }
 
     /// Send an error notification (no reply expected).
-    pub fn send_error_notification(
-        &self,
-        error: jsonrpcmsg::Error,
-    ) -> Result<(), jsonrpcmsg::Error> {
+    pub fn send_error_notification(&self, error: acp::Error) -> Result<(), acp::Error> {
         self.send_raw_message(OutgoingMessage::Error { error })
     }
 
-    fn send_raw_message(&self, message: OutgoingMessage) -> Result<(), jsonrpcmsg::Error> {
+    fn send_raw_message(&self, message: OutgoingMessage) -> Result<(), acp::Error> {
         match &message {
             OutgoingMessage::Response { id, response } => match response {
                 Ok(_) => tracing::debug!(?id, "send_raw_message: queuing success response"),
@@ -396,8 +394,8 @@ pub struct JsonRpcRequestCx<T: JsonRpcIncomingMessage> {
     /// Function to send the response `T` to a request with the given method and id.
     make_json: SendBoxFnOnce<
         'static,
-        ((String, jsonrpcmsg::Id), Result<T, jsonrpcmsg::Error>),
-        Result<serde_json::Value, jsonrpcmsg::Error>,
+        ((String, jsonrpcmsg::Id), Result<T, acp::Error>),
+        Result<serde_json::Value, acp::Error>,
     >,
 }
 
@@ -459,10 +457,7 @@ impl<T: JsonRpcIncomingMessage> JsonRpcRequestCx<T> {
     /// Return a new JsonRpcResponse that expects a response of type U and serializes it.
     pub fn wrap_params<U: JsonRpcIncomingMessage>(
         self,
-        wrap_fn: impl FnOnce(
-            (String, jsonrpcmsg::Id),
-            Result<U, jsonrpcmsg::Error>,
-        ) -> Result<T, jsonrpcmsg::Error>
+        wrap_fn: impl FnOnce((String, jsonrpcmsg::Id), Result<U, acp::Error>) -> Result<T, acp::Error>
         + Send
         + 'static,
     ) -> JsonRpcRequestCx<U> {
@@ -471,7 +466,7 @@ impl<T: JsonRpcIncomingMessage> JsonRpcRequestCx<T> {
             method: self.method,
             id: self.id,
             make_json: SendBoxFnOnce::new(
-                move |args: (String, jsonrpcmsg::Id), input: Result<U, jsonrpcmsg::Error>| {
+                move |args: (String, jsonrpcmsg::Id), input: Result<U, acp::Error>| {
                     let t_value = wrap_fn(args.clone(), input);
                     self.make_json.call(args, t_value)
                 },
@@ -484,28 +479,8 @@ impl<T: JsonRpcIncomingMessage> JsonRpcRequestCx<T> {
         self.cx.clone()
     }
 
-    /// Respond to the JSON-RPC request with a value.
-    pub fn respond_with_result(
-        self,
-        response: Result<T, jsonrpcmsg::Error>,
-    ) -> Result<(), jsonrpcmsg::Error> {
-        match response {
-            Ok(r) => {
-                tracing::debug!(id = ?self.id, "respond_with_result: Ok, calling respond");
-                self.respond(r)
-            }
-            Err(e) => {
-                tracing::debug!(id = ?self.id, ?e, "respond_with_result: Err, calling respond_with_error");
-                self.respond_with_error(e)
-            }
-        }
-    }
-
-    /// Respond to the JSON-RPC request with a value.
-    pub fn respond_result(
-        self,
-        response: Result<T, jsonrpcmsg::Error>,
-    ) -> Result<(), jsonrpcmsg::Error> {
+    /// Respond to the JSON-RPC request with either a value (`Ok`) or an error (`Err`).
+    pub fn respond_with_result(self, response: Result<T, acp::Error>) -> Result<(), acp::Error> {
         tracing::debug!(id = ?self.id, "respond called");
         let json = self
             .make_json
@@ -517,19 +492,19 @@ impl<T: JsonRpcIncomingMessage> JsonRpcRequestCx<T> {
     }
 
     /// Respond to the JSON-RPC request with a value.
-    pub fn respond(self, response: T) -> Result<(), jsonrpcmsg::Error> {
-        self.respond_result(Ok(response))
+    pub fn respond(self, response: T) -> Result<(), acp::Error> {
+        self.respond_with_result(Ok(response))
     }
 
     /// Respond to the JSON-RPC request with an internal error.
-    pub fn respond_with_internal_error(self) -> Result<(), jsonrpcmsg::Error> {
-        self.respond_with_error(jsonrpcmsg::Error::internal_error())
+    pub fn respond_with_internal_error(self) -> Result<(), acp::Error> {
+        self.respond_with_error(acp::Error::internal_error())
     }
 
     /// Respond to the JSON-RPC request with an error.
-    pub fn respond_with_error(self, error: jsonrpcmsg::Error) -> Result<(), jsonrpcmsg::Error> {
+    pub fn respond_with_error(self, error: acp::Error) -> Result<(), acp::Error> {
         tracing::debug!(id = ?self.id, ?error, "respond_with_error called");
-        self.respond_result(Err(error))
+        self.respond_with_result(Err(error))
     }
 }
 
@@ -538,27 +513,27 @@ pub trait JsonRpcMessage: 'static + Debug + Sized {}
 
 pub trait JsonRpcIncomingMessage: JsonRpcMessage {
     /// Convert this message into a JSON value.
-    fn into_json(self, method: &str) -> Result<serde_json::Value, jsonrpcmsg::Error>;
+    fn into_json(self, method: &str) -> Result<serde_json::Value, acp::Error>;
 
     /// Parse a JSON value into the response type.
-    fn from_value(method: &str, value: serde_json::Value) -> Result<Self, jsonrpcmsg::Error>;
+    fn from_value(method: &str, value: serde_json::Value) -> Result<Self, acp::Error>;
 }
 
 impl JsonRpcMessage for serde_json::Value {}
 
 impl JsonRpcIncomingMessage for serde_json::Value {
-    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, jsonrpcmsg::Error> {
+    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
         Ok(value)
     }
 
-    fn into_json(self, _method: &str) -> Result<serde_json::Value, jsonrpcmsg::Error> {
+    fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
         Ok(self)
     }
 }
 
 pub trait JsonRpcOutgoingMessage: JsonRpcMessage {
     /// The parameters for the request.
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error>;
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error>;
 
     /// The method name for the request.
     fn method(&self) -> &str;
@@ -592,7 +567,7 @@ impl JsonRpcOutgoingMessage for JsonRpcUntypedRequest {
         &self.method
     }
 
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
         Ok(self.params)
     }
 }
@@ -603,14 +578,14 @@ impl JsonRpcRequest for JsonRpcUntypedRequest {
 
 /// Represents a pending response of type `R` from an outgoing request.
 pub struct JsonRpcResponse<R> {
-    response_rx: oneshot::Receiver<Result<serde_json::Value, jsonrpcmsg::Error>>,
+    response_rx: oneshot::Receiver<Result<serde_json::Value, acp::Error>>,
     task_tx: mpsc::UnboundedSender<BoxFuture<'static, ()>>,
-    to_result: Box<dyn Fn(serde_json::Value) -> Result<R, jsonrpcmsg::Error> + Send>,
+    to_result: Box<dyn Fn(serde_json::Value) -> Result<R, acp::Error> + Send>,
 }
 
 impl JsonRpcResponse<serde_json::Value> {
     fn new(
-        response_rx: oneshot::Receiver<Result<serde_json::Value, jsonrpcmsg::Error>>,
+        response_rx: oneshot::Receiver<Result<serde_json::Value, acp::Error>>,
         task_tx: mpsc::UnboundedSender<BoxFuture<'static, ()>>,
     ) -> Self {
         Self {
@@ -625,7 +600,7 @@ impl<R: JsonRpcMessage> JsonRpcResponse<R> {
     /// Create a new response that maps the result of the response to a new type.
     pub fn map<U>(
         self,
-        map_fn: impl Fn(R) -> Result<U, jsonrpcmsg::Error> + 'static + Send,
+        map_fn: impl Fn(R) -> Result<U, acp::Error> + 'static + Send,
     ) -> JsonRpcResponse<U>
     where
         U: JsonRpcMessage,
@@ -643,13 +618,13 @@ impl<R: JsonRpcMessage> JsonRpcResponse<R> {
     /// because doing so can easily stall the event loop if done directly in the `on_receive` callback.
     pub async fn on_receiving_response<F>(
         mut self,
-        task: impl FnOnce(Result<R, jsonrpcmsg::Error>) -> F + 'static + Send,
-    ) -> Result<(), jsonrpcmsg::Error>
+        task: impl FnOnce(Result<R, acp::Error>) -> F + 'static + Send,
+    ) -> Result<(), acp::Error>
     where
         F: Future<Output = ()> + 'static + Send,
     {
         self.task_tx
-            .send(Box::pin(async move {
+            .unbounded_send(Box::pin(async move {
                 let result = match self.response_rx.await {
                     // We received a JSON value; transform it to our result type
                     Ok(Ok(json_value)) => (self.to_result)(json_value),
@@ -658,23 +633,22 @@ impl<R: JsonRpcMessage> JsonRpcResponse<R> {
                     Ok(Err(e)) => Err(e),
 
                     // if the `response_tx` is dropped before we get a chance, that's weird
-                    Err(e) => Err(jsonrpcmsg::Error::server_error(
+                    Err(e) => Err(acp::Error::new((
                         COMMUNICATION_FAILURE,
                         format!(
                             "reply of type `{}` never arrived: {e}",
                             std::any::type_name::<R>()
                         ),
-                    )),
+                    ))),
                 };
                 task(result).await;
             }))
-            .await
-            .map_err(crate::util::internal_error)
+            .map_err(acp::Error::into_internal_error)
     }
 }
 
 const COMMUNICATION_FAILURE: i32 = -32000;
 
-fn communication_failure(err: impl ToString) -> jsonrpcmsg::Error {
-    jsonrpcmsg::Error::new(COMMUNICATION_FAILURE, err.to_string())
+fn communication_failure(err: impl ToString) -> acp::Error {
+    acp::Error::new((COMMUNICATION_FAILURE, err.to_string()))
 }

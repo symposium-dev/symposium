@@ -2,7 +2,7 @@ use crate::{
     JsonRpcNotificationCx,
     jsonrpc::{Handled, JsonRpcConnectionCx, JsonRpcHandler, JsonRpcRequestCx},
     proxy::{ToSuccessorNotification, ToSuccessorRequest},
-    util::{acp_to_jsonrpc_error, json_cast},
+    util::json_cast,
 };
 use agent_client_protocol as acp;
 
@@ -43,15 +43,13 @@ impl<CB: ConductorCallbacks> JsonRpcHandler for ProxyToConductorMessages<CB> {
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<crate::jsonrpc::Handled<JsonRpcRequestCx<serde_json::Value>>, jsonrpcmsg::Error>
-    {
+    ) -> Result<crate::jsonrpc::Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
         match cx.method() {
             "_proxy/successor/send/request" => {
                 // Proxy is requesting us to send this message to their successor.
                 self.callbacks
                     .successor_send_request(json_cast(params)?, cx.cast())
-                    .await
-                    .map_err(acp_to_jsonrpc_error)?;
+                    .await?;
                 Ok(Handled::Yes)
             }
 
@@ -63,14 +61,13 @@ impl<CB: ConductorCallbacks> JsonRpcHandler for ProxyToConductorMessages<CB> {
         &mut self,
         cx: JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<crate::jsonrpc::Handled<JsonRpcNotificationCx>, jsonrpcmsg::Error> {
+    ) -> Result<crate::jsonrpc::Handled<JsonRpcNotificationCx>, acp::Error> {
         match cx.method() {
             "_proxy/successor/send/notification" => {
                 // Proxy is requesting us to send this message to their successor.
                 self.callbacks
                     .successor_send_notification(json_cast(params)?, &cx)
-                    .await
-                    .map_err(acp_to_jsonrpc_error)?;
+                    .await?;
                 Ok(Handled::Yes)
             }
 

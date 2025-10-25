@@ -1,4 +1,4 @@
-use agent_client_protocol::SessionNotification;
+use agent_client_protocol::{self as acp, SessionNotification};
 
 use crate::jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcOutgoingMessage};
 use crate::util::json_cast;
@@ -9,7 +9,7 @@ use crate::util::json_cast;
 impl JsonRpcMessage for SessionNotification {}
 
 impl JsonRpcOutgoingMessage for SessionNotification {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
         json_cast(self)
     }
 

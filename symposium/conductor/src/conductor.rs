@@ -88,7 +88,7 @@ impl scp::JsonRpcOutgoingMessage for UntypedNotification {
         &self.method
     }
 
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
         scp::util::json_cast(self.params)
     }
 }
@@ -263,9 +263,9 @@ impl Conductor {
                 }))
                 .with_client(async move |jsonrpccx| {
                     self.components.push(Component { child, jsonrpccx });
-                    self.launch_proxy(providers, serve_args)
-                        .await
-                        .map_err(scp::util::internal_error)
+                    self.launch_proxy(providers, serve_args).await.map_err(|e| {
+                        agent_client_protocol::Error::into_internal_error(std::io::Error::other(e))
+                    })
                 })
                 .await
                 .map_err(|err| anyhow::anyhow!("{err:?}"))
@@ -324,7 +324,7 @@ impl Conductor {
         client: &JsonRpcConnectionCx,
         message: ConductorMessage,
         conductor_tx: &mpsc::Sender<ConductorMessage>,
-    ) -> Result<(), jsonrpcmsg::Error> {
+    ) -> Result<(), agent_client_protocol::Error> {
         match message {
             // When we receive messages from the client, forward to the first item
             // the proxy chain.
@@ -457,7 +457,7 @@ impl Conductor {
                         serde_json::from_value::<NewSessionRequest>(params.clone())
                     else {
                         component_response_cx
-                            .respond_with_error(jsonrpcmsg::Error::invalid_params())?;
+                            .respond_with_error(agent_client_protocol::Error::invalid_params())?;
                         return Ok(());
                     };
 
@@ -612,55 +612,66 @@ impl Conductor {
                         component_index,
                         "Component sent successor notification but it's the last in chain"
                     );
-                    component_cx.send_error_notification(jsonrpcmsg::Error::internal_error())?;
+                    component_cx
+                        .send_error_notification(agent_client_protocol::Error::internal_error())?;
                 }
             }
 
+            // If this is an InitializeResponse from the last component (agent),
+            // check for mcp_acp_transport capability
+            ConductorMessage::ResponseReceived {
+                result,
+                response_cx,
+                method,
+                target_component_index,
+            } if self.is_agent_component(target_component_index) && method == "initialize" => {
+                let result = result
+                    .and_then(|v| {
+                        serde_json::from_value(v)
+                            .map_err(agent_client_protocol::Error::into_internal_error)
+                    })
+                    .map(|init_response: agent_client_protocol::InitializeResponse| {
+                        // Check if agent has mcp_acp_transport capability
+                        let has_capability =
+                            init_response.has_meta_capability(scp::McpAcpTransport);
+                        self.agent_needs_mcp_bridging = Some(!has_capability);
+
+                        info!(
+                            has_capability,
+                            agent_needs_mcp_bridging = !has_capability,
+                            "Detected agent MCP capability from InitializeResponse"
+                        );
+
+                        // Add the capability if agent doesn't have it
+                        if !has_capability {
+                            info!(
+                                "Added mcp_acp_transport capability to agent's InitializeResponse"
+                            );
+                            init_response.add_meta_capability(scp::McpAcpTransport)
+                        } else {
+                            init_response
+                        }
+                    })
+                    .and_then(|v| {
+                        serde_json::to_value(v)
+                            .map_err(agent_client_protocol::Error::into_internal_error)
+                    });
+
+                response_cx.respond_with_result(result)?;
+            }
             ConductorMessage::ResponseReceived {
                 mut result,
                 response_cx,
                 method,
                 target_component_index,
             } => {
-                let from_last_component = target_component_index == self.components.len() - 1;
                 debug!(
                     method,
-                    target_component_index,
-                    from_last_component,
-                    "Forwarding response received from component"
+                    target_component_index, "Forwarding response received from component"
                 );
 
-                // If this is an InitializeResponse from the last component (agent),
-                // check for mcp_acp_transport capability
-                if from_last_component && method == "initialize" {
-                    if let Ok(ref mut response_value) = result {
-                        if let Ok(mut init_response) =
-                            serde_json::from_value::<agent_client_protocol::InitializeResponse>(
-                                response_value.clone(),
-                            )
-                        {
-                            // Check if agent has mcp_acp_transport capability
-                            let has_capability =
-                                init_response.has_meta_capability(scp::McpAcpTransport);
-                            self.agent_needs_mcp_bridging = Some(!has_capability);
-
-                            info!(
-                                has_capability,
-                                agent_needs_mcp_bridging = !has_capability,
-                                "Detected agent MCP capability from InitializeResponse"
-                            );
-
-                            // Add the capability if agent doesn't have it
-                            if !has_capability {
-                                init_response =
-                                    init_response.add_meta_capability(scp::McpAcpTransport);
-                                *response_value = serde_json::to_value(&init_response).unwrap();
-                                info!(
-                                    "Added mcp_acp_transport capability to agent's InitializeResponse"
-                                );
-                            }
-                        }
-                    }
+                if self.is_agent_component(target_component_index) && method == "initialize" {
+                    if let Ok(ref mut response_value) = result {}
                 }
 
                 if let Err(error) = response_cx.respond_with_result(result) {
@@ -757,13 +768,13 @@ impl Conductor {
         to_component: usize,
         initialize_req: Result<InitializeRequest, E>,
         json_rpc_request_cx: JsonRpcRequestCx<serde_json::Value>,
-    ) {
+    ) -> Result<(), agent_client_protocol::Error> {
         let total_components = self.components.len();
         let to_last_component = to_component == total_components - 1;
 
         let Ok(mut initialize_req) = initialize_req else {
-            json_rpc_request_cx.respond_with_error(jsonrpcmsg::Error::parse_error());
-            return;
+            json_rpc_request_cx.respond_with_error(agent_client_protocol::Error::parse_error())?;
+            return Ok(());
         };
 
         // Either add or remove proxy, depending on whether this component has a successor.
@@ -782,13 +793,13 @@ impl Conductor {
             .jsonrpccx
             .send_request(ClientRequest::InitializeRequest(initialize_req));
 
-        let _ = response
+        response
             .on_receiving_response(move |result| async move {
                 if let Err(error) = json_rpc_request_cx.respond_with_result(result) {
                     error!(?error, "Failed to forward initialize response");
                 }
             })
-            .await;
+            .await
     }
 
     /// Transforms MCP servers with `acp:$UUID` URLs for agents that need bridging.
@@ -1056,11 +1067,11 @@ impl Conductor {
                             // Keep connection alive until bridge disconnects
                             futures::future::pending::<()>().await;
 
-                            Ok::<(), jsonrpcmsg::Error>(())
+                            Ok::<(), agent_client_protocol::Error>(())
                         })
                         .await;
 
-                    Ok::<(), jsonrpcmsg::Error>(())
+                    Ok::<(), agent_client_protocol::Error>(())
                 }
                 Err(e) => {
                     warn!(
@@ -1213,7 +1224,7 @@ pub enum ConductorMessage {
     /// inspection and modification (e.g., adding capabilities to InitializeResponse).
     ResponseReceived {
         /// The response result (Ok with JSON value or Err with error)
-        result: Result<serde_json::Value, jsonrpcmsg::Error>,
+        result: Result<serde_json::Value, agent_client_protocol::Error>,
         /// Context to send the response to
         response_cx: JsonRpcRequestCx<serde_json::Value>,
         /// The method that was called (e.g., "initialize")
@@ -1225,7 +1236,7 @@ pub enum ConductorMessage {
     /// Error from a spawned task that couldn't be handled locally.
     ///
     /// Currently logged as a warning. Future versions may trigger chain shutdown.
-    Error { error: jsonrpcmsg::Error },
+    Error { error: agent_client_protocol::Error },
 
     /// MCP request received from a bridge that needs to be routed to the proxy.
     ///

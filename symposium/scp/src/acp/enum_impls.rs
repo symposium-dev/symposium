@@ -19,7 +19,7 @@ use crate::util::json_cast;
 impl JsonRpcMessage for ClientRequest {}
 
 impl JsonRpcOutgoingMessage for ClientRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
         json_cast(self)
     }
 
@@ -43,7 +43,7 @@ impl JsonRpcRequest for ClientRequest {
 impl JsonRpcMessage for ClientNotification {}
 
 impl JsonRpcOutgoingMessage for ClientNotification {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
         json_cast(self)
     }
 
@@ -64,7 +64,7 @@ impl JsonRpcNotification for ClientNotification {}
 impl JsonRpcMessage for AgentRequest {}
 
 impl JsonRpcOutgoingMessage for AgentRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
         json_cast(self)
     }
 
@@ -90,7 +90,7 @@ impl JsonRpcRequest for AgentRequest {
 impl JsonRpcMessage for AgentNotification {}
 
 impl JsonRpcOutgoingMessage for AgentNotification {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, jsonrpcmsg::Error> {
+    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
         json_cast(self)
     }
 

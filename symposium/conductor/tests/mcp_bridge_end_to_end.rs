@@ -101,7 +101,7 @@ async fn test_basic_mcp_tool_invocation() {
                         // TODO: Step 4: Verify tool was invoked on proxy
                         // TODO: Step 5: Verify agent received response
 
-                        Ok::<_, jsonrpcmsg::Error>(())
+                        Ok::<_, acp::Error>(())
                     })
                     .await
             });

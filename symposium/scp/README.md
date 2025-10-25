@@ -102,7 +102,7 @@ struct EchoHandler;
 impl JsonRpcHandler for EchoHandler {
     async fn handle_request(&mut self, method: &str, params: &Option<jsonrpcmsg::Params>,
                            response: JsonRpcRequestCx<jsonrpcmsg::Response>)
-                           -> Result<Handled<JsonRpcRequestCx<jsonrpcmsg::Response>>, jsonrpcmsg::Error> {
+                           -> Result<Handled<JsonRpcRequestCx<jsonrpcmsg::Response>>, acp::Error> {
         if method == "echo" {
             let request: EchoRequest = scp::util::json_cast(params)?;
             response.cast().respond(EchoResponse {
@@ -117,7 +117,7 @@ impl JsonRpcHandler for EchoHandler {
 
 // Run server
 #[tokio::main]
-async fn main() -> Result<(), jsonrpcmsg::Error> {
+async fn main() -> Result<(), acp::Error> {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
@@ -134,7 +134,7 @@ async fn main() -> Result<(), jsonrpcmsg::Error> {
 use scp::{JsonRpcConnection, JsonRpcCx};
 
 #[tokio::main]
-async fn main() -> Result<(), jsonrpcmsg::Error> {
+async fn main() -> Result<(), acp::Error> {
     let (stdin, stdout) = /* your streams */;
 
     JsonRpcConnection::new(stdout, stdin)
@@ -251,7 +251,7 @@ impl AcpAgentCallbacks for MyAgent {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), jsonrpcmsg::Error> {
+async fn main() -> Result<(), acp::Error> {
     let agent = MyAgent;
     let acp_handler = AcpAgent::new(agent);
 
@@ -389,7 +389,7 @@ async fn handle_request(&mut self, method: &str, params: &Option<Params>,
 
 The library uses two error types:
 
-- **`jsonrpcmsg::Error`**: JSON-RPC protocol errors (method not found, invalid params, etc.)
+- **`acp::Error`**: JSON-RPC protocol errors (method not found, invalid params, etc.)
 - **`acp::Error`**: ACP protocol errors, automatically converted to JSON-RPC errors
 
 Convert ACP errors using the utility function:

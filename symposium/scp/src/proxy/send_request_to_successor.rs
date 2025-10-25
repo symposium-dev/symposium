@@ -2,6 +2,7 @@ use crate::{
     jsonrpc::{JsonRpcConnectionCx, JsonRpcNotification, JsonRpcRequest},
     proxy::{ToSuccessorNotification, ToSuccessorRequest},
 };
+use agent_client_protocol as acp;
 
 /// Extension trait for [`JsonRpcCx`] that adds methods for sending to successor.
 ///
@@ -63,7 +64,7 @@ pub trait JsonRpcCxExt {
     fn send_notification_to_successor<Req: JsonRpcNotification>(
         &self,
         notification: Req,
-    ) -> Result<(), jsonrpcmsg::Error>;
+    ) -> Result<(), acp::Error>;
 }
 
 impl JsonRpcCxExt for JsonRpcConnectionCx {
@@ -82,7 +83,7 @@ impl JsonRpcCxExt for JsonRpcConnectionCx {
     fn send_notification_to_successor<Req: JsonRpcNotification>(
         &self,
         notification: Req,
-    ) -> Result<(), jsonrpcmsg::Error> {
+    ) -> Result<(), acp::Error> {
         let wrapper = ToSuccessorNotification {
             method: notification.method().to_string(),
             params: notification,

@@ -38,7 +38,7 @@
 //!     // Handle requests and notifications like any ACP component
 //! }
 //!
-//! # async fn example() -> Result<(), jsonrpcmsg::Error> {
+//! # async fn example() -> Result<(), acp::Error> {
 //! JsonRpcConnection::new(tokio::io::stdin(), tokio::io::stdout())
 //!     .on_receive_from_successor(MyProxyHandler)
 //!     .serve()
