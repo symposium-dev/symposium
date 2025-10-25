@@ -15,7 +15,9 @@ pub struct Component {
     /// None for mock components used in tests.
     pub child: Option<Child>,
 
-    pub jsonrpccx: JsonRpcConnectionCx,
+    /// The connection context to the component. This is called `agent_cx` because the
+    /// component is acting as the conductor's agent.
+    pub agent_cx: JsonRpcConnectionCx,
 }
 
 impl Drop for Component {

@@ -21,8 +21,12 @@ use crate::util::json_cast;
 impl JsonRpcMessage for RequestPermissionRequest {}
 
 impl JsonRpcOutgoingMessage for RequestPermissionRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
-        json_cast(self)
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
+        let method = self.method().to_string();
+        Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -38,7 +42,7 @@ impl JsonRpcMessage for RequestPermissionResponse {}
 
 impl JsonRpcIncomingMessage for RequestPermissionResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
-        serde_json::to_value(self).map_err(acp::Error::into_internal_error)
+        serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)
     }
 
     fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
@@ -53,8 +57,12 @@ impl JsonRpcIncomingMessage for RequestPermissionResponse {
 impl JsonRpcMessage for WriteTextFileRequest {}
 
 impl JsonRpcOutgoingMessage for WriteTextFileRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
-        json_cast(self)
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
+        let method = self.method().to_string();
+        Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -70,7 +78,7 @@ impl JsonRpcMessage for WriteTextFileResponse {}
 
 impl JsonRpcIncomingMessage for WriteTextFileResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
-        serde_json::to_value(self).map_err(acp::Error::into_internal_error)
+        serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)
     }
 
     fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
@@ -85,8 +93,12 @@ impl JsonRpcIncomingMessage for WriteTextFileResponse {
 impl JsonRpcMessage for ReadTextFileRequest {}
 
 impl JsonRpcOutgoingMessage for ReadTextFileRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
-        json_cast(self)
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
+        let method = self.method().to_string();
+        Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -102,7 +114,7 @@ impl JsonRpcMessage for ReadTextFileResponse {}
 
 impl JsonRpcIncomingMessage for ReadTextFileResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
-        serde_json::to_value(self).map_err(acp::Error::into_internal_error)
+        serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)
     }
 
     fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
@@ -117,8 +129,12 @@ impl JsonRpcIncomingMessage for ReadTextFileResponse {
 impl JsonRpcMessage for CreateTerminalRequest {}
 
 impl JsonRpcOutgoingMessage for CreateTerminalRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
-        json_cast(self)
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
+        let method = self.method().to_string();
+        Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -134,7 +150,7 @@ impl JsonRpcMessage for CreateTerminalResponse {}
 
 impl JsonRpcIncomingMessage for CreateTerminalResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
-        serde_json::to_value(self).map_err(acp::Error::into_internal_error)
+        serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)
     }
 
     fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
@@ -149,8 +165,12 @@ impl JsonRpcIncomingMessage for CreateTerminalResponse {
 impl JsonRpcMessage for TerminalOutputRequest {}
 
 impl JsonRpcOutgoingMessage for TerminalOutputRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
-        json_cast(self)
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
+        let method = self.method().to_string();
+        Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -166,7 +186,7 @@ impl JsonRpcMessage for TerminalOutputResponse {}
 
 impl JsonRpcIncomingMessage for TerminalOutputResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
-        serde_json::to_value(self).map_err(acp::Error::into_internal_error)
+        serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)
     }
 
     fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
@@ -181,8 +201,12 @@ impl JsonRpcIncomingMessage for TerminalOutputResponse {
 impl JsonRpcMessage for ReleaseTerminalRequest {}
 
 impl JsonRpcOutgoingMessage for ReleaseTerminalRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
-        json_cast(self)
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
+        let method = self.method().to_string();
+        Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -198,7 +222,7 @@ impl JsonRpcMessage for ReleaseTerminalResponse {}
 
 impl JsonRpcIncomingMessage for ReleaseTerminalResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
-        serde_json::to_value(self).map_err(acp::Error::into_internal_error)
+        serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)
     }
 
     fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
@@ -213,8 +237,12 @@ impl JsonRpcIncomingMessage for ReleaseTerminalResponse {
 impl JsonRpcMessage for WaitForTerminalExitRequest {}
 
 impl JsonRpcOutgoingMessage for WaitForTerminalExitRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
-        json_cast(self)
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
+        let method = self.method().to_string();
+        Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -230,7 +258,7 @@ impl JsonRpcMessage for WaitForTerminalExitResponse {}
 
 impl JsonRpcIncomingMessage for WaitForTerminalExitResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
-        serde_json::to_value(self).map_err(acp::Error::into_internal_error)
+        serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)
     }
 
     fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
@@ -245,8 +273,12 @@ impl JsonRpcIncomingMessage for WaitForTerminalExitResponse {
 impl JsonRpcMessage for KillTerminalCommandRequest {}
 
 impl JsonRpcOutgoingMessage for KillTerminalCommandRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
-        json_cast(self)
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
+        let method = self.method().to_string();
+        Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -262,7 +294,7 @@ impl JsonRpcMessage for KillTerminalCommandResponse {}
 
 impl JsonRpcIncomingMessage for KillTerminalCommandResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
-        serde_json::to_value(self).map_err(acp::Error::into_internal_error)
+        serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)
     }
 
     fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {

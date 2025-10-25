@@ -16,8 +16,12 @@ use crate::util::json_cast;
 impl JsonRpcMessage for InitializeRequest {}
 
 impl JsonRpcOutgoingMessage for InitializeRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        json_cast(self)
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -51,8 +55,12 @@ impl JsonRpcIncomingMessage for InitializeResponse {
 impl JsonRpcMessage for AuthenticateRequest {}
 
 impl JsonRpcOutgoingMessage for AuthenticateRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        json_cast(self)
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -86,8 +94,12 @@ impl JsonRpcIncomingMessage for AuthenticateResponse {
 impl JsonRpcMessage for LoadSessionRequest {}
 
 impl JsonRpcOutgoingMessage for LoadSessionRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        json_cast(self)
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -121,8 +133,12 @@ impl JsonRpcIncomingMessage for LoadSessionResponse {
 impl JsonRpcMessage for NewSessionRequest {}
 
 impl JsonRpcOutgoingMessage for NewSessionRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        json_cast(self)
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -156,8 +172,12 @@ impl JsonRpcIncomingMessage for NewSessionResponse {
 impl JsonRpcMessage for PromptRequest {}
 
 impl JsonRpcOutgoingMessage for PromptRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        json_cast(self)
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -191,8 +211,12 @@ impl JsonRpcIncomingMessage for PromptResponse {
 impl JsonRpcMessage for SetSessionModeRequest {}
 
 impl JsonRpcOutgoingMessage for SetSessionModeRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        json_cast(self)
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {

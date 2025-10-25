@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// Test helper to block and wait for a JSON-RPC response.
-async fn recv<R: JsonRpcMessage + Send>(
+async fn recv<R: JsonRpcIncomingMessage + Send>(
     response: JsonRpcResponse<R>,
 ) -> Result<R, agent_client_protocol::Error> {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -62,8 +62,12 @@ struct SimpleRequest {
 impl JsonRpcMessage for SimpleRequest {}
 
 impl JsonRpcOutgoingMessage for SimpleRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        scp::util::json_cast(self)
+    fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(scp::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -268,8 +272,12 @@ struct ErrorRequest {
 impl JsonRpcMessage for ErrorRequest {}
 
 impl JsonRpcOutgoingMessage for ErrorRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        scp::util::json_cast(self)
+    fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(scp::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -356,8 +364,12 @@ struct EmptyRequest;
 impl JsonRpcMessage for EmptyRequest {}
 
 impl JsonRpcOutgoingMessage for EmptyRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        scp::util::json_cast(self)
+    fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(scp::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {

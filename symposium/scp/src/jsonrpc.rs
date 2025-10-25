@@ -9,7 +9,7 @@ use boxfnonce::SendBoxFnOnce;
 use futures::channel::{mpsc, oneshot};
 use futures::future::{BoxFuture, Either};
 use futures::{AsyncRead, AsyncWrite, FutureExt};
-use jsonrpcmsg::Params;
+
 
 mod actors;
 mod handlers;
@@ -274,8 +274,9 @@ impl JsonRpcConnectionCx {
     ) -> JsonRpcResponse<Req::Response> {
         let method = request.method().to_string();
         let (response_tx, response_rx) = oneshot::channel();
-        match request.params() {
-            Ok(params) => {
+        match request.into_untyped_message() {
+            Ok(untyped) => {
+                let params = crate::util::json_cast(untyped.params).ok();
                 let message = OutgoingMessage::Request {
                     method: method.clone(),
                     params,
@@ -321,9 +322,12 @@ impl JsonRpcConnectionCx {
         &self,
         notification: N,
     ) -> Result<(), acp::Error> {
-        let method = notification.method().to_string();
-        let params = notification.params()?;
-        self.send_raw_message(OutgoingMessage::Notification { method, params })
+        let untyped = notification.into_untyped_message()?;
+        let params = crate::util::json_cast(untyped.params).ok();
+        self.send_raw_message(OutgoingMessage::Notification {
+            method: untyped.method,
+            params,
+        })
     }
 
     /// Send an error notification (no reply expected).
@@ -532,9 +536,21 @@ impl JsonRpcIncomingMessage for serde_json::Value {
     }
 }
 
+impl JsonRpcOutgoingMessage for serde_json::Value {
+    fn into_untyped_message(self) -> Result<UntypedMessage, acp::Error> {
+        // For raw JSON values, we expect them to already be properly formatted
+        // This is a fallback for generic handling
+        Ok(UntypedMessage::new(String::new(), self))
+    }
+
+    fn method(&self) -> &str {
+        ""
+    }
+}
+
 pub trait JsonRpcOutgoingMessage: JsonRpcMessage {
     /// The parameters for the request.
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error>;
+    fn into_untyped_message(self) -> Result<UntypedMessage, acp::Error>;
 
     /// The method name for the request.
     fn method(&self) -> &str;
@@ -550,32 +566,46 @@ pub trait JsonRpcRequest: JsonRpcOutgoingMessage {
 }
 
 #[derive(Debug)]
-pub struct JsonRpcUntypedRequest {
-    method: String,
-    params: Option<Params>,
+pub struct UntypedMessage {
+    pub method: String,
+    pub params: serde_json::Value,
 }
 
-impl JsonRpcUntypedRequest {
-    pub fn new(method: String, params: Option<Params>) -> Self {
+impl UntypedMessage {
+    pub fn new(method: String, params: serde_json::Value) -> Self {
         Self { method, params }
+    }
+
+    pub fn method(&self) -> &str {
+        &self.method
+    }
+
+    pub fn params(&self) -> &serde_json::Value {
+        &self.params
+    }
+
+    pub fn into_parts(self) -> (String, serde_json::Value) {
+        (self.method, self.params)
     }
 }
 
-impl JsonRpcMessage for JsonRpcUntypedRequest {}
+impl JsonRpcMessage for UntypedMessage {}
 
-impl JsonRpcOutgoingMessage for JsonRpcUntypedRequest {
+impl JsonRpcOutgoingMessage for UntypedMessage {
     fn method(&self) -> &str {
         &self.method
     }
 
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
-        Ok(self.params)
+    fn into_untyped_message(self) -> Result<UntypedMessage, agent_client_protocol::Error> {
+        Ok(self)
     }
 }
 
-impl JsonRpcRequest for JsonRpcUntypedRequest {
+impl JsonRpcRequest for UntypedMessage {
     type Response = serde_json::Value;
 }
+
+impl JsonRpcNotification for UntypedMessage {}
 
 /// Represents a pending response of type `R` from an outgoing request.
 pub struct JsonRpcResponse<R> {
@@ -600,14 +630,14 @@ impl JsonRpcResponse<serde_json::Value> {
     }
 }
 
-impl<R: JsonRpcMessage> JsonRpcResponse<R> {
+impl<R: JsonRpcIncomingMessage> JsonRpcResponse<R> {
     /// Create a new response that maps the result of the response to a new type.
     pub fn map<U>(
         self,
         map_fn: impl Fn(R) -> Result<U, acp::Error> + 'static + Send,
     ) -> JsonRpcResponse<U>
     where
-        U: JsonRpcMessage,
+        U: JsonRpcIncomingMessage,
     {
         JsonRpcResponse {
             method: self.method,
@@ -615,6 +645,17 @@ impl<R: JsonRpcMessage> JsonRpcResponse<R> {
             task_tx: self.task_tx,
             to_result: Box::new(move |value| map_fn((self.to_result)(value)?)),
         }
+    }
+
+    /// Schedule an async task that will forward the respond to `response_cx` when it arrives.
+    /// Useful when proxying messages around.
+    pub fn forward_to_request_cx(self, request_cx: JsonRpcRequestCx<R>) -> Result<(), acp::Error>
+    where
+        R: Send,
+    {
+        self.await_when_response_received(async move |result| {
+            request_cx.respond_with_result(result)
+        })
     }
 
     /// Schedule an async task to run when the response is received.

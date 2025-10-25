@@ -5,11 +5,7 @@
 use agent_client_protocol as acp;
 use serde::{Deserialize, Serialize};
 
-use crate::jsonrpc::{
-    JsonRpcIncomingMessage, JsonRpcMessage, JsonRpcNotification, JsonRpcOutgoingMessage,
-    JsonRpcRequest,
-};
-use crate::util::json_cast;
+use crate::jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcOutgoingMessage, JsonRpcRequest};
 
 // ============================================================================
 // Requests and notifications send TO successor (and the response we receieve)
@@ -30,11 +26,16 @@ pub struct ToSuccessorRequest<Req> {
 impl<Req: JsonRpcMessage> JsonRpcMessage for ToSuccessorRequest<Req> {}
 
 impl<Req: JsonRpcOutgoingMessage> JsonRpcOutgoingMessage for ToSuccessorRequest<Req> {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
-        json_cast(ToSuccessorRequest {
-            method: self.method,
-            params: self.params.params()?,
-        })
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
+        let method = self.method().to_string();
+        let params_msg = self.params.into_untyped_message()?;
+                Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(ToSuccessorRequest {
+                method: params_msg.method,
+                params: params_msg.params,
+            }).map_err(acp::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -61,11 +62,16 @@ pub struct ToSuccessorNotification<Req> {
 impl<Req: JsonRpcMessage> JsonRpcMessage for ToSuccessorNotification<Req> {}
 
 impl<Req: JsonRpcOutgoingMessage> JsonRpcOutgoingMessage for ToSuccessorNotification<Req> {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
-        json_cast(ToSuccessorNotification {
-            method: self.method,
-            params: self.params.params()?,
-        })
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
+        let method = self.method().to_string();
+        let params_msg = self.params.into_untyped_message()?;
+                Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(ToSuccessorRequest {
+                method: params_msg.method,
+                params: params_msg.params,
+            }).map_err(acp::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -84,20 +90,27 @@ impl<Req: JsonRpcNotification> JsonRpcNotification for ToSuccessorNotification<R
 /// Delivered via `_proxy/successor/receive` when the successor wants to call back upstream.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ReceiveFromSuccessorRequest {
+pub struct FromSuccessorRequest<R> {
     /// Name of the method to be invoked
     pub method: String,
 
     /// Parameters for the method invocation
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub params: Option<jsonrpcmsg::Params>,
+    pub params: R,
 }
 
-impl JsonRpcMessage for ReceiveFromSuccessorRequest {}
+impl<R: JsonRpcRequest> JsonRpcMessage for FromSuccessorRequest<R> {}
 
-impl JsonRpcOutgoingMessage for ReceiveFromSuccessorRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
-        json_cast(self)
+impl<R: JsonRpcRequest> JsonRpcOutgoingMessage for FromSuccessorRequest<R> {
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
+        let method = self.method().to_string();
+        let params_msg = self.params.into_untyped_message()?;
+                Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(ToSuccessorRequest {
+                method: params_msg.method,
+                params: params_msg.params,
+            }).map_err(acp::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -105,31 +118,8 @@ impl JsonRpcOutgoingMessage for ReceiveFromSuccessorRequest {
     }
 }
 
-impl JsonRpcRequest for ReceiveFromSuccessorRequest {
-    type Response = FromSuccessorResponse;
-}
-
-/// Response sent when we receive a [`FromSuccessorRequest`]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum FromSuccessorResponse {
-    /// Result of the method invocation (on success)
-    Result(serde_json::Value),
-
-    /// Error object (on failure)
-    Error(acp::Error),
-}
-
-impl JsonRpcMessage for FromSuccessorResponse {}
-
-impl JsonRpcIncomingMessage for FromSuccessorResponse {
-    fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
-        serde_json::to_value(self).map_err(acp::Error::into_internal_error)
-    }
-
-    fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
-        json_cast(&value)
-    }
+impl<R: JsonRpcRequest> JsonRpcRequest for FromSuccessorRequest<R> {
+    type Response = R::Response;
 }
 
 /// A notification received from the successor component.
@@ -147,11 +137,16 @@ pub struct FromSuccessorNotification<N> {
 impl<N: JsonRpcNotification> JsonRpcMessage for FromSuccessorNotification<N> {}
 
 impl<N: JsonRpcNotification> JsonRpcOutgoingMessage for FromSuccessorNotification<N> {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, acp::Error> {
-        json_cast(FromSuccessorNotification {
-            method: self.method,
-            params: self.params.params()?,
-        })
+    fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
+        let method = self.method().to_string();
+        let params_msg = self.params.into_untyped_message()?;
+                Ok(crate::UntypedMessage::new(
+            method,
+            serde_json::to_value(ToSuccessorRequest {
+                method: params_msg.method,
+                params: params_msg.params,
+            }).map_err(acp::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {

@@ -122,7 +122,7 @@ where
         //
         //
         //
-        let messages::ReceiveFromSuccessorRequest {
+        let messages::FromSuccessorRequest {
             method: inner_method,
             params: inner_params,
         } = json_cast(params)?;

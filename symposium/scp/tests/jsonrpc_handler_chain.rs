@@ -15,7 +15,7 @@ use std::time::Duration;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// Test helper to block and wait for a JSON-RPC response.
-async fn recv<R: JsonRpcMessage + Send>(
+async fn recv<R: JsonRpcIncomingMessage + Send>(
     response: JsonRpcResponse<R>,
 ) -> Result<R, agent_client_protocol::Error> {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -39,8 +39,12 @@ struct FooRequest {
 impl JsonRpcMessage for FooRequest {}
 
 impl JsonRpcOutgoingMessage for FooRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        scp::util::json_cast(self)
+    fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(scp::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -80,8 +84,12 @@ struct BarRequest {
 impl JsonRpcMessage for BarRequest {}
 
 impl JsonRpcOutgoingMessage for BarRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        scp::util::json_cast(self)
+    fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(scp::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -240,8 +248,12 @@ struct TrackRequest {
 impl JsonRpcMessage for TrackRequest {}
 
 impl JsonRpcOutgoingMessage for TrackRequest {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        scp::util::json_cast(self)
+    fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(scp::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -360,8 +372,12 @@ struct Method1Request {
 impl JsonRpcMessage for Method1Request {}
 
 impl JsonRpcOutgoingMessage for Method1Request {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        scp::util::json_cast(self)
+    fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(scp::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -381,8 +397,12 @@ struct Method2Request {
 impl JsonRpcMessage for Method2Request {}
 
 impl JsonRpcOutgoingMessage for Method2Request {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        scp::util::json_cast(self)
+    fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(scp::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
@@ -561,8 +581,12 @@ struct EventNotification {
 impl JsonRpcMessage for EventNotification {}
 
 impl JsonRpcOutgoingMessage for EventNotification {
-    fn params(self) -> Result<Option<jsonrpcmsg::Params>, agent_client_protocol::Error> {
-        scp::util::json_cast(self)
+    fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
+        let method = self.method().to_string();
+        Ok(scp::UntypedMessage::new(
+            method,
+            serde_json::to_value(self).map_err(agent_client_protocol::Error::into_internal_error)?,
+        ))
     }
 
     fn method(&self) -> &str {
