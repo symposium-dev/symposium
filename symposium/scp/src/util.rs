@@ -9,3 +9,9 @@ where
     let m = serde_json::from_value(json).map_err(|_| acp::Error::parse_error())?;
     Ok(m)
 }
+
+/// Create an internal error from a string message.
+/// This is a convenience helper to avoid the verbose `Error::into_internal_error(std::io::Error::other(...))` pattern.
+pub fn internal_error(message: impl ToString) -> acp::Error {
+    acp::Error::new((-32603, message.to_string()))
+}

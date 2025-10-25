@@ -263,9 +263,9 @@ impl Conductor {
                 }))
                 .with_client(async move |jsonrpccx| {
                     self.components.push(Component { child, jsonrpccx });
-                    self.launch_proxy(providers, serve_args).await.map_err(|e| {
-                        agent_client_protocol::Error::into_internal_error(std::io::Error::other(e))
-                    })
+                    self.launch_proxy(providers, serve_args)
+                        .await
+                        .map_err(|e| scp::util::internal_error(e.to_string()))
                 })
                 .await
                 .map_err(|err| anyhow::anyhow!("{err:?}"))
