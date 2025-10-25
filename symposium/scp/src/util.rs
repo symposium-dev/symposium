@@ -10,8 +10,11 @@ where
     Ok(m)
 }
 
-/// Create an internal error from a string message.
-/// This is a convenience helper to avoid the verbose `Error::into_internal_error(std::io::Error::other(...))` pattern.
-pub fn internal_error(message: impl ToString) -> acp::Error {
-    acp::Error::new((-32603, message.to_string()))
+/// Create an internal error from an error value.
+/// This is a convenience helper that can be used directly with `map_err`:
+/// ```
+/// some_result.map_err(scp::util::internal_error)
+/// ```
+pub fn internal_error(error: impl std::fmt::Display) -> acp::Error {
+    acp::Error::new((-32603, error.to_string()))
 }

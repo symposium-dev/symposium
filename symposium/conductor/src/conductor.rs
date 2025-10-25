@@ -265,7 +265,7 @@ impl Conductor {
                     self.components.push(Component { child, jsonrpccx });
                     self.launch_proxy(providers, serve_args)
                         .await
-                        .map_err(|e| scp::util::internal_error(e.to_string()))
+                        .map_err(scp::util::internal_error)
                 })
                 .await
                 .map_err(|err| anyhow::anyhow!("{err:?}"))
