@@ -498,8 +498,8 @@ impl Conductor {
                     let current_span = tracing::Span::current();
                     let mut conductor_tx_clone = conductor_tx.clone();
                     let _ = successor_response
-                        .on_receiving_response(move |result| {
-                            async move {
+                        .on_receiving_response(async move |result| {
+                            async {
                                 let is_ok = result.is_ok();
                                 debug!(is_ok, "Received successor response, sending to conductor");
 
@@ -525,6 +525,7 @@ impl Conductor {
                                 component_request_id = ?component_request_id
                             ))
                             .instrument(current_span)
+                            .await
                         })
                         .await;
                 } else {
@@ -554,8 +555,8 @@ impl Conductor {
                     let current_span = tracing::Span::current();
                     let mut conductor_tx_clone = conductor_tx.clone();
                     let _ = successor_response
-                        .on_receiving_response(move |result| {
-                            async move {
+                        .on_receiving_response(async move |result| {
+                            async {
                                 let is_ok = result.is_ok();
                                 debug!(is_ok, "Received successor response, sending to conductor");
 
@@ -581,6 +582,7 @@ impl Conductor {
                                 component_request_id = ?component_request_id
                             ))
                             .instrument(current_span)
+                            .await
                         })
                         .await;
                 }
@@ -694,8 +696,8 @@ impl Conductor {
                 let method_for_task = method.clone();
 
                 let _ = response
-                    .on_receiving_response(move |result| {
-                        async move {
+                    .on_receiving_response(async move |result| {
+                        async {
                             debug!(
                                 is_ok = result.is_ok(),
                                 "Received MCP response from component"
@@ -705,6 +707,7 @@ impl Conductor {
                         .instrument(
                             tracing::info_span!("bridge_request", method = %method_for_task),
                         )
+                        .await
                     })
                     .await;
             }
@@ -913,8 +916,8 @@ impl Conductor {
         let current_span = tracing::Span::current();
 
         let _ = response
-            .on_receiving_response(move |result| {
-                async move {
+            .on_receiving_response(async move |result| {
+                async {
                     let is_ok = result.is_ok();
                     debug!(
                         method = method_string,
@@ -946,6 +949,7 @@ impl Conductor {
                     tracing::info_span!("receive_mcp_bridge_response", request_id = ?request_id),
                 )
                 .instrument(current_span)
+                .await
             })
             .await;
 
@@ -1087,8 +1091,8 @@ impl Conductor {
         let request_id = response_cx.id().clone();
         let current_span = tracing::Span::current();
         let _ = response
-            .on_receiving_response(move |result| {
-                async move {
+            .on_receiving_response(async move |result| {
+                async {
                     let is_ok = result.is_ok();
                     debug!(is_ok, ?result, "Received response, sending to conductor");
                     if let Err(error) = conductor_tx
@@ -1107,6 +1111,7 @@ impl Conductor {
                 }
                 .instrument(tracing::info_span!("receive_response", request_id = ?request_id))
                 .instrument(current_span)
+                .await
             })
             .await;
     }

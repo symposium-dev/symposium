@@ -429,8 +429,8 @@ impl AcpClientToAgentCallbacks for Component1Callbacks {
 
         let current_span = tracing::Span::current();
         let _ = successor_response
-            .on_receiving_response(|r| {
-                async move {
+            .on_receiving_response(async |r| {
+                {
                     let _ = response.respond_with_result(r);
                 }
                 .instrument(current_span)
@@ -461,8 +461,8 @@ impl AcpClientToAgentCallbacks for Component1Callbacks {
 
         let current_span = tracing::Span::current();
         let _ = successor_response
-            .on_receiving_response(|prompt_response| {
-                async move {
+            .on_receiving_response(async |prompt_response| {
+                {
                     let _ = response.respond_with_result(prompt_response);
                 }
                 .instrument(current_span)
