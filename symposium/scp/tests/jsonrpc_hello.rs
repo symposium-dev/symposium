@@ -6,7 +6,7 @@
 use futures::{AsyncRead, AsyncWrite};
 use scp::{
     Handled, JsonRpcConnection, JsonRpcHandler, JsonRpcResponsePayload, JsonRpcMessage,
-    JsonRpcNotification, JsonRpcNotificationCx, JsonRpcOutgoingMessage, JsonRpcRequest,
+    JsonRpcNotification, JsonRpcNotificationCx, JsonRpcRequest,
     JsonRpcRequestCx, JsonRpcResponse,
 };
 use serde::{Deserialize, Serialize};
@@ -55,9 +55,8 @@ struct PingRequest {
     message: String,
 }
 
-impl JsonRpcMessage for PingRequest {}
 
-impl JsonRpcOutgoingMessage for PingRequest {
+impl JsonRpcMessage for PingRequest {
     fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         scp::UntypedMessage::new(&method, self)
@@ -78,7 +77,6 @@ struct PongResponse {
     echo: String,
 }
 
-impl JsonRpcMessage for PongResponse {}
 
 impl JsonRpcResponsePayload for PongResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, agent_client_protocol::Error> {
@@ -170,9 +168,8 @@ struct LogNotification {
     message: String,
 }
 
-impl JsonRpcMessage for LogNotification {}
 
-impl JsonRpcOutgoingMessage for LogNotification {
+impl JsonRpcMessage for LogNotification {
     fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         scp::UntypedMessage::new(&method, self)

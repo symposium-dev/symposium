@@ -10,11 +10,11 @@
 use agent_client_protocol::{AgentNotification, AgentRequest, ClientNotification, ClientRequest};
 
 use crate::jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcRequest};
+use crate::util::json_cast;
 
 // ============================================================================
 // Agent side (messages that agents receive)
 // ============================================================================
-
 
 impl JsonRpcMessage for ClientRequest {
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, agent_client_protocol::Error> {
@@ -33,12 +33,45 @@ impl JsonRpcMessage for ClientRequest {
             ClientRequest::ExtMethodRequest(ext) => &ext.method,
         }
     }
+
+    fn parse_request(
+        method: &str,
+        params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        let params = match params {
+            Some(p) => p,
+            None => return Some(Err(agent_client_protocol::Error::invalid_params())),
+        };
+
+        let result = match method {
+            "initialize" => json_cast(params).map(ClientRequest::InitializeRequest),
+            "authenticate" => json_cast(params).map(ClientRequest::AuthenticateRequest),
+            "session/new" => json_cast(params).map(ClientRequest::NewSessionRequest),
+            "session/load" => json_cast(params).map(ClientRequest::LoadSessionRequest),
+            "session/set_mode" => json_cast(params).map(ClientRequest::SetSessionModeRequest),
+            "session/prompt" => json_cast(params).map(ClientRequest::PromptRequest),
+            _ => {
+                // Check for extension methods (prefixed with underscore)
+                if let Some(custom_method) = method.strip_prefix('_') {
+                    json_cast(params).map(|ext_req: agent_client_protocol::ExtRequest| {
+                        ClientRequest::ExtMethodRequest(agent_client_protocol::ExtRequest {
+                            method: custom_method.to_string().into(),
+                            params: ext_req.params,
+                        })
+                    })
+                } else {
+                    return None;
+                }
+            }
+        };
+
+        Some(result)
+    }
 }
 
 impl JsonRpcRequest for ClientRequest {
     type Response = serde_json::Value;
 }
-
 
 impl JsonRpcMessage for ClientNotification {
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, agent_client_protocol::Error> {
@@ -52,6 +85,37 @@ impl JsonRpcMessage for ClientNotification {
             ClientNotification::ExtNotification(ext) => &ext.method,
         }
     }
+
+    fn parse_notification(
+        method: &str,
+        params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        let params = match params {
+            Some(p) => p,
+            None => return Some(Err(agent_client_protocol::Error::invalid_params())),
+        };
+
+        let result = match method {
+            "session/cancel" => json_cast(params).map(ClientNotification::CancelNotification),
+            _ => {
+                // Check for extension notifications (prefixed with underscore)
+                if let Some(custom_method) = method.strip_prefix('_') {
+                    json_cast(params).map(|ext_notif: agent_client_protocol::ExtNotification| {
+                        ClientNotification::ExtNotification(
+                            agent_client_protocol::ExtNotification {
+                                method: custom_method.to_string().into(),
+                                params: ext_notif.params,
+                            },
+                        )
+                    })
+                } else {
+                    return None;
+                }
+            }
+        };
+
+        Some(result)
+    }
 }
 
 impl JsonRpcNotification for ClientNotification {}
@@ -59,7 +123,6 @@ impl JsonRpcNotification for ClientNotification {}
 // ============================================================================
 // Client side (messages that clients/editors receive)
 // ============================================================================
-
 
 impl JsonRpcMessage for AgentRequest {
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, agent_client_protocol::Error> {
@@ -80,12 +143,51 @@ impl JsonRpcMessage for AgentRequest {
             AgentRequest::ExtMethodRequest(ext) => &ext.method,
         }
     }
+
+    fn parse_request(
+        method: &str,
+        params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        let params = match params {
+            Some(p) => p,
+            None => return Some(Err(agent_client_protocol::Error::invalid_params())),
+        };
+
+        let result = match method {
+            "fs/write_text_file" => json_cast(params).map(AgentRequest::WriteTextFileRequest),
+            "fs/read_text_file" => json_cast(params).map(AgentRequest::ReadTextFileRequest),
+            "session/request_permission" => {
+                json_cast(params).map(AgentRequest::RequestPermissionRequest)
+            }
+            "terminal/create" => json_cast(params).map(AgentRequest::CreateTerminalRequest),
+            "terminal/output" => json_cast(params).map(AgentRequest::TerminalOutputRequest),
+            "terminal/release" => json_cast(params).map(AgentRequest::ReleaseTerminalRequest),
+            "terminal/wait_for_exit" => {
+                json_cast(params).map(AgentRequest::WaitForTerminalExitRequest)
+            }
+            "terminal/kill" => json_cast(params).map(AgentRequest::KillTerminalCommandRequest),
+            _ => {
+                // Check for extension methods (prefixed with underscore)
+                if let Some(custom_method) = method.strip_prefix('_') {
+                    json_cast(params).map(|ext_req: agent_client_protocol::ExtRequest| {
+                        AgentRequest::ExtMethodRequest(agent_client_protocol::ExtRequest {
+                            method: custom_method.to_string().into(),
+                            params: ext_req.params,
+                        })
+                    })
+                } else {
+                    return None;
+                }
+            }
+        };
+
+        Some(result)
+    }
 }
 
 impl JsonRpcRequest for AgentRequest {
     type Response = serde_json::Value;
 }
-
 
 impl JsonRpcMessage for AgentNotification {
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, agent_client_protocol::Error> {
@@ -98,6 +200,35 @@ impl JsonRpcMessage for AgentNotification {
             AgentNotification::SessionNotification(_) => "session/update",
             AgentNotification::ExtNotification(ext) => &ext.method,
         }
+    }
+
+    fn parse_notification(
+        method: &str,
+        params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        let params = match params {
+            Some(p) => p,
+            None => return Some(Err(agent_client_protocol::Error::invalid_params())),
+        };
+
+        let result = match method {
+            "session/update" => json_cast(params).map(AgentNotification::SessionNotification),
+            _ => {
+                // Check for extension notifications (prefixed with underscore)
+                if let Some(custom_method) = method.strip_prefix('_') {
+                    json_cast(params).map(|ext_notif: agent_client_protocol::ExtNotification| {
+                        AgentNotification::ExtNotification(agent_client_protocol::ExtNotification {
+                            method: custom_method.to_string().into(),
+                            params: ext_notif.params,
+                        })
+                    })
+                } else {
+                    return None;
+                }
+            }
+        };
+
+        Some(result)
     }
 }
 

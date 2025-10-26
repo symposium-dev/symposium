@@ -9,7 +9,7 @@
 use futures::{AsyncRead, AsyncWrite};
 use scp::{
     Handled, JsonRpcConnection, JsonRpcHandler, JsonRpcResponsePayload, JsonRpcMessage,
-    JsonRpcOutgoingMessage, JsonRpcRequest, JsonRpcRequestCx, JsonRpcResponse,
+    JsonRpcRequest, JsonRpcRequestCx, JsonRpcResponse,
 };
 use serde::{Deserialize, Serialize};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -55,9 +55,8 @@ fn setup_test_connections<H: JsonRpcHandler + 'static>(
 #[derive(Debug, Serialize, Deserialize)]
 struct EmptyRequest;
 
-impl JsonRpcMessage for EmptyRequest {}
 
-impl JsonRpcOutgoingMessage for EmptyRequest {
+impl JsonRpcMessage for EmptyRequest {
     fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         scp::UntypedMessage::new(&method, self)
@@ -78,9 +77,8 @@ struct OptionalParamsRequest {
     value: Option<String>,
 }
 
-impl JsonRpcMessage for OptionalParamsRequest {}
 
-impl JsonRpcOutgoingMessage for OptionalParamsRequest {
+impl JsonRpcMessage for OptionalParamsRequest {
     fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         scp::UntypedMessage::new(&method, self)
@@ -100,7 +98,6 @@ struct SimpleResponse {
     result: String,
 }
 
-impl JsonRpcMessage for SimpleResponse {}
 
 impl JsonRpcResponsePayload for SimpleResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, agent_client_protocol::Error> {

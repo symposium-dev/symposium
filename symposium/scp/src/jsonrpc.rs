@@ -531,6 +531,32 @@ pub trait JsonRpcMessage: 'static + Debug + Sized {
 
     /// The method name for the request.
     fn method(&self) -> &str;
+
+    /// Attempt to parse this type from a JSON-RPC request.
+    ///
+    /// Returns:
+    /// - `None` if this type does not recognize the method name or recognizes it as a notification
+    /// - `Some(Ok(value))` if the method is recognized as a request and deserialization succeeds
+    /// - `Some(Err(error))` if the method is recognized as a request but deserialization fails
+    fn parse_request(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, acp::Error>> {
+        None
+    }
+
+    /// Attempt to parse this type from a JSON-RPC notification.
+    ///
+    /// Returns:
+    /// - `None` if this type does not recognize the method name or recognizes it as a request
+    /// - `Some(Ok(value))` if the method is recognized as a notification and deserialization succeeds
+    /// - `Some(Err(error))` if the method is recognized as a notification but deserialization fails
+    fn parse_notification(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, acp::Error>> {
+        None
+    }
 }
 
 /// Defines the "payload" of a successful response to a JSON-RPC request.

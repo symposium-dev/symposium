@@ -8,7 +8,7 @@
 use futures::{AsyncRead, AsyncWrite};
 use scp::{
     Handled, JsonRpcConnection, JsonRpcHandler, JsonRpcResponsePayload, JsonRpcMessage,
-    JsonRpcOutgoingMessage, JsonRpcRequest, JsonRpcRequestCx, JsonRpcResponse,
+    JsonRpcRequest, JsonRpcRequestCx, JsonRpcResponse,
 };
 use serde::{Deserialize, Serialize};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -56,9 +56,8 @@ struct PingRequest {
     value: u32,
 }
 
-impl JsonRpcMessage for PingRequest {}
 
-impl JsonRpcOutgoingMessage for PingRequest {
+impl JsonRpcMessage for PingRequest {
     fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         scp::UntypedMessage::new(&method, self)
@@ -78,7 +77,6 @@ struct PongResponse {
     value: u32,
 }
 
-impl JsonRpcMessage for PongResponse {}
 
 impl JsonRpcResponsePayload for PongResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, agent_client_protocol::Error> {
@@ -99,9 +97,8 @@ struct SlowRequest {
     id: u32,
 }
 
-impl JsonRpcMessage for SlowRequest {}
 
-impl JsonRpcOutgoingMessage for SlowRequest {
+impl JsonRpcMessage for SlowRequest {
     fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         scp::UntypedMessage::new(&method, self)
@@ -121,7 +118,6 @@ struct SlowResponse {
     id: u32,
 }
 
-impl JsonRpcMessage for SlowResponse {}
 
 impl JsonRpcResponsePayload for SlowResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, agent_client_protocol::Error> {

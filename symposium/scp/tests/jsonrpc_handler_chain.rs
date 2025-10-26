@@ -6,7 +6,7 @@
 
 use scp::{
     Handled, JsonRpcConnection, JsonRpcHandler, JsonRpcResponsePayload, JsonRpcMessage,
-    JsonRpcNotification, JsonRpcNotificationCx, JsonRpcOutgoingMessage, JsonRpcRequest,
+    JsonRpcNotification, JsonRpcNotificationCx, JsonRpcRequest,
     JsonRpcRequestCx, JsonRpcResponse,
 };
 use serde::{Deserialize, Serialize};
@@ -36,9 +36,8 @@ struct FooRequest {
     value: String,
 }
 
-impl JsonRpcMessage for FooRequest {}
 
-impl JsonRpcOutgoingMessage for FooRequest {
+impl JsonRpcMessage for FooRequest {
     fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         scp::UntypedMessage::new(&method, self)
@@ -58,7 +57,6 @@ struct FooResponse {
     result: String,
 }
 
-impl JsonRpcMessage for FooResponse {}
 
 impl JsonRpcResponsePayload for FooResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, agent_client_protocol::Error> {
@@ -78,9 +76,8 @@ struct BarRequest {
     value: String,
 }
 
-impl JsonRpcMessage for BarRequest {}
 
-impl JsonRpcOutgoingMessage for BarRequest {
+impl JsonRpcMessage for BarRequest {
     fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         scp::UntypedMessage::new(&method, self)
@@ -100,7 +97,6 @@ struct BarResponse {
     result: String,
 }
 
-impl JsonRpcMessage for BarResponse {}
 
 impl JsonRpcResponsePayload for BarResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, agent_client_protocol::Error> {
@@ -239,9 +235,8 @@ struct TrackRequest {
     value: String,
 }
 
-impl JsonRpcMessage for TrackRequest {}
 
-impl JsonRpcOutgoingMessage for TrackRequest {
+impl JsonRpcMessage for TrackRequest {
     fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         scp::UntypedMessage::new(&method, self)
@@ -360,9 +355,8 @@ struct Method1Request {
     value: String,
 }
 
-impl JsonRpcMessage for Method1Request {}
 
-impl JsonRpcOutgoingMessage for Method1Request {
+impl JsonRpcMessage for Method1Request {
     fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         scp::UntypedMessage::new(&method, self)
@@ -382,9 +376,8 @@ struct Method2Request {
     value: String,
 }
 
-impl JsonRpcMessage for Method2Request {}
 
-impl JsonRpcOutgoingMessage for Method2Request {
+impl JsonRpcMessage for Method2Request {
     fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         scp::UntypedMessage::new(&method, self)
@@ -563,9 +556,8 @@ struct EventNotification {
     event: String,
 }
 
-impl JsonRpcMessage for EventNotification {}
 
-impl JsonRpcOutgoingMessage for EventNotification {
+impl JsonRpcMessage for EventNotification {
     fn into_untyped_message(self) -> Result<scp::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         scp::UntypedMessage::new(&method, self)
