@@ -5,7 +5,7 @@
 use agent_client_protocol as acp;
 use serde::{Deserialize, Serialize};
 
-use crate::jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcOutgoingMessage, JsonRpcRequest};
+use crate::jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcRequest};
 
 // ============================================================================
 // Requests and notifications send TO successor (and the response we receieve)
@@ -23,9 +23,7 @@ pub struct ToSuccessorRequest<Req: JsonRpcRequest> {
     pub request: Req,
 }
 
-impl<Req: JsonRpcRequest> JsonRpcMessage for ToSuccessorRequest<Req> {}
-
-impl<Req: JsonRpcRequest> JsonRpcOutgoingMessage for ToSuccessorRequest<Req> {
+impl<Req: JsonRpcRequest> JsonRpcMessage for ToSuccessorRequest<Req> {
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
         crate::UntypedMessage::new(
             TO_SUCCESSOR_REQUEST_METHOD,
@@ -54,9 +52,7 @@ pub struct ToSuccessorNotification<Req: JsonRpcNotification> {
     pub notification: Req,
 }
 
-impl<Req: JsonRpcNotification> JsonRpcMessage for ToSuccessorNotification<Req> {}
-
-impl<Req: JsonRpcNotification> JsonRpcOutgoingMessage for ToSuccessorNotification<Req> {
+impl<Req: JsonRpcNotification> JsonRpcMessage for ToSuccessorNotification<Req> {
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
         crate::UntypedMessage::new(
             TO_SUCCESSOR_NOTIFICATION_METHOD,
@@ -88,9 +84,7 @@ pub struct FromSuccessorRequest<Req: JsonRpcRequest> {
     pub request: Req,
 }
 
-impl<Req: JsonRpcRequest> JsonRpcMessage for FromSuccessorRequest<Req> {}
-
-impl<R: JsonRpcRequest> JsonRpcOutgoingMessage for FromSuccessorRequest<R> {
+impl<R: JsonRpcRequest> JsonRpcMessage for FromSuccessorRequest<R> {
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
         crate::UntypedMessage::new(
             FROM_SUCCESSOR_REQUEST_METHOD,
@@ -119,9 +113,7 @@ pub struct FromSuccessorNotification<N: JsonRpcNotification> {
     pub notification: N,
 }
 
-impl<N: JsonRpcNotification> JsonRpcMessage for FromSuccessorNotification<N> {}
-
-impl<N: JsonRpcNotification> JsonRpcOutgoingMessage for FromSuccessorNotification<N> {
+impl<N: JsonRpcNotification> JsonRpcMessage for FromSuccessorNotification<N> {
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
         crate::UntypedMessage::new(
             FROM_SUCCESSOR_NOTIFICATION_METHOD,

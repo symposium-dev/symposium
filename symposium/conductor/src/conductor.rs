@@ -67,8 +67,8 @@ use futures::{AsyncRead, AsyncWrite, SinkExt, StreamExt, channel::mpsc};
 
 use scp::{
     AcpAgentToClientMessages, AcpClientToAgentMessages, InitializeRequestExt,
-    InitializeResponseExt, JsonRpcConnection, JsonRpcConnectionCx, JsonRpcNotification,
-    JsonRpcOutgoingMessage, JsonRpcRequest, JsonRpcRequestCx, JsonRpcResponse, McpConnectRequest,
+    InitializeResponseExt, JsonRpcConnection, JsonRpcConnectionCx, JsonRpcMessage,
+    JsonRpcNotification, JsonRpcRequest, JsonRpcRequestCx, JsonRpcResponse, McpConnectRequest,
     McpConnectResponse, McpDisconnectNotification, McpOverAcpMessage, McpOverAcpNotification,
     McpOverAcpRequest, Proxy, ProxyToConductorMessages, UntypedMessage,
 };

@@ -2,8 +2,7 @@ use std::error::Error;
 
 use crate::{
     Handled, JsonRpcHandler, JsonRpcMessage, JsonRpcNotification, JsonRpcNotificationCx,
-    JsonRpcOutgoingMessage, JsonRpcRequest, JsonRpcRequestCx, JsonRpcResponsePayload,
-    UntypedMessage, util::json_cast,
+    JsonRpcRequest, JsonRpcRequestCx, JsonRpcResponsePayload, UntypedMessage, util::json_cast,
 };
 use agent_client_protocol as acp;
 use serde::{Deserialize, Serialize};
@@ -16,9 +15,7 @@ pub struct McpConnectRequest {
     pub acp_url: String,
 }
 
-impl JsonRpcMessage for McpConnectRequest {}
-
-impl JsonRpcOutgoingMessage for McpConnectRequest {
+impl JsonRpcMessage for McpConnectRequest {
     fn into_untyped_message(self) -> Result<UntypedMessage, acp::Error> {
         UntypedMessage::new(METHOD_MCP_CONNECT_REQUEST, self)
     }
@@ -36,8 +33,6 @@ impl JsonRpcRequest for McpConnectRequest {
 pub struct McpConnectResponse {
     pub connection_id: String,
 }
-
-impl JsonRpcMessage for McpConnectResponse {}
 
 impl JsonRpcResponsePayload for McpConnectResponse {
     fn into_json(self, _method: &str) -> Result<serde_json::Value, agent_client_protocol::Error> {
@@ -61,9 +56,7 @@ pub struct McpDisconnectNotification {
     pub connection_id: String,
 }
 
-impl JsonRpcMessage for McpDisconnectNotification {}
-
-impl JsonRpcOutgoingMessage for McpDisconnectNotification {
+impl JsonRpcMessage for McpDisconnectNotification {
     fn into_untyped_message(self) -> Result<UntypedMessage, acp::Error> {
         UntypedMessage::new(METHOD_MCP_DISCONNECT_NOTIFICATION, self)
     }
@@ -92,9 +85,7 @@ pub struct McpOverAcpRequest<R> {
     pub message: R,
 }
 
-impl<R: JsonRpcRequest> JsonRpcMessage for McpOverAcpRequest<R> {}
-
-impl<R: JsonRpcRequest> JsonRpcOutgoingMessage for McpOverAcpRequest<R> {
+impl<R: JsonRpcRequest> JsonRpcMessage for McpOverAcpRequest<R> {
     fn into_untyped_message(self) -> Result<UntypedMessage, acp::Error> {
         let message = self.message.into_untyped_message()?;
         UntypedMessage::new(METHOD_MCP_REQUEST, message)
@@ -127,9 +118,7 @@ pub struct McpOverAcpNotification<R> {
     pub notification: R,
 }
 
-impl<R: JsonRpcOutgoingMessage> JsonRpcMessage for McpOverAcpNotification<R> {}
-
-impl<R: JsonRpcOutgoingMessage> JsonRpcOutgoingMessage for McpOverAcpNotification<R> {
+impl<R: JsonRpcMessage> JsonRpcMessage for McpOverAcpNotification<R> {
     fn into_untyped_message(self) -> Result<UntypedMessage, acp::Error> {
         let params = self.notification.into_untyped_message()?;
         UntypedMessage::new(METHOD_MCP_NOTIFICATION, params)
@@ -140,7 +129,7 @@ impl<R: JsonRpcOutgoingMessage> JsonRpcOutgoingMessage for McpOverAcpNotificatio
     }
 }
 
-impl<R: JsonRpcOutgoingMessage> JsonRpcNotification for McpOverAcpNotification<R> {}
+impl<R: JsonRpcMessage> JsonRpcNotification for McpOverAcpNotification<R> {}
 
 /// Callbacks for "mcp-over-acp"
 #[allow(async_fn_in_trait)]

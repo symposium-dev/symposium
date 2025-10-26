@@ -9,15 +9,14 @@
 
 use agent_client_protocol::{AgentNotification, AgentRequest, ClientNotification, ClientRequest};
 
-use crate::jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcOutgoingMessage, JsonRpcRequest};
+use crate::jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcRequest};
 
 // ============================================================================
 // Agent side (messages that agents receive)
 // ============================================================================
 
-impl JsonRpcMessage for ClientRequest {}
 
-impl JsonRpcOutgoingMessage for ClientRequest {
+impl JsonRpcMessage for ClientRequest {
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         crate::UntypedMessage::new(&method, self)
@@ -40,9 +39,8 @@ impl JsonRpcRequest for ClientRequest {
     type Response = serde_json::Value;
 }
 
-impl JsonRpcMessage for ClientNotification {}
 
-impl JsonRpcOutgoingMessage for ClientNotification {
+impl JsonRpcMessage for ClientNotification {
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         crate::UntypedMessage::new(&method, self)
@@ -62,9 +60,8 @@ impl JsonRpcNotification for ClientNotification {}
 // Client side (messages that clients/editors receive)
 // ============================================================================
 
-impl JsonRpcMessage for AgentRequest {}
 
-impl JsonRpcOutgoingMessage for AgentRequest {
+impl JsonRpcMessage for AgentRequest {
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         crate::UntypedMessage::new(&method, self)
@@ -89,9 +86,8 @@ impl JsonRpcRequest for AgentRequest {
     type Response = serde_json::Value;
 }
 
-impl JsonRpcMessage for AgentNotification {}
 
-impl JsonRpcOutgoingMessage for AgentNotification {
+impl JsonRpcMessage for AgentNotification {
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, agent_client_protocol::Error> {
         let method = self.method().to_string();
         crate::UntypedMessage::new(&method, self)

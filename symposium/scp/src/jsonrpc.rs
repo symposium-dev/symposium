@@ -525,7 +525,13 @@ impl<T: JsonRpcResponsePayload> JsonRpcRequestCx<T> {
 }
 
 /// Common bounds for any JSON-RPC message.
-pub trait JsonRpcMessage: 'static + Debug + Sized {}
+pub trait JsonRpcMessage: 'static + Debug + Sized {
+    /// The parameters for the request.
+    fn into_untyped_message(self) -> Result<UntypedMessage, acp::Error>;
+
+    /// The method name for the request.
+    fn method(&self) -> &str;
+}
 
 /// Defines the "payload" of a successful response to a JSON-RPC request.
 pub trait JsonRpcResponsePayload: 'static + Debug + Sized {
@@ -535,8 +541,6 @@ pub trait JsonRpcResponsePayload: 'static + Debug + Sized {
     /// Parse a JSON value into the response type.
     fn from_value(method: &str, value: serde_json::Value) -> Result<Self, acp::Error>;
 }
-
-impl JsonRpcMessage for serde_json::Value {}
 
 impl JsonRpcResponsePayload for serde_json::Value {
     fn from_value(_method: &str, value: serde_json::Value) -> Result<Self, acp::Error> {
@@ -548,7 +552,7 @@ impl JsonRpcResponsePayload for serde_json::Value {
     }
 }
 
-impl JsonRpcOutgoingMessage for serde_json::Value {
+impl JsonRpcMessage for serde_json::Value {
     fn into_untyped_message(self) -> Result<UntypedMessage, acp::Error> {
         // For raw JSON values, we expect them to already be properly formatted
         // This is a fallback for generic handling
@@ -561,19 +565,11 @@ impl JsonRpcOutgoingMessage for serde_json::Value {
     }
 }
 
-pub trait JsonRpcOutgoingMessage: JsonRpcMessage {
-    /// The parameters for the request.
-    fn into_untyped_message(self) -> Result<UntypedMessage, acp::Error>;
-
-    /// The method name for the request.
-    fn method(&self) -> &str;
-}
-
 /// A struct that represents a notification (JSON-RPC message that does not expect a response).
-pub trait JsonRpcNotification: JsonRpcOutgoingMessage {}
+pub trait JsonRpcNotification: JsonRpcMessage {}
 
 /// A struct that represents a request (JSON-RPC message expecting a response).
-pub trait JsonRpcRequest: JsonRpcOutgoingMessage {
+pub trait JsonRpcRequest: JsonRpcMessage {
     /// The type of data expected in response.
     type Response: JsonRpcResponsePayload;
 }
@@ -607,9 +603,7 @@ impl UntypedMessage {
     }
 }
 
-impl JsonRpcMessage for UntypedMessage {}
-
-impl JsonRpcOutgoingMessage for UntypedMessage {
+impl JsonRpcMessage for UntypedMessage {
     fn method(&self) -> &str {
         &self.method
     }
