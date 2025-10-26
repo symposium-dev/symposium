@@ -122,7 +122,17 @@ conductor agent sparkle-acp claude-code-acp
 conductor mcp 54321
 ```
 
-To editors, the conductor is a normal ACP agent - no special capabilities are advertised upstream. However, the conductor advertises a `"proxy"` capability to its downstream components, and expects them to respond with a `"proxy"` capability to confirm they are P/ACP-aware.
+To editors, the conductor is a normal ACP agent - no special capabilities are advertised upstream.
+
+**Proxy Capability Handshake:**
+
+The conductor uses a two-way capability handshake to verify that proxy components can fulfill their role:
+
+1. **Conductor offers proxy capability** - When initializing non-last components (proxies), the conductor includes `"proxy": true` in the `_meta` field of the InitializeRequest
+2. **Component accepts proxy capability** - The component must respond with `"proxy": true` in the `_meta` field of its InitializeResponse  
+3. **Last component (agent)** - The final component is treated as a standard ACP agent and does NOT receive the proxy capability offer
+
+**Why a two-way handshake?** The proxy capability is an *active protocol* - it requires the component to handle `_proxy/successor/*` messages and route communications appropriately. Unlike passive capabilities (like "http" or "sse") which are just declarations, proxy components must actively participate in message routing. If a component doesn't respond with the proxy capability, the conductor fails initialization with an error like "component X is not a proxy", since that component cannot fulfill its required role in the chain.
 
 
 # Shiny future
@@ -209,20 +219,13 @@ P/ACP proxies forward the capabilities they receive from their editor.
 
 ### P/ACP component capabilities
 
-P/ACP components advertise their role during ACP initialization:
+P/ACP uses capabilities in the `_meta` field for the proxy handshake:
 
-**Orchestrator capability:**
-```json
-"_meta": {
-    "symposium": {
-        "version": "1.0",
-        "orchestrator": true
-    }
-}
-```
+**Proxy capability (two-way handshake):**
 
-**Proxy capability:**
+The conductor offers the proxy capability to non-last components in InitializeRequest:
 ```json
+// InitializeRequest from conductor to proxy component
 "_meta": {
     "symposium": {
         "version": "1.0",
@@ -231,8 +234,21 @@ P/ACP components advertise their role during ACP initialization:
 }
 ```
 
+The component must accept by responding with the proxy capability in InitializeResponse:
+```json
+// InitializeResponse from proxy component to conductor
+"_meta": {
+    "symposium": {
+        "version": "1.0",
+        "proxy": true
+    }
+}
+```
+
+If a component that was offered the proxy capability does not respond with it, the conductor fails initialization.
+
 **Agent capability:**
-Agents don't need special P/ACP capabilities - they're just normal ACP agents.
+The last component in the chain (the agent) is NOT offered the proxy capability and does not need to respond with it. Agents are just normal ACP agents with no P/ACP awareness required.
 
 ### The `_proxy/successor/{send,receive}` protocol
 
@@ -641,18 +657,21 @@ sequenceDiagram
     Note over Editor,Agent: === Initialization Phase ===
     
     Editor->>Fiedler: initialize (id: I0)
-    Fiedler->>Sparkle: initialize (id: I0)<br/>(with PROXY capability)
+    Fiedler->>Sparkle: initialize (id: I0)<br/>(offers PROXY capability)
     
-    Note over Sparkle: Sees proxy capability,<br/>initializes successor
+    Note over Sparkle: Sees proxy capability offer,<br/>initializes successor
     
     Sparkle->>Fiedler: _proxy/successor/request (id: I1)<br/>payload: initialize
-    Fiedler->>Agent: initialize (id: I1)<br/>(without PROXY capability)
+    Fiedler->>Agent: initialize (id: I1)<br/>(NO proxy capability - agent is last)
     Agent-->>Fiedler: initialize response (id: I1)
     Fiedler-->>Sparkle: _proxy/successor response (id: I1)
     
-    Note over Sparkle: Sees Agent capabilities,<br/>adds own capabilities
+    Note over Sparkle: Sees Agent capabilities,<br/>prepares response
     
-    Sparkle-->>Fiedler: initialize response (id: I0)
+    Sparkle-->>Fiedler: initialize response (id: I0)<br/>(accepts PROXY capability)
+    
+    Note over Fiedler: Verifies Sparkle accepted proxy.<br/>If not, would fail with error.
+    
     Fiedler-->>Editor: initialize response (id: I0)
     
     Note over Editor,Agent: === Session Creation ===
@@ -772,18 +791,27 @@ sequenceDiagram
    }
    ```
 
-7. **Sparkle → Fiedler: initialize response** (id: I0, with combined capabilities)
+7. **Sparkle → Fiedler: initialize response** (id: I0, accepting proxy capability)
    ```json
    {
      "jsonrpc": "2.0",
      "id": "I0",
      "result": {
        "protocolVersion": "0.1.0",
-       "capabilities": {},
+       "capabilities": {
+         "_meta": {
+           "symposium": {
+             "version": "1.0",
+             "proxy": true
+           }
+         }
+       },
        "serverInfo": {"name": "Sparkle + claude-code-acp", "version": "0.1.0"}
      }
    }
    ```
+   
+   Note: Sparkle MUST include `"proxy": true` in its response since it was offered the proxy capability. If this field is missing, Fiedler will fail initialization with an error.
 
 8. **Editor → Fiedler: session/new** (id: U0)
    ```json

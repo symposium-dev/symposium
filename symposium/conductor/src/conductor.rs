@@ -62,15 +62,15 @@
 
 use std::{collections::HashMap, pin::Pin};
 
-use agent_client_protocol::{self as acp, ClientRequest, InitializeRequest};
+use agent_client_protocol::{self as acp, ClientRequest, InitializeRequest, InitializeResponse};
 use futures::{AsyncRead, AsyncWrite, SinkExt, StreamExt, channel::mpsc};
 
 use scp::{
-    AcpAgentToClientMessages, AcpClientToAgentMessages, InitializeRequestExt, JsonRpcConnection,
-    JsonRpcConnectionCx, JsonRpcNotification, JsonRpcOutgoingMessage, JsonRpcRequest,
-    JsonRpcRequestCx, JsonRpcResponse, McpConnectRequest, McpConnectResponse,
-    McpDisconnectNotification, McpOverAcpMessage, McpOverAcpNotification, McpOverAcpRequest, Proxy,
-    ProxyToConductorMessages, UntypedMessage,
+    AcpAgentToClientMessages, AcpClientToAgentMessages, InitializeRequestExt,
+    InitializeResponseExt, JsonRpcConnection, JsonRpcConnectionCx, JsonRpcNotification,
+    JsonRpcOutgoingMessage, JsonRpcRequest, JsonRpcRequestCx, JsonRpcResponse, McpConnectRequest,
+    McpConnectResponse, McpDisconnectNotification, McpOverAcpMessage, McpOverAcpNotification,
+    McpOverAcpRequest, Proxy, ProxyToConductorMessages, UntypedMessage,
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::{debug, error, info};
@@ -566,7 +566,7 @@ impl Conductor {
             self.forward_initialize_request(
                 target_component_index,
                 serde_json::from_value(request.params).map_err(acp::Error::into_internal_error),
-                request_cx,
+                request_cx.cast(),
             )
         } else if request.method == "session/new" {
             // When forwarding "session/new", we adjust MCP servers to manage "acp:" URLs.
@@ -610,7 +610,7 @@ impl Conductor {
         &self,
         target_component_index: usize,
         initialize_req: Result<InitializeRequest, acp::Error>,
-        request_cx: JsonRpcRequestCx<serde_json::Value>,
+        request_cx: JsonRpcRequestCx<InitializeResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
         // If we failed to create the initialize request, respond with an error and return.
         let Ok(mut initialize_req) = initialize_req else {
@@ -619,7 +619,9 @@ impl Conductor {
         };
 
         // Either add or remove proxy, depending on whether this component has a successor.
-        if self.is_agent_component(target_component_index) {
+        let is_agent = self.is_agent_component(target_component_index);
+
+        if is_agent {
             initialize_req = initialize_req.remove_meta_capability(Proxy);
         } else {
             initialize_req = initialize_req.add_meta_capability(Proxy);
@@ -627,8 +629,20 @@ impl Conductor {
 
         self.components[target_component_index]
             .agent_cx
-            .send_request(ClientRequest::InitializeRequest(initialize_req))
-            .forward_to_request_cx(request_cx)
+            .send_request(initialize_req)
+            .await_when_response_received(async move |response| match response {
+                Ok(response) => {
+                    // Verify proxy capability handshake for non-agent components
+                    if !is_agent && !response.has_meta_capability(Proxy) {
+                        request_cx.respond_with_error(acp::Error::internal_error().with_data(
+                            format!("component {} is not a proxy", target_component_index),
+                        ))
+                    } else {
+                        request_cx.respond(response)
+                    }
+                }
+                Err(error) => request_cx.respond_with_error(error),
+            })
     }
 
     // Intercept `session/new` requests and replace MCP servers based on `acp:...` URLs with stdio-based servers.

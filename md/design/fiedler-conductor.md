@@ -75,22 +75,20 @@ Routes messages between editor and components:
 
 ### 3. Capability Management
 
-The conductor modifies capability advertisements during initialization:
+The conductor performs a two-way capability handshake during initialization:
 
-**When forwarding `acp/initialize` to first component:**
-- Adds `_proxy/successor/*` capability if component has a successor
-- Removes `_proxy/successor/*` capability if component is the last in chain
-- Passes through all other capabilities from editor's request
+**Proxy Capability Handshake:**
+- **For non-last components (proxies)**: Conductor offers `proxy: true` in `_meta` field of InitializeRequest
+- **Component must accept**: Proxy components MUST respond with `proxy: true` in `_meta` field of InitializeResponse
+- **For last component (agent)**: Conductor does NOT offer `proxy` capability (agent is just a normal ACP agent)
+- **Handshake failure**: If a component offered the proxy capability doesn't respond with it, conductor fails initialization with error "component X is not a proxy"
 
-**MCP bridge capability (`mcp_acp_transport`):**
-- Check if final agent advertises `mcp_acp_transport: true`
-- If agent lacks capability, conductor activates MCP bridging
-- Always advertise `mcp_acp_transport: true` to intermediate components
+**Why a handshake?** The proxy capability is an *active protocol* requiring components to handle `_proxy/successor/*` messages. Unlike passive capabilities (like "http"), proxy components must actively participate in routing. The two-way handshake ensures components can fulfill their role.
 
-This allows:
-- Each component to see what capabilities its successor offers
-- Each component to decide what capabilities to advertise to its predecessor
-- The chain to be transparent to the editor
+**MCP bridge capability (future):**
+- Components may declare MCP servers with ACP transport (`"url": "acp:$UUID"`)
+- Conductor will handle bridging if agent doesn't support `mcp_acp_transport`
+- See [MCP Bridge](./mcp-bridge.md) for details
 
 ### 4. MCP Bridge Adaptation
 
@@ -122,30 +120,35 @@ sequenceDiagram
     Note over Fiedler: Spawns both components at startup<br/>from CLI args
     
     Editor->>Fiedler: acp/initialize [I0]
-    Fiedler->>Sparkle: acp/initialize (+ proxy capability) [I0]
+    Fiedler->>Sparkle: acp/initialize (offers proxy capability) [I0]
     
-    Note over Sparkle: Sees proxy capability,<br/>knows it has a successor
+    Note over Sparkle: Sees proxy capability offer,<br/>knows it has a successor
     
     Sparkle->>Fiedler: _proxy/successor/request(acp/initialize) [I1]
     
     Note over Fiedler: Unwraps request,<br/>knows Agent is last in chain
     
-    Fiedler->>Agent: acp/initialize (NO proxy capability) [I1]
+    Fiedler->>Agent: acp/initialize (NO proxy capability - agent is last) [I1]
     Agent-->>Fiedler: initialize response (capabilities) [I1]
     Fiedler-->>Sparkle: _proxy/successor response [I1]
     
-    Note over Sparkle: Sees Agent's capabilities,<br/>adds own capabilities
+    Note over Sparkle: Sees Agent's capabilities,<br/>prepares response
     
-    Sparkle-->>Fiedler: initialize response (combined capabilities) [I0]
+    Sparkle-->>Fiedler: initialize response (accepts proxy capability) [I0]
+    
+    Note over Fiedler: Verifies Sparkle accepted proxy.<br/>If not, would fail with error.
+    
     Fiedler-->>Editor: initialize response [I0]
 ```
 
 Key points:
 1. **Fiedler spawns ALL components at startup** based on command-line args
 2. **Sequential initialization**: Fiedler → Component1 → Component2 → ... → Agent
-3. **Capability modification by Fiedler**:
-   - Adds `proxy: true` to intermediate components (they have successors)
-   - Omits `proxy: true` from last component (no successor)
+3. **Proxy capability handshake**:
+   - Fiedler **offers** `proxy: true` to non-last components (in InitializeRequest `_meta`)
+   - Components **must accept** by responding with `proxy: true` (in InitializeResponse `_meta`)
+   - Last component (agent) is NOT offered proxy capability
+   - Fiedler **verifies** acceptance and fails initialization if missing
 4. **Components use `_proxy/successor/request`** to initialize their successors
 5. **Capabilities flow back up the chain**: Each component sees successor's capabilities before responding
 6. **Message IDs**: Preserved from editor (I0), new IDs for proxy messages (I1, I2, ...)
@@ -253,12 +256,14 @@ If component fails to initialize:
 - [x] Error reporting from spawned tasks to conductor
 - [ ] **PUNCH LIST - Remaining MVP items:**
   - [ ] Fix typo: `ComnponentToItsClientMessage` → `ComponentToItsClientMessage`
-  - [ ] Capability modification during initialization:
-    - [ ] Add `_proxy/successor/*` for intermediate components during `acp/initialize`
-    - [ ] Omit `_proxy/successor/*` for last component
+  - [ ] Proxy capability handshake during initialization:
+    - [ ] Offer `proxy: true` in `_meta` to non-last components during `acp/initialize`
+    - [ ] Do NOT offer `proxy` to last component (agent)
+    - [ ] Verify component accepts by checking for `proxy: true` in InitializeResponse `_meta`
+    - [ ] Fail initialization with error "component X is not a proxy" if handshake fails
   - [ ] Add documentation/comments explaining recursive chain building
   - [ ] Add logging (message routing, component startup, errors)
-  - [ ] Write tests (basic routing, initialization, error handling)
+  - [ ] Write tests (proxy capability handshake, basic routing, initialization, error handling)
   - [ ] Component crash detection and chain shutdown
 
 ### Phase 2: Robust Error Handling
