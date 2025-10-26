@@ -1,6 +1,6 @@
-use crate::JsonRpcNotificationCx;
 use crate::jsonrpc::{Handled, JsonRpcHandler};
-use std::error::Error;
+use crate::{JsonRpcNotificationCx, UntypedMessage};
+use agent_client_protocol as acp;
 use std::ops::AsyncFnMut;
 
 use super::JsonRpcRequestCx;
@@ -38,7 +38,7 @@ where
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, agent_client_protocol::Error> {
+    ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, acp::Error> {
         match self.handler1.handle_request(cx, params).await? {
             Handled::Yes => Ok(Handled::Yes),
             Handled::No(cx) => self.handler2.handle_request(cx, params).await,
@@ -49,7 +49,7 @@ where
         &mut self,
         cx: JsonRpcNotificationCx,
         params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<Handled<JsonRpcNotificationCx>, agent_client_protocol::Error> {
+    ) -> Result<Handled<JsonRpcNotificationCx>, acp::Error> {
         match self.handler1.handle_notification(cx, params).await? {
             Handled::Yes => Ok(Handled::Yes),
             Handled::No(cx) => self.handler2.handle_notification(cx, params).await,
@@ -57,30 +57,22 @@ where
     }
 }
 
-/// Generic JSON-RPC handler that forwards all incoming messages to a callback function.
-///
-/// This is useful for bridging JSON-RPC messages to an mpsc channel or other routing mechanism,
-/// allowing centralized message handling in an event loop.
-pub struct GenericHandler<TX, E>
+/// Generic JSON-RPC handler that provides callbacks for incoming requests and notifications.
+pub struct AllMessages<HandleReq, HandleNotification>
 where
-    TX: AsyncFnMut(
-        String,
-        Option<jsonrpcmsg::Params>,
-        JsonRpcRequestCx<serde_json::Value>,
-    ) -> Result<(), E>,
-    E: Error,
+    HandleReq:
+        AsyncFnMut(UntypedMessage, JsonRpcRequestCx<serde_json::Value>) -> Result<(), acp::Error>,
+    HandleNotification: AsyncFnMut(UntypedMessage, JsonRpcNotificationCx) -> Result<(), acp::Error>,
 {
-    tx: TX,
+    handle_request: HandleReq,
+    handle_notification: HandleNotification,
 }
 
-impl<TX, E> GenericHandler<TX, E>
+impl<HandleReq, HandleNotification> AllMessages<HandleReq, HandleNotification>
 where
-    TX: AsyncFnMut(
-        String,
-        Option<jsonrpcmsg::Params>,
-        JsonRpcRequestCx<serde_json::Value>,
-    ) -> Result<(), E>,
-    E: Error,
+    HandleReq:
+        AsyncFnMut(UntypedMessage, JsonRpcRequestCx<serde_json::Value>) -> Result<(), acp::Error>,
+    HandleNotification: AsyncFnMut(UntypedMessage, JsonRpcNotificationCx) -> Result<(), acp::Error>,
 {
     /// Create a handler that forwards all requests to the given callback.
     ///
@@ -100,43 +92,37 @@ where
     ///     .serve()
     ///     .await
     /// ```
-    pub fn send_to(tx: TX) -> Self {
-        Self { tx }
+    pub fn call(handle_request: HandleReq, handle_notification: HandleNotification) -> Self {
+        Self {
+            handle_request,
+            handle_notification,
+        }
     }
 }
 
-impl<TX, E> JsonRpcHandler for GenericHandler<TX, E>
+impl<HandleReq, HandleNotification> JsonRpcHandler for AllMessages<HandleReq, HandleNotification>
 where
-    TX: AsyncFnMut(
-        String,
-        Option<jsonrpcmsg::Params>,
-        JsonRpcRequestCx<serde_json::Value>,
-    ) -> Result<(), E>,
-    E: Error,
+    HandleReq:
+        AsyncFnMut(UntypedMessage, JsonRpcRequestCx<serde_json::Value>) -> Result<(), acp::Error>,
+    HandleNotification: AsyncFnMut(UntypedMessage, JsonRpcNotificationCx) -> Result<(), acp::Error>,
 {
     async fn handle_request(
         &mut self,
         cx: JsonRpcRequestCx<serde_json::Value>,
         params: &Option<jsonrpcmsg::Params>,
     ) -> Result<Handled<JsonRpcRequestCx<serde_json::Value>>, agent_client_protocol::Error> {
-        (self.tx)(cx.method().to_string(), params.clone(), cx)
-            .await
-            .map_err(|e| {
-                agent_client_protocol::Error::new((-32603, "Internal error".to_string()))
-                    .with_data(serde_json::json!({"error": e.to_string()}))
-            })?;
-
-        // Always claim the message (GenericHandler handles everything)
+        let message = UntypedMessage::new(cx.method(), params)?;
+        (self.handle_request)(message, cx).await?;
         Ok(Handled::Yes)
     }
 
     async fn handle_notification(
         &mut self,
         cx: JsonRpcNotificationCx,
-        _params: &Option<jsonrpcmsg::Params>,
+        params: &Option<jsonrpcmsg::Params>,
     ) -> Result<Handled<JsonRpcNotificationCx>, agent_client_protocol::Error> {
-        // Generic handler only handles requests, not notifications
-        // (notifications don't need responses, so they don't fit the bridge use case)
-        Ok(Handled::No(cx))
+        let message = UntypedMessage::new(cx.method(), params)?;
+        (self.handle_notification)(message, cx).await?;
+        Ok(Handled::Yes)
     }
 }

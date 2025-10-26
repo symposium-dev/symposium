@@ -20,12 +20,13 @@ use crate::{
 ///
 /// This is a convenience wrapper around `upon_receiving_response` that blocks
 /// until the response is received, making test code more readable.
-async fn recv<R: scp::JsonRpcMessage + Send>(
+async fn recv<R: scp::JsonRpcIncomingMessage + Send>(
     response: scp::JsonRpcResponse<R>,
 ) -> Result<R, agent_client_protocol::Error> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    response.await_when_response_received(move |result| async move {
-        let _ = tx.send(result);
+    response.await_when_response_received(async move |result| {
+        tx.send(result)
+            .map_err(|_| agent_client_protocol::Error::internal_error())
     })?;
     rx.await
         .map_err(|_| agent_client_protocol::Error::internal_error())?
@@ -420,20 +421,13 @@ impl AcpClientToAgentCallbacks for Component1Callbacks {
     async fn initialize(
         &mut self,
         args: InitializeRequest,
-        response: scp::JsonRpcRequestCx<InitializeResponse>,
+        request_cx: scp::JsonRpcRequestCx<InitializeResponse>,
     ) -> Result<(), agent_client_protocol::Error> {
         *self.captured_init.lock().await = Some(args.clone());
 
-        let successor_response = response.send_request_to_successor(args);
+        let successor_response = request_cx.send_request_to_successor(args);
 
-        let current_span = tracing::Span::current();
-        let _ = successor_response.await_when_response_received(async |r| {
-            async {
-                let _ = response.respond_with_result(r);
-            }
-            .instrument(current_span)
-            .await
-        });
+        let _ = successor_response.forward_to_request_cx(request_cx);
 
         Ok(())
     }
@@ -453,20 +447,10 @@ impl AcpClientToAgentCallbacks for Component1Callbacks {
             modified_prompt.prompt = vec![ContentBlock::Text(modified_text)];
         }
 
-        let successor_response = response
+        response
             .json_rpc_cx()
-            .send_request_to_successor(modified_prompt);
-
-        let current_span = tracing::Span::current();
-        let _ = successor_response.await_when_response_received(async |prompt_response| {
-            async {
-                let _ = response.respond_with_result(prompt_response);
-            }
-            .instrument(current_span)
-            .await
-        });
-
-        Ok(())
+            .send_request_to_successor(modified_prompt)
+            .forward_to_request_cx(response)
     }
 
     async fn authenticate(

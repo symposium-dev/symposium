@@ -72,7 +72,7 @@ impl JsonRpcCxExt for JsonRpcConnectionCx {
         &self,
         request: Req,
     ) -> crate::jsonrpc::JsonRpcResponse<Req::Response> {
-        let wrapper = ToSuccessorRequest { message: request };
+        let wrapper = ToSuccessorRequest { request };
 
         self.send_request(wrapper)
     }
@@ -81,9 +81,7 @@ impl JsonRpcCxExt for JsonRpcConnectionCx {
         &self,
         notification: Req,
     ) -> Result<(), acp::Error> {
-        let wrapper = ToSuccessorNotification {
-            message: notification,
-        };
+        let wrapper = ToSuccessorNotification { notification };
         self.send_notification(wrapper)
     }
 }

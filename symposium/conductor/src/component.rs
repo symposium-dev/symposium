@@ -23,7 +23,7 @@ pub struct Component {
 impl Drop for Component {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            child.start_kill();
+            let _: Result<_, _> = child.start_kill();
         }
     }
 }
@@ -42,7 +42,6 @@ pub enum ComponentProvider {
 ///
 /// Mock components provide bidirectional byte streams that the conductor
 /// can use to communicate via JSON-RPC, without spawning actual subprocesses.
-#[cfg_attr(not(any(test, feature = "test-support")), expect(dead_code))]
 pub trait MockComponent: Send {
     /// Create the byte streams for this mock component.
     ///
@@ -79,12 +78,11 @@ pub type MockComponentHandler = Box<
 ///
 /// This provides default boilerplate for setting up JSON-RPC connections,
 /// allowing tests to focus on the component's behavior.
-#[cfg_attr(not(any(test, feature = "test-support")), expect(dead_code))]
+
 pub struct MockComponentImpl {
     handler: MockComponentHandler,
 }
 
-#[cfg_attr(not(any(test, feature = "test-support")), expect(dead_code))]
 impl MockComponentImpl {
     pub fn new<F, Fut>(handler: F) -> Self
     where

@@ -121,7 +121,7 @@ where
         //
         //
         //
-        let messages::FromSuccessorRequest { message }: messages::FromSuccessorRequest<
+        let messages::FromSuccessorRequest { request: message }: messages::FromSuccessorRequest<
             UntypedMessage,
         > = json_cast(params)?;
 
@@ -142,9 +142,9 @@ where
             return Ok(Handled::No(cx));
         }
 
-        let messages::FromSuccessorNotification { message }: messages::FromSuccessorNotification<
-            UntypedMessage,
-        > = json_cast(params)?;
+        let messages::FromSuccessorNotification {
+            notification: message,
+        }: messages::FromSuccessorNotification<UntypedMessage> = json_cast(params)?;
 
         let inner_method = message.method.clone();
         let inner_params = json_cast(&message.params).ok();

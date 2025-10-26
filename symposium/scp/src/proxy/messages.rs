@@ -20,7 +20,7 @@ const TO_SUCCESSOR_REQUEST_METHOD: &str = "_proxy/successor/send/request";
 pub struct ToSuccessorRequest<Req: JsonRpcRequest> {
     /// The message to be sent to the successor component.
     #[serde(flatten)]
-    pub message: Req,
+    pub request: Req,
 }
 
 impl<Req: JsonRpcRequest> JsonRpcMessage for ToSuccessorRequest<Req> {}
@@ -29,7 +29,7 @@ impl<Req: JsonRpcRequest> JsonRpcOutgoingMessage for ToSuccessorRequest<Req> {
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
         crate::UntypedMessage::new(
             TO_SUCCESSOR_REQUEST_METHOD,
-            self.message.into_untyped_message()?,
+            self.request.into_untyped_message()?,
         )
     }
 
@@ -51,7 +51,7 @@ const TO_SUCCESSOR_NOTIFICATION_METHOD: &str = "_proxy/successor/send/notificati
 pub struct ToSuccessorNotification<Req: JsonRpcNotification> {
     /// The message to be sent to the successor component.
     #[serde(flatten)]
-    pub message: Req,
+    pub notification: Req,
 }
 
 impl<Req: JsonRpcNotification> JsonRpcMessage for ToSuccessorNotification<Req> {}
@@ -60,7 +60,7 @@ impl<Req: JsonRpcNotification> JsonRpcOutgoingMessage for ToSuccessorNotificatio
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
         crate::UntypedMessage::new(
             TO_SUCCESSOR_NOTIFICATION_METHOD,
-            self.message.into_untyped_message()?,
+            self.notification.into_untyped_message()?,
         )
     }
 
@@ -85,7 +85,7 @@ const FROM_SUCCESSOR_REQUEST_METHOD: &str = "_proxy/successor/receive/request";
 pub struct FromSuccessorRequest<Req: JsonRpcRequest> {
     /// The message received from the successor component.
     #[serde(flatten)]
-    pub message: Req,
+    pub request: Req,
 }
 
 impl<Req: JsonRpcRequest> JsonRpcMessage for FromSuccessorRequest<Req> {}
@@ -94,7 +94,7 @@ impl<R: JsonRpcRequest> JsonRpcOutgoingMessage for FromSuccessorRequest<R> {
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
         crate::UntypedMessage::new(
             FROM_SUCCESSOR_REQUEST_METHOD,
-            self.message.into_untyped_message()?,
+            self.request.into_untyped_message()?,
         )
     }
 
@@ -116,7 +116,7 @@ const FROM_SUCCESSOR_NOTIFICATION_METHOD: &str = "_proxy/successor/receive/notif
 pub struct FromSuccessorNotification<N: JsonRpcNotification> {
     /// The message received from the successor component.
     #[serde(flatten)]
-    pub message: N,
+    pub notification: N,
 }
 
 impl<N: JsonRpcNotification> JsonRpcMessage for FromSuccessorNotification<N> {}
@@ -125,7 +125,7 @@ impl<N: JsonRpcNotification> JsonRpcOutgoingMessage for FromSuccessorNotificatio
     fn into_untyped_message(self) -> Result<crate::UntypedMessage, acp::Error> {
         crate::UntypedMessage::new(
             FROM_SUCCESSOR_NOTIFICATION_METHOD,
-            self.message.into_untyped_message()?,
+            self.notification.into_untyped_message()?,
         )
     }
 

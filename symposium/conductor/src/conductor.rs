@@ -62,17 +62,23 @@
 
 use std::{collections::HashMap, pin::Pin};
 
-use agent_client_protocol::{self as acp, ClientRequest, InitializeRequest, NewSessionRequest};
+use agent_client_protocol::{self as acp, ClientRequest, InitializeRequest};
 use futures::{AsyncRead, AsyncWrite, SinkExt, StreamExt, channel::mpsc};
+
 use scp::{
     AcpAgentToClientMessages, AcpClientToAgentMessages, InitializeRequestExt, JsonRpcConnection,
-    JsonRpcConnectionCx, JsonRpcOutgoingMessage, JsonRpcRequestCx, Proxy, ProxyToConductorMessages,
-    UntypedMessage,
+    JsonRpcConnectionCx, JsonRpcNotification, JsonRpcOutgoingMessage, JsonRpcRequest,
+    JsonRpcRequestCx, JsonRpcResponse, McpConnectRequest, McpConnectResponse,
+    McpDisconnectNotification, McpOverAcpMessage, McpOverAcpNotification, McpOverAcpRequest, Proxy,
+    ProxyToConductorMessages, UntypedMessage,
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-use tracing::{Instrument, debug, error, info, warn};
+use tracing::{debug, error, info};
 
-use crate::component::{Component, ComponentProvider};
+use crate::{
+    component::{Component, ComponentProvider},
+    conductor::mcp_bridge::{McpBridgeConnection, McpBridgeConnectionActor, McpBridgeListeners},
+};
 
 mod mcp_bridge;
 
@@ -93,6 +99,12 @@ struct ServeArgs<OB: AsyncWrite, IB: AsyncRead> {
 pub struct Conductor {
     /// Channel for receiving internal conductor messages from spawned tasks
     conductor_rx: mpsc::Receiver<ConductorMessage>,
+
+    /// Manages the TCP listeners for MCP connections that will be proxied over ACP.
+    bridge_listeners: McpBridgeListeners,
+
+    /// Manages active connections to MCP clients.
+    bridge_connections: HashMap<String, McpBridgeConnection>,
 
     /// The chain of spawned components, ordered from first (index 0) to last
     components: Vec<Component>,
@@ -126,6 +138,8 @@ impl Conductor {
 
                 Conductor {
                     components: Default::default(),
+                    bridge_listeners: Default::default(),
+                    bridge_connections: Default::default(),
                     conductor_rx,
                 }
                 .launch_proxy(providers, serve_args)
@@ -264,26 +278,33 @@ impl Conductor {
         mut self,
         serve_args: ServeArgs<OB, IB>,
     ) -> anyhow::Result<()> {
-        let conductor_tx = serve_args.conductor_tx;
-        JsonRpcConnection::new(serve_args.outgoing_bytes, serve_args.incoming_bytes)
+        let ServeArgs {
+            mut conductor_tx,
+            outgoing_bytes,
+            incoming_bytes,
+        } = serve_args;
+
+        JsonRpcConnection::new(outgoing_bytes, incoming_bytes)
             .on_receive(AcpClientToAgentMessages::send_to({
                 // When we receive messages from the client, forward to the first item
                 // the proxy chain.
-                let mut conductor_tx_clone = conductor_tx.clone();
+                let mut conductor_tx = conductor_tx.clone();
                 async move |message| {
-                    conductor_tx_clone
+                    conductor_tx
                         .send(ConductorMessage::ClientToAgentViaProxyChain { message })
                         .await
                 }
             }))
-            .with_client(async |client| {
-                // This is the "central actor" of the conductor. Most other things forward messages
-                // via `conductor_tx` into this loop. This lets us serialize the conductor's activity.
-                while let Some(message) = self.conductor_rx.next().await {
-                    self.handle_conductor_message(&client, message, &conductor_tx)
-                        .await?;
+            .with_client({
+                async |client| {
+                    // This is the "central actor" of the conductor. Most other things forward messages
+                    // via `conductor_tx` into this loop. This lets us serialize the conductor's activity.
+                    while let Some(message) = self.conductor_rx.next().await {
+                        self.handle_conductor_message(&client, message, &mut conductor_tx)
+                            .await?;
+                    }
+                    Ok(())
                 }
-                Ok(())
             })
             .await
             .map_err(|err| anyhow::anyhow!("{err:?}"))
@@ -311,218 +332,81 @@ impl Conductor {
         &mut self,
         client: &JsonRpcConnectionCx,
         message: ConductorMessage,
-        conductor_tx: &mpsc::Sender<ConductorMessage>,
+        conductor_tx: &mut mpsc::Sender<ConductorMessage>,
     ) -> Result<(), agent_client_protocol::Error> {
         match message {
-            // # Messages coming from the client:
+            // Incoming message from our client:
             //
-            // * these are sent to the first component in the chain (could be a proxy or the agent)
+            // Forward to the first component (proxy or agent).
+            // We intercept "initialize" messions.
             ConductorMessage::ClientToAgentViaProxyChain { message } => match message {
-                // Initialize requests: insert or remove proxy capability.
-                scp::AcpClientToAgentMessage::Request(
-                    ClientRequest::InitializeRequest(init_req),
-                    json_rpc_request_cx,
-                ) => {
-                    self.send_initialize_request(0, Ok(init_req), json_rpc_request_cx)
-                        .await?;
+                scp::AcpClientToAgentMessage::Request(request, request_cx) => {
+                    self.forward_client_to_agent_request(conductor_tx, 0, request, request_cx)
+                        .await
                 }
-
-                // Other requests: forward to the first component.
-                scp::AcpClientToAgentMessage::Request(client_request, request_cx) => {
-                    let method = client_request.method().to_string();
-
-                    debug!(
-                        method,
-                        target = "component_0",
-                        has_successor = self.components.len() > 1,
-                        "Routing editor request to first component"
-                    );
-
-                    self.components[0]
-                        .agent_cx
-                        .send_request(client_request)
-                        .forward_to_request_cx(request_cx)?;
-                }
-
-                // Notifications: forward to the first component.
-                scp::AcpClientToAgentMessage::Notification(client_notification, _json_rpc_cx) => {
-                    debug!(
-                        method = client_notification.method(),
-                        target = "component_0",
-                        "Routing editor notification to first component"
-                    );
-                    self.components[0]
-                        .agent_cx
-                        .send_notification(client_notification)?
+                scp::AcpClientToAgentMessage::Notification(notification, _) => {
+                    self.send_client_to_agent_notification(0, notification)
+                        .await
                 }
             },
 
-            // # Message coming from a component to its *predecessor*.
+            // Incoming request from a proxy to its successor
             //
-            // This is a bit subtle. The component is sending an agent-to-client
-            // message to its predecessor. The way the conductor handles this depends
-            // on the conductor's relationship to that predecessor:
+            // Forward to the first component (proxy or agent).
+            // We intercept "initialize" messions.
+            ConductorMessage::ProxyRequestToSuccessor {
+                component_index,
+                args: scp::ToSuccessorRequest { request },
+                request_cx,
+            } => {
+                self.forward_client_to_agent_request(
+                    conductor_tx,
+                    component_index,
+                    request,
+                    request_cx,
+                )
+                .await
+            }
+
+            // Incoming notification from a proxy to its successor
             //
-            // * If the predecessor is the client, then the conductor is its agent,
-            //   and it can just send this as normal ACP.
-            // * If the predecessor is another component, then the conductor is acting
-            //   as the predecessor's *client*, and hence it has to send the message
-            //   wrapped in a "from successor" wrapping.
+            // Forward to the first component (proxy or agent).
+            // We intercept "initialize" messions.
+            ConductorMessage::ProxyNotificationToSuccessor {
+                component_index,
+                args: scp::ToSuccessorNotification { notification },
+                component_cx: _,
+            } => {
+                self.send_client_to_agent_notification(component_index + 1, notification)
+                    .await
+            }
+
+            // Incoming message from the agent or a proxy to its predecessor.
             ConductorMessage::ComponentToItsPredecessorMessage {
                 component_index,
                 message,
             } => match message {
                 scp::AcpAgentToClientMessage::Request(request, request_cx) => {
-                    let method = request.method().to_string();
-
                     debug!(
                         component_index,
-                        method, "Routing component request to its client"
+                        method = request.method(),
+                        "Routing component request to its client"
                     );
 
-                    if component_index == 0 {
-                        client
-                            .send_request(request)
-                            .forward_to_request_cx(request_cx)?;
-                    } else {
-                        self.components[component_index - 1]
-                            .agent_cx
-                            .send_request(scp::FromSuccessorRequest {
-                                method,
-                                params: request,
-                            })
-                            .forward_to_request_cx(request_cx)?;
-                    }
+                    self.send_request_to_predecessor_of(client, component_index, request)
+                        .forward_to_request_cx(request_cx)
                 }
 
-                scp::AcpAgentToClientMessage::Notification(agent_notification, _) => {
+                scp::AcpAgentToClientMessage::Notification(notification, _) => {
                     debug!(
                         component_index,
-                        method = agent_notification.method(),
+                        method = notification.method(),
                         "Routing component notification to its client"
                     );
 
-                    if component_index == 0 {
-                        client.send_notification(agent_notification)?;
-                    } else {
-                        self.components[component_index - 1]
-                            .agent_cx
-                            .send_notification(scp::FromSuccessorNotification {
-                                method: agent_notification.method().to_string(),
-                                params: agent_notification,
-                            })?;
-                    }
+                    self.send_notification_to_predecessor_of(client, component_index, notification)
                 }
             },
-
-            // # Request coming from a component to its *successor*.
-            //
-            // The component is sending a client-to-agent request to its successor in the chain.
-            // The conductor is always playing the client role for its components, so this is just a normal ACP message send.
-            // However, we intercept some messages and make changes along the way.
-            ConductorMessage::ComponentToItsSuccessorSendRequest {
-                component_index,
-                args: scp::ToSuccessorRequest { method, params },
-                request_cx,
-            } => {
-                if method == "initialize" {
-                    // When forwarding "initialize", we either add or remove the proxy capability,
-                    // depending on whether we are sending this message to the final component.
-                    self.send_initialize_request(
-                        component_index,
-                        serde_json::from_value(params).map_err(acp::Error::into_internal_error),
-                        request_cx,
-                    )
-                    .await?;
-                } else if method == "session/new" {
-                    // When forwarding "session/new", we adjust MCP servers to manage "acp:" URLs.
-                    self.send_session_new_request(
-                        component_index,
-                        serde_json::from_value(params).map_err(acp::Error::into_internal_error),
-                        request_cx.cast(),
-                        &conductor_tx,
-                    )
-                    .await?;
-                } else {
-                    // Otherwise, just send the message along "as is".
-                    self.components[component_index + 1]
-                        .agent_cx
-                        .send_request(UntypedMessage::new(method, params))
-                        .forward_to_request_cx(request_cx)?;
-                }
-            }
-
-            // # Notification coming from a component to its *successor*.
-            //
-            // The component is sending a client-to-agent notification to its successor in the chain.
-            // The conductor is always playing the client role for its components, so this is just a normal ACP message send.
-            ConductorMessage::ComponentToItsSuccessorSendNotification {
-                component_index,
-                args: scp::ToSuccessorNotification { method, params },
-                component_cx,
-            } => {
-                self.components[component_index + 1]
-                    .agent_cx
-                    .send_notification(UntypedMessage::new(method, params))?;
-            }
-
-            //
-            ConductorMessage::McpRequestReceived {
-                acp_url,
-                method,
-                params,
-                response_cx,
-            } => {
-                info!(
-                    acp_url = acp_url,
-                    method = method,
-                    "Bridge request received, routing to proxy via successor chain"
-                );
-
-                // Find which component owns this MCP server
-                // For now, we'll route to the first component (component 0)
-                // which should be the proxy that injected the MCP server
-                // TODO: Track which component owns which MCP server UUID
-
-                // Send the MCP request directly to the component via JSON-RPC
-                // The component should handle MCP methods like tools/call, tools/list, etc.
-                debug!(method = method, "Sending MCP request to component 0");
-
-                let request = scp::UntypedMessage::new(method.clone(), params);
-                let response = self.components[0].agent_cx.send_request(request);
-                let method_for_task = method.clone();
-
-                let _ = response.await_when_response_received(async move |result| {
-                    async {
-                        debug!(
-                            is_ok = result.is_ok(),
-                            "Received MCP response from component"
-                        );
-                        let _ = response_cx.respond_with_result(result);
-                    }
-                    .instrument(tracing::info_span!("bridge_request", method = %method_for_task))
-                    .await
-                });
-            }
-
-            ConductorMessage::BridgeConnected { acp_url, bridge_cx } => {
-                info!(acp_url = acp_url, "Bridge connected, updating bridge info");
-
-                // Update the bridge info with the connection
-                if let Some(bridge_info) = self.mcp_bridges.get_mut(&acp_url) {
-                    bridge_info.bridge_cx = Some(bridge_cx);
-                    info!(
-                        acp_url = acp_url,
-                        tcp_port = bridge_info.tcp_port,
-                        "Bridge connection stored for message routing"
-                    );
-                } else {
-                    warn!(
-                        acp_url = acp_url,
-                        "Received bridge connection for unknown acp_url"
-                    );
-                }
-            }
 
             ConductorMessage::Error { error } => {
                 error!(
@@ -530,9 +414,190 @@ impl Conductor {
                     error_message = %error.message,
                     "Error in spawned task"
                 );
+
+                Err(error)
+            }
+
+            // New MCP connection request. Send it back along the chain to get a connection id.
+            // When the connection id arrives, send a message back into this conductor loop with
+            // the connection id and the (as yet unspawned) actor.
+            ConductorMessage::McpConnectionReceived {
+                acp_url,
+                connection,
+                actor,
+            } => self
+                .send_request_to_predecessor_of(
+                    client,
+                    self.components.len() - 1,
+                    McpConnectRequest { acp_url },
+                )
+                .await_when_response_received({
+                    let mut conductor_tx = conductor_tx.clone();
+                    async move |result| {
+                        match result {
+                            Ok(response) => conductor_tx
+                                .send(ConductorMessage::McpConnectionEstablished {
+                                    response,
+                                    actor,
+                                    connection,
+                                })
+                                .await
+                                .map_err(|_| acp::Error::internal_error()),
+                            Err(_) => {
+                                // Error occurred, just drop the connection.
+                                Ok(())
+                            }
+                        }
+                    }
+                }),
+
+            // MCP connection successfully established. Spawn the actor
+            // and insert the connection into our map fot future reference.
+            ConductorMessage::McpConnectionEstablished {
+                response: McpConnectResponse { connection_id },
+                actor,
+                connection,
+            } => {
+                self.bridge_connections
+                    .insert(connection_id.clone(), connection);
+                client.spawn(actor.run(connection_id))
+            }
+
+            // Message meant for the MCP client received. Forward it to the appropriate actor's mailbox.
+            ConductorMessage::McpMessageReceived { message } => match &message {
+                McpOverAcpMessage::Request(McpOverAcpRequest { connection_id, .. }, _) => {
+                    self.bridge_connections
+                        .get_mut(connection_id)
+                        .ok_or_else(acp::Error::internal_error)?
+                        .send(message)
+                        .await
+                }
+                McpOverAcpMessage::Notification(
+                    McpOverAcpNotification { connection_id, .. },
+                    _,
+                ) => {
+                    self.bridge_connections
+                        .get_mut(connection_id)
+                        .ok_or_else(acp::Error::internal_error)?
+                        .send(message)
+                        .await
+                }
+            },
+
+            // MCP client disconnected. Remove it from our map and send the
+            // notification backwards along the chain.
+            ConductorMessage::McpConnectionDisconnected { notification } => {
+                self.bridge_connections.remove(&notification.connection_id);
+                self.send_notification_to_predecessor_of(
+                    client,
+                    self.components.len() - 1,
+                    notification,
+                )
             }
         }
-        Ok(())
+    }
+
+    /// Send a request to the predecessor of the given component.
+    ///
+    /// This is a bit subtle because the relationship of the conductor
+    /// is different depending on who will be receiving the message:
+    /// * If the request is going to the conductor's client, then no changes
+    ///   are needed, as the conductor is sending an agent-to-client message and
+    ///   the conductor is acting as the agent.
+    /// * If the request is going to a proxy component, then we have to wrap
+    ///   it in a "from successor" wrapper, because the conductor is the
+    ///   proxy's client.
+    fn send_request_to_predecessor_of<Req: JsonRpcRequest>(
+        &mut self,
+        client: &JsonRpcConnectionCx,
+        component_index: usize,
+        request: Req,
+    ) -> JsonRpcResponse<Req::Response> {
+        if component_index == 0 {
+            client.send_request(request)
+        } else {
+            self.components[component_index - 1]
+                .agent_cx
+                .send_request(scp::FromSuccessorRequest { request })
+        }
+    }
+
+    /// Send a notification to the predecessor of the given component.
+    ///
+    /// This is a bit subtle because the relationship of the conductor
+    /// is different depending on who will be receiving the message:
+    /// * If the notification is going to the conductor's client, then no changes
+    ///   are needed, as the conductor is sending an agent-to-client message and
+    ///   the conductor is acting as the agent.
+    /// * If the notification is going to a proxy component, then we have to wrap
+    ///   it in a "from successor" wrapper, because the conductor is the
+    ///   proxy's client.
+    fn send_notification_to_predecessor_of<N: JsonRpcNotification>(
+        &mut self,
+        client: &JsonRpcConnectionCx,
+        component_index: usize,
+        notification: N,
+    ) -> Result<(), acp::Error> {
+        if component_index == 0 {
+            client.send_notification(notification)
+        } else {
+            self.components[component_index - 1]
+                .agent_cx
+                .send_notification(scp::FromSuccessorNotification { notification })
+        }
+    }
+
+    /// Send a request from 'left to right', forwarding the reply
+    /// to `request_cx`. Left-to-right means from the client or an
+    /// intermediate proxy to the component at `target_component_index` (could be
+    /// a proxy or the agent). Makes changes to select messages
+    /// along the way (e.g., `initialize` and `session/new`).
+    async fn forward_client_to_agent_request(
+        &mut self,
+        conductor_tx: &mut mpsc::Sender<ConductorMessage>,
+        target_component_index: usize,
+        request: impl JsonRpcRequest,
+        request_cx: JsonRpcRequestCx<serde_json::Value>,
+    ) -> Result<(), agent_client_protocol::Error> {
+        let request = request.into_untyped_message()?;
+        if request.method == "initialize" {
+            // When forwarding "initialize", we either add or remove the proxy capability,
+            // depending on whether we are sending this message to the final component.
+            self.forward_initialize_request(
+                target_component_index,
+                serde_json::from_value(request.params).map_err(acp::Error::into_internal_error),
+                request_cx,
+            )
+        } else if request.method == "session/new" {
+            // When forwarding "session/new", we adjust MCP servers to manage "acp:" URLs.
+            self.forward_session_new_request(
+                target_component_index,
+                serde_json::from_value(request.params).map_err(acp::Error::into_internal_error),
+                &conductor_tx,
+                request_cx,
+            )
+            .await
+        } else {
+            // Otherwise, just send the message along "as is".
+            self.components[target_component_index]
+                .agent_cx
+                .send_request(request)
+                .forward_to_request_cx(request_cx)
+        }
+    }
+
+    /// Send a notification from 'left to right'.
+    /// Left-to-right means from the client or an intermediate proxy to the component
+    /// at `target_component_index` (could be a proxy or the agent).
+    async fn send_client_to_agent_notification<N: JsonRpcNotification>(
+        &mut self,
+        target_component_index: usize,
+        request: N,
+    ) -> Result<(), agent_client_protocol::Error> {
+        // Otherwise, just send the message along "as is".
+        self.components[target_component_index]
+            .agent_cx
+            .send_notification(request)
     }
 
     /// Checks if the given component index is the agent (final component).
@@ -541,13 +606,9 @@ impl Conductor {
     }
 
     /// Checks if the given component index is the last proxy before the agent.
-    fn is_last_proxy_component(&self, component_index: usize) -> bool {
-        self.components.len() > 1 && component_index == self.components.len() - 2
-    }
-
-    async fn send_initialize_request(
+    fn forward_initialize_request(
         &self,
-        to_component: usize,
+        target_component_index: usize,
         initialize_req: Result<InitializeRequest, acp::Error>,
         request_cx: JsonRpcRequestCx<serde_json::Value>,
     ) -> Result<(), agent_client_protocol::Error> {
@@ -558,134 +619,43 @@ impl Conductor {
         };
 
         // Either add or remove proxy, depending on whether this component has a successor.
-        if self.is_agent_component(to_component) {
+        if self.is_agent_component(target_component_index) {
             initialize_req = initialize_req.remove_meta_capability(Proxy);
         } else {
             initialize_req = initialize_req.add_meta_capability(Proxy);
         }
 
-        let response = self.components[to_component]
+        self.components[target_component_index]
             .agent_cx
-            .send_request(ClientRequest::InitializeRequest(initialize_req));
-
-        response.await_when_response_received(async move |result| {
-            request_cx.respond_with_result(result)
-        })
-    }
-
-    /// Routes an MCP request from agent to the appropriate bridge.
-    ///
-    /// Extracts the UUID from `_mcp/$UUID/$method` pattern, looks up the bridge,
-    /// strips the `_mcp/$UUID/` prefix, and forwards to the bridge.
-    ///
-    /// Spawns a task to await the bridge's response and forward it back to the agent.
-    ///
-    /// Returns Some(()) if routing succeeded, None if bridge not found/connected.
-    async fn route_to_mcp_bridge_request(
-        &self,
-        method: &str,
-        request: impl serde::Serialize,
-        response_cx: JsonRpcRequestCx<serde_json::Value>,
-        mut conductor_tx: mpsc::Sender<ConductorMessage>,
-    ) -> Option<()> {
-        // Parse _mcp/$UUID/$actual_method
-        let parts: Vec<&str> = method.splitn(4, '/').collect();
-        if parts.len() < 3 || parts[0] != "" || parts[1] != "_mcp" {
-            warn!(
-                method = method,
-                "Invalid _mcp/ method format, expected _mcp/$UUID/$method"
-            );
-            return None;
-        }
-
-        let uuid = parts[2];
-        let actual_method = parts.get(3).copied().unwrap_or("");
-        let acp_url = format!("acp:{}", uuid);
-
-        // Look up bridge
-        let bridge_info = self.mcp_bridges.get(&acp_url)?;
-        let bridge_cx = bridge_info.bridge_cx.as_ref()?;
-
-        info!(
-            acp_url = acp_url,
-            actual_method = actual_method,
-            "Routing MCP request to bridge"
-        );
-
-        // Forward request with stripped method
-        let params = serde_json::to_value(&request);
-        let request = scp::UntypedMessage::new(actual_method.to_string(), params);
-        let response = bridge_cx.send_request(request);
-
-        // Spawn task to await response and forward back to agent
-        let request_id = response_cx.id().clone();
-        let method_string = method.to_string();
-        let current_span = tracing::Span::current();
-
-        let _ = response.await_when_response_received(async move |result| {
-            async {
-                let is_ok = result.is_ok();
-                debug!(
-                    method = method_string,
-                    is_ok, "Received bridge response, forwarding to agent"
-                );
-
-                if let Err(error) = conductor_tx
-                    .send(ConductorMessage::ResponseReceived {
-                        result,
-                        response_cx,
-                        method: method_string.clone(),
-                        target_component_index: 0, // Response is from bridge to component 0
-                    })
-                    .await
-                {
-                    error!(
-                        method = method_string,
-                        ?error,
-                        "Failed to send bridge response to conductor"
-                    );
-                } else {
-                    debug!(
-                        method = method_string,
-                        "Sent bridge response to conductor for forwarding"
-                    );
-                }
-            }
-            .instrument(
-                tracing::info_span!("receive_mcp_bridge_response", request_id = ?request_id),
-            )
-            .instrument(current_span)
-            .await
-        });
-
-        Some(())
+            .send_request(ClientRequest::InitializeRequest(initialize_req))
+            .forward_to_request_cx(request_cx)
     }
 
     // Intercept `session/new` requests and replace MCP servers based on `acp:...` URLs with stdio-based servers.
-    async fn send_session_new_request(
+    async fn forward_session_new_request(
         &mut self,
-        component_index: usize,
+        target_component_index: usize,
         request: Result<acp::NewSessionRequest, agent_client_protocol::Error>,
-        request_cx: JsonRpcRequestCx<acp::NewSessionResponse>,
         conductor_tx: &mpsc::Sender<ConductorMessage>,
+        request_cx: JsonRpcRequestCx<serde_json::Value>,
     ) -> Result<(), acp::Error> {
         let Ok(mut new_session_req) = request else {
             request_cx.respond_with_error(agent_client_protocol::Error::invalid_params())?;
             return Ok(());
         };
 
-        new_session_req = self
-            .transform_mcp_servers(new_session_req, conductor_tx)
-            .await;
+        for mcp_server in &mut new_session_req.mcp_servers {
+            self.bridge_listeners
+                .transform_mcp_servers(&request_cx, mcp_server, conductor_tx)
+                .await?;
+        }
 
-        self.components[component_index + 1]
+        self.components[target_component_index]
             .agent_cx
-            .send_request(new_session_req)
+            .send_request(ClientRequest::NewSessionRequest(new_session_req))
             .forward_to_request_cx(request_cx)
     }
 }
-
-fn ignore_send_err<T>(_: Result<T, mpsc::SendError>) {}
 
 struct SuccessorSendCallbacks {
     component_index: usize,
@@ -695,11 +665,11 @@ struct SuccessorSendCallbacks {
 impl scp::ConductorCallbacks for SuccessorSendCallbacks {
     async fn successor_send_request(
         &mut self,
-        args: scp::ToSuccessorRequest<serde_json::Value>,
+        args: scp::ToSuccessorRequest<UntypedMessage>,
         response: JsonRpcRequestCx<serde_json::Value>,
     ) -> Result<(), agent_client_protocol::Error> {
         self.conductor_tx
-            .send(ConductorMessage::ComponentToItsSuccessorSendRequest {
+            .send(ConductorMessage::ProxyRequestToSuccessor {
                 component_index: self.component_index,
                 args,
                 request_cx: response,
@@ -710,11 +680,11 @@ impl scp::ConductorCallbacks for SuccessorSendCallbacks {
 
     async fn successor_send_notification(
         &mut self,
-        args: scp::ToSuccessorNotification<serde_json::Value>,
+        args: scp::ToSuccessorNotification<UntypedMessage>,
         cx: &scp::JsonRpcConnectionCx,
     ) -> Result<(), agent_client_protocol::Error> {
         self.conductor_tx
-            .send(ConductorMessage::ComponentToItsSuccessorSendNotification {
+            .send(ConductorMessage::ProxyNotificationToSuccessor {
                 component_index: self.component_index,
                 args,
                 component_cx: cx.clone(),
@@ -759,9 +729,9 @@ pub enum ConductorMessage {
     /// The conductor strips the `_proxy/successor/` prefix and routes to
     /// `components[component_index + 1]`, managing capability modifications
     /// for `initialize` requests based on chain position.
-    ComponentToItsSuccessorSendRequest {
+    ProxyRequestToSuccessor {
         component_index: usize,
-        args: scp::ToSuccessorRequest<serde_json::Value>,
+        args: scp::ToSuccessorRequest<UntypedMessage>,
         request_cx: JsonRpcRequestCx<serde_json::Value>,
     },
 
@@ -769,9 +739,9 @@ pub enum ConductorMessage {
     ///
     /// Similar to requests, but no response is expected. The conductor strips
     /// the prefix and forwards to the next component.
-    ComponentToItsSuccessorSendNotification {
+    ProxyNotificationToSuccessor {
         component_index: usize,
-        args: scp::ToSuccessorNotification<serde_json::Value>,
+        args: scp::ToSuccessorNotification<UntypedMessage>,
         component_cx: JsonRpcConnectionCx,
     },
 
@@ -780,29 +750,44 @@ pub enum ConductorMessage {
     /// Currently logged as a warning. Future versions may trigger chain shutdown.
     Error { error: agent_client_protocol::Error },
 
+    /// A pending MCP bridge connection request request.
+    /// The request must be sent back over ACP to receive the connection-id.
+    /// Once the connection-id is received, the actor must be spawned.
+    McpConnectionReceived {
+        /// The acp:$UUID URL identifying this bridge
+        acp_url: String,
+
+        /// The actor that should be spawned once the connection-id is available.
+        actor: McpBridgeConnectionActor,
+
+        /// The connection to the bridge
+        connection: McpBridgeConnection,
+    },
+
+    /// A pending MCP bridge connection request request.
+    /// The request must be sent back over ACP to receive the connection-id.
+    /// Once the connection-id is received, the actor must be spawned.
+    McpConnectionEstablished {
+        response: McpConnectResponse,
+
+        /// The actor that should be spawned once the connection-id is available.
+        actor: McpBridgeConnectionActor,
+
+        /// The connection to the bridge
+        connection: McpBridgeConnection,
+    },
+
     /// MCP request received from a bridge that needs to be routed to the proxy.
     ///
     /// Sent when the bridge receives an MCP tool call from the agent and forwards it
     /// to the conductor via TCP. The conductor routes this to the appropriate proxy component.
-    McpRequestReceived {
-        /// The acp:$UUID URL identifying which MCP server this request is for
-        acp_url: String,
-        /// The MCP method being called (e.g., "tools/call", "tools/list")
-        method: String,
-        /// The parameters for the MCP request
-        params: serde_json::Value,
-        /// Context to send the response back to the bridge
-        response_cx: JsonRpcRequestCx<serde_json::Value>,
+    McpMessageReceived {
+        /// The MCP message received
+        message: McpOverAcpMessage,
     },
 
-    /// MCP bridge connected and ready for message routing.
-    ///
-    /// Sent when a bridge process connects to the TCP listener. The conductor
-    /// stores the bridge's JsonRpcCx to enable routing of `_mcp/$UUID/*` messages.
-    BridgeConnected {
-        /// The acp:$UUID URL identifying this bridge
-        acp_url: String,
-        /// The JSON-RPC connection to the bridge
-        bridge_cx: JsonRpcConnectionCx,
+    /// Message sent when MCP client disconnects
+    McpConnectionDisconnected {
+        notification: McpDisconnectNotification,
     },
 }
