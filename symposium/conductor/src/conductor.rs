@@ -249,7 +249,7 @@ impl Conductor {
                     });
                     self.launch_proxy(providers, serve_args)
                         .await
-                        .map_err(scp::util::into_internal_error)
+                        .map_err(scp::util::internal_error)
                 })
                 .await
                 .map_err(|err| anyhow::anyhow!("{err:?}"))

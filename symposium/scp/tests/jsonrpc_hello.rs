@@ -149,7 +149,7 @@ async fn test_hello_world() {
                         };
 
                         let response = recv(cx.send_request(request)).await.map_err(|e| {
-                            scp::util::into_internal_error(format!("Request failed: {:?}", e))
+                            scp::util::internal_error(format!("Request failed: {:?}", e))
                         })?;
 
                         assert_eq!(response.echo, "pong: hello world");
@@ -235,7 +235,7 @@ async fn test_notification() {
                             message: "test log 1".to_string(),
                         })
                         .map_err(|e| {
-                            scp::util::into_internal_error(format!(
+                            scp::util::internal_error(format!(
                                 "Failed to send notification: {:?}",
                                 e
                             ))
@@ -245,7 +245,7 @@ async fn test_notification() {
                             message: "test log 2".to_string(),
                         })
                         .map_err(|e| {
-                            scp::util::into_internal_error(format!(
+                            scp::util::internal_error(format!(
                                 "Failed to send notification: {:?}",
                                 e
                             ))
@@ -295,10 +295,7 @@ async fn test_multiple_sequential_requests() {
                             };
 
                             let response = recv(cx.send_request(request)).await.map_err(|e| {
-                                scp::util::into_internal_error(format!(
-                                    "Request {} failed: {:?}",
-                                    i, e
-                                ))
+                                scp::util::internal_error(format!("Request {} failed: {:?}", i, e))
                             })?;
 
                             assert_eq!(response.echo, format!("pong: message {}", i));
@@ -348,10 +345,7 @@ async fn test_concurrent_requests() {
                         // Now await all responses
                         for (i, response_future) in responses {
                             let response = recv(response_future).await.map_err(|e| {
-                                scp::util::into_internal_error(format!(
-                                    "Request {} failed: {:?}",
-                                    i, e
-                                ))
+                                scp::util::internal_error(format!("Request {} failed: {:?}", i, e))
                             })?;
 
                             assert_eq!(response.echo, format!("pong: concurrent message {}", i));

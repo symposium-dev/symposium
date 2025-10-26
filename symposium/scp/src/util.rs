@@ -11,10 +11,10 @@ where
     Ok(m)
 }
 
-pub fn into_internal_error(message: impl ToString) -> acp::Error {
+pub fn internal_error(message: impl ToString) -> acp::Error {
     acp::Error::internal_error().with_data(message.to_string())
 }
 
-pub fn into_parse_error(message: impl ToString) -> acp::Error {
+pub fn parse_error(message: impl ToString) -> acp::Error {
     acp::Error::parse_error().with_data(message.to_string())
 }
