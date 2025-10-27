@@ -501,6 +501,7 @@ dependencies = [
  "futures",
  "jsonrpcmsg",
  "rmcp",
+ "schemars",
  "scp",
  "serde",
  "serde_json",
