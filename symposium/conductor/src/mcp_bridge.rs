@@ -6,7 +6,7 @@
 //! The main conductor (in agent mode) listens on the TCP port and translates between
 //! TCP (raw JSON-RPC) and ACP `_mcp/*` extension messages.
 
-use anyhow::{Context, Result};
+use anyhow::Context;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
@@ -15,7 +15,7 @@ use tokio::net::TcpStream;
 ///
 /// Reads MCP JSON-RPC messages from stdin, forwards to TCP connection.
 /// Reads responses from TCP, writes to stdout.
-pub async fn run_mcp_bridge(port: u16) -> Result<()> {
+pub async fn run_mcp_bridge(port: u16) -> Result<(), agent_client_protocol::Error> {
     tracing::info!("MCP bridge starting, connecting to localhost:{}", port);
 
     // Connect to the main conductor via TCP
@@ -92,7 +92,7 @@ pub async fn run_mcp_bridge(port: u16) -> Result<()> {
 }
 
 /// Connect to TCP port with retry logic
-async fn connect_with_retry(port: u16) -> Result<TcpStream> {
+async fn connect_with_retry(port: u16) -> Result<TcpStream, agent_client_protocol::Error> {
     let max_retries = 10;
     let mut retry_delay_ms = 50;
 
@@ -113,14 +113,10 @@ async fn connect_with_retry(port: u16) -> Result<TcpStream> {
                 retry_delay_ms = (retry_delay_ms * 2).min(1000); // Exponential backoff, max 1s
             }
             Err(e) => {
-                return Err(e).context(format!(
-                    "Failed to connect to localhost:{} after {} attempts",
-                    port, max_retries
-                ));
+                return Err(agent_client_protocol::Error::into_internal_error(e));
             }
         }
     }
 
     unreachable!()
 }
-

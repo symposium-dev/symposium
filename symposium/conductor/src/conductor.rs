@@ -68,10 +68,10 @@ use agent_client_protocol::{
 use futures::{AsyncRead, AsyncWrite, SinkExt, StreamExt, channel::mpsc};
 
 use scp::{
-    InitializeRequestExt, InitializeResponseExt, JsonRpcConnection, JsonRpcConnectionCx,
-    JsonRpcNotification, JsonRpcRequest, JsonRpcRequestCx, JsonRpcResponse, McpConnectRequest,
-    McpConnectResponse, McpDisconnectNotification, McpOverAcpNotification, McpOverAcpRequest,
-    Proxy, TypeNotification, TypeRequest, UntypedMessage,
+    JsonRpcConnection, JsonRpcConnectionCx, JsonRpcNotification, JsonRpcRequest, JsonRpcRequestCx,
+    JsonRpcResponse, McpConnectRequest, McpConnectResponse, McpDisconnectNotification,
+    McpOverAcpNotification, McpOverAcpRequest, MetaCapabilityExt, NullHandler, Proxy,
+    TypeNotification, TypeRequest, UntypedMessage,
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::{debug, info};
@@ -90,9 +90,8 @@ mod mcp_bridge;
 ///
 /// These are kept separate from the Conductor struct to avoid partial move issues.
 struct ServeArgs<OB: AsyncWrite, IB: AsyncRead> {
+    connection: JsonRpcConnection<OB, IB, NullHandler>,
     conductor_tx: mpsc::Sender<ConductorMessage>,
-    outgoing_bytes: OB,
-    incoming_bytes: IB,
 }
 
 /// The conductor manages the proxy chain lifecycle and message routing.
@@ -118,10 +117,12 @@ impl Conductor {
     pub async fn run<OB: AsyncWrite, IB: AsyncRead>(
         outgoing_bytes: OB,
         incoming_bytes: IB,
-        mut providers: Vec<ComponentProvider>,
-    ) -> anyhow::Result<()> {
+        mut providers: Vec<Box<dyn ComponentProvider>>,
+    ) -> Result<(), acp::Error> {
         if providers.len() == 0 {
-            anyhow::bail!("must have at least one component")
+            return Err(scp::util::internal_error(
+                "must have at least one component",
+            ));
         }
 
         info!(
@@ -132,24 +133,21 @@ impl Conductor {
         providers.reverse();
         let (conductor_tx, conductor_rx) = mpsc::channel(128 /* chosen arbitrarily */);
 
-        tokio::task::LocalSet::new()
-            .run_until(async move {
-                let serve_args = ServeArgs {
-                    conductor_tx: conductor_tx.clone(),
-                    outgoing_bytes,
-                    incoming_bytes,
-                };
+        let connection = JsonRpcConnection::new(outgoing_bytes, incoming_bytes);
 
-                Conductor {
-                    components: Default::default(),
-                    bridge_listeners: Default::default(),
-                    bridge_connections: Default::default(),
-                    conductor_rx,
-                }
-                .launch_proxy(providers, serve_args)
-                .await
-            })
-            .await
+        let serve_args = ServeArgs {
+            connection,
+            conductor_tx: conductor_tx.clone(),
+        };
+
+        Conductor {
+            components: Default::default(),
+            bridge_listeners: Default::default(),
+            bridge_connections: Default::default(),
+            conductor_rx,
+        }
+        .launch_proxy(providers, serve_args)
+        .await
     }
 
     /// Recursively spawns components and builds the proxy chain.
@@ -170,9 +168,9 @@ impl Conductor {
     /// - `serve_args`: I/O streams and conductor channel for the serve method
     fn launch_proxy<OB: AsyncWrite, IB: AsyncRead>(
         mut self,
-        mut providers: Vec<ComponentProvider>,
+        mut providers: Vec<Box<dyn ComponentProvider>>,
         serve_args: ServeArgs<OB, IB>,
-    ) -> Pin<Box<impl Future<Output = anyhow::Result<()>>>> {
+    ) -> Pin<Box<impl Future<Output = Result<(), acp::Error>>>> {
         Box::pin(async move {
             let Some(next_provider) = providers.pop() else {
                 info!("All components spawned, starting message routing");
@@ -188,41 +186,27 @@ impl Conductor {
                 "Creating component"
             );
 
+            let (proxy_stream, conductor_stream) = tokio::io::duplex(1024); // buffer size
+
+            // Split each side into read/write halves
+            let (conductor_read, proxy_write) = tokio::io::split(proxy_stream);
+            let (proxy_read, conductor_write) = tokio::io::split(conductor_stream);
+
+            let cx = serve_args.connection.json_rpc_cx();
+
             // Create the component streams based on the provider type
-            let (child, stdin, stdout) = match next_provider {
-                ComponentProvider::Command(command) => {
-                    debug!(component_index, command = %command, "Spawning command");
-
-                    let mut child = tokio::process::Command::new(&command)
-                        .stdin(std::process::Stdio::piped())
-                        .stdout(std::process::Stdio::piped())
-                        .spawn()?;
-
-                    // Take ownership of the streams (can only do this once!)
-                    let stdin = child.stdin.take().expect("Failed to open stdin");
-                    let stdout = child.stdout.take().expect("Failed to open stdout");
-
-                    // Convert tokio streams to futures streams using compat
-                    (
-                        Some(child),
-                        Box::pin(stdin.compat_write()) as Pin<Box<dyn AsyncWrite + Send>>,
-                        Box::pin(stdout.compat()) as Pin<Box<dyn AsyncRead + Send>>,
-                    )
-                }
-                ComponentProvider::Mock(mock) => {
-                    debug!(component_index, "Creating mock component");
-                    // mock is Box<dyn MockComponent>, create() takes Box<Self>
-                    let (outgoing, incoming) = mock.create().await?;
-                    (None, outgoing, incoming)
-                }
-            };
+            let cleanup = next_provider.create(
+                &cx,
+                Box::pin(proxy_write.compat_write()),
+                Box::pin(proxy_read.compat()),
+            )?;
 
             debug!(
                 component_index,
                 "Component created, setting up JSON-RPC connection"
             );
 
-            JsonRpcConnection::new(stdin, stdout)
+            JsonRpcConnection::new(conductor_write.compat_write(), conductor_read.compat())
                 // Intercept messages sent by a proxy component (acting as ACP client) to its successor agent.
                 .on_receive_request({
                     let mut conductor_tx = serve_args.conductor_tx.clone();
@@ -281,7 +265,7 @@ impl Conductor {
                 })
                 .with_client(async move |jsonrpccx| {
                     self.components.push(Component {
-                        child,
+                        cleanup,
                         agent_cx: jsonrpccx,
                     });
                     self.launch_proxy(providers, serve_args)
@@ -289,7 +273,6 @@ impl Conductor {
                         .map_err(scp::util::internal_error)
                 })
                 .await
-                .map_err(|err| anyhow::anyhow!("{err:?}"))
         })
     }
 
@@ -314,14 +297,13 @@ impl Conductor {
     async fn serve<OB: AsyncWrite, IB: AsyncRead>(
         mut self,
         serve_args: ServeArgs<OB, IB>,
-    ) -> anyhow::Result<()> {
+    ) -> Result<(), acp::Error> {
         let ServeArgs {
+            connection,
             mut conductor_tx,
-            outgoing_bytes,
-            incoming_bytes,
         } = serve_args;
 
-        JsonRpcConnection::new(outgoing_bytes, incoming_bytes)
+        connection
             // Any incoming requests from the client are client-to-agent requests targeting the first component.
             .on_receive_request({
                 let mut conductor_tx = conductor_tx.clone();
@@ -361,7 +343,6 @@ impl Conductor {
                 }
             })
             .await
-            .map_err(|err| anyhow::anyhow!("{err:?}"))
     }
 
     /// Central message handling logic for the conductor.

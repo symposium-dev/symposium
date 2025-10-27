@@ -19,5 +19,8 @@ async fn main() -> anyhow::Result<()> {
 
     tracing::info!("Conductor starting");
 
-    ConductorArgs::parse().run().await
+    ConductorArgs::parse()
+        .run()
+        .await
+        .map_err(|err| anyhow::anyhow!("{err}"))
 }

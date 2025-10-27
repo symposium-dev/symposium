@@ -1,0 +1,9 @@
+[package]
+name = "sparkle-acp-proxy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap.workspace = true
+scp = { version = "0.1.0", path = "../scp" }
+tokio.workspace = true

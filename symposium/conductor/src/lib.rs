@@ -1,4 +1,4 @@
-use crate::conductor::Conductor;
+use crate::{component::CommandComponentProvider, conductor::Conductor};
 
 pub mod component;
 pub mod conductor;
@@ -40,12 +40,12 @@ pub enum ConductorCommand {
 }
 
 impl ConductorArgs {
-    pub async fn run(self) -> anyhow::Result<()> {
+    pub async fn run(self) -> Result<(), agent_client_protocol::Error> {
         match self.command {
             ConductorCommand::Agent { proxies } => {
                 let providers = proxies
                     .into_iter()
-                    .map(ComponentProvider::Command)
+                    .map(|s| CommandComponentProvider::new(s))
                     .collect();
 
                 Conductor::run(stdout().compat_write(), stdin().compat(), providers).await

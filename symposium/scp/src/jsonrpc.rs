@@ -103,11 +103,22 @@ impl<OB: AsyncWrite, IB: AsyncRead, H: JsonRpcHandler> JsonRpcConnection<OB, IB,
     /// Returns a [`JsonRpcCx`] that allows you to send requests over the connection
     /// and receive responses.
     ///
-    /// This is private because it would give people a footgun if they had it,
-    /// since they might try to use it when the server is not running and deadlock,
-    /// and I don't really think they need it.
-    fn json_rpc_cx(&self) -> JsonRpcConnectionCx {
+    /// **Warning:** This method is provided for use during setup and construction.
+    /// It returns a [`JsonRpcConnectionCx`] that you can use later to send requests
+    /// or to spawn tasks. But if you do not invoke [`Self::serve`] or [`Self::with_client`],
+    /// the server will not be running, and those messages will not be received.
+    pub fn json_rpc_cx(&self) -> JsonRpcConnectionCx {
         JsonRpcConnectionCx::new(self.outgoing_tx.clone(), self.new_task_tx.clone())
+    }
+
+    /// With a task that will be spawned on the server's executor when it is active.
+    pub fn with_spawned(
+        self,
+        task: impl Future<Output = Result<(), acp::Error>> + Send + 'static,
+    ) -> Self {
+        let json_rpc_cx = self.json_rpc_cx();
+        json_rpc_cx.spawn(task).expect("spawning failed");
+        self
     }
 
     /// Runs a server that listens for incoming requests and handles them according to the added handlers.

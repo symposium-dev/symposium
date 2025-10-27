@@ -58,7 +58,7 @@ impl MetaCapability for McpAcpTransport {
 }
 
 /// Extension trait for checking and modifying capabilities in `InitializeRequest`.
-pub trait InitializeRequestExt {
+pub trait MetaCapabilityExt {
     /// Check if a capability is present in `_meta.symposium`
     fn has_meta_capability(&self, capability: impl MetaCapability) -> bool;
 
@@ -69,9 +69,10 @@ pub trait InitializeRequestExt {
     fn remove_meta_capability(self, capability: impl MetaCapability) -> Self;
 }
 
-impl InitializeRequestExt for InitializeRequest {
+impl MetaCapabilityExt for InitializeRequest {
     fn has_meta_capability(&self, capability: impl MetaCapability) -> bool {
-        self.meta
+        self.client_capabilities
+            .meta
             .as_ref()
             .and_then(|meta| meta.get("symposium"))
             .and_then(|symposium| symposium.get(capability.key()))
@@ -79,7 +80,7 @@ impl InitializeRequestExt for InitializeRequest {
     }
 
     fn add_meta_capability(mut self, capability: impl MetaCapability) -> Self {
-        let mut meta = self.meta.take().unwrap_or(json!({}));
+        let mut meta = self.client_capabilities.meta.take().unwrap_or(json!({}));
 
         if let Some(obj) = meta.as_object_mut() {
             let symposium = obj.entry("symposium").or_insert_with(|| json!({}));
@@ -90,12 +91,12 @@ impl InitializeRequestExt for InitializeRequest {
             }
         }
 
-        self.meta = Some(meta);
+        self.client_capabilities.meta = Some(meta);
         self
     }
 
     fn remove_meta_capability(mut self, capability: impl MetaCapability) -> Self {
-        if let Some(ref mut meta) = self.meta {
+        if let Some(ref mut meta) = self.client_capabilities.meta {
             if let Some(obj) = meta.as_object_mut() {
                 if let Some(symposium) = obj.get_mut("symposium") {
                     if let Some(symposium_obj) = symposium.as_object_mut() {
@@ -108,21 +109,10 @@ impl InitializeRequestExt for InitializeRequest {
     }
 }
 
-/// Extension trait for checking and modifying capabilities in `InitializeResponse`.
-pub trait InitializeResponseExt {
-    /// Check if a capability is present in `_meta.symposium`
-    fn has_meta_capability(&self, capability: impl MetaCapability) -> bool;
-
-    /// Add a capability to `_meta.symposium`, creating the structure if needed
-    fn add_meta_capability(self, capability: impl MetaCapability) -> Self;
-
-    /// Remove a capability from `_meta.symposium` if present
-    fn remove_meta_capability(self, capability: impl MetaCapability) -> Self;
-}
-
-impl InitializeResponseExt for InitializeResponse {
+impl MetaCapabilityExt for InitializeResponse {
     fn has_meta_capability(&self, capability: impl MetaCapability) -> bool {
-        self.meta
+        self.agent_capabilities
+            .meta
             .as_ref()
             .and_then(|meta| meta.get("symposium"))
             .and_then(|symposium| symposium.get(capability.key()))
@@ -130,7 +120,7 @@ impl InitializeResponseExt for InitializeResponse {
     }
 
     fn add_meta_capability(mut self, capability: impl MetaCapability) -> Self {
-        let mut meta = self.meta.take().unwrap_or(json!({}));
+        let mut meta = self.agent_capabilities.meta.take().unwrap_or(json!({}));
 
         if let Some(obj) = meta.as_object_mut() {
             let symposium = obj.entry("symposium").or_insert_with(|| json!({}));
@@ -141,12 +131,12 @@ impl InitializeResponseExt for InitializeResponse {
             }
         }
 
-        self.meta = Some(meta);
+        self.agent_capabilities.meta = Some(meta);
         self
     }
 
     fn remove_meta_capability(mut self, capability: impl MetaCapability) -> Self {
-        if let Some(ref mut meta) = self.meta {
+        if let Some(ref mut meta) = self.agent_capabilities.meta {
             if let Some(obj) = meta.as_object_mut() {
                 if let Some(symposium) = obj.get_mut("symposium") {
                     if let Some(symposium_obj) = symposium.as_object_mut() {
