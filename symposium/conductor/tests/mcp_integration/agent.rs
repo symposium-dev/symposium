@@ -31,7 +31,9 @@ impl ComponentProvider for AgentComponentProvider {
                     };
                     request_cx.respond(response)
                 })
-                .on_receive_request(async move |_request: NewSessionRequest, request_cx| {
+                .on_receive_request(async move |request: NewSessionRequest, request_cx| {
+                    assert!(!request.mcp_servers.is_empty());
+
                     // Simple session response
                     let response = NewSessionResponse {
                         session_id: "test-session-123".into(),

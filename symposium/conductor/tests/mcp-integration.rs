@@ -51,7 +51,7 @@ async fn run_test_with_components(
 }
 
 #[tokio::test]
-async fn xtest_proxy_provides_mcp_tools() -> Result<(), acp::Error> {
+async fn test_proxy_provides_mcp_tools() -> Result<(), acp::Error> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()

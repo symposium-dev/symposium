@@ -1,7 +1,7 @@
 //! Proxy component that provides MCP tools
 
 use agent_client_protocol::{
-    self as acp, InitializeRequest, NewSessionRequest, NewSessionResponse,
+    self as acp, InitializeRequest, McpServer, NewSessionRequest, NewSessionResponse,
 };
 use conductor::component::{Cleanup, ComponentProvider};
 use futures::{AsyncRead, AsyncWrite};
@@ -33,9 +33,13 @@ impl ComponentProvider for ProxyComponentProvider {
                             request_cx.respond(response)
                         })
                 })
-                .on_receive_request(async move |request: NewSessionRequest, request_cx| {
-                    // TODO: Add MCP tools to the session response
-                    // For now, just forward to agent
+                .on_receive_request(async move |mut request: NewSessionRequest, request_cx| {
+                    request.mcp_servers.push(McpServer::Http {
+                        name: "eg".to_string(),
+                        url: format!("acp:eg"),
+                        headers: vec![],
+                    });
+
                     request_cx
                         .send_request_to_successor(request)
                         .await_when_response_received(
