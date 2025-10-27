@@ -74,8 +74,7 @@ use scp::{
     TypeNotification, TypeRequest, UntypedMessage,
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-use tracing::{debug, info};
-use tracing_subscriber::fmt::init;
+use tracing::{debug, info};≈g
 
 use crate::{
     component::{Component, ComponentProvider},

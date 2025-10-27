@@ -73,9 +73,11 @@ impl ComponentProvider for InitComponentProvider {
         cx.spawn(async move {
             JsonRpcConnection::new(outgoing_bytes, incoming_bytes)
                 .name("init-component-provider")
-                .on_receive_request(async move |request: InitializeRequest, request_cx| {
+                .on_receive_request(async move |mut request: InitializeRequest, request_cx| {
                     let has_proxy_capability = request.has_meta_capability(Proxy);
                     *config.offered_proxy.lock().expect("unpoisoned") = Some(has_proxy_capability);
+
+                    request = request.remove_meta_capability(Proxy);
 
                     if config.respond_with_proxy {
                         request_cx

@@ -5,11 +5,7 @@
 use agent_client_protocol as acp;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    UntypedMessage,
-    jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcRequest},
-    util::json_cast,
-};
+use crate::jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcRequest};
 
 // ============================================================================
 // Requests and notifications send TO successor (and the response we receieve)
