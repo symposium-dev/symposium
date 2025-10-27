@@ -55,6 +55,14 @@ impl JsonRpcMessage for FooRequest {
         let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
     }
+
+    fn parse_notification(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        // This is a request, not a notification
+        None
+    }
 }
 
 impl JsonRpcRequest for FooRequest {
@@ -103,6 +111,14 @@ impl JsonRpcMessage for BarRequest {
         }
         let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
+    }
+
+    fn parse_notification(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        // This is a request, not a notification
+        None
     }
 }
 
@@ -234,6 +250,14 @@ impl JsonRpcMessage for TrackRequest {
         let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
     }
+
+    fn parse_notification(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        // This is a request, not a notification
+        None
+    }
 }
 
 impl JsonRpcRequest for TrackRequest {
@@ -346,6 +370,14 @@ impl JsonRpcMessage for Method1Request {
         let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
     }
+
+    fn parse_notification(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        // This is a request, not a notification
+        None
+    }
 }
 
 impl JsonRpcRequest for Method1Request {
@@ -376,6 +408,14 @@ impl JsonRpcMessage for Method2Request {
         }
         let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
+    }
+
+    fn parse_notification(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        // This is a request, not a notification
+        None
     }
 }
 
@@ -535,6 +575,14 @@ impl JsonRpcMessage for EventNotification {
 
     fn method(&self) -> &str {
         "event"
+    }
+
+    fn parse_request(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        // This is a notification, not a request
+        None
     }
 
     fn parse_notification(

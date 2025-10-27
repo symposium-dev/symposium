@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! use scp::{InitializeRequestExt, Proxy};
+//! use scp::{MetaCapabilityExt, Proxy};
 //! # use agent_client_protocol::InitializeRequest;
 //! # let init_request: InitializeRequest = unimplemented!();
 //!
@@ -166,22 +166,25 @@ mod tests {
 
         assert!(request.has_meta_capability(Proxy));
         assert_eq!(
-            request.meta.as_ref().unwrap()["symposium"]["proxy"],
+            request.client_capabilities.meta.as_ref().unwrap()["symposium"]["proxy"],
             json!(true)
         );
     }
 
     #[test]
     fn test_remove_proxy_capability() {
+        let mut client_capabilities = agent_client_protocol::ClientCapabilities::default();
+        client_capabilities.meta = Some(json!({
+            "symposium": {
+                "version": "1.0",
+                "proxy": true
+            }
+        }));
+
         let request = InitializeRequest {
             protocol_version: agent_client_protocol::VERSION,
-            client_capabilities: agent_client_protocol::ClientCapabilities::default(),
-            meta: Some(json!({
-                "symposium": {
-                    "version": "1.0",
-                    "proxy": true
-                }
-            })),
+            client_capabilities,
+            meta: None,
         };
 
         let request = request.remove_meta_capability(Proxy);
@@ -191,14 +194,17 @@ mod tests {
 
     #[test]
     fn test_has_proxy_capability() {
+        let mut client_capabilities = agent_client_protocol::ClientCapabilities::default();
+        client_capabilities.meta = Some(json!({
+            "symposium": {
+                "proxy": true
+            }
+        }));
+
         let request = InitializeRequest {
             protocol_version: agent_client_protocol::VERSION,
-            client_capabilities: agent_client_protocol::ClientCapabilities::default(),
-            meta: Some(json!({
-                "symposium": {
-                    "proxy": true
-                }
-            })),
+            client_capabilities,
+            meta: None,
         };
 
         assert!(request.has_meta_capability(Proxy));
@@ -218,7 +224,7 @@ mod tests {
 
         assert!(response.has_meta_capability(McpAcpTransport));
         assert_eq!(
-            response.meta.as_ref().unwrap()["symposium"]["mcp_acp_transport"],
+            response.agent_capabilities.meta.as_ref().unwrap()["symposium"]["mcp_acp_transport"],
             json!(true)
         );
     }

@@ -71,6 +71,14 @@ impl JsonRpcMessage for PingRequest {
         let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
     }
+
+    fn parse_notification(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        // This is a request, not a notification
+        None
+    }
 }
 
 impl JsonRpcRequest for PingRequest {
@@ -162,6 +170,14 @@ impl JsonRpcMessage for LogNotification {
 
     fn method(&self) -> &str {
         "log"
+    }
+
+    fn parse_request(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        // This is a notification, not a request
+        None
     }
 
     fn parse_notification(

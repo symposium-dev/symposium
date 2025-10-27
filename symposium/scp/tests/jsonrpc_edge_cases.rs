@@ -71,6 +71,14 @@ impl JsonRpcMessage for EmptyRequest {
         }
         Some(Ok(EmptyRequest))
     }
+
+    fn parse_notification(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        // This is a request, not a notification
+        None
+    }
 }
 
 impl JsonRpcRequest for EmptyRequest {
@@ -102,6 +110,14 @@ impl JsonRpcMessage for OptionalParamsRequest {
         }
         let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
+    }
+
+    fn parse_notification(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        // This is a request, not a notification
+        None
     }
 }
 

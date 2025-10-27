@@ -76,6 +76,14 @@ impl JsonRpcMessage for SimpleRequest {
         let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
     }
+
+    fn parse_notification(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        // This is a request, not a notification
+        None
+    }
 }
 
 impl JsonRpcRequest for SimpleRequest {
@@ -255,6 +263,14 @@ impl JsonRpcMessage for ErrorRequest {
         let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
     }
+
+    fn parse_notification(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        // This is a request, not a notification
+        None
+    }
 }
 
 impl JsonRpcRequest for ErrorRequest {
@@ -335,6 +351,14 @@ impl JsonRpcMessage for EmptyRequest {
             return None;
         }
         Some(Ok(EmptyRequest))
+    }
+
+    fn parse_notification(
+        _method: &str,
+        _params: &Option<jsonrpcmsg::Params>,
+    ) -> Option<Result<Self, agent_client_protocol::Error>> {
+        // This is a request, not a notification
+        None
     }
 }
 
