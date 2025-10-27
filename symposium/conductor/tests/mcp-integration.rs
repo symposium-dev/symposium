@@ -7,13 +7,26 @@
 
 mod mcp_integration;
 
-use agent_client_protocol::{self as acp};
+use agent_client_protocol::{self as acp, InitializeRequest, NewSessionRequest};
 use conductor::component::ComponentProvider;
 use conductor::conductor::Conductor;
 use scp::JsonRpcConnection;
 
 use tokio::io::duplex;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+
+/// Test helper to receive a JSON-RPC response
+async fn recv<R: scp::JsonRpcResponsePayload + Send>(
+    response: scp::JsonRpcResponse<R>,
+) -> Result<R, agent_client_protocol::Error> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    response.await_when_response_received(async move |result| {
+        tx.send(result)
+            .map_err(|_| agent_client_protocol::Error::internal_error())
+    })?;
+    rx.await
+        .map_err(|_| agent_client_protocol::Error::internal_error())?
+}
 
 async fn run_test_with_components(
     components: Vec<Box<dyn ComponentProvider>>,
@@ -38,7 +51,7 @@ async fn run_test_with_components(
 }
 
 #[tokio::test]
-async fn test_proxy_provides_mcp_tools() -> Result<(), acp::Error> {
+async fn xtest_proxy_provides_mcp_tools() -> Result<(), acp::Error> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -52,8 +65,38 @@ async fn test_proxy_provides_mcp_tools() -> Result<(), acp::Error> {
             mcp_integration::proxy::create(),
             mcp_integration::agent::create(),
         ],
-        async |_editor_cx| {
-            // TODO: Send initialization, session/new, and verify agent can see MCP tools
+        async |editor_cx| {
+            // Send initialization request
+            let init_response = recv(editor_cx.send_request(InitializeRequest {
+                protocol_version: Default::default(),
+                client_capabilities: Default::default(),
+                meta: None,
+            }))
+            .await;
+
+            assert!(
+                init_response.is_ok(),
+                "Initialize should succeed: {:?}",
+                init_response
+            );
+
+            // Send session/new request
+            let session_response = recv(editor_cx.send_request(NewSessionRequest {
+                cwd: Default::default(),
+                mcp_servers: vec![],
+                meta: None,
+            }))
+            .await;
+
+            assert!(
+                session_response.is_ok(),
+                "Session/new should succeed: {:?}",
+                session_response
+            );
+
+            let session = session_response.unwrap();
+            assert_eq!(&*session.session_id.0, "test-session-123");
+
             Ok(())
         },
     )

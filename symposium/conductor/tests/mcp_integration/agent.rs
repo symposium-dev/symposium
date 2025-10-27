@@ -1,7 +1,8 @@
 //! Agent component that echoes back prompts
 
 use agent_client_protocol::{
-    self as acp, AgentCapabilities, InitializeRequest, InitializeResponse,
+    self as acp, AgentCapabilities, InitializeRequest, InitializeResponse, NewSessionRequest,
+    NewSessionResponse,
 };
 use conductor::component::{Cleanup, ComponentProvider};
 use futures::{AsyncRead, AsyncWrite};
@@ -26,6 +27,15 @@ impl ComponentProvider for AgentComponentProvider {
                         protocol_version: request.protocol_version,
                         agent_capabilities: AgentCapabilities::default(),
                         auth_methods: vec![],
+                        meta: None,
+                    };
+                    request_cx.respond(response)
+                })
+                .on_receive_request(async move |_request: NewSessionRequest, request_cx| {
+                    // Simple session response
+                    let response = NewSessionResponse {
+                        session_id: "test-session-123".into(),
+                        modes: None,
                         meta: None,
                     };
                     request_cx.respond(response)
