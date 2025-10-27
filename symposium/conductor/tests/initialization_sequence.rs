@@ -34,6 +34,8 @@ async fn recv<R: scp::JsonRpcResponsePayload + Send>(
 
 struct InitConfig {
     respond_with_proxy: bool,
+    /// If true, forward the request WITH the proxy capability still attached (error case)
+    forward_with_proxy: bool,
     offered_proxy: Mutex<Option<bool>>,
 }
 
@@ -41,6 +43,15 @@ impl InitConfig {
     fn new(respond_with_proxy: bool) -> Arc<Self> {
         Arc::new(Self {
             respond_with_proxy,
+            forward_with_proxy: false,
+            offered_proxy: Mutex::new(None),
+        })
+    }
+
+    fn new_with_forward_behavior(respond_with_proxy: bool, forward_with_proxy: bool) -> Arc<Self> {
+        Arc::new(Self {
+            respond_with_proxy,
+            forward_with_proxy,
             offered_proxy: Mutex::new(None),
         })
     }
@@ -77,7 +88,10 @@ impl ComponentProvider for InitComponentProvider {
                     let has_proxy_capability = request.has_meta_capability(Proxy);
                     *config.offered_proxy.lock().expect("unpoisoned") = Some(has_proxy_capability);
 
-                    request = request.remove_meta_capability(Proxy);
+                    // Conditionally remove proxy capability based on config
+                    if !config.forward_with_proxy {
+                        request = request.remove_meta_capability(Proxy);
+                    }
 
                     if config.respond_with_proxy {
                         request_cx
@@ -208,6 +222,114 @@ async fn test_two_components() -> Result<(), acp::Error> {
 
     assert_eq!(component1.read_offered_proxy(), Some(true));
     assert_eq!(component2.read_offered_proxy(), Some(false));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_proxy_component_must_respond_with_proxy() -> Result<(), acp::Error> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("conductor=debug".parse().unwrap()),
+        )
+        .with_test_writer()
+        .try_init();
+
+    // Component is offered proxy but does NOT respond with it (respond_with_proxy: false)
+    let component1 = InitConfig::new(false);
+    let component2 = InitConfig::new(false);
+
+    let result = run_test_with_components(
+        vec![
+            InitComponentProvider::new(&component1),
+            InitComponentProvider::new(&component2),
+        ],
+        async |editor_cx| {
+            let init_response = recv(editor_cx.send_request(InitializeRequest {
+                protocol_version: Default::default(),
+                client_capabilities: Default::default(),
+                meta: None,
+            }))
+            .await;
+
+            // Should fail because component1 was offered proxy but didn't respond with it
+            assert!(
+                init_response.is_err(),
+                "Initialize should fail when proxy component doesn't respond with proxy capability"
+            );
+
+            Ok::<(), agent_client_protocol::Error>(())
+        },
+    )
+    .await;
+
+    // Verify the error occurred
+    assert!(result.is_err(), "Expected conductor to return an error");
+    let error = result.unwrap_err();
+    assert!(
+        error.to_string().contains("component 0 is not a proxy"),
+        "Expected 'component 0 is not a proxy' error, got: {:?}",
+        error
+    );
+
+    // Verify component1 was offered proxy
+    assert_eq!(component1.read_offered_proxy(), Some(true));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_proxy_component_must_strip_proxy_when_forwarding() -> Result<(), acp::Error> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("conductor=debug".parse().unwrap()),
+        )
+        .with_test_writer()
+        .try_init();
+
+    // Component responds with proxy BUT incorrectly forwards the request with proxy still attached
+    let component1 = InitConfig::new_with_forward_behavior(true, true);
+    let component2 = InitConfig::new(false);
+
+    let result = run_test_with_components(
+        vec![
+            InitComponentProvider::new(&component1),
+            InitComponentProvider::new(&component2),
+        ],
+        async |editor_cx| {
+            let init_response = recv(editor_cx.send_request(InitializeRequest {
+                protocol_version: Default::default(),
+                client_capabilities: Default::default(),
+                meta: None,
+            }))
+            .await;
+
+            // Should fail because component1 forwarded request with proxy capability still attached
+            assert!(
+                init_response.is_err(),
+                "Initialize should fail when proxy component forwards request with proxy capability"
+            );
+
+            Ok::<(), agent_client_protocol::Error>(())
+        },
+    )
+    .await;
+
+    // Verify the error occurred
+    assert!(result.is_err(), "Expected conductor to return an error");
+    let error = result.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("conductor received unexpected initialization request with proxy capability"),
+        "Expected 'conductor received unexpected initialization request with proxy capability' error, got: {:?}",
+        error
+    );
+
+    // Verify component1 was offered proxy
+    assert_eq!(component1.read_offered_proxy(), Some(true));
 
     Ok(())
 }
