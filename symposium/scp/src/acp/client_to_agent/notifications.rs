@@ -1,4 +1,5 @@
 use agent_client_protocol::CancelNotification;
+use serde::Serialize;
 
 use crate::jsonrpc::{JsonRpcMessage, JsonRpcNotification};
 use crate::util::json_cast;
@@ -15,7 +16,7 @@ impl JsonRpcMessage for CancelNotification {
 
     fn parse_request(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a notification, not a request
         None
@@ -23,16 +24,11 @@ impl JsonRpcMessage for CancelNotification {
 
     fn parse_notification(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "session/cancel" {
             return None;
         }
-
-        let params = match params {
-            Some(p) => p,
-            None => return Some(Err(agent_client_protocol::Error::invalid_params())),
-        };
 
         Some(json_cast(params))
     }

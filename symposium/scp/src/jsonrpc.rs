@@ -610,10 +610,7 @@ pub trait JsonRpcMessage: 'static + Debug + Sized {
     /// - `None` if this type does not recognize the method name or recognizes it as a notification
     /// - `Some(Ok(value))` if the method is recognized as a request and deserialization succeeds
     /// - `Some(Err(error))` if the method is recognized as a request but deserialization fails
-    fn parse_request(
-        _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
-    ) -> Option<Result<Self, acp::Error>>;
+    fn parse_request(_method: &str, _params: &impl Serialize) -> Option<Result<Self, acp::Error>>;
 
     /// Attempt to parse this type from a JSON-RPC notification.
     ///
@@ -623,7 +620,7 @@ pub trait JsonRpcMessage: 'static + Debug + Sized {
     /// - `Some(Err(error))` if the method is recognized as a notification but deserialization fails
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>>;
 }
 
@@ -695,14 +692,14 @@ impl JsonRpcMessage for UntypedMessage {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         Some(UntypedMessage::new(method, params))
     }
 
     fn parse_notification(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         Some(UntypedMessage::new(method, params))
     }

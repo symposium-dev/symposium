@@ -5,7 +5,11 @@
 use agent_client_protocol as acp;
 use serde::{Deserialize, Serialize};
 
-use crate::jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcRequest};
+use crate::{
+    UntypedMessage,
+    jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcRequest},
+    util::json_cast,
+};
 
 // ============================================================================
 // Requests and notifications send TO successor (and the response we receieve)
@@ -35,20 +39,27 @@ impl<Req: JsonRpcRequest> JsonRpcMessage for ToSuccessorRequest<Req> {
         TO_SUCCESSOR_REQUEST_METHOD
     }
 
-    fn parse_request(
-        _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
-    ) -> Option<Result<Self, acp::Error>> {
-        // Generic wrapper type - cannot be parsed without knowing concrete inner type
-        None
+    fn parse_request(method: &str, params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
+        if method == TO_SUCCESSOR_REQUEST_METHOD {
+            match json_cast::<_, UntypedMessage>(params) {
+                Ok(request) => match Req::parse_request(&request.method, &request.params) {
+                    Some(Ok(request)) => Some(Ok(ToSuccessorRequest { request })),
+                    Some(Err(err)) => Some(Err(err)),
+                    None => None,
+                },
+
+                Err(err) => Some(Err(err)),
+            }
+        } else {
+            None
+        }
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
-        // Generic wrapper type - cannot be parsed without knowing concrete inner type
-        None
+        None // Request, not notification
     }
 }
 
@@ -80,17 +91,13 @@ impl<Req: JsonRpcNotification> JsonRpcMessage for ToSuccessorNotification<Req> {
         TO_SUCCESSOR_NOTIFICATION_METHOD
     }
 
-    fn parse_request(
-        _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
-    ) -> Option<Result<Self, acp::Error>> {
-        // Generic wrapper type - cannot be parsed without knowing concrete inner type
-        None
+    fn parse_request(_method: &str, _params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
+        None // Notification, not request
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
         // Generic wrapper type - cannot be parsed without knowing concrete inner type
         None
@@ -128,17 +135,14 @@ impl<R: JsonRpcRequest> JsonRpcMessage for FromSuccessorRequest<R> {
         FROM_SUCCESSOR_REQUEST_METHOD
     }
 
-    fn parse_request(
-        _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
-    ) -> Option<Result<Self, acp::Error>> {
+    fn parse_request(_method: &str, _params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
         // Generic wrapper type - cannot be parsed without knowing concrete inner type
         None
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
         // Generic wrapper type - cannot be parsed without knowing concrete inner type
         None
@@ -173,17 +177,14 @@ impl<N: JsonRpcNotification> JsonRpcMessage for FromSuccessorNotification<N> {
         FROM_SUCCESSOR_NOTIFICATION_METHOD
     }
 
-    fn parse_request(
-        _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
-    ) -> Option<Result<Self, acp::Error>> {
+    fn parse_request(_method: &str, _params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
         // Generic wrapper type - cannot be parsed without knowing concrete inner type
         None
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
         // Generic wrapper type - cannot be parsed without knowing concrete inner type
         None

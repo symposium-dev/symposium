@@ -5,6 +5,7 @@ use agent_client_protocol::{
     TerminalOutputRequest, TerminalOutputResponse, WaitForTerminalExitRequest,
     WaitForTerminalExitResponse, WriteTextFileRequest, WriteTextFileResponse,
 };
+use serde::Serialize;
 
 use crate::jsonrpc::{JsonRpcMessage, JsonRpcRequest, JsonRpcResponsePayload};
 use crate::util::json_cast;
@@ -26,20 +27,16 @@ impl JsonRpcMessage for RequestPermissionRequest {
         "session/request_permission"
     }
 
-    fn parse_request(
-        method: &str,
-        params: &Option<jsonrpcmsg::Params>,
-    ) -> Option<Result<Self, acp::Error>> {
+    fn parse_request(method: &str, params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
         if method != "session/request_permission" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
         // This is a request, not a notification
         None
@@ -74,20 +71,16 @@ impl JsonRpcMessage for WriteTextFileRequest {
         "fs/write_text_file"
     }
 
-    fn parse_request(
-        method: &str,
-        params: &Option<jsonrpcmsg::Params>,
-    ) -> Option<Result<Self, acp::Error>> {
+    fn parse_request(method: &str, params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
         if method != "fs/write_text_file" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
         // This is a request, not a notification
         None
@@ -122,20 +115,16 @@ impl JsonRpcMessage for ReadTextFileRequest {
         "fs/read_text_file"
     }
 
-    fn parse_request(
-        method: &str,
-        params: &Option<jsonrpcmsg::Params>,
-    ) -> Option<Result<Self, acp::Error>> {
+    fn parse_request(method: &str, params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
         if method != "fs/read_text_file" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
         // This is a request, not a notification
         None
@@ -170,20 +159,16 @@ impl JsonRpcMessage for CreateTerminalRequest {
         "terminal/create"
     }
 
-    fn parse_request(
-        method: &str,
-        params: &Option<jsonrpcmsg::Params>,
-    ) -> Option<Result<Self, acp::Error>> {
+    fn parse_request(method: &str, params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
         if method != "terminal/create" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
         // This is a request, not a notification
         None
@@ -218,20 +203,16 @@ impl JsonRpcMessage for TerminalOutputRequest {
         "terminal/output"
     }
 
-    fn parse_request(
-        method: &str,
-        params: &Option<jsonrpcmsg::Params>,
-    ) -> Option<Result<Self, acp::Error>> {
+    fn parse_request(method: &str, params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
         if method != "terminal/output" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
         // This is a request, not a notification
         None
@@ -266,20 +247,16 @@ impl JsonRpcMessage for ReleaseTerminalRequest {
         "terminal/release"
     }
 
-    fn parse_request(
-        method: &str,
-        params: &Option<jsonrpcmsg::Params>,
-    ) -> Option<Result<Self, acp::Error>> {
+    fn parse_request(method: &str, params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
         if method != "terminal/release" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
         // This is a request, not a notification
         None
@@ -314,20 +291,16 @@ impl JsonRpcMessage for WaitForTerminalExitRequest {
         "terminal/wait_for_exit"
     }
 
-    fn parse_request(
-        method: &str,
-        params: &Option<jsonrpcmsg::Params>,
-    ) -> Option<Result<Self, acp::Error>> {
+    fn parse_request(method: &str, params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
         if method != "terminal/wait_for_exit" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
         // This is a request, not a notification
         None
@@ -362,20 +335,16 @@ impl JsonRpcMessage for KillTerminalCommandRequest {
         "terminal/kill"
     }
 
-    fn parse_request(
-        method: &str,
-        params: &Option<jsonrpcmsg::Params>,
-    ) -> Option<Result<Self, acp::Error>> {
+    fn parse_request(method: &str, params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
         if method != "terminal/kill" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
         // This is a request, not a notification
         None

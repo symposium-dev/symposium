@@ -3,6 +3,7 @@ use agent_client_protocol::{
     LoadSessionRequest, LoadSessionResponse, NewSessionRequest, NewSessionResponse, PromptRequest,
     PromptResponse, SetSessionModeRequest, SetSessionModeResponse,
 };
+use serde::Serialize;
 
 use crate::jsonrpc::{JsonRpcMessage, JsonRpcRequest, JsonRpcResponsePayload};
 use crate::util::json_cast;
@@ -23,23 +24,18 @@ impl JsonRpcMessage for InitializeRequest {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "initialize" {
             return None;
         }
-
-        let params = match params {
-            Some(p) => p,
-            None => return Some(Err(agent_client_protocol::Error::invalid_params())),
-        };
 
         Some(json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a request, not a notification
         None
@@ -79,18 +75,17 @@ impl JsonRpcMessage for AuthenticateRequest {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "authenticate" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a request, not a notification
         None
@@ -130,18 +125,17 @@ impl JsonRpcMessage for LoadSessionRequest {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "session/load" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a request, not a notification
         None
@@ -181,18 +175,17 @@ impl JsonRpcMessage for NewSessionRequest {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "session/new" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a request, not a notification
         None
@@ -232,18 +225,17 @@ impl JsonRpcMessage for PromptRequest {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "session/prompt" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a request, not a notification
         None
@@ -283,18 +275,17 @@ impl JsonRpcMessage for SetSessionModeRequest {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "session/set_mode" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a request, not a notification
         None

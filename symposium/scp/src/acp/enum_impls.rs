@@ -8,6 +8,7 @@
 //! - AgentNotification (notifications clients receive)
 
 use agent_client_protocol::{AgentNotification, AgentRequest, ClientNotification, ClientRequest};
+use serde::Serialize;
 
 use crate::jsonrpc::{JsonRpcMessage, JsonRpcNotification, JsonRpcRequest};
 use crate::util::json_cast;
@@ -36,13 +37,8 @@ impl JsonRpcMessage for ClientRequest {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
-        let params = match params {
-            Some(p) => p,
-            None => return Some(Err(agent_client_protocol::Error::invalid_params())),
-        };
-
         let result = match method {
             "initialize" => json_cast(params).map(ClientRequest::InitializeRequest),
             "authenticate" => json_cast(params).map(ClientRequest::AuthenticateRequest),
@@ -70,7 +66,7 @@ impl JsonRpcMessage for ClientRequest {
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // ClientRequest is for requests only, not notifications
         None
@@ -96,7 +92,7 @@ impl JsonRpcMessage for ClientNotification {
 
     fn parse_request(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // ClientNotification is for notifications only, not requests
         None
@@ -104,13 +100,8 @@ impl JsonRpcMessage for ClientNotification {
 
     fn parse_notification(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
-        let params = match params {
-            Some(p) => p,
-            None => return Some(Err(agent_client_protocol::Error::invalid_params())),
-        };
-
         let result = match method {
             "session/cancel" => json_cast(params).map(ClientNotification::CancelNotification),
             _ => {
@@ -162,13 +153,8 @@ impl JsonRpcMessage for AgentRequest {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
-        let params = match params {
-            Some(p) => p,
-            None => return Some(Err(agent_client_protocol::Error::invalid_params())),
-        };
-
         let result = match method {
             "fs/write_text_file" => json_cast(params).map(AgentRequest::WriteTextFileRequest),
             "fs/read_text_file" => json_cast(params).map(AgentRequest::ReadTextFileRequest),
@@ -202,7 +188,7 @@ impl JsonRpcMessage for AgentRequest {
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // AgentRequest is for requests only, not notifications
         None
@@ -228,7 +214,7 @@ impl JsonRpcMessage for AgentNotification {
 
     fn parse_request(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // AgentNotification is for notifications only, not requests
         None
@@ -236,13 +222,8 @@ impl JsonRpcMessage for AgentNotification {
 
     fn parse_notification(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
-        let params = match params {
-            Some(p) => p,
-            None => return Some(Err(agent_client_protocol::Error::invalid_params())),
-        };
-
         let result = match method {
             "session/update" => json_cast(params).map(AgentNotification::SessionNotification),
             _ => {

@@ -47,18 +47,17 @@ impl JsonRpcMessage for FooRequest {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "foo" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a request, not a notification
         None
@@ -104,18 +103,17 @@ impl JsonRpcMessage for BarRequest {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "bar" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a request, not a notification
         None
@@ -242,18 +240,17 @@ impl JsonRpcMessage for TrackRequest {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "track" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a request, not a notification
         None
@@ -362,18 +359,17 @@ impl JsonRpcMessage for Method1Request {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "method1" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a request, not a notification
         None
@@ -401,18 +397,17 @@ impl JsonRpcMessage for Method2Request {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "method2" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a request, not a notification
         None
@@ -579,7 +574,7 @@ impl JsonRpcMessage for EventNotification {
 
     fn parse_request(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a notification, not a request
         None
@@ -587,12 +582,11 @@ impl JsonRpcMessage for EventNotification {
 
     fn parse_notification(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "event" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
     }
 }

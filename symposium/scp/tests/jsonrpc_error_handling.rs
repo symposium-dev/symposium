@@ -68,18 +68,17 @@ impl JsonRpcMessage for SimpleRequest {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "simple_method" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a request, not a notification
         None
@@ -255,18 +254,17 @@ impl JsonRpcMessage for ErrorRequest {
 
     fn parse_request(
         method: &str,
-        params: &Option<jsonrpcmsg::Params>,
+        params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "error_method" {
             return None;
         }
-        let params = params.as_ref()?;
         Some(scp::util::json_cast(params))
     }
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a request, not a notification
         None
@@ -345,7 +343,7 @@ impl JsonRpcMessage for EmptyRequest {
 
     fn parse_request(
         method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         if method != "strict_method" {
             return None;
@@ -355,7 +353,7 @@ impl JsonRpcMessage for EmptyRequest {
 
     fn parse_notification(
         _method: &str,
-        _params: &Option<jsonrpcmsg::Params>,
+        _params: &impl serde::Serialize,
     ) -> Option<Result<Self, agent_client_protocol::Error>> {
         // This is a request, not a notification
         None
