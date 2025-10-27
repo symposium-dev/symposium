@@ -1,8 +1,5 @@
-use std::error::Error;
-
 use crate::{
-    Handled, JsonRpcHandler, JsonRpcMessage, JsonRpcNotification, JsonRpcNotificationCx,
-    JsonRpcRequest, JsonRpcRequestCx, JsonRpcResponsePayload, UntypedMessage, util::json_cast,
+    JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponsePayload, UntypedMessage,
 };
 use agent_client_protocol as acp;
 use serde::{Deserialize, Serialize};
@@ -82,12 +79,12 @@ pub struct McpOverAcpRequest<R> {
 
     /// Request to be sent to the MCP server or client.
     #[serde(flatten)]
-    pub message: R,
+    pub request: R,
 }
 
 impl<R: JsonRpcRequest> JsonRpcMessage for McpOverAcpRequest<R> {
     fn into_untyped_message(self) -> Result<UntypedMessage, acp::Error> {
-        let message = self.message.into_untyped_message()?;
+        let message = self.request.into_untyped_message()?;
         UntypedMessage::new(METHOD_MCP_REQUEST, message)
     }
 
@@ -130,123 +127,3 @@ impl<R: JsonRpcMessage> JsonRpcMessage for McpOverAcpNotification<R> {
 }
 
 impl<R: JsonRpcMessage> JsonRpcNotification for McpOverAcpNotification<R> {}
-
-/// Callbacks for "mcp-over-acp"
-#[allow(async_fn_in_trait)]
-pub trait McpOverAcpCallbacks {
-    async fn mcp_request(
-        &mut self,
-        request: McpOverAcpRequest<UntypedMessage>,
-        request_cx: JsonRpcRequestCx<serde_json::Value>,
-    ) -> Result<(), acp::Error>;
-
-    async fn mcp_notification(
-        &mut self,
-        request: McpOverAcpNotification<UntypedMessage>,
-        notification_cx: JsonRpcNotificationCx,
-    ) -> Result<(), acp::Error>;
-}
-
-/// MCP-over-ACP messages
-pub struct McpOverAcpMessages<CB: McpOverAcpCallbacks> {
-    callbacks: CB,
-}
-
-impl<CB: McpOverAcpCallbacks> McpOverAcpMessages<CB> {
-    pub fn callback(callbacks: CB) -> Self {
-        Self { callbacks }
-    }
-}
-
-impl<CB: McpOverAcpCallbacks> JsonRpcHandler for McpOverAcpMessages<CB> {
-    async fn handle_request(
-        &mut self,
-        cx: JsonRpcRequestCx<serde_json::Value>,
-        params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<crate::Handled<JsonRpcRequestCx<serde_json::Value>>, agent_client_protocol::Error>
-    {
-        if cx.method() != METHOD_MCP_REQUEST {
-            return Ok(Handled::No(cx));
-        }
-
-        let request: McpOverAcpRequest<UntypedMessage> = json_cast(params)?;
-        self.callbacks.mcp_request(request, cx).await?;
-        Ok(Handled::Yes)
-    }
-
-    async fn handle_notification(
-        &mut self,
-        cx: JsonRpcNotificationCx,
-        params: &Option<jsonrpcmsg::Params>,
-    ) -> Result<crate::Handled<JsonRpcNotificationCx>, agent_client_protocol::Error> {
-        if cx.method() != METHOD_MCP_NOTIFICATION {
-            return Ok(Handled::No(cx));
-        }
-
-        let request: McpOverAcpNotification<UntypedMessage> = json_cast(params)?;
-        self.callbacks.mcp_notification(request, cx).await?;
-        Ok(Handled::Yes)
-    }
-}
-
-impl<TX, E> McpOverAcpMessages<AcpMcpSendTo<TX, E>>
-where
-    TX: AsyncFnMut(McpOverAcpMessage) -> Result<(), E>,
-    E: Error,
-{
-    pub fn send_to(tx: TX) -> Self {
-        Self::callback(AcpMcpSendTo { tx })
-    }
-}
-
-/// An MCP message sent over ACP.
-pub enum McpOverAcpMessage {
-    /// An MCP request requiring a reply.
-    Request(
-        McpOverAcpRequest<UntypedMessage>,
-        JsonRpcRequestCx<serde_json::Value>,
-    ),
-    /// An MCP notification.
-    Notification(
-        McpOverAcpNotification<UntypedMessage>,
-        JsonRpcNotificationCx,
-    ),
-}
-
-/// MCP-over-ACP callbacks to send [`McpOverAcpMessage`] to a channel.
-pub struct AcpMcpSendTo<TX, E>
-where
-    TX: AsyncFnMut(McpOverAcpMessage) -> Result<(), E>,
-    E: Error,
-{
-    tx: TX,
-}
-
-impl<TX, E> McpOverAcpCallbacks for AcpMcpSendTo<TX, E>
-where
-    TX: AsyncFnMut(McpOverAcpMessage) -> Result<(), E>,
-    E: Error,
-{
-    async fn mcp_request(
-        &mut self,
-        request: McpOverAcpRequest<UntypedMessage>,
-        request_cx: JsonRpcRequestCx<serde_json::Value>,
-    ) -> Result<(), acp::Error> {
-        (self.tx)(McpOverAcpMessage::Request(request, request_cx))
-            .await
-            .map_err(acp::Error::into_internal_error)
-    }
-
-    async fn mcp_notification(
-        &mut self,
-        notification: McpOverAcpNotification<UntypedMessage>,
-        notification_cx: JsonRpcNotificationCx,
-    ) -> Result<(), acp::Error> {
-        (self.tx)(McpOverAcpMessage::Notification(
-            notification,
-            notification_cx,
-        ))
-        .await
-        .map_err(acp::Error::into_internal_error)
-    }
-}

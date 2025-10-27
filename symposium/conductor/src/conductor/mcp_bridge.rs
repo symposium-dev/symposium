@@ -4,8 +4,8 @@ use agent_client_protocol as acp;
 use agent_client_protocol::McpServer;
 use futures::{SinkExt, StreamExt as _, channel::mpsc};
 use scp::{
-    JsonRpcConnection, JsonRpcConnectionCx, McpDisconnectNotification, McpOverAcpMessage,
-    McpOverAcpNotification, McpOverAcpRequest,
+    JsonRpcConnection, JsonRpcConnectionCx, JsonRpcRequestCx, McpDisconnectNotification,
+    UntypedMessage,
 };
 use tokio::net::TcpStream;
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
@@ -188,7 +188,7 @@ pub struct McpBridgeConnectionActor {
     conductor_tx: mpsc::Sender<ConductorMessage>,
 
     /// Receiver for messages from the conductor to the MCP client
-    to_mcp_client_rx: mpsc::Receiver<McpOverAcpMessage>,
+    to_mcp_client_rx: mpsc::Receiver<McpServerToMcpClientMessage>,
 }
 
 impl McpBridgeConnectionActor {
@@ -204,55 +204,47 @@ impl McpBridgeConnectionActor {
         // The conductor can also send responses back
         let result = JsonRpcConnection::new(write_half.compat_write(), read_half.compat())
             // When we receive a message from the MCP client, forward it to the conductor
-            .on_receive(scp::AllMessages::call(
-                {
-                    let mut conductor_tx = self.conductor_tx.clone();
-                    let connection_id = connection_id.clone();
-                    async move |request, request_cx| {
-                        conductor_tx
-                            .send(ConductorMessage::McpMessageReceived {
-                                message: McpOverAcpMessage::Request(
-                                    McpOverAcpRequest {
-                                        connection_id: connection_id.clone(),
-                                        message: request,
-                                    },
-                                    request_cx,
-                                ),
-                            })
-                            .await
-                            .map_err(|_| acp::Error::internal_error())
-                    }
-                },
-                {
-                    let mut conductor_tx = self.conductor_tx.clone();
-                    let connection_id = connection_id.clone();
-                    async move |notification, notification_cx| {
-                        conductor_tx
-                            .send(ConductorMessage::McpMessageReceived {
-                                message: McpOverAcpMessage::Notification(
-                                    McpOverAcpNotification {
-                                        connection_id: connection_id.clone(),
-                                        notification,
-                                    },
-                                    notification_cx,
-                                ),
-                            })
-                            .await
-                            .map_err(|_| acp::Error::internal_error())
-                    }
-                },
-            ))
+            .on_receive_request({
+                let mut conductor_tx = self.conductor_tx.clone();
+                let connection_id = connection_id.clone();
+                async move |request: UntypedMessage, request_cx| {
+                    conductor_tx
+                        .send(ConductorMessage::McpClientToMcpServerRequest {
+                            connection_id: connection_id.clone(),
+                            request,
+                            request_cx,
+                        })
+                        .await
+                        .map_err(|_| acp::Error::internal_error())
+                }
+            })
+            .on_receive_notification({
+                let mut conductor_tx = self.conductor_tx.clone();
+                let connection_id = connection_id.clone();
+                async move |notification: UntypedMessage, _| {
+                    conductor_tx
+                        .send(ConductorMessage::McpClientToMcpServerNotification {
+                            connection_id: connection_id.clone(),
+                            notification,
+                        })
+                        .await
+                        .map_err(|_| acp::Error::internal_error())
+                }
+            })
             // When we receive messages from the conductor, forward them to the MCP client
             .with_client(async move |mcp_client_cx| {
                 while let Some(message) = self.to_mcp_client_rx.next().await {
                     match message {
-                        McpOverAcpMessage::Request(untyped_message, request_cx) => {
+                        McpServerToMcpClientMessage::Request {
+                            request,
+                            request_cx,
+                        } => {
                             mcp_client_cx
-                                .send_request(untyped_message)
+                                .send_request(request)
                                 .forward_to_request_cx(request_cx)?;
                         }
-                        McpOverAcpMessage::Notification(untyped_message, _notification_cx) => {
-                            mcp_client_cx.send_notification(untyped_message)?;
+                        McpServerToMcpClientMessage::Notification { notification } => {
+                            mcp_client_cx.send_notification(notification)?;
                         }
                     }
                 }
@@ -279,14 +271,26 @@ impl McpBridgeConnectionActor {
 #[derive(Clone, Debug)]
 pub struct McpBridgeConnection {
     /// Channel to send messages from MCP server (ACP proxy) to the MCP client (ACP agent).
-    to_mcp_client_tx: mpsc::Sender<McpOverAcpMessage>,
+    to_mcp_client_tx: mpsc::Sender<McpServerToMcpClientMessage>,
 }
 
 impl McpBridgeConnection {
-    pub async fn send(&mut self, message: McpOverAcpMessage) -> Result<(), acp::Error> {
+    pub async fn send(&mut self, message: McpServerToMcpClientMessage) -> Result<(), acp::Error> {
         self.to_mcp_client_tx
             .send(message)
             .await
             .map_err(|_| acp::Error::internal_error())
     }
+}
+
+/// An MCP message sent over ACP.
+pub enum McpServerToMcpClientMessage {
+    /// An MCP request requiring a reply.
+    Request {
+        request: UntypedMessage,
+        request_cx: JsonRpcRequestCx<serde_json::Value>,
+    },
+
+    /// An MCP notification.
+    Notification { notification: UntypedMessage },
 }

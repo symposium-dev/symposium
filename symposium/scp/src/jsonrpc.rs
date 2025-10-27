@@ -60,24 +60,6 @@ impl<OB: AsyncWrite, IB: AsyncRead> JsonRpcConnection<OB, IB, NullHandler> {
 }
 
 impl<OB: AsyncWrite, IB: AsyncRead, H: JsonRpcHandler> JsonRpcConnection<OB, IB, H> {
-    /// Adds a message handler that will have the opportunity to process incoming messages.
-    /// When a new message arrives, handlers are tried in the order they were added, and
-    /// the first to "claim" the message "wins".
-    pub fn on_receive<H1>(self, handler: H1) -> JsonRpcConnection<OB, IB, ChainHandler<H, H1>>
-    where
-        H1: JsonRpcHandler,
-    {
-        JsonRpcConnection {
-            handler: ChainHandler::new(self.handler, handler),
-            outgoing_bytes: self.outgoing_bytes,
-            incoming_bytes: self.incoming_bytes,
-            outgoing_rx: self.outgoing_rx,
-            outgoing_tx: self.outgoing_tx,
-            new_task_rx: self.new_task_rx,
-            new_task_tx: self.new_task_tx,
-        }
-    }
-
     /// Invoke the given closure when a request is received.
     pub fn on_receive_request<R, F>(
         self,
@@ -615,19 +597,6 @@ impl JsonRpcResponsePayload for serde_json::Value {
 
     fn into_json(self, _method: &str) -> Result<serde_json::Value, acp::Error> {
         Ok(self)
-    }
-}
-
-impl JsonRpcMessage for serde_json::Value {
-    fn into_untyped_message(self) -> Result<UntypedMessage, acp::Error> {
-        // For raw JSON values, we expect them to already be properly formatted
-        // This is a fallback for generic handling
-        let method = String::new();
-        UntypedMessage::new(&method, self)
-    }
-
-    fn method(&self) -> &str {
-        ""
     }
 }
 
