@@ -2,6 +2,7 @@
 
 use agent_client_protocol::{
     self as acp, InitializeRequest, McpServer, NewSessionRequest, NewSessionResponse,
+    PromptRequest, PromptResponse,
 };
 use conductor::component::{Cleanup, ComponentProvider};
 use futures::{AsyncRead, AsyncWrite, SinkExt, StreamExt, channel::mpsc};
@@ -73,6 +74,16 @@ impl ComponentProvider for ProxyComponentProvider {
                             .send_request_to_successor(request)
                             .await_when_response_received(
                                 async move |response: Result<NewSessionResponse, acp::Error>| {
+                                    request_cx.respond(response?)
+                                },
+                            )
+                    })
+                    .on_receive_request(async move |request: PromptRequest, request_cx| {
+                        // Forward prompt requests to the agent
+                        request_cx
+                            .send_request_to_successor(request)
+                            .await_when_response_received(
+                                async move |response: Result<PromptResponse, acp::Error>| {
                                     request_cx.respond(response?)
                                 },
                             )

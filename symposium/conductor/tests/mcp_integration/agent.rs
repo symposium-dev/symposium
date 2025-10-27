@@ -1,12 +1,13 @@
-//! Agent component that verifies MCP server configuration
+//! Agent component that verifies MCP server configuration and handles prompts
 
 use agent_client_protocol::{
-    self as acp, AgentCapabilities, InitializeRequest, InitializeResponse, McpServer,
-    NewSessionRequest, NewSessionResponse,
+    self as acp, AgentCapabilities, ContentBlock, InitializeRequest, InitializeResponse, McpServer,
+    NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse, SessionNotification,
+    SessionUpdate, StopReason, TextContent,
 };
 use conductor::component::{Cleanup, ComponentProvider};
 use futures::{AsyncRead, AsyncWrite};
-use scp::{JsonRpcConnection, JsonRpcConnectionCx};
+use scp::{JsonRpcConnection, JsonRpcConnectionCx, JsonRpcCxExt};
 use std::pin::Pin;
 
 pub struct AgentComponentProvider;
@@ -65,6 +66,32 @@ impl ComponentProvider for AgentComponentProvider {
                     let response = NewSessionResponse {
                         session_id: "test-session-123".into(),
                         modes: None,
+                        meta: None,
+                    };
+                    request_cx.respond(response)
+                })
+                .on_receive_request(async move |request: PromptRequest, request_cx| {
+                    println!(
+                        "📨 Received prompt request for session: {}",
+                        request.session_id.0
+                    );
+
+                    // Send initial message
+                    request_cx.send_notification(SessionNotification {
+                        session_id: request.session_id.clone(),
+                        update: SessionUpdate::AgentMessageChunk {
+                            content: ContentBlock::Text(TextContent {
+                                annotations: None,
+                                text: "Hello. I will now use the MCP tool".to_string(),
+                                meta: None,
+                            }),
+                        },
+                        meta: None,
+                    })?;
+
+                    // End the turn
+                    let response = PromptResponse {
+                        stop_reason: StopReason::EndTurn,
                         meta: None,
                     };
                     request_cx.respond(response)

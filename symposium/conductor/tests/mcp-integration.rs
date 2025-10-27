@@ -7,7 +7,9 @@
 
 mod mcp_integration;
 
-use agent_client_protocol::{self as acp, InitializeRequest, NewSessionRequest};
+use agent_client_protocol::{
+    self as acp, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest, TextContent,
+};
 use conductor::component::ComponentProvider;
 use conductor::conductor::Conductor;
 use scp::JsonRpcConnection;
@@ -96,6 +98,70 @@ async fn test_proxy_provides_mcp_tools() -> Result<(), acp::Error> {
 
             let session = session_response.unwrap();
             assert_eq!(&*session.session_id.0, "test-session-123");
+
+            Ok(())
+        },
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_agent_handles_prompt() -> Result<(), acp::Error> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("conductor=debug".parse().unwrap()),
+        )
+        .with_test_writer()
+        .try_init();
+
+    run_test_with_components(
+        vec![
+            mcp_integration::proxy::create(),
+            mcp_integration::agent::create(),
+        ],
+        async |editor_cx| {
+            // Initialize
+            recv(editor_cx.send_request(InitializeRequest {
+                protocol_version: Default::default(),
+                client_capabilities: Default::default(),
+                meta: None,
+            }))
+            .await?;
+
+            // Create session
+            let session = recv(editor_cx.send_request(NewSessionRequest {
+                cwd: Default::default(),
+                mcp_servers: vec![],
+                meta: None,
+            }))
+            .await?;
+
+            println!("✓ Session created: {}", session.session_id.0);
+
+            // Send a prompt
+            let prompt_response = recv(editor_cx.send_request(PromptRequest {
+                session_id: session.session_id.clone(),
+                prompt: vec![ContentBlock::Text(TextContent {
+                    annotations: None,
+                    text: "Hello agent!".to_string(),
+                    meta: None,
+                })],
+                meta: None,
+            }))
+            .await?;
+
+            println!(
+                "✓ Prompt response received: {:?}",
+                prompt_response.stop_reason
+            );
+            assert_eq!(
+                prompt_response.stop_reason,
+                acp::StopReason::EndTurn,
+                "Expected EndTurn stop reason"
+            );
 
             Ok(())
         },
