@@ -41,13 +41,13 @@ impl<Req: JsonRpcRequest> JsonRpcMessage for ToSuccessorRequest<Req> {
 
     fn parse_request(method: &str, params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
         if method == TO_SUCCESSOR_REQUEST_METHOD {
-            match json_cast::<_, UntypedMessage>(params) {
-                Ok(request) => match Req::parse_request(&request.method, &request.params) {
+            match crate::util::json_cast::<_, ToSuccessorRequest<crate::UntypedMessage>>(params) {
+                Ok(outer) => match Req::parse_request(&outer.request.method, &outer.request.params)
+                {
                     Some(Ok(request)) => Some(Ok(ToSuccessorRequest { request })),
                     Some(Err(err)) => Some(Err(err)),
                     None => None,
                 },
-
                 Err(err) => Some(Err(err)),
             }
         } else {
@@ -100,8 +100,13 @@ impl<Req: JsonRpcNotification> JsonRpcMessage for ToSuccessorNotification<Req> {
         params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
         if method == TO_SUCCESSOR_NOTIFICATION_METHOD {
-            match crate::util::json_cast::<_, crate::UntypedMessage>(params) {
-                Ok(msg) => match Req::parse_notification(&msg.method, &msg.params) {
+            match crate::util::json_cast::<_, ToSuccessorNotification<crate::UntypedMessage>>(
+                params,
+            ) {
+                Ok(outer) => match Req::parse_notification(
+                    &outer.notification.method,
+                    &outer.notification.params,
+                ) {
                     Some(Ok(notification)) => Some(Ok(ToSuccessorNotification { notification })),
                     Some(Err(err)) => Some(Err(err)),
                     None => None,
@@ -147,8 +152,8 @@ impl<R: JsonRpcRequest> JsonRpcMessage for FromSuccessorRequest<R> {
 
     fn parse_request(method: &str, params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
         if method == FROM_SUCCESSOR_REQUEST_METHOD {
-            match crate::util::json_cast::<_, crate::UntypedMessage>(params) {
-                Ok(msg) => match R::parse_request(&msg.method, &msg.params) {
+            match crate::util::json_cast::<_, FromSuccessorRequest<crate::UntypedMessage>>(params) {
+                Ok(outer) => match R::parse_request(&outer.request.method, &outer.request.params) {
                     Some(Ok(request)) => Some(Ok(FromSuccessorRequest { request })),
                     Some(Err(err)) => Some(Err(err)),
                     None => None,
@@ -205,8 +210,13 @@ impl<N: JsonRpcNotification> JsonRpcMessage for FromSuccessorNotification<N> {
         params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
         if method == FROM_SUCCESSOR_NOTIFICATION_METHOD {
-            match crate::util::json_cast::<_, crate::UntypedMessage>(params) {
-                Ok(msg) => match N::parse_notification(&msg.method, &msg.params) {
+            match crate::util::json_cast::<_, FromSuccessorNotification<crate::UntypedMessage>>(
+                params,
+            ) {
+                Ok(outer) => match N::parse_notification(
+                    &outer.notification.method,
+                    &outer.notification.params,
+                ) {
                     Some(Ok(notification)) => Some(Ok(FromSuccessorNotification { notification })),
                     Some(Err(err)) => Some(Err(err)),
                     None => None,

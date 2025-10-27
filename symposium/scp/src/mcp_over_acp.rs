@@ -1,5 +1,6 @@
 use crate::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponsePayload, UntypedMessage,
+    util::json_cast,
 };
 use agent_client_protocol as acp;
 use serde::{Deserialize, Serialize};
@@ -122,9 +123,22 @@ impl<R: JsonRpcRequest> JsonRpcMessage for McpOverAcpRequest<R> {
         METHOD_MCP_REQUEST
     }
 
-    fn parse_request(_method: &str, _params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
-        // Generic type - cannot deserialize without knowing concrete R type
-        None
+    fn parse_request(method: &str, params: &impl Serialize) -> Option<Result<Self, acp::Error>> {
+        if method == METHOD_MCP_REQUEST {
+            match json_cast::<_, McpOverAcpRequest<UntypedMessage>>(params) {
+                Ok(outer) => match R::parse_request(&outer.request.method, &outer.request.params) {
+                    Some(Ok(request)) => Some(Ok(McpOverAcpRequest {
+                        connection_id: outer.connection_id,
+                        request,
+                    })),
+                    Some(Err(err)) => Some(Err(err)),
+                    None => None,
+                },
+                Err(err) => Some(Err(err)),
+            }
+        } else {
+            None
+        }
     }
 
     fn parse_notification(
@@ -172,11 +186,27 @@ impl<R: JsonRpcMessage> JsonRpcMessage for McpOverAcpNotification<R> {
     }
 
     fn parse_notification(
-        _method: &str,
-        _params: &impl Serialize,
+        method: &str,
+        params: &impl Serialize,
     ) -> Option<Result<Self, acp::Error>> {
-        // Generic type - cannot deserialize without knowing concrete R type
-        None
+        if method == METHOD_MCP_NOTIFICATION {
+            match json_cast::<_, McpOverAcpNotification<UntypedMessage>>(params) {
+                Ok(outer) => match R::parse_notification(
+                    &outer.notification.method,
+                    &outer.notification.params,
+                ) {
+                    Some(Ok(notification)) => Some(Ok(McpOverAcpNotification {
+                        connection_id: outer.connection_id,
+                        notification,
+                    })),
+                    Some(Err(err)) => Some(Err(err)),
+                    None => None,
+                },
+                Err(err) => Some(Err(err)),
+            }
+        } else {
+            None
+        }
     }
 }
 
