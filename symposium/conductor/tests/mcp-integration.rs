@@ -139,7 +139,7 @@ async fn test_agent_handles_prompt() -> Result<(), acp::Error> {
             }))
             .await?;
 
-            println!("✓ Session created: {}", session.session_id.0);
+            tracing::debug!(session_id = %session.session_id.0, "Session created");
 
             // Send a prompt
             let prompt_response = recv(editor_cx.send_request(PromptRequest {
@@ -153,9 +153,9 @@ async fn test_agent_handles_prompt() -> Result<(), acp::Error> {
             }))
             .await?;
 
-            println!(
-                "✓ Prompt response received: {:?}",
-                prompt_response.stop_reason
+            tracing::debug!(
+                stop_reason = ?prompt_response.stop_reason,
+                "Prompt response received"
             );
             assert_eq!(
                 prompt_response.stop_reason,

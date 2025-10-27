@@ -56,9 +56,9 @@ impl ComponentProvider for AgentComponentProvider {
                         assert_eq!(args.len(), 2);
                         assert_eq!(args[0], "mcp");
                         // args[1] is the port number, which varies
-                        println!(
-                            "✓ MCP server correctly configured: conductor mcp {}",
-                            args[1]
+                        tracing::debug!(
+                            port = %args[1],
+                            "MCP server correctly configured: conductor mcp"
                         );
                     }
 
@@ -71,9 +71,9 @@ impl ComponentProvider for AgentComponentProvider {
                     request_cx.respond(response)
                 })
                 .on_receive_request(async move |request: PromptRequest, request_cx| {
-                    println!(
-                        "📨 Received prompt request for session: {}",
-                        request.session_id.0
+                    tracing::debug!(
+                        session_id = %request.session_id.0,
+                        "Received prompt request"
                     );
 
                     // Send initial message
