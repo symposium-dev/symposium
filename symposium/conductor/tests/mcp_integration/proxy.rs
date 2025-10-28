@@ -90,7 +90,7 @@ impl ComponentProvider for ProxyComponentProvider {
                             )
                     })
                     //
-                    .on_receive_request({
+                    .on_receive_request_from_successor({
                         let state = state.clone();
                         async move |request: McpConnectRequest, request_cx| {
                             // Spawn MCP server for this connection
@@ -199,7 +199,7 @@ impl ComponentProvider for ProxyComponentProvider {
                             })
                         }
                     })
-                    .on_receive_request({
+                    .on_receive_request_from_successor({
                         let state = state.clone();
                         async move |request: McpOverAcpRequest<UntypedMessage>, request_cx| {
                             let connection = state
@@ -230,7 +230,7 @@ impl ComponentProvider for ProxyComponentProvider {
                             }
                         }
                     })
-                    .on_receive_notification({
+                    .on_receive_notification_from_successor({
                         let state = state.clone();
                         async move |notification: McpOverAcpNotification<UntypedMessage>, _| {
                             let connection = state
