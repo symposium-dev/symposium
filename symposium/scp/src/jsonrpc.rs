@@ -347,6 +347,16 @@ impl JsonRpcConnectionCx {
             .map_err(acp::Error::into_internal_error)
     }
 
+    /// Send a request/notification and forward the response appropriately.
+    pub fn send_proxied_message(&self, message: ProxiedMessage) -> Result<(), acp::Error> {
+        match message {
+            ProxiedMessage::Request(request, request_cx) => {
+                self.send_request(request).forward_to_request_cx(request_cx)
+            }
+            ProxiedMessage::Notification(notification) => self.send_notification(notification),
+        }
+    }
+
     /// Send an outgoing request and await the reply.
     pub fn send_request<Req: JsonRpcRequest>(
         &self,
@@ -660,6 +670,17 @@ pub trait JsonRpcRequest: JsonRpcMessage {
     type Response: JsonRpcResponsePayload;
 }
 
+/// An enum capturing an in-flight request or notification.
+/// In the case of a request, also includes the context used to respond to the request.
+pub enum ProxiedMessage {
+    /// Incoming request and the context where the response should be sent.
+    Request(UntypedMessage, JsonRpcRequestCx<serde_json::Value>),
+
+    /// Incoming notification.
+    Notification(UntypedMessage),
+}
+
+/// An incoming JSON message without any typing. Can be a request or a notification.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct UntypedMessage {
     pub method: String,

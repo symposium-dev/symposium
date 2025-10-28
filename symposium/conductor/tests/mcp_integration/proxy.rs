@@ -8,12 +8,13 @@ use conductor::component::{Cleanup, ComponentProvider};
 use futures::{AsyncRead, AsyncWrite, SinkExt, StreamExt, channel::mpsc};
 use rmcp::ServiceExt;
 use scp::{
-    AcpAgentToClientNotification, JsonRpcConnection, JsonRpcConnectionCx, JsonRpcConnectionExt,
-    JsonRpcCxExt, McpConnectRequest, McpConnectResponse, McpOverAcpNotification, McpOverAcpRequest,
-    MetaCapabilityExt, Proxy, UntypedMessage,
+    JsonRpcConnection, JsonRpcConnectionCx, JsonRpcConnectionExt, JsonRpcCxExt, JsonRpcRequestCx,
+    McpConnectRequest, McpConnectResponse, McpOverAcpNotification, McpOverAcpRequest,
+    MetaCapabilityExt, ProxiedMessage, Proxy, UntypedMessage,
 };
+use std::sync::Mutex;
 use std::{collections::HashMap, pin::Pin, sync::Arc};
-use tokio::sync::Mutex;
+use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 pub struct ProxyComponentProvider;
 
@@ -21,18 +22,7 @@ pub struct ProxyComponentProvider;
 #[derive(Clone)]
 struct McpConnectionState {
     /// Map of connection_id to channel for sending messages to MCP server
-    connections: Arc<Mutex<HashMap<String, mpsc::Sender<McpClientMessage>>>>,
-}
-
-/// Messages from MCP client to MCP server
-enum McpClientMessage {
-    Request {
-        request: UntypedMessage,
-        response_tx: tokio::sync::oneshot::Sender<Result<serde_json::Value, acp::Error>>,
-    },
-    Notification {
-        notification: UntypedMessage,
-    },
+    connections: Arc<Mutex<HashMap<String, mpsc::Sender<ProxiedMessage>>>>,
 }
 
 impl ComponentProvider for ProxyComponentProvider {
@@ -48,231 +38,187 @@ impl ComponentProvider for ProxyComponentProvider {
 
         cx.spawn({
             let state = state.clone();
-            async move {
-                JsonRpcConnection::new(outgoing_bytes, incoming_bytes)
-                    .name("proxy-component")
-                    .on_receive_request(async move |mut request: InitializeRequest, request_cx| {
-                        // Remove proxy capability before forwarding
-                        request = request.remove_meta_capability(Proxy);
+            JsonRpcConnection::new(outgoing_bytes, incoming_bytes)
+                .name("proxy-component")
+                .on_receive_request(async move |mut request: InitializeRequest, request_cx| {
+                    // Remove proxy capability before forwarding
+                    request = request.remove_meta_capability(Proxy);
 
-                        // Forward to agent and add proxy capability to response
-                        request_cx
-                            .send_request_to_successor(request)
-                            .await_when_response_received(async move |response| {
-                                let mut response = response?;
-                                response = response.add_meta_capability(Proxy);
-                                request_cx.respond(response)
-                            })
-                    })
-                    .on_receive_request(async move |mut request: NewSessionRequest, request_cx| {
-                        request.mcp_servers.push(McpServer::Http {
-                            name: "eg".to_string(),
-                            url: format!("acp:eg"),
-                            headers: vec![],
-                        });
+                    // Forward to agent and add proxy capability to response
+                    request_cx
+                        .send_request_to_successor(request)
+                        .await_when_response_received(async move |response| {
+                            let mut response = response?;
+                            response = response.add_meta_capability(Proxy);
+                            request_cx.respond(response)
+                        })
+                })
+                .on_receive_request(async move |mut request: NewSessionRequest, request_cx| {
+                    request.mcp_servers.push(McpServer::Http {
+                        name: "eg".to_string(),
+                        url: format!("acp:eg"),
+                        headers: vec![],
+                    });
 
-                        request_cx
-                            .send_request_to_successor(request)
-                            .await_when_response_received(
-                                async move |response: Result<NewSessionResponse, acp::Error>| {
-                                    request_cx.respond(response?)
-                                },
+                    request_cx
+                        .send_request_to_successor(request)
+                        .await_when_response_received(
+                            async move |response: Result<NewSessionResponse, acp::Error>| {
+                                request_cx.respond(response?)
+                            },
+                        )
+                })
+                .on_receive_request(async move |request: PromptRequest, request_cx| {
+                    // Forward prompt requests to the agent
+                    request_cx
+                        .send_request_to_successor(request)
+                        .await_when_response_received(
+                            async move |response: Result<PromptResponse, acp::Error>| {
+                                request_cx.respond(response?)
+                            },
+                        )
+                })
+                .on_receive_request_from_successor({
+                    let state = state.clone();
+                    async move |request: McpConnectRequest, request_cx| {
+                        state.start_connection(request, request_cx).await
+                    }
+                })
+                .on_receive_request_from_successor({
+                    let state = state.clone();
+                    async move |request: McpOverAcpRequest<UntypedMessage>, request_cx| {
+                        state
+                            .send_proxied_message(
+                                request.connection_id,
+                                ProxiedMessage::Request(request.request, request_cx),
                             )
-                    })
-                    .on_receive_request(async move |request: PromptRequest, request_cx| {
-                        // Forward prompt requests to the agent
-                        request_cx
-                            .send_request_to_successor(request)
-                            .await_when_response_received(
-                                async move |response: Result<PromptResponse, acp::Error>| {
-                                    request_cx.respond(response?)
-                                },
+                            .await
+                    }
+                })
+                .on_receive_notification_from_successor({
+                    let state = state.clone();
+                    async move |notification: McpOverAcpNotification<UntypedMessage>, _| {
+                        state
+                            .send_proxied_message(
+                                notification.connection_id,
+                                ProxiedMessage::Notification(notification.notification),
                             )
-                    })
-                    //
-                    .on_receive_request_from_successor({
-                        let state = state.clone();
-                        async move |request: McpConnectRequest, request_cx| {
-                            // Spawn MCP server for this connection
-                            let connection_id = format!("mcp-{}", uuid::Uuid::new_v4());
-
-                            // Create channel for communicating with MCP server
-                            let (client_tx, mut client_rx) = mpsc::channel::<McpClientMessage>(128);
-
-                            // Store the connection
-                            state
-                                .connections
-                                .lock()
-                                .await
-                                .insert(connection_id.clone(), client_tx);
-
-                            // Spawn MCP server task
-                            request_cx.spawn(async move {
-                                use crate::mcp_integration::mcp_server::TestMcpServer;
-                                use rmcp::{ClientHandler, ServiceExt};
-
-                                let server = TestMcpServer::new();
-
-                                // Create duplex stream for MCP communication
-                                let (client_stream, server_stream) = tokio::io::duplex(8192);
-
-                                // Spawn task to serve MCP server
-                                tokio::spawn(async move {
-                                    if let Err(e) = server.serve(server_stream).await {
-                                        eprintln!("MCP server error: {:?}", e);
-                                    }
-                                });
-
-                                // Create MCP client to communicate with the server
-                                struct NoOpClientHandler;
-                                impl ClientHandler for NoOpClientHandler {}
-
-                                let mcp_client =
-                                    NoOpClientHandler.serve(client_stream).await.map_err(|e| {
-                                        eprintln!("MCP client serve error: {:?}", e);
-                                        acp::Error::internal_error()
-                                    })?;
-
-                                // Handle messages from ACP client
-                                while let Some(message) = client_rx.next().await {
-                                    match message {
-                                        McpClientMessage::Request {
-                                            request,
-                                            response_tx,
-                                        } => {
-                                            // Parse the method and forward to appropriate MCP call
-                                            let result = if request.method == "tools/call" {
-                                                // Call the tool via the MCP client
-                                                match serde_json::from_value::<
-                                                    rmcp::model::CallToolRequestParam,
-                                                >(
-                                                    request.params
-                                                ) {
-                                                    Ok(params) => {
-                                                        match mcp_client
-                                                            .peer()
-                                                            .call_tool(params)
-                                                            .await
-                                                        {
-                                                            Ok(result) => {
-                                                                Ok(serde_json::to_value(&result)
-                                                                    .unwrap())
-                                                            }
-                                                            Err(e) => {
-                                                                eprintln!(
-                                                                    "Tool call error: {:?}",
-                                                                    e
-                                                                );
-                                                                Err(acp::Error::internal_error())
-                                                            }
-                                                        }
-                                                    }
-                                                    Err(e) => {
-                                                        eprintln!(
-                                                            "Failed to parse tool params: {:?}",
-                                                            e
-                                                        );
-                                                        Err(acp::Error::invalid_params())
-                                                    }
-                                                }
-                                            } else {
-                                                eprintln!("Unsupported method: {}", request.method);
-                                                Err(acp::Error::method_not_found())
-                                            };
-
-                                            let _ = response_tx.send(result);
-                                        }
-                                        McpClientMessage::Notification { notification: _ } => {
-                                            // Notifications not yet implemented
-                                        }
-                                    }
-                                }
-
-                                // Clean up client
-                                let _ = mcp_client.cancel().await;
-
-                                Ok::<_, acp::Error>(())
-                            })?;
-
-                            request_cx.respond(McpConnectResponse {
-                                connection_id: connection_id.into(),
-                            })
-                        }
-                    })
-                    .on_receive_request_from_successor({
-                        let state = state.clone();
-                        async move |request: McpOverAcpRequest<UntypedMessage>, request_cx| {
-                            let connection = state
-                                .connections
-                                .lock()
-                                .await
-                                .get(&request.connection_id)
-                                .cloned();
-
-                            if let Some(mut connection) = connection {
-                                let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-
-                                connection
-                                    .send(McpClientMessage::Request {
-                                        request: request.request,
-                                        response_tx,
-                                    })
-                                    .await
-                                    .map_err(|_| acp::Error::internal_error())?;
-
-                                let result = response_rx
-                                    .await
-                                    .map_err(|_| acp::Error::internal_error())??;
-
-                                request_cx.respond(result)
-                            } else {
-                                request_cx.respond_with_error(acp::Error::internal_error())
-                            }
-                        }
-                    })
-                    .on_receive_notification_from_successor({
-                        let state = state.clone();
-                        async move |notification: McpOverAcpNotification<UntypedMessage>, _| {
-                            let connection = state
-                                .connections
-                                .lock()
-                                .await
-                                .get(&notification.connection_id)
-                                .cloned();
-
-                            if let Some(mut connection) = connection {
-                                let _ = connection
-                                    .send(McpClientMessage::Notification {
-                                        notification: notification.notification,
-                                    })
-                                    .await;
-                            }
-
-                            Ok(())
-                        }
-                    })
-                    // All other notifications -- pass along to the predecessor
-                    .on_receive_request_from_successor(
-                        async move |request: UntypedMessage, request_cx| {
-                            tracing::debug!(?request, "on_receive_request_from_successor");
-                            request_cx
-                                .send_request(request)
-                                .forward_to_request_cx(request_cx)
-                        },
-                    )
-                    // All other notifications -- pass along to the predecessor
-                    .on_receive_notification_from_successor(
-                        async move |notification: UntypedMessage, cx| {
-                            tracing::debug!(?notification, "on_receive_request_from_successor");
-                            cx.send_notification(notification)
-                        },
-                    )
-                    .serve()
-                    .await
-            }
+                            .await
+                    }
+                })
+                // All other notifications -- pass along to the predecessor
+                .on_receive_request_from_successor(
+                    async move |request: UntypedMessage, request_cx| {
+                        tracing::debug!(?request, "on_receive_request_from_successor");
+                        request_cx
+                            .send_request(request)
+                            .forward_to_request_cx(request_cx)
+                    },
+                )
+                // All other notifications -- pass along to the predecessor
+                .on_receive_notification_from_successor(
+                    async move |notification: UntypedMessage, cx| {
+                        tracing::debug!(?notification, "on_receive_request_from_successor");
+                        cx.send_notification(notification)
+                    },
+                )
+                .serve()
         })?;
 
         Ok(Cleanup::None)
+    }
+}
+
+impl McpConnectionState {
+    async fn start_connection(
+        &self,
+        _request: McpConnectRequest,
+        request_cx: JsonRpcRequestCx<McpConnectResponse>,
+    ) -> Result<(), acp::Error> {
+        use crate::mcp_integration::mcp_server::TestMcpServer;
+
+        // Generate connection ID and channel for future communication
+        let connection_id = format!("mcp-{}", uuid::Uuid::new_v4());
+        let (mcp_server_tx, mut mcp_server_rx) = mpsc::channel(128);
+        self.connections
+            .lock()
+            .expect("not poisoned")
+            .insert(connection_id.clone(), mcp_server_tx);
+
+        // Generate streams
+        let (mcp_server_stream, mcp_client_stream) = tokio::io::duplex(8192);
+        let (mcp_server_read, mcp_server_write) = tokio::io::split(mcp_server_stream);
+        let (mcp_client_read, mcp_client_write) = tokio::io::split(mcp_client_stream);
+
+        // Create JsonRpcConnection for communicating the server
+        request_cx.spawn(
+            JsonRpcConnection::new(mcp_client_write.compat_write(), mcp_client_read.compat())
+                // Everything the server sends us, we send to our agent
+                .on_receive_request({
+                    let connection_id = connection_id.clone();
+                    let outer_cx = request_cx.json_rpc_cx();
+                    async move |mcp_request: UntypedMessage, mcp_request_cx| {
+                        outer_cx
+                            .send_request_to_successor(McpOverAcpRequest {
+                                connection_id: connection_id.clone(),
+                                request: mcp_request,
+                            })
+                            .forward_to_request_cx(mcp_request_cx)
+                    }
+                })
+                .on_receive_notification({
+                    let connection_id = connection_id.clone();
+                    let outer_cx = request_cx.json_rpc_cx();
+                    async move |mcp_notification: UntypedMessage, _| {
+                        outer_cx.send_notification_to_successor(McpOverAcpNotification {
+                            connection_id: connection_id.clone(),
+                            notification: mcp_notification,
+                        })
+                    }
+                })
+                .with_client({
+                    async move |mcp_cx| {
+                        while let Some(msg) = mcp_server_rx.next().await {
+                            mcp_cx.send_proxied_message(msg)?;
+                        }
+                        Ok(())
+                    }
+                }),
+        )?;
+
+        // Spawn MCP server task
+        request_cx.spawn(async move {
+            let server = TestMcpServer::new();
+            server
+                .serve((mcp_server_read, mcp_server_write))
+                .await
+                .map(|_running_server| ())
+                .map_err(acp::Error::into_internal_error)
+        })?;
+
+        request_cx.respond(McpConnectResponse {
+            connection_id: connection_id.into(),
+        })
+    }
+
+    async fn send_proxied_message(
+        &self,
+        connection_id: String,
+        message: ProxiedMessage,
+    ) -> Result<(), acp::Error> {
+        let mut mcp_tx = self
+            .connections
+            .lock()
+            .expect("not poisoned")
+            .get(&connection_id)
+            .ok_or_else(|| {
+                scp::util::internal_error(format!("unknown connection: {:?}", connection_id))
+            })?
+            .clone();
+        mcp_tx
+            .send(message)
+            .await
+            .map_err(acp::Error::into_internal_error)
     }
 }
 

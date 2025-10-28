@@ -79,8 +79,7 @@ use tracing::{debug, info};
 use crate::{
     component::{Component, ComponentProvider},
     conductor::mcp_bridge::{
-        McpBridgeConnection, McpBridgeConnectionActor, McpBridgeListeners,
-        McpServerToMcpClientMessage,
+        McpBridgeConnection, McpBridgeConnectionActor, McpBridgeListeners, McpMessage,
     },
 };
 
@@ -594,7 +593,7 @@ impl Conductor {
                                 connection_id
                             ))
                         })?
-                        .send(McpServerToMcpClientMessage::Request {
+                        .send(McpMessage::Request {
                             request: mcp_request,
                             request_cx,
                         })
@@ -637,7 +636,7 @@ impl Conductor {
                                 connection_id
                             ))
                         })?
-                        .send(McpServerToMcpClientMessage::Notification {
+                        .send(McpMessage::Notification {
                             notification: mcp_notification,
                         })
                         .await

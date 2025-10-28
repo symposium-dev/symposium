@@ -188,7 +188,7 @@ pub struct McpBridgeConnectionActor {
     conductor_tx: mpsc::Sender<ConductorMessage>,
 
     /// Receiver for messages from the conductor to the MCP client
-    to_mcp_client_rx: mpsc::Receiver<McpServerToMcpClientMessage>,
+    to_mcp_client_rx: mpsc::Receiver<McpMessage>,
 }
 
 impl McpBridgeConnectionActor {
@@ -236,7 +236,7 @@ impl McpBridgeConnectionActor {
             .with_client(async move |mcp_client_cx| {
                 while let Some(message) = self.to_mcp_client_rx.next().await {
                     match message {
-                        McpServerToMcpClientMessage::Request {
+                        McpMessage::Request {
                             request,
                             request_cx,
                         } => {
@@ -244,7 +244,7 @@ impl McpBridgeConnectionActor {
                                 .send_request(request)
                                 .forward_to_request_cx(request_cx)?;
                         }
-                        McpServerToMcpClientMessage::Notification { notification } => {
+                        McpMessage::Notification { notification } => {
                             mcp_client_cx.send_notification(notification)?;
                         }
                     }
@@ -272,11 +272,11 @@ impl McpBridgeConnectionActor {
 #[derive(Clone, Debug)]
 pub struct McpBridgeConnection {
     /// Channel to send messages from MCP server (ACP proxy) to the MCP client (ACP agent).
-    to_mcp_client_tx: mpsc::Sender<McpServerToMcpClientMessage>,
+    to_mcp_client_tx: mpsc::Sender<McpMessage>,
 }
 
 impl McpBridgeConnection {
-    pub async fn send(&mut self, message: McpServerToMcpClientMessage) -> Result<(), acp::Error> {
+    pub async fn send(&mut self, message: McpMessage) -> Result<(), acp::Error> {
         self.to_mcp_client_tx
             .send(message)
             .await
@@ -285,7 +285,7 @@ impl McpBridgeConnection {
 }
 
 /// An MCP message sent over ACP.
-pub enum McpServerToMcpClientMessage {
+pub enum McpMessage {
     /// An MCP request requiring a reply.
     Request {
         request: UntypedMessage,

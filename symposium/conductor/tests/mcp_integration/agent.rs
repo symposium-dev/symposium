@@ -7,7 +7,7 @@ use agent_client_protocol::{
 };
 use conductor::component::{Cleanup, ComponentProvider};
 use futures::{AsyncRead, AsyncWrite};
-use scp::{JsonRpcConnection, JsonRpcConnectionCx, JsonRpcCxExt};
+use scp::{JsonRpcConnection, JsonRpcConnectionCx};
 use std::pin::Pin;
 
 pub struct AgentComponentProvider;
