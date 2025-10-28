@@ -9,7 +9,7 @@ use tracing::Instrument as _;
 
 use boxfnonce::SendBoxFnOnce;
 use futures::channel::{mpsc, oneshot};
-use futures::future::{BoxFuture, Either};
+use futures::future::Either;
 use futures::{AsyncRead, AsyncWrite, FutureExt};
 
 mod actors;
