@@ -189,10 +189,16 @@ impl McpConnectionState {
         // Spawn MCP server task
         request_cx.spawn(async move {
             let server = TestMcpServer::new();
-            server
+            let running_server = server
                 .serve((mcp_server_read, mcp_server_write))
                 .await
-                .map(|_running_server| ())
+                .map_err(acp::Error::into_internal_error)?;
+
+            // Keep the server alive by waiting for it to finish
+            running_server
+                .waiting()
+                .await
+                .map(|_quit_reason| ())
                 .map_err(acp::Error::into_internal_error)
         })?;
 

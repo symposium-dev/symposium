@@ -27,7 +27,7 @@ pub struct TestMcpServer {
 impl TestMcpServer {
     pub fn new() -> Self {
         Self {
-            tool_router: ToolRouter::new(),
+            tool_router: Self::tool_router(),
         }
     }
 }
