@@ -7,7 +7,7 @@ use agent_client_protocol::{
 };
 use conductor::component::{Cleanup, ComponentProvider};
 use futures::{AsyncRead, AsyncWrite};
-use scp::{JsonRpcConnection, JsonRpcConnectionCx};
+use scp::{JsonRpcConnection, JsonRpcConnectionCx, JsonRpcRequestCx};
 use std::pin::Pin;
 
 pub struct AgentComponentProvider;
@@ -76,31 +76,44 @@ impl ComponentProvider for AgentComponentProvider {
                         "Received prompt request"
                     );
 
-                    // Send initial message
-                    request_cx.send_notification(SessionNotification {
-                        session_id: request.session_id.clone(),
-                        update: SessionUpdate::AgentMessageChunk {
-                            content: ContentBlock::Text(TextContent {
-                                annotations: None,
-                                text: "Hello. I will now use the MCP tool".to_string(),
-                                meta: None,
-                            }),
-                        },
-                        meta: None,
-                    })?;
-
-                    // End the turn
-                    let response = PromptResponse {
-                        stop_reason: StopReason::EndTurn,
-                        meta: None,
-                    };
-                    request_cx.respond(response)
+                    // Run the rest out of turn so the loop stays responsive
+                    let connection_cx = request_cx.json_rpc_cx();
+                    connection_cx.spawn(Self::respond_to_prompt(request, request_cx))
                 })
                 .serve()
                 .await
         })?;
 
         Ok(Cleanup::None)
+    }
+}
+
+impl AgentComponentProvider {
+    async fn respond_to_prompt(
+        request: PromptRequest,
+        request_cx: JsonRpcRequestCx<PromptResponse>,
+    ) -> Result<(), acp::Error> {
+        let connection_cx = request_cx.json_rpc_cx();
+
+        // Send initial message
+        connection_cx.send_notification(SessionNotification {
+            session_id: request.session_id.clone(),
+            update: SessionUpdate::AgentMessageChunk {
+                content: ContentBlock::Text(TextContent {
+                    annotations: None,
+                    text: "Hello. I will now use the MCP tool".to_string(),
+                    meta: None,
+                }),
+            },
+            meta: None,
+        })?;
+
+        let response = PromptResponse {
+            stop_reason: StopReason::EndTurn,
+            meta: None,
+        };
+
+        request_cx.respond(response)
     }
 }
 
