@@ -521,6 +521,16 @@ impl Conductor {
         }
     }
 
+    /// Send a notification to the predecessor of the given component.
+    ///
+    /// This is a bit subtle because the relationship of the conductor
+    /// is different depending on who will be receiving the message:
+    /// * If the notification is going to the conductor's client, then no changes
+    ///   are needed, as the conductor is sending an agent-to-client message and
+    ///   the conductor is acting as the agent.
+    /// * If the notification is going to a proxy component, then we have to wrap
+    ///   it in a "from successor" wrapper, because the conductor is the
+    ///   proxy's client.
     fn send_notification_to_predecessor_of<N: JsonRpcNotification>(
         &mut self,
         client: &JsonRpcConnectionCx,
