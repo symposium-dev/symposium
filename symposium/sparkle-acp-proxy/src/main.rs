@@ -74,8 +74,8 @@
 
 use acp_proxy::{AcpProxyExt, JsonRpcCxExt, McpServiceRegistry};
 use agent_client_protocol::{
-    self as acp, ContentBlock, NewSessionRequest, NewSessionResponse, PromptRequest,
-    PromptResponse, SessionNotification, SessionUpdate, TextContent,
+    self as acp, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
+    SessionNotification, SessionUpdate,
 };
 use scp::{JsonRpcConnection, JsonRpcRequestCx};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
@@ -137,11 +137,7 @@ async fn handle_session_new_response(
     cx.send_notification(SessionNotification {
         session_id: session_id.clone(),
         update: SessionUpdate::AgentMessageChunk(agent_client_protocol::ContentChunk {
-            content: ContentBlock::Text(TextContent {
-                text: "*Embodying Sparkle...*".to_string(),
-                annotations: None,
-                meta: None,
-            }),
+            content: "*Embodying Sparkle...*".into(),
             meta: None,
         }),
         meta: None,
