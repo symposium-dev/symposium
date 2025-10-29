@@ -314,27 +314,14 @@ impl Conductor {
         } = serve_args;
 
         connection
-            // Any incoming requests from the client are client-to-agent requests targeting the first component.
-            .on_receive_request({
+            // Any incoming messages from the client are client-to-agent messages targeting the first component.
+            .on_receive_message({
                 let mut conductor_tx = conductor_tx.clone();
-                async move |request: UntypedMessage, request_cx| {
+                async move |message: MessageAndCx| {
                     conductor_tx
                         .send(ConductorMessage::ClientToAgent {
                             target_component_index: 0,
-                            message: MessageAndCx::Request(request, request_cx),
-                        })
-                        .await
-                        .map_err(scp::util::internal_error)
-                }
-            })
-            // Any incoming notifications from the client are client-to-agent notifications targeting the first component.
-            .on_receive_notification({
-                let mut conductor_tx = conductor_tx.clone();
-                async move |notification: UntypedMessage, cx| {
-                    conductor_tx
-                        .send(ConductorMessage::ClientToAgent {
-                            target_component_index: 0,
-                            message: MessageAndCx::Notification(notification, cx),
+                            message,
                         })
                         .await
                         .map_err(scp::util::internal_error)
@@ -445,33 +432,30 @@ impl Conductor {
             }
 
             // Message meant for the MCP client received. Forward it to the appropriate actor's mailbox.
-            ConductorMessage::McpClientToMcpServerRequest {
+            ConductorMessage::McpClientToMcpServer {
                 connection_id,
-                request,
-                request_cx,
-            } => self
-                .send_request_to_predecessor_of(
-                    client,
-                    self.components.len() - 1,
-                    McpOverAcpRequest {
-                        connection_id,
-                        request,
-                    },
-                )
-                .forward_to_request_cx(request_cx),
-
-            // Message meant for the MCP client received. Forward it to the appropriate actor's mailbox.
-            ConductorMessage::McpClientToMcpServerNotification {
-                connection_id,
-                notification,
-            } => self.send_notification_to_predecessor_of(
-                client,
-                self.components.len() - 1,
-                McpOverAcpNotification {
-                    connection_id,
-                    notification,
-                },
-            ),
+                message,
+            } => match message {
+                MessageAndCx::Request(request, request_cx) => self
+                    .send_request_to_predecessor_of(
+                        client,
+                        self.components.len() - 1,
+                        McpOverAcpRequest {
+                            connection_id,
+                            request,
+                        },
+                    )
+                    .forward_to_request_cx(request_cx),
+                MessageAndCx::Notification(notification, _) => self
+                    .send_notification_to_predecessor_of(
+                        client,
+                        self.components.len() - 1,
+                        McpOverAcpNotification {
+                            connection_id,
+                            notification,
+                        },
+                    ),
+            },
 
             // MCP client disconnected. Remove it from our map and send the
             // notification backwards along the chain.
@@ -818,23 +802,13 @@ pub enum ConductorMessage {
         connection: McpBridgeConnection,
     },
 
-    /// MCP request received from a bridge that needs to be routed to the final proxy.
+    /// MCP message (request or notification) received from a bridge that needs to be routed to the final proxy.
     ///
     /// Sent when the bridge receives an MCP tool call from the agent and forwards it
     /// to the conductor via TCP. The conductor routes this to the appropriate proxy component.
-    McpClientToMcpServerRequest {
+    McpClientToMcpServer {
         connection_id: String,
-        request: UntypedMessage,
-        request_cx: JsonRpcRequestCx<serde_json::Value>,
-    },
-
-    /// MCP notification received from a bridge that needs to be routed to the final proxy.
-    ///
-    /// Sent when the bridge receives an MCP tool call from the agent and forwards it
-    /// to the conductor via TCP. The conductor routes this to the appropriate proxy component.
-    McpClientToMcpServerNotification {
-        connection_id: String,
-        notification: UntypedMessage,
+        message: MessageAndCx,
     },
 
     /// Message sent when MCP client disconnects

@@ -4,7 +4,7 @@ use acp_proxy::McpDisconnectNotification;
 use agent_client_protocol as acp;
 use agent_client_protocol::McpServer;
 use futures::{SinkExt, StreamExt as _, channel::mpsc};
-use scp::{JsonRpcConnection, JsonRpcConnectionCx, MessageAndCx, UntypedMessage};
+use scp::{JsonRpcConnection, JsonRpcConnectionCx, MessageAndCx};
 use tokio::net::TcpStream;
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 use tracing::info;
@@ -214,28 +214,14 @@ impl McpBridgeConnectionActor {
         let result = JsonRpcConnection::new(write_half.compat_write(), read_half.compat())
             .name(format!("mpc-client-to-conductor({connection_id})"))
             // When we receive a message from the MCP client, forward it to the conductor
-            .on_receive_request({
+            .on_receive_message({
                 let mut conductor_tx = self.conductor_tx.clone();
                 let connection_id = connection_id.clone();
-                async move |request: UntypedMessage, request_cx| {
+                async move |message: scp::MessageAndCx| {
                     conductor_tx
-                        .send(ConductorMessage::McpClientToMcpServerRequest {
+                        .send(ConductorMessage::McpClientToMcpServer {
                             connection_id: connection_id.clone(),
-                            request,
-                            request_cx,
-                        })
-                        .await
-                        .map_err(|_| acp::Error::internal_error())
-                }
-            })
-            .on_receive_notification({
-                let mut conductor_tx = self.conductor_tx.clone();
-                let connection_id = connection_id.clone();
-                async move |notification: UntypedMessage, _| {
-                    conductor_tx
-                        .send(ConductorMessage::McpClientToMcpServerNotification {
-                            connection_id: connection_id.clone(),
-                            notification,
+                            message,
                         })
                         .await
                         .map_err(|_| acp::Error::internal_error())
