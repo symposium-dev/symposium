@@ -73,17 +73,15 @@ use futures::{AsyncRead, AsyncWrite, SinkExt, StreamExt, channel::mpsc};
 
 use scp::{
     JsonRpcConnection, JsonRpcConnectionCx, JsonRpcNotification, JsonRpcRequest, JsonRpcRequestCx,
-    JsonRpcResponse, MetaCapabilityExt, NullHandler, Proxy, TypeNotification, TypeRequest,
-    UntypedMessage,
+    JsonRpcResponse, MessageAndCx, MetaCapabilityExt, NullHandler, Proxy, TypeNotification,
+    TypeRequest, UntypedMessage,
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::{debug, info};
 
 use crate::{
     component::{Component, ComponentProvider},
-    conductor::mcp_bridge::{
-        McpBridgeConnection, McpBridgeConnectionActor, McpBridgeListeners, McpMessage,
-    },
+    conductor::mcp_bridge::{McpBridgeConnection, McpBridgeConnectionActor, McpBridgeListeners},
 };
 
 mod mcp_bridge;
@@ -626,10 +624,7 @@ impl Conductor {
                                 connection_id
                             ))
                         })?
-                        .send(McpMessage::Request {
-                            request: mcp_request,
-                            request_cx,
-                        })
+                        .send(MessageAndCx::Request(mcp_request, request_cx))
                         .await
                 },
             )
@@ -654,6 +649,7 @@ impl Conductor {
         notification: UntypedMessage,
         cx: &JsonRpcConnectionCx,
     ) -> Result<(), agent_client_protocol::Error> {
+        let cx_clone = cx.clone();
         TypeNotification::new(notification, cx)
             .handle_if(
                 async |notification: McpOverAcpNotification<UntypedMessage>| {
@@ -669,9 +665,7 @@ impl Conductor {
                                 connection_id
                             ))
                         })?
-                        .send(McpMessage::Notification {
-                            notification: mcp_notification,
-                        })
+                        .send(MessageAndCx::Notification(mcp_notification, cx_clone))
                         .await
                 },
             )

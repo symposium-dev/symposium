@@ -4,7 +4,7 @@ use acp_proxy::McpDisconnectNotification;
 use agent_client_protocol as acp;
 use agent_client_protocol::McpServer;
 use futures::{SinkExt, StreamExt as _, channel::mpsc};
-use scp::{JsonRpcConnection, JsonRpcConnectionCx, JsonRpcRequestCx, UntypedMessage};
+use scp::{JsonRpcConnection, JsonRpcConnectionCx, MessageAndCx, UntypedMessage};
 use tokio::net::TcpStream;
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 use tracing::info;
@@ -197,7 +197,7 @@ pub struct McpBridgeConnectionActor {
     conductor_tx: mpsc::Sender<ConductorMessage>,
 
     /// Receiver for messages from the conductor to the MCP client
-    to_mcp_client_rx: mpsc::Receiver<McpMessage>,
+    to_mcp_client_rx: mpsc::Receiver<MessageAndCx>,
 }
 
 impl McpBridgeConnectionActor {
@@ -244,19 +244,7 @@ impl McpBridgeConnectionActor {
             // When we receive messages from the conductor, forward them to the MCP client
             .with_client(async move |mcp_client_cx| {
                 while let Some(message) = self.to_mcp_client_rx.next().await {
-                    match message {
-                        McpMessage::Request {
-                            request,
-                            request_cx,
-                        } => {
-                            mcp_client_cx
-                                .send_request(request)
-                                .forward_to_request_cx(request_cx)?;
-                        }
-                        McpMessage::Notification { notification } => {
-                            mcp_client_cx.send_notification(notification)?;
-                        }
-                    }
+                    mcp_client_cx.send_proxied_message(message)?;
                 }
                 Ok(())
             })
@@ -281,26 +269,14 @@ impl McpBridgeConnectionActor {
 #[derive(Clone, Debug)]
 pub struct McpBridgeConnection {
     /// Channel to send messages from MCP server (ACP proxy) to the MCP client (ACP agent).
-    to_mcp_client_tx: mpsc::Sender<McpMessage>,
+    to_mcp_client_tx: mpsc::Sender<MessageAndCx>,
 }
 
 impl McpBridgeConnection {
-    pub async fn send(&mut self, message: McpMessage) -> Result<(), acp::Error> {
+    pub async fn send(&mut self, message: MessageAndCx) -> Result<(), acp::Error> {
         self.to_mcp_client_tx
             .send(message)
             .await
             .map_err(|_| acp::Error::internal_error())
     }
-}
-
-/// An MCP message sent over ACP.
-pub enum McpMessage {
-    /// An MCP request requiring a reply.
-    Request {
-        request: UntypedMessage,
-        request_cx: JsonRpcRequestCx<serde_json::Value>,
-    },
-
-    /// An MCP notification.
-    Notification { notification: UntypedMessage },
 }
