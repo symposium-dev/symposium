@@ -334,7 +334,14 @@ impl JsonRpcConnectionCx {
     }
 
     /// Send a request/notification and forward the response appropriately.
-    pub fn send_proxied_message(&self, message: MessageAndCx) -> Result<(), acp::Error> {
+    ///
+    /// Note: This works specifically with `MessageAndCx` that uses `JsonRpcRequestCx<serde_json::Value>`.
+    /// The request type R must have `Response = serde_json::Value`.
+    pub fn send_proxied_message<R, N>(&self, message: MessageAndCx<R, N>) -> Result<(), acp::Error>
+    where
+        R: JsonRpcRequest<Response = serde_json::Value>,
+        N: JsonRpcNotification,
+    {
         match message {
             MessageAndCx::Request(request, request_cx) => {
                 self.send_request(request).forward_to_request_cx(request_cx)
@@ -615,32 +622,19 @@ pub trait JsonRpcRequest: JsonRpcMessage {
 
 /// An enum capturing an in-flight request or notification.
 /// In the case of a request, also includes the context used to respond to the request.
+///
+/// Type parameters allow specifying the concrete request and notification types.
+/// By default, both are `UntypedMessage` for dynamic dispatch.
 #[derive(Debug)]
-pub enum MessageAndCx {
+pub enum MessageAndCx<R: JsonRpcMessage = UntypedMessage, N: JsonRpcMessage = UntypedMessage> {
     /// Incoming request and the context where the response should be sent.
-    Request(UntypedMessage, JsonRpcRequestCx<serde_json::Value>),
+    Request(R, JsonRpcRequestCx<serde_json::Value>),
 
     /// Incoming notification.
-    Notification(UntypedMessage, JsonRpcConnectionCx),
+    Notification(N, JsonRpcConnectionCx),
 }
 
-impl MessageAndCx {
-    /// Returns the method of the message.
-    pub fn method(&self) -> &str {
-        match self {
-            MessageAndCx::Request(msg, _) => &msg.method,
-            MessageAndCx::Notification(msg, _) => &msg.method,
-        }
-    }
-
-    /// Returns the message of the message.
-    pub fn message(&self) -> &UntypedMessage {
-        match self {
-            MessageAndCx::Request(msg, _) => msg,
-            MessageAndCx::Notification(msg, _) => msg,
-        }
-    }
-
+impl<R: JsonRpcMessage, N: JsonRpcMessage> MessageAndCx<R, N> {
     /// Respond to the message with an error.
     ///
     /// If this message is a request, this error becomes the reply to the request.
@@ -650,6 +644,24 @@ impl MessageAndCx {
         match self {
             MessageAndCx::Request(_, cx) => cx.respond_with_error(error),
             MessageAndCx::Notification(_, cx) => cx.send_error_notification(error),
+        }
+    }
+}
+
+impl MessageAndCx {
+    /// Returns the method of the message (only available for UntypedMessage).
+    pub fn method(&self) -> &str {
+        match self {
+            MessageAndCx::Request(msg, _) => &msg.method,
+            MessageAndCx::Notification(msg, _) => &msg.method,
+        }
+    }
+
+    /// Returns the message of the message (only available for UntypedMessage).
+    pub fn message(&self) -> &UntypedMessage {
+        match self {
+            MessageAndCx::Request(msg, _) => msg,
+            MessageAndCx::Notification(msg, _) => msg,
         }
     }
 }
