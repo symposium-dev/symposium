@@ -3,10 +3,11 @@
 //! Provides get_selection, ide_operation, and present_walkthrough tools for AI assistants
 //! to interact with the VSCode extension via IPC.
 
+use crate::structured_logging;
 use anyhow::Result;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
-    handler::server::{router::tool::ToolRouter, tool::Parameters},
+    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
     service::RequestContext,
     tool, tool_handler, tool_router,
@@ -15,7 +16,6 @@ use rust_embed::RustEmbed;
 use serde_json;
 use std::future::Future;
 use tracing::{debug, error, info, warn};
-use crate::structured_logging;
 
 use crate::dialect::DialectInterpreter;
 use crate::eg::Eg;
@@ -151,7 +151,9 @@ impl SymposiumServer {
                 Some(shell_pid)
             }
             None => {
-                info!("Could not discover VSCode PID from process tree - continuing without shell PID");
+                info!(
+                    "Could not discover VSCode PID from process tree - continuing without shell PID"
+                );
                 None
             }
         };
@@ -241,8 +243,7 @@ impl SymposiumServer {
     /// Accepts markdown content with special XML tags (comment, gitdiff, action, mermaid)
     /// as described in the dialectic guidance documentation.
     // ANCHOR: present_walkthrough_tool
-    #[tool(
-        description = "\
+    #[tool(description = "\
             Display a code walkthrough in the user's IDE.\n\
             Use this when the user\n\
             (1) requests a walkthrough or that you walk through code or\n\
@@ -272,14 +273,16 @@ impl SymposiumServer {
             \n\
             (what message you will get)\n\
             ```\n\
-        "
-    )]
+        ")]
     async fn present_walkthrough(
         &self,
         Parameters(params): Parameters<PresentWalkthroughParams>,
     ) -> Result<CallToolResult, McpError> {
         // ANCHOR_END: present_walkthrough_tool
-        debug!("Received present_walkthrough tool call with markdown content ({} chars)", params.content.len());
+        debug!(
+            "Received present_walkthrough tool call with markdown content ({} chars)",
+            params.content.len()
+        );
 
         // Parse markdown with XML elements and resolve Dialect expressions
         let mut parser =
@@ -329,13 +332,11 @@ impl SymposiumServer {
     /// Works with source files, review panels, and any other text editor.
     /// Returns null if no text is selected or no active editor is found.
     // ANCHOR: get_selection_tool
-    #[tool(
-        description = "\
+    #[tool(description = "\
             Get the currently selected text from any active editor in VSCode.\n\
             Works with source files, review panels, and any other text editor.\n\
             Returns null if no text is selected or no active editor is found.\
-        "
-    )]
+        ")]
     async fn get_selection(&self) -> Result<CallToolResult, McpError> {
         // ANCHOR_END: get_selection_tool
         // Request current selection from VSCode extension via IPC
@@ -376,8 +377,7 @@ impl SymposiumServer {
     /// Provides access to VSCode's Language Server Protocol (LSP) capabilities
     /// through a composable function system for symbol resolution and reference finding.
     // ANCHOR: ide_operation_tool
-    #[tool(
-        description = "\
+    #[tool(description = "\
             Execute IDE operations using a structured JSON mini-language.\n\
             This tool provides access to VSCode's Language Server Protocol (LSP) capabilities\n\
             through a composable function system.\n\
@@ -387,14 +387,16 @@ impl SymposiumServer {
             - findReferences(\"MyFunction\") - list of locations where a symbol named `MyFunction` is referenced\n\
             \n\
             To find full guidelines for usage, use the `expand_reference` with `walkthrough-format.md`.\n\
-            "
-    )]
+            ")]
     async fn ide_operation(
         &self,
         Parameters(params): Parameters<IdeOperationParams>,
     ) -> Result<CallToolResult, McpError> {
         // ANCHOR_END: ide_operation_tool
-        debug!("Received ide_operation tool call with program: {:?}", params.program);
+        debug!(
+            "Received ide_operation tool call with program: {:?}",
+            params.program
+        );
 
         info!("Executing Dialect program...");
 
@@ -666,7 +668,10 @@ impl SymposiumServer {
         Parameters(params): Parameters<UpdateTaskspaceParams>,
     ) -> Result<CallToolResult, McpError> {
         // ANCHOR_END: update_taskspace_tool
-        info!("Updating taskspace: {} - {}", params.name, params.description);
+        info!(
+            "Updating taskspace: {} - {}",
+            params.name, params.description
+        );
 
         // Send update_taskspace message to Symposium app via daemon
         match self
@@ -737,21 +742,30 @@ impl SymposiumServer {
     }
 
     /// Get Rust crate source with optional pattern search
-    #[tool(description = "Get Rust crate source with optional pattern search. Always returns the source path, and optionally performs pattern matching if a search pattern is provided.")]
+    #[tool(
+        description = "Get Rust crate source with optional pattern search. Always returns the source path, and optionally performs pattern matching if a search pattern is provided."
+    )]
     async fn get_rust_crate_source(
         &self,
-        Parameters(GetRustCrateSourceParams { crate_name, version, pattern }): Parameters<GetRustCrateSourceParams>,
+        Parameters(GetRustCrateSourceParams {
+            crate_name,
+            version,
+            pattern,
+        }): Parameters<GetRustCrateSourceParams>,
     ) -> Result<CallToolResult, McpError> {
-        debug!("Getting Rust crate source for '{}' version: {:?} pattern: {:?}", crate_name, version, pattern);
+        debug!(
+            "Getting Rust crate source for '{}' version: {:?} pattern: {:?}",
+            crate_name, version, pattern
+        );
 
         let has_pattern = pattern.is_some();
         let mut search = Eg::rust_crate(&crate_name);
-        
+
         // Use version resolver for semver range support and project detection
         if let Some(version_spec) = version {
             search = search.version(&version_spec);
         }
-        
+
         if let Some(pattern) = pattern {
             search = search.pattern(&pattern).map_err(|e| {
                 let error_msg = format!("Invalid regex pattern: {}", e);
@@ -765,52 +779,64 @@ impl SymposiumServer {
                     "crate_name": crate_name,
                     "version": result.version,
                     "checkout_path": result.checkout_path.to_string_lossy(),
-                    "message": format!("Crate {} v{} extracted to {}", 
+                    "message": format!("Crate {} v{} extracted to {}",
                                      crate_name, result.version, result.checkout_path.display())
                 });
-                
+
                 // Only include match results if a pattern was provided
                 if has_pattern {
                     // Convert to new response format with context strings
-                    let example_matches: Vec<_> = result.example_matches.into_iter().map(|m| {
-                        let mut context_lines = m.context_before.clone();
-                        context_lines.push(m.line_content.clone());
-                        context_lines.extend(m.context_after.clone());
-                        
-                        let context_start_line = m.line_number.saturating_sub(m.context_before.len() as u32);
-                        let context_end_line = m.line_number + m.context_after.len() as u32;
-                        
-                        serde_json::json!({
-                            "file_path": m.file_path,
-                            "line_number": m.line_number,
-                            "context_start_line": context_start_line,
-                            "context_end_line": context_end_line,
-                            "context": context_lines.join("\n")
+                    let example_matches: Vec<_> = result
+                        .example_matches
+                        .into_iter()
+                        .map(|m| {
+                            let mut context_lines = m.context_before.clone();
+                            context_lines.push(m.line_content.clone());
+                            context_lines.extend(m.context_after.clone());
+
+                            let context_start_line =
+                                m.line_number.saturating_sub(m.context_before.len() as u32);
+                            let context_end_line = m.line_number + m.context_after.len() as u32;
+
+                            serde_json::json!({
+                                "file_path": m.file_path,
+                                "line_number": m.line_number,
+                                "context_start_line": context_start_line,
+                                "context_end_line": context_end_line,
+                                "context": context_lines.join("\n")
+                            })
                         })
-                    }).collect();
-                    
-                    let other_matches: Vec<_> = result.other_matches.into_iter().map(|m| {
-                        let mut context_lines = m.context_before.clone();
-                        context_lines.push(m.line_content.clone());
-                        context_lines.extend(m.context_after.clone());
-                        
-                        let context_start_line = m.line_number.saturating_sub(m.context_before.len() as u32);
-                        let context_end_line = m.line_number + m.context_after.len() as u32;
-                        
-                        serde_json::json!({
-                            "file_path": m.file_path,
-                            "line_number": m.line_number,
-                            "context_start_line": context_start_line,
-                            "context_end_line": context_end_line,
-                            "context": context_lines.join("\n")
+                        .collect();
+
+                    let other_matches: Vec<_> = result
+                        .other_matches
+                        .into_iter()
+                        .map(|m| {
+                            let mut context_lines = m.context_before.clone();
+                            context_lines.push(m.line_content.clone());
+                            context_lines.extend(m.context_after.clone());
+
+                            let context_start_line =
+                                m.line_number.saturating_sub(m.context_before.len() as u32);
+                            let context_end_line = m.line_number + m.context_after.len() as u32;
+
+                            serde_json::json!({
+                                "file_path": m.file_path,
+                                "line_number": m.line_number,
+                                "context_start_line": context_start_line,
+                                "context_end_line": context_end_line,
+                                "context": context_lines.join("\n")
+                            })
                         })
-                    }).collect();
-                    
+                        .collect();
+
                     response["example_matches"] = serde_json::to_value(example_matches).unwrap();
                     response["other_matches"] = serde_json::to_value(other_matches).unwrap();
                 }
-                
-                Ok(CallToolResult::success(vec![Content::text(serde_json::to_string_pretty(&response).unwrap())]))
+
+                Ok(CallToolResult::success(vec![Content::text(
+                    serde_json::to_string_pretty(&response).unwrap(),
+                )]))
             }
             Err(e) => {
                 let error_msg = format!("Failed to get Rust crate source: {}", e);
@@ -873,6 +899,8 @@ impl SymposiumServer {
                         description,
                         mime_type: Some("text/markdown".into()),
                         size: Some(file.data.len() as u32),
+                        title: None,
+                        icons: None,
                     },
                     annotations: None,
                 });
@@ -906,20 +934,20 @@ impl SymposiumServer {
             (true, Some(_)) => {
                 // In taskspace with task - full introduction
                 indoc! {"
-                    Hi, welcome! You are a new agent just getting started as part of the project Symposium. 
-                    This is a taskspace, a separate copy of the project's files where you can work undisturbed. 
-                    The user's description of the task to be done follows after this message. Can you start by 
-                    reading the description and using the 'update_taskspace' tool to provide a better 
-                    name/description for the taskspace? Before doing any work on the task, be sure to ask the 
+                    Hi, welcome! You are a new agent just getting started as part of the project Symposium.
+                    This is a taskspace, a separate copy of the project's files where you can work undisturbed.
+                    The user's description of the task to be done follows after this message. Can you start by
+                    reading the description and using the 'update_taskspace' tool to provide a better
+                    name/description for the taskspace? Before doing any work on the task, be sure to ask the
                     user clarifying questions to better understand their intent.
                 "}
             }
             (true, None) => {
                 // In taskspace but no task - ask user to establish task
                 indoc! {"
-                    Hi, welcome! You are a new agent just getting started as part of the project Symposium. 
-                    This is a taskspace, a separate copy of the project's files where you can work undisturbed. 
-                    Please talk to the user to establish what they would like to accomplish in this taskspace 
+                    Hi, welcome! You are a new agent just getting started as part of the project Symposium.
+                    This is a taskspace, a separate copy of the project's files where you can work undisturbed.
+                    Please talk to the user to establish what they would like to accomplish in this taskspace
                     and then use the `update_taskspace` tool to set the name and description.
                 "}
             }
@@ -936,9 +964,9 @@ impl SymposiumServer {
         prompt.push_str(indoc! {"
             ## Load Collaboration Patterns
 
-            Use the `expand_reference` tool to fetch `main.md` into your working context. This contains 
-            collaboration patterns demonstrated through dialogue. Embody the collaborative spirit shown in 
-            these examples - approach our work with genuine curiosity, ask questions when 
+            Use the `expand_reference` tool to fetch `main.md` into your working context. This contains
+            collaboration patterns demonstrated through dialogue. Embody the collaborative spirit shown in
+            these examples - approach our work with genuine curiosity, ask questions when
             something isn't clear, and trust that we'll navigate together what's worth pursuing.
 
             Most importantly, before taking potentially side-effect-ful or dangerous actions
@@ -947,19 +975,19 @@ impl SymposiumServer {
 
             ## Load Walkthrough Format
 
-            Use the `expand_reference` tool to fetch `walkthrough-format.md` into your working context. 
-            This defines how to create interactive code walkthroughs using markdown with embedded XML 
+            Use the `expand_reference` tool to fetch `walkthrough-format.md` into your working context.
+            This defines how to create interactive code walkthroughs using markdown with embedded XML
             elements for comments, diffs, and actions.
 
             ## Load Coding Guidelines
 
-            Use the `expand_reference` tool to fetch `coding-guidelines.md` into your working context. Follow these 
+            Use the `expand_reference` tool to fetch `coding-guidelines.md` into your working context. Follow these
             development standards and best practices in all code work.
 
             ## Load MCP Tool Usage Suggestions
 
-            Use the `expand_reference` tool to fetch `mcp-tool-usage-suggestions.md` into your working context. 
-            This covers effective use of Symposium's MCP tools, including completion signaling 
+            Use the `expand_reference` tool to fetch `mcp-tool-usage-suggestions.md` into your working context.
+            This covers effective use of Symposium's MCP tools, including completion signaling
             and systematic code exploration patterns.
 
         "});
@@ -1000,6 +1028,9 @@ impl ServerHandler for SymposiumServer {
             server_info: Implementation {
                 name: "symposium-mcp".to_string(),
                 version: "0.1.0".to_string(),
+                icons: None,
+                title: None,
+                website_url: None,
             },
             instructions: Some(
                 "This server provides tools for AI assistants to perform IDE operations and display walkthroughs in VSCode. \
@@ -1074,11 +1105,15 @@ impl ServerHandler for SymposiumServer {
                         .to_string(),
                 ),
                 arguments: None,
+                title: None,
+                icons: None,
             },
             Prompt {
                 name: "hi".to_string(),
                 description: Some("Agent initialization prompt (alias for yiasou)".to_string()),
                 arguments: None,
+                title: None,
+                icons: None,
             },
         ];
 
@@ -1115,7 +1150,7 @@ impl ServerHandler for SymposiumServer {
 mod tests {
     use super::*;
     use crate::types::PresentWalkthroughParams;
-    use rmcp::handler::server::tool::Parameters;
+    use rmcp::handler::server::wrapper::Parameters;
 
     #[tokio::test]
     async fn test_baseuri_conversion() {
@@ -1157,6 +1192,8 @@ mod tests {
                     ),
                     mime_type: Some("text/markdown".into()),
                     size: None,
+                    title: None,
+                    icons: None,
                 },
                 annotations: None,
             },
@@ -1169,6 +1206,8 @@ mod tests {
                     ),
                     mime_type: Some("text/markdown".into()),
                     size: None,
+                    title: None,
+                    icons: None,
                 },
                 annotations: None,
             },
@@ -1179,6 +1218,8 @@ mod tests {
                     description: Some("Development best practices and standards".into()),
                     mime_type: Some("text/markdown".into()),
                     size: None,
+                    title: None,
+                    icons: None,
                 },
                 annotations: None,
             },
@@ -1217,10 +1258,12 @@ mod tests {
                 uri,
                 text,
                 mime_type,
+                meta,
             } => {
                 assert_eq!(uri, "test.md");
                 assert_eq!(text, "Hello world");
                 assert_eq!(mime_type, Some("text".to_string()));
+                assert_eq!(meta, None);
             }
             _ => panic!("Expected TextResourceContents"),
         }
@@ -1286,10 +1329,7 @@ This is test content."#;
         assert_eq!(coding_resource.raw.name, "Coding Guidelines");
         assert_eq!(
             coding_resource.raw.description,
-            Some(
-                "Development best practices and standards for the Symposium project"
-                    .to_string()
-            )
+            Some("Development best practices and standards for the Symposium project".to_string())
         );
     }
 
@@ -1364,17 +1404,17 @@ This is test content."#;
     #[tokio::test]
     async fn test_get_rust_crate_source_extraction_only() {
         let server = SymposiumServer::new_test();
-        
+
         // Test extraction without pattern (should not include search results)
         let params = GetRustCrateSourceParams {
             crate_name: "serde".to_string(),
             version: None,
             pattern: None,
         };
-        
+
         let result = server.get_rust_crate_source(Parameters(params)).await;
         assert!(result.is_ok());
-        
+
         let content = match result.unwrap().content.first() {
             Some(content) => {
                 if let Some(text) = content.as_text() {
@@ -1382,18 +1422,18 @@ This is test content."#;
                 } else {
                     panic!("Expected text content")
                 }
-            },
+            }
             _ => panic!("Expected content"),
         };
-        
+
         let response: serde_json::Value = serde_json::from_str(&content).unwrap();
-        
+
         // Should have basic extraction info
         assert_eq!(response["crate_name"], "serde");
         assert!(response["version"].is_string());
         assert!(response["checkout_path"].is_string());
         assert!(response["message"].is_string());
-        
+
         // Should NOT have search results when no pattern provided
         assert!(response["example_matches"].is_null());
         assert!(response["other_matches"].is_null());
@@ -1403,17 +1443,17 @@ This is test content."#;
     #[tokio::test]
     async fn test_get_rust_crate_source_with_pattern() {
         let server = SymposiumServer::new_test();
-        
+
         // Test extraction with pattern (should include search results)
         let params = GetRustCrateSourceParams {
             crate_name: "serde".to_string(),
             version: None,
             pattern: Some("derive".to_string()),
         };
-        
+
         let result = server.get_rust_crate_source(Parameters(params)).await;
         assert!(result.is_ok());
-        
+
         let content = match result.unwrap().content.first() {
             Some(content) => {
                 if let Some(text) = content.as_text() {
@@ -1421,22 +1461,22 @@ This is test content."#;
                 } else {
                     panic!("Expected text content")
                 }
-            },
+            }
             _ => panic!("Expected content"),
         };
-        
+
         let response: serde_json::Value = serde_json::from_str(&content).unwrap();
-        
+
         // Should have basic extraction info
         assert_eq!(response["crate_name"], "serde");
         assert!(response["version"].is_string());
         assert!(response["checkout_path"].is_string());
         assert!(response["message"].is_string());
-        
+
         // Should have search results when pattern provided
         assert!(response["example_matches"].is_array());
         assert!(response["other_matches"].is_array());
-        
+
         // Verify search result format if any matches found
         if let Some(matches) = response["example_matches"].as_array() {
             if !matches.is_empty() {
@@ -1454,17 +1494,17 @@ This is test content."#;
     #[tokio::test]
     async fn test_get_rust_crate_source_with_version() {
         let server = SymposiumServer::new_test();
-        
+
         // Test with version parameter
         let params = GetRustCrateSourceParams {
             crate_name: "serde".to_string(),
             version: Some("1.0".to_string()),
             pattern: None,
         };
-        
+
         let result = server.get_rust_crate_source(Parameters(params)).await;
         assert!(result.is_ok());
-        
+
         let content = match result.unwrap().content.first() {
             Some(content) => {
                 if let Some(text) = content.as_text() {
@@ -1472,12 +1512,12 @@ This is test content."#;
                 } else {
                     panic!("Expected text content")
                 }
-            },
+            }
             _ => panic!("Expected content"),
         };
-        
+
         let response: serde_json::Value = serde_json::from_str(&content).unwrap();
-        
+
         // Should have extraction info with version handling
         assert_eq!(response["crate_name"], "serde");
         assert!(response["version"].is_string());
@@ -1489,17 +1529,17 @@ This is test content."#;
     #[tokio::test]
     async fn test_get_rust_crate_source_invalid_pattern() {
         let server = SymposiumServer::new_test();
-        
+
         // Test with invalid regex pattern
         let params = GetRustCrateSourceParams {
             crate_name: "serde".to_string(),
             version: None,
             pattern: Some("[invalid regex".to_string()),
         };
-        
+
         let result = server.get_rust_crate_source(Parameters(params)).await;
         assert!(result.is_err());
-        
+
         // Should return appropriate error for invalid regex
         let error = result.unwrap_err();
         assert!(error.to_string().contains("Invalid regex pattern"));

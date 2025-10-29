@@ -3144,6 +3144,7 @@ dependencies = [
  "scp",
  "sparkle-mcp",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
 ]

@@ -10,5 +10,6 @@ rmcp.workspace = true
 scp = { version = "0.1.0", path = "../scp" }
 sparkle-mcp = { git = "https://github.com/symposium-dev/sparkle", branch = "main" }
 tokio.workspace = true
+tokio-util = { workspace = true, features = ["compat"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
