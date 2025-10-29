@@ -505,8 +505,7 @@ pub trait JsonRpcCxExt {
     /// # Returns
     ///
     /// Returns a [`JsonRpcResponse`] that can be awaited to get the successor's
-    /// response. The response will be a `FromSuccessorResponse` containing the
-    /// inner `jsonrpcmsg::Response`.
+    /// response.
     ///
     /// # Example
     ///
