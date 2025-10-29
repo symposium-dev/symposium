@@ -244,10 +244,9 @@ impl Conductor {
                     let mut conductor_tx = serve_args.conductor_tx.clone();
                     async move |request: SuccessorRequest<UntypedMessage>, request_cx| {
                         conductor_tx
-                            .send(ConductorMessage::ClientToAgentRequest {
+                            .send(ConductorMessage::ClientToAgent {
                                 target_component_index: component_index + 1,
-                                request: request.request,
-                                request_cx,
+                                message: MessageAndCx::Request(request.request, request_cx),
                             })
                             .await
                             .map_err(scp::util::internal_error)
@@ -255,11 +254,11 @@ impl Conductor {
                 })
                 .on_receive_notification({
                     let mut conductor_tx = serve_args.conductor_tx.clone();
-                    async move |notification: SuccessorNotification<UntypedMessage>, _| {
+                    async move |notification: SuccessorNotification<UntypedMessage>, cx| {
                         conductor_tx
-                            .send(ConductorMessage::ClientToAgentNotification {
+                            .send(ConductorMessage::ClientToAgent {
                                 target_component_index: component_index + 1,
-                                notification: notification.notification,
+                                message: MessageAndCx::Notification(notification.notification, cx),
                             })
                             .await
                             .map_err(scp::util::internal_error)
@@ -274,10 +273,9 @@ impl Conductor {
                     let mut conductor_tx = serve_args.conductor_tx.clone();
                     async move |request: UntypedMessage, request_cx| {
                         conductor_tx
-                            .send(ConductorMessage::AgentToClientRequest {
+                            .send(ConductorMessage::AgentToClient {
                                 source_component_index: component_index,
-                                request,
-                                request_cx,
+                                message: MessageAndCx::Request(request, request_cx),
                             })
                             .await
                             .map_err(scp::util::internal_error)
@@ -285,11 +283,11 @@ impl Conductor {
                 })
                 .on_receive_notification({
                     let mut conductor_tx = serve_args.conductor_tx.clone();
-                    async move |notification: UntypedMessage, _| {
+                    async move |notification: UntypedMessage, cx| {
                         conductor_tx
-                            .send(ConductorMessage::AgentToClientNotification {
+                            .send(ConductorMessage::AgentToClient {
                                 source_component_index: component_index,
-                                notification,
+                                message: MessageAndCx::Notification(notification, cx),
                             })
                             .await
                             .map_err(scp::util::internal_error)
@@ -341,10 +339,9 @@ impl Conductor {
                 let mut conductor_tx = conductor_tx.clone();
                 async move |request: UntypedMessage, request_cx| {
                     conductor_tx
-                        .send(ConductorMessage::ClientToAgentRequest {
+                        .send(ConductorMessage::ClientToAgent {
                             target_component_index: 0,
-                            request,
-                            request_cx,
+                            message: MessageAndCx::Request(request, request_cx),
                         })
                         .await
                         .map_err(scp::util::internal_error)
@@ -353,11 +350,11 @@ impl Conductor {
             // Any incoming notifications from the client are client-to-agent notifications targeting the first component.
             .on_receive_notification({
                 let mut conductor_tx = conductor_tx.clone();
-                async move |notification: UntypedMessage, _| {
+                async move |notification: UntypedMessage, cx| {
                     conductor_tx
-                        .send(ConductorMessage::ClientToAgentNotification {
+                        .send(ConductorMessage::ClientToAgent {
                             target_component_index: 0,
-                            notification,
+                            message: MessageAndCx::Notification(notification, cx),
                         })
                         .await
                         .map_err(scp::util::internal_error)
@@ -401,47 +398,26 @@ impl Conductor {
         message: ConductorMessage,
         conductor_tx: &mut mpsc::Sender<ConductorMessage>,
     ) -> Result<(), agent_client_protocol::Error> {
-        tracing::debug!(?message, "handle_conductor_message");
+        tracing::debug!("handle_conductor_message");
 
         match message {
-            ConductorMessage::ClientToAgentRequest {
+            ConductorMessage::ClientToAgent {
                 target_component_index,
-                request,
-                request_cx,
+                message,
             } => {
-                self.forward_client_to_agent_request(
+                self.forward_client_to_agent_message(
                     conductor_tx,
                     target_component_index,
-                    request,
-                    request_cx,
+                    message,
+                    client,
                 )
                 .await
             }
 
-            ConductorMessage::ClientToAgentNotification {
-                target_component_index,
-                notification,
-            } => {
-                self.send_client_to_agent_notification(target_component_index, notification, client)
-                    .await
-            }
-
-            ConductorMessage::AgentToClientRequest {
+            ConductorMessage::AgentToClient {
                 source_component_index,
-                request,
-                request_cx,
-            } => self
-                .send_request_to_predecessor_of(client, source_component_index, request)
-                .forward_to_request_cx(request_cx),
-
-            ConductorMessage::AgentToClientNotification {
-                source_component_index,
-                notification,
-            } => self.send_notification_to_predecessor_of(
-                client,
-                source_component_index,
-                notification,
-            ),
+                message,
+            } => self.send_message_to_predecessor_of(client, source_component_index, message),
 
             // New MCP connection request. Send it back along the chain to get a connection id.
             // When the connection id arrives, send a message back into this conductor loop with
@@ -540,6 +516,23 @@ impl Conductor {
     /// * If the request is going to a proxy component, then we have to wrap
     ///   it in a "from successor" wrapper, because the conductor is the
     ///   proxy's client.
+    fn send_message_to_predecessor_of(
+        &mut self,
+        client: &JsonRpcConnectionCx,
+        source_component_index: usize,
+        message: MessageAndCx,
+    ) -> Result<(), acp::Error> {
+        match message {
+            MessageAndCx::Request(request, request_cx) => {
+                let response =
+                    self.send_request_to_predecessor_of(client, source_component_index, request);
+                response.forward_to_request_cx(request_cx)
+            }
+            MessageAndCx::Notification(notification, _cx) => self
+                .send_notification_to_predecessor_of(client, source_component_index, notification),
+        }
+    }
+
     fn send_request_to_predecessor_of<Req: JsonRpcRequest>(
         &mut self,
         client: &JsonRpcConnectionCx,
@@ -577,6 +570,34 @@ impl Conductor {
             self.components[component_index - 1]
                 .agent_cx
                 .send_notification(SuccessorNotification { notification })
+        }
+    }
+
+    /// Send a message (request or notification) from 'left to right'.
+    /// Left-to-right means from the client or an intermediate proxy to the component
+    /// at `target_component_index` (could be a proxy or the agent).
+    /// Makes changes to select messages along the way (e.g., `initialize` and `session/new`).
+    async fn forward_client_to_agent_message(
+        &mut self,
+        conductor_tx: &mut mpsc::Sender<ConductorMessage>,
+        target_component_index: usize,
+        message: MessageAndCx,
+        client: &JsonRpcConnectionCx,
+    ) -> Result<(), agent_client_protocol::Error> {
+        match message {
+            MessageAndCx::Request(request, request_cx) => {
+                self.forward_client_to_agent_request(
+                    conductor_tx,
+                    target_component_index,
+                    request,
+                    request_cx,
+                )
+                .await
+            }
+            MessageAndCx::Notification(notification, _cx) => {
+                self.send_client_to_agent_notification(target_component_index, notification, client)
+                    .await
+            }
         }
     }
 
@@ -774,36 +795,19 @@ impl Conductor {
 ///
 /// All spawned tasks send messages via this enum through a shared channel,
 /// allowing centralized routing logic in the `serve()` loop.
-#[derive(Debug)]
 pub enum ConductorMessage {
-    /// Some unknown request targeting a component from its client.
-    /// This request will be forwarded "as is" to the component.
-    ClientToAgentRequest {
+    /// A message (request or notification) targeting a component from its client.
+    /// This message will be forwarded "as is" to the component.
+    ClientToAgent {
         target_component_index: usize,
-        request: UntypedMessage,
-        request_cx: JsonRpcRequestCx<serde_json::Value>,
+        message: MessageAndCx,
     },
 
-    /// Some unknown notification targeting a component from its client.
-    /// This notification will be forwarded "as is" to the component.
-    ClientToAgentNotification {
-        target_component_index: usize,
-        notification: UntypedMessage,
-    },
-
-    /// Some unknown request sent by a component to its client.
-    /// This request will be forwarded "as is" to its client.
-    AgentToClientRequest {
+    /// A message (request or notification) sent by a component to its client.
+    /// This message will be forwarded "as is" to its client.
+    AgentToClient {
         source_component_index: usize,
-        request: UntypedMessage,
-        request_cx: JsonRpcRequestCx<serde_json::Value>,
-    },
-
-    /// Some unknown notification targeting a component from another component.
-    /// This notification will be forwarded "as is" to the component.
-    AgentToClientNotification {
-        source_component_index: usize,
-        notification: UntypedMessage,
+        message: MessageAndCx,
     },
 
     /// A pending MCP bridge connection request request.
