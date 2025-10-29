@@ -435,27 +435,29 @@ impl Conductor {
             ConductorMessage::McpClientToMcpServer {
                 connection_id,
                 message,
-            } => match message {
-                MessageAndCx::Request(request, request_cx) => self
-                    .send_request_to_predecessor_of(
-                        client,
-                        self.components.len() - 1,
-                        McpOverAcpRequest {
-                            connection_id,
-                            request,
-                        },
-                    )
-                    .forward_to_request_cx(request_cx),
-                MessageAndCx::Notification(notification, _) => self
-                    .send_notification_to_predecessor_of(
-                        client,
-                        self.components.len() - 1,
-                        McpOverAcpNotification {
-                            connection_id,
-                            notification,
-                        },
-                    ),
-            },
+            } => {
+                let wrapped = message.map(
+                    |request, request_cx| {
+                        (
+                            McpOverAcpRequest {
+                                connection_id: connection_id.clone(),
+                                request,
+                            },
+                            request_cx,
+                        )
+                    },
+                    |notification, notification_cx| {
+                        (
+                            McpOverAcpNotification {
+                                connection_id: connection_id.clone(),
+                                notification,
+                            },
+                            notification_cx,
+                        )
+                    },
+                );
+                self.send_message_to_predecessor_of(client, self.components.len() - 1, wrapped)
+            }
 
             // MCP client disconnected. Remove it from our map and send the
             // notification backwards along the chain.
@@ -480,12 +482,15 @@ impl Conductor {
     /// * If the request is going to a proxy component, then we have to wrap
     ///   it in a "from successor" wrapper, because the conductor is the
     ///   proxy's client.
-    fn send_message_to_predecessor_of(
+    fn send_message_to_predecessor_of<Req: JsonRpcRequest, N: JsonRpcNotification>(
         &mut self,
         client: &JsonRpcConnectionCx,
         source_component_index: usize,
-        message: MessageAndCx,
-    ) -> Result<(), acp::Error> {
+        message: MessageAndCx<Req, N>,
+    ) -> Result<(), acp::Error>
+    where
+        Req::Response: Send,
+    {
         match message {
             MessageAndCx::Request(request, request_cx) => {
                 let response =
