@@ -463,7 +463,7 @@ impl ProxyHandler {
         request = request.remove_meta_capability(Proxy);
         request_cx
             .send_request_to_successor(request)
-            .await_when_response_received(async move |mut result| {
+            .await_when_result_received(async move |mut result| {
                 result = result.map(|r| r.add_meta_capability(Proxy));
                 request_cx.respond_with_result(result)
             })

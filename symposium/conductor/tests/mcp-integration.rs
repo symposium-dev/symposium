@@ -25,7 +25,7 @@ async fn recv<R: scp::JsonRpcResponsePayload + Send>(
     response: scp::JsonRpcResponse<R>,
 ) -> Result<R, agent_client_protocol::Error> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    response.await_when_response_received(async move |result| {
+    response.await_when_result_received(async move |result| {
         tx.send(result)
             .map_err(|_| agent_client_protocol::Error::internal_error())
     })?;

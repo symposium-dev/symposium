@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-clap.workspace = true
+acp-proxy = { version = "0.1.0", path = "../acp-proxy" }
+agent-client-protocol.workspace = true
+rmcp.workspace = true
 scp = { version = "0.1.0", path = "../scp" }
+sparkle-mcp = { git = "https://github.com/symposium-dev/sparkle", branch = "main" }
 tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

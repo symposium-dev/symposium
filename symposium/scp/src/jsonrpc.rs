@@ -4,7 +4,6 @@ use agent_client_protocol as acp;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::panic::Location;
-use tracing::Instrument as _;
 
 use boxfnonce::SendBoxFnOnce;
 use futures::channel::{mpsc, oneshot};
@@ -418,7 +417,7 @@ impl JsonRpcConnectionCx {
             }
         }
 
-        JsonRpcResponse::new(method.clone(), response_rx, self.task_tx.clone())
+        JsonRpcResponse::new(method.clone(), self.clone(), response_rx)
             .map(move |json| <Req::Response>::from_value(&method, json))
     }
 
@@ -777,21 +776,21 @@ impl JsonRpcNotification for UntypedMessage {}
 /// Represents a pending response of type `R` from an outgoing request.
 pub struct JsonRpcResponse<R> {
     method: String,
+    connection_cx: JsonRpcConnectionCx,
     response_rx: oneshot::Receiver<Result<serde_json::Value, acp::Error>>,
-    task_tx: mpsc::UnboundedSender<Task>,
     to_result: Box<dyn Fn(serde_json::Value) -> Result<R, acp::Error> + Send>,
 }
 
 impl JsonRpcResponse<serde_json::Value> {
     fn new(
         method: String,
+        connection_cx: JsonRpcConnectionCx,
         response_rx: oneshot::Receiver<Result<serde_json::Value, acp::Error>>,
-        task_tx: mpsc::UnboundedSender<Task>,
     ) -> Self {
         Self {
             method,
             response_rx,
-            task_tx,
+            connection_cx,
             to_result: Box::new(Ok),
         }
     }
@@ -809,7 +808,7 @@ impl<R: JsonRpcResponsePayload> JsonRpcResponse<R> {
         JsonRpcResponse {
             method: self.method,
             response_rx: self.response_rx,
-            task_tx: self.task_tx,
+            connection_cx: self.connection_cx,
             to_result: Box::new(move |value| map_fn((self.to_result)(value)?)),
         }
     }
@@ -820,8 +819,48 @@ impl<R: JsonRpcResponsePayload> JsonRpcResponse<R> {
     where
         R: Send,
     {
-        self.await_when_response_received(async move |result| {
-            request_cx.respond_with_result(result)
+        self.await_when_result_received(async move |result| request_cx.respond_with_result(result))
+    }
+
+    /// Block the current task until the response is received.
+    ///
+    /// This is useful in spawned tasks. It should *not* be used
+    /// in callbacks like [`JsonRpcConnection::on_receive_message`]
+    /// as that will prevent the event loop from running.
+    ///
+    /// In a callback setting, prefer [`Self::await_when_response_received`].
+    pub async fn block_task(self) -> Result<R, acp::Error>
+    where
+        R: Send,
+    {
+        match self.response_rx.await {
+            Ok(Ok(json_value)) => match (self.to_result)(json_value) {
+                Ok(value) => Ok(value),
+                Err(err) => Err(err),
+            },
+            Ok(Err(err)) => Err(err),
+            Err(err) => Err(crate::util::internal_error(format!(
+                "response to `{}` never received: {}",
+                self.method, err
+            ))),
+        }
+    }
+
+    /// Schedule an async task to run when a successful response is received.
+    /// If an error occurs, that error will be returned to `request_cx` as the result.
+    #[track_caller]
+    pub fn await_when_ok_response_received<F>(
+        self,
+        request_cx: JsonRpcRequestCx<R>,
+        task: impl FnOnce(R, JsonRpcRequestCx<R>) -> F + 'static + Send,
+    ) -> Result<(), acp::Error>
+    where
+        F: Future<Output = Result<(), acp::Error>> + 'static + Send,
+        R: Send,
+    {
+        self.await_when_result_received(async move |result| match result {
+            Ok(value) => task(value, request_cx).await,
+            Err(err) => request_cx.respond_with_error(err),
         })
     }
 
@@ -832,48 +871,17 @@ impl<R: JsonRpcResponsePayload> JsonRpcResponse<R> {
     ///
     /// If this task ultimately returns `Err`, the server will abort.
     #[track_caller]
-    pub fn await_when_response_received<F>(
+    pub fn await_when_result_received<F>(
         self,
         task: impl FnOnce(Result<R, acp::Error>) -> F + 'static + Send,
     ) -> Result<(), acp::Error>
     where
         F: Future<Output = Result<(), acp::Error>> + 'static + Send,
+        R: Send,
     {
-        let current_span = tracing::Span::current();
-        self.task_tx
-            .unbounded_send(Task {
-                location: Location::caller(),
-                future: Box::pin(
-                    async move {
-                        let result = match self.response_rx.await {
-                            // We received a JSON value; transform it to our result type
-                            Ok(Ok(json_value)) => {
-                                tracing::trace!(?json_value, "received response to message");
-                                (self.to_result)(json_value)
-                            }
-
-                            // We got sent an error
-                            Ok(Err(e)) => Err(e),
-
-                            // if the `response_tx` is dropped before we get a chance, that's weird
-                            Err(e) => Err(acp::Error::new((
-                                COMMUNICATION_FAILURE,
-                                format!(
-                                    "reply of type `{}` never arrived: {e}",
-                                    std::any::type_name::<R>()
-                                ),
-                            ))),
-                        };
-                        task(result).await
-                    }
-                    .instrument(tracing::info_span!(
-                        "receive_response",
-                        method = self.method
-                    ))
-                    .instrument(current_span),
-                ),
-            })
-            .map_err(acp::Error::into_internal_error)
+        let connection_cx = self.connection_cx.clone();
+        let block_task = self.block_task();
+        connection_cx.spawn(async move { task(block_task.await).await })
     }
 }
 

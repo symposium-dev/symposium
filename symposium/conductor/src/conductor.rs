@@ -399,7 +399,7 @@ impl Conductor {
                     self.components.len() - 1,
                     McpConnectRequest { acp_url },
                 )
-                .await_when_response_received({
+                .await_when_result_received({
                     let mut conductor_tx = conductor_tx.clone();
                     async move |result| {
                         match result {
@@ -698,7 +698,7 @@ impl Conductor {
             self.components[target_component_index]
                 .agent_cx
                 .send_request(initialize_req)
-                .await_when_response_received(async move |response| match response {
+                .await_when_result_received(async move |response| match response {
                     Ok(response) => request_cx.respond(response),
                     Err(error) => request_cx.respond_with_error(error),
                 })
@@ -707,7 +707,7 @@ impl Conductor {
             self.components[target_component_index]
                 .agent_cx
                 .send_request(initialize_req)
-                .await_when_response_received(async move |response| match response {
+                .await_when_result_received(async move |response| match response {
                     Ok(mut response) => {
                         // Verify proxy capability handshake for non-agent components
                         // Each proxy component must respond with Proxy capability or we

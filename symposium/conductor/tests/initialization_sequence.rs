@@ -25,7 +25,7 @@ async fn recv<R: scp::JsonRpcResponsePayload + Send>(
     response: scp::JsonRpcResponse<R>,
 ) -> Result<R, agent_client_protocol::Error> {
     let (tx, rx) = tokio::sync::oneshot::channel();
-    response.await_when_response_received(async move |result| {
+    response.await_when_result_received(async move |result| {
         tx.send(result)
             .map_err(|_| agent_client_protocol::Error::internal_error())
     })?;
@@ -97,7 +97,7 @@ impl ComponentProvider for InitComponentProvider {
                     if config.respond_with_proxy {
                         request_cx
                             .send_request_to_successor(request)
-                            .await_when_response_received(async move |response| {
+                            .await_when_result_received(async move |response| {
                                 let mut response = response?;
                                 assert!(!response.has_meta_capability(Proxy));
                                 response = response.add_meta_capability(Proxy);
