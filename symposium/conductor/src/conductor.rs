@@ -398,7 +398,7 @@ impl Conductor {
         message: ConductorMessage,
         conductor_tx: &mut mpsc::Sender<ConductorMessage>,
     ) -> Result<(), agent_client_protocol::Error> {
-        tracing::debug!("handle_conductor_message");
+        tracing::debug!(?message, "handle_conductor_message");
 
         match message {
             ConductorMessage::ClientToAgent {
@@ -795,6 +795,7 @@ impl Conductor {
 ///
 /// All spawned tasks send messages via this enum through a shared channel,
 /// allowing centralized routing logic in the `serve()` loop.
+#[derive(Debug)]
 pub enum ConductorMessage {
     /// A message (request or notification) targeting a component from its client.
     /// This message will be forwarded "as is" to the component.

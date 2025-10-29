@@ -615,6 +615,7 @@ pub trait JsonRpcRequest: JsonRpcMessage {
 
 /// An enum capturing an in-flight request or notification.
 /// In the case of a request, also includes the context used to respond to the request.
+#[derive(Debug)]
 pub enum MessageAndCx {
     /// Incoming request and the context where the response should be sent.
     Request(UntypedMessage, JsonRpcRequestCx<serde_json::Value>),
