@@ -54,6 +54,9 @@
 //!     |                        |                          |
 //!     |<---SessionUpdate-------|<-----SessionUpdate-------|
 //!     |                        |                          |
+//!     |                        |<--UseTool[EmbodySparkle]-|
+//!     |                        |---(tool response)------->|
+//!     |                        |                          |
 //!     |                        |<--PromptResponse---------|
 //!     |                        | (consumed, not forwarded)|
 //!     |                        |                          |
@@ -103,11 +106,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Build the connection with handlers
     JsonRpcConnection::new(stdout.compat_write(), stdin.compat())
         .name("sparkle-acp-proxy")
-        .on_receive_request(handle_session_new)
         .provide_mcp(
             McpServiceRegistry::default()
                 .with_rmcp_server("sparkle", sparkle_mcp::SparkleServer::new)?,
         )
+        .on_receive_request(handle_session_new)
         .proxy()
         .serve()
         .await?;
