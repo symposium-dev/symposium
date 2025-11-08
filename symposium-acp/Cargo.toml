@@ -1,0 +1,12 @@
+[package]
+name = "symposium-acp"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive"] }
+sacp = "1.0.0-alpha.1"
+sacp-conductor = "1.0.0-alpha"
+sacp-proxy = "1.0.0-alpha.1"
+tokio = { workspace = true, features = ["full"] }

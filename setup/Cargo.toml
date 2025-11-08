@@ -18,7 +18,3 @@ serde_json = { workspace = true }
 # Additional dependencies for setup functionality
 which = { workspace = true }
 home = { workspace = true }
-
-# CLI agent utilities
-
-symposium-cli-agent-util = { path = "../symposium/cli-agent-util" }
