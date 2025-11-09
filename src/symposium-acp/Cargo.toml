@@ -1,0 +1,20 @@
+[package]
+name = "symposium-acp"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "symposium-acp"
+path = "src/main.rs"
+
+[dependencies]
+sacp-conductor = "1.0.0-alpha.3"
+sacp = "1.0.0-alpha.3"
+sacp-tokio = "1.0.0-alpha.3"
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+futures = "0.3"

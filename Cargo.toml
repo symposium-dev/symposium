@@ -3,7 +3,7 @@ members = [
     "setup",
     "md-rfd-preprocessor",
     "ci",
-    "symposium-acp",
+    "src/symposium-acp",
 ]
 resolver = "2"
 
