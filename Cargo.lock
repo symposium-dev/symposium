@@ -2213,15 +2213,19 @@ name = "symposium-acp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "futures",
  "sacp",
  "sacp-conductor",
  "sacp-tokio",
+ "schemars",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-util",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

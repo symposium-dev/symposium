@@ -11,16 +11,18 @@
 //! 4. Forward Initialize through the chain
 //! 5. Bidirectionally forward all subsequent messages
 
+pub mod logging;
+
 use anyhow::Result;
 use futures::channel::mpsc;
 use sacp::schema::InitializeRequest;
 use sacp::JrConnectionCx;
 use sacp_conductor::conductor::{Conductor, ConductorMessage};
-use sacp_tokio::Stdio;
 
 /// Run the Symposium ACP meta proxy
 ///
 /// This is the main entry point that:
+/// - Creates session logging infrastructure
 /// - Listens for the Initialize request
 /// - Uses conductor with lazy initialization to build the proxy chain
 /// - Forwards all messages bidirectionally
@@ -35,6 +37,22 @@ pub async fn run() -> Result<()> {
 
     tracing::info!("Starting Symposium ACP meta proxy");
 
+    // Create session logger
+    let session_logger = logging::SessionLogger::new().await?;
+    tracing::info!(
+        "Session directory: {}",
+        session_logger.session_dir().display()
+    );
+
+    // Get stage loggers for wrapping transports
+    let stage0_logger = session_logger.stage_logger("stage0".to_string());
+
+    // Wrap stdio with logging
+    use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+    let stdout =
+        logging::LoggingWriter::new(tokio::io::stdout().compat_write(), stage0_logger.clone());
+    let stdin = logging::LoggingReader::new(tokio::io::stdin().compat(), stage0_logger);
+
     // Create conductor with lazy initialization
     // The closure will be called when Initialize is received
     let conductor = Conductor::new(
@@ -46,7 +64,7 @@ pub async fn run() -> Result<()> {
     // Convert to handler chain and serve
     conductor
         .into_handler_chain()
-        .connect_to(Stdio::default())?
+        .connect_to(sacp::ByteStreams::new(stdout, stdin))?
         .serve()
         .await?;
 
