@@ -1,0 +1,44 @@
+[package]
+name = "rust-crate-sources-proxy"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "rust-crate-sources-proxy"
+path = "src/main.rs"
+
+[dependencies]
+# ACP proxy framework
+sacp-proxy = "1.0.0-alpha.3"
+sacp = "1.0.0-alpha.3"
+
+# MCP SDK
+rmcp = { workspace = true, features = ["server"] }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Rust crate extraction dependencies
+regex = "1.10"
+semver = "1.0"
+cargo_metadata = "0.18"
+flate2 = "1.0"
+tar = "0.4"
+crates_io_api = "0.11"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+home = "0.5"
+dirs = "5.0"
