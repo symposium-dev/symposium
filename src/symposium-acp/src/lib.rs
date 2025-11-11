@@ -14,7 +14,8 @@
 pub mod logging;
 
 use anyhow::Result;
-use sacp_conductor::conductor::{Component, Conductor};
+use sacp::component::Component;
+use sacp_conductor::conductor::Conductor;
 
 /// Run the Symposium ACP meta proxy
 ///

@@ -11,6 +11,7 @@ path = "src/main.rs"
 # ACP proxy framework
 sacp-proxy.workspace = true
 sacp.workspace = true
+sacp-conductor.workspace = true
 
 # MCP SDK
 rmcp = { workspace = true, features = ["server"] }

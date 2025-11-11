@@ -8,11 +8,10 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-# Temporarily using git versions to test ComponentList trait changes
-sacp = { git = "https://github.com/nikomatsakis/symposium-acp", branch = "main" }
-sacp-proxy = { git = "https://github.com/nikomatsakis/symposium-acp", branch = "main" }
-sacp-tokio = { git = "https://github.com/nikomatsakis/symposium-acp", branch = "main" }
-sacp-conductor = { git = "https://github.com/nikomatsakis/symposium-acp", branch = "main" }
+sacp = { version = "1.0.0-alpha.4" }
+sacp-proxy = { version = "1.0.0-alpha.4" }
+sacp-tokio = { version = "1.0.0-alpha.4" }
+sacp-conductor = { version = "1.0.0-alpha.4" }
 jsonrpcmsg = "0.1.2"
 
 # Core async runtime

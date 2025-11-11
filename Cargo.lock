@@ -2289,6 +2289,7 @@ dependencies = [
  "reqwest",
  "rmcp",
  "sacp",
+ "sacp-conductor",
  "sacp-proxy",
  "schemars",
  "semver",
@@ -2375,8 +2376,9 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "sacp"
-version = "1.0.0-alpha.1"
-source = "git+https://github.com/nikomatsakis/symposium-acp?branch=main#9f283311ca3e2b80a02395e2a8269d161409c357"
+version = "1.0.0-alpha.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03f755af5cffe83bb3f724368103b202587d1c66aea999f82aed14851ada83e9"
 dependencies = [
  "agent-client-protocol-schema",
  "anyhow",
@@ -2392,14 +2394,14 @@ dependencies = [
 
 [[package]]
 name = "sacp-conductor"
-version = "1.0.0-alpha.1"
-source = "git+https://github.com/nikomatsakis/symposium-acp?branch=main#9f283311ca3e2b80a02395e2a8269d161409c357"
+version = "1.0.0-alpha.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1731c91b2db4ddaa5853f3b4a6f544318e7d4562e4fbf6f2e7c0c16b6c56ca22"
 dependencies = [
  "agent-client-protocol-schema",
  "anyhow",
  "clap",
  "futures",
- "jsonrpcmsg",
  "sacp",
  "sacp-proxy",
  "sacp-tokio",
@@ -2416,13 +2418,13 @@ dependencies = [
 
 [[package]]
 name = "sacp-proxy"
-version = "1.0.0-alpha.1"
-source = "git+https://github.com/nikomatsakis/symposium-acp?branch=main#9f283311ca3e2b80a02395e2a8269d161409c357"
+version = "1.0.0-alpha.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5afa93525156c5c3d2e8376cc8e9657a907e6ab0cc95ce070e57ec180a3bd817"
 dependencies = [
  "agent-client-protocol-schema",
  "futures",
  "fxhash",
- "jsonrpcmsg",
  "rmcp",
  "sacp",
  "serde",
@@ -2435,11 +2437,11 @@ dependencies = [
 
 [[package]]
 name = "sacp-tokio"
-version = "1.0.0-alpha.1"
-source = "git+https://github.com/nikomatsakis/symposium-acp?branch=main#9f283311ca3e2b80a02395e2a8269d161409c357"
+version = "1.0.0-alpha.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "479f252c8de0f94b32fb11c0f23b3d148766c4e42d42ec87143ccf33c5e5f4de"
 dependencies = [
  "futures",
- "jsonrpcmsg",
  "sacp",
  "serde",
  "serde_json",

@@ -6,13 +6,12 @@
 pub mod eg;
 
 use anyhow::Result;
-use futures::channel::mpsc;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
     tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
 };
-use sacp::IntoJrTransport;
+use sacp::component::Component;
 use sacp_proxy::{AcpProxyExt, McpServiceRegistry};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -53,27 +52,27 @@ pub async fn run() -> Result<()> {
 /// A proxy which forwards all messages to its successor, adding access to the rust-crate-sources MCP server.
 pub struct CrateSourcesProxy {}
 
-impl IntoJrTransport for CrateSourcesProxy {
-    fn into_jr_transport(
+impl Component for CrateSourcesProxy {
+    fn serve(
         self: Box<Self>,
-        cx: &sacp::JrConnectionCx,
-        outgoing_rx: mpsc::UnboundedReceiver<jsonrpcmsg::Message>,
-        incoming_tx: mpsc::UnboundedSender<jsonrpcmsg::Message>,
-    ) -> std::result::Result<(), sacp::Error> {
-        let mcp_registry = McpServiceRegistry::default()
-            .with_rmcp_server("rust-crate-sources", RustCrateSourcesService::new)?;
+        channels: sacp::Channels,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = std::result::Result<(), sacp::Error>> + Send + 'static,
+        >,
+    > {
+        Box::pin(async move {
+            let mcp_registry = McpServiceRegistry::default()
+                .with_rmcp_server("rust-crate-sources", RustCrateSourcesService::new)?;
 
-        cx.spawn(async move {
             sacp::JrHandlerChain::new()
                 .name("rust-crate-sources-proxy")
                 .provide_mcp(mcp_registry)
                 .proxy()
-                .connect_to(sacp::Channels::new(outgoing_rx, incoming_tx))?
+                .connect_to(channels)?
                 .serve()
                 .await
-        })?;
-
-        Ok(())
+        })
     }
 }
 
