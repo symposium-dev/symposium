@@ -6,13 +6,76 @@
 pub mod eg;
 
 use anyhow::Result;
+use futures::channel::mpsc;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::*,
     tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
 };
+use sacp::IntoJrTransport;
+use sacp_proxy::{AcpProxyExt, McpServiceRegistry};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+/// Run the proxy as a standalone binary connected to stdio
+pub async fn run() -> Result<()> {
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
+
+    tracing::info!("Starting rust-crate-sources-proxy");
+
+    // Create the MCP service registry
+    let mcp_registry = McpServiceRegistry::default()
+        .with_rmcp_server("rust-crate-sources", RustCrateSourcesService::new)?;
+
+    // Connect to stdio and serve
+    use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+
+    sacp::JrHandlerChain::new()
+        .name("rust-crate-sources-proxy")
+        .provide_mcp(mcp_registry)
+        .proxy()
+        .connect_to(sacp::ByteStreams::new(
+            tokio::io::stdout().compat_write(),
+            tokio::io::stdin().compat(),
+        ))?
+        .serve()
+        .await?;
+
+    Ok(())
+}
+
+/// A proxy which forwards all messages to its successor, adding access to the rust-crate-sources MCP server.
+pub struct CrateSourcesProxy {}
+
+impl IntoJrTransport for CrateSourcesProxy {
+    fn into_jr_transport(
+        self: Box<Self>,
+        cx: &sacp::JrConnectionCx,
+        outgoing_rx: mpsc::UnboundedReceiver<jsonrpcmsg::Message>,
+        incoming_tx: mpsc::UnboundedSender<jsonrpcmsg::Message>,
+    ) -> std::result::Result<(), sacp::Error> {
+        let mcp_registry = McpServiceRegistry::default()
+            .with_rmcp_server("rust-crate-sources", RustCrateSourcesService::new)?;
+
+        cx.spawn(async move {
+            sacp::JrHandlerChain::new()
+                .name("rust-crate-sources-proxy")
+                .provide_mcp(mcp_registry)
+                .proxy()
+                .connect_to(sacp::Channels::new(outgoing_rx, incoming_tx))?
+                .serve()
+                .await
+        })?;
+
+        Ok(())
+    }
+}
 
 /// Parameters for the get_rust_crate_source tool
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -131,38 +194,4 @@ impl ServerHandler for RustCrateSourcesService {
             ),
         }
     }
-}
-
-pub async fn run() -> Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_writer(std::io::stderr)
-        .init();
-
-    tracing::info!("Starting Rust Crate Sources proxy");
-
-    // Create MCP service registry
-    use sacp_proxy::{AcpProxyExt, McpServiceRegistry};
-    let mcp_registry = McpServiceRegistry::default()
-        .with_rmcp_server("rust-crate-sources", RustCrateSourcesService::new)?;
-
-    // Set up stdio transport
-    use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-    let stdout = tokio::io::stdout().compat_write();
-    let stdin = tokio::io::stdin().compat();
-
-    // Create and run the proxy
-    sacp::JrHandlerChain::new()
-        .name("rust-crate-sources-proxy")
-        .provide_mcp(mcp_registry)
-        .proxy()
-        .connect_to(sacp::ByteStreams::new(stdout, stdin))?
-        .serve()
-        .await?;
-
-    Ok(())
 }

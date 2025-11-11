@@ -8,9 +8,9 @@ name = "symposium-acp"
 path = "src/main.rs"
 
 [dependencies]
-sacp-conductor = "1.0.0-alpha.3"
-sacp = "1.0.0-alpha.3"
-sacp-tokio = "1.0.0-alpha.3"
+sacp-conductor.workspace = true
+sacp.workspace = true
+sacp-tokio.workspace = true
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
@@ -22,3 +22,6 @@ uuid = { workspace = true }
 futures = "0.3"
 chrono = "0.4"
 tokio-util = { version = "0.7", features = ["compat"] }
+
+# Proxy components
+rust-crate-sources-proxy = { path = "../rust-crate-sources-proxy" }

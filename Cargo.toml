@@ -3,13 +3,21 @@ members = [
     "setup",
     "md-rfd-preprocessor",
     "ci",
-    "src/symposium-acp",
+    "src/symposium-acp", "src/rust-crate-sources-proxy",
 ]
 resolver = "2"
 
 [workspace.dependencies]
+# Temporarily using git versions to test ComponentList trait changes
+sacp = { git = "https://github.com/nikomatsakis/symposium-acp", branch = "main" }
+sacp-proxy = { git = "https://github.com/nikomatsakis/symposium-acp", branch = "main" }
+sacp-tokio = { git = "https://github.com/nikomatsakis/symposium-acp", branch = "main" }
+sacp-conductor = { git = "https://github.com/nikomatsakis/symposium-acp", branch = "main" }
+jsonrpcmsg = "0.1.2"
+
 # Core async runtime
 tokio = { version = "1.0", features = ["full"] }
+futures = "0.3.31"
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }

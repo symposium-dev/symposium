@@ -14,10 +14,7 @@
 pub mod logging;
 
 use anyhow::Result;
-use futures::channel::mpsc;
-use sacp::schema::InitializeRequest;
-use sacp::JrConnectionCx;
-use sacp_conductor::conductor::{Conductor, ConductorMessage};
+use sacp_conductor::conductor::{Component, Conductor};
 
 /// Run the Symposium ACP meta proxy
 ///
@@ -55,11 +52,7 @@ pub async fn run() -> Result<()> {
 
     // Create conductor with lazy initialization
     // The closure will be called when Initialize is received
-    let conductor = Conductor::new(
-        "symposium".to_string(),
-        build_proxy_chain,
-        None, // No custom conductor command
-    );
+    let conductor = symposium_conductor()?;
 
     // Convert to handler chain and serve
     conductor
@@ -71,43 +64,29 @@ pub async fn run() -> Result<()> {
     Ok(())
 }
 
-/// Build the proxy chain based on editor capabilities
-///
-/// This is called by the conductor when it receives the Initialize request.
-/// We examine the client capabilities and decide which components to spawn.
-///
-/// For now, this is a stub that just forwards to a simple agent proxy.
-/// Future enhancements will:
-/// - Check for IDE operation capabilities
-/// - Spawn ide-ops adapter if missing
-/// - Spawn ide-ops component to provide MCP tools
-/// - Add other components as needed
-async fn build_proxy_chain(
-    _cx: JrConnectionCx,
-    _conductor_tx: mpsc::Sender<ConductorMessage>,
-    init_req: InitializeRequest,
-) -> Result<(InitializeRequest, Vec<JrConnectionCx>), sacp::Error> {
-    tracing::info!("Building proxy chain based on capabilities");
+/// Create and return the "symposium conductor", which assembles the symposium libraries together.
+pub fn symposium_conductor() -> Result<Conductor> {
+    // Create conductor with lazy initialization using ComponentList trait
+    // The closure receives the Initialize request and returns components to spawn
+    let conductor = Conductor::new(
+        "symposium".to_string(),
+        |init_req| async move {
+            tracing::info!("Building proxy chain based on capabilities");
 
-    // TODO: Examine init_req.client_capabilities to determine what's needed
-    // TODO: Spawn components/adapters based on capability gaps
+            // TODO: Examine init_req.capabilities to determine what's needed
 
-    // For now, just create a passthrough to the agent
-    // This will be replaced with actual component spawning logic
-    let agent = create_agent_proxy(&_cx, &_conductor_tx).await?;
+            let components: Vec<Box<dyn Component>> =
+                vec![Box::new(rust_crate_sources_proxy::CrateSourcesProxy {})];
 
-    Ok((init_req, vec![agent]))
-}
+            // TODO: Add more components based on capabilities
+            // - Check for IDE operation capabilities
+            // - Spawn ide-ops adapter if missing
+            // - Spawn ide-ops component to provide MCP tools
 
-/// Create a proxy to the downstream agent
-///
-/// For now this is a stub. Eventually this will connect to the actual
-/// agent specified in configuration or command line arguments.
-async fn create_agent_proxy(
-    _cx: &JrConnectionCx,
-    _conductor_tx: &mpsc::Sender<ConductorMessage>,
-) -> Result<JrConnectionCx, sacp::Error> {
-    // TODO: Actually spawn or connect to an agent
-    // For now, just error since we don't have a real agent yet
-    Err(sacp::Error::internal_error())
+            Ok((init_req, components))
+        },
+        None, // No custom conductor command
+    );
+
+    Ok(conductor)
 }
