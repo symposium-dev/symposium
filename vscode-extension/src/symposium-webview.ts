@@ -5,6 +5,12 @@ import { MynahUI } from "@aws/mynah-ui";
 const mynahUI = new MynahUI({
   rootSelector: "#mynah-root",
   loadStyles: true,
+  config: {
+    texts: {
+      mainTitle: "Symposium",
+      noTabsOpen: "### Join the symposium by opening a tab",
+    },
+  },
   defaults: {
     store: {
       tabTitle: "Symposium",
