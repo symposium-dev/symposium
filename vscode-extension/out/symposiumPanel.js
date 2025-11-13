@@ -42,7 +42,7 @@ const homerActor_1 = require("./actors/homerActor");
  */
 class SymposiumPanel {
     static currentPanel;
-    static viewType = 'symposium.chatView';
+    static viewType = "symposium.chatView";
     _panel;
     _extensionUri;
     _actor;
@@ -58,68 +58,84 @@ class SymposiumPanel {
         return panel;
     }
     constructor(webviewView, extensionUri) {
+        console.log("[SymposiumPanel] Constructing panel");
         this._panel = webviewView;
         this._extensionUri = extensionUri;
         this._actor = new homerActor_1.HomerActor();
         // Set up webview options
         this._panel.webview.options = {
             enableScripts: true,
-            localResourceRoots: [this._extensionUri]
+            localResourceRoots: [this._extensionUri],
         };
         // Set the HTML content
         this._panel.webview.html = this._getHtmlForWebview(this._panel.webview);
+        console.log("[SymposiumPanel] HTML set, webview initialized");
         // Listen for messages from the webview
-        this._panel.webview.onDidReceiveMessage((message) => this._handleWebviewMessage(message), null, this._disposables);
+        this._panel.webview.onDidReceiveMessage((message) => {
+            console.log("[SymposiumPanel] Received message from webview:", message);
+            this._handleWebviewMessage(message);
+        }, null, this._disposables);
         // Clean up when panel is disposed
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
     }
     async _handleWebviewMessage(message) {
         switch (message.type) {
-            case 'sendPrompt':
+            case "sendPrompt":
                 await this._handleSendPrompt(message);
                 break;
         }
     }
     async _handleSendPrompt(message) {
         const { tabId, prompt, messageId } = message;
+        console.log("[SymposiumPanel] Handling prompt:", {
+            tabId,
+            prompt,
+            messageId,
+        });
         // Send stream start message
         this._postMessage({
-            type: 'streamStart',
+            type: "streamStart",
             tabId,
-            messageId
+            messageId,
         });
+        console.log("[SymposiumPanel] Sent streamStart");
         try {
             // Get response stream from actor
             const responseStream = this._actor.sendPrompt(prompt);
+            console.log("[SymposiumPanel] Got response stream from actor");
             // Stream chunks to webview
+            let chunkCount = 0;
             for await (const chunk of responseStream) {
+                chunkCount++;
                 this._postMessage({
-                    type: 'streamChunk',
+                    type: "streamChunk",
                     tabId,
                     messageId,
-                    content: chunk
+                    content: chunk,
                 });
             }
+            console.log(`[SymposiumPanel] Streamed ${chunkCount} chunks`);
             // Send stream end message
             this._postMessage({
-                type: 'streamEnd',
-                tabId,
-                messageId
-            });
-        }
-        catch (error) {
-            console.error('Error handling prompt:', error);
-            // Send error as final chunk and end stream
-            this._postMessage({
-                type: 'streamChunk',
+                type: "streamEnd",
                 tabId,
                 messageId,
-                content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`
+            });
+            console.log("[SymposiumPanel] Sent streamEnd");
+        }
+        catch (error) {
+            console.error("[SymposiumPanel] Error handling prompt:", error);
+            // Send error as final chunk and end stream
+            this._postMessage({
+                type: "streamChunk",
+                tabId,
+                messageId,
+                content: `Error: ${error instanceof Error ? error.message : "Unknown error"}`,
             });
             this._postMessage({
-                type: 'streamEnd',
+                type: "streamEnd",
                 tabId,
-                messageId
+                messageId,
             });
         }
     }
@@ -128,16 +144,51 @@ class SymposiumPanel {
     }
     _getHtmlForWebview(webview) {
         // Get the URI for our webview script
-        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'out', 'webview.js'));
+        const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, "out", "webview.js"));
         // Use a nonce to allow only specific scripts
         const nonce = getNonce();
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data: https:; font-src ${webview.cspSource};">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Symposium Chat</title>
+    <style>
+        :root {
+            /* Basic mynah-ui theme variables - using VSCode dark theme colors */
+            --mynah-color-bg: var(--vscode-editor-background);
+            --mynah-color-tab-active: var(--vscode-tab-activeBackground);
+            --mynah-color-text-default: var(--vscode-editor-foreground);
+            --mynah-color-text-strong: var(--vscode-editor-foreground);
+            --mynah-color-text-weak: var(--vscode-descriptionForeground);
+            --mynah-color-text-link: var(--vscode-textLink-foreground);
+            --mynah-color-text-input: var(--vscode-input-foreground);
+            --mynah-color-button: var(--vscode-button-background);
+            --mynah-color-button-reverse: var(--vscode-button-foreground);
+            --mynah-color-border-default: var(--vscode-panel-border);
+            --mynah-font-family: var(--vscode-font-family);
+            --mynah-font-size-small: var(--vscode-font-size);
+            --mynah-font-size-medium: calc(var(--vscode-font-size) * 1.1);
+            --mynah-font-size-large: calc(var(--vscode-font-size) * 1.25);
+            --mynah-line-height: 1.5;
+            --mynah-syntax-bg: var(--vscode-textCodeBlock-background);
+            --mynah-card-bg: var(--vscode-editor-background);
+            --mynah-shadow-button-stroke: none;
+        }
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            overflow: hidden;
+            background-color: var(--vscode-editor-background);
+            color: var(--vscode-editor-foreground);
+        }
+        #mynah-root {
+            height: 100%;
+            width: 100%;
+        }
+    </style>
 </head>
 <body>
     <div id="mynah-root"></div>
@@ -158,8 +209,8 @@ class SymposiumPanel {
 }
 exports.SymposiumPanel = SymposiumPanel;
 function getNonce() {
-    let text = '';
-    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    let text = "";
+    const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     for (let i = 0; i < 32; i++) {
         text += possible.charAt(Math.floor(Math.random() * possible.length));
     }
