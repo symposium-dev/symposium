@@ -1,21 +1,21 @@
-const path = require('path');
+const path = require("path");
 
 /** @type {import('webpack').Configuration} */
-const config = {
-  target: 'node',
-  mode: 'none',
+const extensionConfig = {
+  target: "node",
+  mode: "none",
 
-  entry: './src/extension.ts',
+  entry: "./src/extension.ts",
   output: {
-    path: path.resolve(__dirname, 'out'),
-    filename: 'extension.js',
-    libraryTarget: 'commonjs2'
+    path: path.resolve(__dirname, "out"),
+    filename: "extension.js",
+    libraryTarget: "commonjs2",
   },
   externals: {
-    vscode: 'commonjs vscode'
+    vscode: "commonjs vscode",
   },
   resolve: {
-    extensions: ['.ts', '.js']
+    extensions: [".ts", ".js"],
   },
   module: {
     rules: [
@@ -24,16 +24,59 @@ const config = {
         exclude: /node_modules/,
         use: [
           {
-            loader: 'ts-loader'
-          }
-        ]
-      }
-    ]
+            loader: "ts-loader",
+            options: {
+              configFile: "src/webview/tsconfig.json",
+            },
+          },
+        ],
+      },
+    ],
   },
-  devtool: 'nosources-source-map',
+  devtool: "nosources-source-map",
   infrastructureLogging: {
     level: "log",
   },
 };
 
-module.exports = config;
+/** @type {import('webpack').Configuration} */
+const webviewConfig = {
+  target: "web",
+  mode: "none",
+
+  entry: "./src/webview/main.ts",
+  output: {
+    path: path.resolve(__dirname, "out"),
+    filename: "webview.js",
+  },
+  resolve: {
+    extensions: [".ts", ".js"],
+    fallback: {
+      path: false,
+      fs: false,
+    },
+  },
+  module: {
+    rules: [
+      {
+        test: /\.ts$/,
+        exclude: /node_modules/,
+        use: [
+          {
+            loader: "ts-loader",
+          },
+        ],
+      },
+      {
+        test: /\.css$/,
+        use: ["style-loader", "css-loader"],
+      },
+    ],
+  },
+  devtool: "nosources-source-map",
+  infrastructureLogging: {
+    level: "log",
+  },
+};
+
+module.exports = [extensionConfig, webviewConfig];
