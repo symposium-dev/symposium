@@ -36,6 +36,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           for await (const chunk of this._actor.processPrompt(message.prompt)) {
             webviewView.webview.postMessage({
               type: "response-chunk",
+              tabId: message.tabId,
               messageId: message.messageId,
               chunk: chunk,
             });
@@ -43,6 +44,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           // Send final message to indicate streaming is complete
           webviewView.webview.postMessage({
             type: "response-complete",
+            tabId: message.tabId,
             messageId: message.messageId,
           });
           break;

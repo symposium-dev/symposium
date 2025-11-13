@@ -5,9 +5,11 @@ import { MynahUI, ChatItem, ChatItemType } from "@aws/mynah-ui";
 declare const acquireVsCodeApi: any;
 declare const window: any;
 
+// Import uuid - note: webpack will bundle this for browser
+import { v4 as uuidv4 } from "uuid";
+
 const vscode = acquireVsCodeApi();
 
-let messageIdCounter = 0;
 let mynahUI: MynahUI;
 
 // Request saved state from extension
@@ -30,11 +32,13 @@ function initializeMynahUI(savedTabs?: any) {
       },
     },
     onChatPrompt: (tabId: string, prompt: any) => {
-      // User sent a prompt - send it to the extension
-      const messageId = `msg-${messageIdCounter++}`;
+      // Generate UUID for this message
+      const messageId = uuidv4();
 
+      // Send prompt to extension with tabId and messageId
       vscode.postMessage({
         type: "prompt",
+        tabId: tabId,
         messageId: messageId,
         prompt: prompt.prompt,
       });
@@ -45,7 +49,7 @@ function initializeMynahUI(savedTabs?: any) {
         body: prompt.prompt,
       });
 
-      // Add a placeholder for the streaming answer
+      // Add placeholder for the streaming answer
       mynahUI.addChatItem(tabId, {
         type: ChatItemType.ANSWER_STREAM,
         messageId: messageId,
@@ -80,22 +84,14 @@ window.addEventListener("message", (event: MessageEvent) => {
     return;
   }
 
-  // Find the active tab
-  const tabs = mynahUI.getAllTabs();
-  const tabId = Object.keys(tabs).find((id) => tabs[id].isSelected);
-
-  if (!tabId) {
-    return;
-  }
-
   if (message.type === "response-chunk") {
     // Update the streaming answer with the new chunk
-    mynahUI.updateChatAnswerWithMessageId(tabId, message.messageId, {
+    mynahUI.updateChatAnswerWithMessageId(message.tabId, message.messageId, {
       body: message.chunk,
     });
   } else if (message.type === "response-complete") {
     // Mark the stream as complete
-    mynahUI.endMessageStream(tabId, message.messageId);
+    mynahUI.endMessageStream(message.tabId, message.messageId);
 
     // Save state after each completed response
     const state = mynahUI.getAllTabs();

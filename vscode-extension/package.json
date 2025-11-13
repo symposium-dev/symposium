@@ -67,6 +67,8 @@
     "webpack-cli": "^5.1.0"
   },
   "dependencies": {
-    "@aws/mynah-ui": "^4.38.0"
+    "@aws/mynah-ui": "^4.38.0",
+    "@types/uuid": "^10.0.0",
+    "uuid": "^13.0.0"
   }
 }
