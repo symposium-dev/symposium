@@ -160,13 +160,16 @@
     "webpack-dev": "webpack --mode development",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "test": "npm run compile && vscode-test"
   },
   "devDependencies": {
     "@types/node": "^20.x",
     "@types/vscode": "^1.93.0",
     "@typescript-eslint/eslint-plugin": "^7.0.0",
     "@typescript-eslint/parser": "^7.0.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
     "css-loader": "^7.1.2",
     "eslint": "^8.57.0",
     "style-loader": "^4.0.0",

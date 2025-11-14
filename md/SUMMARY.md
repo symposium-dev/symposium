@@ -24,6 +24,7 @@
     - [Message Protocol](./design/vscode-extension/message-protocol.md)
     - [State Persistence](./design/vscode-extension/state-persistence.md)
     - [Webview Lifecycle](./design/vscode-extension/webview-lifecycle.md)
+    - [Testing](./design/vscode-extension/testing.md)
     - [Implementation Status](./design/vscode-extension/implementation-status.md)
 
 # References
