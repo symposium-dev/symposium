@@ -64,6 +64,13 @@
               "command": "elizacp",
               "args": [],
               "env": {}
+            },
+            "Claude Code": {
+              "command": "npx",
+              "args": [
+                "@zed-industries/claude-code-acp"
+              ],
+              "env": {}
             }
           },
           "description": "Configured ACP agents (keyed by agent name)"
