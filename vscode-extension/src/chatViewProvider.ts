@@ -25,17 +25,18 @@ const STATE_VERSION = 1;
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "symposium.chatView";
   private static readonly STATE_KEY = "symposium.chatState";
-  private _view?: vscode.WebviewView;
-  private _agent: HomerActor;
-  private _tabToSession: Map<string, string> = new Map(); // tabId → sessionId
-  private _messageBuffer: BufferedMessage[] = [];
+  #view?: vscode.WebviewView;
+  #agent: HomerActor;
+  #tabToSession: Map<string, string> = new Map(); // tabId → sessionId
+  #messageBuffer: BufferedMessage[] = [];
+  #extensionUri: vscode.Uri;
+  #context: vscode.ExtensionContext;
 
-  constructor(
-    private readonly _extensionUri: vscode.Uri,
-    private readonly _context: vscode.ExtensionContext,
-  ) {
+  constructor(extensionUri: vscode.Uri, context: vscode.ExtensionContext) {
+    this.#extensionUri = extensionUri;
+    this.#context = context;
     // Create singleton agent
-    this._agent = new HomerActor();
+    this.#agent = new HomerActor();
   }
 
   public resolveWebviewView(
@@ -43,23 +44,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken,
   ) {
-    this._view = webviewView;
+    this.#view = webviewView;
 
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [this._extensionUri],
+      localResourceRoots: [this.#extensionUri],
     };
 
-    webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+    webviewView.webview.html = this.#getHtmlForWebview(webviewView.webview);
 
     // Handle webview visibility changes
     webviewView.onDidChangeVisibility(() => {
       if (webviewView.visible) {
         console.log("Webview became visible");
-        this._onWebviewVisible();
+        this.#onWebviewVisible();
       } else {
         console.log("Webview became hidden");
-        this._onWebviewHidden();
+        this.#onWebviewHidden();
       }
     });
 
@@ -68,12 +69,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       switch (message.type) {
         case "new-tab":
           // Create a new session for this tab
-          const sessionId = this._agent.createSession();
-          this._tabToSession.set(message.tabId, sessionId);
+          const sessionId = this.#agent.createSession();
+          this.#tabToSession.set(message.tabId, sessionId);
           console.log(`Created session ${sessionId} for tab ${message.tabId}`);
 
           // Save state after creating session
-          await this._saveState();
+          await this.#saveState();
           break;
 
         case "prompt":
@@ -82,7 +83,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           );
 
           // Get the session for this tab
-          const promptSessionId = this._tabToSession.get(message.tabId);
+          const promptSessionId = this.#tabToSession.get(message.tabId);
           if (!promptSessionId) {
             console.error(`No session found for tab ${message.tabId}`);
             return;
@@ -91,12 +92,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           console.log(`Processing prompt with session ${promptSessionId}`);
 
           // Stream the response progressively
-          for await (const chunk of this._agent.processPrompt(
+          for await (const chunk of this.#agent.processPrompt(
             promptSessionId,
             message.prompt,
           )) {
             console.log(`Sending chunk for message ${message.messageId}`);
-            this._sendToWebview({
+            this.#sendToWebview({
               type: "response-chunk",
               tabId: message.tabId,
               messageId: message.messageId,
@@ -108,43 +109,43 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           console.log(
             `Sending response-complete for message ${message.messageId}`,
           );
-          this._sendToWebview({
+          this.#sendToWebview({
             type: "response-complete",
             tabId: message.tabId,
             messageId: message.messageId,
           });
 
           // Save session state after response
-          await this._saveState();
+          await this.#saveState();
           break;
 
         case "save-state":
           // Save the UI state along with session state
           console.log("Saving UI state from webview");
-          await this._saveState(message.state);
+          await this.#saveState(message.state);
           break;
 
         case "request-saved-state":
           // Webview is requesting saved state on initialization
-          await this._restoreState();
+          await this.#restoreState();
           break;
       }
     });
   }
 
-  private async _saveState(uiState?: any) {
+  async #saveState(uiState?: any) {
     // Get UI state (either provided or fetch current)
     const currentUiState =
       uiState ||
-      this._context.workspaceState.get<ExtensionState>(
+      this.#context.workspaceState.get<ExtensionState>(
         ChatViewProvider.STATE_KEY,
       )?.uiState;
 
     // Build session state from current sessions
     const sessions: { [tabId: string]: SessionInfo } = {};
-    for (const [tabId, sessionId] of this._tabToSession.entries()) {
+    for (const [tabId, sessionId] of this.#tabToSession.entries()) {
       try {
-        const state = this._agent.getSessionState(sessionId);
+        const state = this.#agent.getSessionState(sessionId);
         sessions[tabId] = { sessionId, state };
       } catch (error) {
         console.error(`Failed to get state for session ${sessionId}:`, error);
@@ -159,25 +160,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     };
 
     console.log("Saving extension state:", extensionState);
-    await this._context.workspaceState.update(
+    await this.#context.workspaceState.update(
       ChatViewProvider.STATE_KEY,
       extensionState,
     );
   }
 
-  private async _restoreState() {
-    if (!this._view) {
+  async #restoreState() {
+    if (!this.#view) {
       return;
     }
 
-    const extensionState = this._context.workspaceState.get<ExtensionState>(
+    const extensionState = this.#context.workspaceState.get<ExtensionState>(
       ChatViewProvider.STATE_KEY,
     );
 
     if (!extensionState) {
       console.log("No saved state found");
       // Still send restore message so webview initializes
-      await this._view.webview.postMessage({
+      await this.#view.webview.postMessage({
         type: "restore-state",
         state: undefined,
       });
@@ -189,12 +190,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       console.log(
         `State version mismatch (saved: ${extensionState.version}, current: ${STATE_VERSION}) - wiping old state`,
       );
-      await this._context.workspaceState.update(
+      await this.#context.workspaceState.update(
         ChatViewProvider.STATE_KEY,
         undefined,
       );
       // Send empty state to webview
-      await this._view.webview.postMessage({
+      await this.#view.webview.postMessage({
         type: "restore-state",
         state: undefined,
       });
@@ -208,8 +209,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       for (const [tabId, sessionInfo] of Object.entries(
         extensionState.sessions,
       )) {
-        this._agent.resumeSession(sessionInfo.sessionId, sessionInfo.state);
-        this._tabToSession.set(tabId, sessionInfo.sessionId);
+        this.#agent.resumeSession(sessionInfo.sessionId, sessionInfo.state);
+        this.#tabToSession.set(tabId, sessionInfo.sessionId);
         console.log(
           `Restored session ${sessionInfo.sessionId} for tab ${tabId}`,
         );
@@ -217,29 +218,29 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     // Restore UI state
-    await this._view.webview.postMessage({
+    await this.#view.webview.postMessage({
       type: "restore-state",
       state: extensionState.uiState,
     });
   }
 
-  private _sendToWebview(message: any) {
-    if (!this._view) {
+  #sendToWebview(message: any) {
+    if (!this.#view) {
       return;
     }
 
-    if (this._view.visible) {
+    if (this.#view.visible) {
       // Webview is visible, send immediately
-      this._view.webview.postMessage(message);
+      this.#view.webview.postMessage(message);
     } else {
       // Webview is hidden, buffer the message
       console.log("Buffering message (webview hidden):", message.type);
-      this._messageBuffer.push(message);
+      this.#messageBuffer.push(message);
     }
   }
 
-  private async _onWebviewVisible() {
-    if (!this._view) {
+  async #onWebviewVisible() {
+    if (!this.#view) {
       return;
     }
 
@@ -247,24 +248,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // We only need to replay buffered messages here
 
     // Replay buffered messages
-    if (this._messageBuffer.length > 0) {
-      console.log(`Replaying ${this._messageBuffer.length} buffered messages`);
-      for (const message of this._messageBuffer) {
-        await this._view.webview.postMessage(message);
+    if (this.#messageBuffer.length > 0) {
+      console.log(`Replaying ${this.#messageBuffer.length} buffered messages`);
+      for (const message of this.#messageBuffer) {
+        await this.#view.webview.postMessage(message);
       }
-      this._messageBuffer = [];
+      this.#messageBuffer = [];
     }
   }
 
-  private async _onWebviewHidden() {
+  async #onWebviewHidden() {
     // Save current state when webview is hidden
     console.log("Webview hidden - saving state");
-    await this._saveState();
+    await this.#saveState();
   }
 
-  private _getHtmlForWebview(webview: vscode.Webview) {
+  #getHtmlForWebview(webview: vscode.Webview) {
     const scriptUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this._extensionUri, "out", "webview.js"),
+      vscode.Uri.joinPath(this.#extensionUri, "out", "webview.js"),
     );
 
     return `<!DOCTYPE html>
