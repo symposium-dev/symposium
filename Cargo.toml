@@ -11,10 +11,11 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-sacp = { version = "1.0.0-alpha.7" }
-sacp-proxy = { version = "1.0.0-alpha.7" }
-sacp-tokio = { version = "1.0.0-alpha.8" }
-sacp-conductor = { version = "1.0.0-alpha.9" }
+sacp = { version = "1.0.0" }
+sacp-proxy = { version = "1.0.0" }
+sacp-tokio = { version = "1.0.0" }
+sacp-conductor = { version = "1.0.0" }
+sacp-rmcp = { version = "0.8" }
 jsonrpcmsg = "0.1.2"
 
 # Core async runtime

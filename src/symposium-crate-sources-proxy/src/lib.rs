@@ -13,6 +13,7 @@ use rmcp::{
 };
 use sacp::component::Component;
 use sacp_proxy::{AcpProxyExt, McpServiceRegistry};
+use sacp_rmcp::McpServiceRegistryRmcpExt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
