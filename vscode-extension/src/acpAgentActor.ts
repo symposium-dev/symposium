@@ -189,20 +189,23 @@ export class AcpAgentActor {
 
   /**
    * Create a new agent session
+   * @param workspaceFolder - Workspace folder to use as working directory
    * @returns Agent session ID
    */
-  async createSession(): Promise<string> {
+  async createSession(workspaceFolder: string): Promise<string> {
     if (!this.connection) {
       throw new Error("ACP connection not initialized");
     }
 
     // Create a session with the ACP agent
     const result = await this.connection.newSession({
-      cwd: process.cwd(),
+      cwd: workspaceFolder,
       mcpServers: [],
     });
 
-    console.log(`Created agent session: ${result.sessionId}`);
+    console.log(
+      `Created agent session: ${result.sessionId} (cwd: ${workspaceFolder})`,
+    );
     return result.sessionId;
   }
 

@@ -166,7 +166,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case "new-tab":
           try {
             // Get the current agent configuration from settings
-            const config = AgentConfiguration.fromSettings();
+            const config = await AgentConfiguration.fromSettings();
 
             // Store the configuration for this tab
             this.#tabToConfig.set(message.tabId, config);
@@ -186,7 +186,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             const actor = await this.#getOrCreateActor(config);
 
             // Create a new agent session for this tab
-            const agentSessionId = await actor.createSession();
+            const agentSessionId = await actor.createSession(
+              config.workspaceFolder.uri.fsPath,
+            );
             this.#tabToAgentSession.set(message.tabId, agentSessionId);
             this.#agentSessionToTab.set(agentSessionId, message.tabId);
 
@@ -504,7 +506,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     switch (message.type) {
       case "new-tab":
         try {
-          const config = AgentConfiguration.fromSettings();
+          const config = await AgentConfiguration.fromSettings();
           this.#tabToConfig.set(message.tabId, config);
           this.#messageQueues.set(message.tabId, []);
           this.#nextMessageIndex.set(message.tabId, 0);
@@ -516,7 +518,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           });
 
           const actor = await this.#getOrCreateActor(config);
-          const agentSessionId = await actor.createSession();
+          const agentSessionId = await actor.createSession(
+            config.workspaceFolder.uri.fsPath,
+          );
           this.#tabToAgentSession.set(message.tabId, agentSessionId);
           this.#agentSessionToTab.set(agentSessionId, message.tabId);
 

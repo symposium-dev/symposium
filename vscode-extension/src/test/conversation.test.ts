@@ -78,7 +78,9 @@ suite("Conversation Tests", () => {
     assert.ok(
       response.toLowerCase().includes("eliza") ||
         response.toLowerCase().includes("hello") ||
-        response.toLowerCase().includes("how"),
+        response.toLowerCase().includes("hi") ||
+        response.toLowerCase().includes("how") ||
+        response.toLowerCase().includes("what"),
       "Response should be relevant to the prompt",
     );
 

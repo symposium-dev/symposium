@@ -86,14 +86,24 @@ The agent owns all session state and conversation logic. The extension only trac
 
 **Why ACP over stdio?** ACP provides a standardized protocol for agent communication. Stdio is simple, universal, and works with any language. No need for network sockets or IPC complexity.
 
-## Singleton Agent Process
+## Agent Configuration and Sharing
 
-The extension spawns a single agent process shared across all tabs/conversations.
+The extension uses `AgentConfiguration` to determine when agent processes can be shared across tabs. An `AgentConfiguration` consists of:
+- Agent name (e.g., "ElizACP", "Claude")
+- Enabled components (e.g., "symposium-acp")
+- Workspace folder (the VSCode workspace the agent operates in)
+
+**Sharing strategy:** Tabs with identical configurations share the same agent actor (process), but each tab gets its own session within that process.
+
+**Workspace folder selection:**
+- Single workspace: Automatically uses that workspace
+- Multiple workspaces: Prompts user to select which workspace folder to use
+- Each session is created with the workspace folder as its working directory
 
 **Rationale:**
-- **Startup latency** - One process spawned at extension activation, not per-tab
-- **Resource efficiency** - Single process overhead instead of N processes for N tabs
-- **Shared context** - Agent can maintain cross-session knowledge if desired
+- **Resource efficiency** - Shared actor means one process for multiple tabs with the same config
+- **Workspace isolation** - Different workspace folders get different actors to maintain proper working directory context
+- **Session isolation** - Each tab gets its own session ID for conversation independence
 
 **Trade-off:** Agent must implement multiplexing. Messages include session/tab IDs for routing. Extension maps UI tab IDs to agent session IDs.
 
