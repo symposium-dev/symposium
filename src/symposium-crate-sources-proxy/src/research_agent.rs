@@ -37,23 +37,15 @@ pub async fn run(
         request.crate_version
     );
 
-    // Get current working directory for the new session
-    let cwd = std::env::current_dir().map_err(|e| sacp::Error::internal_error())?;
-
-    // Add sub-agent MCP servers to the new session request
-    let mut new_session_req = NewSessionRequest {
-        cwd,
-        mcp_servers: vec![],
-        meta: None,
-    };
-    sub_agent_mcp_registry.add_registered_mcp_servers_to(&mut new_session_req);
-
     // Spawn the sub-agent session
     let NewSessionResponse {
         session_id,
         modes: _,
         meta: _,
-    } = cx.send_request(new_session_req).block_task().await?;
+    } = cx
+        .send_request(research_agent_session_request(sub_agent_mcp_registry)?)
+        .block_task()
+        .await?;
 
     tracing::info!("Research session created: {}", session_id);
 
@@ -82,4 +74,18 @@ pub async fn run(
         .map_err(|_| sacp::Error::internal_error())?;
 
     Ok(())
+}
+
+/// Create a NewSessionRequest for the research agent.
+fn research_agent_session_request(
+    sub_agent_mcp_registry: McpServiceRegistry,
+) -> Result<NewSessionRequest, sacp::Error> {
+    let cwd = std::env::current_dir().map_err(|e| sacp::Error::internal_error())?;
+    let mut new_session_req = NewSessionRequest {
+        cwd,
+        mcp_servers: vec![],
+        meta: None,
+    };
+    sub_agent_mcp_registry.add_registered_mcp_servers_to(&mut new_session_req);
+    Ok(new_session_req)
 }
