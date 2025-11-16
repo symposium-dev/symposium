@@ -13,7 +13,7 @@ use sacp::{
         NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
         RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
     },
-    Handled, JrConnectionCx, JrMessage, JrMessageHandler, MessageAndCx,
+    Handled, JrConnectionCx, JrMessageHandler, MessageAndCx,
 };
 use sacp_proxy::McpServiceRegistry;
 use sacp_rmcp::McpServiceRegistryRmcpExt;
@@ -40,46 +40,38 @@ impl JrMessageHandler for PermissionAutoApprover {
         &mut self,
         message: MessageAndCx,
     ) -> Result<Handled<MessageAndCx>, sacp::Error> {
-        match message {
-            MessageAndCx::Request(request, request_cx) => {
-                // Try to parse as RequestPermissionRequest
-                if let Some(req_result) =
-                    RequestPermissionRequest::parse_request(&request.method, &request.params)
-                {
-                    let req = req_result?;
+        sacp::util::MatchMessage::new(message)
+            .if_request(async |request: RequestPermissionRequest, request_cx| {
+                // Auto-approve all permissions for research sessions
+                if self.state.is_research_session(&request.session_id) {
+                    tracing::debug!(
+                        "Auto-approving permission request for research session {}",
+                        request.session_id
+                    );
 
-                    // Auto-approve all permissions for research sessions
-                    if self.state.is_research_session(&req.session_id) {
-                        tracing::debug!(
-                            "Auto-approving permission request for research session {}",
-                            req.session_id
-                        );
-
-                        // Select the first available option (typically "allow")
-                        let Some(first_option) = req.options.first() else {
-                            // No options provided - this shouldn't happen but handle gracefully
-                            tracing::warn!("No permission options provided for research session");
-                            return Ok(Handled::No(MessageAndCx::Request(request, request_cx)));
-                        };
-
-                        let response = RequestPermissionResponse {
-                            outcome: RequestPermissionOutcome::Selected {
-                                option_id: first_option.id.clone(),
-                            },
-                            meta: None,
-                        };
-
-                        request_cx.respond(serde_json::to_value(response).unwrap())?;
-                        return Ok(Handled::Yes);
+                    // Find the first option that looks like "allow" and use it.
+                    for option in &request.options {
+                        match option.kind {
+                            sacp::schema::PermissionOptionKind::AllowOnce
+                            | sacp::schema::PermissionOptionKind::AllowAlways => {
+                                request_cx.respond(RequestPermissionResponse {
+                                    outcome: RequestPermissionOutcome::Selected {
+                                        option_id: option.id.clone(),
+                                    },
+                                    meta: None,
+                                })?;
+                                return Ok(Handled::Yes);
+                            }
+                            sacp::schema::PermissionOptionKind::RejectOnce
+                            | sacp::schema::PermissionOptionKind::RejectAlways => {}
+                        }
                     }
                 }
-                Ok(Handled::No(MessageAndCx::Request(request, request_cx)))
-            }
-            MessageAndCx::Notification(_, _) => {
-                // Not interested in notifications
-                Ok(Handled::No(message))
-            }
-        }
+
+                Ok(Handled::No((request, request_cx)))
+            })
+            .await
+            .done()
     }
 }
 
