@@ -32,24 +32,14 @@ pub async fn run() -> Result<()> {
 
     tracing::info!("Starting rust-crate-sources-proxy");
 
-    // Create the MCP service registry
-    let mcp_registry = McpServiceRegistry::default()
-        .with_rmcp_server("rust-crate-sources", RustCrateSourcesService::new)?;
-
-    sacp::JrHandlerChain::new()
-        .name("rust-crate-sources-proxy")
-        .provide_mcp(mcp_registry)
-        .proxy()
-        .connect_to(sacp_tokio::Stdio)?
-        .serve()
-        .await?;
+    CrateSourcesProxy.serve(sacp_tokio::Stdio).await?;
 
     Ok(())
 }
 
 /// Handle a single research request by spawning a sub-agent session
 async fn handle_research_request(
-    _cx: JrConnectionCx,
+    cx: JrConnectionCx,
     request: user_facing::ResearchRequest,
 ) -> Result<(), sacp::Error> {
     tracing::info!(
@@ -101,9 +91,10 @@ impl Component for CrateSourcesProxy {
                 tracing::info!("Research request handler started");
 
                 while let Some(request) = research_rx.recv().await {
-                    if let Err(e) = handle_research_request(cx.clone(), request).await {
-                        tracing::error!("Research request failed: {}", e);
-                    }
+                    cx.spawn({
+                        let cx = cx.clone();
+                        async move { handle_research_request(cx, request).await }
+                    })?;
                 }
 
                 tracing::info!("Research request handler shutting down");
