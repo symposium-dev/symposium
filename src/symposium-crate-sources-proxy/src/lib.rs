@@ -20,7 +20,7 @@ use sacp_proxy::{AcpProxyExt, McpServiceRegistry};
 use sacp_rmcp::McpServiceRegistryRmcpExt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 
 /// Run the proxy as a standalone binary connected to stdio
@@ -62,6 +62,11 @@ impl Component for CrateSourcesProxy {
         let research_agent_mcp_registry = McpServiceRegistry::default()
             .with_rmcp_server("rust-crate-sources", RustCrateSourcesService::new)?;
 
+        // Create shared state for tracking active research sessions
+        let state = Arc::new(ResearchState {
+            active_research_session_ids: Mutex::new(FxHashSet::default()),
+        });
+
         sacp::JrHandlerChain::new()
             .name("rust-crate-sources-proxy")
             .provide_mcp(mcp_registry)
@@ -71,7 +76,9 @@ impl Component for CrateSourcesProxy {
                 while let Some(request) = research_rx.recv().await {
                     cx.spawn({
                         let cx = cx.clone();
-                        async move { research_agent::run(cx, request).await }
+                        let state = state.clone();
+                        let registry = research_agent_mcp_registry.clone();
+                        async move { research_agent::run(cx, state, registry, request).await }
                     })?;
                 }
 
@@ -95,10 +102,10 @@ impl Component for CrateSourcesProxy {
 /// Note: The oneshot::Sender for sending responses back is NOT stored here.
 /// It's owned by the handle_research_request function and used directly when
 /// return_response_to_user is called.
-struct ResearchState {
+pub struct ResearchState {
     /// Set of session IDs that correspond to active research requests.
     /// The main loop checks this to decide how to handle session-specific messages.
-    active_research_session_ids: Mutex<FxHashSet<String>>,
+    pub active_research_session_ids: Mutex<FxHashSet<String>>,
 }
 
 /// Parameters for the get_rust_crate_source tool
