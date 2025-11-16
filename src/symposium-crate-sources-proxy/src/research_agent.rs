@@ -8,6 +8,7 @@
 //! 4. Returns the findings to the original caller
 
 use crate::{crate_research_mcp, crate_sources_mcp, state::ResearchState};
+use indoc::formatdoc;
 use sacp::{
     schema::{
         NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
@@ -132,9 +133,10 @@ pub async fn run(
             Ok::<(), sacp::Error>(())
         }),
         pin!(async {
+            let research_prompt = build_research_prompt(&request.prompt);
             let prompt_request = PromptRequest {
                 session_id: session_id.clone(),
-                prompt: vec![request.prompt.clone().into()],
+                prompt: vec![research_prompt.into()],
                 meta: None,
             };
 
@@ -180,4 +182,28 @@ fn research_agent_session_request(
     };
     sub_agent_mcp_registry.add_registered_mcp_servers_to(&mut new_session_req);
     Ok(new_session_req)
+}
+
+/// Build the research prompt with context and instructions for the sub-agent.
+fn build_research_prompt(user_prompt: &str) -> String {
+    formatdoc! {"
+        <agent_instructions>
+        You are an expert Rust programmer who has been asked advice on a particular question.
+        You have available to you an MCP server that can fetch the sources for Rust crates.
+        When you have completed researching the answer to the question, you can invoke the
+        `return_response_to_user` tool. If you are answering a question with more than one
+        answer, you can invoke the tool more than once and all the invocations will be returned.
+
+        IMPORTANT: You are a *researcher*, you are not here to make changes. Do NOT edit files,
+        make git commits, or perform any other permanent changes.
+
+        The research prompt provided by the user is as follows. If you encounter critical
+        ambiguities, use the return_response_to_user tool to request a refined prompt and
+        describe the ambiguities you encountered.
+        </agent_instructions>
+
+        <research_prompt>
+        {user_prompt}
+        </research_prompt>
+    "}
 }

@@ -36,6 +36,9 @@ schemars = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+# String formatting
+indoc = "2.0"
+
 # Rust crate extraction dependencies
 regex = "1.10"
 semver = "1.0"
