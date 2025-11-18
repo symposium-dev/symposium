@@ -158,10 +158,26 @@ pub fn build_server(state: Arc<ResearchState>) -> sacp_proxy::McpServer {
     use sacp_proxy::McpServer;
 
     McpServer::new()
-        .instructions("Provides research capabilities for Rust crate source code via dedicated sub-agent sessions")
+        .instructions(
+            "Research Rust crate source code and APIs. Essential for working with unfamiliar crates.
+
+When to use:
+- Before using a new crate: get usage examples and understand the API
+- When compilation fails: verify actual method signatures, available fields, correct types
+- When implementation details matter: explore how features work internally
+- When documentation is unclear: see concrete code examples"
+        )
         .tool_fn(
             "rust_crate_query",
-            "Research a Rust crate's source code. Provide the crate name and describe what you want to know. A specialized research agent will examine the crate sources and return findings.",
+            "Research a Rust crate by examining its actual source code.
+
+Examples:
+- \"Show me how to create a tokio::runtime::Runtime and spawn tasks\"
+- \"What fields are available on serde::Deserialize? I'm getting a compilation error\"
+- \"How do I use async-trait with associated types?\"
+- \"What's the signature of reqwest::Client::get()?\"
+
+The research agent will examine the crate sources and return relevant code examples, signatures, and implementation details.",
             {
                 async move |input: RustCrateQueryParams, mcp_cx| {
                     let RustCrateQueryParams {
