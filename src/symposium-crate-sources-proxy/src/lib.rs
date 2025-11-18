@@ -3,7 +3,6 @@
 //! An ACP proxy that provides the `rust_crate_query` MCP tool for researching
 //! Rust crate sources via dedicated sub-agent sessions.
 
-mod crate_research_mcp;
 mod crate_sources_mcp;
 mod eg;
 mod research_agent;
@@ -43,7 +42,7 @@ impl Component for CrateSourcesProxy {
         // Create MCP service registry with the user-facing service
         let mcp_registry = McpServiceRegistry::default().with_mcp_server(
             "rust-crate-query",
-            crate_research_mcp::build_server(state.clone()),
+            research_agent::build_server(state.clone()),
         )?;
 
         sacp::JrHandlerChain::new()
