@@ -12,7 +12,7 @@ use indoc::formatdoc;
 use sacp::{
     schema::{
         NewSessionRequest, RequestPermissionOutcome, RequestPermissionRequest,
-        RequestPermissionResponse,
+        RequestPermissionResponse, SessionNotification,
     },
     Handled, JrMessageHandler, MessageAndCx,
 };
@@ -68,6 +68,19 @@ impl JrMessageHandler for PermissionAutoApprover {
                 }
 
                 Ok(Handled::No((request, request_cx)))
+            })
+            .await
+            .if_notification({
+                let state = self.state.clone();
+                async move |notification: SessionNotification, notification_cx| {
+                    // Log all notifications for research sessions
+                    if state.is_research_session(&notification.session_id) {
+                        tracing::debug!("Research session notification: {:?}", notification);
+                        return Ok(Handled::Yes);
+                    }
+
+                    Ok(Handled::No((notification, notification_cx)))
+                }
             })
             .await
             .done()
