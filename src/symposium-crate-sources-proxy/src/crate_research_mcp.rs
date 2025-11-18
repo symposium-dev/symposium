@@ -5,22 +5,13 @@
 //! The service coordinates with research_agent to spawn sub-sessions that
 //! investigate crate sources and return synthesized findings.
 
+use crate::{crate_sources_mcp, research_agent, state::ResearchState};
+use sacp::schema::{NewSessionResponse, PromptRequest, PromptResponse};
+use sacp_proxy::McpServiceRegistry;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, oneshot};
-
-/// Request to start a research session for a Rust crate
-#[derive(Debug)]
-pub struct ResearchRequest {
-    /// Name of the Rust crate to research
-    pub crate_name: String,
-    /// Optional semver range (e.g., "1.0", "^1.2", "~1.2.3")
-    pub crate_version: Option<String>,
-    /// Research prompt describing what information is needed
-    pub prompt: String,
-    /// Channel to send the research findings back
-    pub response_tx: oneshot::Sender<serde_json::Value>,
-}
+use std::{pin::pin, sync::Arc};
+use tokio::sync::mpsc;
 
 /// Parameters for the rust_crate_query tool
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
@@ -47,7 +38,7 @@ struct RustCrateQueryOutput {
 }
 
 /// Build the MCP server for crate research queries
-pub fn build_server(research_tx: mpsc::Sender<ResearchRequest>) -> sacp_proxy::McpServer {
+pub fn build_server(state: Arc<ResearchState>) -> sacp_proxy::McpServer {
     use sacp_proxy::McpServer;
 
     McpServer::new()
@@ -56,8 +47,7 @@ pub fn build_server(research_tx: mpsc::Sender<ResearchRequest>) -> sacp_proxy::M
             "rust_crate_query",
             "Research a Rust crate's source code. Provide the crate name and describe what you want to know. A specialized research agent will examine the crate sources and return findings.",
             {
-                let research_tx = research_tx.clone();
-                async move |input: RustCrateQueryParams, _context| {
+                async move |input: RustCrateQueryParams, mcp_cx| {
                     let RustCrateQueryParams {
                         crate_name,
                         crate_version,
@@ -71,27 +61,83 @@ pub fn build_server(research_tx: mpsc::Sender<ResearchRequest>) -> sacp_proxy::M
                     );
                     tracing::debug!("Research prompt: {}", prompt);
 
-                    // Create oneshot channel for the response
-                    let (response_tx, response_rx) = oneshot::channel();
+                    let cx = mcp_cx.connection_cx();
 
-                    // Send research request to background task
-                    let request = ResearchRequest {
-                        crate_name: crate_name.clone(),
-                        crate_version,
-                        prompt,
-                        response_tx,
+                    // Create a channel for receiving responses from the sub-agent's return_response_to_user calls
+                    let (response_tx, mut response_rx) = mpsc::channel::<serde_json::Value>(32);
+
+                    // Create a fresh MCP service registry for this research session
+                    let sub_agent_mcp_registry = McpServiceRegistry::default()
+                        .with_mcp_server(
+                            "rust-crate-sources",
+                            crate_sources_mcp::build_server(response_tx.clone()),
+                        )
+                        .map_err(|e| anyhow::anyhow!("Failed to create MCP registry: {}", e))?;
+
+                    // Spawn the sub-agent session with the per-instance MCP registry
+                    let NewSessionResponse {
+                        session_id,
+                        modes: _,
+                        meta: _,
+                    } = cx
+                        .send_request(research_agent::research_agent_session_request(
+                            sub_agent_mcp_registry,
+                        ).map_err(|e| anyhow::anyhow!("Failed to create session request: {}", e))?)
+                        .block_task()
+                        .await
+                        .map_err(|e| anyhow::anyhow!("Failed to spawn research session: {}", e))?;
+
+                    tracing::info!("Research session created: {}", session_id);
+
+                    // Register this session_id in shared state so permission requests are auto-approved
+                    state.register_session(&session_id);
+
+                    let mut responses = vec![];
+                    let (result, _) = futures::future::select(
+                        // Collect responses from the response channel
+                        pin!(async {
+                            while let Some(response) = response_rx.recv().await {
+                                responses.push(response);
+                            }
+                            Ok::<(), anyhow::Error>(())
+                        }),
+                        pin!(async {
+                            let research_prompt = research_agent::build_research_prompt(&prompt);
+                            let prompt_request = PromptRequest {
+                                session_id: session_id.clone(),
+                                prompt: vec![research_prompt.into()],
+                                meta: None,
+                            };
+
+                            let PromptResponse {
+                                stop_reason,
+                                meta: _,
+                            } = cx
+                                .send_request(prompt_request)
+                                .block_task()
+                                .await
+                                .map_err(|e| anyhow::anyhow!("Prompt request failed: {}", e))?;
+
+                            tracing::info!(
+                                "Research complete for session {session_id} ({stop_reason:?})"
+                            );
+
+                            Ok::<(), anyhow::Error>(())
+                        }),
+                    )
+                    .await
+                    .factor_first();
+                    result?;
+
+                    // Unregister the session now that research is complete
+                    state.unregister_session(&session_id);
+
+                    // Return the accumulated responses
+                    let response = if responses.len() == 1 {
+                        responses.pop().expect("singleton")
+                    } else {
+                        serde_json::Value::Array(responses)
                     };
-
-                    research_tx.send(request).await.map_err(|_| {
-                        anyhow::anyhow!("Failed to send research request to background task")
-                    })?;
-
-                    tracing::debug!("Research request sent, awaiting response");
-
-                    // Wait for the response from the research session
-                    let response = response_rx.await.map_err(|_| {
-                        anyhow::anyhow!("Research session closed without sending response")
-                    })?;
 
                     tracing::info!("Research complete for '{}'", crate_name);
 

@@ -14,7 +14,6 @@ use sacp::component::Component;
 use sacp_proxy::{AcpProxyExt, McpServiceRegistry};
 use state::ResearchState;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 
 /// Run the proxy as a standalone binary connected to stdio
 pub async fn run() -> Result<()> {
@@ -38,37 +37,19 @@ pub struct CrateSourcesProxy;
 
 impl Component for CrateSourcesProxy {
     async fn serve(self, client: impl Component) -> Result<(), sacp::Error> {
-        // Create channel for research requests
-        let (research_tx, mut research_rx) =
-            mpsc::channel::<crate_research_mcp::ResearchRequest>(32);
+        // Create shared state for tracking active research sessions
+        let state = Arc::new(ResearchState::new());
 
         // Create MCP service registry with the user-facing service
         let mcp_registry = McpServiceRegistry::default().with_mcp_server(
             "rust-crate-query",
-            crate_research_mcp::build_server(research_tx.clone()),
+            crate_research_mcp::build_server(state.clone()),
         )?;
-
-        // Create shared state for tracking active research sessions
-        let state = Arc::new(ResearchState::new());
 
         sacp::JrHandlerChain::new()
             .name("rust-crate-sources-proxy")
             .provide_mcp(mcp_registry)
             .with_handler(research_agent::PermissionAutoApprover::new(state.clone()))
-            .with_spawned(|cx| async move {
-                tracing::info!("Research request handler started");
-
-                while let Some(request) = research_rx.recv().await {
-                    cx.spawn({
-                        let cx = cx.clone();
-                        let state = state.clone();
-                        async move { research_agent::run(cx, state, request).await }
-                    })?;
-                }
-
-                tracing::info!("Research request handler shutting down");
-                Ok(())
-            })
             .proxy()
             .connect_to(client)?
             .serve()
