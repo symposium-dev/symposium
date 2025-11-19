@@ -14,7 +14,7 @@ sacp = { version = "1.0.0" }
 sacp-proxy = { version = "2.0.0" }
 sacp-tokio = { version = "1.0.0" }
 sacp-conductor = { version = "2.0.0" }
-sacp-rmcp = { version = "0.8" }
+sacp-rmcp = { version = "0.8.2" }
 jsonrpcmsg = "0.1.2"
 
 # Core async runtime
@@ -42,7 +42,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rmcp = { version = "0.8", features = ["server", "transport-io", "schemars"] }
 
 # Sparkle integration
-sparkle = { package = "sparkle-mcp", git = "https://github.com/nikomatsakis/sparkle.git", branch = "main" }
+sparkle = { package = "sparkle-mcp", version = "0.1.4" }
 
 # CLI parsing
 clap = { version = "4.0", features = ["derive"] }
