@@ -109,7 +109,9 @@ pub async fn run(args: &SymposiumArgs) -> Result<()> {
     tracing::info!("Starting Symposium ACP meta proxy");
 
     // Create conductor with lazy initialization
-    symposium_conductor(args)?.run(sacp_tokio::Stdio).await?;
+    symposium_conductor(args)?
+        .run(sacp_tokio::Stdio::new())
+        .await?;
 
     Ok(())
 }

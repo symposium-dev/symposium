@@ -26,7 +26,7 @@ pub async fn run() -> Result<()> {
 
     tracing::info!("Starting rust-crate-sources-proxy");
 
-    CrateSourcesProxy.serve(sacp_tokio::Stdio).await?;
+    CrateSourcesProxy.serve(sacp_tokio::Stdio::new()).await?;
 
     Ok(())
 }
