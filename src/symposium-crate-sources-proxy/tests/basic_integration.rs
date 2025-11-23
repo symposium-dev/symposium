@@ -29,12 +29,9 @@ async fn test_rust_crate_query_with_elizacp() -> Result<()> {
     // Create the component chain: CrateSourcesProxy -> ElizACP
     let proxy = CrateSourcesProxy;
 
-    // Create duplex streams for editor <-> conductor communication
-    let (editor_write, conductor_read) = duplex(8192);
-    let (conductor_write, editor_read) = duplex(8192);
-
-    // Spawn conductor with proxy + ElizACP chain
-    let conductor_handle = tokio::spawn(async move {
+    // Send a tool invocation to rust_crate_query
+    // ElizACP expects format: "Use tool <server>::<tool> with <json_params>"
+    let response = yopo::prompt(
         Conductor::new(
             "test-conductor".to_string(),
             vec![
@@ -42,21 +39,8 @@ async fn test_rust_crate_query_with_elizacp() -> Result<()> {
                 DynComponent::new(elizacp::ElizaAgent::new()),
             ],
             None,
-        )
-        .run(ByteStreams::new(
-            conductor_write.compat_write(),
-            conductor_read.compat(),
-        ))
-        .await
-    });
-
-    // Send a tool invocation to rust_crate_query
-    // ElizACP expects format: "Use tool <server>::<tool> with <json_params>"
-    let tool_call = r#"Use tool rust-crate-query::rust_crate_query with {"crate_name":"serde","prompt":"What is the signature of from_value?"}"#;
-
-    let response = yopo::prompt(
-        ByteStreams::new(editor_write.compat_write(), editor_read.compat()),
-        tool_call,
+        ),
+        r#"Use tool rust-crate-query::rust_crate_query with {"crate_name":"serde","prompt":"What is the signature of from_value?"}"#,
     )
     .await?;
 
@@ -64,9 +48,6 @@ async fn test_rust_crate_query_with_elizacp() -> Result<()> {
     // ElizACP will attempt to execute the tool but fail because it can't
     // actually spawn the research session, so we expect an error message
     expect![[r#"ERROR: connection closed: initialize response"#]].assert_eq(&response);
-
-    // Clean up
-    conductor_handle.await??;
 
     Ok(())
 }
