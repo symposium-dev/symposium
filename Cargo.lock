@@ -714,7 +714,9 @@ dependencies = [
 
 [[package]]
 name = "elizacp"
-version = "2.0.0"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c1dd06a314ff9540882eb73ec9dee6194a3c4ba431e918735d380a64f793c2f6"
 dependencies = [
  "agent-client-protocol-schema",
  "anyhow",
@@ -2465,6 +2467,8 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 [[package]]
 name = "sacp"
 version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "caa30546fadbc3ebcf8e828fd177bebd042e50f26870b85e882c432fbd7e328f"
 dependencies = [
  "agent-client-protocol-schema",
  "anyhow",
@@ -2576,6 +2580,8 @@ dependencies = [
 [[package]]
 name = "sacp-tokio"
 version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "da5859a958d40af219fc3dedfa9c58b7d94c35c5cfca2d1a09aab207e3b7c85e"
 dependencies = [
  "futures",
  "sacp",

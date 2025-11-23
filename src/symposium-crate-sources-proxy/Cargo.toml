@@ -49,6 +49,6 @@ sacp-tokio.workspace = true
 fxhash.workspace = true
 
 [dev-dependencies]
-elizacp = { path = "../../../symposium-acp/src/elizacp" }
+elizacp = "2.0.1"
 yopo = "1.0"
 expect-test = "1.5"

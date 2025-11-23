@@ -2,11 +2,9 @@
 
 use anyhow::Result;
 use expect_test::expect;
-use sacp::{ByteStreams, DynComponent};
+use sacp::DynComponent;
 use sacp_conductor::conductor::Conductor;
 use symposium_crate_sources_proxy::CrateSourcesProxy;
-use tokio::io::duplex;
-use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 /// Test that the rust_crate_query tool can be invoked and triggers a new session.
 ///

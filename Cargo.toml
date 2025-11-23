@@ -51,7 +51,3 @@ clap = { version = "4.0", features = ["derive"] }
 which = "6.0"
 home = "0.5"
 fxhash = "0.2.1"
-
-[patch.crates-io]
-sacp = { path = "../symposium-acp/src/sacp" }
-sacp-tokio = { path = "../symposium-acp/src/sacp-tokio" }
