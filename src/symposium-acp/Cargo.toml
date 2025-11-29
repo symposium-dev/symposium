@@ -26,5 +26,5 @@ tokio-util = { version = "0.7", features = ["compat"] }
 
 # Proxy components
 symposium-crate-sources-proxy = { path = "../symposium-crate-sources-proxy" }
-sacp-tee = { version = "0.1.2" }
-sparkle = { workspace = true }
+sacp-tee.workspace = true
+sparkle.workspace = true

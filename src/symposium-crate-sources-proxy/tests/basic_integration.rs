@@ -3,7 +3,7 @@
 use anyhow::Result;
 use expect_test::expect;
 use sacp::DynComponent;
-use sacp_conductor::conductor::Conductor;
+use sacp_conductor::Conductor;
 use symposium_crate_sources_proxy::CrateSourcesProxy;
 
 /// Test that the rust_crate_query tool can be invoked and triggers a new session.

@@ -49,6 +49,6 @@ sacp-tokio.workspace = true
 fxhash.workspace = true
 
 [dev-dependencies]
-elizacp = "3.0.0"
-yopo = "1.0"
+elizacp.workspace = true
+yopo.workspace = true
 expect-test = "1.5"

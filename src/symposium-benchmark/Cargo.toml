@@ -12,7 +12,7 @@ sacp.workspace = true
 sacp-tokio.workspace = true
 sacp-conductor.workspace = true
 sacp-tee.workspace = true
-yopo = { git = "https://github.com/nikomatsakis/symposium-acp" }
+yopo.workspace = true
 
 # Async runtime
 tokio.workspace = true

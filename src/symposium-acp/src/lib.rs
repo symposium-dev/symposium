@@ -15,7 +15,7 @@ use std::fs::File;
 use std::path::PathBuf;
 
 use anyhow::Result;
-use sacp_conductor::conductor::Conductor;
+use sacp_conductor::Conductor;
 
 #[derive(Debug, Clone, PartialEq, Eq, clap::Args)]
 pub struct SymposiumArgs {
@@ -138,9 +138,9 @@ pub fn symposium_conductor(args: &SymposiumArgs) -> Result<Conductor> {
                 symposium_crate_sources_proxy::CrateSourcesProxy {},
             ));
 
-            if args.sparkle {
-                components.push(sacp::DynComponent::new(sparkle::SparkleComponent::new()));
-            }
+            // if args.sparkle {
+            //     components.push(sacp::DynComponent::new(sparkle::SparkleComponent::new()));
+            // }
 
             // TODO: Add more components based on capabilities
             // - Check for IDE operation capabilities

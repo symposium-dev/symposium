@@ -12,12 +12,14 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-sacp = { git = "https://github.com/nikomatsakis/symposium-acp" }
-sacp-proxy = { git = "https://github.com/nikomatsakis/symposium-acp" }
-sacp-tokio = { git = "https://github.com/nikomatsakis/symposium-acp" }
-sacp-conductor = { git = "https://github.com/nikomatsakis/symposium-acp" }
-sacp-rmcp = { git = "https://github.com/nikomatsakis/symposium-acp" }
-sacp-tee = { git = "https://github.com/nikomatsakis/symposium-acp" }
+sacp = "2.0.0"
+sacp-proxy = "3.0.0"
+sacp-tokio = "2.1.0"
+sacp-conductor = "4.0.0"
+sacp-rmcp = "0.8.5"
+sacp-tee = "0.1.3"
+yopo = "1.3.0"
+elizacp = "3.0.2"
 jsonrpcmsg = "0.1.2"
 
 # Core async runtime
@@ -45,7 +47,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rmcp = { version = "0.8", features = ["server", "transport-io", "schemars"] }
 
 # Sparkle integration
-sparkle = { package = "sparkle-mcp", version = "0.1.4" }
+sparkle = { package = "sparkle-mcp", git = "https://github.com/nikomatsakis/sparkle" }
 
 # CLI parsing
 clap = { version = "4.0", features = ["derive"] }
