@@ -5,23 +5,54 @@ import { logger } from "./extension";
 /** Maximum number of files to include in context commands */
 const MAX_CONTEXT_FILES = 16000;
 
+/** Maximum number of symbols to include in context commands */
+const MAX_CONTEXT_SYMBOLS = 5000;
+
+/** Represents a workspace symbol for context */
+export interface ContextSymbol {
+  name: string;
+  kind: vscode.SymbolKind;
+  location: string; // relative file path
+  containerName?: string;
+  /** Full definition range (from DocumentSymbol.range) */
+  range: {
+    startLine: number;
+    startChar: number;
+    endLine: number;
+    endChar: number;
+  };
+  /** Selection range - just the symbol name (from DocumentSymbol.selectionRange) */
+  selectionRange?: {
+    startLine: number;
+    startChar: number;
+    endLine: number;
+    endChar: number;
+  };
+}
+
 /**
- * Maintains a live index of files in the workspace.
+ * Maintains a live index of files and symbols in the workspace.
  *
+ * Files:
  * - Initializes from `git ls-files` (respects .gitignore)
  * - Falls back to `workspace.findFiles` for non-git workspaces
  * - Uses FileSystemWatcher for live updates
  * - Tracks open editor tabs (even files outside workspace)
+ *
+ * Symbols:
+ * - Fetched via executeWorkspaceSymbolProvider with empty query
+ * - Results depend on language server support
  */
 export class WorkspaceFileIndex {
   #workspaceFolder: vscode.WorkspaceFolder;
   #files: Set<string> = new Set();
+  #symbols: ContextSymbol[] = [];
   #watcher: vscode.FileSystemWatcher | undefined;
   #openTabsDisposable: vscode.Disposable | undefined;
   #onDidChange = new vscode.EventEmitter<void>();
   #isGitRepo: boolean = false;
 
-  /** Fires when the file list changes */
+  /** Fires when the file or symbol list changes */
   readonly onDidChange = this.#onDidChange.event;
 
   constructor(workspaceFolder: vscode.WorkspaceFolder) {
@@ -43,6 +74,9 @@ export class WorkspaceFileIndex {
 
     // Track open tabs
     this.#setupOpenTabsTracking();
+
+    // Fetch workspace symbols (async, non-blocking)
+    this.#fetchWorkspaceSymbols();
 
     logger.info("fileIndex", "Initialized workspace file index", {
       workspace: this.#workspaceFolder.name,
@@ -81,9 +115,171 @@ export class WorkspaceFileIndex {
     return sorted;
   }
 
+  /** Get all indexed symbols */
+  getSymbols(): ContextSymbol[] {
+    return this.#symbols;
+  }
+
   /** Get the workspace folder this index is for */
   get workspaceFolder(): vscode.WorkspaceFolder {
     return this.#workspaceFolder;
+  }
+
+  /** Fetch workspace symbols using DocumentSymbol for full definition ranges */
+  async #fetchWorkspaceSymbols(): Promise<void> {
+    try {
+      const startTime = Date.now();
+      const files = this.getFiles();
+
+      // Filter to source files that are likely to have symbols
+      const sourceExtensions = new Set([
+        "ts",
+        "tsx",
+        "js",
+        "jsx",
+        "rs",
+        "py",
+        "go",
+        "java",
+        "c",
+        "cpp",
+        "h",
+        "hpp",
+        "cs",
+        "rb",
+        "swift",
+        "kt",
+        "scala",
+        "vue",
+        "svelte",
+      ]);
+
+      const sourceFiles = files.filter((f) => {
+        const ext = f.split(".").pop()?.toLowerCase();
+        return ext && sourceExtensions.has(ext);
+      });
+
+      logger.info("fileIndex", "Fetching DocumentSymbols for source files", {
+        totalFiles: files.length,
+        sourceFiles: sourceFiles.length,
+      });
+
+      const contextSymbols: ContextSymbol[] = [];
+      let filesProcessed = 0;
+      let filesWithSymbols = 0;
+
+      // Process files in parallel batches for performance
+      const batchSize = 10;
+      for (let i = 0; i < sourceFiles.length; i += batchSize) {
+        if (contextSymbols.length >= MAX_CONTEXT_SYMBOLS) {
+          break;
+        }
+
+        const batch = sourceFiles.slice(i, i + batchSize);
+        const results = await Promise.all(
+          batch.map((relativePath) => this.#fetchDocumentSymbols(relativePath)),
+        );
+
+        for (let j = 0; j < results.length; j++) {
+          const symbols = results[j];
+          const relativePath = batch[j];
+          filesProcessed++;
+
+          if (symbols && symbols.length > 0) {
+            filesWithSymbols++;
+            this.#collectSymbols(
+              symbols,
+              relativePath,
+              contextSymbols,
+              undefined,
+            );
+          }
+
+          if (contextSymbols.length >= MAX_CONTEXT_SYMBOLS) {
+            break;
+          }
+        }
+      }
+
+      this.#symbols = contextSymbols;
+
+      const elapsed = Date.now() - startTime;
+      logger.info("fileIndex", "Fetched DocumentSymbols", {
+        filesProcessed,
+        filesWithSymbols,
+        symbolCount: contextSymbols.length,
+        elapsed,
+      });
+
+      // Notify listeners
+      if (contextSymbols.length > 0) {
+        this.#onDidChange.fire();
+      }
+    } catch (err) {
+      logger.error("fileIndex", "Failed to fetch workspace symbols", {
+        error: err,
+      });
+    }
+  }
+
+  /** Fetch DocumentSymbol for a single file */
+  async #fetchDocumentSymbols(
+    relativePath: string,
+  ): Promise<vscode.DocumentSymbol[] | null> {
+    try {
+      const uri = vscode.Uri.joinPath(this.#workspaceFolder.uri, relativePath);
+      const symbols = await vscode.commands.executeCommand<
+        vscode.DocumentSymbol[]
+      >("vscode.executeDocumentSymbolProvider", uri);
+      return symbols || null;
+    } catch {
+      // File might not exist or no language server available
+      return null;
+    }
+  }
+
+  /** Recursively collect symbols from DocumentSymbol tree */
+  #collectSymbols(
+    symbols: vscode.DocumentSymbol[],
+    relativePath: string,
+    output: ContextSymbol[],
+    parentName: string | undefined,
+  ): void {
+    for (const sym of symbols) {
+      if (output.length >= MAX_CONTEXT_SYMBOLS) {
+        return;
+      }
+
+      // Build container name from parent
+      const containerName = parentName;
+
+      output.push({
+        name: sym.name,
+        kind: sym.kind,
+        location: relativePath,
+        containerName,
+        range: {
+          startLine: sym.range.start.line,
+          startChar: sym.range.start.character,
+          endLine: sym.range.end.line,
+          endChar: sym.range.end.character,
+        },
+        selectionRange: {
+          startLine: sym.selectionRange.start.line,
+          startChar: sym.selectionRange.start.character,
+          endLine: sym.selectionRange.end.line,
+          endChar: sym.selectionRange.end.character,
+        },
+      });
+
+      // Recurse into children
+      if (sym.children && sym.children.length > 0) {
+        const childParent = parentName
+          ? `${parentName}::${sym.name}`
+          : sym.name;
+        this.#collectSymbols(sym.children, relativePath, output, childParent);
+      }
+    }
   }
 
   /** Try to populate from git ls-files */

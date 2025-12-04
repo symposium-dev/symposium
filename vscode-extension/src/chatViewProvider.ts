@@ -249,6 +249,71 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
+   * Read symbol content for embedding in a prompt.
+   * Extracts the relevant lines from the file based on the symbol's range.
+   */
+  async #readSymbolContent(
+    filePath: string,
+    range: {
+      startLine: number;
+      startChar: number;
+      endLine: number;
+      endChar: number;
+    },
+    symbolName: string,
+    workspaceFolder: vscode.WorkspaceFolder,
+  ): Promise<{
+    absolutePath: string;
+    text: string;
+    mimeType: string;
+    startLine: number;
+    endLine: number;
+  } | null> {
+    // Resolve the path
+    let absolutePath: string;
+    if (filePath.startsWith("/")) {
+      absolutePath = filePath;
+    } else {
+      absolutePath = vscode.Uri.joinPath(workspaceFolder.uri, filePath).fsPath;
+    }
+
+    try {
+      const uri = vscode.Uri.file(absolutePath);
+      const content = await vscode.workspace.fs.readFile(uri);
+      const fullText = new TextDecoder().decode(content);
+      const lines = fullText.split("\n");
+
+      // Use the exact range from the LSP - no heuristic expansion
+      // LSP lines are 0-indexed
+      const startLine = range.startLine;
+      const endLine = range.endLine;
+
+      // Extract the relevant lines
+      const extractedLines = lines.slice(startLine, endLine + 1);
+      const text = extractedLines.join("\n");
+
+      // Determine MIME type
+      const ext = filePath.split(".").pop()?.toLowerCase() || "";
+      const mimeType = this.#getMimeType(ext);
+
+      return {
+        absolutePath,
+        text,
+        mimeType,
+        startLine: startLine + 1, // 1-indexed for display
+        endLine: endLine + 1,
+      };
+    } catch (err) {
+      logger.error("context", "Failed to read symbol content", {
+        path: absolutePath,
+        symbol: symbolName,
+        error: err,
+      });
+      return null;
+    }
+  }
+
+  /**
    * Get MIME type for a file extension.
    */
   #getMimeType(ext: string): string {
@@ -287,14 +352,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    */
   #sendFileListToTab(tabId: string, index: WorkspaceFileIndex): void {
     const files = index.getFiles();
+    const symbols = index.getSymbols();
     this.#sendToWebview({
       type: "available-context",
       tabId,
       files,
+      symbols,
     });
-    logger.info("context", "Sent file list to tab", {
+    logger.info("context", "Sent context to tab", {
       tabId,
       fileCount: files.length,
+      symbolCount: symbols.length,
     });
   }
 
@@ -466,6 +534,42 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               } catch (err) {
                 logger.error("context", "Failed to read context file", {
                   path: filePath,
+                  error: err,
+                });
+              }
+            }
+          }
+
+          // Add symbol context as EmbeddedResource blocks
+          if (message.contextSymbols && Array.isArray(message.contextSymbols)) {
+            for (const sym of message.contextSymbols) {
+              try {
+                const content = await this.#readSymbolContent(
+                  sym.location,
+                  sym.range,
+                  sym.name,
+                  tabConfig.workspaceFolder,
+                );
+                if (content !== null) {
+                  contentBlocks.push({
+                    type: "resource",
+                    resource: {
+                      uri: `file://${content.absolutePath}#L${content.startLine}-L${content.endLine}`,
+                      text: content.text,
+                      mimeType: content.mimeType,
+                    },
+                  });
+                  logger.info("context", "Added symbol context", {
+                    name: sym.name,
+                    path: sym.location,
+                    lines: `${content.startLine}-${content.endLine}`,
+                    size: content.text.length,
+                  });
+                }
+              } catch (err) {
+                logger.error("context", "Failed to read symbol context", {
+                  name: sym.name,
+                  path: sym.location,
                   error: err,
                 });
               }

@@ -408,26 +408,58 @@ const config: any = {
       promptText = prompt.command + (promptText ? " " + promptText : "");
     }
 
-    // Extract context (file references from @ mentions)
+    // Extract context (file and symbol references from @ mentions)
     // context can be string[] or QuickActionCommand[]
-    let contextFiles: string[] = [];
+    const contextFiles: string[] = [];
+    const contextSymbols: Array<{
+      name: string;
+      location: string;
+      range: {
+        startLine: number;
+        startChar: number;
+        endLine: number;
+        endChar: number;
+      };
+    }> = [];
+
     if (prompt.context && Array.isArray(prompt.context)) {
-      contextFiles = prompt.context
-        .map((item: any) => {
-          if (typeof item === "string") {
-            return item;
-          } else if (item.command) {
-            // QuickActionCommand format
-            return item.command;
+      for (const item of prompt.context) {
+        if (typeof item === "string") {
+          // Plain string - treat as file path
+          contextFiles.push(item);
+        } else if (item.id) {
+          // Has id field - check if it's an encoded symbol reference
+          try {
+            const decoded = JSON.parse(atob(item.id));
+            if (decoded.type === "symbol") {
+              contextSymbols.push({
+                name: decoded.name,
+                location: decoded.location,
+                range: decoded.range,
+              });
+            } else {
+              // Unknown type, treat command as file
+              if (item.command) contextFiles.push(item.command);
+            }
+          } catch {
+            // Not valid base64/JSON, treat command as file
+            if (item.command && !item.command.startsWith("#")) {
+              contextFiles.push(item.command);
+            }
           }
-          return null;
-        })
-        .filter(Boolean);
+        } else if (item.command && !item.command.startsWith("#")) {
+          // No id, command doesn't start with # - treat as file path
+          contextFiles.push(item.command);
+        }
+      }
     }
 
     console.log("Sending prompt text:", promptText);
     if (contextFiles.length > 0) {
       console.log("With context files:", contextFiles);
+    }
+    if (contextSymbols.length > 0) {
+      console.log("With context symbols:", contextSymbols);
     }
 
     // Send prompt to extension with tabId and context
@@ -436,6 +468,7 @@ const config: any = {
       tabId: tabId,
       prompt: promptText,
       contextFiles: contextFiles.length > 0 ? contextFiles : undefined,
+      contextSymbols: contextSymbols.length > 0 ? contextSymbols : undefined,
     });
 
     // Show loading/thinking indicator
@@ -612,47 +645,80 @@ window.addEventListener("message", (event: MessageEvent) => {
       quickActionCommands,
     });
   } else if (message.type === "available-context") {
-    // Convert file list to MynahUI contextCommands format
+    // Convert file list and symbols to MynahUI contextCommands format
     const files = message.files as string[];
+    const symbols = (message.symbols || []) as Array<{
+      name: string;
+      kind: number;
+      location: string;
+      containerName?: string;
+      range: {
+        startLine: number;
+        startChar: number;
+        endLine: number;
+        endChar: number;
+      };
+    }>;
 
-    // Helper to get file icon based on extension
-    const getFileIcon = (path: string): string => {
-      const ext = path.split(".").pop()?.toLowerCase();
-      switch (ext) {
-        case "ts":
-        case "tsx":
-        case "js":
-        case "jsx":
-          return "file";
-        case "rs":
-          return "file";
-        case "md":
-          return "file";
-        case "json":
-          return "file";
-        case "toml":
-        case "yaml":
-        case "yml":
-          return "file";
-        default:
-          return "file";
-      }
+    // Symbol kind names (subset of vscode.SymbolKind)
+    const symbolKindNames: Record<number, string> = {
+      4: "class",
+      5: "method",
+      6: "property",
+      8: "field",
+      11: "function",
+      12: "variable",
+      13: "constant",
+      22: "struct",
+      23: "enum",
+      10: "interface",
+      24: "type",
     };
 
-    // Group files - for now just one flat group
-    const contextCommands = [
-      {
+    // Build context command groups
+    const contextCommands = [];
+
+    // Files group
+    if (files.length > 0) {
+      contextCommands.push({
         groupName: "Files",
         commands: files.map((filePath) => ({
           command: filePath,
           description: filePath,
         })),
-      },
-    ];
+      });
+    }
+
+    // Symbols group
+    if (symbols.length > 0) {
+      contextCommands.push({
+        groupName: "Symbols",
+        commands: symbols.map((sym) => {
+          const kindName = symbolKindNames[sym.kind] || "symbol";
+          const displayName = sym.containerName
+            ? `${sym.containerName}::${sym.name}`
+            : sym.name;
+          // Encode symbol info as JSON for resolution
+          const symbolRef = JSON.stringify({
+            type: "symbol",
+            name: sym.name,
+            location: sym.location,
+            range: sym.range,
+          });
+          return {
+            // Use # prefix to distinguish symbols from files
+            command: `#${sym.name}`,
+            label: displayName,
+            description: `${kindName} in ${sym.location}`,
+            // Store full info for resolution (base64 to avoid special chars)
+            id: btoa(symbolRef),
+          };
+        }),
+      });
+    }
 
     console.log(
-      `Setting context commands: ${files.length} files`,
-      files.slice(0, 5),
+      `Setting context commands: ${files.length} files, ${symbols.length} symbols`,
     );
 
     // Update the tab store with the context commands
