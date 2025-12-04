@@ -78,7 +78,7 @@ export class WorkspaceFileIndex {
     // Fetch workspace symbols (async, non-blocking)
     this.#fetchWorkspaceSymbols();
 
-    logger.info("fileIndex", "Initialized workspace file index", {
+    logger.debug("fileIndex", "Initialized workspace file index", {
       workspace: this.#workspaceFolder.name,
       fileCount: this.#files.size,
       isGitRepo: this.#isGitRepo,
@@ -106,7 +106,7 @@ export class WorkspaceFileIndex {
     // Convert to sorted array and limit
     const sorted = Array.from(allFiles).sort();
     if (sorted.length > MAX_CONTEXT_FILES) {
-      logger.info("fileIndex", "Truncating file list", {
+      logger.debug("fileIndex", "Truncating file list", {
         total: sorted.length,
         limit: MAX_CONTEXT_FILES,
       });
@@ -159,7 +159,7 @@ export class WorkspaceFileIndex {
         return ext && sourceExtensions.has(ext);
       });
 
-      logger.info("fileIndex", "Fetching DocumentSymbols for source files", {
+      logger.debug("fileIndex", "Fetching DocumentSymbols for source files", {
         totalFiles: files.length,
         sourceFiles: sourceFiles.length,
       });
@@ -204,7 +204,7 @@ export class WorkspaceFileIndex {
       this.#symbols = contextSymbols;
 
       const elapsed = Date.now() - startTime;
-      logger.info("fileIndex", "Fetched DocumentSymbols", {
+      logger.debug("fileIndex", "Fetched DocumentSymbols", {
         filesProcessed,
         filesWithSymbols,
         symbolCount: contextSymbols.length,
@@ -292,7 +292,7 @@ export class WorkspaceFileIndex {
         { cwd, maxBuffer: 10 * 1024 * 1024 },
         (error, stdout) => {
           if (error) {
-            logger.info("fileIndex", "git ls-files failed, will use fallback", {
+            logger.debug("fileIndex", "git ls-files failed, will use fallback", {
               error: error.message,
             });
             resolve(false);
@@ -345,7 +345,7 @@ export class WorkspaceFileIndex {
       const relativePath = this.#getRelativePath(uri);
       if (relativePath && this.#shouldIncludeFile(relativePath)) {
         this.#files.add(relativePath);
-        logger.info("fileIndex", "File created", { path: relativePath });
+        logger.debug("fileIndex", "File created", { path: relativePath });
         this.#onDidChange.fire();
       }
     });
@@ -354,7 +354,7 @@ export class WorkspaceFileIndex {
       const relativePath = this.#getRelativePath(uri);
       if (relativePath && this.#files.has(relativePath)) {
         this.#files.delete(relativePath);
-        logger.info("fileIndex", "File deleted", { path: relativePath });
+        logger.debug("fileIndex", "File deleted", { path: relativePath });
         this.#onDidChange.fire();
       }
     });

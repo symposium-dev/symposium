@@ -77,14 +77,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Return existing actor if we have one for this config
     const existing = this.#configToActor.get(key);
     if (existing) {
-      logger.info("agent", "Reusing existing agent actor", {
+      logger.debug("agent", "Reusing existing agent actor", {
         configKey: key,
         agentName: config.agentName,
       });
       return existing;
     }
 
-    logger.info("agent", "Spawning new agent actor", {
+    logger.important("agent", "Spawning new agent actor", {
       configKey: key,
       agentName: config.agentName,
       components: config.components,
@@ -101,7 +101,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             this.#testResponseCapture.get(tabId)!.push(text);
           }
 
-          logger.info("perf", "Received chunk from agent", {
+          logger.debug("perf", "Received chunk from agent", {
             receiveTime,
             textLength: text.length,
           });
@@ -112,7 +112,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             timestamp: receiveTime,
           });
           const sendTime = Date.now();
-          logger.info("perf", "Sent chunk to webview", {
+          logger.debug("perf", "Sent chunk to webview", {
             sendTime,
             delay: sendTime - receiveTime,
           });
@@ -142,7 +142,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             (opt) => opt.kind === "allow_once",
           );
           if (allowOption) {
-            logger.info(
+            logger.debug(
               "approval",
               "Auto-approved (bypass permissions enabled)",
               {
@@ -480,7 +480,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       symbols,
       selection: this.#currentSelection,
     });
-    logger.info("context", "Sent context to tab", {
+    logger.debug("context", "Sent context to tab", {
       tabId,
       fileCount: files.length,
       symbolCount: symbols.length,
@@ -513,7 +513,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.html = this.#getHtmlForWebview(webviewView.webview);
 
-    logger.info("webview", "Webview resolved and created");
+    logger.debug("webview", "Webview resolved and created");
 
     // Set up selection tracking
     this.#setupSelectionTracking();
@@ -521,10 +521,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Handle webview visibility changes
     webviewView.onDidChangeVisibility(() => {
       if (webviewView.visible) {
-        logger.info("webview", "Webview became visible");
+        logger.debug("webview", "Webview became visible");
         this.#onWebviewVisible();
       } else {
-        logger.info("webview", "Webview became hidden");
+        logger.debug("webview", "Webview became hidden");
         this.#onWebviewHidden();
       }
     });
@@ -574,7 +574,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             );
             this.#sendFileListToTab(message.tabId, fileIndex);
 
-            logger.info("agent", "Created agent session", {
+            logger.important("agent", "Created agent session", {
               agentSessionId,
               tabId: message.tabId,
               config: config.describe(),
@@ -592,7 +592,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           break;
 
         case "prompt":
-          logger.info("agent", "Received prompt", {
+          logger.debug("agent", "Received prompt", {
             tabId: message.tabId,
             contextFiles: message.contextFiles,
           });
@@ -651,7 +651,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                       mimeType: content.mimeType,
                     },
                   });
-                  logger.info("context", "Added file context", {
+                  logger.debug("context", "Added file context", {
                     path: filePath,
                     size: content.text.length,
                   });
@@ -684,7 +684,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                       mimeType: content.mimeType,
                     },
                   });
-                  logger.info("context", "Added symbol context", {
+                  logger.debug("context", "Added symbol context", {
                     name: sym.name,
                     path: sym.location,
                     lines: `${content.startLine}-${content.endLine}`,
@@ -720,7 +720,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                   mimeType,
                 },
               });
-              logger.info("context", "Added selection context", {
+              logger.debug("context", "Added selection context", {
                 path: sel.relativePath,
                 lines: `${sel.startLine}-${sel.endLine}`,
                 size: sel.text.length,
@@ -728,7 +728,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             }
           }
 
-          logger.info("agent", "Sending prompt to agent", {
+          logger.debug("agent", "Sending prompt to agent", {
             agentSessionId,
             contentBlockCount: contentBlocks.length,
           });
@@ -748,13 +748,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         case "webview-ready":
           // Webview is initialized and ready to receive messages
-          logger.info("webview", "Webview ready - replaying queued messages");
+          logger.debug("webview", "Webview ready - replaying queued messages");
           this.#replayQueuedMessages();
           break;
 
         case "log":
           // Webview sending a log message
-          logger.info("webview", message.message, message.data);
+          logger.debug("webview", message.message, message.data);
           break;
 
         case "selected-tab-response":
@@ -785,7 +785,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                   agents,
                   vscode.ConfigurationTarget.Global,
                 );
-                logger.info("approval", "Bypass permissions enabled by user", {
+                logger.debug("approval", "Bypass permissions enabled by user", {
                   agent: pending.agentName,
                 });
               }
@@ -813,7 +813,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const remaining = queue.filter((msg) => msg.index > ackedIndex);
     this.#messageQueues.set(tabId, remaining);
 
-    logger.info("webview", "Message acknowledged", {
+    logger.debug("webview", "Message acknowledged", {
       tabId,
       ackedIndex,
       remainingInQueue: remaining.length,
@@ -846,7 +846,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const tabId = tabIds[0]; // Use first tab for now
 
-    logger.info("approval", "Requesting user approval", {
+    logger.debug("approval", "Requesting user approval", {
       approvalId,
       tabId,
       agent: agentName,
@@ -882,7 +882,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Replay all queued messages for all tabs
     for (const [tabId, queue] of this.#messageQueues.entries()) {
       for (const message of queue) {
-        logger.info("webview", "Replaying queued message", {
+        logger.debug("webview", "Replaying queued message", {
           tabId,
           messageIndex: message.index,
         });
@@ -918,13 +918,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     // Send if webview is visible
     if (this.#view.visible) {
-      logger.info("webview", "Sending message to webview", {
+      logger.debug("webview", "Sending message to webview", {
         tabId,
         messageIndex: index,
       });
       this.#view.webview.postMessage(indexedMessage);
     } else {
-      logger.info("webview", "Queued message (webview hidden)", {
+      logger.debug("webview", "Queued message (webview hidden)", {
         tabId,
         messageIndex: index,
       });
@@ -946,7 +946,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       this.#sendToWebview({ ...message, tabId });
     } else {
       // Queue until session mapping is established
-      logger.info("agent", "Queuing notification (session not yet mapped)", {
+      logger.debug("agent", "Queuing notification (session not yet mapped)", {
         agentSessionId,
         messageType: message.type,
       });
@@ -962,7 +962,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   #replayPendingSessionNotifications(agentSessionId: string, tabId: string) {
     const queue = this.#pendingSessionNotifications.get(agentSessionId);
     if (queue && queue.length > 0) {
-      logger.info("agent", "Replaying queued notifications", {
+      logger.debug("agent", "Replaying queued notifications", {
         agentSessionId,
         tabId,
         count: queue.length,
@@ -976,12 +976,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   #onWebviewVisible() {
     // Visibility change detected - webview will send "webview-ready" when initialized
-    logger.info("webview", "Webview became visible");
+    logger.debug("webview", "Webview became visible");
   }
 
   #onWebviewHidden() {
     // Nothing to do - messages stay queued until acked
-    logger.info("webview", "Webview became hidden");
+    logger.debug("webview", "Webview became hidden");
   }
 
   #getHtmlForWebview(webview: vscode.Webview) {
@@ -1064,7 +1064,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     // If no tab is selected, tell webview to create one and use that
     if (!tabId) {
-      logger.info("context", "No tab selected, requesting new tab creation");
+      logger.debug("context", "No tab selected, requesting new tab creation");
       tabId = await this.#requestNewTab();
       if (!tabId) {
         logger.error("context", "Failed to create new tab");
@@ -1079,7 +1079,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       selection,
     });
 
-    logger.info("context", "Added frozen selection to prompt", {
+    logger.debug("context", "Added frozen selection to prompt", {
       tabId,
       path: selection.relativePath,
       lines: `${selection.startLine}-${selection.endLine}`,
@@ -1208,7 +1208,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           );
           this.#sendFileListToTab(message.tabId, fileIndex);
 
-          logger.info("agent", "Agent session created", {
+          logger.important("agent", "Agent session created", {
             tabId: message.tabId,
             agentSessionId,
             agentName: config.agentName,
@@ -1223,7 +1223,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       case "prompt":
         try {
-          logger.info("agent", "Received prompt", { tabId: message.tabId });
+          logger.debug("agent", "Received prompt", { tabId: message.tabId });
 
           // Get the agent session for this tab
           const agentSessionId = this.#tabToAgentSession.get(message.tabId);
@@ -1251,7 +1251,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             return;
           }
 
-          logger.info("agent", "Sending prompt to agent", {
+          logger.debug("agent", "Sending prompt to agent", {
             tabId: message.tabId,
             agentSessionId,
           });
@@ -1287,7 +1287,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                 agents,
                 vscode.ConfigurationTarget.Global,
               );
-              logger.info("approval", "Bypass permissions enabled by user", {
+              logger.debug("approval", "Bypass permissions enabled by user", {
                 agent: pending.agentName,
               });
             }

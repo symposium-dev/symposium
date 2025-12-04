@@ -16,11 +16,11 @@ export function getChatProviderForTesting(): ChatViewProvider | undefined {
 }
 
 export function activate(context: vscode.ExtensionContext) {
-  logger.info("extension", "Symposium extension is now active");
+  logger.important("extension", "Symposium extension is now active");
 
   // Generate extension activation ID for this VSCode session
   const extensionActivationId = uuidv4();
-  logger.info("extension", "Generated extension activation ID", {
+  logger.debug("extension", "Generated extension activation ID", {
     extensionActivationId,
   });
 
@@ -84,7 +84,7 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("symposium.discussSelection", async () => {
       const editor = vscode.window.activeTextEditor;
       if (!editor || editor.selection.isEmpty) {
-        logger.info("command", "discussSelection: no selection");
+        logger.debug("command", "discussSelection: no selection");
         return;
       }
 
@@ -116,7 +116,7 @@ export function activate(context: vscode.ExtensionContext) {
         text,
       };
 
-      logger.info("command", "discussSelection triggered", {
+      logger.debug("command", "discussSelection triggered", {
         path: relativePath,
         lines: `${selectionData.startLine}-${selectionData.endLine}`,
       });

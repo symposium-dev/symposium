@@ -67,7 +67,7 @@ class SymposiumClient implements acp.Client {
     }
 
     // Default: auto-approve read operations, reject everything else
-    logger.info("approval", "Permission requested (default handler)", {
+    logger.debug("approval", "Permission requested (default handler)", {
       title: params.toolCall.title,
       kind: params.toolCall.kind,
     });
@@ -103,7 +103,7 @@ class SymposiumClient implements acp.Client {
       case "agent_message_chunk":
         if (update.content.type === "text") {
           const text = update.content.text;
-          logger.info("agent", "Text chunk", {
+          logger.debug("agent", "Text chunk", {
             length: text.length,
             text: text.length > 50 ? text.slice(0, 50) + "..." : text,
           });
@@ -111,7 +111,7 @@ class SymposiumClient implements acp.Client {
         }
         break;
       case "tool_call":
-        logger.info("agent", "Tool call", {
+        logger.debug("agent", "Tool call", {
           toolCallId: update.toolCallId,
           title: update.title,
           status: update.status,
@@ -133,7 +133,7 @@ class SymposiumClient implements acp.Client {
         // Look up cached title since updates don't include it
         const cachedTitle =
           update.title ?? this.toolCallTitles.get(update.toolCallId) ?? "";
-        logger.info("agent", "Tool call update", {
+        logger.debug("agent", "Tool call update", {
           toolCallId: update.toolCallId,
           title: cachedTitle,
           status: update.status,
@@ -161,7 +161,7 @@ class SymposiumClient implements acp.Client {
             inputHint: cmd.input?.hint,
           }),
         );
-        logger.info("agent", "Available commands update", {
+        logger.debug("agent", "Available commands update", {
           count: commands.length,
           commands: commands.map((c) => c.name),
         });
@@ -240,7 +240,7 @@ export class AcpAgentActor {
     // Build conductor arguments: agent <component1> <component2> ... <agent-command>
     const conductorArgs = ["agent", ...config.components, agentCommandStr];
 
-    logger.info("agent", "Spawning ACP agent", {
+    logger.important("agent", "Spawning ACP agent", {
       command: conductorCommand,
       args: conductorArgs,
     });
@@ -276,7 +276,7 @@ export class AcpAgentActor {
       },
     });
 
-    logger.info("agent", "Connected to ACP agent", {
+    logger.important("agent", "Connected to ACP agent", {
       protocolVersion: initResult.protocolVersion,
     });
   }
@@ -297,7 +297,7 @@ export class AcpAgentActor {
       mcpServers: [],
     });
 
-    logger.info("agent", "Created agent session", {
+    logger.important("agent", "Created agent session", {
       sessionId: result.sessionId,
       cwd: workspaceFolder,
     });
@@ -336,7 +336,7 @@ export class AcpAgentActor {
       (b) => b.type === "resource",
     ).length;
 
-    logger.info("agent", "Sending prompt to agent session", {
+    logger.debug("agent", "Sending prompt to agent session", {
       agentSessionId,
       promptLength: textContent.length,
       prompt: truncatedPrompt,
@@ -349,7 +349,7 @@ export class AcpAgentActor {
       prompt: contentBlocks,
     });
 
-    logger.info("agent", "Prompt completed", {
+    logger.debug("agent", "Prompt completed", {
       stopReason: promptResult.stopReason,
     });
 

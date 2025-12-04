@@ -23,6 +23,16 @@
     "configuration": {
       "title": "Symposium",
       "properties": {
+        "symposium.logLevel": {
+          "type": "string",
+          "enum": [
+            "error",
+            "info",
+            "debug"
+          ],
+          "default": "error",
+          "description": "Log verbosity level. 'error' shows only errors and agent connections, 'info' adds general activity, 'debug' shows everything."
+        },
         "symposium.agents": {
           "type": "object",
           "patternProperties": {
