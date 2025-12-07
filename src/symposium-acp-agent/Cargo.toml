@@ -1,0 +1,22 @@
+[package]
+name = "symposium-acp-agent"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "symposium-acp-agent"
+path = "src/main.rs"
+
+[dependencies]
+sacp-conductor.workspace = true
+sacp.workspace = true
+sacp-tokio.workspace = true
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { workspace = true }
+
+# Symposium components
+symposium-crate-sources-proxy = { path = "../symposium-crate-sources-proxy" }
+sparkle.workspace = true

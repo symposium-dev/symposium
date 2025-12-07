@@ -1,8 +1,8 @@
-//! Symposium ACP Meta Proxy
+//! Symposium ACP Proxy
 //!
-//! This is the main Symposium binary that acts as an ACP proxy. It receives
-//! initialization from an editor, examines the capabilities provided, and uses
-//! sacp-conductor to orchestrate a dynamic chain of component proxies.
+//! This crate provides the Symposium proxy functionality. It sits between an
+//! editor and an agent, using sacp-conductor to orchestrate a dynamic chain
+//! of component proxies that enrich the agent's capabilities.
 //!
 //! Architecture:
 //! 1. Receive Initialize request from editor

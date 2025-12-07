@@ -250,7 +250,7 @@ Each `rust_crate_query` call creates exactly one research session and expects ex
 
 ## Integration with Symposium
 
-The component is registered with the conductor in `symposium-acp/src/lib.rs`:
+The component is registered with the conductor in `symposium-acp-proxy/src/lib.rs`:
 
 ```rust
 components.push(sacp::DynComponent::new(

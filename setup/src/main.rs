@@ -39,7 +39,7 @@ struct Args {
     #[arg(long)]
     all: bool,
 
-    /// Install ACP binaries (sacp-conductor, elizacp, sacp-tee, symposium-acp)
+    /// Install ACP binaries (sacp-conductor, elizacp, sacp-tee, symposium-acp-proxy)
     #[arg(long)]
     acp: bool,
 
@@ -103,8 +103,8 @@ fn main() -> Result<()> {
 
     if configure_zed {
         let conductor_path = acp::get_binary_path("sacp-conductor")?;
-        let symposium_acp_path = acp::get_binary_path("symposium-acp")?;
-        zed::configure_zed(&conductor_path, &symposium_acp_path, args.dry_run)?;
+        let symposium_acp_proxy_path = acp::get_binary_path("symposium-acp-proxy")?;
+        zed::configure_zed(&conductor_path, &symposium_acp_proxy_path, args.dry_run)?;
         println!();
     }
 
@@ -146,7 +146,7 @@ fn print_completion_message(
         println!("   • sacp-conductor");
         println!("   • elizacp");
         println!("   • sacp-tee");
-        println!("   • symposium-acp");
+        println!("   • symposium-acp-proxy");
         println!();
     }
 

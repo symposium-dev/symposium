@@ -1,29 +1,49 @@
 # Implementation Overview
 
-Symposium appears to external clients as a single ACP proxy, but internally uses a **conductor** to orchestrate a dynamic chain of component proxies. This architecture allows Symposium to adapt to different client capabilities and provide consistent functionality regardless of what the editor or agent natively supports.
+Symposium uses a **conductor** to orchestrate a dynamic chain of component proxies that enrich agent capabilities. This architecture adapts to different client capabilities and provides consistent functionality regardless of what the editor or agent natively supports.
 
-## Architecture
+## Two Deployment Modes
 
-### External View
+Symposium provides two binaries for different deployment scenarios:
 
-From the outside, Symposium is a standard ACP proxy that sits between an editor and an agent:
+### Proxy Mode (`symposium-acp-proxy`)
+
+Sits between an editor and an existing agent, enriching the connection:
 
 ```mermaid
 flowchart LR
-    Editor --> Symposium --> Agent
+    Editor --> Proxy[symposium-acp-proxy] --> Agent
 ```
 
-### Internal Structure
+Use this when the editor spawns agents separately and you want to insert Symposium's capabilities in between.
 
-Internally, Symposium runs a [conductor](https://symposium-dev.github.io/symposium-acp/) in proxy mode that orchestrates multiple component proxies:
+### Agent Mode (`symposium-acp-agent`)
+
+Acts as a complete agent that wraps a downstream agent:
 
 ```mermaid
 flowchart LR
-    Editor --> S[Symposium Conductor]
+    Editor --> Agent[symposium-acp-agent] --> DownstreamAgent[claude-code, etc.]
+```
+
+Use this when you want a single binary that editors can spawn directly. This is ideal for Zed extensions and similar scenarios where the editor expects to spawn a single agent binary.
+
+Example:
+```bash
+symposium-acp-agent -- npx -y @zed-industries/claude-code-acp
+```
+
+## Internal Structure
+
+Both modes use a [conductor](https://symposium-dev.github.io/symposium-acp/) to orchestrate multiple component proxies:
+
+```mermaid
+flowchart LR
+    Input[Editor/stdin] --> S[Symposium Conductor]
     S --> C1[Component 1]
     C1 --> A1[Adapter 1]
     A1 --> C2[Component 2]
-    C2 --> Agent
+    C2 --> Output[Agent/stdout]
 ```
 
 The conductor dynamically builds this chain based on what capabilities the editor and agent provide.

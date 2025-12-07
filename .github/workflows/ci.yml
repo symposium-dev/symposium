@@ -99,7 +99,7 @@ jobs:
         run: |
           cargo install --force elizacp
           cargo install --force sacp-conductor
-          cargo install --force --path src/symposium-acp
+          cargo install --force --path src/symposium-acp-proxy
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
