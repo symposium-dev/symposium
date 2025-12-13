@@ -61,6 +61,7 @@ async fn main() -> Result<()> {
     }
 
     // Build a shell command string from the args
+    tracing::debug!("agent command: {:?}", cli.agent);
     let agent: AcpAgent = AcpAgent::from_args(&cli.agent)?;
 
     // Run Symposium with the agent as the downstream component
