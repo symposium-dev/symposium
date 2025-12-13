@@ -838,6 +838,13 @@ export interface ConfigOptions {
   typewriterStackTime?: number;
   typewriterMaxWordTime?: number;
   disableTypewriterAnimation?: boolean;
+  /**
+   * When true, sending the prompt requires a modifier key:
+   * - Shift+Enter or Cmd/Ctrl+Enter sends the prompt
+   * - Enter alone inserts a newline
+   * When false (default), Enter sends and Shift+Enter inserts newline.
+   */
+  requireModifierToSendPrompt?: boolean;
 }
 
 export interface ConfigModel extends ConfigOptions {

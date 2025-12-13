@@ -416,9 +416,26 @@ export class ChatPromptInput {
           cancelEvent(e);
           this.clearTextArea(true);
         }
-      } else if (e.key === KeyMap.ENTER &&
-        ((!e.isComposing && !e.shiftKey && !e.ctrlKey) ||
-        (e.isComposing && (e.shiftKey)))) {
+      } else if (e.key === KeyMap.ENTER && !e.isComposing) {
+        const requireModifier = Config.getInstance().config.requireModifierToSendPrompt === true;
+        const hasModifier = e.shiftKey || e.metaKey || e.ctrlKey;
+
+        if (requireModifier) {
+          // Modifier required: Shift/Cmd/Ctrl+Enter sends, plain Enter is newline
+          if (hasModifier) {
+            cancelEvent(e);
+            this.sendPrompt();
+          }
+          // Plain Enter: let it through to insert newline
+        } else {
+          // Default behavior: Enter sends, Shift+Enter is newline
+          if (!e.shiftKey && !e.ctrlKey) {
+            cancelEvent(e);
+            this.sendPrompt();
+          }
+        }
+      } else if (e.key === KeyMap.ENTER && e.isComposing && e.shiftKey) {
+        // IME composition: Shift+Enter sends
         cancelEvent(e);
         this.sendPrompt();
       } else if (
