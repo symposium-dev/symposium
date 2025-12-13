@@ -3,6 +3,7 @@ import * as acp from "@agentclientprotocol/sdk";
 import { AcpAgentActor, ToolCallInfo, SlashCommandInfo } from "./acpAgentActor";
 import { AgentConfiguration } from "./agentConfiguration";
 import { WorkspaceFileIndex } from "./workspaceFileIndex";
+import { getConductorCommand } from "./binaryPath";
 import { logger } from "./extension";
 import { v4 as uuidv4 } from "uuid";
 
@@ -58,12 +59,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     { resolve: (tabId: string | undefined) => void }
   > = new Map();
 
+  #extensionContext: vscode.ExtensionContext;
+
   constructor(
     extensionUri: vscode.Uri,
     context: vscode.ExtensionContext,
     extensionActivationId: string,
   ) {
     this.#extensionUri = extensionUri;
+    this.#extensionContext = context;
     this.#extensionActivationId = extensionActivationId;
   }
 
@@ -87,7 +91,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     logger.important("agent", "Spawning new agent actor", {
       configKey: key,
       agentName: config.agentName,
-      components: config.components,
     });
 
     // Create a new actor with callbacks
@@ -191,8 +194,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       },
     });
 
-    // Initialize the actor
-    await actor.initialize(config);
+    // Initialize the actor with the conductor command (bundled or from PATH)
+    const conductorCommand = getConductorCommand(this.#extensionContext);
+    await actor.initialize(config, conductorCommand);
 
     // Store it in the map
     this.#configToActor.set(key, actor);
@@ -1212,7 +1216,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             tabId: message.tabId,
             agentSessionId,
             agentName: config.agentName,
-            components: config.components,
           });
         } catch (err) {
           logger.error("agent", "Failed to create agent session", {

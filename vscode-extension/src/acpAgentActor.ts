@@ -205,16 +205,15 @@ export class AcpAgentActor {
 
   /**
    * Initialize the ACP connection by spawning the agent process
+   * @param config - Agent configuration
+   * @param conductorCommand - Path to the conductor/agent binary
    */
-  async initialize(config: AgentConfiguration): Promise<void> {
+  async initialize(
+    config: AgentConfiguration,
+    conductorCommand: string,
+  ): Promise<void> {
     // Read settings to build the command
     const vsConfig = vscode.workspace.getConfiguration("symposium");
-
-    // Get conductor command
-    const conductorCommand = vsConfig.get<string>(
-      "conductor",
-      "sacp-conductor",
-    );
 
     // Get the agent definition
     const agents = vsConfig.get<
@@ -231,14 +230,12 @@ export class AcpAgentActor {
       );
     }
 
-    // Build the agent command string (command + args)
+    // Build the agent command with its arguments
     const agentCmd = agent.command;
     const agentArgs = agent.args || [];
-    const agentCommandStr =
-      agentArgs.length > 0 ? `${agentCmd} ${agentArgs.join(" ")}` : agentCmd;
 
-    // Build conductor arguments: agent <component1> <component2> ... <agent-command>
-    const conductorArgs = ["agent", ...config.components, agentCommandStr];
+    // Build conductor arguments: -- <agent-command> [agent-args...]
+    const conductorArgs = ["--", agentCmd, ...agentArgs];
 
     logger.important("agent", "Spawning ACP agent", {
       command: conductorCommand,

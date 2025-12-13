@@ -3,25 +3,21 @@ import * as vscode from "vscode";
 /**
  * AgentConfiguration - Identifies a unique agent setup
  *
- * Consists of the base agent name, enabled component names, and workspace folder.
+ * Consists of the base agent name and workspace folder.
  * Tabs with the same configuration can share an ACP agent process.
  */
 
 export class AgentConfiguration {
   constructor(
     public readonly agentName: string,
-    public readonly components: string[],
     public readonly workspaceFolder: vscode.WorkspaceFolder,
-  ) {
-    // Sort components for consistent comparison
-    this.components = [...components].sort();
-  }
+  ) {}
 
   /**
    * Get a unique key for this configuration
    */
   key(): string {
-    return `${this.agentName}:${this.components.join(",")}:${this.workspaceFolder.uri.fsPath}`;
+    return `${this.agentName}:${this.workspaceFolder.uri.fsPath}`;
   }
 
   /**
@@ -35,10 +31,7 @@ export class AgentConfiguration {
    * Get a human-readable description
    */
   describe(): string {
-    if (this.components.length === 0) {
-      return this.agentName;
-    }
-    return `${this.agentName} + ${this.components.length} component${this.components.length > 1 ? "s" : ""}`;
+    return this.agentName;
   }
 
   /**
@@ -51,16 +44,7 @@ export class AgentConfiguration {
     const config = vscode.workspace.getConfiguration("symposium");
 
     // Get current agent
-    const currentAgentName = config.get<string>("currentAgent", "ElizACP");
-
-    // Get enabled components
-    const components = config.get<
-      Record<string, { command: string; args?: string[]; disabled?: boolean }>
-    >("components", {});
-
-    const enabledComponents = Object.keys(components).filter(
-      (name) => !components[name].disabled,
-    );
+    const currentAgentName = config.get<string>("currentAgent", "Claude Code");
 
     // Determine workspace folder
     let folder = workspaceFolder;
@@ -82,6 +66,6 @@ export class AgentConfiguration {
       }
     }
 
-    return new AgentConfiguration(currentAgentName, enabledComponents, folder);
+    return new AgentConfiguration(currentAgentName, folder);
   }
 }

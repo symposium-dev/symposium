@@ -88,50 +88,8 @@
         },
         "symposium.currentAgent": {
           "type": "string",
-          "default": "ElizACP",
+          "default": "Claude Code",
           "description": "Name of the currently selected agent"
-        },
-        "symposium.conductor": {
-          "type": "string",
-          "default": "sacp-conductor",
-          "description": "Command to launch the ACP conductor"
-        },
-        "symposium.components": {
-          "type": "object",
-          "patternProperties": {
-            ".*": {
-              "type": "object",
-              "properties": {
-                "command": {
-                  "type": "string",
-                  "description": "Command to launch the component"
-                },
-                "args": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  },
-                  "default": [],
-                  "description": "Arguments to pass to the component command"
-                },
-                "disabled": {
-                  "type": "boolean",
-                  "default": false,
-                  "description": "Whether this component is disabled"
-                }
-              },
-              "required": [
-                "command"
-              ]
-            }
-          },
-          "default": {
-            "symposium-acp-proxy": {
-              "command": "symposium-acp-proxy",
-              "args": []
-            }
-          },
-          "description": "Configured ACP components (keyed by component name)"
         }
       }
     },

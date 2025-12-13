@@ -18,11 +18,15 @@ pub fn build_and_install_extension(repo_root: &Path, dry_run: bool) -> Result<()
     println!("📦 Building VSCode extension...");
 
     if dry_run {
+        println!("   Would copy binary to extension bin/ directory");
         println!("   Would install dependencies (npm install)");
         println!("   Would build extension (npm run webpack-dev)");
         println!("   Would package extension (npx vsce package)");
         println!("   Would install extension (code --install-extension)");
     } else {
+        // Copy the symposium-acp-agent binary into the extension
+        copy_binary_to_extension(repo_root, &extension_dir)?;
+
         // Install dependencies
         install_dependencies(&extension_dir)?;
 
@@ -37,6 +41,55 @@ pub fn build_and_install_extension(repo_root: &Path, dry_run: bool) -> Result<()
 
         println!("✅ VSCode extension installed successfully!");
     }
+    Ok(())
+}
+
+/// Copy the symposium-acp-agent binary into the extension's bin directory
+fn copy_binary_to_extension(repo_root: &Path, extension_dir: &Path) -> Result<()> {
+    println!("📋 Copying symposium-acp-agent binary...");
+
+    // Determine the binary name based on platform
+    let binary_name = if cfg!(target_os = "windows") {
+        "symposium-acp-agent.exe"
+    } else {
+        "symposium-acp-agent"
+    };
+
+    // Source: target/release or target/debug
+    let release_binary = repo_root.join("target").join("release").join(binary_name);
+    let debug_binary = repo_root.join("target").join("debug").join(binary_name);
+
+    let source = if release_binary.exists() {
+        release_binary
+    } else if debug_binary.exists() {
+        debug_binary
+    } else {
+        return Err(anyhow!(
+            "❌ symposium-acp-agent binary not found.\n   Please run 'cargo build -p symposium-acp-agent' first."
+        ));
+    };
+
+    // Destination: vscode-extension/bin/<platform>-<arch>/
+    let platform = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    let platform_dir = format!("{}-{}", platform, arch);
+
+    let dest_dir = extension_dir.join("bin").join(&platform_dir);
+    std::fs::create_dir_all(&dest_dir)
+        .with_context(|| format!("Failed to create directory: {}", dest_dir.display()))?;
+
+    let dest = dest_dir.join(binary_name);
+
+    std::fs::copy(&source, &dest).with_context(|| {
+        format!(
+            "Failed to copy binary from {} to {}",
+            source.display(),
+            dest.display()
+        )
+    })?;
+
+    println!("   Copied {} to {}", source.display(), dest.display());
+
     Ok(())
 }
 

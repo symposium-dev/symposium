@@ -58,3 +58,6 @@ clap = { version = "4.0", features = ["derive"] }
 which = "6.0"
 home = "0.5"
 fxhash = "0.2.1"
+
+[patch.crates-io]
+sparkle-mcp = { path = "../sparkle/sparkle-mcp" }
