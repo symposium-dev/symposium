@@ -1,0 +1,50 @@
+.mynah-overlay > .mynah-overlay-container > .mynah-overlay-inner-container > .mynah-chat-prompt-context-tooltip {
+    display: flex;
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    flex-flow: row nowrap;
+    align-items: flex-start;
+    justify-content: flex-start;
+    overflow: hidden;
+    padding: var(--mynah-sizing-2) var(--mynah-sizing-3);
+    color: var(--mynah-color-text-default);
+    border-radius: var(--mynah-input-radius);
+    transition: var(--mynah-short-transition-rev);
+    gap: var(--mynah-sizing-3);
+
+    > .mynah-ui-icon {
+        margin-top: var(--mynah-sizing-half);
+        font-size: var(--mynah-font-size-large);
+        color: var(--mynah-color-text-default);
+    }
+
+    > .mynah-chat-prompt-context-tooltip-container {
+        flex: 1;
+        display: flex;
+        position: relative;
+        box-sizing: border-box;
+        flex-flow: column nowrap;
+        align-items: flex-start;
+        justify-content: flex-start;
+        overflow: hidden;
+        gap: var(--mynah-sizing-1);
+
+        > .mynah-chat-prompt-context-tooltip-name {
+            font-family: var(--mynah-font-family);
+            font-weight: bold;
+            flex: 0 1 0%;
+            width: 100%;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        > .mynah-chat-prompt-context-tooltip-description {
+            color: var(--mynah-color-text-weak);
+            flex: 1 0 100%;
+            width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+    }
+}

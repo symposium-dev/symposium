@@ -1,0 +1,98 @@
+/*!
+ * Copyright 2022 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+.mynah-form-item-pill-box-wrapper {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    padding: var(--mynah-sizing-2);
+    border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+    background-color: var(--mynah-card-bg);
+    border-radius: var(--mynah-input-radius);
+    min-height: calc(var(--mynah-sizing-6) + var(--mynah-sizing-half));
+    box-sizing: border-box;
+    transform: translateZ(0px);
+
+    &:focus-within {
+        box-shadow: 0 0 0 2px var(--mynah-color-border-focus-shadow);
+    }
+}
+
+.mynah-form-item-pill-box-pills-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.mynah-form-item-pill-box-input {
+    border: none;
+    outline: none;
+    background: transparent;
+    width: 100%;
+    resize: none;
+    font-family: var(--mynah-font-family);
+    font-size: var(--mynah-font-size-medium);
+    color: var(--mynah-color-text-input);
+
+    &::placeholder {
+        color: var(--mynah-color-text-input-placeholder);
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        overflow: hidden;
+    }
+}
+
+.mynah-form-item-pill {
+    display: inline-flex;
+    align-items: center;
+    background-color: var(--mynah-color-primary-light);
+    border-radius: 16px;
+    padding: 4px 8px;
+    max-width: 100%;
+
+    .mynah-form-item-pill-text {
+        margin-right: 4px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 200px;
+    }
+
+    .mynah-form-item-pill-remove {
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 14px;
+        height: 14px;
+        opacity: 0.7;
+
+        &:hover {
+            opacity: 1;
+        }
+    }
+}
+
+[disabled] .mynah-form-item-pill-box-wrapper,
+.mynah-form-item-pill-box-wrapper[disabled] {
+    &::after {
+        content: '';
+        position: absolute;
+        top: calc(var(--mynah-border-width) * -1);
+        left: calc(var(--mynah-border-width) * -1);
+        right: calc(var(--mynah-border-width) * -1);
+        bottom: calc(var(--mynah-border-width) * -1);
+        background-color: var(--mynah-color-text-disabled);
+        border-radius: var(--mynah-input-radius);
+        z-index: var(--mynah-z-sub);
+        opacity: 10%;
+    }
+
+    .mynah-form-item-pill-box-input {
+        pointer-events: none;
+        opacity: 50%;
+    }
+}

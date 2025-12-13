@@ -1,0 +1,4 @@
+* {
+    scrollbar-gutter: unset;
+    scrollbar-color: color-mix(in hsl, var(--mynah-card-bg-alternate), hsla(0, 0%, 100%, 0.2) 90%) transparent;
+}

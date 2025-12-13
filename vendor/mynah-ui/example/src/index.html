@@ -1,0 +1,55 @@
+<html theme="base-light">
+    <head>
+        <meta name="viewport" content="width=device-width, height=device-height, initial-scale=1" />
+    </head>
+
+    <body>
+        <input class="hidden" id="theme-editor-enabled" type="checkbox" checked />
+        <input class="hidden" id="console-enabled" type="checkbox" checked />
+        <div class="mynah-extension-showcase-grid">
+            <div id="header-bar">
+                <div class="mynah-ui-example-input">
+                    <div class="mynah-ui-example-input-wrapper">
+                        <select id="theme-selector">
+                            <option disabled>## Custom Themes ##</option>
+                            <option selected value="base-light">LIGHT Theme</option>
+                            <option value="base-dark">DARK Theme</option>
+                            <option disabled>## VSCODE Light Themes ##</option>
+                            <option value="light+">Light +</option>
+                            <option value="light+tweaked">Light + Tweaked</option>
+                            <option value="light-orange">Light Orange</option>
+                            <option value="light-quiet">Light Quiet</option>
+                            <option value="light-solarized">Light Solarized</option>
+                            <option disabled>## VSCODE Dark Themes ##</option>
+                            <option value="dark-plus">Dark +</option>
+                            <option value="dark+tweaked">Dark + Tweaked</option>
+                            <option value="dark-abyss">Dark Abyss</option>
+                            <option value="dark-ayu-mirage">Dark Ayu Mirage</option>
+                            <option value="dark-dracula">Dark Dracula</option>
+                            <option value="dark-solarized">Dark Solarized</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="mynah-ui-example-input">
+                    <div class="mynah-ui-example-input-wrapper">
+                        <label for="theme-editor-enabled">Theme Builder</label>
+                    </div>
+                </div>
+                <div class="mynah-ui-example-input">
+                    <div class="mynah-ui-example-input-wrapper">
+                        <label for="console-enabled">Console</label>
+                    </div>
+                </div>
+            </div>
+            <div id="theme-editor"></div>
+            <div id="mynah-ui-panel">
+                <div id="amzn-mynah-website-wrapper"></div>
+            </div>
+            <div id="console">
+                <div id="console-content"></div>
+            </div>
+        </div>
+
+        <style id="custom-style"></style>
+    </body>
+</html>

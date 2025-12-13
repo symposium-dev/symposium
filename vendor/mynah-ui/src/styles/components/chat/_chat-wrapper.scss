@@ -1,0 +1,290 @@
+@import '../../mixins';
+@import '../../scss-variables';
+
+.mynah-chat-prompt-overlay-buttons-container {
+    display: inline-flex;
+    flex-flow: column nowrap;
+    gap: var(--mynah-sizing-2);
+    justify-content: flex-start;
+    align-items: flex-start;
+}
+.mynah-chat-wrapper {
+    position: relative;
+    width: inherit;
+    max-width: inherit;
+    height: 100%;
+    flex: 1 0 100%;
+    flex-flow: column nowrap;
+    overflow: hidden;
+    justify-content: center;
+    align-items: stretch;
+    display: flex;
+    position: absolute;
+    left: -100%;
+    opacity: 0;
+    visibility: hidden;
+
+    box-sizing: border-box;
+    > div[class^='mynah-chat'] {
+        width: inherit;
+        max-width: inherit;
+        box-sizing: border-box;
+    }
+    &:after {
+        transition: var(--mynah-very-short-transition);
+        content: '';
+        position: absolute;
+        top: 0;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        width: auto;
+        height: auto;
+        background-color: black;
+        z-index: var(--mynah-z-max);
+        opacity: 0;
+        pointer-events: none;
+        transform: translate3d(0, 0, 0) scale(2);
+        transform-origin: center center;
+    }
+
+    &.tab-mode-switch-animation {
+        &,
+        > .mynah-ui-tab-header-details,
+        > .mynah-chat-wrapper-footer-spacer,
+        > .mynah-chat-wrapper-header-spacer,
+        > .mynah-chat-items-container,
+        > .mynah-chat-items-container > .mynah-chat-items-conversation-container > .mynah-chat-item-card {
+            transition: var(--mynah-main-wrapper-transition);
+        }
+
+        &:not(.show-tab-header-details) {
+            &,
+            > .mynah-chat-wrapper-footer-spacerinfo,
+            > .mynah-chat-items-container {
+                transition-delay: 100ms;
+            }
+        }
+    }
+
+    &.compact-mode {
+        padding: 0 var(--mynah-sizing-10);
+        > .mynah-chat-wrapper-footer-spacer {
+            flex-grow: 0.8 !important;
+        }
+        > .mynah-chat-wrapper-header-spacer {
+            flex-grow: 0.2 !important;
+        }
+        > .mynah-chat-items-container {
+            flex-grow: 0;
+        }
+    }
+
+    &.show-tab-header-details {
+        > .mynah-ui-tab-header-details {
+            opacity: 1;
+            max-height: 100vh;
+        }
+        &:not(.compact-mode) {
+            > .mynah-chat-wrapper-footer-spacer {
+                flex-grow: 1 !important;
+            }
+            > .mynah-chat-wrapper-header-spacer {
+                flex-grow: 0 !important;
+            }
+        }
+        > .mynah-chat-items-container {
+            flex-grow: 0;
+            padding-top: var(--mynah-sizing-1);
+            padding-bottom: var(--mynah-sizing-12);
+        }
+        > .mynah-chat-items-container > .mynah-chat-items-conversation-container {
+            > .mynah-chat-item-card {
+                &:not(.mynah-chat-item-prompt, .mynah-chat-item-system-prompt) {
+                    max-width: 100%;
+                    min-width: 100%;
+                }
+                > .mynah-card > .mynah-chat-item-card-footer {
+                    padding-top: 0;
+                    border-top: none;
+                    > .mynah-ui-chat-item-small-card {
+                        flex: 1;
+                    }
+                }
+                > .mynah-card > .mynah-chat-item-card-header {
+                    padding-bottom: 0;
+                    border-bottom: none;
+                    > .mynah-ui-chat-item-small-card {
+                        flex: 1;
+                    }
+                }
+            }
+        }
+    }
+
+    > .mynah-ui-tab-header-details {
+        padding: var(--mynah-sizing-4);
+        transition-delay: 150ms;
+        flex-shrink: 0;
+        overflow: hidden;
+        max-height: 0;
+        opacity: 0;
+        > .mynah-ui-title-description-icon-icon > .mynah-ui-icon {
+            font-size: var(--mynah-font-size-xxlarge);
+        }
+        > .mynah-ui-title-description-icon-title {
+            font-weight: bold;
+        }
+        > .mynah-ui-title-description-icon-title,
+        > .mynah-ui-title-description-icon-description {
+            font-size: var(--mynah-font-size-xxlarge);
+        }
+        &:empty {
+            display: none;
+        }
+    }
+
+    &:not(.with-background) {
+        > .mynah-ui-gradient-background {
+            opacity: 0;
+        }
+    }
+    > .more-content-indicator {
+        > .mynah-button {
+            pointer-events: all;
+            &:after {
+                transform: translate3d(0%, 0, 0);
+                opacity: 0.1;
+            }
+            &:hover:after {
+                opacity: 0.15;
+            }
+        }
+    }
+    &:not(.more-content) > .more-content-indicator {
+        opacity: 0;
+        > .mynah-button {
+            pointer-events: none;
+        }
+    }
+
+    .mynah-drag-overlay-content {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        z-index: calc(var(--mynah-z-max) + 2);
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: var(--mynah-sizing-3);
+        color: var(--mynah-color-text-default);
+        font-size: var(--mynah-font-size-large);
+        text-align: center;
+        pointer-events: none;
+
+        > .mynah-ui-icon {
+            font-size: var(--mynah-font-size-xxlarge);
+            opacity: 0.8;
+        }
+    }
+
+    .mynah-drag-blur-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background-color: var(--mynah-drag-overlay-blur-bg);
+        backdrop-filter: blur(3px);
+        z-index: calc(var(--mynah-z-max) + 1);
+        pointer-events: none;
+    }
+
+    &.drag-over {
+        .mynah-drag-overlay-content {
+            z-index: calc(var(--mynah-z-max) + 2);
+        }
+    }
+
+    @import 'chat-items-container';
+    @import 'chat-prompt-wrapper';
+    &.loading {
+        &:before {
+            display: block;
+            animation: horizontal-roll 1250ms linear infinite both;
+        }
+        > .mynah-chat-items-container {
+            padding-bottom: var(--mynah-sizing-14);
+            > .mynah-chat-items-conversation-container:last-child {
+                > .mynah-chat-item-card.mynah-chat-item-answer-stream {
+                    &:last-child {
+                        position: relative;
+                        > .mynah-card {
+                            min-width: 100px;
+                            > .mynah-chat-item-card-footer {
+                                display: none;
+                            }
+                        }
+                        &.mynah-chat-item-empty {
+                            .mynah-chat-items-spinner {
+                                display: inline-flex;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+.mynah-overlay > .mynah-overlay-container > .mynah-overlay-inner-container {
+    &:has(> .mynah-chat-prompt-chars-indicator) {
+        padding: var(--mynah-sizing-4);
+    }
+}
+
+.mynah-overlay
+    > .mynah-overlay-container
+    > .mynah-overlay-inner-container
+    > .mynah-chat-prompt-quick-picks-overlay-wrapper {
+    max-height: 70vh;
+    height: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+
+    // Quick pick selector info header styling
+    > .mynah-chat-prompt-quick-picks-header {
+        padding: var(--mynah-sizing-3);
+        > .mynah-ui-title-description-icon-title {
+            font-weight: bold;
+            color: var(--mynah-color-text-strong);
+        }
+        > .mynah-ui-title-description-icon-description {
+            color: var(--mynah-color-text-weak);
+        }
+        @each $status in $mynah-statuses {
+            &.status-#{$status} {
+                > .mynah-ui-title-description-icon-icon {
+                    color: var(--mynah-color-status-#{$status});
+                }
+            }
+        }
+    }
+
+    > .mynah-detailed-list {
+        padding: var(--mynah-sizing-2);
+        flex: 1;
+    }
+}
+
+.mynah-chat-items-container,
+.mynah-chat-prompt-input-sticky-card {
+    @import 'chat-item-card';
+}
+
+@import 'chat-item-tree-view';
+@import 'chat-prompt-attachment';
+@import 'chat-prompt-context-tooltip';
+@import 'chat-wrapper-dropdown';

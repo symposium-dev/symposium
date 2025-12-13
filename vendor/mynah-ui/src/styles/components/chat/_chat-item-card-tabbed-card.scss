@@ -1,0 +1,66 @@
+.mynah-tabbed-card-wrapper {
+    display: flex;
+    flex-flow: column nowrap;
+    justify-content: center;
+    align-items: center;
+    box-sizing: border-box;
+    width: 100%;
+    gap: var(--mynah-sizing-2);
+
+    > .mynah-tabbed-card-contents {
+        width: 100%;
+        box-sizing: border-box;
+        padding: var(--mynah-sizing-4);
+        border-radius: var(--mynah-card-radius);
+        position: relative;
+        background-color: var(--mynah-color-syntax-bg);
+
+        > .mynah-chat-item-card {
+            border: none;
+            border-radius: inherit;
+            margin: 0 !important;
+            padding: 0 !important;
+            border: none !important;
+            z-index: var(--mynah-z-1);
+
+            > .mynah-card {
+                border-radius: var(--mynah-input-radius) !important;
+                padding: var(--mynah-sizing-3);
+                box-shadow: none;
+                border: none;
+                > div {
+                    padding: 0;
+                }
+            }
+            .mynah-chat-item-information-card-main {
+                border: none;
+                border-radius: 0;
+            }
+        }
+    }
+
+    > .mynah-tabbed-card-tabs {
+        > .mynah-tabs-container {
+            background-color: var(--mynah-color-syntax-bg);
+            border-radius: var(--mynah-button-radius);
+            padding: var(--mynah-sizing-1);
+            width: fit-content;
+
+            // Default
+            .mynah-tab-item-label {
+                background-color: transparent;
+                padding: var(--mynah-sizing-2) var(--mynah-sizing-7) var(--mynah-sizing-2) var(--mynah-sizing-7);
+                gap: var(--mynah-sizing-2);
+                border-radius: var(--mynah-button-radius);
+                border: none;
+                color: var(--mynah-color-text-default);
+            }
+
+            // Selected
+            .mynah-tab-item:checked + .mynah-tab-item-label {
+                background-color: var(--mynah-color-bg);
+                border: none;
+            }
+        }
+    }
+}

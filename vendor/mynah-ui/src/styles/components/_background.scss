@@ -1,0 +1,63 @@
+@import '../scss-variables';
+.mynah-ui-gradient-background {
+    transition: var(--mynah-short-rev-transition);
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: auto;
+    height: auto;
+    background-repeat: no-repeat;
+    background-position: bottom center;
+    background-size: cover;
+    opacity: 1;
+    pointer-events: none;
+
+    display: flex;
+    justify-content: center;
+    align-items: flex-end;
+    overflow: hidden;
+    z-index: var(--mynah-z-0);
+    background-color: var(--mynah-color-bg);
+
+    &:before,
+    &:after {
+        content: '';
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        top: 0;
+        width: 100%;
+        height: auto;
+        top: 0;
+        background-repeat: no-repeat;
+        background-position: bottom center;
+        background-size: cover;
+        z-index: var(--mynah-z-2);
+    }
+    &:before {
+        background-image: linear-gradient(
+            to bottom,
+            var(--mynah-color-bg) 0,
+            var(--mynah-color-bg) 40%,
+            transparent 100%
+        );
+        mask-image: linear-gradient(to top, transparent 0%, black 35%, black 100%);
+        -webkit-mask-image: linear-gradient(to top, transparent 0%, black 35%, black 100%);
+    }
+    &:after {
+        top: initial;
+        height: 400px;
+        background-image: linear-gradient(to top, var(--mynah-color-bg) 40px, transparent 100%);
+        mask-image: linear-gradient(to bottom, transparent 0, black 100%);
+        -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 100%);
+    }
+
+    > svg {
+        min-width: 100vw;
+        z-index: var(--mynah-z-1);
+        min-height: 200vw;
+        opacity: 0.75;
+    }
+}

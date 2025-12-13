@@ -1,0 +1,74 @@
+@import '../../mixins';
+
+> span.pinned-context-pill {
+    position: relative;
+    border-radius: calc(var(--mynah-input-radius) / 2);
+    display: inline-flex;
+    white-space: nowrap;
+    overflow-wrap: break-word;
+    z-index: var(--mynah-z-1);
+    cursor: pointer;
+    padding: 0.2em 0.3em 0.05em 0.3em;
+    margin-bottom: var(--mynah-border-width);
+    flex-flow: row nowrap;
+    justify-content: center;
+    align-items: center;
+    gap: var(--mynah-sizing-half);
+    font-size: var(--mynah-font-size-small);
+    > .mynah-ui-icon {
+        font-size: var(--mynah-font-size-xxsmall);
+        flex-shrink: 0;
+    }
+
+    // Hide hover icons by default
+    > .mynah-ui-icon.hover-icon {
+        display: none;
+    }
+
+    // Hover state
+    &:hover {
+        // Show hover icon
+        > .mynah-ui-icon.hover-icon {
+            display: inline-flex;
+        }
+
+        // Hide normal icon and @-char
+        > .mynah-ui-icon:not(.hover-icon) {
+            display: none;
+        }
+    }
+
+    > .label {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        max-width: 100px;
+    }
+
+    &:before {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        bottom: 0;
+        width: auto;
+        height: calc(100%);
+        border-width: var(--mynah-button-border-width);
+        border-style: solid;
+        border-radius: inherit;
+        border-color: var(--mynah-color-text-disabled, var(--mynah-color-border-default));
+        z-index: var(--mynah-z-sub);
+    }
+
+    &.overflow-button {
+        &:hover:before {
+            background-color: var(--mynah-color-text-weak);
+            transition: var(--mynah-very-short-transition);
+            transform: translate3d(0%, 0, 0);
+            opacity: 0.15;
+            border-width: var(--mynah-button-border-width);
+            border-style: solid;
+        }
+    }
+}

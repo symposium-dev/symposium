@@ -1,0 +1,15 @@
+out
+dist
+**api-docs
+build
+node_modules
+*.bk
+*.zip
+**/.DS_Store
+.idea
+package-lock.json
+.gitcommit
+.vscode
+__results__/
+e2e-results/
+coverage/

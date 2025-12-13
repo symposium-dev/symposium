@@ -1,0 +1,21 @@
+.more-content-indicator {
+    position: relative;
+    padding: var(--mynah-border-width) var(--mynah-sizing-2);
+    pointer-events: none;
+    opacity: 1;
+    display: flex;
+    flex-flow: row nowrap;
+    justify-content: center;
+    align-items: center;
+    background-color: var(--mynah-color-bg);
+    box-shadow: 0 -15px 15px 0px var(--mynah-color-bg);
+    box-sizing: border-box;
+    height: var(--mynah-sizing-8);
+    min-height: var(--mynah-sizing-8);
+    max-height: var(--mynah-sizing-8);
+    margin-top: calc(-1 * (var(--mynah-sizing-8) + (2 * var(--mynah-border-width))));
+    z-index: var(--mynah-z-4);
+    > .mynah-button {
+        pointer-events: all;
+    }
+}

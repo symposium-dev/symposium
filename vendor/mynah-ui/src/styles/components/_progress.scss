@@ -1,0 +1,77 @@
+@import '../mixins';
+@import '../scss-variables';
+.mynah-progress-indicator {
+    position: relative;
+    border-radius: inherit;
+    width: 100%;
+    display: block;
+    opacity: 1;
+    transition: var(--mynah-bottom-panel-transition);
+    &.no-content,
+    &.no-content * {
+        opacity: 0;
+        pointer-events: none !important;
+        user-select: none !important;
+    }
+    > .mynah-progress-indicator-wrapper {
+        position: relative;
+        display: flex;
+        flex-flow: row nowrap;
+        justify-content: flex-start;
+        align-items: center;
+        border-radius: inherit;
+        color: var(--mynah-color-default);
+        border-color: var(--mynah-color-default);
+        padding: var(--mynah-sizing-3);
+        padding-right: var(--mynah-sizing-1);
+        box-sizing: border-box;
+        gap: var(--mynah-sizing-2);
+        overflow: hidden;
+        @include gradient-border();
+
+        &[indeterminate='true'] {
+            animation: horizontal-roll 1750ms linear infinite both;
+        }
+        > * {
+            z-index: var(--mynah-z-2);
+        }
+        > .mynah-progress-indicator-value-bar {
+            position: absolute;
+            box-sizing: border-box;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            background-clip: content-box, border-box;
+            background-origin: border-box;
+            height: auto;
+            background-color: var(--mynah-color-gradient-start);
+            z-index: var(--mynah-z-1);
+            opacity: 0.2;
+            transition: var(--mynah-bottom-panel-transition);
+        }
+        > .mynah-chat-item-buttons-container {
+            flex-shrink: 0;
+        }
+        > .mynah-progress-indicator-value-text {
+            flex: 1 0 0%;
+        }
+        > .mynah-progress-indicator-text {
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            overflow: hidden;
+        }
+        > .mynah-progress-indicator-text,
+        > .mynah-progress-indicator-value-text {
+            font-weight: bold;
+        }
+        @each $status in $mynah-statuses {
+            &[progress-status='#{$status}'] {
+                background-image: none;
+                border-color: var(--mynah-color-status-#{$status});
+                > .mynah-progress-indicator-value-bar {
+                    background-color: var(--mynah-color-status-#{$status});
+                }
+            }
+        }
+    }
+}

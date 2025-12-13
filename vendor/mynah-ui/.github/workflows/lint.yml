@@ -1,0 +1,26 @@
+name: Run linter
+on: workflow_call
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Set up Node
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          registry-url: 'https://registry.npmjs.org'
+          scope: '@aws'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build && cd ./ui-tests && npm install && cd ..
+
+      - name: Run linter
+        run: npm run lint

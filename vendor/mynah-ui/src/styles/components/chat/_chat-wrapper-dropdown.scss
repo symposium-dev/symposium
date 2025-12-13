@@ -1,0 +1,10 @@
+.mynah-dropdown-list-container {
+    padding: var(--mynah-sizing-1) var(--mynah-sizing-1) var(--mynah-sizing-1) var(--mynah-sizing-2);
+    display: flex;
+    justify-content: flex-end;
+    width: 100%;
+
+    .mynah-dropdown-list-wrapper {
+        margin-bottom: 0;
+    }
+}

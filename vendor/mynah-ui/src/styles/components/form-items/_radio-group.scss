@@ -1,0 +1,84 @@
+.mynah-form-input-radio-wrapper {
+    display: inline-flex;
+    flex-flow: row nowrap;
+    justify-content: center;
+    align-items: center;
+    &:not(:last-child) {
+        margin-right: var(--mynah-sizing-4);
+    }
+
+    > .mynah-form-input-radio-label {
+        display: inline-flex;
+        flex-flow: row nowrap;
+        justify-content: center;
+        align-items: center;
+        position: relative;
+        gap: var(--mynah-sizing-2);
+        cursor: pointer;
+
+        box-sizing: border-box;
+        min-width: var(--mynah-sizing-6);
+        min-height: var(--mynah-sizing-6);
+
+        > input {
+            position: absolute;
+            opacity: 0;
+            cursor: pointer;
+            height: 0;
+            width: 0;
+            &:checked + .mynah-form-input-radio-check {
+                border-color: var(--mynah-color-button);
+                background-color: var(--mynah-color-button);
+                > .mynah-ui-icon {
+                    color: var(--mynah-color-button-reverse);
+                    opacity: 1;
+                }
+            }
+            &[type='checkbox'].as-checkbox {
+                & + .mynah-form-input-radio-check {
+                    border-radius: 25%;
+                }
+            }
+        }
+        > .mynah-form-input-radio-check {
+            position: relative;
+            transition: var(--mynah-bottom-panel-transition);
+            width: var(--mynah-sizing-4);
+            height: var(--mynah-sizing-4);
+            border-radius: 100%;
+            overflow: hidden;
+            box-sizing: border-box;
+            border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+            display: inline-flex;
+            flex-flow: row nowrap;
+            justify-content: center;
+            align-items: center;
+
+            > .mynah-ui-icon {
+                position: relative;
+                transition: inherit;
+                opacity: 0;
+                font-size: 85%;
+                z-index: var(--mynah-z-2);
+            }
+
+            & + span:empty {
+                display: none;
+            }
+        }
+    }
+}
+
+/* Vertical radio group styles */
+.mynah-form-input-vertical {
+    display: flex;
+    flex-direction: column;
+}
+
+.mynah-form-input-radio-wrapper-vertical {
+    display: block;
+
+    &:not(:last-child) {
+        margin-bottom: var(--mynah-sizing-2);
+    }
+}

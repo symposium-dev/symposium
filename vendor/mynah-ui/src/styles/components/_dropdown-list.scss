@@ -1,0 +1,180 @@
+.mynah-dropdown-list-wrapper {
+    position: relative;
+    width: auto;
+    display: inline-block;
+    margin-bottom: var(--mynah-sizing-2);
+
+    .mynah-dropdown-list-button {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: var(--mynah-sizing-1) var(--mynah-sizing-1) var(--mynah-sizing-1) var(--mynah-sizing-2);
+        border: none;
+        border-radius: var(--mynah-card-radius);
+        cursor: pointer;
+        transition: var(--mynah-very-short-transition);
+
+        .mynah-button-label {
+            flex: 1;
+            font-size: var(--mynah-font-size-xsmall);
+            text-align: right;
+            flex-shrink: 0;
+            margin-left: auto;
+        }
+    }
+}
+
+// Portal-based dropdown content (rendered at document root)
+.mynah-dropdown-list-portal {
+    position: fixed;
+    .mynah-dropdown-list-content {
+        width: var(--mynah-dropdown-width);
+        max-height: var(--mynah-dropdown-max-height);
+        overflow-y: auto;
+        margin-top: var(--mynah-sizing-1);
+        background-color: var(--mynah-card-bg);
+        border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+        box-shadow: var(--mynah-shadow-overlay);
+        border-radius: var(--mynah-card-radius);
+
+        .mynah-dropdown-list-footer {
+            padding: var(--mynah-sizing-1) var(--mynah-sizing-2);
+
+            .mynah-dropdown-list-description {
+                font-size: var(--mynah-font-size-xsmall);
+                color: var(--mynah-color-text-weak);
+                margin: 0;
+                padding: 0;
+                // Align with option text by accounting for checkbox space
+                margin-left: calc(var(--mynah-sizing-3) + var(--mynah-sizing-2));
+
+                .mynah-dropdown-list-description-link {
+                    color: var(--mynah-color-button-primary);
+                    background: none;
+                    border: none;
+                    padding: 0;
+                    cursor: pointer;
+                    font-size: inherit;
+                    text-align: left;
+                    font-family: inherit;
+                    text-decoration: underline;
+
+                    &:hover {
+                        color: var(--mynah-color-button-primary-hover);
+                    }
+
+                    &:focus {
+                        outline: var(--mynah-border-width) solid var(--mynah-color-button-primary);
+                        outline-offset: 1px;
+                    }
+
+                    // Add margin only when there's text before the link
+                    &:not(:first-child) {
+                        margin-left: var(--mynah-sizing-half);
+                    }
+                }
+            }
+        }
+
+        .mynah-dropdown-list-options {
+            overflow-y: auto;
+
+            .mynah-dropdown-list-option {
+                display: flex;
+                align-items: center;
+                padding: var(--mynah-sizing-1) var(--mynah-sizing-2);
+                cursor: pointer;
+                min-height: var(--mynah-sizing-4); // Consistent height to prevent text shift
+                position: relative;
+                overflow: hidden;
+                transition: var(--mynah-very-short-transition);
+
+                &::before {
+                    content: '';
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    opacity: 0;
+                    background-color: currentColor;
+                    pointer-events: none;
+                    transition: var(--mynah-very-short-transition);
+                }
+
+                &::after {
+                    content: '';
+                    pointer-events: none;
+                    transition: var(--mynah-very-short-transition);
+                    opacity: 0;
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    width: 100%;
+                    height: 100%;
+                    background-color: currentColor;
+                    transform: translate3d(-7%, 0, 0) scale(0.93);
+                }
+
+                &:hover {
+                    &::after {
+                        transform: translate3d(0%, 0, 0);
+                        opacity: 0.15;
+                    }
+                }
+
+                &:focus-visible {
+                    outline: var(--mynah-border-width) solid var(--mynah-color-button-primary);
+                    outline-offset: -1px;
+                    &::before {
+                        opacity: 0.6;
+                    }
+                }
+
+                &[aria-selected='true'] {
+                    background-color: var(--mynah-color-button-primary-light);
+                }
+
+                .mynah-dropdown-list-checkbox {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    margin-right: var(--mynah-sizing-2);
+                    width: var(--mynah-sizing-3);
+                    height: var(--mynah-sizing-3);
+
+                    .mynah-dropdown-list-check-icon {
+                        color: var(--mynah-color-text-default);
+                        font: 700;
+                        width: calc(var(--mynah-sizing-2) + var(--mynah-sizing-half));
+                        height: calc(var(--mynah-sizing-2) + var(--mynah-sizing-half));
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    }
+                }
+
+                .mynah-dropdown-list-option-label {
+                    flex: 1;
+                    font-size: var(--mynah-font-size-small);
+                    color: var(--mynah-color-text-default);
+                    display: flex;
+                    align-items: center;
+                    min-height: var(--mynah-sizing-4); // Prevent text shift
+
+                    .mynah-dropdown-list-check-icon {
+                        color: var(--mynah-color-text-default);
+                        font-weight: bold;
+                        width: var(--mynah-sizing-4);
+                        height: var(--mynah-sizing-4);
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        margin-right: var(--mynah-sizing-1);
+                        flex-shrink: 0; // Prevent icon from shrinking
+                    }
+                }
+            }
+        }
+    }
+}

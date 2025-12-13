@@ -1,0 +1,74 @@
+name: Publish package to NPM
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*.*', 'beta*.*']
+
+permissions:
+  id-token: write # Required for OIDC authentication with npm
+  packages: write
+  checks: write
+  contents: write
+  actions: read
+
+jobs:
+  lint:
+    uses: ./.github/workflows/lint.yml
+  unit-tests:
+    uses: ./.github/workflows/unit-tests.yml
+  e2e-linux:
+    uses: ./.github/workflows/e2e-linux.yml
+  build-beta:
+    if: ${{ startsWith(github.ref_name, 'beta') }}
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          registry-url: 'https://registry.npmjs.org'
+          scope: '@aws'
+      - name: Beta release (build and publish)
+        run: |
+          echo "Publishing beta release"
+          npm ci
+          npm run build
+          npm publish --tag beta --access public
+  build-prod:
+    if: ${{ startsWith(github.ref_name, 'v') }}
+    needs: [lint, unit-tests, e2e-linux]
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.x'
+          registry-url: 'https://registry.npmjs.org'
+          scope: '@aws'
+      - name: Install dependencies and build
+        run: npm ci && npm run build
+      - name: Build demo app
+        run: npm run packdemo
+      - name: Get release info
+        id: get_release
+        uses: bruceadams/get-release@v1.3.2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Upload demo app to assets
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.get_release.outputs.upload_url }}
+          asset_path: ./example/mynah-ui-demo.zip
+          asset_name: mynah-ui-demo.zip
+          asset_content_type: application/zip
+      - name: Publish to npm
+        run: npm publish --access public
+      - name: Update Channels
+        uses: fjogeleit/http-request-action@v1
+        with:
+          url: '${{ secrets.SLACK_ENDPOINT }}'
+          method: 'POST'
+          customHeaders: '{"Content-Type": "application/json"}'
+          data: '{"version": "${{ steps.get_release.outputs.tag_name }}", "url": "${{ steps.get_release.outputs.html_url }}"}'

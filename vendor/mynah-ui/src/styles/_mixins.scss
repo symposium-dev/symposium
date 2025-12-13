@@ -1,0 +1,156 @@
+@import './scss-variables';
+@mixin list-fader-bottom($height: var(--mynah-sizing-6)) {
+    position: relative;
+    $listFader: linear-gradient(to bottom, black 30%, black calc(100% - $height), transparent 100%);
+    -webkit-mask-image: $listFader;
+    -webkit-mask-size: 100% 100%;
+    mask-image: $listFader;
+    mask-size: 100% 100%;
+}
+
+@mixin gradient-border($gradient: var(--mynah-color-gradient-main), $background: var(--mynah-card-bg)) {
+    background-clip: padding-box, border-box;
+    background-origin: border-box;
+    background-image: linear-gradient($background, $background), $gradient;
+    background-position: 0% bottom;
+    background-size: 200% 100%;
+    background-repeat: repeat-x;
+    border: var(--mynah-border-width) solid transparent;
+}
+
+/**
+ * @param {string} $size - The size of the font.
+ * @param {string} $weight - The weight of the font.
+ * @param {string} $family - The family of the font.
+ */
+@mixin mynah-font($size, $weight: normal, $family: var(--mynah-font-family)) {
+    font-size: $size;
+    font-weight: $weight;
+    font-family: $family;
+}
+
+/**
+ * @param {string} $text-color - The color of the text.
+ * @param {string} $bg-color - The background color.
+ */
+@mixin mynah-color($text-color, $bg-color) {
+    color: $text-color;
+    background-color: $bg-color;
+}
+
+/**
+ * @param {string} $margin - The margin of the element.
+ * @param {string} $padding - The padding of the element.
+ */
+@mixin mynah-spacing($margin: 0, $padding: 0) {
+    margin: $margin;
+    padding: $padding;
+}
+
+/**
+ * @param {string} $radius - The radius of the border.
+ */
+@mixin mynah-border-radius($radius) {
+    border-radius: $radius;
+}
+
+/**
+ * @param {string} $shadow - The shadow of the element.
+ */
+@mixin mynah-box-shadow($shadow) {
+    box-shadow: $shadow;
+}
+
+/**
+ * @param {string} $name - The name of the transition.
+ * @param {number} $duration - The duration of the transition in milliseconds.
+ * @param {string} $timing-function - The timing function of the transition.
+ */
+@mixin mynah-transition($name, $duration, $timing-function) {
+    --mynah-#{$name}-transition: all #{$duration}ms #{$timing-function};
+}
+
+@mixin full-width-header() {
+    min-width: 100%;
+    box-sizing: border-box;
+    gap: var(--mynah-sizing-1);
+    > .mynah-ui-chat-item-small-card {
+        flex: 1;
+        > .mynah-card.padding-none {
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            grid-template-rows: auto;
+            padding: 0;
+            column-gap: 0;
+            align-items: center;
+            > .mynah-ui-icon {
+                margin-right: var(--mynah-sizing-2);
+                &[class*='icon-status'] + .mynah-card-body {
+                    align-self: center;
+                }
+            }
+            > .mynah-chat-item-buttons-container {
+                margin-left: var(--mynah-sizing-2);
+            }
+            > * {
+                grid-column: 2;
+            }
+            > .mynah-card-body {
+                &,
+                & *:not(h1):not(h2):not(h3):not(h4:not(h5):not(h6)) {
+                    font-size: var(--mynah-font-size-medium);
+                }
+                & h1,
+                & h2,
+                & h3,
+                & h4,
+                & h5,
+                & h6 {
+                    font-size: revert;
+                }
+            }
+            > .mynah-ui-icon {
+                grid-column: 1;
+                align-self: center;
+                position: relative;
+                transform: translate(0px, 0px);
+                font-size: var(--mynah-font-size-large);
+            }
+            > .mynah-chat-item-buttons-container {
+                grid-column: 3;
+                gap: var(--mynah-border-width);
+            }
+            > .mynah-chat-item-tree-view-wrapper {
+                padding: 0;
+                min-width: auto;
+                width: 100%;
+                > .mynah-chat-item-tree-view-wrapper-container {
+                    border: none;
+                }
+            }
+        }
+    }
+}
+
+@mixin text-shimmer {
+    @keyframes shimmer {
+        0% {
+            background-position: -100% 0;
+        }
+        100% {
+            background-position: 100% 0;
+        }
+    }
+
+    background: linear-gradient(
+        90deg,
+        var(--mynah-color-text-default) 0%,
+        rgba(135, 135, 135, 0.4) 50%,
+        var(--mynah-color-text-default) 100%
+    );
+    background-size: 50% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    color: transparent;
+    animation: shimmer 3s infinite linear;
+}

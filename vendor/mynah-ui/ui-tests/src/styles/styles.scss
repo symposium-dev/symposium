@@ -1,0 +1,47 @@
+@import 'theme';
+
+html,
+body {
+    font-size: var(--mynah-font-size-medium) !important;
+    width: 100vw;
+    height: 100vh;
+    margin: 0;
+    padding: 0;
+    display: block;
+    overflow: hidden;
+    background-color: var(--mynah-color-bg);
+    color: var(--mynah-color-text-default);
+    line-height: var(--mynah-line-height) !important;
+    transform: translateZ(0);
+    filter: contrast(1);
+}
+* {
+    font-stretch: 100%;
+    letter-spacing: normal;
+    text-rendering: optimizeSpeed;
+    -webkit-font-smoothing: antialiased;
+}
+
+#mynah-ui-wrapper {
+    max-width: var(--mynah-max-width);
+    background-color: var(--mynah-color-bg);
+    border: none;
+    position: relative;
+    display: flex;
+    flex-flow: row nowrap;
+    z-index: var(--mynah-z-1);
+    flex: 1;
+    height: 100%;
+    width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+    margin: 0 auto;
+}
+
+.mynah-chat-prompt-input {
+    caret-color: rgba(0, 0, 0, 0) !important;
+}
+
+.more-content-indicator {
+    opacity: 0 !important;
+}

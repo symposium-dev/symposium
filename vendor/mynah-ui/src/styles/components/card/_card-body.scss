@@ -1,0 +1,214 @@
+@use 'sass:color';
+
+.mynah-card-body {
+    flex-shrink: 0;
+    overflow: hidden;
+    position: relative;
+    display: block;
+    line-height: var(--mynah-line-height);
+    font-size: var(--mynah-font-size-medium);
+
+    &:empty {
+        display: none;
+    }
+
+    img {
+        max-width: 100%;
+        vertical-align: middle;
+        object-fit: cover;
+    }
+
+    a {
+        pointer-events: bounding-box;
+        color: var(--mynah-color-text-link);
+    }
+
+    span[start][end] {
+        display: none;
+    }
+
+    > p:first-child {
+        &,
+        & h1:first-child,
+        & h2:first-child,
+        & h3:first-child,
+        & h4:first-child,
+        & h5:first-child,
+        & h6:first-child {
+            margin-top: 0;
+        }
+    }
+
+    > p:first-child:last-of-type,
+    > p p:first-child {
+        margin: 0;
+    }
+
+    &,
+    & > div {
+        h1 {
+            font-size: var(--mynah-font-size-xxlarge);
+        }
+        h2 {
+            font-size: var(--mynah-font-size-xlarge);
+        }
+        h3 {
+            font-size: var(--mynah-font-size-large);
+        }
+
+        h1,
+        h2,
+        h3,
+        h4,
+        h5,
+        h6 {
+            line-height: initial;
+            @for $i from 1 through 6 {
+                & + h#{$i} {
+                    margin-block-start: 0em;
+                }
+            }
+        }
+
+        li {
+            > p:first-child {
+                margin-block-end: 0em;
+            }
+        }
+
+        /* Add spacing only between top-level list items */
+        > ol > li,
+        > ul > li,
+        > div > ol > li,
+        > div > ul > li {
+            margin-bottom: 0.4em;
+        }
+
+        p + ol,
+        p + ul {
+            margin-block-start: 0;
+        }
+
+        p,
+        h1,
+        h2,
+        h3,
+        h4,
+        h5,
+        h6 {
+            margin-block-start: 0.75em;
+            margin-block-end: 0.75em;
+            word-break: normal;
+            overflow-wrap: break-word;
+            padding-bottom: 1px !important;
+
+            &:first-child {
+                margin-block-start: 0em;
+            }
+            &:last-child {
+                margin-block-end: 0em;
+            }
+
+            user-select: text;
+
+            &:empty {
+                display: none;
+            }
+        }
+
+        // FULL WIDTH ITEMS
+        table,
+        hr,
+        video,
+        audio,
+        iframe,
+        object,
+        embed,
+        blockquote {
+            max-width: 100%;
+            width: 100%;
+            box-sizing: border-box;
+            border: none;
+            font-size: inherit;
+        }
+
+        table {
+            table-layout: fixed;
+        }
+
+        // BLOCKS
+        video {
+            background-color: var(--mynah-color-bg);
+        }
+        video,
+        audio,
+        iframe,
+        object,
+        embed,
+        img,
+        blockquote {
+            border-radius: var(--mynah-input-radius);
+
+            &[aspect-ratio] {
+                max-width: 100%;
+                min-width: 100%;
+                width: 100%;
+                box-sizing: border-box;
+            }
+            &[aspect-ratio='16:9'] {
+                aspect-ratio: 16 / 9;
+            }
+            &[aspect-ratio='9:16'] {
+                aspect-ratio: 9 / 16;
+            }
+            &[aspect-ratio='21:9'] {
+                aspect-ratio: 21 / 9;
+            }
+            &[aspect-ratio='9:21'] {
+                aspect-ratio: 9 / 21;
+            }
+            &[aspect-ratio='4:3'] {
+                aspect-ratio: 4 / 3;
+            }
+            &[aspect-ratio='3:4'] {
+                aspect-ratio: 3 / 4;
+            }
+            &[aspect-ratio='3:2'] {
+                aspect-ratio: 3 / 2;
+            }
+            &[aspect-ratio='2:3'] {
+                aspect-ratio: 3 / 2;
+            }
+            &[aspect-ratio='1:1'] {
+                aspect-ratio: 1 / 1;
+            }
+        }
+
+        hr {
+            display: block;
+            box-sizing: border-box;
+            height: var(--mynah-border-width);
+            margin-top: var(--mynah-sizing-2);
+            margin-bottom: var(--mynah-sizing-2);
+            background-color: var(--mynah-color-border-default);
+            border: none;
+        }
+        blockquote {
+            border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+            margin: 0;
+            padding: var(--mynah-sizing-2);
+            box-sizing: border-box;
+        }
+
+        mark[reference-tracker] {
+            background-color: var(--mynah-color-highlight);
+            color: inherit;
+            cursor: help;
+        }
+    }
+
+    ol,
+    ul {
+        padding-left: calc(var(--mynah-font-size-medium) * 2);
+    }
+}

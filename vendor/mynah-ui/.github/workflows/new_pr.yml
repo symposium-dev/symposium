@@ -1,0 +1,23 @@
+name: New PR created
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+jobs:
+  notify:
+    if: github.event.pull_request.draft == false
+    name: Slack notification
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inform channels
+        uses: fjogeleit/http-request-action@v1
+        with:
+          url: '${{ secrets.SLACK_WEBHOOK_URL }}'
+          method: 'POST'
+          customHeaders: '{"Content-Type": "application/json"}'
+          data: '{ "title": "${{ github.event.pull_request.title }}", "author": "${{ github.event.pull_request.user.login }}", "link": "${{ github.event.pull_request.html_url }}"}'
+  lint:
+    uses: ./.github/workflows/lint.yml
+  unit-tests:
+    uses: ./.github/workflows/unit-tests.yml
+  e2e-linux:
+    uses: ./.github/workflows/e2e-linux.yml

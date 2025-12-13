@@ -1,0 +1,75 @@
+.mynah-form-input-radio-wrapper {
+    display: inline-flex;
+    flex-flow: row nowrap;
+    justify-content: center;
+    align-items: center;
+    &:not(:last-child) {
+        margin-right: 0;
+    }
+
+    > .mynah-form-input-radio-label {
+        display: inline-flex;
+        flex-flow: row nowrap;
+        justify-content: center;
+        align-items: center;
+        position: relative;
+        gap: var(--mynah-sizing-half);
+        padding: var(--mynah-sizing-1);
+        cursor: pointer;
+        > input {
+            position: absolute;
+            opacity: 0;
+            cursor: pointer;
+            height: 0;
+            width: 0;
+            &:checked + .mynah-form-input-radio-check {
+                border-color: var(--mynah-color-button);
+                > .mynah-ui-icon {
+                    transform: scale(1);
+                    color: var(--mynah-color-button-reverse);
+                }
+                &::after {
+                    background-color: var(--mynah-color-button);
+                    opacity: 1;
+                }
+                & + span {
+                    color: var(--mynah-color-button-reverse);
+                }
+            }
+        }
+        > .mynah-form-input-radio-check {
+            position: initial;
+            width: auto;
+            height: auto;
+            border-radius: calc(var(--mynah-input-radius) - var(--mynah-border-width));
+            overflow: visible;
+            box-sizing: border-box;
+            border: none;
+            font-size: var(--mynah-font-size-xsmall);
+
+            > .mynah-ui-icon {
+                transform: scale(1) !important;
+                color: inherit;
+            }
+            &::after {
+                content: '';
+                transition: inherit;
+                position: absolute;
+                top: var(--mynah-border-width);
+                right: var(--mynah-border-width);
+                bottom: var(--mynah-border-width);
+                left: var(--mynah-border-width);
+                height: auto;
+                width: auto;
+                background-color: var(--mynah-color-border-default);
+                opacity: 0;
+                border-radius: inherit;
+                z-index: var(--mynah-z-1);
+            }
+            & + span {
+                position: relative;
+                z-index: var(--mynah-z-1);
+            }
+        }
+    }
+}

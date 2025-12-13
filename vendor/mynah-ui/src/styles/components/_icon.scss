@@ -1,0 +1,26 @@
+@import '../scss-variables';
+
+.mynah-ui-icon {
+    font-style: normal;
+    font-weight: normal;
+    display: inline-flex;
+    width: 1em;
+    height: 1em;
+    font-variant: normal;
+    text-transform: none;
+    -webkit-mask: center/100% no-repeat;
+    mask: center/100% no-repeat;
+    color: inherit;
+    background-color: currentColor;
+    aspect-ratio: 1 / 1;
+
+    > span {
+        display: none;
+    }
+
+    @each $status in $mynah-statuses {
+        &.status-#{$status} {
+            color: var(--mynah-color-status-#{$status});
+        }
+    }
+}

@@ -1,0 +1,220 @@
+.mynah-form-input-wrapper {
+    position: relative;
+    display: flex;
+    box-sizing: border-box;
+    gap: var(--mynah-sizing-2);
+    flex-flow: column nowrap;
+    pointer-events: all;
+    > .mynah-form-input-label {
+        &:empty {
+            display: none;
+        }
+        > .mynah-ui-form-item-bold-label {
+            font-weight: bold;
+        }
+        > .mynah-ui-form-item-mandatory-title {
+            display: inline-flex;
+            flex-flow: row nowrap;
+            justify-content: flex-start;
+            align-items: center;
+            gap: var(--mynah-sizing-1);
+            > .mynah-ui-icon {
+                color: var(--mynah-color-status-warning);
+                opacity: 0.75;
+                font-size: 75%;
+            }
+        }
+    }
+    .mynah-ui-form-item-description {
+        font-size: var(--mynah-font-size-small);
+        color: var(--mynah-color-text-weak);
+    }
+    .mynah-form-input-container {
+        position: relative;
+        display: flex;
+        box-sizing: border-box;
+        justify-content: flex-end;
+        align-items: center;
+        z-index: var(--mynah-z-0);
+        min-width: calc(var(--mynah-sizing-6) + var(--mynah-sizing-half));
+        min-height: calc(var(--mynah-sizing-6) + var(--mynah-sizing-half));
+
+        &:not(.no-border) {
+            padding: var(--mynah-sizing-2);
+            border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+            background-color: var(--mynah-card-bg);
+            border-radius: var(--mynah-input-radius);
+            transform: translateZ(0px);
+        }
+
+        &:has(.mynah-form-input:disabled) {
+            &::after {
+                content: '';
+                position: absolute;
+                top: calc(var(--mynah-border-width) * -1);
+                left: calc(var(--mynah-border-width) * -1);
+                right: calc(var(--mynah-border-width) * -1);
+                bottom: calc(var(--mynah-border-width) * -1);
+                background-color: var(--mynah-color-text-disabled);
+                border-radius: var(--mynah-input-radius);
+                z-index: var(--mynah-z-sub);
+                opacity: 10%;
+            }
+        }
+
+        > .mynah-form-input {
+            width: 100%;
+            left: 0;
+            color: var(--mynah-color-text-default);
+            background-color: transparent;
+
+            &[disabled] {
+                pointer-events: none;
+                opacity: 50%;
+            }
+
+            &::placeholder {
+                color: var(--mynah-color-text-input-placeholder);
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                overflow: hidden;
+            }
+            option {
+                background-color: var(--mynah-card-bg);
+            }
+            option.empty-option {
+                font-style: italic;
+                opacity: 0.5;
+            }
+
+            -webkit-appearance: none;
+            appearance: none;
+            border: none;
+            text-overflow: clip;
+            outline: none;
+
+            > {
+                @import './form-items/radio-group';
+            }
+
+            > .mynah-feedback-form-stars-container {
+                transition: var(--mynah-short-transition-rev);
+                transform-origin: right bottom;
+                display: inline-flex;
+                flex-flow: row nowrap;
+                > .mynah-feedback-form-star {
+                    cursor: pointer;
+                    padding-right: var(--mynah-sizing-1);
+                    color: var(--mynah-color-button);
+                    font-size: 1.5rem;
+                    transition: var(--mynah-very-short-transition);
+                    > .mynah-ui-icon {
+                        transition: var(--mynah-very-short-transition);
+                        opacity: 0.4;
+                        transform: translate3d(0, 0, 0) scale(0.6);
+                    }
+                }
+                &[selected-star]:not(:hover) > :not(.mynah-feedback-form-star.selected ~ .mynah-feedback-form-star),
+                &:hover > :not(.mynah-feedback-form-star:hover ~ .mynah-feedback-form-star) {
+                    > .mynah-ui-icon {
+                        opacity: 1;
+                        transform: translate3d(0, 0, 0) scale(1);
+                    }
+                }
+            }
+
+            &.validation-error {
+                border-color: var(--mynah-color-status-error);
+            }
+        }
+
+        select.mynah-form-input {
+            padding: 0px var(--mynah-sizing-2);
+        }
+
+        > .select-auto-width-sizer {
+            opacity: 0;
+            color: transparent;
+            padding-right: calc(var(--mynah-sizing-2) + 1em);
+            & + select {
+                position: absolute;
+                left: 0;
+                width: 100% !important;
+                cursor: pointer;
+            }
+        }
+
+        &.mynah-form-input-toggle-group {
+            justify-content: flex-start;
+            > .mynah-form-input {
+                width: auto;
+                // padding: var(--mynah-sizing-half);
+                border-radius: var(--mynah-input-radius);
+                background-color: var(--mynah-color-bg);
+                border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+                display: inline-flex;
+                flex-flow: row nowrap;
+                overflow: hidden;
+                gap: var(--mynah-sizing-half);
+                > {
+                    @import './form-items/toggle-group';
+                }
+            }
+        }
+
+        > textarea.mynah-form-input {
+            font-family: var(--mynah-font-family);
+            resize: none;
+            font-size: var(--mynah-font-size-medium);
+            color: var(--mynah-color-text-input);
+            outline: none;
+        }
+        > .mynah-form-input-icon {
+            color: var(--mynah-color-text-weak);
+        }
+        > .mynah-select-handle {
+            position: relative;
+            color: var(--mynah-color-text-weak);
+            pointer-events: none;
+            transform: translateX(-25%);
+        }
+        & ~ .mynah-form-input-validation-error-block {
+            display: flex;
+            flex-flow: column nowrap;
+            font-size: var(--mynah-font-size-xsmall);
+            font-style: italic;
+            color: var(--mynah-color-status-error);
+            opacity: 0.75;
+            &:empty {
+                display: none;
+            }
+        }
+    }
+
+    &[disabled='disabled'] {
+        > .mynah-form-item-list-wrapper {
+            > .mynah-button,
+            > .mynah-form-item-list-rows-wrapper > .mynah-form-item-list-row > .mynah-button {
+                display: none !important;
+            }
+        }
+    }
+}
+
+.mynah-chat-item-form-items-container {
+    display: flex;
+    flex-flow: column nowrap;
+    gap: var(--mynah-sizing-5);
+    overflow: hidden;
+    padding-bottom: var(--mynah-sizing-1);
+}
+.mynah-chat-item-buttons-container {
+    display: flex;
+    flex-flow: row-reverse wrap-reverse;
+    gap: var(--mynah-sizing-2);
+    overflow: hidden;
+    padding-top: 0;
+    padding-bottom: 0;
+    justify-content: flex-end;
+    align-items: center;
+}

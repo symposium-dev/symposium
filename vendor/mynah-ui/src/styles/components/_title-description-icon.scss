@@ -1,0 +1,33 @@
+.mynah-ui-title-description-icon-wrapper {
+    display: grid;
+    grid-template-columns: min-content 1fr;
+    grid-template-rows: min-content auto;
+    grid-template-areas:
+        'icon title'
+        '. description';
+    column-gap: var(--mynah-sizing-3);
+    row-gap: var(--mynah-sizing-1);
+
+    position: relative;
+    box-sizing: border-box;
+    width: 100%;
+    overflow: hidden;
+
+    > .mynah-ui-title-description-icon-icon {
+        grid-area: icon;
+        align-items: flex-start;
+        justify-content: center;
+        display: flex;
+        flex-flow: column nowrap;
+    }
+    > .mynah-ui-title-description-icon-title {
+        grid-area: title;
+        align-items: flex-start;
+        justify-content: center;
+        display: flex;
+        flex-flow: column nowrap;
+    }
+    > .mynah-ui-title-description-icon-description {
+        grid-area: description;
+    }
+}

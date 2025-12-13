@@ -1,0 +1,202 @@
+@import '../scss-variables';
+.mynah-button {
+    &:not(.mynah-button-border) {
+        border: none;
+    }
+    min-width: calc(var(--mynah-sizing-6) + var(--mynah-sizing-half));
+    min-height: calc(var(--mynah-sizing-6) + var(--mynah-sizing-half));
+    border-radius: var(--mynah-button-radius);
+    font-family: var(--mynah-font-family);
+    font-size: var(--mynah-font-size-medium) !important;
+    cursor: pointer;
+    transition: var(--mynah-very-short-transition);
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    outline: none;
+    overflow: hidden;
+    position: relative;
+    transform: translateZ(0px);
+    padding: var(--mynah-sizing-half) calc(var(--mynah-sizing-1) + var(--mynah-sizing-half));
+    gap: var(--mynah-sizing-1);
+    opacity: 1;
+    background-color: transparent;
+    color: inherit;
+    &:not(.mynah-button-secondary) {
+        &.fill-state-always,
+        &.fill-state-hover:hover {
+            box-shadow: var(--mynah-shadow-button);
+            color: var(--mynah-color-button-reverse);
+            background-color: var(--mynah-color-button);
+        }
+    }
+    &::after {
+        content: '';
+        pointer-events: none;
+        transition: var(--mynah-very-short-transition);
+        opacity: 0;
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        opacity: 0;
+        border-radius: inherit;
+        background-color: currentColor;
+        transform: translate3d(-7%, 0, 0) scale(0.93);
+    }
+    &[disabled='disabled'] {
+        opacity: 0.25 !important;
+        cursor: default;
+    }
+    &.mynah-button-secondary {
+        background-color: rgba(0, 0, 0, 0);
+        color: currentColor;
+        box-sizing: border-box;
+        &.mynah-button-border {
+            border: var(--mynah-border-width) solid currentColor !important;
+        }
+        box-shadow: none;
+        @each $status in $mynah-statuses {
+            &.status-#{$status} {
+                &::before {
+                    content: '';
+                    position: absolute;
+                    width: 100%;
+                    height: 100%;
+                    opacity: 0.08;
+                }
+                &.fill-state-always,
+                &.fill-state-hover:hover {
+                    &::before {
+                        background-color: var(--mynah-color-status-#{$status});
+                    }
+                }
+                &::after {
+                    color: var(--mynah-color-status-#{$status});
+                }
+                .mynah-button-border {
+                    border: var(--mynah-border-width) solid var(--mynah-color-status-#{$status}) !important;
+                }
+            }
+        }
+    }
+    &.status-dimmed-clear,
+    &.status-clear {
+        &,
+        &.mynah-button-border {
+            border-color: transparent !important;
+        }
+        &::before {
+            background-color: rgba(0, 0, 0, 0) !important;
+        }
+    }
+    &.status-dimmed-clear {
+        color: var(--mynah-color-text-weak);
+    }
+    &.status-main {
+        &::before {
+            transition: inherit;
+            content: '';
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            background-image: var(--mynah-color-gradient-main-half);
+            background-repeat: no-repeat;
+            background-size: 105% 105%;
+            background-position: center center;
+        }
+        &.fill-state-hover {
+            border: var(--mynah-border-width) solid currentColor;
+        }
+        .mynah-chat-item-card:hover &.mynah-button-flash-by-parent-focus:not(:hover),
+        &.fill-state-always,
+        &.fill-state-hover:hover {
+            border-color: rgba(0, 0, 0, 0) !important;
+            color: var(--mynah-color-gradient-alternate);
+            &::before {
+                opacity: 1;
+            }
+        }
+    }
+    &:active,
+    &:focus-visible {
+        &::before {
+            opacity: 0.6 !important;
+        }
+    }
+    &:hover {
+        &::after {
+            transform: translate3d(0%, 0, 0);
+            opacity: 0.15;
+        }
+    }
+    &.mynah-icon-button {
+        width: var(--mynah-sizing-10);
+        height: var(--mynah-sizing-10);
+        border-radius: 0;
+    }
+    > span {
+        white-space: nowrap;
+        transition: inherit;
+        overflow: hidden;
+        box-sizing: border-box;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        z-index: var(--mynah-z-1);
+    }
+
+    .mynah-chat-item-card:hover &.mynah-button-flash-by-parent-focus:not(:hover) {
+        &,
+        &:after {
+            animation: flash-main 3.25s cubic-bezier(0.75, 0, 0.25, 1) infinite both;
+        }
+        animation-name: flash-main;
+        &:after {
+            animation-name: flash-pseudo;
+        }
+        &.animate-once {
+            &,
+            &:after {
+                animation-iteration-count: 1;
+            }
+        }
+    }
+
+    &.hidden {
+        display: none !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+    }
+}
+
+.mynah-button-confirmation-dialog-container {
+    padding: var(--mynah-sizing-3);
+    display: flex;
+    flex-flow: column nowrap;
+    gap: var(--mynah-sizing-1);
+    max-width: 90vw;
+    > .mynah-button-confirmation-dialog-header {
+        display: flex;
+        flex-flow: row nowrap;
+        justify-content: flex-start;
+        align-items: center;
+        gap: var(--mynah-sizing-2);
+        > i:first-child {
+            color: var(--mynah-color-status-warning);
+            flex-shrink: 0;
+        }
+        > h4:nth-child(2) {
+            margin: 0;
+            flex: 1;
+        }
+    }
+    > .mynah-button-confirmation-dialog-buttons {
+        display: flex;
+        flex-flow: row nowrap;
+        justify-content: flex-end;
+        align-items: center;
+        gap: var(--mynah-sizing-2);
+    }
+}

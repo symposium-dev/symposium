@@ -1,0 +1,581 @@
+@import 'variables';
+
+// Since mynah-ui css custom properties are mapped to VSCode theme ones by default
+// here are some sample VSCode themes applied.
+@import 'themes/light+.scss';
+@import 'themes/light+tweaked.scss';
+@import 'themes/light-orange.scss';
+@import 'themes/light-quiet.scss';
+@import 'themes/light-solarized.scss';
+@import 'themes/dark-plus.scss';
+@import 'themes/dark+tweaked.scss';
+@import 'themes/dark-abyss.scss';
+@import 'themes/dark-ayu-mirage.scss';
+@import 'themes/dark-dracula.scss';
+@import 'themes/dark-solarized.scss';
+
+html,
+body {
+    width: 100vw;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    display: block;
+    overflow: hidden;
+    background-color: var(--mynah-color-bg);
+    color: var(--mynah-color-text-default);
+}
+.mynah-extension-showcase-grid {
+    &:before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        background-color: var(--mynah-color-syntax-bg);
+        z-index: var(--mynah-z-0);
+        opacity: 0.25;
+        pointer-events: none;
+    }
+    transition: all 850ms cubic-bezier(0.25, 1, 0, 1);
+    display: grid;
+    grid-template-rows: auto 1fr;
+    grid-template-columns: 2fr 3fr 2fr;
+    height: 100%;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    overflow: hidden;
+    gap: var(--mynah-sizing-5);
+    padding: var(--mynah-sizing-5);
+    position: relative;
+
+    > * {
+        overflow: hidden;
+        padding: var(--mynah-sizing-5);
+        box-shadow: 0 5px 20px -5px rgba(0, 0, 0, 0.15);
+        border-radius: var(--mynah-card-radius);
+        background-color: var(--mynah-card-bg) !important;
+        border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+        z-index: var(--mynah-z-1);
+        &:not(#header-var):before {
+            padding-bottom: var(--mynah-sizing-5);
+            font-size: 130%;
+            font-weight: 800;
+            opacity: 0.75;
+        }
+    }
+
+    #header-bar {
+        grid-row-start: 1;
+        grid-column-start: 1;
+
+        grid-row-end: 1;
+        grid-column-end: -1;
+
+        display: flex;
+        flex-flow: row nowrap;
+        align-items: center;
+        justify-content: flex-start;
+        gap: var(--mynah-sizing-2);
+        padding: var(--mynah-sizing-2);
+
+        label {
+            cursor: pointer;
+            padding: var(--mynah-sizing-3) var(--mynah-sizing-2);
+            border-radius: var(--mynah-input-radius);
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            gap: var(--mynah-sizing-2);
+            &:before {
+                transition: all 850ms cubic-bezier(0.25, 1, 0, 1);
+                color: var(--mynah-color-button-reverse);
+                content: '';
+                display: block;
+                position: absolute;
+                right: var(--mynah-sizing-1);
+                width: var(--mynah-sizing-6);
+                height: var(--mynah-sizing-6);
+                border-radius: var(--mynah-sizing-3);
+                background-color: var(--mynah-color-status-success);
+            }
+            &:after {
+                transition: all 850ms cubic-bezier(0.25, 1, 0, 1);
+                background-color: var(--mynah-color-button-reverse);
+                content: '';
+                display: block;
+                -webkit-mask-image: var(--mynah-ui-icon-ok);
+                mask-image: var(--mynah-ui-icon-ok);
+                -webkit-mask-size: 100%;
+                mask-size: 100%;
+                -webkit-mask-position: center center;
+                mask-position: center center;
+                -webkit-mask-repeat: no-repeat;
+                mask-repeat: no-repeat;
+                width: var(--mynah-sizing-4);
+                height: var(--mynah-sizing-4);
+            }
+        }
+    }
+
+    #theme-editor {
+        &:before {
+            content: 'Theme Builder';
+        }
+        grid-row-start: 2;
+        grid-column-start: 1;
+
+        grid-row-end: 2;
+        grid-column-end: 1;
+        overflow: hidden;
+
+        display: flex;
+        flex-flow: column nowrap;
+    }
+
+    #mynah-ui-panel {
+        &:before {
+            content: 'Mynah UI (Example)';
+        }
+        grid-row-start: 2;
+        grid-column-start: 2;
+        grid-row-end: 2;
+        grid-column-end: 3;
+        position: relative;
+        display: flex;
+        flex-flow: column nowrap;
+        justify-content: center;
+        align-items: stretch;
+
+        > #amzn-mynah-website-wrapper {
+            max-width: var(--mynah-max-width);
+            box-shadow: 0 5px 20px -15px rgba(0, 0, 0, 0.5);
+            border-radius: var(--mynah-input-radius);
+            background-color: var(--mynah-color-bg);
+            border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+            position: relative;
+            display: flex;
+            flex-flow: row nowrap;
+            flex: 1;
+            height: 100%;
+            box-sizing: border-box;
+            overflow: hidden;
+            margin: 0 auto;
+            width: 100%;
+        }
+    }
+
+    #console {
+        &:before {
+            content: 'Console';
+        }
+        border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+        display: flex;
+        flex-flow: column nowrap;
+        box-sizing: border-box;
+        min-height: 100%;
+        max-height: 100%;
+        max-height: 80px;
+        overflow: hidden;
+        grid-row-start: 2;
+        grid-column-start: 3;
+        grid-row-end: 2;
+        grid-column-end: 3;
+        z-index: 9;
+
+        #console-content {
+            flex: 1;
+            overflow-x: hidden;
+            overflow-y: auto;
+            position: relative;
+            font-family: monospace;
+            display: flex;
+            font-size: 80%;
+            flex-flow: column-reverse nowrap;
+            gap: var(--mynah-sizing-3);
+            color: var(--mynah-color-syntax-code);
+            background-color: var(--mynah-card-bg);
+            padding: var(--mynah-sizing-4);
+
+            > p {
+                margin-block-start: 0;
+                margin-block-end: 0;
+                position: relative;
+                padding-left: var(--mynah-sizing-6);
+
+                &::first-letter {
+                    text-transform: capitalize;
+                }
+
+                &:before {
+                    content: '>>';
+                    color: var(--mynah-color-syntax-attr);
+                    position: absolute;
+                    left: 0;
+                    top: 0;
+                }
+
+                b {
+                    color: var(--mynah-color-syntax-property);
+                    font-weight: 500;
+                }
+            }
+        }
+    }
+}
+
+.mynah-ui-example-input-main-wrapper {
+    display: flex;
+    flex-flow: column nowrap;
+    gap: var(--mynah-sizing-5);
+    overflow: hidden;
+    flex: 1;
+    overflow-x: hidden;
+    overflow-y: auto;
+    color: var(--mynah-color-text-default);
+    > .mynah-ui-example-input-items-wrapper {
+        order: 100;
+        display: flex;
+        flex-flow: column nowrap;
+        gap: var(--mynah-sizing-5);
+        overflow: hidden;
+        flex-shrink: 0;
+    }
+    > h1 {
+        margin: 0;
+    }
+    > p {
+        order: 10;
+    }
+}
+
+.mynah-ui-example-input-buttons-wrapper {
+    display: flex;
+    flex-flow: row wrap;
+    gap: var(--mynah-sizing-2);
+    overflow: hidden;
+    padding-bottom: var(--mynah-sizing-5);
+    flex-shrink: 0;
+    > button > span {
+        white-space: nowrap;
+    }
+    > .config-operation {
+        &.hidden {
+            opacity: 0;
+            visibility: hidden;
+            display: none;
+        }
+    }
+}
+
+.mynah-ui-example-input {
+    display: flex;
+    flex-flow: column nowrap;
+    gap: var(--mynah-sizing-3);
+    &-category {
+        &-sizing {
+            order: 10;
+        }
+        &-border-style {
+            order: 20;
+        }
+        &-font-size {
+            order: 30;
+        }
+        &-font-family {
+            order: 40;
+        }
+        &-text-color {
+            order: 50;
+        }
+        &-syntax-color {
+            order: 60;
+        }
+        &-status-color {
+            order: 70;
+        }
+        &-background-color {
+            order: 80;
+        }
+        &-shadow {
+            order: 90;
+        }
+        &-radius {
+            order: 100;
+        }
+        &-transition {
+            order: 110;
+        }
+        &-other {
+            order: 1000;
+        }
+    }
+    > h1 {
+        padding-top: var(--mynah-sizing-6);
+        margin: 0;
+        text-transform: capitalize;
+    }
+    & > &-title-wrapper {
+        display: flex;
+        flex-flow: column nowrap;
+        gap: var(--mynah-sizing-1);
+        h4 {
+            margin: 0;
+            text-transform: capitalize;
+        }
+        span {
+            font-style: italic;
+            font-size: 90%;
+            color: var(--mynah-color-text-weak);
+        }
+    }
+    & > &-wrapper {
+        display: flex;
+        flex-flow: row nowrap;
+        gap: var(--mynah-sizing-2);
+        position: relative;
+        &:has(select) {
+            > select {
+                padding-right: var(--mynah-sizing-5);
+            }
+            &:after {
+                content: '';
+                -webkit-mask-image: var(--mynah-ui-icon-down-open);
+                mask-image: var(--mynah-ui-icon-down-open);
+                background-color: currentColor;
+                opacity: 0.5;
+                -webkit-mask-size: 100%;
+                mask-size: 100%;
+                -webkit-mask-position: center center;
+                mask-position: center center;
+                -webkit-mask-repeat: no-repeat;
+                mask-repeat: no-repeat;
+                position: absolute;
+                right: var(--mynah-sizing-3);
+                top: 50%;
+                margin-top: calc(-1 * var(--mynah-sizing-2));
+                width: var(--mynah-sizing-4);
+                height: var(--mynah-sizing-4);
+            }
+        }
+        > input[type='text'],
+        > input[type='number'] {
+            flex: 1;
+        }
+        > select {
+            appearance: none;
+            min-width: 70px;
+            cursor: pointer;
+            &#theme-selector {
+                max-width: 140px;
+            }
+        }
+
+        > small,
+        > input,
+        > select {
+            &[type='color'],
+            &[type='range'] {
+                padding: var(--mynah-sizing-1);
+                width: 100px;
+                min-width: 100px;
+                max-width: 100px;
+                outline: none;
+            }
+
+            background-color: var(--mynah-card-bg);
+            color: var(--mynah-color-text-input);
+            border-radius: var(--mynah-input-radius);
+            padding: var(--mynah-sizing-3);
+            border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+        }
+
+        > small {
+            border: none;
+            padding: 0 !important;
+        }
+
+        > input[type='range'] {
+            border: none;
+            -webkit-appearance: none;
+            appearance: none;
+            background: transparent;
+            cursor: pointer;
+
+            &:focus {
+                outline: none;
+            }
+
+            &::-webkit-slider-runnable-track {
+                background-color: var(--mynah-color-border-default);
+                border-radius: 0.5rem;
+                height: var(--mynah-sizing-2);
+            }
+
+            &::-webkit-slider-thumb {
+                outline: none;
+                -webkit-appearance: none;
+                appearance: none;
+                margin-top: calc(-1 * var(--mynah-sizing-2));
+                background-color: var(--mynah-color-button);
+                height: var(--mynah-sizing-6);
+                width: var(--mynah-sizing-6);
+                border-radius: var(--mynah-sizing-3);
+            }
+        }
+    }
+}
+
+.ver-div {
+    height: 30px;
+    border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+}
+
+input.hidden {
+    // visibility: hidden;
+    display: none;
+    opacity: 0;
+}
+
+@media only screen and (max-width: 1280px) {
+    #theme-editor-enabled,
+    label[for='theme-editor-enabled'] {
+        display: none !important;
+    }
+    .mynah-extension-showcase-grid {
+        grid-template-columns: 4fr 3fr !important;
+
+        #theme-editor {
+            display: none;
+            visibility: hidden;
+        }
+
+        #mynah-ui-panel {
+            grid-column-start: 1;
+            grid-column-end: 2;
+        }
+
+        #console {
+            grid-column-start: 2;
+            grid-column-end: 2;
+        }
+    }
+}
+
+@media only screen and (max-width: 860px) {
+    #console-enabled,
+    label[for='console-enabled'] {
+        display: none !important;
+    }
+    .mynah-extension-showcase-grid {
+        grid-template-columns: 100% !important;
+        padding: 0;
+        gap: 0;
+
+        #header-bar {
+            padding: var(--mynah-sizing-2);
+            box-shadow: none;
+            border-radius: 0;
+            border: none;
+        }
+
+        #theme-editor {
+            display: none;
+        }
+
+        #mynah-ui-panel {
+            #amzn-mynah-website-wrapper {
+                border-radius: 0;
+                border: none;
+                .mynah-nav-tabs-wrapper {
+                    > .mynah-tabs-container > span:first-child > label {
+                        border-top-left-radius: initial;
+                    }
+                }
+            }
+            grid-column-start: 1;
+            grid-column-end: 1;
+            border-radius: 0;
+            padding: 0;
+            border-left: none;
+            border-right: none;
+            border-bottom: none;
+            &:before {
+                display: none;
+            }
+        }
+
+        #console {
+            display: none;
+        }
+    }
+}
+
+html:not([theme^='base']) {
+    label[for='theme-editor-enabled'] {
+        display: none !important;
+    }
+}
+html:not([theme^='base']) .mynah-extension-showcase-grid,
+#theme-editor-enabled:not(:checked) ~ .mynah-extension-showcase-grid {
+    grid-template-columns: 1fr 2fr 2fr;
+    #theme-editor {
+        display: none;
+        visibility: hidden;
+    }
+
+    #mynah-ui-panel {
+        grid-column-start: 1;
+    }
+
+    #header-bar {
+        label[for='theme-editor-enabled'] {
+            &:before {
+                background-color: var(--mynah-color-text-weak);
+            }
+            &:after {
+                -webkit-mask-image: var(--mynah-ui-icon-minus);
+                mask-image: var(--mynah-ui-icon-minus);
+            }
+        }
+    }
+}
+#console-enabled:not(:checked) {
+    & ~ .mynah-extension-showcase-grid {
+        grid-template-columns: 2fr 2fr 1fr;
+        #console {
+            display: none;
+            visibility: hidden;
+        }
+
+        #mynah-ui-panel {
+            grid-column-end: -1;
+        }
+
+        #header-bar {
+            label[for='console-enabled'] {
+                &:before {
+                    background-color: var(--mynah-color-text-weak);
+                }
+                &:after {
+                    -webkit-mask-image: var(--mynah-ui-icon-minus);
+                    mask-image: var(--mynah-ui-icon-minus);
+                }
+            }
+        }
+    }
+}
+
+html:not([theme^='base']) #console-enabled:not(:checked) ~ .mynah-extension-showcase-grid,
+#theme-editor-enabled:not(:checked) + #console-enabled:not(:checked) ~ .mynah-extension-showcase-grid {
+    #console {
+        display: none;
+        visibility: hidden;
+    }
+
+    #mynah-ui-panel {
+        grid-column-end: -1;
+    }
+}

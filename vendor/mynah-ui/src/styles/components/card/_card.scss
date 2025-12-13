@@ -1,0 +1,79 @@
+@import '../../scss-variables';
+
+.mynah-card {
+    text-decoration: none;
+    outline: none;
+    position: relative;
+    transition: var(--mynah-short-transition-rev);
+    box-sizing: border-box;
+    display: flex;
+    flex-flow: column nowrap;
+    gap: var(--mynah-sizing-2);
+    transform: translate3d(0, 0, 0);
+    flex: auto 0 0;
+    width: 100%;
+    overflow: hidden;
+    border-radius: var(--mynah-card-radius);
+    box-shadow: var(--mynah-shadow-card);
+    &:empty {
+        display: none;
+    }
+
+    @for $i from 0 through 100 {
+        > .mynah-card-inner-order-#{$i} {
+            order: $i;
+        }
+    }
+
+    .mynah-ui-clickable-item {
+        cursor: pointer;
+    }
+
+    &.padding {
+        @each $size, $padding in $mynah-padding-sizes {
+            &-#{$size} {
+                padding: var(--mynah-sizing-#{$padding});
+                @if $size == 'none' {
+                    border-radius: 0;
+                    padding: 0;
+                }
+            }
+        }
+    }
+    &.background {
+        background-color: var(--mynah-card-bg);
+    }
+    &:not(.background) {
+        box-shadow: none;
+    }
+    &.border {
+        border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+    }
+
+    @each $status in $mynah-statuses {
+        &.status-#{$status} {
+            &:before {
+                content: '';
+                z-index: 0;
+                background-color: var(--mynah-color-status-#{$status});
+                opacity: 0.025;
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+                height: 100%;
+            }
+            border-color: var(--mynah-color-status-#{$status});
+        }
+    }
+
+    > * {
+        z-index: var(--mynah-z-1);
+        position: relative;
+    }
+
+    @import '../source-link-header';
+    @import '../votes-wrapper';
+}
+
+@import 'card-body';

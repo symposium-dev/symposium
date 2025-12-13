@@ -1,0 +1,87 @@
+.mynah-form-input-switch-wrapper {
+    display: inline-flex;
+    flex-flow: row nowrap;
+    justify-content: center;
+    align-items: center;
+    gap: var(--mynah-sizing-1);
+    &:not(:last-child) {
+        margin-right: var(--mynah-sizing-4);
+    }
+
+    > .mynah-form-input-switch-label {
+        display: inline-flex;
+        flex-flow: row nowrap;
+        justify-content: flex-start;
+        align-items: center;
+        position: relative;
+        gap: var(--mynah-sizing-1);
+        cursor: pointer;
+        overflow: hidden;
+
+        box-sizing: border-box;
+        min-width: var(--mynah-sizing-9);
+        min-height: calc(var(--mynah-sizing-6) + var(--mynah-sizing-half));
+        padding: var(--mynah-border-width);
+
+        > input {
+            position: absolute;
+            opacity: 0;
+            cursor: pointer;
+            height: 0;
+            width: 0;
+            &:checked {
+                & + .mynah-form-input-switch-check {
+                    transform: translateX(var(--mynah-sizing-3));
+                    border-color: var(--mynah-color-button);
+                    background-color: var(--mynah-color-button);
+                    color: var(--mynah-color-button-reverse);
+                }
+            }
+        }
+
+        > .mynah-form-input-switch-check-bg {
+            transition: inherit;
+            position: absolute;
+            top: 0;
+            right: 0;
+            bottom: 0;
+            left: 0;
+            width: auto;
+            height: auto;
+            background-color: var(--mynah-color-bg);
+            border-radius: inherit;
+            z-index: var(--mynah-z-1);
+            border-radius: var(--mynah-input-radius);
+            border: solid var(--mynah-border-width) var(--mynah-color-border-default);
+        }
+        > .mynah-form-input-switch-check {
+            position: relative;
+            transition: var(--mynah-bottom-panel-transition);
+            width: calc(var(--mynah-sizing-6) - (4 * var(--mynah-border-width)));
+            height: calc(var(--mynah-sizing-6) - (4 * var(--mynah-border-width)));
+            border-radius: calc(var(--mynah-input-radius) - var(--mynah-border-width));
+            overflow: hidden;
+            box-sizing: border-box;
+            border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+            display: inline-flex;
+            flex-flow: row nowrap;
+            justify-content: center;
+            align-items: center;
+            background-color: var(--mynah-card-bg);
+            color: var(--mynah-color-text-weak);
+            z-index: var(--mynah-z-2);
+            transform: translateX(calc(2 * var(--mynah-border-width)));
+
+            > .mynah-ui-icon {
+                position: relative;
+                transition: inherit;
+                z-index: var(--mynah-z-2);
+                font-size: 90%;
+            }
+
+            & + span:empty {
+                display: none;
+            }
+        }
+    }
+}

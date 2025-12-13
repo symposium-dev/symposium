@@ -1,0 +1,55 @@
+@import '../../_mixins.scss';
+
+> .mynah-chat-items-container {
+    position: relative;
+    display: flex;
+    flex-grow: 1;
+    flex-shrink: 1;
+    overflow-x: hidden;
+    overflow-y: auto;
+    flex-flow: column nowrap;
+    align-items: flex-start;
+    padding: var(--mynah-chat-wrapper-spacing);
+    padding-bottom: 0;
+    gap: var(--mynah-chat-wrapper-spacing);
+    scroll-behavior: smooth;
+
+    @include list-fader-bottom();
+
+    &.set-scroll {
+        scroll-snap-type: y mandatory;
+    }
+
+    > .mynah-chat-items-conversation-container {
+        gap: var(--mynah-chat-wrapper-spacing);
+        position: relative;
+        display: flex;
+        flex-shrink: 0;
+        overflow: hidden;
+        flex-flow: column nowrap;
+        align-items: flex-start;
+        width: 100%;
+        box-sizing: border-box;
+        &:empty {
+            display: none;
+        }
+
+        > .intersection-observer {
+            position: absolute;
+            bottom: var(--mynah-sizing-8);
+            left: 0;
+            right: 0;
+            width: auto;
+            height: var(--mynah-sizing-1);
+            background-color: transparent;
+            z-index: var(--mynah-z-4);
+            pointer-events: none;
+        }
+
+        &:last-child {
+            scroll-snap-align: start;
+            padding-bottom: calc(var(--mynah-chat-wrapper-spacing) + var(--mynah-sizing-1));
+            min-height: 100%;
+        }
+    }
+}

@@ -1,0 +1,112 @@
+@import '../scss-variables';
+.mynah-ui-spinner-container {
+    display: block;
+    width: calc(var(--mynah-font-size-medium) + var(--mynah-font-size-xxlarge));
+    aspect-ratio: 1 / 1;
+    position: relative;
+    overflow: visible;
+    --anim-speed: 2.5s;
+    --suppress: 5%;
+
+    > span.mynah-ui-spinner-logo-part {
+        position: absolute;
+        width: 64%;
+        height: 64%;
+        overflow: visible;
+        left: 18%;
+        top: 18%;
+        &:not(.backdrop, .semi-backdrop) {
+            top: calc(3 * var(--suppress));
+            left: calc(3 * var(--suppress));
+            width: calc(100% - (6 * var(--suppress)));
+            height: calc(100% - (6 * var(--suppress)));
+            z-index: var(--mynah-z-3);
+        }
+        &.backdrop {
+            opacity: 0.25;
+            z-index: var(--mynah-z-1);
+            filter: blur(5px);
+            overflow: visible;
+        }
+        &.semi-backdrop {
+            top: calc(1 * var(--suppress));
+            left: calc(1 * var(--suppress));
+            width: calc(100% - (2 * var(--suppress)));
+            height: calc(100% - (2 * var(--suppress)));
+            z-index: var(--mynah-z-2);
+            > .mynah-ui-spinner-logo-mask {
+                overflow: visible;
+                &:after {
+                    background-color: var(--mynah-color-bg);
+                    content: '';
+                    position: absolute;
+                    width: 100%;
+                    height: 100%;
+                    opacity: 0.5;
+                }
+                &:before {
+                    opacity: 0.5;
+                    filter: blur(5px);
+                }
+            }
+        }
+
+        > .mynah-ui-spinner-logo-mask {
+            position: absolute;
+            -webkit-mask: center/100% no-repeat;
+            mask: center/100% no-repeat;
+            width: 100%;
+            height: 100%;
+
+            &.base {
+                &::before {
+                    animation: spinner-spin-delayed var(--anim-speed) 250ms ease-in-out infinite;
+                    transform-origin: center center;
+                    content: '';
+                    position: absolute;
+                    left: 0;
+                    top: 0;
+                    width: 100%;
+                    height: 100%;
+                    background-color: var(--mynah-color-bg);
+                    background-image: radial-gradient(
+                        190% 140% at 140% -15%,
+                        var(--mynah-color-gradient-end),
+                        var(--mynah-bg-gradient-mid),
+                        var(--mynah-bg-gradient-mid),
+                        var(--mynah-bg-gradient-end),
+                        var(--mynah-bg-gradient-start)
+                    );
+                }
+                -webkit-mask-image: var(--mynah-ui-spinner-base);
+                mask-image: var(--mynah-ui-spinner-base);
+            }
+
+            &.text {
+                opacity: 0.9;
+                background-color: white;
+                -webkit-mask-image: var(--mynah-ui-spinner-text);
+                mask-image: var(--mynah-ui-spinner-text);
+            }
+        }
+
+        &.backdrop {
+            animation: opacity var(--anim-speed) 250ms linear infinite;
+            > .mynah-ui-spinner-logo-mask:before {
+                animation-name: spinner-spin-delayed;
+
+                background-image: radial-gradient(
+                    100% 100% at 100% 0%,
+                    var(--mynah-color-gradient-end),
+                    var(--mynah-bg-gradient-mid),
+                    var(--mynah-bg-gradient-end)
+                );
+            }
+        }
+        &.semi-backdrop {
+            > .mynah-ui-spinner-logo-mask:before {
+                animation-name: spinner-spin-delayed-reverse;
+            }
+        }
+    }
+}

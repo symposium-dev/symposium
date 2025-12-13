@@ -1,0 +1,99 @@
+@import './scss-variables';
+.mynah-ui-splash-loader-wrapper {
+    transition: var(--mynah-short-rev-transition);
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: auto;
+    height: auto;
+    opacity: 0;
+    display: flex;
+    flex-flow: column nowrap;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+    z-index: calc(var(--mynah-z-max) * 2);
+    gap: var(--mynah-sizing-3);
+    &,
+    & * {
+        pointer-events: none;
+    }
+
+    &::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: var(--mynah-color-bg);
+        opacity: 0.85;
+        z-index: 1;
+    }
+
+    &.visible {
+        opacity: 1;
+        &,
+        & * {
+            pointer-events: all;
+            cursor: wait;
+        }
+    }
+    &:not(.visible) {
+        *,
+        *:before {
+            animation: none !important;
+        }
+    }
+
+    > * {
+        z-index: 2;
+    }
+    > .mynah-ui-splash-loader-container {
+        display: flex;
+        flex-flow: row nowrap;
+        justify-content: center;
+        align-items: center;
+        overflow: hidden;
+        gap: var(--mynah-sizing-3);
+        > .mynah-ui-icon {
+            color: var(--mynah-color-status-info);
+        }
+        > .mynah-ui-splash-loader-text {
+            &:empty {
+                display: none;
+            }
+            font-size: var(--mynah-font-size-medium);
+            color: var(--mynah-color-text-default);
+        }
+        > .mynah-ui-spinner-container {
+            width: min(30vw, 30vh, 200px);
+            height: min(30vw, 30vh, 200px);
+            > .mynah-ui-spinner-logo-part.backdrop {
+                filter: blur(30px);
+            }
+            > .mynah-ui-spinner-logo-part.semi-backdrop::before {
+                filter: blur(30px);
+            }
+        }
+    }
+
+    > .mynah-ui-splash-loader-buttons {
+        display: flex;
+        flex-flow: row nowrap;
+        justify-content: center;
+        align-items: center;
+        overflow: hidden;
+        gap: var(--mynah-sizing-3);
+        &:empty {
+            display: none;
+        }
+        > .mynah-button,
+        > .mynah-button * {
+            pointer-events: all;
+            cursor: pointer;
+        }
+    }
+}

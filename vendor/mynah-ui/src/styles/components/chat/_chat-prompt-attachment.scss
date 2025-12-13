@@ -1,0 +1,80 @@
+@import '../../mixins';
+.outer-container {
+    display: flex;
+    &:not(:empty) {
+        margin-top: var(--mynah-sizing-3);
+    }
+}
+
+.mynah-prompt-attachment-container.vertical-overflow {
+    & pre {
+        // Show fading effect at the bottom when overflowing
+        @include list-fader-bottom(var(--mynah-sizing-16));
+    }
+}
+
+.mynah-prompt-attachment-container {
+    box-sizing: border-box;
+    max-width: 100%;
+    max-height: calc(2 * var(--mynah-sizing-12));
+    > .mynah-button {
+        position: absolute;
+        background-color: var(--mynah-card-bg) !important;
+        width: var(--mynah-sizing-7) !important;
+        min-width: var(--mynah-sizing-7) !important;
+        max-width: var(--mynah-sizing-7) !important;
+        height: var(--mynah-sizing-7) !important;
+        border-radius: 100%;
+        right: calc(-1 * var(--mynah-sizing-2));
+        top: calc(-1 * var(--mynah-sizing-2));
+        border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+        opacity: 1 !important;
+        filter: brightness(0.95);
+    }
+    &:not(:hover) {
+        > .mynah-button {
+            display: none;
+        }
+    }
+    > .mynah-card-body > .mynah-syntax-highlighter {
+        & pre {
+            text-overflow: ellipsis;
+        }
+    }
+    .more-content-indicator {
+        display: none !important;
+    }
+}
+
+.mynah-prompt-input-snippet-attachment-overlay {
+    max-width: 90vw;
+    max-height: 70vh;
+    > .mynah-card-body {
+        > .mynah-syntax-highlighter {
+            max-height: calc(70vh - var(--mynah-sizing-12)) !important;
+        }
+    }
+}
+.mynah-prompt-attachment-container,
+.mynah-prompt-input-snippet-attachment-overlay {
+    position: relative;
+    overflow: visible;
+    width: 100%;
+    box-sizing: border-box;
+    > .mynah-card-body {
+        max-height: 100%;
+        > .mynah-syntax-highlighter {
+            user-select: none;
+            pointer-events: none;
+            margin: 0;
+            max-height: 100%;
+            overflow: hidden;
+            > .mynah-syntax-highlighter-copy-buttons {
+                display: none;
+            }
+        }
+    }
+    & pre {
+        text-overflow: ellipsis;
+    }
+}

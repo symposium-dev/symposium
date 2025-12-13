@@ -1,0 +1,48 @@
+.mynah-collapsible-content-wrapper {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    overflow: hidden;
+    position: relative;
+    > .mynah-collapsible-content-checkbox {
+        display: none;
+        & + .mynah-collapsible-content-label {
+            box-sizing: border-box;
+            display: flex;
+            flex-flow: column nowrap;
+            overflow: hidden;
+            align-items: flex-start;
+            justify-content: stretch;
+            padding: var(--mynah-sizing-2);
+            gap: var(--mynah-sizing-2);
+            > .mynah-collapsible-content-label-title-wrapper {
+                gap: var(--mynah-sizing-2);
+                display: flex;
+                flex-flow: row nowrap;
+                box-sizing: border-box;
+                width: 100%;
+                overflow: hidden;
+                justify-content: flex-start;
+                align-items: flex-start;
+                pointer-events: all;
+                cursor: pointer;
+                user-select: none;
+                > .mynah-collapsible-content-label-title-text {
+                    flex: 1;
+                    overflow: hidden;
+                }
+            }
+            > .mynah-collapsible-content-label-content-wrapper {
+                overflow: hidden;
+                box-sizing: border-box;
+                width: 100%;
+            }
+        }
+
+        &:checked + .mynah-collapsible-content-label {
+            > .mynah-collapsible-content-label-content-wrapper {
+                display: none;
+            }
+        }
+    }
+}

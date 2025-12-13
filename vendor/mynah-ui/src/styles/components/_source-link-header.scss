@@ -1,0 +1,188 @@
+> .mynah-source-link-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    opacity: 1;
+    gap: var(--mynah-sizing-2);
+    transition: var(--mynah-very-short-transition);
+    > .mynah-source-thumbnail {
+        font-style: normal;
+        font-weight: normal;
+        display: none;
+        width: var(--mynah-sizing-8);
+        height: var(--mynah-sizing-8);
+        font-variant: normal;
+        text-transform: none;
+        border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+        border-radius: 100%;
+        background-size: 85%;
+        background-clip: content-box;
+        background-position: center center;
+        background-repeat: no-repeat;
+        align-self: flex-start;
+        box-sizing: border-box;
+        background-color: var(--mynah-card-bg);
+        position: relative;
+        overflow: hidden;
+        &:after {
+            content: '';
+            pointer-events: none;
+            box-sizing: border-box;
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            width: auto;
+            height: auto;
+            border: 2px solid var(--mynah-card-bg);
+            border-radius: 100%;
+        }
+    }
+    > .mynah-source-link-title-wrapper {
+        flex: 1 1 0;
+        display: flex;
+        flex-flow: column nowrap;
+        align-items: flex-start;
+        gap: var(--mynah-sizing-half);
+        max-width: 100%;
+        overflow: hidden;
+        cursor: pointer;
+        &:hover > .mynah-source-link-title > .mynah-source-link-expand-icon {
+            opacity: 0.75;
+            align-self: baseline;
+        }
+        > .mynah-source-link-title {
+            font-size: var(--mynah-font-size-medium);
+            font-weight: 500;
+            color: var(--mynah-color-text-strong);
+            width: 100%;
+            display: inline-flex;
+            flex-flow: row nowrap;
+            align-items: center;
+            justify-content: flex-start;
+            gap: var(--mynah-sizing-2);
+            white-space: normal;
+            text-overflow: ellipsis;
+            text-decoration: none;
+            outline: none;
+            overflow: hidden;
+            > .mynah-source-link-expand-icon {
+                transition: var(--mynah-short-transition-rev);
+                opacity: 0;
+                color: var(--mynah-color-text-weak);
+                font-size: var(--mynah-font-size-xsmall);
+                display: inline;
+                padding: var(--mynah-sizing-1);
+            }
+        }
+        > .mynah-source-link-url {
+            font-size: var(--mynah-font-size-xsmall);
+            font-weight: 300;
+            color: var(--mynah-color-text-link);
+            white-space: nowrap;
+            text-overflow: ellipsis;
+            text-decoration: none;
+            outline: none;
+            overflow: hidden;
+            max-width: 100%;
+            position: relative;
+            padding-bottom: var(--mynah-sizing-1);
+            display: inline-block;
+            transition: var(--mynah-short-transition-rev);
+            &:after {
+                content: '';
+                position: relative;
+                display: block;
+                bottom: 0;
+                left: 0;
+                width: 100%;
+                height: 1px;
+                border-radius: var(--mynah-sizing-half);
+                background-color: currentColor;
+                transform: translate3d(-30%, 0, 0);
+                transition: var(--mynah-short-transition-rev);
+                opacity: 0;
+            }
+            &:hover {
+                &:after {
+                    transform: translate3d(0, 0, 0);
+                    opacity: 1;
+                }
+            }
+            > span {
+                &:not(:last-child) {
+                    &:after {
+                        content: '>';
+                        margin: 0 var(--mynah-sizing-1);
+                    }
+                }
+                &:nth-child(3) ~ span:not(:last-child) {
+                    display: none;
+                }
+                &:last-child {
+                    font-weight: bold;
+                }
+                &:nth-child(3):not(:last-child):after {
+                    content: '> ... >';
+                }
+            }
+        }
+        > .mynah-title-meta-block {
+            display: flex;
+            flex-flow: row wrap;
+            align-items: center;
+            justify-content: flex-start;
+            gap: var(--mynah-sizing-1);
+            margin-bottom: var(--mynah-sizing-half);
+            &:empty {
+                display: none;
+            }
+            > .mynah-title-meta-block-item {
+                display: inline-flex;
+                flex-flow: row nowrap;
+                align-items: center;
+                justify-content: flex-start;
+                gap: var(--mynah-sizing-1);
+                padding: calc(var(--mynah-sizing-half) * 3);
+                border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+                border-radius: var(--mynah-button-radius);
+                opacity: 0.75;
+                > .mynah-icon {
+                    opacity: 0.5;
+                    font-size: var(--mynah-font-size-medium);
+                    color: var(--mynah-color-text-weak);
+                }
+                > .mynah-title-meta-block-item-text {
+                    font-size: var(--mynah-font-size-xxsmall);
+                    color: var(--mynah-color-text-weak);
+                    &::first-letter {
+                        text-transform: capitalize;
+                    }
+                }
+                &.approved-answer {
+                    border-color: green;
+                    position: relative;
+                    &:before {
+                        content: '';
+                        border-radius: var(--mynah-button-radius);
+                        position: absolute;
+                        top: 0;
+                        left: 0;
+                        right: 0;
+                        bottom: 0;
+                        background-color: green;
+                        opacity: 0.04;
+                    }
+                    > .mynah-icon {
+                        opacity: 1;
+                        color: green;
+                        border-radius: var(--mynah-button-radius);
+                        width: var(--mynah-sizing-3);
+                        height: var(--mynah-sizing-3);
+                    }
+                }
+            }
+        }
+    }
+}

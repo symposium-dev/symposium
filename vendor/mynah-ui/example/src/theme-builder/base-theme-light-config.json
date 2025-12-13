@@ -1,0 +1,472 @@
+{
+    "--mynah-max-width": {
+        "type": "measurement",
+        "description": "Max width for mynah-ui container",
+        "units": ["px", "rem", "vw", ""],
+        "unit": "px",
+        "category": "sizing",
+        "value": "2560"
+    },
+    "--mynah-sizing-base": {
+        "type": "measurement",
+        "description": "Base spacing value used on paddings, margins etc.",
+        "units": ["px", "rem", ""],
+        "unit": "px",
+        "category": "sizing",
+        "value": "4"
+    },
+    "--mynah-chat-wrapper-spacing": {
+        "type": "text",
+        "description": "Chat wrapper spacing value used on paddings and the distance between cards",
+        "category": "sizing",
+        "value": "var(--mynah-sizing-4)"
+    },
+    "--mynah-font-family": {
+        "type": "text",
+        "description": "Base font-family",
+        "category": "font-family",
+        "value": "system-ui, -apple-system, sans-serif"
+    },
+    "--mynah-syntax-code-font-family": {
+        "type": "text",
+        "description": "Code blocks' font-family",
+        "category": "font-family",
+        "value": "consolas, Monaco, Lucida Console, Liberation Mono, DejaVu Sans Mono, Bitstream Vera Sans Mono Courier New, monospace"
+    },
+    "--mynah-color-text-default": {
+        "type": "color",
+        "description": "Default text color used in various places",
+        "category": "text-color",
+        "alpha": "100",
+        "value": "#597688"
+    },
+    "--mynah-color-text-alternate": {
+        "type": "color",
+        "description": "Alternate text color used in various places",
+        "category": "text-color",
+        "alpha": "100",
+        "value": "#ffffff"
+    },
+    "--mynah-color-text-strong": {
+        "type": "color",
+        "description": "Strong text color used in various places",
+        "category": "text-color",
+        "alpha": "100",
+        "value": "#296689"
+    },
+    "--mynah-color-text-weak": {
+        "type": "color",
+        "description": "Light text color used in various places",
+        "category": "text-color",
+        "alpha": "100",
+        "value": "#bacad8"
+    },
+    "--mynah-color-text-link": {
+        "type": "color",
+        "description": "Link text color",
+        "category": "text-color",
+        "alpha": "100",
+        "value": "#006ab1"
+    },
+    "--mynah-color-text-input-border": {
+        "type": "color",
+        "description": "Border of the chat input textbox, when it does not have focus",
+        "category": "border-style",
+        "alpha": "100",
+        "value": "#fafcff"
+    },
+    "--mynah-color-text-input-border-focused": {
+        "type": "color",
+        "description": "Border of the chat input textbox, when it has focus",
+        "category": "border-style",
+        "alpha": "100",
+        "value": "#e6e8eb"
+    },
+    "--mynah-color-text-input": {
+        "type": "color",
+        "description": "Input text color used in input fields",
+        "category": "text-color",
+        "alpha": "100",
+        "value": "#517185"
+    },
+    "--mynah-color-text-input-placeholder": {
+        "type": "color",
+        "description": "Link text color",
+        "category": "text-color",
+        "alpha": "100",
+        "value": "#bacad8"
+    },
+    "--mynah-color-light": {
+        "type": "color",
+        "description": "Light shade text color used in various places",
+        "category": "text-color",
+        "alpha": "5",
+        "value": "#000000"
+    },
+    "--mynah-color-highlight": {
+        "type": "color",
+        "description": "Highlighted text background color",
+        "category": "text-color",
+        "alpha": "100",
+        "value": "#fff3d6"
+    },
+    "--mynah-color-highlight-text": {
+        "type": "color",
+        "description": "Highlighted text foreground/text color",
+        "category": "text-color",
+        "alpha": "100",
+        "value": "#886411"
+    },
+    "--mynah-color-border-default": {
+        "type": "color",
+        "description": "Default border color used in several places",
+        "category": "border-style",
+        "alpha": "100",
+        "value": "#e6e8eb"
+    },
+    "--mynah-button-border-width": {
+        "type": "measurement",
+        "description": "Button border width",
+        "units": ["px", "rem", ""],
+        "unit": "px",
+        "category": "border-style",
+        "value": "1"
+    },
+    "--mynah-border-width": {
+        "type": "measurement",
+        "description": "Default border width used in several places",
+        "units": ["px", "rem", ""],
+        "unit": "px",
+        "category": "border-style",
+        "value": "1"
+    },
+    "--mynah-color-syntax-variable": {
+        "type": "color",
+        "description": "Variable color inside code blocks",
+        "category": "syntax-color",
+        "alpha": "100",
+        "value": "#7e009e"
+    },
+    "--mynah-color-syntax-function": {
+        "type": "color",
+        "description": "Function declaration color inside code blocks",
+        "category": "syntax-color",
+        "alpha": "100",
+        "value": "#4dc9ff"
+    },
+    "--mynah-color-syntax-operator": {
+        "type": "color",
+        "description": "Operator color inside code blocks",
+        "category": "syntax-color",
+        "alpha": "100",
+        "value": "#e60086"
+    },
+    "--mynah-color-syntax-attr-value": {
+        "type": "color",
+        "description": "Attribute value color inside code blocks",
+        "category": "syntax-color",
+        "alpha": "100",
+        "value": "#007acc"
+    },
+    "--mynah-color-syntax-attr": {
+        "type": "color",
+        "description": "Attribute color inside code blocks",
+        "category": "syntax-color",
+        "alpha": "100",
+        "value": "#dc0450"
+    },
+    "--mynah-color-syntax-property": {
+        "type": "color",
+        "description": "Property color inside code blocks",
+        "category": "syntax-color",
+        "alpha": "100",
+        "value": "#00d1e0"
+    },
+    "--mynah-color-syntax-comment": {
+        "type": "color",
+        "description": "Comment color inside code blocks",
+        "category": "syntax-color",
+        "alpha": "100",
+        "value": "#0c923f"
+    },
+    "--mynah-color-syntax-code": {
+        "type": "color",
+        "description": "Default code text color inside code blocks and inline code",
+        "category": "syntax-color",
+        "alpha": "100",
+        "value": "#0051a8"
+    },
+    "--mynah-color-syntax-bg": {
+        "type": "color",
+        "description": "Default background color of code blocks and inline code",
+        "category": "syntax-color",
+        "alpha": "100",
+        "value": "#fafcff"
+    },
+    "--mynah-color-status-info": {
+        "type": "color",
+        "description": "Info color",
+        "category": "status-color",
+        "alpha": "100",
+        "value": "#28a7e6"
+    },
+    "--mynah-color-status-success": {
+        "type": "color",
+        "description": "Success color",
+        "category": "status-color",
+        "alpha": "100",
+        "value": "#36e281"
+    },
+    "--mynah-color-status-warning": {
+        "type": "color",
+        "description": "Warning color",
+        "category": "status-color",
+        "alpha": "100",
+        "value": "#eca14b"
+    },
+    "--mynah-color-status-error": {
+        "type": "color",
+        "description": "Error color",
+        "category": "status-color",
+        "alpha": "100",
+        "value": "#e60063"
+    },
+    "--mynah-color-bg": {
+        "type": "color",
+        "description": "Main background color ",
+        "category": "background-color",
+        "alpha": "100",
+        "value": "#fafcff"
+    },
+    "--mynah-color-tab-active": {
+        "type": "color",
+        "description": "Tab active background color",
+        "category": "background-color",
+        "alpha": "100",
+        "value": "#ffffff"
+    },
+    "--mynah-color-toggle": {
+        "type": "color",
+        "description": "Toggle background color",
+        "category": "background-color",
+        "alpha": "100",
+        "value": "#fafbfc"
+    },
+    "--mynah-color-toggle-reverse": {
+        "type": "color",
+        "description": "Toggle foreground/text color",
+        "category": "background-color",
+        "alpha": "50",
+        "value": "#000000"
+    },
+    "--mynah-color-button": {
+        "type": "color",
+        "description": "Button background color",
+        "category": "background-color",
+        "alpha": "100",
+        "value": "#1e9ddc"
+    },
+    "--mynah-color-button-reverse": {
+        "type": "color",
+        "description": "Button foreground/text color",
+        "category": "background-color",
+        "alpha": "100",
+        "value": "#ffffff"
+    },
+    "--mynah-color-alternate": {
+        "type": "color",
+        "description": "Alternative background color",
+        "category": "background-color",
+        "alpha": "100",
+        "value": "#5f6a79"
+    },
+    "--mynah-color-alternate-reverse": {
+        "type": "color",
+        "description": "Alternative foreground/text color",
+        "category": "background-color",
+        "alpha": "100",
+        "value": "#ffffff"
+    },
+    "--mynah-card-bg": {
+        "type": "color",
+        "description": "Card background color",
+        "category": "background-color",
+        "alpha": "100",
+        "value": "#ffffff"
+    },
+    "--mynah-card-bg-alternate": {
+        "type": "color",
+        "description": "Card alternate background color",
+        "category": "background-color",
+        "alpha": "100",
+        "value": "#a1b6d3"
+    },
+    "--mynah-shadow-button": {
+        "type": "text",
+        "description": "Button shadows",
+        "category": "shadow",
+        "value": "0 5px 10px -10px rgba(0, 0, 0, 0.25)"
+    },
+    "--mynah-shadow-card": {
+        "type": "text",
+        "description": "Card shadow",
+        "category": "shadow",
+        "value": "0 10px 20px -15px rgba(0, 0, 0, 0.25)"
+    },
+    "--mynah-shadow-overlay": {
+        "type": "text",
+        "description": "Overlay shadows (notification, bottom popup etc.)",
+        "category": "shadow",
+        "value": "0 7px 27px -12px rgba(0, 0, 0, 0.35)"
+    },
+    "--mynah-syntax-code-font-size": {
+        "type": "measurement",
+        "description": "Code block font size used code blocks (not the inline codes!)",
+        "category": "font-size",
+        "units": ["px", "rem", ""],
+        "unit": "rem",
+        "value": "1"
+    },
+    "--mynah-syntax-code-line-height": {
+        "type": "measurement",
+        "description": "Line height for texts inside cards",
+        "category": "font-size",
+        "units": ["px", "rem", "em", ""],
+        "unit": "",
+        "value": "118%"
+    },
+    "--mynah-font-size-xxsmall": {
+        "type": "measurement",
+        "description": "The smallest font size used on several places",
+        "category": "font-size",
+        "units": ["px", "rem", ""],
+        "unit": "rem",
+        "value": "0.825"
+    },
+    "--mynah-font-size-xsmall": {
+        "type": "measurement",
+        "description": "Extra small font size used on several places",
+        "category": "font-size",
+        "units": ["px", "rem", ""],
+        "unit": "rem",
+        "value": "0.875"
+    },
+    "--mynah-font-size-small": {
+        "type": "measurement",
+        "description": "Small font size used on several places",
+        "category": "font-size",
+        "units": ["px", "rem", ""],
+        "unit": "rem",
+        "value": "0.925"
+    },
+    "--mynah-font-size-medium": {
+        "type": "measurement",
+        "description": "Medium font size used on several places and the default font size in general which will follow the :root font size",
+        "category": "font-size",
+        "units": ["px", "rem", ""],
+        "unit": "rem",
+        "value": "1"
+    },
+    "--mynah-font-size-large": {
+        "type": "measurement",
+        "description": "Large font size used on several places",
+        "category": "font-size",
+        "units": ["px", "rem", ""],
+        "unit": "rem",
+        "value": "1.125"
+    },
+    "--mynah-line-height": {
+        "type": "measurement",
+        "description": "Line height for texts inside cards",
+        "category": "font-size",
+        "units": ["px", "rem", "em", ""],
+        "unit": "rem",
+        "value": "1.25"
+    },
+    "--mynah-card-radius": {
+        "type": "measurement",
+        "description": "Border radius used on all Cards",
+        "category": "radius",
+        "units": ["px", "rem", "em", ""],
+        "unit": "",
+        "value": "var(--mynah-sizing-5)"
+    },
+    "--mynah-card-radius-corner": {
+        "type": "measurement",
+        "description": "Border radius used on all Chat card edge bottom corner",
+        "category": "radius",
+        "units": ["px", "rem", "em", ""],
+        "unit": "px",
+        "value": "0"
+    },
+    "--mynah-button-radius": {
+        "type": "measurement",
+        "description": "Border radius used on buttons and follow up pills",
+        "category": "radius",
+        "units": ["px", "rem", "em", ""],
+        "unit": "",
+        "value": "var(--mynah-sizing-4)"
+    },
+    "--mynah-input-radius": {
+        "type": "measurement",
+        "description": "Border radius used on inputs",
+        "category": "radius",
+        "units": ["px", "rem", "em", ""],
+        "unit": "",
+        "value": "var(--mynah-sizing-2)"
+    },
+    "--mynah-main-wrapper-transition": {
+        "type": "text",
+        "category": "transition",
+        "description": "This is a transition animation used in several places",
+        "value": "all 350ms cubic-bezier(0.83, 0, 0.17, 1)"
+    },
+    "--mynah-bottom-panel-transition": {
+        "type": "text",
+        "category": "transition",
+        "description": "This is a transition animation used in several places",
+        "value": "all 450ms cubic-bezier(0.25, 1, 0, 1)"
+    },
+    "--mynah-short-rev-transition": {
+        "type": "text",
+        "category": "transition",
+        "description": "This is a transition animation used in several places",
+        "value": "all 280ms cubic-bezier(0.35, 1, 0, 1)"
+    },
+    "--mynah-very-short-transition": {
+        "type": "text",
+        "category": "transition",
+        "description": "This is a transition animation used in several places",
+        "value": "all 300ms cubic-bezier(0.25, 1, 0, 1)"
+    },
+    "--mynah-very-long-transition": {
+        "type": "text",
+        "category": "transition",
+        "description": "This is a transition animation used in several places",
+        "value": "all 1000ms cubic-bezier(0.25, 1, 0, 1)"
+    },
+    "--mynah-short-transition": {
+        "type": "text",
+        "category": "transition",
+        "description": "This is a transition animation used in several places",
+        "value": "all 300ms cubic-bezier(0.85, 0.15, 0, 1)"
+    },
+    "--mynah-short-transition-rev": {
+        "type": "text",
+        "category": "transition",
+        "description": "This is a transition animation used in several places",
+        "value": "all 280ms cubic-bezier(0.35, 1, 0, 1)"
+    },
+    "--mynah-short-transition-rev-opacity": {
+        "type": "text",
+        "category": "transition",
+        "description": "This is a transition animation used in several places",
+        "value": "opacity 350ms cubic-bezier(0.35, 1, 0, 1)"
+    },
+    "--mynah-text-flow-transition": {
+        "type": "text",
+        "category": "transition",
+        "description": "This is the transition animation for text flows during a stream update",
+        "value": "all 400ms cubic-bezier(0.35, 1.2, 0, 1), transform 400ms cubic-bezier(0.2, 1.05, 0, 1)"
+    }
+}

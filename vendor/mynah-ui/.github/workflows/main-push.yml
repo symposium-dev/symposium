@@ -1,0 +1,12 @@
+name: Main Branch Push
+on:
+  push:
+    branches:
+      - main
+jobs:
+  lint:
+    uses: ./.github/workflows/lint.yml
+  unit-tests:
+    uses: ./.github/workflows/unit-tests.yml
+  e2e-linux:
+    uses: ./.github/workflows/e2e-linux.yml

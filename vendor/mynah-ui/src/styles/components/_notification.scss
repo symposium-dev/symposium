@@ -1,0 +1,58 @@
+.mynah-notification {
+    display: inline-flex;
+    flex-flow: row nowrap;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: var(--mynah-sizing-2);
+    padding: var(--mynah-sizing-2);
+    overflow: hidden;
+    position: relative;
+    &.mynah-notification-clickable {
+        pointer-events: all;
+        cursor: pointer;
+    }
+    > .mynah-ui-icon {
+        font-size: var(--mynah-font-size-large);
+        &- {
+            &ok-circled {
+                color: var(--mynah-color-status-success);
+            }
+            @each $status in info warning error {
+                &#{$status} {
+                    color: var(--mynah-color-status-#{$status});
+                }
+            }
+        }
+    }
+    > .mynah-notification-container {
+        flex: 1;
+        max-width: 50vw;
+        min-width: 200px;
+        display: inline-flex;
+        flex-flow: column nowrap;
+        align-items: flex-start;
+        justify-content: flex-start;
+        gap: var(--mynah-sizing-2);
+        overflow: hidden;
+        position: relative;
+        > .mynah-notification-title {
+            margin: 0;
+            &:empty {
+                display: none;
+            }
+        }
+        > .mynah-notification-content {
+            font-size: var(--mynah-font-size-small);
+            display: flex;
+            flex-flow: column nowrap;
+            justify-content: flex-start;
+            align-items: flex-start;
+            gap: var(--mynah-sizing-1);
+            > .mynah-button {
+                align-self: stretch;
+                background-color: var(--mynah-color-alternate);
+                color: var(--mynah-color-alternate-reverse);
+            }
+        }
+    }
+}

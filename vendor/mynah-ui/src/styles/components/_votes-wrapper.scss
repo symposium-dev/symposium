@@ -1,0 +1,70 @@
+.mynah-card-votes-wrapper {
+    align-items: center;
+    gap: var(--mynah-sizing-2);
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    font-size: var(--mynah-font-size-small);
+    flex: 1;
+    > span.mynah-feedback-thanks {
+        overflow: hidden;
+    }
+    > .mynah-button > span {
+        padding: 0;
+        font-size: var(--mynah-font-size-small);
+        color: var(--mynah-color-text-link);
+    }
+    > .mynah-vote-text {
+        color: var(--mynah-color-text-weak);
+        font-size: var(--mynah-font-size-small);
+    }
+    > .mynah-card-vote {
+        position: relative;
+        overflow: visible;
+        display: inline-flex;
+        align-items: center;
+        box-sizing: border-box;
+        gap: var(--mynah-sizing-1);
+        > .mynah-vote-radio {
+            display: none;
+        }
+        > .mynah-vote-label {
+            z-index: var(--mynah-z-1);
+            cursor: pointer;
+            font-size: var(--mynah-font-size-small);
+            transition: var(--mynah-very-short-transition);
+            width: var(--mynah-sizing-5);
+            height: var(--mynah-sizing-5);
+            display: inline-flex;
+            justify-content: center;
+            align-items: center;
+            color: var(--mynah-color-text-weak);
+            opacity: 0.5;
+            padding: var(--mynah-sizing-1);
+            border: var(--mynah-border-width) solid transparent;
+            border-radius: var(--mynah-button-radius);
+            &:hover {
+                opacity: 1;
+                border-color: currentColor;
+            }
+            > * {
+                pointer-events: none;
+            }
+            > i {
+                height: calc(var(--mynah-sizing-6) + var(--mynah-sizing-half));
+            }
+        }
+        > .mynah-vote-up-radio:checked {
+            & ~ .mynah-vote-up {
+                color: var(--mynah-color-text-default);
+                opacity: 1;
+            }
+        }
+        > .mynah-vote-down-radio:checked {
+            & ~ .mynah-vote-down {
+                color: var(--mynah-color-text-default);
+                opacity: 1;
+            }
+        }
+    }
+}

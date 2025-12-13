@@ -1,0 +1,69 @@
+.mynah-nav-tabs-wrapper {
+    border-top: var(--mynah-button-border-width) solid var(--mynah-color-border-default);
+    background-color: var(--mynah-color-bg);
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    z-index: var(--mynah-z-1);
+    min-height: var(--mynah-sizing-8);
+    max-height: var(--mynah-sizing-8);
+    position: relative;
+    &:after {
+        content: '';
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        width: auto;
+        height: var(--mynah-button-border-width);
+        background-color: var(--mynah-color-border-default);
+    }
+
+    > .mynah-tabs-container {
+        height: 100%;
+        background: none;
+        box-sizing: border-box;
+        > span {
+            white-space: nowrap;
+        }
+    }
+    &:empty {
+        display: none;
+    }
+
+    &.mynah-nav-tabs-loading,
+    &.mynah-nav-tabs-loading * {
+        pointer-events: none;
+    }
+    .mynah-button {
+        margin: var(--mynah-border-width);
+        margin-top: 0;
+    }
+}
+
+@import 'nav-tabs-buttons-wrapper';
+
+.mynah-nav-tabs-max-reached-overlay {
+    min-width: max(20vw, 100px);
+    max-width: 90vw;
+}
+
+.mynah-overlay > .mynah-overlay-container .mynah-card.mynah-nav-tabs-close-confirmation-overlay {
+    > .mynah-nav-tabs-close-confirmation-buttons-wrapper {
+        display: inline-flex;
+        flex-flow: row nowrap;
+        max-width: max-content;
+        gap: var(--mynah-sizing-3);
+        > .mynah-button {
+            pointer-events: all !important;
+            &.mynah-nav-tabs-close-confirmation-close-button {
+                border: var(--mynah-border-width) solid var(--mynah-color-border-default);
+                color: var(--mynah-color-text-default);
+                background-color: transparent;
+                &:hover {
+                    border-color: var(--mynah-color-text-default);
+                }
+            }
+        }
+    }
+}

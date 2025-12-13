@@ -1,0 +1,73 @@
+body.mynah-ui-root {
+    min-width: 100vw;
+    min-height: 100vh;
+}
+
+#mynah-wrapper {
+    container-type: size;
+    container-name: mynah-wrapper;
+    display: flex;
+    flex-flow: column nowrap;
+    margin: 0 auto;
+    width: inherit;
+    min-width: inherit;
+    max-width: var(--mynah-max-width);
+    box-sizing: border-box;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+    justify-content: stretch;
+    align-items: stretch;
+    background-color: var(--mynah-color-bg);
+    color: var(--mynah-color-text-default);
+
+    > .mynah-no-tabs-wrapper:not(.hidden) {
+        & + .mynah-ui-tab-contents-wrapper {
+            display: none;
+        }
+    }
+    > .mynah-ui-tab-contents-wrapper {
+        position: relative;
+        width: inherit;
+        min-width: inherit;
+        max-width: inherit;
+        display: block;
+        height: inherit;
+        // Flexbox fix
+        min-height: 0;
+        flex: 1;
+
+        &:first-child {
+            > .mynah-chat-wrapper {
+                display: flex;
+            }
+        }
+    }
+
+    @for $i from 1 through 6 {
+        h#{$i} {
+            font-weight: 600;
+        }
+    }
+
+    ::-webkit-scrollbar {
+        width: 2px;
+        height: 2px;
+        opacity: 0.25;
+        &:horizontal {
+            width: 0px;
+            height: 0px;
+        }
+    }
+
+    *:focus {
+        outline: none;
+    }
+}
+
+@container mynah-wrapper (max-width: 0px) {
+    * {
+        display: none !important;
+        content-visibility: hidden !important;
+    }
+}

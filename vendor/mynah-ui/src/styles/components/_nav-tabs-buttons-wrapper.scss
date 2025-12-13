@@ -1,0 +1,39 @@
+.mynah-nav-tabs-bar-buttons-wrapper {
+    border-left: var(--mynah-button-border-width) solid var(--mynah-color-border-default);
+    display: inline-flex;
+    align-items: center;
+    overflow: hidden;
+    z-index: var(--mynah-z-1);
+    min-height: var(--mynah-sizing-10);
+    max-height: var(--mynah-sizing-10);
+    position: relative;
+    flex-shrink: 0;
+    flex-grow: 1;
+    justify-content: flex-end;
+    &:empty {
+        display: none;
+    }
+}
+.mynah-nav-tabs-bar-buttons-wrapper-overlay {
+    display: inline-flex;
+    flex-flow: column nowrap;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: var(--mynah-sizing-1);
+    overflow: hidden;
+    position: relative;
+    pointer-events: all;
+    padding: var(--mynah-sizing-4);
+    border-radius: inherit;
+    button {
+        pointer-events: all;
+        > .mynah-button-label {
+            padding: 0;
+        }
+        > i {
+            & + .mynah-button-label {
+                padding-left: var(--mynah-sizing-1);
+            }
+        }
+    }
+}

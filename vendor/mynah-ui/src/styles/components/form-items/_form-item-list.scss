@@ -1,0 +1,58 @@
+.mynah-form-item-list-wrapper {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: var(--mynah-sizing-2);
+
+    > .mynah-form-item-list-rows-wrapper {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: var(--mynah-sizing-2);
+
+        > .mynah-form-item-list-row {
+            display: flex;
+            align-items: center;
+            gap: var(--mynah-sizing-2);
+            > .mynah-form-item-list-row-header {
+                display: flex;
+                flex-flow: column nowrap;
+                flex: 1;
+                gap: var(--mynah-sizing-half);
+            }
+            > .mynah-form-item-list-row-remove-all-button {
+                opacity: 0 !important;
+                pointer-events: none;
+                &:first-child {
+                    display: none !important;
+                }
+            }
+
+            > .mynah-form-item-list-row-items-container {
+                width: 100%;
+                display: flex;
+                gap: var(--mynah-sizing-2);
+
+                > .mynah-chat-item-form-items-container {
+                    width: 100%;
+                    flex-flow: row nowrap;
+                    justify-content: stretch;
+                    gap: var(--mynah-sizing-2);
+                    padding-bottom: 0;
+
+                    > .mynah-form-input-wrapper {
+                        flex: 1;
+                    }
+
+                    .mynah-form-input-label {
+                        color: var(--mynah-color-text-weak);
+                    }
+                }
+            }
+        }
+    }
+
+    > .mynah-form-item-list-add-button {
+        width: fit-content;
+    }
+}

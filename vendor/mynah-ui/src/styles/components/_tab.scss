@@ -1,0 +1,116 @@
+.mynah-tabs-container {
+    flex-flow: row nowrap;
+    max-width: 100%;
+    overflow: hidden;
+    align-items: center;
+    position: relative;
+    background: var(--mynah-color-toggle);
+    color: var(--mynah-color-toggle-reverse);
+    justify-content: flex-start;
+    overflow-y: hidden;
+    overflow-x: auto;
+    scrollbar-color: transparent transparent;
+    scrollbar-width: none;
+    display: flex;
+    > span {
+        overflow: hidden;
+        height: 100%;
+        min-width: var(--mynah-sizing-8);
+        max-width: calc(3 * var(--mynah-sizing-15));
+        flex-shrink: 0;
+        order: 10;
+        &.mynah-tab-item-pinned {
+            order: 5;
+        }
+        > .mynah-tab-item {
+            display: none;
+            &:not(:first-child) + .mynah-tab-item-label {
+                margin-left: calc(-1 * var(--mynah-sizing-1));
+            }
+            &:not(:checked) + .mynah-tab-item-label {
+                &.indication:after {
+                    content: '';
+                    position: absolute;
+                    top: 50%;
+                    transform: translateY(-50%);
+                    left: calc(var(--mynah-sizing-1) + var(--mynah-sizing-half));
+                    height: var(--mynah-sizing-1);
+                    width: var(--mynah-sizing-1);
+                    background-color: var(--mynah-color-status-success);
+                    border-radius: var(--mynah-sizing-1);
+                    border: 1px solid var(--mynah-color-text-weak);
+                    opacity: 0.75;
+                }
+            }
+            & + .mynah-tab-item-label {
+                cursor: pointer;
+                pointer-events: all;
+                position: relative;
+                z-index: var(--mynah-z-1);
+                padding: 0 var(--mynah-sizing-4) 0 var(--mynah-sizing-4);
+                gap: var(--mynah-sizing-1);
+                height: 100%;
+                box-sizing: border-box;
+                display: inline-flex;
+                overflow: hidden;
+                justify-content: stretch;
+                align-items: center;
+                color: var(--mynah-color-text-weak);
+                border-right: 1px solid var(--mynah-color-border-default);
+                border-top: 1px solid transparent;
+                background-color: var(--mynah-color-bg);
+                opacity: 0.75;
+                max-width: 100%;
+                &,
+                & * {
+                    user-select: none;
+                }
+                > span {
+                    text-overflow: ellipsis;
+                    overflow: hidden;
+                    white-space: nowrap;
+                    max-width: 100%;
+                    display: block;
+                    &:empty {
+                        display: none;
+                    }
+                }
+                > .mynah-tabs-close-button {
+                    margin-right: calc(-1 * var(--mynah-sizing-3));
+                    $closeBtnSize: var(--mynah-sizing-5);
+                    min-width: $closeBtnSize;
+                    max-width: $closeBtnSize;
+                    min-height: $closeBtnSize;
+                    max-height: $closeBtnSize;
+                    padding: 0;
+                }
+            }
+            &:checked + .mynah-tab-item-label {
+                border-top-color: var(--mynah-color-button);
+                color: var(--mynah-color-text-default);
+                opacity: 1;
+                background-color: var(--mynah-color-tab-active);
+            }
+            &[disabled='disabled'] {
+                pointer-events: none !important;
+                & + .mynah-tab-item-label {
+                    pointer-events: none !important;
+                    opacity: 0.25;
+                }
+            }
+        }
+    }
+
+    &.mynah-tabs-direction-vertical {
+        flex-flow: column nowrap;
+        gap: var(--mynah-sizing-3);
+    }
+}
+
+.mynah-tabs-disabled-tooltip-container {
+    max-width: 30vw;
+    display: inline-block;
+    padding: var(--mynah-sizing-3);
+    font-size: 80%;
+    opacity: 0.85;
+}
