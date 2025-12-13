@@ -14,7 +14,6 @@ path = "src/main.rs"
 
 [dependencies]
 # ACP proxy framework
-sacp-proxy.workspace = true
 sacp.workspace = true
 sacp-conductor.workspace = true
 

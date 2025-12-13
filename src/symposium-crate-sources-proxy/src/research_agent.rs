@@ -10,14 +10,14 @@
 use crate::{crate_sources_mcp, state::ResearchState};
 use indoc::formatdoc;
 use sacp::{
+    mcp_server::{McpServer, McpServiceRegistry},
     schema::{
         NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
         RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
         SessionNotification,
     },
-    Handled, JrMessageHandler, MessageAndCx,
+    Handled, JrConnectionCx, JrMessageHandler, MessageCx, ProxyToConductor,
 };
-use sacp_proxy::{JrCxExt, McpServiceRegistry};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{pin::pin, sync::Arc};
@@ -35,14 +35,17 @@ impl PermissionAutoApprover {
 }
 
 impl JrMessageHandler for PermissionAutoApprover {
+    type Role = ProxyToConductor;
+
     fn describe_chain(&self) -> impl std::fmt::Debug {
         "permission-auto-approver"
     }
 
     async fn handle_message(
         &mut self,
-        message: MessageAndCx,
-    ) -> Result<Handled<MessageAndCx>, sacp::Error> {
+        message: MessageCx,
+        _cx: JrConnectionCx<Self::Role>,
+    ) -> Result<Handled<MessageCx>, sacp::Error> {
         sacp::util::MatchMessage::new(message)
             .if_request(async |request: RequestPermissionRequest, request_cx| {
                 // Auto-approve all permissions for research sessions
@@ -76,14 +79,14 @@ impl JrMessageHandler for PermissionAutoApprover {
             .await
             .if_notification({
                 let state = self.state.clone();
-                async move |notification: SessionNotification, notification_cx| {
+                async move |notification: SessionNotification| {
                     // Log all notifications for research sessions
                     if state.is_research_session(&notification.session_id) {
                         tracing::debug!("Research session notification: {:?}", notification);
                         return Ok(Handled::Yes);
                     }
 
-                    Ok(Handled::No((notification, notification_cx)))
+                    Ok(Handled::No(notification))
                 }
             })
             .await
@@ -93,7 +96,7 @@ impl JrMessageHandler for PermissionAutoApprover {
 
 /// Create a NewSessionRequest for the research agent.
 pub fn research_agent_session_request(
-    sub_agent_mcp_registry: McpServiceRegistry,
+    sub_agent_mcp_registry: McpServiceRegistry<ProxyToConductor>,
 ) -> Result<NewSessionRequest, sacp::Error> {
     let cwd = std::env::current_dir().map_err(|_| sacp::Error::internal_error())?;
     let mut new_session_req = NewSessionRequest {
@@ -154,9 +157,7 @@ struct RustCrateQueryOutput {
 }
 
 /// Build the MCP server for crate research queries
-pub fn build_server(state: Arc<ResearchState>) -> sacp_proxy::McpServer {
-    use sacp_proxy::McpServer;
-
+pub fn build_server(state: Arc<ResearchState>) -> McpServer<ProxyToConductor> {
     McpServer::new()
         .instructions(indoc::indoc! {"
             Research Rust crate source code and APIs. Essential for working with unfamiliar crates.
@@ -181,7 +182,7 @@ pub fn build_server(state: Arc<ResearchState>) -> sacp_proxy::McpServer {
                 The research agent will examine the crate sources and return relevant code examples, signatures, and implementation details.
             "#},
             {
-                async move |input: RustCrateQueryParams, mcp_cx| {
+                async move |input: RustCrateQueryParams, mcp_cx: sacp::mcp_server::McpContext<ProxyToConductor>| {
                     let RustCrateQueryParams {
                         crate_name,
                         crate_version,
@@ -201,7 +202,7 @@ pub fn build_server(state: Arc<ResearchState>) -> sacp_proxy::McpServer {
                     let (response_tx, mut response_rx) = mpsc::channel::<serde_json::Value>(32);
 
                     // Create a fresh MCP service registry for this research session
-                    let sub_agent_mcp_registry = McpServiceRegistry::default()
+                    let sub_agent_mcp_registry = McpServiceRegistry::new()
                         .with_mcp_server(
                             "rust-crate-sources",
                             crate_sources_mcp::build_server(response_tx.clone()),
@@ -214,7 +215,7 @@ pub fn build_server(state: Arc<ResearchState>) -> sacp_proxy::McpServer {
                         modes: _,
                         meta: _,
                     } = cx
-                        .send_request_to_successor(research_agent_session_request(
+                        .send_request_to(sacp::Agent, research_agent_session_request(
                             sub_agent_mcp_registry,
                         ).map_err(|e| anyhow::anyhow!("Failed to create session request: {}", e))?)
                         .block_task()
@@ -247,7 +248,7 @@ pub fn build_server(state: Arc<ResearchState>) -> sacp_proxy::McpServer {
                                 stop_reason,
                                 meta: _,
                             } = cx
-                                .send_request_to_successor(prompt_request)
+                                .send_request_to(sacp::Agent, prompt_request)
                                 .block_task()
                                 .await
                                 .map_err(|e| anyhow::anyhow!("Prompt request failed: {}", e))?;

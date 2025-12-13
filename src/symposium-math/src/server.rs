@@ -105,16 +105,16 @@ pub async fn run_mcp_stdio() -> Result<()> {
 
 /// Run as ACP proxy component that provides the MCP server.
 pub async fn run_acp_proxy() -> Result<()> {
-    use sacp_proxy::{AcpProxyExt, McpServiceRegistry};
+    use sacp::ProxyToConductor;
+    use sacp::mcp_server::McpServiceRegistry;
     use sacp_rmcp::McpServiceRegistryRmcpExt;
 
     let mcp_registry =
-        McpServiceRegistry::default().with_rmcp_server("symposium-math", MathServer::new)?;
+        McpServiceRegistry::new().with_rmcp_server("symposium-math", MathServer::new)?;
 
-    sacp::JrHandlerChain::new()
+    ProxyToConductor::builder()
         .name("symposium-math-proxy")
-        .provide_mcp(mcp_registry)
-        .proxy()
+        .with_handler(mcp_registry)
         .serve(sacp_tokio::Stdio::new())
         .await?;
 

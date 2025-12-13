@@ -10,7 +10,8 @@ mod state;
 
 use anyhow::Result;
 use sacp::component::Component;
-use sacp_proxy::{AcpProxyExt, McpServiceRegistry};
+use sacp::mcp_server::McpServiceRegistry;
+use sacp::ProxyToConductor;
 use state::ResearchState;
 use std::sync::Arc;
 
@@ -40,18 +41,16 @@ impl Component for CrateSourcesProxy {
         let state = Arc::new(ResearchState::new());
 
         // Create MCP service registry with the user-facing service
-        let mcp_registry = McpServiceRegistry::default().with_mcp_server(
+        let mcp_registry = McpServiceRegistry::new().with_mcp_server(
             "rust-crate-query",
             research_agent::build_server(state.clone()),
         )?;
 
-        sacp::JrHandlerChain::new()
+        ProxyToConductor::builder()
             .name("rust-crate-sources-proxy")
-            .provide_mcp(mcp_registry)
+            .with_handler(mcp_registry)
             .with_handler(research_agent::PermissionAutoApprover::new(state.clone()))
-            .proxy()
-            .connect_to(client)?
-            .serve()
+            .serve(client)
             .await
     }
 }

@@ -47,8 +47,10 @@ struct ReturnResponseOutput {
 ///
 /// Each instance is created for a specific research session and holds a channel
 /// to send responses back to the waiting research agent.
-pub fn build_server(response_tx: mpsc::Sender<serde_json::Value>) -> sacp_proxy::McpServer {
-    use sacp_proxy::McpServer;
+pub fn build_server(
+    response_tx: mpsc::Sender<serde_json::Value>,
+) -> sacp::mcp_server::McpServer<sacp::ProxyToConductor> {
+    use sacp::mcp_server::McpServer;
 
     McpServer::new()
         .instructions("Provides tools for researching Rust crate sources: get_rust_crate_source to locate crates, return_response_to_user to deliver findings")

@@ -14,7 +14,6 @@ rmcp = { workspace = true }
 
 # ACP integration
 sacp.workspace = true
-sacp-proxy.workspace = true
 sacp-rmcp.workspace = true
 sacp-tokio.workspace = true
 

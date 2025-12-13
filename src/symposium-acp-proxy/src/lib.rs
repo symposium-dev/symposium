@@ -41,7 +41,10 @@ impl Symposium {
 
 impl sacp::Component for Symposium {
     async fn serve(self, client: impl Component) -> Result<(), sacp::Error> {
-        let Self { crate_sources_proxy, sparkle } = self;
+        let Self {
+            crate_sources_proxy,
+            sparkle,
+        } = self;
         Conductor::new(
             "symposium".to_string(),
             move |init_req| async move {
@@ -62,13 +65,15 @@ impl sacp::Component for Symposium {
                 }
 
                 // TODO: Add more components based on capabilities
-                // -car Check for IDE operation capabilities
+                // - Check for IDE operation capabilities
                 // - Spawn ide-ops adapter if missing
                 // - Spawn ide-ops component to provide MCP tools
 
                 Ok((init_req, components))
             },
             McpBridgeMode::default(),
-        ).run(client).await
+        )
+        .run(client)
+        .await
     }
 }
