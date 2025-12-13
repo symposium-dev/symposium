@@ -98,8 +98,7 @@ jobs:
       - name: Install ACP tools
         run: |
           cargo install --force elizacp
-          cargo install --force sacp-conductor
-          cargo install --force --path src/symposium-acp-proxy
+          cargo install --force --path src/symposium-acp-agent
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
