@@ -49,7 +49,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rmcp = { version = "0.9", features = ["server", "transport-io", "schemars"] }
 
 # Sparkle integration
-sparkle = { package = "sparkle-mcp", version = "0.1.6" }
+sparkle = { package = "sparkle-mcp", version = "0.1.7" }
 
 # CLI parsing
 clap = { version = "4.0", features = ["derive"] }
@@ -58,6 +58,3 @@ clap = { version = "4.0", features = ["derive"] }
 which = "6.0"
 home = "0.5"
 fxhash = "0.2.1"
-
-[patch.crates-io]
-sparkle-mcp = { path = "../sparkle/sparkle-mcp" }
