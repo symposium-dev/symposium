@@ -1,178 +1,94 @@
 # Extension Packaging
 
-This chapter documents how the VSCode extension is built and packaged for distribution.
+This chapter documents the design decisions for building and distributing the VSCode extension.
 
-## Overview
+## Architecture Overview
 
-The extension packaging involves several steps:
+The extension consists of two parts that must be bundled together:
 
-1. **Build the Rust binary** (`symposium-acp-agent`) for the target platform(s)
-2. **Build the TypeScript/webpack bundle** (extension code + webview)
-3. **Package as `.vsix`** using `vsce`
+1. **TypeScript code** - The extension logic and webview, bundled via webpack
+2. **Native binary** - The `symposium-acp-agent` Rust binary for the target platform
 
-## Directory Structure
+## Platform-Specific Extensions
 
-```
-vscode-extension/
-├── bin/                          # Bundled binaries (gitignored)
-│   └── darwin-arm64/             # Platform-specific directories
-│       └── symposium-acp-agent   # The conductor binary
-├── out/                          # Compiled JS output (gitignored)
-│   ├── extension.js              # Main extension bundle
-│   └── webview.js                # Webview bundle
-├── src/                          # TypeScript source
-├── vendor/                       # -> ../vendor (symlink or path)
-├── package.json
-├── webpack.config.js
-├── .vscodeignore                 # Files to exclude from .vsix
-└── symposium-0.0.1.vsix          # Packaged extension (gitignored)
-```
+We publish **separate extensions for each platform** rather than a universal extension containing all binaries.
 
-## Build Steps
+**Rationale:**
+- A universal extension would be ~70MB+ (all platform binaries)
+- Platform-specific extensions are ~7MB each
+- VSCode Marketplace natively supports this - users automatically get the right variant
+- Aligns with how other extensions with native dependencies work (rust-analyzer, etc.)
 
-### 1. Build the Rust Binary
+**Supported platforms:**
 
-The `symposium-acp-agent` binary must be compiled for each target platform and placed in `bin/<platform>-<arch>/`:
+| Platform | Description |
+|----------|-------------|
+| darwin-arm64 | macOS Apple Silicon |
+| darwin-x64 | macOS Intel |
+| linux-x64 | Linux x86_64 |
+| linux-arm64 | Linux ARM64 |
+| win32-x64 | Windows x86_64 |
 
-```bash
-# For local development (current platform only)
-cargo build --release -p symposium-acp-agent
+## Binary Resolution
 
-# Copy to the expected location
-mkdir -p vscode-extension/bin/darwin-arm64
-cp target/release/symposium-acp-agent vscode-extension/bin/darwin-arm64/
-```
+The extension uses a fallback chain for finding the conductor binary:
 
-Platform directory names follow Node.js conventions:
-- `darwin-arm64` (macOS Apple Silicon)
-- `darwin-x64` (macOS Intel)
-- `linux-x64` (Linux x86_64)
-- `win32-x64` (Windows x86_64)
+1. **Bundled binary** in `bin/<platform>/` (production)
+2. **PATH lookup** (development)
 
-### 2. Build the Vendored mynah-ui
+This enables local development without packaging - developers can `cargo install` the binary and the extension finds it in PATH.
 
-The extension uses a vendored fork of mynah-ui. It must be built before the extension:
+## Release Flow
 
-```bash
-cd vendor/mynah-ui
-npm ci
-npm run build
-```
-
-### 3. Build the Extension
-
-The extension uses webpack to bundle the TypeScript code:
-
-```bash
-cd vscode-extension
-npm ci
-npm run webpack  # Production build
-```
-
-This produces two bundles:
-- `out/extension.js` - The main extension (Node.js target)
-- `out/webview.js` - The webview code (browser target)
-
-### 4. Package as .vsix
-
-Use `vsce` to create the installable package:
-
-```bash
-cd vscode-extension
-npx vsce package
-```
-
-This creates `symposium-<version>.vsix`.
-
-## Binary Resolution at Runtime
-
-The extension looks for the conductor binary in this order (see `binaryPath.ts`):
-
-1. **Bundled binary**: `<extensionPath>/bin/<platform>-<arch>/symposium-acp-agent`
-2. **Simple layout**: `<extensionPath>/bin/symposium-acp-agent` (for single-platform dev)
-3. **PATH fallback**: Just `symposium-acp-agent` (development mode)
-
-This allows development without bundling binaries - just `cargo install` the binary and it will be found in PATH.
-
-## .vscodeignore
-
-The `.vscodeignore` file controls what goes into the `.vsix`:
+Releases are orchestrated through release-plz and GitHub Actions:
 
 ```
-.vscode/**
-.vscode-test/**
-src/**
-.gitignore
-tsconfig.json
-**/*.map
-**/*.ts
+release-plz creates tag
+        ↓
+GitHub Release created
+        ↓
+Binary build workflow triggered
+        ↓
+┌───────────────────────────────────────┐
+│  Build binaries (parallel)            │
+│  - macOS arm64/x64                    │
+│  - Linux x64/arm64/musl               │
+│  - Windows x64                        │
+└───────────────────────────────────────┘
+        ↓
+Upload archives to GitHub Release
+        ↓
+┌───────────────────────────────────────┐
+│  Build VSCode extensions (parallel)   │
+│  - One per platform                   │
+│  - Each bundles its platform binary   │
+└───────────────────────────────────────┘
+        ↓
+Upload .vsix files to GitHub Release
+        ↓
+Publish to marketplaces (TODO)
 ```
 
-Currently missing entries that should be added:
-- `../vendor/**` - The vendored mynah-ui source (only the built webview.js is needed)
-- `node_modules/**` - Should be excluded since webpack bundles dependencies
+**Why GitHub Releases as the source:**
+- Single source of truth for all binaries
+- Enables Zed extension (points to release archives)
+- Enables direct downloads for users not on VSCode
+- Versioned and immutable
 
-## Multi-Platform Distribution
+## Vendored mynah-ui
 
-The extension uses **platform-specific packages**. VSCode Marketplace natively supports this via the `--target` flag in `vsce`:
+The extension depends on a fork of mynah-ui (AWS's chat UI component) located in `vendor/mynah-ui`. This is managed as a git subtree.
 
-```bash
-npx vsce package --target darwin-arm64
-npx vsce package --target darwin-x64
-npx vsce package --target linux-x64
-npx vsce package --target linux-arm64
-npx vsce package --target win32-x64
-```
-
-Each `.vsix` contains only that platform's binary (~7MB each). When users install from the marketplace, VSCode automatically downloads the correct platform variant.
-
-### Target Platforms
-
-| VSCode Target | Rust Target | Description |
-|---------------|-------------|-------------|
-| darwin-arm64 | aarch64-apple-darwin | macOS Apple Silicon |
-| darwin-x64 | x86_64-apple-darwin | macOS Intel |
-| linux-x64 | x86_64-unknown-linux-gnu | Linux x86_64 (glibc) |
-| linux-arm64 | aarch64-unknown-linux-gnu | Linux ARM64 |
-| win32-x64 | x86_64-pc-windows-msvc | Windows x86_64 |
-
-We also build a musl variant (`x86_64-unknown-linux-musl`) for static linking, used in the standalone binary releases.
-
-## CI/CD Release Workflow
-
-Releases are automated via `.github/workflows/release-binaries.yml`, triggered when release-plz creates a `symposium-acp-agent-v*` tag:
-
-1. **Build binaries** for all platforms (macOS, Linux, Windows, including ARM64 and musl)
-2. **Upload to GitHub Release** as `.tar.gz` / `.zip` archives
-3. **Build platform-specific VSCode extensions** using the binaries
-4. **Upload `.vsix` files** to the GitHub Release
-
-Future steps (TODO):
-- Publish to VSCode Marketplace via `VSCE_PAT` secret
-- Publish to Open VSX via `OVSX_PAT` secret
-
-### CI Build Requirements
-
-- macOS runner for darwin targets (Apple's codesigning requirements)
-- Linux runner with cross-compilation tools for ARM64
-- Linux runner with musl-tools for static builds
-- Windows runner for MSVC builds
+**Why vendor:**
+- Enables custom features not yet upstream
+- Webpack bundles it into `webview.js` - only the built output ships in the extension
 
 ## Local Development
 
-For local development without packaging:
+For development without building platform packages:
 
-```bash
-# Install the conductor globally
-cargo install --path src/symposium-acp-agent
+1. Install the conductor: `cargo install --path src/symposium-acp-agent`
+2. Build the extension: `cd vscode-extension && npm run compile`
+3. Launch via F5 in VSCode
 
-# Build the extension
-cd vscode-extension
-npm ci
-npm run compile  # or npm run watch
-
-# Run in VSCode
-# Press F5 to launch Extension Development Host
-```
-
-The extension will find `symposium-acp-agent` in PATH when no bundled binary exists.
+The extension finds the binary in PATH when no bundled binary exists.
