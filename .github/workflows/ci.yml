@@ -107,6 +107,12 @@ jobs:
           cache: "npm"
           cache-dependency-path: vscode-extension/package-lock.json
 
+      - name: Build vendored mynah-ui
+        working-directory: vendor/mynah-ui
+        run: |
+          npm ci
+          npm run build
+
       - name: Install dependencies
         working-directory: vscode-extension
         run: npm ci
