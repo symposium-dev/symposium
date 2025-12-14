@@ -1,0 +1,173 @@
+name: Release Binaries
+
+# Triggered when release-plz creates a release for symposium-acp-agent
+on:
+  release:
+    types: [published]
+
+jobs:
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    if: startsWith(github.ref_name, 'symposium-acp-agent-v')
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            artifact: symposium-darwin-x64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact: symposium-darwin-arm64
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: symposium-linux-x64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            artifact: symposium-linux-arm64
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            artifact: symposium-linux-x64-musl
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: symposium-windows-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --target ${{ matrix.target }} -p symposium-acp-agent
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/symposium-acp-agent dist/
+          cd dist
+          tar -czvf ${{ matrix.artifact }}.tar.gz symposium-acp-agent
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir dist
+          copy target\${{ matrix.target }}\release\symposium-acp-agent.exe dist\
+          cd dist
+          7z a ${{ matrix.artifact }}.zip symposium-acp-agent.exe
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/${{ matrix.artifact }}.*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifact for VSCode job
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/symposium-acp-agent*
+
+  build-vscode-extensions:
+    name: Build VSCode Extensions
+    needs: build-binaries
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - vscode-target: darwin-arm64
+            artifact: symposium-darwin-arm64
+            binary: symposium-acp-agent
+          - vscode-target: darwin-x64
+            artifact: symposium-darwin-x64
+            binary: symposium-acp-agent
+          - vscode-target: linux-x64
+            artifact: symposium-linux-x64
+            binary: symposium-acp-agent
+          - vscode-target: linux-arm64
+            artifact: symposium-linux-arm64
+            binary: symposium-acp-agent
+          - vscode-target: win32-x64
+            artifact: symposium-windows-x64
+            binary: symposium-acp-agent.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: vscode-extension/bin/${{ matrix.vscode-target }}
+
+      - name: Make binary executable
+        if: runner.os != 'Windows'
+        run: chmod +x vscode-extension/bin/${{ matrix.vscode-target }}/${{ matrix.binary }}
+
+      - name: Build vendored mynah-ui
+        working-directory: vendor/mynah-ui
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install extension dependencies
+        working-directory: vscode-extension
+        run: npm ci
+
+      - name: Package extension
+        working-directory: vscode-extension
+        run: npx vsce package --target ${{ matrix.vscode-target }}
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: vscode-extension/*.vsix
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # TODO: Publish to VSCode Marketplace
+  # publish-vscode-marketplace:
+  #   name: Publish to VSCode Marketplace
+  #   needs: build-vscode-extensions
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #     - run: npx vsce publish --packagePath *.vsix
+  #       env:
+  #         VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+  # TODO: Publish to Open VSX
+  # publish-open-vsx:
+  #   name: Publish to Open VSX
+  #   needs: build-vscode-extensions
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - uses: actions/download-artifact@v4
+  #     - run: npx ovsx publish *.vsix
+  #       env:
+  #         OVSX_PAT: ${{ secrets.OVSX_PAT }}

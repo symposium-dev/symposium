@@ -114,41 +114,49 @@ Currently missing entries that should be added:
 
 ## Multi-Platform Distribution
 
-For marketplace distribution, the extension needs binaries for all platforms. Options:
+The extension uses **platform-specific packages**. VSCode Marketplace natively supports this via the `--target` flag in `vsce`:
 
-### Option A: Platform-Specific Extensions
-
-Publish separate extensions for each platform:
-- `symposium-darwin-arm64`
-- `symposium-darwin-x64`
-- `symposium-linux-x64`
-- `symposium-win32-x64`
-
-### Option B: Universal Extension with Download
-
-Ship without binaries and download on first activation. This is more complex but results in smaller initial download.
-
-### Option C: Universal Extension with All Binaries
-
-Bundle all platform binaries in a single extension. Simple but large (~70MB+ for all platforms).
-
-## CI/CD Considerations
-
-For automated builds:
-
-1. The CI workflow needs to build mynah-ui before the extension
-2. Cross-compilation of Rust binaries requires appropriate toolchains
-3. Each platform's binary should be built on that platform (or cross-compiled)
-
-Current CI builds mynah-ui in the `vscode-extension` job:
-
-```yaml
-- name: Build vendored mynah-ui
-  working-directory: vendor/mynah-ui
-  run: |
-    npm ci
-    npm run build
+```bash
+npx vsce package --target darwin-arm64
+npx vsce package --target darwin-x64
+npx vsce package --target linux-x64
+npx vsce package --target linux-arm64
+npx vsce package --target win32-x64
 ```
+
+Each `.vsix` contains only that platform's binary (~7MB each). When users install from the marketplace, VSCode automatically downloads the correct platform variant.
+
+### Target Platforms
+
+| VSCode Target | Rust Target | Description |
+|---------------|-------------|-------------|
+| darwin-arm64 | aarch64-apple-darwin | macOS Apple Silicon |
+| darwin-x64 | x86_64-apple-darwin | macOS Intel |
+| linux-x64 | x86_64-unknown-linux-gnu | Linux x86_64 (glibc) |
+| linux-arm64 | aarch64-unknown-linux-gnu | Linux ARM64 |
+| win32-x64 | x86_64-pc-windows-msvc | Windows x86_64 |
+
+We also build a musl variant (`x86_64-unknown-linux-musl`) for static linking, used in the standalone binary releases.
+
+## CI/CD Release Workflow
+
+Releases are automated via `.github/workflows/release-binaries.yml`, triggered when release-plz creates a `symposium-acp-agent-v*` tag:
+
+1. **Build binaries** for all platforms (macOS, Linux, Windows, including ARM64 and musl)
+2. **Upload to GitHub Release** as `.tar.gz` / `.zip` archives
+3. **Build platform-specific VSCode extensions** using the binaries
+4. **Upload `.vsix` files** to the GitHub Release
+
+Future steps (TODO):
+- Publish to VSCode Marketplace via `VSCE_PAT` secret
+- Publish to Open VSX via `OVSX_PAT` secret
+
+### CI Build Requirements
+
+- macOS runner for darwin targets (Apple's codesigning requirements)
+- Linux runner with cross-compilation tools for ARM64
+- Linux runner with musl-tools for static builds
+- Windows runner for MSVC builds
 
 ## Local Development
 

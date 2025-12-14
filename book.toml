@@ -7,9 +7,6 @@ title = "Symposium"
 [preprocessor.mermaid]
 command = "mdbook-mermaid"
 
-[preprocessor.rfd]
-command = "cargo run -p md-rfd-preprocessor --"
-
 [output]
 
 [output.html]
