@@ -3,7 +3,7 @@
   "displayName": "Symposium",
   "description": "Collaborative AI built collaboratively",
   "version": "0.0.1",
-  "publisher": "symposium",
+  "publisher": "symposium-dev",
   "repository": {
     "type": "git",
     "url": "https://github.com/symposium/symposium.git"

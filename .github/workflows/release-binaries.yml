@@ -150,24 +150,40 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # TODO: Publish to VSCode Marketplace
-  # publish-vscode-marketplace:
-  #   name: Publish to VSCode Marketplace
-  #   needs: build-vscode-extensions
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/download-artifact@v4
-  #     - run: npx vsce publish --packagePath *.vsix
-  #       env:
-  #         VSCE_PAT: ${{ secrets.VSCE_PAT }}
+      - name: Upload vsix artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix-${{ matrix.vscode-target }}
+          path: vscode-extension/*.vsix
 
-  # TODO: Publish to Open VSX
+  publish-vscode-marketplace:
+    name: Publish to VSCode Marketplace
+    needs: build-vscode-extensions
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all vsix artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: vsix-*
+          merge-multiple: true
+
+      - name: Publish to marketplace
+        run: npx vsce publish --packagePath *.vsix
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+  # TODO: Publish to Open VSX (needs OVSX_PAT secret)
   # publish-open-vsx:
   #   name: Publish to Open VSX
   #   needs: build-vscode-extensions
   #   runs-on: ubuntu-latest
   #   steps:
-  #     - uses: actions/download-artifact@v4
-  #     - run: npx ovsx publish *.vsix
+  #     - name: Download all vsix artifacts
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         pattern: vsix-*
+  #         merge-multiple: true
+  #     - name: Publish to Open VSX
+  #       run: npx ovsx publish *.vsix
   #       env:
   #         OVSX_PAT: ${{ secrets.OVSX_PAT }}
