@@ -130,3 +130,32 @@ jobs:
         working-directory: vscode-extension
         run: npm test
         if: runner.os == 'macOS'
+
+  zed-dev-wrapper:
+    name: Update Zed Dev Wrapper
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wrapper archives
+        working-directory: zed-extension/dev/wrapper
+        run: ./build-archives.sh
+
+      - name: Update zed-dev-wrapper release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: zed-dev-wrapper
+          name: Zed Dev Wrapper
+          body: |
+            Wrapper scripts for the Symposium Dev Zed extension.
+            These delegate to your locally installed `symposium-acp-agent`.
+
+            Updated automatically on each push to main.
+          files: |
+            zed-extension/dev/wrapper/symposium-dev-darwin.tar.gz
+            zed-extension/dev/wrapper/symposium-dev-linux.tar.gz
+          prerelease: true

@@ -1,0 +1,31 @@
+id = "symposium-dev"
+name = "Symposium Dev"
+version = "0.1.0"
+schema_version = 1
+authors = ["Niko Matsakis <niko@alum.mit.edu>"]
+description = "Development version - uses locally installed symposium-acp-agent"
+repository = "https://github.com/symposium-dev/symposium"
+
+[agent_servers.symposium-dev]
+name = "Symposium Dev"
+icon = "./icons/symposium.svg"
+
+[agent_servers.symposium-dev.targets.darwin-aarch64]
+archive = "https://github.com/symposium-dev/symposium/releases/download/zed-dev-wrapper/symposium-dev-darwin.tar.gz"
+cmd = "./symposium-dev"
+args = ["--", "npx", "-y", "@anthropic-ai/claude-code@latest"]
+
+[agent_servers.symposium-dev.targets.darwin-x86_64]
+archive = "https://github.com/symposium-dev/symposium/releases/download/zed-dev-wrapper/symposium-dev-darwin.tar.gz"
+cmd = "./symposium-dev"
+args = ["--", "npx", "-y", "@anthropic-ai/claude-code@latest"]
+
+[agent_servers.symposium-dev.targets.linux-x86_64]
+archive = "https://github.com/symposium-dev/symposium/releases/download/zed-dev-wrapper/symposium-dev-linux.tar.gz"
+cmd = "./symposium-dev"
+args = ["--", "npx", "-y", "@anthropic-ai/claude-code@latest"]
+
+[agent_servers.symposium-dev.targets.linux-aarch64]
+archive = "https://github.com/symposium-dev/symposium/releases/download/zed-dev-wrapper/symposium-dev-linux.tar.gz"
+cmd = "./symposium-dev"
+args = ["--", "npx", "-y", "@anthropic-ai/claude-code@latest"]
