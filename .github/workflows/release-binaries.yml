@@ -34,6 +34,10 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
+      - name: Enable long paths (Windows)
+        if: runner.os == 'Windows'
+        run: git config --system core.longpaths true
+
       - uses: actions/checkout@v4
 
       - name: Install Rust
