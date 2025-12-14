@@ -11,13 +11,21 @@ export class AgentConfiguration {
   constructor(
     public readonly agentName: string,
     public readonly workspaceFolder: vscode.WorkspaceFolder,
+    public readonly enableSparkle: boolean = true,
+    public readonly enableCrateResearcher: boolean = true,
   ) {}
 
   /**
    * Get a unique key for this configuration
    */
   key(): string {
-    return `${this.agentName}:${this.workspaceFolder.uri.fsPath}`;
+    const components = [
+      this.enableSparkle ? "sparkle" : "",
+      this.enableCrateResearcher ? "crate-researcher" : "",
+    ]
+      .filter((c) => c)
+      .join("+");
+    return `${this.agentName}:${this.workspaceFolder.uri.fsPath}:${components}`;
   }
 
   /**
@@ -31,7 +39,15 @@ export class AgentConfiguration {
    * Get a human-readable description
    */
   describe(): string {
-    return this.agentName;
+    const components = [
+      this.enableSparkle ? "Sparkle" : null,
+      this.enableCrateResearcher ? "Rust Crate Researcher" : null,
+    ].filter((c) => c !== null);
+
+    if (components.length === 0) {
+      return this.agentName;
+    }
+    return `${this.agentName} + ${components.join(" + ")}`;
   }
 
   /**
@@ -45,6 +61,13 @@ export class AgentConfiguration {
 
     // Get current agent
     const currentAgentName = config.get<string>("currentAgent", "Claude Code");
+
+    // Get component settings
+    const enableSparkle = config.get<boolean>("enableSparkle", true);
+    const enableCrateResearcher = config.get<boolean>(
+      "enableCrateResearcher",
+      true,
+    );
 
     // Determine workspace folder
     let folder = workspaceFolder;
@@ -66,6 +89,11 @@ export class AgentConfiguration {
       }
     }
 
-    return new AgentConfiguration(currentAgentName, folder);
+    return new AgentConfiguration(
+      currentAgentName,
+      folder,
+      enableSparkle,
+      enableCrateResearcher,
+    );
   }
 }

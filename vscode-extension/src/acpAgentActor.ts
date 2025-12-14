@@ -256,16 +256,10 @@ export class AcpAgentActor {
     }
 
     // Add component disable flags if components are disabled
-    const enableSparkle = vsConfig.get<boolean>("enableSparkle", true);
-    if (!enableSparkle) {
+    if (!config.enableSparkle) {
       conductorArgs.push("--no-sparkle");
     }
-
-    const enableCrateResearcher = vsConfig.get<boolean>(
-      "enableCrateResearcher",
-      true,
-    );
-    if (!enableCrateResearcher) {
+    if (!config.enableCrateResearcher) {
       conductorArgs.push("--no-crate-researcher");
     }
 
