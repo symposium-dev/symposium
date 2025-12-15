@@ -1,6 +1,6 @@
 [package]
 name = "symposium-acp-agent"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 license = "Apache-2.0"
 description = "Symposium-enriched ACP agent that wraps downstream agents with enhanced capabilities"
