@@ -5,13 +5,11 @@
 
 use anyhow::Result;
 use clap::Parser;
-use sacp::{ByteStreams, Component, DynComponent};
+use sacp::DynComponent;
 use sacp_conductor::Conductor;
 use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
 use std::str::FromStr;
-use tokio::io::duplex;
-use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 #[derive(Parser, Debug)]
 #[command(name = "symposium-benchmark")]
@@ -56,19 +54,8 @@ async fn main() -> Result<()> {
 
     // Initialize tracing based on --log argument
     if let Some(log_targets) = &args.log {
-        let mut filter = tracing_subscriber::EnvFilter::from_default_env();
-        for target in log_targets.split(',') {
-            let target = target.trim();
-            if !target.is_empty() {
-                // If target already has a level (contains '='), use as-is; otherwise default to debug
-                let directive = if target.contains('=') {
-                    target.to_string()
-                } else {
-                    format!("{}=debug", target)
-                };
-                filter = filter.add_directive(directive.parse().unwrap());
-            }
-        }
+        let filter =
+            tracing_subscriber::EnvFilter::try_new(log_targets).expect("invalid log filter syntax");
         tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_writer(std::io::stderr)
@@ -115,33 +102,19 @@ async fn run_benchmark(benchmark: &Benchmark, output_dir: &PathBuf) -> Result<()
     let research_prompt = benchmark.prompt;
     let expected_result = benchmark.expected;
 
-    // Create components: rust-crate-sources-proxy + Claude Code
-    let proxy = symposium_crate_sources_proxy::CrateSourcesProxy;
-    let claude_agent = AcpAgent::from_str("npx -y '@zed-industries/claude-code-acp'")?;
-
-    // Create duplex streams for editor <-> conductor communication
-    let (editor_write, conductor_read) = duplex(8192);
-    let (conductor_write, editor_read) = duplex(8192);
-
-    // Spawn conductor with proxy + agent chain (with tees for debugging)
-    let conductor_handle = tokio::spawn(async move {
+    let response = yopo::prompt(
         Conductor::new(
             "benchmark-conductor".to_string(),
-            vec![DynComponent::new(proxy), DynComponent::new(claude_agent)],
+            vec![
+                DynComponent::new(symposium_crate_sources_proxy::CrateSourcesProxy),
+                DynComponent::new(AcpAgent::from_str(
+                    "npx -y '@zed-industries/claude-code-acp'",
+                )?),
+            ],
             Default::default(),
         )
         .trace_to_path("killme.jsons")
-        .map_err(sacp::util::internal_error)?
-        .run(ByteStreams::new(
-            conductor_write.compat_write(),
-            conductor_read.compat(),
-        ))
-        .await
-    });
-
-    // Send prompt using yopo
-    let response = yopo::prompt(
-        ByteStreams::new(editor_write.compat_write(), editor_read.compat()),
+        .map_err(sacp::util::internal_error)?,
         research_prompt,
     )
     .await?;
@@ -151,30 +124,15 @@ async fn run_benchmark(benchmark: &Benchmark, output_dir: &PathBuf) -> Result<()
     // Validate response using another Claude Code instance
     tracing::info!("Validating response");
 
-    let validator_agent = AcpAgent::from_str("npx -y '@zed-industries/claude-code-acp'")?;
-    let (validator_write, validator_read) = duplex(8192);
-    let (validator_out_write, validator_out_read) = duplex(8192);
-
-    let validator_handle = tokio::spawn(async move {
-        validator_agent
-            .serve(ByteStreams::new(
-                validator_out_write.compat_write(),
-                validator_read.compat(),
-            ))
-            .await
-    });
-
-    let validation_prompt = format!(
-        "Compare this response to the expected result and respond with PASS or FAIL. \
+    let validation_result = yopo::prompt(
+        AcpAgent::from_str("npx -y '@zed-industries/claude-code-acp'")?,
+        &format!(
+            "Compare this response to the expected result and respond with PASS or FAIL. \
          If FAIL, explain what's missing.\n\n\
          Expected: {}\n\n\
          Actual response:\n{}",
-        expected_result, response
-    );
-
-    let validation_result = yopo::prompt(
-        ByteStreams::new(validator_write.compat_write(), validator_out_read.compat()),
-        &validation_prompt,
+            expected_result, response
+        ),
     )
     .await?;
 
@@ -198,10 +156,6 @@ async fn run_benchmark(benchmark: &Benchmark, output_dir: &PathBuf) -> Result<()
     println!("\n=== BENCHMARK: {} ===", benchmark.name);
     println!("VALIDATION RESULT:\n{}", validation_result);
     println!("========================\n");
-
-    // Clean up
-    validator_handle.await??;
-    conductor_handle.await??;
 
     Ok(())
 }
