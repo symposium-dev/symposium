@@ -4,7 +4,7 @@
  */
 
 import { Config } from '../helper/config';
-import { DomBuilder, ExtendedHTMLElement } from '../helper/dom';
+import { DomBuilder, DomBuilderObject, ExtendedHTMLElement } from '../helper/dom';
 import { cancelEvent } from '../helper/events';
 import { MynahUITabsStore } from '../helper/tabs-store';
 import { Button } from './button';
@@ -17,6 +17,28 @@ export class NoTabs {
   render: ExtendedHTMLElement;
   constructor () {
     StyleLoader.getInstance().load('components/_no-tabs.scss');
+
+    // Determine what to show in the icon wrapper:
+    // - If noTabsImage is set, render an actual <img> element
+    // - Otherwise, use the Icon component (CSS mask) with noTabsIcon or default TABS icon
+    const config = Config.getInstance().config;
+    let iconWrapperChild: DomBuilderObject | ExtendedHTMLElement;
+
+    if (config.noTabsImage != null) {
+      const opacity = config.noTabsImageOpacity ?? 0.25;
+      iconWrapperChild = {
+        type: 'img',
+        classNames: [ 'mynah-no-tabs-image' ],
+        attributes: {
+          src: config.noTabsImage,
+          alt: '',
+          style: `opacity: ${opacity}`
+        }
+      };
+    } else {
+      iconWrapperChild = new Icon({ icon: config.noTabsIcon ?? MynahIcons.TABS }).render;
+    }
+
     this.render = DomBuilder.getInstance().build({
       type: 'div',
       testId: testIds.noTabs.wrapper,
@@ -26,9 +48,7 @@ export class NoTabs {
         {
           type: 'div',
           classNames: [ 'mynah-no-tabs-icon-wrapper' ],
-          children: [
-            new Icon({ icon: MynahIcons.TABS }).render
-          ]
+          children: [ iconWrapperChild ]
         },
         {
           type: 'div',

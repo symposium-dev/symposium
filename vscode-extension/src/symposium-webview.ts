@@ -6,6 +6,7 @@ declare const acquireVsCodeApi: any;
 declare const window: any & {
   SYMPOSIUM_EXTENSION_ACTIVATION_ID: string;
   SYMPOSIUM_REQUIRE_MODIFIER_TO_SEND: boolean;
+  SYMPOSIUM_NO_TABS_IMAGE_URI: string;
 };
 
 // Import uuid - note: webpack will bundle this for browser
@@ -356,6 +357,9 @@ const config: any = {
       noTabsOpen: "### Join the symposium by opening a tab",
       spinnerText: "Discussing with the Symposium...",
     },
+    // Custom image for the "no tabs open" screen (uses actual img element, not CSS mask)
+    noTabsImage: window.SYMPOSIUM_NO_TABS_IMAGE_URI,
+    noTabsImageOpacity: 0.6,
     // When true, Enter adds newline and Shift/Cmd+Enter sends
     // When false (default), Enter sends and Shift+Enter adds newline
     requireModifierToSendPrompt: window.SYMPOSIUM_REQUIRE_MODIFIER_TO_SEND,

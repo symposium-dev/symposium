@@ -1020,6 +1020,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       vscode.Uri.joinPath(this.#extensionUri, "out", "webview.js"),
     );
 
+    // Get the URI for the no-tabs background image (vase with Ferrises)
+    const noTabsImageUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this.#extensionUri, "resources", "no-tabs-image.png"),
+    );
+
     // Get the requireModifierToSend setting
     const config = vscode.workspace.getConfiguration("symposium");
     const requireModifierToSend = config.get<boolean>(
@@ -1052,6 +1057,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         window.SYMPOSIUM_EXTENSION_ACTIVATION_ID = "${this.#extensionActivationId}";
         // Embed settings for MynahUI config
         window.SYMPOSIUM_REQUIRE_MODIFIER_TO_SEND = ${requireModifierToSend};
+        // Image URI for the no-tabs screen
+        window.SYMPOSIUM_NO_TABS_IMAGE_URI = "${noTabsImageUri}";
     </script>
     <script src="${scriptUri}"></script>
 </body>
