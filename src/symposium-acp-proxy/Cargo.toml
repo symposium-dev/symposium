@@ -1,6 +1,6 @@
 [package]
 name = "symposium-acp-proxy"
-version = "0.2.1"
+version = "1.0.0-alpha.1"
 edition = "2021"
 license = "Apache-2.0"
 description = "Symposium ACP proxy - orchestrates component chains to enrich agent capabilities"
@@ -34,6 +34,6 @@ chrono = "0.4"
 tokio-util = { version = "0.7", features = ["compat"] }
 
 # Proxy components
-symposium-crate-sources-proxy = { path = "../symposium-crate-sources-proxy", version = "0.2.1" }
+symposium-crate-sources-proxy = { path = "../symposium-crate-sources-proxy", version = "1.0.0-alpha.1" }
 sacp-tee.workspace = true
 sparkle.workspace = true

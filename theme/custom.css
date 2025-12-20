@@ -1,22 +1,28 @@
-@import url('https://fonts.googleapis.com/css2?family=Bungee&family=Dancing+Script:wght@400;700&family=Lato:wght@300;400;500;700&family=Open+Sans:wght@300;400;500;600&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Dancing+Script:wght@400;700&family=Lato:wght@300;400;500;700&family=Open+Sans:wght@300;400;500;600&family=Poppins:wght@400;500;600;700&display=swap");
 
 body {
-    font-family: 'Lato', sans-serif;
+    font-family: "Lato", sans-serif;
 }
 
-h1, h2, h3, h4, h5, h6 {
-    font-family: 'Bungee', cursive;
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    font-family: "Poppins", sans-serif;
+    font-weight: 600;
 }
 
 .hero-title {
-    font-family: 'Bungee', cursive;
+    font-family: "Caesar Dressing", cursive;
     font-size: 8rem;
     margin: 0.5rem 0 0.5rem 0;
     color: #333;
 }
 
 .hero-subtitle {
-    font-family: 'Dancing Script', cursive;
+    font-family: "Dancing Script", cursive;
     font-size: 4rem;
     font-weight: 400;
     margin: 0.5rem 0 2rem 0;
@@ -24,7 +30,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .warning-banner {
-    font-family: 'Lato', sans-serif;
+    font-family: "Lato", sans-serif;
     font-size: 1.6rem;
     color: #ad160c;
     margin: 0;
@@ -45,7 +51,7 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 .action-link {
-    font-family: 'Lato', sans-serif;
+    font-family: "Lato", sans-serif;
     font-size: 2rem;
     color: #372b2f !important;
     text-decoration: none;
