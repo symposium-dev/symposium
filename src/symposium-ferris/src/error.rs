@@ -1,13 +1,13 @@
-//! Error types for the eg library
+//! Error types for the Ferris library
 
 use thiserror::Error;
 
-/// Result type alias for eg operations
-pub type Result<T> = std::result::Result<T, EgError>;
+/// Result type alias for Ferris operations
+pub type Result<T> = std::result::Result<T, FerrisError>;
 
-/// Errors that can occur during crate source operations
+/// Errors that can occur during Ferris operations
 #[derive(Debug, Error)]
-pub enum EgError {
+pub enum FerrisError {
     /// Failed to parse or access project metadata
     #[error("Project error: {0}")]
     ProjectError(#[from] cargo_metadata::Error),

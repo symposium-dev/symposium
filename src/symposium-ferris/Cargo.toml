@@ -1,21 +1,34 @@
 [package]
-name = "symposium-eg"
+name = "symposium-ferris"
 version = "1.0.0-alpha.1"
-edition = "2021"
+edition = "2024"
 license = "Apache-2.0"
-description = "Example search library for Rust crates - download, cache, and search crate source code"
+description = "Ferris MCP server - helpful tools for Rust development"
 repository = "https://github.com/symposium-dev/symposium"
 homepage = "https://symposium-dev.github.io/symposium/"
+
+[[bin]]
+name = "symposium-ferris"
+path = "src/main.rs"
 
 [dependencies]
 # Error handling
 thiserror = { workspace = true }
+anyhow = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
+schemars = { workspace = true }
 
-# Search
-regex = "1.10"
+# MCP server
+rmcp = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 # Version resolution
 semver = "1.0"

@@ -1,6 +1,6 @@
 //! Version resolution for Rust crates
 
-use crate::{Result, EgError};
+use crate::{Result, FerrisError};
 use cargo_metadata::{MetadataCommand, CargoOpt};
 use semver::{Version, VersionReq};
 
@@ -41,7 +41,7 @@ impl VersionResolver {
             }
         }
 
-        Err(EgError::CrateNotFound(crate_name.to_string()))
+        Err(FerrisError::CrateNotFound(crate_name.to_string()))
     }
 
     /// Resolve version constraint to latest matching version
@@ -60,7 +60,7 @@ impl VersionResolver {
         matching_versions
             .last()
             .map(|v| v.to_string())
-            .ok_or_else(|| EgError::NoMatchingVersions {
+            .ok_or_else(|| FerrisError::NoMatchingVersions {
                 crate_name: crate_name.to_string(),
                 constraint: constraint.to_string(),
             })
@@ -69,12 +69,12 @@ impl VersionResolver {
     /// Get latest version from crates.io
     async fn get_latest_version(&self, crate_name: &str) -> Result<String> {
         let client = crates_io_api::AsyncClient::new(
-            "symposium-eg (https://github.com/symposium-dev/symposium)",
+            "symposium-ferris (https://github.com/symposium-dev/symposium)",
             std::time::Duration::from_millis(1000),
-        ).map_err(|e| EgError::Other(e.to_string()))?;
+        ).map_err(|e| FerrisError::Other(e.to_string()))?;
 
         let crate_info = client.get_crate(crate_name).await
-            .map_err(|_| EgError::CrateNotFound(crate_name.to_string()))?;
+            .map_err(|_| FerrisError::CrateNotFound(crate_name.to_string()))?;
 
         Ok(crate_info.crate_data.max_version)
     }
@@ -82,13 +82,13 @@ impl VersionResolver {
     /// Get all available versions from crates.io
     async fn get_available_versions(&self, crate_name: &str) -> Result<Vec<Version>> {
         let client = crates_io_api::AsyncClient::new(
-            "symposium-eg (https://github.com/symposium-dev/symposium)",
+            "symposium-ferris (https://github.com/symposium-dev/symposium)",
             std::time::Duration::from_millis(1000),
-        ).map_err(|e| EgError::Other(e.to_string()))?;
+        ).map_err(|e| FerrisError::Other(e.to_string()))?;
 
         // Get crate info which includes versions
         let crate_info = client.get_crate(crate_name).await
-            .map_err(|_| EgError::CrateNotFound(crate_name.to_string()))?;
+            .map_err(|_| FerrisError::CrateNotFound(crate_name.to_string()))?;
 
         let mut parsed_versions = Vec::new();
         for version in crate_info.versions {

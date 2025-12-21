@@ -66,28 +66,28 @@ pub fn build_server(
                     version,
                 );
 
-                let mut search = symposium_eg::Eg::rust_crate(&crate_name);
+                let mut fetch = symposium_ferris::Ferris::rust_crate(&crate_name);
 
                 // Use version resolver for semver range support and project detection
                 if let Some(version_spec) = version {
-                    search = search.version(&version_spec);
+                    fetch = fetch.version(&version_spec);
                 }
 
-                let search_result = search.search().await.map_err(|e| {
-                    anyhow::anyhow!("Search failed: {}", e)
+                let result = fetch.fetch().await.map_err(|e| {
+                    anyhow::anyhow!("Fetch failed: {}", e)
                 })?;
 
                 let message = format!(
                     "Crate '{}' version {} extracted to {}",
                     crate_name,
-                    search_result.version,
-                    search_result.checkout_path.display()
+                    result.version,
+                    result.path.display()
                 );
 
                 Ok(GetRustCrateSourceOutput {
                     crate_name,
-                    version: search_result.version.clone(),
-                    checkout_path: search_result.checkout_path.display().to_string(),
+                    version: result.version.clone(),
+                    checkout_path: result.path.display().to_string(),
                     message,
                 })
             },

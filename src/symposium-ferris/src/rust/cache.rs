@@ -1,6 +1,6 @@
 //! Cache management for extracted crates
 
-use crate::{Result, EgError};
+use crate::{Result, FerrisError};
 use std::path::PathBuf;
 
 /// Manages access to cargo's cache and our extraction cache
@@ -13,7 +13,7 @@ impl CacheManager {
     /// Create a new cache manager
     pub fn new() -> Result<Self> {
         let cargo_home = home::cargo_home()
-            .map_err(EgError::CargoHomeNotFound)?;
+            .map_err(FerrisError::CargoHomeNotFound)?;
 
         let cargo_cache_dir = cargo_home.join("registry");
 

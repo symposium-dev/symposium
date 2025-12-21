@@ -1,6 +1,6 @@
 //! Crate extraction to local cache
 
-use crate::{Result, EgError};
+use crate::{Result, FerrisError};
 use flate2::read::GzDecoder;
 use std::fs;
 use std::io::Read;
@@ -40,7 +40,7 @@ impl CrateExtractor {
 
         let response = reqwest::get(&download_url).await?;
         if !response.status().is_success() {
-            return Err(EgError::Other(format!(
+            return Err(FerrisError::Other(format!(
                 "Failed to download crate: HTTP {}",
                 response.status()
             )));
@@ -65,7 +65,7 @@ impl CrateExtractor {
 
         // Extract all files
         archive.unpack(extraction_path)
-            .map_err(|e| EgError::ExtractionError(format!("Failed to extract archive: {}", e)))?;
+            .map_err(|e| FerrisError::ExtractionError(format!("Failed to extract archive: {}", e)))?;
 
         // The archive typically contains a single directory with the crate name-version
         // We want to flatten this structure

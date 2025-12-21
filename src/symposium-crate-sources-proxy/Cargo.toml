@@ -40,7 +40,7 @@ tracing-subscriber = { workspace = true }
 indoc = "2.0"
 
 # Crate source access
-symposium-eg = { path = "../symposium-eg" }
+symposium-ferris = { path = "../symposium-ferris" }
 
 sacp-tokio.workspace = true
 fxhash.workspace = true

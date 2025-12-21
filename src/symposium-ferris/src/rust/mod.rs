@@ -1,34 +1,38 @@
 //! Rust-specific crate source functionality
 
-use crate::{Result, SearchResult};
-use regex::Regex;
+use std::path::PathBuf;
+
+use crate::Result;
 
 mod cache;
 mod extraction;
-mod search;
 mod version;
 
 pub use cache::CacheManager;
 pub use extraction::CrateExtractor;
-pub use search::CrateSearcher;
 pub use version::VersionResolver;
 
-/// Builder for accessing Rust crate source code
-pub struct RustCrateSearch {
-    crate_name: String,
-    version_spec: Option<String>,
-    pattern: Option<Regex>,
-    context_lines: usize,
+/// Result of fetching a crate's sources
+#[derive(Debug, Clone)]
+pub struct FetchResult {
+    /// The exact version that was fetched
+    pub version: String,
+    /// Path to the extracted crate sources on disk
+    pub path: PathBuf,
 }
 
-impl RustCrateSearch {
-    /// Create a new search for the given crate name
+/// Builder for accessing Rust crate source code
+pub struct RustCrateFetch {
+    crate_name: String,
+    version_spec: Option<String>,
+}
+
+impl RustCrateFetch {
+    /// Create a new fetch request for the given crate name
     pub fn new(name: &str) -> Self {
         Self {
             crate_name: name.to_string(),
             version_spec: None,
-            pattern: None,
-            context_lines: 2, // Default context
         }
     }
 
@@ -38,8 +42,8 @@ impl RustCrateSearch {
         self
     }
 
-    /// Execute the search
-    pub async fn search(self) -> Result<SearchResult> {
+    /// Fetch the crate sources, returning the path to extracted sources
+    pub async fn fetch(self) -> Result<FetchResult> {
         // 1. Resolve version
         let resolver = VersionResolver::new();
         let version = resolver
@@ -50,24 +54,10 @@ impl RustCrateSearch {
         let cache_manager = CacheManager::new()?;
         let extractor = CrateExtractor::new();
 
-        let checkout_path = cache_manager
+        let path = cache_manager
             .get_or_extract_crate(&self.crate_name, &version, &extractor)
             .await?;
 
-        // 3. Search the extracted crate
-        let searcher = CrateSearcher::new();
-        let (example_matches, other_matches) = if let Some(pattern) = &self.pattern {
-            searcher.search_crate(&checkout_path, pattern, self.context_lines)?
-        } else {
-            // No pattern - just return empty matches but still provide checkout_path
-            (Vec::new(), Vec::new())
-        };
-
-        Ok(SearchResult {
-            version,
-            checkout_path,
-            example_matches,
-            other_matches,
-        })
+        Ok(FetchResult { version, path })
     }
 }

@@ -3236,7 +3236,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
- "symposium-eg",
+ "symposium-ferris",
  "thiserror 1.0.69",
  "tokio",
  "tokio-util",
@@ -3246,20 +3246,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "symposium-eg"
+name = "symposium-ferris"
 version = "1.0.0-alpha.1"
 dependencies = [
+ "anyhow",
  "cargo_metadata",
  "crates_io_api",
  "dirs",
  "flate2",
  "home",
- "regex",
  "reqwest",
+ "rmcp",
+ "schemars",
  "semver",
  "serde",
  "tar",
  "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
