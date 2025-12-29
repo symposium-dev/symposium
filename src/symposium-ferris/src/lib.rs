@@ -27,13 +27,13 @@ use std::path::Path;
 use sacp::{ProxyToConductor, mcp_server::McpServer};
 
 mod component;
+mod crate_sources;
 pub mod error;
 mod mcp;
-mod rust;
 
 pub use component::FerrisComponent;
+pub use crate_sources::{FetchResult, RustCrateFetch};
 pub use error::{FerrisError, Result};
-pub use rust::{FetchResult, RustCrateFetch};
 
 /// Ferris - Rust development tools
 ///
@@ -102,7 +102,7 @@ impl Ferris {
     ///     .fetch()
     ///     .await?;
     /// ```
-    pub fn rust_crate(name: &str) -> rust::RustCrateFetch {
-        rust::RustCrateFetch::new(name)
+    pub fn rust_crate(name: &str) -> RustCrateFetch {
+        RustCrateFetch::new(name)
     }
 }
