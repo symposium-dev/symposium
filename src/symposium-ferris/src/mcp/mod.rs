@@ -6,8 +6,6 @@ use sacp::{ProxyToConductor, mcp_server::McpServer};
 
 use crate::Ferris;
 
-mod rust_researcher;
-
 /// Build an MCP server with the configured Ferris tools.
 pub fn build_server(
     config: Ferris,
@@ -26,7 +24,7 @@ pub fn build_server(
 
     // Register tools - each takes an `enabled` flag
     let builder = crate::crate_sources::mcp::register(builder, config.crate_sources);
-    let builder = rust_researcher::register(builder, config.rust_researcher);
+    let builder = crate::rust_researcher::register(builder, config.rust_researcher);
 
     builder.build()
 }

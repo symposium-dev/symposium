@@ -30,6 +30,7 @@ mod component;
 mod crate_sources;
 pub mod error;
 mod mcp;
+mod rust_researcher;
 
 pub use component::FerrisComponent;
 pub use crate_sources::{FetchResult, RustCrateFetch};
