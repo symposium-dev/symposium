@@ -3,9 +3,11 @@ import { MynahUI, ChatItem, ChatItemType } from "@aws/mynah-ui";
 
 // Browser API declarations for webview context
 declare const acquireVsCodeApi: any;
+declare const document: any;
 declare const window: any & {
   SYMPOSIUM_EXTENSION_ACTIVATION_ID: string;
   SYMPOSIUM_REQUIRE_MODIFIER_TO_SEND: boolean;
+  SYMPOSIUM_NO_TABS_IMAGE_URI: string;
 };
 
 // Import uuid - note: webpack will bundle this for browser
@@ -347,6 +349,34 @@ function handleApprovalRequest(message: any) {
   (window as any)[`approval_${messageId}`] = { approvalId, options };
 }
 
+// Detect if we're in dark theme (VSCode adds class to body)
+function isDarkTheme(): boolean {
+  return document.body.classList.contains("vscode-dark");
+}
+
+// Get theme-specific no-tabs image config
+function getNoTabsImageConfig() {
+  if (isDarkTheme()) {
+    // Dark theme: use near-white/opaque background so dark vase is visible
+    return {
+      noTabsImage: window.SYMPOSIUM_NO_TABS_IMAGE_URI,
+      noTabsImageOpacity: 0.95,
+      noTabsImageBackground: "rgba(255, 255, 255, 0.85)",
+      noTabsImageBorderRadius: "16px",
+      noTabsImagePadding: "20px",
+    };
+  } else {
+    // Light theme: more visible grey background
+    return {
+      noTabsImage: window.SYMPOSIUM_NO_TABS_IMAGE_URI,
+      noTabsImageOpacity: 0.9,
+      noTabsImageBackground: "rgba(128, 128, 128, 0.25)",
+      noTabsImageBorderRadius: "16px",
+      noTabsImagePadding: "20px",
+    };
+  }
+}
+
 const config: any = {
   rootSelector: "#mynah-root",
   loadStyles: true,
@@ -356,6 +386,8 @@ const config: any = {
       noTabsOpen: "### Join the symposium by opening a tab",
       spinnerText: "Discussing with the Symposium...",
     },
+    // Custom image for the "no tabs open" screen (theme-specific styling)
+    ...getNoTabsImageConfig(),
     // When true, Enter adds newline and Shift/Cmd+Enter sends
     // When false (default), Enter sends and Shift+Enter adds newline
     requireModifierToSendPrompt: window.SYMPOSIUM_REQUIRE_MODIFIER_TO_SEND,

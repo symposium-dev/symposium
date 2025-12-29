@@ -597,12 +597,12 @@ dependencies = [
 
 [[package]]
 name = "darling"
-version = "0.21.3"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9cdf337090841a411e2a7f3deb9187445851f91b309c0c0a29e05f74a00a48c0"
+checksum = "25ae13da2f202d56bd7f91c25fba009e7717a1e4a1cc98a76d844b65ae912e9d"
 dependencies = [
- "darling_core 0.21.3",
- "darling_macro 0.21.3",
+ "darling_core 0.23.0",
+ "darling_macro 0.23.0",
 ]
 
 [[package]]
@@ -621,11 +621,10 @@ dependencies = [
 
 [[package]]
 name = "darling_core"
-version = "0.21.3"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1247195ecd7e3c85f83c8d2a366e4210d588e802133e1e355180a9870b517ea4"
+checksum = "9865a50f7c335f53564bb694ef660825eb8610e0a53d3e11bf1b0d3df31e03b0"
 dependencies = [
- "fnv",
  "ident_case",
  "proc-macro2",
  "quote",
@@ -646,11 +645,11 @@ dependencies = [
 
 [[package]]
 name = "darling_macro"
-version = "0.21.3"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d38308df82d1080de0afee5d069fa14b0326a88c14f15c5ccda35b4a6c414c81"
+checksum = "ac3984ec7bd6cfa798e62b4a642426a5be0e68f9401cfc2a01e3fa9ea2fcdb8d"
 dependencies = [
- "darling_core 0.21.3",
+ "darling_core 0.23.0",
  "quote",
  "syn",
 ]
@@ -819,9 +818,9 @@ dependencies = [
 
 [[package]]
 name = "elizacp"
-version = "9.0.0"
+version = "10.0.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "609d114650512f091ac0ad726e61e3447369579bea9f1065e03f47b674a6cb17"
+checksum = "898827b699b7ce52c4a6f915ade404c5f7103acec78497687e983c8c23192a7d"
 dependencies = [
  "agent-client-protocol-schema",
  "anyhow",
@@ -2065,10 +2064,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "paste"
-version = "1.0.15"
+name = "pastey"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+checksum = "b867cad97c0791bbd3aaa6472142568c6c9e8f71937e98379f584cfb0cf35bec"
 
 [[package]]
 name = "pathdiff"
@@ -2265,9 +2264,9 @@ dependencies = [
 
 [[package]]
 name = "process-wrap"
-version = "8.2.1"
+version = "9.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a3ef4f2f0422f23a82ec9f628ea2acd12871c81a9362b02c43c1aa86acfc3ba1"
+checksum = "5e5fd83ab7fa55fd06f5e665e3fc52b8bca451c0486b8ea60ad649cd1c10a5da"
 dependencies = [
  "futures",
  "indexmap",
@@ -2555,16 +2554,16 @@ dependencies = [
 
 [[package]]
 name = "rmcp"
-version = "0.9.1"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eaa07b85b779d1e1df52dd79f6c6bffbe005b191f07290136cc42a142da3409a"
+checksum = "528d42f8176e6e5e71ea69182b17d1d0a19a6b3b894b564678b74cd7cab13cfa"
 dependencies = [
  "async-trait",
  "base64",
  "chrono",
  "futures",
  "http",
- "paste",
+ "pastey",
  "pin-project-lite",
  "process-wrap",
  "reqwest",
@@ -2582,11 +2581,11 @@ dependencies = [
 
 [[package]]
 name = "rmcp-macros"
-version = "0.9.1"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f6fa09933cac0d0204c8a5d647f558425538ed6a0134b1ebb1ae4dc00c96db3"
+checksum = "e3f81daaa494eb8e985c9462f7d6ce1ab05e5299f48aafd76cdd3d8b060e6f59"
 dependencies = [
- "darling 0.21.3",
+ "darling 0.23.0",
  "proc-macro2",
  "quote",
  "serde_json",
@@ -2683,9 +2682,9 @@ checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
 
 [[package]]
 name = "sacp"
-version = "9.0.0"
+version = "10.0.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7679525f5c2f4e1cb4b07e3684c4b050b34bafa0f908852879b7411522ff6626"
+checksum = "5e431c775ebaa1e73991dbe44db8eadade11c44f94d5324d945ca9ae95e98fdd"
 dependencies = [
  "agent-client-protocol-schema",
  "anyhow",
@@ -2708,9 +2707,9 @@ dependencies = [
 
 [[package]]
 name = "sacp-conductor"
-version = "9.0.0"
+version = "10.0.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "234e8dcd4788b957ba275a29229c2afe33f6634f56d212ab17e5b8c81ce88075"
+checksum = "813cd4996d0c59d60c20655755498c423135b7fd50a97cf8d721fe3bf8e359e0"
 dependencies = [
  "agent-client-protocol-schema",
  "anyhow",
@@ -2741,9 +2740,9 @@ dependencies = [
 
 [[package]]
 name = "sacp-derive"
-version = "9.0.0"
+version = "10.0.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70a36c27381224c2fc970935c887b26f48ff78105003d9abfa04c2e808569d3b"
+checksum = "b9b8803d6b4e86f5c1dc2fb0f0a2545f8504beb93492881ca4cd9982130efd12"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2752,9 +2751,9 @@ dependencies = [
 
 [[package]]
 name = "sacp-rmcp"
-version = "9.0.0"
+version = "10.0.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edd2e0f13ca9ffe02f0d40aa303e1e0f46706b46e077fea2fa56fbe58e562276"
+checksum = "19f1f3f2569038f537cc7e9fdce82ec7ff6ded78494d423597b82bc05c3ef7af"
 dependencies = [
  "futures",
  "rmcp",
@@ -2765,9 +2764,9 @@ dependencies = [
 
 [[package]]
 name = "sacp-tee"
-version = "9.0.0"
+version = "10.0.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ad4745f9f9f79312fb4cfa4c776cf9d11737e627fd60351748af6dcb5d3c59d"
+checksum = "710c5b8fdabf36db79ae5686a03a649e8c6e3d353a414b4a4ea1157a988d26ea"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2783,9 +2782,9 @@ dependencies = [
 
 [[package]]
 name = "sacp-tokio"
-version = "9.0.0"
+version = "10.0.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b7ad0b5f6b3585cabfc05ea726e4f9fa63ec3ba4cbedb20dcd3e3a45dbd1ad4"
+checksum = "d267fa525ae54e8e5e181a04ba3bac41cd2e67c6854d4100a1bd399dc7a0bcad"
 dependencies = [
  "futures",
  "sacp",
@@ -2798,9 +2797,9 @@ dependencies = [
 
 [[package]]
 name = "sacp-trace-viewer"
-version = "9.0.0"
+version = "10.0.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42dfb08c7454e7396b37ef690873c6f3ff83d0b1702905c9b87f0bb5cc04293c"
+checksum = "352b6d3207eda8f1037fe4200098740eee1406262528efa738d39d05a63bde0d"
 dependencies = [
  "anyhow",
  "axum 0.7.9",
@@ -3055,9 +3054,9 @@ dependencies = [
 
 [[package]]
 name = "sparkle-mcp"
-version = "0.2.1"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41ed32cc329685750984d97bfa5b5bd2381a774417ac4b9382b1c83cddcfe08a"
+checksum = "026870045e83074d6d2664a997d5255a6e876bee2e99d2f0fb12f64acfbb3f40"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3202,6 +3201,7 @@ dependencies = [
  "sacp-conductor",
  "sacp-tee",
  "sacp-tokio",
+ "symposium-acp-proxy",
  "symposium-crate-sources-proxy",
  "tokio",
  "tokio-util",
@@ -3224,33 +3224,47 @@ name = "symposium-crate-sources-proxy"
 version = "1.0.0-alpha.1"
 dependencies = [
  "anyhow",
- "cargo_metadata",
- "crates_io_api",
- "dirs",
  "elizacp",
  "expect-test",
- "flate2",
  "futures",
  "fxhash",
- "home",
  "indoc",
  "jsonrpcmsg",
- "regex",
- "reqwest",
  "sacp",
  "sacp-conductor",
  "sacp-tokio",
  "schemars",
- "semver",
  "serde",
  "serde_json",
- "tar",
+ "symposium-ferris",
  "thiserror 1.0.69",
  "tokio",
  "tokio-util",
  "tracing",
  "tracing-subscriber",
  "yopo",
+]
+
+[[package]]
+name = "symposium-ferris"
+version = "1.0.0-alpha.1"
+dependencies = [
+ "anyhow",
+ "cargo_metadata",
+ "crates_io_api",
+ "dirs",
+ "flate2",
+ "home",
+ "reqwest",
+ "rmcp",
+ "schemars",
+ "semver",
+ "serde",
+ "tar",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -4471,9 +4485,9 @@ dependencies = [
 
 [[package]]
 name = "yopo"
-version = "9.0.0"
+version = "10.0.0-alpha.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c4e668e445064d85c69eb63e652f14c715528a760793fc898127c92814db7faf"
+checksum = "cae887dc1700d7c8b8b7357b2b3b3b5c0d7366ec592c5131acb740c2f9208a86"
 dependencies = [
  "clap",
  "sacp",

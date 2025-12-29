@@ -67,14 +67,16 @@ async fn main() -> Result<()> {
     // Run Symposium with the agent as the downstream component
     let mut symposium = symposium_acp_proxy::Symposium::new()
         .sparkle(!cli.no_sparkle)
-        .crate_sources_proxy(!cli.no_crate_researcher)
-        .agent(agent);
+        .crate_sources_proxy(!cli.no_crate_researcher);
 
     if let Some(trace_dir) = cli.trace_dir {
         symposium = symposium.trace_dir(trace_dir);
     }
 
-    symposium.serve(sacp_tokio::Stdio::new()).await?;
+    symposium
+        .with_agent(agent)
+        .serve(sacp_tokio::Stdio::new())
+        .await?;
 
     Ok(())
 }

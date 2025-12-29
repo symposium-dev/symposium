@@ -6,6 +6,7 @@ members = [
     "src/symposium-acp-proxy",
     "src/symposium-acp-agent",
     "src/symposium-crate-sources-proxy",
+    "src/symposium-ferris",
     "src/symposium-math",
     "src/cli-agent-util",
     "src/symposium-benchmark",
@@ -13,14 +14,14 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-sacp = "9.0.0"
-sacp-tokio = "9.0.0"
-sacp-conductor = "9.0.0"
-sacp-rmcp = "9.0.0"
-sacp-tee = "9.0.0"
-sacp-test = "9.0.0"
-yopo = "9.0.0"
-elizacp = "9.0.0"
+sacp = "10.0.0-alpha.2"
+sacp-tokio = "10.0.0-alpha.2"
+sacp-conductor = "10.0.0-alpha.2"
+sacp-rmcp = "10.0.0-alpha.2"
+sacp-tee = "10.0.0-alpha.2"
+sacp-test = "10.0.0-alpha.2"
+yopo = "10.0.0-alpha.2"
+elizacp = "10.0.0-alpha.2"
 jsonrpcmsg = "0.1.2"
 
 # Core async runtime
@@ -45,10 +46,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # MCP SDK
-rmcp = { version = "0.9", features = ["server", "transport-io", "schemars"] }
+rmcp = { version = "0.12", features = ["server", "transport-io", "schemars"] }
 
 # Sparkle integration
-sparkle = { package = "sparkle-mcp", version = "0.2.1" }
+sparkle = { package = "sparkle-mcp", version = "0.3.0" }
 
 # CLI parsing
 clap = { version = "4.0", features = ["derive"] }

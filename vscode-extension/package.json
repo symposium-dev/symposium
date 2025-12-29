@@ -2,13 +2,14 @@
   "name": "symposium",
   "displayName": "Symposium",
   "description": "Collaborative AI built collaboratively",
-  "version": "0.0.1",
+  "version": "10.0.0-alpha.2",
   "publisher": "symposium-dev",
   "repository": {
     "type": "git",
     "url": "https://github.com/symposium/symposium.git"
   },
   "license": "MIT",
+  "icon": "resources/extension-icon.png",
   "engines": {
     "vscode": "^1.93.0"
   },

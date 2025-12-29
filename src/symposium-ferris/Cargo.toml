@@ -1,0 +1,47 @@
+[package]
+name = "symposium-ferris"
+version = "1.0.0-alpha.1"
+edition = "2024"
+license = "Apache-2.0"
+description = "Ferris MCP server - helpful tools for Rust development"
+repository = "https://github.com/symposium-dev/symposium"
+homepage = "https://symposium-dev.github.io/symposium/"
+
+[[bin]]
+name = "symposium-ferris"
+path = "src/main.rs"
+
+[dependencies]
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+schemars = { workspace = true }
+
+# MCP server
+rmcp = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true, features = ["full"] }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Version resolution
+semver = "1.0"
+cargo_metadata = "0.18"
+
+# Crate extraction
+flate2 = "1.0"
+tar = "0.4"
+
+# Crate download
+crates_io_api = { version = "0.12", default-features = false, features = ["rustls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+
+# Cache paths
+home = "0.5"
+dirs = "5.0"

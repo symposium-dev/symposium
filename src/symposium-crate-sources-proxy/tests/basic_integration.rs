@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use expect_test::expect;
+use sacp::link::{AgentToClient, ProxyToConductor};
 use sacp::DynComponent;
 use sacp_conductor::Conductor;
 use symposium_crate_sources_proxy::CrateSourcesProxy;
@@ -26,16 +27,15 @@ async fn test_rust_crate_query_with_elizacp() -> Result<()> {
 
     // Create the component chain: CrateSourcesProxy -> ElizACP
     let proxy = CrateSourcesProxy;
+    let proxies: Vec<DynComponent<ProxyToConductor>> = vec![DynComponent::new(proxy)];
+    let agent: DynComponent<AgentToClient> = DynComponent::new(elizacp::ElizaAgent::new());
 
     // Send a tool invocation to rust_crate_query
     // ElizACP expects format: "Use tool <server>::<tool> with <json_params>"
     let response = yopo::prompt(
-        Conductor::new(
-            "test-conductor".to_string(),
-            vec![
-                DynComponent::new(proxy),
-                DynComponent::new(elizacp::ElizaAgent::new()),
-            ],
+        Conductor::new_agent(
+            "test-conductor",
+            move |init_req| async move { Ok((init_req, proxies, agent)) },
             Default::default(),
         ),
         r#"Use tool rust-crate-query::rust_crate_query with {"crate_name":"serde","prompt":"What is the signature of from_value?"}"#,

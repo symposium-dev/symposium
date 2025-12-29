@@ -5,8 +5,6 @@
 
 use anyhow::Result;
 use clap::Parser;
-use sacp::DynComponent;
-use sacp_conductor::Conductor;
 use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
 use std::str::FromStr;
@@ -102,22 +100,15 @@ async fn run_benchmark(benchmark: &Benchmark, output_dir: &PathBuf) -> Result<()
     let research_prompt = benchmark.prompt;
     let expected_result = benchmark.expected;
 
-    // Build conductor with crate sources proxy and agent
-    let conductor = Conductor::new(
-        "benchmark-conductor".to_string(),
-        vec![
-            DynComponent::new(symposium_crate_sources_proxy::CrateSourcesProxy),
-            DynComponent::new(AcpAgent::from_str(
-                "npx -y '@zed-industries/claude-code-acp'",
-            )?),
-        ],
-        Default::default(),
-    )
-    .trace_to_path("killme.jsons")
-    .map_err(sacp::util::internal_error)?;
+    // Build Symposium agent with crate sources proxy
+    let agent = AcpAgent::from_str("npx -y '@zed-industries/claude-code-acp'")?;
+    let symposium = symposium_acp_proxy::Symposium::new()
+        .sparkle(false)
+        .trace_dir(".")
+        .with_agent(agent);
 
     // Run prompt
-    let response = yopo::prompt(conductor, research_prompt).await?;
+    let response = yopo::prompt(symposium, research_prompt).await?;
 
     tracing::info!("Research response received: {} chars", response.len());
 

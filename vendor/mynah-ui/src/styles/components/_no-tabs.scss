@@ -17,6 +17,17 @@
             color: var(--mynah-color-text-weak);
             opacity: 0.15;
         }
+        > .mynah-no-tabs-image-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+
+            > .mynah-no-tabs-image {
+                width: calc(4 * var(--mynah-sizing-18));
+                height: calc(4 * var(--mynah-sizing-18));
+                object-fit: contain;
+            }
+        }
     }
     > .mynah-no-tabs-info {
         > * {

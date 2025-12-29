@@ -1,6 +1,6 @@
 id = "symposium"
 name = "Symposium"
-version = "0.1.0"
+version = "10.0.0-alpha.2"
 schema_version = 1
 authors = ["Niko Matsakis <niko@alum.mit.edu>"]
 description = "Collaborative AI with Sparkle identity and Rust crate research"

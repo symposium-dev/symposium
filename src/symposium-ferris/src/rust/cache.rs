@@ -1,6 +1,6 @@
 //! Cache management for extracted crates
 
-use crate::eg::{Result, EgError};
+use crate::{Result, FerrisError};
 use std::path::PathBuf;
 
 /// Manages access to cargo's cache and our extraction cache
@@ -13,17 +13,17 @@ impl CacheManager {
     /// Create a new cache manager
     pub fn new() -> Result<Self> {
         let cargo_home = home::cargo_home()
-            .map_err(EgError::CargoHomeNotFound)?;
-        
+            .map_err(FerrisError::CargoHomeNotFound)?;
+
         let cargo_cache_dir = cargo_home.join("registry");
-        
+
         // Use platform-appropriate cache directory for our extractions
         let extraction_cache_dir = dirs::cache_dir()
             .unwrap_or_else(|| cargo_home.clone())
             .join("eg")
             .join("extractions");
-        
-        Ok(Self { 
+
+        Ok(Self {
             cargo_cache_dir,
             extraction_cache_dir,
         })
@@ -64,7 +64,7 @@ impl CacheManager {
         }
 
         let crate_dir_name = format!("{}-{}", crate_name, version);
-        
+
         // Look for registry directories (e.g., index.crates.io-*)
         for entry in std::fs::read_dir(src_dir)? {
             let entry = entry?;
@@ -78,7 +78,7 @@ impl CacheManager {
                 }
             }
         }
-        
+
         Ok(None)
     }
 
@@ -90,7 +90,7 @@ impl CacheManager {
         }
 
         let crate_filename = format!("{}-{}.crate", crate_name, version);
-        
+
         // Look for registry directories
         for entry in std::fs::read_dir(cache_dir)? {
             let entry = entry?;
@@ -104,8 +104,7 @@ impl CacheManager {
                 }
             }
         }
-        
+
         Ok(None)
     }
-
 }

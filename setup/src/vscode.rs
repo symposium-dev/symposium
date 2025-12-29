@@ -165,6 +165,9 @@ fn build_extension(extension_dir: &Path) -> Result<()> {
 fn package_extension(extension_dir: &Path) -> Result<()> {
     println!("📦 Packaging VSCode extension...");
 
+    // Clean up any old .vsix files first to avoid ambiguity
+    clean_old_vsix_files(extension_dir)?;
+
     let output = Command::new("npx")
         .args(["vsce", "package", "--no-dependencies"])
         .current_dir(extension_dir)
@@ -201,6 +204,28 @@ fn install_extension(extension_dir: &Path) -> Result<()> {
             "❌ Failed to install VSCode extension:\n   Error: {}",
             stderr.trim()
         ));
+    }
+
+    Ok(())
+}
+
+/// Remove any existing .vsix files to avoid version conflicts
+fn clean_old_vsix_files(extension_dir: &Path) -> Result<()> {
+    let entries = std::fs::read_dir(extension_dir).context("Failed to read extension directory")?;
+
+    for entry in entries {
+        let entry = entry.context("Failed to read directory entry")?;
+        let path = entry.path();
+        if let Some(extension) = path.extension() {
+            if extension == "vsix" {
+                std::fs::remove_file(&path)
+                    .with_context(|| format!("Failed to remove old vsix: {}", path.display()))?;
+                println!(
+                    "   Removed old package: {}",
+                    path.file_name().unwrap().to_string_lossy()
+                );
+            }
+        }
     }
 
     Ok(())

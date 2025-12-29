@@ -131,7 +131,8 @@ async fn run_research_query(
 
     cx.build_session(cwd)
         .with_mcp_server(mcp_server)?
-        .run_session(async |mut active_session| {
+        .block_task()
+        .run_until(async |mut active_session| {
             tracing::debug!(session_id = ?active_session.session_id(), "Session active");
 
             active_session.send_prompt(build_research_prompt(&prompt))?;

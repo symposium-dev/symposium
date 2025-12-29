@@ -1,6 +1,6 @@
 //! Crate extraction to local cache
 
-use crate::eg::{Result, EgError};
+use crate::{Result, FerrisError};
 use flate2::read::GzDecoder;
 use std::fs;
 use std::io::Read;
@@ -40,7 +40,7 @@ impl CrateExtractor {
 
         let response = reqwest::get(&download_url).await?;
         if !response.status().is_success() {
-            return Err(EgError::Other(format!(
+            return Err(FerrisError::Other(format!(
                 "Failed to download crate: HTTP {}",
                 response.status()
             )));
@@ -65,7 +65,7 @@ impl CrateExtractor {
 
         // Extract all files
         archive.unpack(extraction_path)
-            .map_err(|e| EgError::ExtractionError(format!("Failed to extract archive: {}", e)))?;
+            .map_err(|e| FerrisError::ExtractionError(format!("Failed to extract archive: {}", e)))?;
 
         // The archive typically contains a single directory with the crate name-version
         // We want to flatten this structure
@@ -84,20 +84,20 @@ impl CrateExtractor {
             let entry = &entries[0];
             if entry.file_type()?.is_dir() {
                 let inner_dir = entry.path();
-                
+
                 // Move all contents from inner directory to extraction_path
                 for inner_entry in fs::read_dir(&inner_dir)? {
                     let inner_entry = inner_entry?;
                     let src = inner_entry.path();
                     let dst = extraction_path.join(inner_entry.file_name());
-                    
+
                     if src.is_dir() {
                         self.move_dir(&src, &dst)?;
                     } else {
                         fs::rename(&src, &dst)?;
                     }
                 }
-                
+
                 // Remove the now-empty inner directory
                 fs::remove_dir(&inner_dir)?;
             }
@@ -109,20 +109,26 @@ impl CrateExtractor {
     /// Recursively move a directory
     fn move_dir(&self, src: &Path, dst: &Path) -> Result<()> {
         fs::create_dir_all(dst)?;
-        
+
         for entry in fs::read_dir(src)? {
             let entry = entry?;
             let src_path = entry.path();
             let dst_path = dst.join(entry.file_name());
-            
+
             if src_path.is_dir() {
                 self.move_dir(&src_path, &dst_path)?;
             } else {
                 fs::rename(&src_path, &dst_path)?;
             }
         }
-        
+
         fs::remove_dir(src)?;
         Ok(())
+    }
+}
+
+impl Default for CrateExtractor {
+    fn default() -> Self {
+        Self::new()
     }
 }
