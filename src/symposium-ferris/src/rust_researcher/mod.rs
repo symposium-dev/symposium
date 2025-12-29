@@ -50,8 +50,10 @@ pub fn register(
     enabled: bool,
     cwd: PathBuf,
 ) -> McpServerBuilder<ProxyToConductor, impl sacp::JrResponder<ProxyToConductor>> {
-    builder.tool_fn_mut(
-        "rust_researcher",
+    const TOOL_NAME: &str = "rust_researcher";
+
+    let builder = builder.tool_fn_mut(
+        TOOL_NAME,
         indoc::indoc! {r#"
             Research a Rust crate by examining its actual source code using an LLM sub-agent.
 
@@ -65,15 +67,16 @@ pub fn register(
             - "What's the signature of reqwest::Client::get()?"
         "#},
         async move |input: RustResearcherParams, mcp_cx: McpContext<ProxyToConductor>| {
-            if !enabled {
-                return Err(sacp::util::internal_error(
-                    "rust_researcher tool is not enabled",
-                ));
-            }
             run_research(input, mcp_cx, cwd.clone()).await
         },
         sacp::tool_fn_mut!(),
-    )
+    );
+
+    if enabled {
+        builder.enable_tool(TOOL_NAME).expect("valid tool name")
+    } else {
+        builder.disable_tool(TOOL_NAME).expect("valid tool name")
+    }
 }
 
 /// Build the research prompt with context and instructions for the sub-agent.

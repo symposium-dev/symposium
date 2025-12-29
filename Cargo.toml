@@ -13,14 +13,14 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-sacp = "10.0.0-alpha.2"
-sacp-tokio = "10.0.0-alpha.2"
-sacp-conductor = "10.0.0-alpha.2"
-sacp-rmcp = "10.0.0-alpha.2"
-sacp-tee = "10.0.0-alpha.2"
-sacp-test = "10.0.0-alpha.2"
-yopo = "10.0.0-alpha.2"
-elizacp = "10.0.0-alpha.2"
+sacp = "10.0.0-alpha.3"
+sacp-tokio = "10.0.0-alpha.3"
+sacp-conductor = "10.0.0-alpha.3"
+sacp-rmcp = "10.0.0-alpha.3"
+sacp-tee = "10.0.0-alpha.3"
+sacp-test = "10.0.0-alpha.3"
+yopo = "10.0.0-alpha.3"
+elizacp = "10.0.0-alpha.3"
 jsonrpcmsg = "0.1.2"
 
 # Core async runtime
@@ -48,7 +48,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rmcp = { version = "0.12", features = ["server", "transport-io", "schemars"] }
 
 # Sparkle integration
-sparkle = { package = "sparkle-mcp", version = "0.3.0" }
+sparkle = { package = "sparkle-mcp", version = "0.4.0" }
 
 # CLI parsing
 clap = { version = "4.0", features = ["derive"] }

@@ -36,8 +36,10 @@ pub fn register(
     enabled: bool,
     cwd: PathBuf,
 ) -> McpServerBuilder<ProxyToConductor, impl sacp::JrResponder<ProxyToConductor>> {
-    builder.tool_fn_mut(
-        "crate_sources",
+    const TOOL_NAME: &str = "crate_sources";
+
+    let builder = builder.tool_fn_mut(
+        TOOL_NAME,
         indoc::indoc! {r#"
             Fetch and extract Rust crate source code from crates.io.
 
@@ -53,12 +55,6 @@ pub fn register(
             - Fetch with semver range: { "crate_name": "anyhow", "version": "^1.0" }
         "#},
         async move |input: CrateSourceParams, _context| -> Result<CrateSourceOutput, sacp::Error> {
-            if !enabled {
-                return Err(sacp::util::internal_error(
-                    "crate_sources tool is not enabled",
-                ));
-            }
-
             let CrateSourceParams {
                 crate_name,
                 version,
@@ -87,5 +83,11 @@ pub fn register(
             })
         },
         sacp::tool_fn_mut!(),
-    )
+    );
+
+    if enabled {
+        builder.enable_tool(TOOL_NAME).expect("valid tool name")
+    } else {
+        builder.disable_tool(TOOL_NAME).expect("valid tool name")
+    }
 }
