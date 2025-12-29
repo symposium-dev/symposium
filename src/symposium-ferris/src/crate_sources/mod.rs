@@ -6,6 +6,7 @@ use crate::Result;
 
 mod cache;
 mod extraction;
+pub(crate) mod mcp;
 mod version;
 
 pub use cache::CacheManager;

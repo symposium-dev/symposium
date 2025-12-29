@@ -34,22 +34,25 @@ pub fn register(
     enabled: bool,
 ) -> McpServerBuilder<ProxyToConductor, impl sacp::JrResponder<ProxyToConductor>> {
     builder.tool_fn_mut(
-        "crate_source",
+        "crate_sources",
         indoc::indoc! {r#"
             Fetch and extract Rust crate source code from crates.io.
 
             Returns the local path where the crate sources are available for reading.
             Use this to inspect crate implementations, understand APIs, or debug issues.
 
+            If no version is given, default to the version used in the current workspace,
+            or the latest version if crate is not used.
+
             Examples:
-            - Fetch latest tokio: { "crate_name": "tokio" }
+            - Fetch the version of tokio used in the workspace: { "crate_name": "tokio" }
             - Fetch specific version: { "crate_name": "serde", "version": "1.0.193" }
             - Fetch with semver range: { "crate_name": "anyhow", "version": "^1.0" }
         "#},
         async move |input: CrateSourceParams, _context| -> Result<CrateSourceOutput, sacp::Error> {
             if !enabled {
                 return Err(sacp::util::internal_error(
-                    "crate_source tool is not enabled",
+                    "crate_sources tool is not enabled",
                 ));
             }
 
@@ -61,7 +64,7 @@ pub fn register(
             tracing::info!(
                 crate_name = %crate_name,
                 version = ?version,
-                "Fetching crate source"
+                "Fetching crate sources"
             );
 
             let mut fetch = Ferris::rust_crate(&crate_name);
