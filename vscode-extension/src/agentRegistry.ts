@@ -409,6 +409,80 @@ export async function addAgentFromRegistry(
 }
 
 /**
+ * Check for updates to registry-sourced agents and update them in settings.
+ * Returns a summary of what was updated.
+ */
+export async function checkForRegistryUpdates(): Promise<{
+  updated: string[];
+  failed: string[];
+}> {
+  const result = { updated: [] as string[], failed: [] as string[] };
+
+  // Fetch the registry
+  let registryAgents: RegistryEntry[];
+  try {
+    registryAgents = await fetchRegistry();
+  } catch (error) {
+    throw new Error(
+      `Failed to fetch registry: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
+  // Create a lookup map by agent id
+  const registryById = new Map<string, RegistryEntry>();
+  for (const agent of registryAgents) {
+    registryById.set(agent.id, agent);
+  }
+
+  // Get current settings
+  const config = vscode.workspace.getConfiguration("symposium");
+  const currentAgents = config.get<AgentSettings>("agents", {});
+
+  // Find registry-sourced agents that have updates
+  const updates: Record<string, AgentSettingsEntry> = {};
+
+  for (const [id, entry] of Object.entries(currentAgents)) {
+    if (entry._source !== "registry") {
+      continue;
+    }
+
+    const registryEntry = registryById.get(id);
+    if (!registryEntry) {
+      // Agent was removed from registry - leave as-is
+      continue;
+    }
+
+    // Check if version changed
+    if (entry.version !== registryEntry.version) {
+      updates[id] = {
+        name: registryEntry.name,
+        version: registryEntry.version,
+        description: registryEntry.description,
+        distribution: registryEntry.distribution,
+        _source: "registry",
+      };
+      result.updated.push(registryEntry.name);
+    }
+  }
+
+  // Apply updates if any
+  if (Object.keys(updates).length > 0) {
+    const updatedAgents = {
+      ...currentAgents,
+      ...updates,
+    };
+
+    await config.update(
+      "agents",
+      updatedAgents,
+      vscode.ConfigurationTarget.Global,
+    );
+  }
+
+  return result;
+}
+
+/**
  * Show a QuickPick dialog to add an agent from the registry
  */
 export async function showAddAgentFromRegistryDialog(): Promise<boolean> {

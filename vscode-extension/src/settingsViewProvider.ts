@@ -3,6 +3,7 @@ import {
   getEffectiveAgents,
   getCurrentAgentId,
   AgentConfig,
+  checkForRegistryUpdates,
 } from "./agentRegistry";
 
 export class SettingsViewProvider implements vscode.WebviewViewProvider {
@@ -80,6 +81,10 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
           // Show the add agent from registry dialog
           vscode.commands.executeCommand("symposium.addAgentFromRegistry");
           break;
+        case "check-for-updates":
+          // Check for registry updates
+          await this.#checkForUpdates();
+          break;
         case "toggle-require-modifier-to-send":
           // Toggle the requireModifierToSend setting
           await this.#toggleRequireModifierToSend();
@@ -137,6 +142,40 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       vscode.ConfigurationTarget.Global,
     );
     this.#sendConfiguration();
+  }
+
+  async #checkForUpdates() {
+    const result = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: "Checking for agent updates...",
+        cancellable: false,
+      },
+      async () => {
+        try {
+          return await checkForRegistryUpdates();
+        } catch (error) {
+          vscode.window.showErrorMessage(
+            `Failed to check for updates: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          return null;
+        }
+      },
+    );
+
+    if (result === null) {
+      return;
+    }
+
+    if (result.updated.length === 0) {
+      vscode.window.showInformationMessage("All agents are up to date.");
+    } else {
+      vscode.window.showInformationMessage(
+        `Updated ${result.updated.length} agent(s): ${result.updated.join(", ")}`,
+      );
+      // Refresh the UI to show new versions
+      this.#sendConfiguration();
+    }
   }
 
   #sendConfiguration() {
@@ -279,9 +318,12 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         <div class="agent-list" id="agent-list">
             <div>Loading...</div>
         </div>
-        <div style="margin-top: 12px;">
+        <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 6px;">
             <a href="#" id="add-agent-link" style="color: var(--vscode-textLink-foreground); text-decoration: none;">
                 + Add agent from registry...
+            </a>
+            <a href="#" id="check-updates-link" style="color: var(--vscode-textLink-foreground); text-decoration: none;">
+                ↻ Check for updates
             </a>
         </div>
     </div>
@@ -343,6 +385,12 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         document.getElementById('add-agent-link').onclick = (e) => {
             e.preventDefault();
             vscode.postMessage({ type: 'add-agent-from-registry' });
+        };
+
+        // Handle check for updates link
+        document.getElementById('check-updates-link').onclick = (e) => {
+            e.preventDefault();
+            vscode.postMessage({ type: 'check-for-updates' });
         };
 
         // Handle require modifier to send checkbox
