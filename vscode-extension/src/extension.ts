@@ -3,6 +3,7 @@ import { ChatViewProvider } from "./chatViewProvider";
 import { SettingsViewProvider } from "./settingsViewProvider";
 import { DiscussCodeActionProvider } from "./discussCodeActionProvider";
 import { Logger } from "./logger";
+import { showAddAgentFromRegistryDialog } from "./agentRegistry";
 import { v4 as uuidv4 } from "uuid";
 
 // Global logger instance
@@ -65,6 +66,16 @@ export function activate(context: vscode.ExtensionContext) {
       });
       await vscode.window.showTextDocument(doc);
     }),
+  );
+
+  // Command to add agent from registry
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "symposium.addAgentFromRegistry",
+      async () => {
+        await showAddAgentFromRegistryDialog();
+      },
+    ),
   );
 
   // Register "Discuss in Symposium" code action provider

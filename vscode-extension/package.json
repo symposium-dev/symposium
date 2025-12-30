@@ -194,6 +194,10 @@
       {
         "command": "symposium.discussSelection",
         "title": "Discuss in Symposium"
+      },
+      {
+        "command": "symposium.addAgentFromRegistry",
+        "title": "Symposium: Add Agent from Registry"
       }
     ],
     "viewsContainers": {

@@ -76,6 +76,10 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
             "symposium",
           );
           break;
+        case "add-agent-from-registry":
+          // Show the add agent from registry dialog
+          vscode.commands.executeCommand("symposium.addAgentFromRegistry");
+          break;
         case "toggle-require-modifier-to-send":
           // Toggle the requireModifierToSend setting
           await this.#toggleRequireModifierToSend();
@@ -266,6 +270,11 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         <div class="agent-list" id="agent-list">
             <div>Loading...</div>
         </div>
+        <div style="margin-top: 12px;">
+            <a href="#" id="add-agent-link" style="color: var(--vscode-textLink-foreground); text-decoration: none;">
+                + Add agent from registry...
+            </a>
+        </div>
     </div>
 
     <div class="section">
@@ -319,6 +328,12 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         document.getElementById('configure-link').onclick = (e) => {
             e.preventDefault();
             vscode.postMessage({ type: 'open-settings' });
+        };
+
+        // Handle add agent link
+        document.getElementById('add-agent-link').onclick = (e) => {
+            e.preventDefault();
+            vscode.postMessage({ type: 'add-agent-from-registry' });
         };
 
         // Handle require modifier to send checkbox

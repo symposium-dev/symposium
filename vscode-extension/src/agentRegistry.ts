@@ -5,6 +5,9 @@
  * merges built-in agents with user-configured agents from settings.
  */
 
+const REGISTRY_URL =
+  "https://github.com/agentclientprotocol/registry/releases/latest/download/registry.json";
+
 import * as vscode from "vscode";
 import * as os from "os";
 import * as path from "path";
@@ -315,5 +318,151 @@ async function extractArchive(
   } else {
     // tar.gz or tgz
     await execAsync(`tar -xzf "${archivePath}" -C "${destDir}"`);
+  }
+}
+
+/**
+ * Registry entry format (as returned from the registry API)
+ */
+export interface RegistryEntry {
+  id: string;
+  name: string;
+  version: string;
+  description?: string;
+  distribution: Distribution;
+}
+
+/**
+ * Fetch the agent registry from GitHub releases.
+ * Returns agents that are NOT already in the user's effective agents list.
+ */
+export async function fetchAvailableRegistryAgents(): Promise<RegistryEntry[]> {
+  const response = await fetch(REGISTRY_URL);
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch registry: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  const registry = (await response.json()) as RegistryEntry[];
+
+  // Filter out agents already configured
+  const effectiveAgents = getEffectiveAgents();
+  const existingIds = new Set(effectiveAgents.map((a) => a.id));
+
+  return registry.filter((entry) => !existingIds.has(entry.id));
+}
+
+/**
+ * Fetch all agents from the registry (without filtering)
+ */
+export async function fetchRegistry(): Promise<RegistryEntry[]> {
+  const response = await fetch(REGISTRY_URL);
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch registry: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  return (await response.json()) as RegistryEntry[];
+}
+
+/**
+ * Add an agent from the registry to user settings
+ */
+export async function addAgentFromRegistry(
+  entry: RegistryEntry,
+): Promise<void> {
+  const config = vscode.workspace.getConfiguration("symposium");
+  const currentAgents = config.get<AgentSettings>("agents", {});
+
+  const newEntry: AgentSettingsEntry = {
+    name: entry.name,
+    version: entry.version,
+    description: entry.description,
+    distribution: entry.distribution,
+    _source: "registry",
+  };
+
+  const updatedAgents = {
+    ...currentAgents,
+    [entry.id]: newEntry,
+  };
+
+  await config.update(
+    "agents",
+    updatedAgents,
+    vscode.ConfigurationTarget.Global,
+  );
+}
+
+/**
+ * Show a QuickPick dialog to add an agent from the registry
+ */
+export async function showAddAgentFromRegistryDialog(): Promise<boolean> {
+  // Show progress while fetching
+  const agents = await vscode.window.withProgress(
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "Fetching agent registry...",
+      cancellable: false,
+    },
+    async () => {
+      try {
+        return await fetchAvailableRegistryAgents();
+      } catch (error) {
+        vscode.window.showErrorMessage(
+          `Failed to fetch registry: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return null;
+      }
+    },
+  );
+
+  if (agents === null) {
+    return false;
+  }
+
+  if (agents.length === 0) {
+    vscode.window.showInformationMessage(
+      "All registry agents are already configured.",
+    );
+    return false;
+  }
+
+  // Create QuickPick items
+  interface AgentQuickPickItem extends vscode.QuickPickItem {
+    agent: RegistryEntry;
+  }
+
+  const items: AgentQuickPickItem[] = agents.map((agent) => ({
+    label: agent.name,
+    description: `v${agent.version}`,
+    detail: agent.description,
+    agent,
+  }));
+
+  const selected = await vscode.window.showQuickPick(items, {
+    placeHolder: "Select an agent to add",
+    title: "Add Agent from Registry",
+    matchOnDescription: true,
+    matchOnDetail: true,
+  });
+
+  if (!selected) {
+    return false;
+  }
+
+  try {
+    await addAgentFromRegistry(selected.agent);
+    vscode.window.showInformationMessage(
+      `Added ${selected.agent.name} to your agents.`,
+    );
+    return true;
+  } catch (error) {
+    vscode.window.showErrorMessage(
+      `Failed to add agent: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
   }
 }
