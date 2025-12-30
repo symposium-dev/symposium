@@ -66,7 +66,8 @@ fn main() -> Result<()> {
     }
 
     // Determine what to install
-    let install_acp = args.all || args.acp;
+    // --zed implies --acp since Zed config points to ACP binaries
+    let install_acp = args.all || args.acp || args.zed;
     let install_vscode = args.all || args.vscode;
     let configure_zed = args.all || args.zed;
 
