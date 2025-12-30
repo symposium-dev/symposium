@@ -24,6 +24,7 @@ use std::path::PathBuf;
 /// Shared configuration for Symposium proxy chains.
 struct SymposiumConfig {
     ferris: Option<symposium_ferris::Ferris>,
+    cargo: bool,
     sparkle: bool,
     trace_dir: Option<PathBuf>,
 }
@@ -33,6 +34,7 @@ impl SymposiumConfig {
         SymposiumConfig {
             sparkle: true,
             ferris: Some(symposium_ferris::Ferris::default()),
+            cargo: true,
             trace_dir: None,
         }
     }
@@ -64,6 +66,12 @@ impl Symposium {
         self
     }
 
+    /// Enable or disable Cargo tools.
+    pub fn cargo(mut self, enable: bool) -> Self {
+        self.config.cargo = enable;
+        self
+    }
+
     /// Enable trace logging to a directory.
     /// Traces will be written as `<timestamp>.jsons` files.
     pub fn trace_dir(mut self, dir: impl Into<PathBuf>) -> Self {
@@ -84,6 +92,7 @@ impl Component<ProxyToConductor> for Symposium {
         let Self { config } = self;
 
         let ferris = config.ferris;
+        let cargo = config.cargo;
         let sparkle = config.sparkle;
         let trace_dir = config.trace_dir;
 
@@ -99,6 +108,10 @@ impl Component<ProxyToConductor> for Symposium {
                     proxies.push(DynComponent::new(symposium_ferris::FerrisComponent::new(
                         ferris_config,
                     )));
+                }
+
+                if cargo {
+                    proxies.push(DynComponent::new(symposium_cargo::CargoProxy));
                 }
 
                 if sparkle {
@@ -153,6 +166,7 @@ impl Component<AgentToClient> for SymposiumAgent {
         let Self { config, agent } = self;
 
         let ferris = config.ferris;
+        let cargo = config.cargo;
         let sparkle = config.sparkle;
         let trace_dir = config.trace_dir;
 
@@ -168,6 +182,10 @@ impl Component<AgentToClient> for SymposiumAgent {
                     proxies.push(DynComponent::new(symposium_ferris::FerrisComponent::new(
                         ferris_config,
                     )));
+                }
+
+                if cargo {
+                    proxies.push(DynComponent::new(symposium_cargo::CargoProxy));
                 }
 
                 if sparkle {

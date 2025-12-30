@@ -35,5 +35,6 @@ tokio-util = { version = "0.7", features = ["compat"] }
 
 # Proxy components
 symposium-ferris = { path = "../symposium-ferris", version = "1.0.0" }
+symposium-cargo = "0.2.0"
 sacp-tee.workspace = true
 sparkle.workspace = true

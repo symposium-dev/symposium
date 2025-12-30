@@ -3119,6 +3119,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sparkle-mcp",
+ "symposium-cargo",
  "symposium-ferris",
  "tokio",
  "tokio-util",
@@ -3146,6 +3147,24 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "yopo",
+]
+
+[[package]]
+name = "symposium-cargo"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8a32a3f5652e07cc751a2691ea6c8b2dbb388ab54b12b3287961780a54eb7cb3"
+dependencies = [
+ "anyhow",
+ "indoc",
+ "sacp",
+ "sacp-tokio",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

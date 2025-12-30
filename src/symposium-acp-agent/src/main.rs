@@ -39,6 +39,10 @@ struct Cli {
     #[arg(long, default_value = "crate_source", value_delimiter = ',')]
     ferris_tools: Vec<String>,
 
+    /// Enable or disable Cargo tools (default: yes)
+    #[arg(long, default_value = "yes", value_parser = parse_yes_no)]
+    cargo: bool,
+
     /// Enable trace logging to the specified directory.
     /// Traces are written as timestamped .jsons files viewable with sacp-trace-viewer.
     #[arg(long)]
@@ -98,7 +102,8 @@ async fn main() -> Result<()> {
 
     let mut symposium = symposium_acp_proxy::Symposium::new()
         .sparkle(cli.sparkle)
-        .ferris(ferris_config);
+        .ferris(ferris_config)
+        .cargo(cli.cargo);
 
     if let Some(trace_dir) = cli.trace_dir {
         symposium = symposium.trace_dir(trace_dir);
