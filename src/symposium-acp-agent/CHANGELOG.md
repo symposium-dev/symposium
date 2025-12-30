@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.1.0](https://github.com/symposium-dev/symposium/compare/symposium-acp-agent-v1.0.0...symposium-acp-agent-v1.1.0) - 2025-12-30
+
+### Added
+
+- add --cargo flag to CLI binaries
+
 ## [1.0.0](https://github.com/symposium-dev/symposium/compare/symposium-acp-agent-v1.0.0-alpha.2...symposium-acp-agent-v1.0.0) - 2025-12-30
 
 ### Other
