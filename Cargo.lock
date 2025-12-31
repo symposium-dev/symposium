@@ -3593,7 +3593,7 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "symposium-acp-agent"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -3610,7 +3610,7 @@ dependencies = [
 
 [[package]]
 name = "symposium-acp-proxy"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3682,7 +3682,7 @@ dependencies = [
 
 [[package]]
 name = "symposium-ferris"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "cargo_metadata",

@@ -1,6 +1,6 @@
 [package]
 name = "symposium-acp-agent"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Symposium-enriched ACP agent that wraps downstream agents with enhanced capabilities"
@@ -23,8 +23,8 @@ tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 
 # Symposium components
-symposium-acp-proxy = { path = "../symposium-acp-proxy", version = "1.0.0" }
-symposium-ferris = { path = "../symposium-ferris", version = "1.0.0" }
+symposium-acp-proxy = { path = "../symposium-acp-proxy", version = "1.1.0" }
+symposium-ferris = { path = "../symposium-ferris", version = "1.0.1" }
 
 # Built-in agents
 elizacp.workspace = true

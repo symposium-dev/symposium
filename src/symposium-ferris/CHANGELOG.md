@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1](https://github.com/symposium-dev/symposium/compare/symposium-ferris-v1.0.0...symposium-ferris-v1.0.1) - 2025-12-31
+
+### Other
+
+- update Cargo.toml dependencies
+
 ## [1.0.0](https://github.com/symposium-dev/symposium/compare/symposium-ferris-v1.0.0-alpha.2...symposium-ferris-v1.0.0) - 2025-12-30
 
 ### Other

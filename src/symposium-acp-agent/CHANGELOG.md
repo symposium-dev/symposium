@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/symposium-dev/symposium/compare/symposium-acp-agent-v1.0.0...symposium-acp-agent-v1.1.0) - 2025-12-31
+
+### Added
+
+- add built-in ElizACP agent for testing
+- add --cargo flag to CLI binaries
+
+### Other
+
+- upgrade elizacp to 11.0.0
+- *(vscode)* remove component toggle settings
+
 ## [1.0.0](https://github.com/symposium-dev/symposium/compare/symposium-acp-agent-v1.0.0-alpha.2...symposium-acp-agent-v1.0.0) - 2025-12-30
 
 ### Other

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/symposium-dev/symposium/compare/symposium-acp-proxy-v1.0.0...symposium-acp-proxy-v1.1.0) - 2025-12-31
+
+### Added
+
+- add --cargo flag to CLI binaries
+- add cargo tools to symposium proxy
+
 ## [1.0.0](https://github.com/symposium-dev/symposium/compare/symposium-acp-proxy-v1.0.0-alpha.2...symposium-acp-proxy-v1.0.0) - 2025-12-30
 
 ### Other
