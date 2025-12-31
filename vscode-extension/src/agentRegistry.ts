@@ -36,7 +36,14 @@ export interface SymposiumDistribution {
   args?: string[];
 }
 
+export interface LocalDistribution {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+}
+
 export interface Distribution {
+  local?: LocalDistribution; // explicit local binary path
   npx?: NpxDistribution;
   pipx?: PipxDistribution;
   binary?: Record<string, BinaryDistribution>; // keyed by platform, e.g., "darwin-aarch64"
@@ -206,7 +213,16 @@ export async function resolveDistribution(
 ): Promise<ResolvedCommand> {
   const dist = agent.distribution;
 
-  // Try symposium builtin first (e.g., eliza subcommand)
+  // Try local first (explicit path takes priority)
+  if (dist.local) {
+    return {
+      command: dist.local.command,
+      args: dist.local.args ?? [],
+      env: dist.local.env,
+    };
+  }
+
+  // Try symposium builtin (e.g., eliza subcommand)
   if (dist.symposium) {
     return {
       command: dist.symposium.subcommand,
