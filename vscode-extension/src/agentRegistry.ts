@@ -198,7 +198,7 @@ export interface ResolvedCommand {
   command: string;
   args: string[];
   env?: Record<string, string>;
-  /** If true, this is a built-in symposium subcommand - don't wrap with conductor */
+  /** If true, this is a built-in symposium subcommand - use the same binary as the downstream agent */
   isSymposiumBuiltin?: boolean;
 }
 
