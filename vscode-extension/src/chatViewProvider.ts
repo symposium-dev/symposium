@@ -31,6 +31,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     {
       resolve: (response: any) => void;
       reject: (error: Error) => void;
+      agentId: string;
       agentName: string;
     }
   > = new Map(); // approvalId → promise resolvers
@@ -172,7 +173,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
 
         // Need user approval - send request to webview and wait for response
-        return this.#requestUserApproval(params, displayName);
+        return this.#requestUserApproval(params, config.agentId, displayName);
       },
       onToolCall: (agentSessionId: string, toolCall: ToolCallInfo) => {
         const tabId = this.#agentSessionToTab.get(agentSessionId);
@@ -815,18 +816,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               const vsConfig = vscode.workspace.getConfiguration("symposium");
               const agents = vsConfig.get<Record<string, any>>("agents", {});
 
-              // Update the agent's bypassPermissions setting
-              if (agents[pending.agentName]) {
-                agents[pending.agentName].bypassPermissions = true;
-                await vsConfig.update(
-                  "agents",
-                  agents,
-                  vscode.ConfigurationTarget.Global,
-                );
-                logger.debug("approval", "Bypass permissions enabled by user", {
-                  agent: pending.agentName,
-                });
+              // Update the agent's bypassPermissions setting (create entry if needed)
+              if (!agents[pending.agentId]) {
+                agents[pending.agentId] = {};
               }
+              agents[pending.agentId].bypassPermissions = true;
+              await vsConfig.update(
+                "agents",
+                agents,
+                vscode.ConfigurationTarget.Global,
+              );
+              logger.debug("approval", "Bypass permissions enabled by user", {
+                agentId: pending.agentId,
+                agent: pending.agentName,
+              });
             }
 
             // Resolve the promise with the response
@@ -860,6 +863,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   async #requestUserApproval(
     params: acp.RequestPermissionRequest,
+    agentId: string,
     agentName: string,
   ): Promise<acp.RequestPermissionResponse> {
     // Generate unique approval ID
@@ -894,7 +898,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Create a promise that will be resolved when user responds
     const approvalPromise = new Promise<acp.RequestPermissionResponse>(
       (resolve, reject) => {
-        this.#pendingApprovals.set(approvalId, { resolve, reject, agentName });
+        this.#pendingApprovals.set(approvalId, {
+          resolve,
+          reject,
+          agentId,
+          agentName,
+        });
       },
     );
 
@@ -1362,18 +1371,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             const vsConfig = vscode.workspace.getConfiguration("symposium");
             const agents = vsConfig.get<Record<string, any>>("agents", {});
 
-            // Update the agent's bypassPermissions setting
-            if (agents[pending.agentName]) {
-              agents[pending.agentName].bypassPermissions = true;
-              await vsConfig.update(
-                "agents",
-                agents,
-                vscode.ConfigurationTarget.Global,
-              );
-              logger.debug("approval", "Bypass permissions enabled by user", {
-                agent: pending.agentName,
-              });
+            // Update the agent's bypassPermissions setting (create entry if needed)
+            if (!agents[pending.agentId]) {
+              agents[pending.agentId] = {};
             }
+            agents[pending.agentId].bypassPermissions = true;
+            await vsConfig.update(
+              "agents",
+              agents,
+              vscode.ConfigurationTarget.Global,
+            );
+            logger.debug("approval", "Bypass permissions enabled by user", {
+              agentId: pending.agentId,
+              agent: pending.agentName,
+            });
           }
 
           // Resolve the promise with the response
