@@ -11,7 +11,7 @@ use sacp::{
     JrMessageHandler, JrNotification, JrPeer, JrRequest, JrResponsePayload, MessageCx,
 };
 use serde::{Deserialize, Serialize};
-use session_actor::SessionActor;
+use session_actor::{AgentDefinition, SessionActor};
 use std::path::PathBuf;
 
 // ============================================================================
@@ -149,6 +149,7 @@ pub struct ProvideInfoResponse {
 pub struct ProvideResponseRequest {
     pub model_id: String,
     pub messages: Vec<Message>,
+    pub agent: sacp::schema::McpServer,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JrResponsePayload)]
@@ -208,25 +209,12 @@ pub struct ProvideTokenCountResponse {
 pub struct LmBackendHandler {
     /// Active sessions, searched linearly for prefix matches
     sessions: Vec<SessionActor>,
-    /// Whether to use deterministic Eliza responses (for testing)
-    #[cfg(test)]
-    deterministic: bool,
 }
 
 impl LmBackendHandler {
     pub fn new() -> Self {
         Self {
             sessions: Vec::new(),
-            #[cfg(test)]
-            deterministic: false,
-        }
-    }
-
-    #[cfg(test)]
-    pub fn new_deterministic() -> Self {
-        Self {
-            sessions: Vec::new(),
-            deterministic: true,
         }
     }
 }
@@ -291,11 +279,8 @@ impl JrMessageHandler for LmBackendHandler {
                     );
                     session
                 } else {
-                    #[cfg(test)]
-                    let deterministic = self.deterministic;
-                    #[cfg(not(test))]
-                    let deterministic = false;
-                    let session = SessionActor::spawn(&cx, deterministic)?;
+                    let agent_def = AgentDefinition::McpServer(req.agent.clone());
+                    let session = SessionActor::spawn(&cx, agent_def)?;
                     self.sessions.push(session);
                     self.sessions.last_mut().unwrap()
                 };
@@ -354,14 +339,6 @@ impl LmBackend {
     pub fn new() -> Self {
         Self {
             handler: LmBackendHandler::new(),
-        }
-    }
-
-    /// Create a new LmBackend with deterministic Eliza responses (for testing).
-    #[cfg(test)]
-    pub fn new_deterministic() -> Self {
-        Self {
-            handler: LmBackendHandler::new_deterministic(),
         }
     }
 }
@@ -440,7 +417,7 @@ mod tests {
     #[tokio::test]
     async fn test_provide_info() -> Result<(), sacp::Error> {
         VsCodeToLmBackend::builder()
-            .connect_to(LmBackend::new_deterministic())?
+            .connect_to(LmBackend::new())?
             .run_until(async |cx| {
                 let response = cx
                     .send_request(ProvideInfoRequest { silent: false })
@@ -474,7 +451,7 @@ mod tests {
     #[tokio::test]
     async fn test_provide_token_count() -> Result<(), sacp::Error> {
         VsCodeToLmBackend::builder()
-            .connect_to(LmBackend::new_deterministic())?
+            .connect_to(LmBackend::new())?
             .run_until(async |cx| {
                 let response = cx
                     .send_request(ProvideTokenCountRequest {
@@ -496,127 +473,9 @@ mod tests {
             .await
     }
 
-    #[tokio::test]
-    async fn test_chat_response() -> Result<(), sacp::Error> {
-        let mut full_response = String::new();
-
-        VsCodeToLmBackend::builder()
-            .on_receive_notification(
-                async |notif: ResponsePartNotification, _cx| {
-                    let ResponsePart::Text { value } = notif.part;
-                    full_response.push_str(&value);
-                    Ok(())
-                },
-                sacp::on_receive_notification!(),
-            )
-            .connect_to(LmBackend::new_deterministic())?
-            .run_until(async |cx| {
-                cx.send_request(ProvideResponseRequest {
-                    model_id: "symposium-eliza".to_string(),
-                    messages: vec![Message {
-                        role: "user".to_string(),
-                        content: vec![ContentPart::Text {
-                            value: "I feel happy".to_string(),
-                        }],
-                    }],
-                })
-                .block_task()
-                .await?;
-
-                Ok(())
-            })
-            .await?;
-
-        expect![[r#"Do you often feel happy?"#]].assert_eq(&full_response);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_session_continuation() -> Result<(), sacp::Error> {
-        // Test that a second request extending the first reuses the session
-        // and only processes new messages
-        let responses: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
-            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-
-        let responses_for_notif = responses.clone();
-        let connection = VsCodeToLmBackend::builder()
-            .on_receive_notification(
-                async move |notif: ResponsePartNotification, _cx| {
-                    let ResponsePart::Text { value } = notif.part;
-                    responses_for_notif.lock().unwrap().push(value);
-                    Ok(())
-                },
-                sacp::on_receive_notification!(),
-            )
-            .on_receive_notification(
-                async |_notif: ResponseCompleteNotification, _cx| Ok(()),
-                sacp::on_receive_notification!(),
-            )
-            .connect_to(LmBackend::new_deterministic())?;
-
-        connection
-            .run_until(async |cx| {
-                // First request: single user message
-                cx.send_request(ProvideResponseRequest {
-                    model_id: "symposium-eliza".to_string(),
-                    messages: vec![Message {
-                        role: "user".to_string(),
-                        content: vec![ContentPart::Text {
-                            value: "I feel happy".to_string(),
-                        }],
-                    }],
-                })
-                .block_task()
-                .await?;
-
-                let first_response: String = responses.lock().unwrap().drain(..).collect();
-                expect![[r#"Do you often feel happy?"#]].assert_eq(&first_response);
-
-                // Second request: extends the first with assistant response + new user message
-                // This simulates what VS Code does - it sends the full history each time
-                cx.send_request(ProvideResponseRequest {
-                    model_id: "symposium-eliza".to_string(),
-                    messages: vec![
-                        Message {
-                            role: "user".to_string(),
-                            content: vec![ContentPart::Text {
-                                value: "I feel happy".to_string(),
-                            }],
-                        },
-                        Message {
-                            role: "assistant".to_string(),
-                            content: vec![ContentPart::Text {
-                                value: "Do you often feel happy?".to_string(),
-                            }],
-                        },
-                        Message {
-                            role: "user".to_string(),
-                            content: vec![ContentPart::Text {
-                                value: "Yes, I am very happy".to_string(),
-                            }],
-                        },
-                    ],
-                })
-                .block_task()
-                .await?;
-
-                let second_response: String = responses.lock().unwrap().drain(..).collect();
-                // Eliza responds - the key thing is we got a response, proving
-                // the session continued and processed only the new message
-                assert!(
-                    !second_response.is_empty(),
-                    "Expected a response from continued session"
-                );
-                // Should NOT contain the first response again (proving we didn't reprocess)
-                assert!(
-                    !second_response.contains("Do you often feel happy"),
-                    "Should not have reprocessed first message, got: {}",
-                    second_response
-                );
-
-                Ok(())
-            })
-            .await
-    }
+    // TODO: Add integration tests that spawn a real agent process
+    // The chat_response and session_continuation tests have been removed
+    // because they relied on the old in-process Eliza implementation.
+    // With the new architecture, the session actor spawns an external
+    // ACP agent process, which requires different test infrastructure.
 }
