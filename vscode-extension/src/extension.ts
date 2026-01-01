@@ -48,6 +48,9 @@ export function activate(context: vscode.ExtensionContext) {
     ),
   );
 
+  // Check agent availability at startup
+  settingsProvider.refreshAvailability();
+
   // Register the command to open chat
   context.subscriptions.push(
     vscode.commands.registerCommand("symposium.openChat", () => {

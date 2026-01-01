@@ -11,6 +11,109 @@ const REGISTRY_URL =
 import * as vscode from "vscode";
 import * as os from "os";
 import * as path from "path";
+import * as fs from "fs";
+import { promisify } from "util";
+import { exec } from "child_process";
+
+const execAsync = promisify(exec);
+
+/**
+ * Availability status for built-in agents
+ */
+export interface AvailabilityStatus {
+  available: boolean;
+  reason?: string;
+}
+
+/**
+ * Check if a command exists on the PATH
+ */
+async function commandExists(command: string): Promise<boolean> {
+  try {
+    const checkCmd =
+      process.platform === "win32" ? `where ${command}` : `which ${command}`;
+    await execAsync(checkCmd);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if a directory exists
+ */
+async function directoryExists(dirPath: string): Promise<boolean> {
+  try {
+    const stats = await fs.promises.stat(dirPath);
+    return stats.isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Availability checks for built-in agents.
+ * If an agent is not in this map, it's always available.
+ */
+const AVAILABILITY_CHECKS: Record<string, () => Promise<AvailabilityStatus>> = {
+  "zed-claude-code": async () => {
+    const claudeDir = path.join(os.homedir(), ".claude");
+    if (await directoryExists(claudeDir)) {
+      return { available: true };
+    }
+    return { available: false, reason: "~/.claude not found" };
+  },
+  "zed-codex": async () => {
+    if (await commandExists("codex")) {
+      return { available: true };
+    }
+    return { available: false, reason: "codex not found on PATH" };
+  },
+  "google-gemini": async () => {
+    if (await commandExists("gemini")) {
+      return { available: true };
+    }
+    return { available: false, reason: "gemini not found on PATH" };
+  },
+  "kiro-cli": async () => {
+    if (await commandExists("kiro-cli-chat")) {
+      return { available: true };
+    }
+    return { available: false, reason: "kiro-cli-chat not found on PATH" };
+  },
+  // elizacp has no check - always available (symposium builtin)
+};
+
+/**
+ * Check availability for a single agent
+ */
+export async function checkAgentAvailability(
+  agentId: string,
+): Promise<AvailabilityStatus> {
+  const check = AVAILABILITY_CHECKS[agentId];
+  if (!check) {
+    return { available: true };
+  }
+  return check();
+}
+
+/**
+ * Check availability for all built-in agents
+ */
+export async function checkAllBuiltInAvailability(): Promise<
+  Map<string, AvailabilityStatus>
+> {
+  const results = new Map<string, AvailabilityStatus>();
+
+  await Promise.all(
+    BUILT_IN_AGENTS.map(async (agent) => {
+      const status = await checkAgentAvailability(agent.id);
+      results.set(agent.id, status);
+    }),
+  );
+
+  return results;
+}
 
 /**
  * Distribution methods for spawning an agent
@@ -108,6 +211,14 @@ export const BUILT_IN_AGENTS: AgentConfig[] = [
     },
     _source: "custom",
   },
+  {
+    id: "kiro-cli",
+    name: "Kiro CLI",
+    distribution: {
+      local: { command: "kiro-cli-chat", args: ["acp"] },
+    },
+    _source: "custom",
+  },
 ];
 
 /**
@@ -198,7 +309,7 @@ export interface ResolvedCommand {
   command: string;
   args: string[];
   env?: Record<string, string>;
-  /** If true, this is a built-in symposium subcommand - don't wrap with conductor */
+  /** If true, this is a built-in symposium subcommand - use the same binary as the downstream agent */
   isSymposiumBuiltin?: boolean;
 }
 

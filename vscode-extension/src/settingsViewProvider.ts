@@ -4,12 +4,15 @@ import {
   getCurrentAgentId,
   AgentConfig,
   checkForRegistryUpdates,
+  checkAllBuiltInAvailability,
+  AvailabilityStatus,
 } from "./agentRegistry";
 
 export class SettingsViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "symposium.settingsView";
   #view?: vscode.WebviewView;
   #extensionUri: vscode.Uri;
+  #availabilityCache: Map<string, AvailabilityStatus> = new Map();
 
   constructor(extensionUri: vscode.Uri) {
     this.#extensionUri = extensionUri;
@@ -20,6 +23,15 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         this.#sendConfiguration();
       }
     });
+  }
+
+  /**
+   * Refresh availability checks for built-in agents.
+   * Call this at activation and when the settings panel becomes visible.
+   */
+  async refreshAvailability(): Promise<void> {
+    this.#availabilityCache = await checkAllBuiltInAvailability();
+    this.#sendConfiguration();
   }
 
   public resolveWebviewView(
@@ -39,8 +51,8 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     // Handle webview visibility changes
     webviewView.onDidChangeVisibility(() => {
       if (webviewView.visible) {
-        // Refresh configuration when view becomes visible
-        this.#sendConfiguration();
+        // Refresh availability checks and configuration when view becomes visible
+        this.refreshAvailability();
       }
     });
 
@@ -171,12 +183,18 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     const config = vscode.workspace.getConfiguration("symposium");
     const bypassList = config.get<string[]>("bypassPermissions", []);
 
-    // Get effective agents (built-ins + settings) and merge bypass settings
+    // Get effective agents (built-ins + settings) and merge bypass/availability settings
     const effectiveAgents = getEffectiveAgents();
-    const agents = effectiveAgents.map((agent) => ({
-      ...agent,
-      bypassPermissions: bypassList.includes(agent.id),
-    }));
+    const agents = effectiveAgents.map((agent) => {
+      const availability = this.#availabilityCache.get(agent.id);
+      return {
+        ...agent,
+        bypassPermissions: bypassList.includes(agent.id),
+        // Only built-in agents have availability checks (registry agents are always available)
+        disabled: availability ? !availability.available : false,
+        disabledReason: availability?.reason,
+      };
+    });
 
     const currentAgentId = getCurrentAgentId();
     const requireModifierToSend = config.get<boolean>(
@@ -264,6 +282,18 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         }
         .badge.bypass:hover {
             opacity: 0.8;
+        }
+        .agent-item.disabled {
+            opacity: 0.5;
+            cursor: default;
+        }
+        .agent-item.disabled:hover {
+            background: var(--vscode-list-inactiveSelectionBackground);
+        }
+        .disabled-reason {
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+            font-style: italic;
         }
         .toggle {
             font-size: 11px;
@@ -376,15 +406,16 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
             for (const agent of agents) {
                 const displayName = agent.name || agent.id;
                 const isActive = agent.id === currentAgentId;
+                const isDisabled = agent.disabled;
 
                 const item = document.createElement('div');
-                item.className = 'agent-item' + (isActive ? ' active' : '');
+                item.className = 'agent-item' + (isActive ? ' active' : '') + (isDisabled ? ' disabled' : '');
 
                 const badges = [];
                 if (isActive) {
                     badges.push('<span class="badge">Active</span>');
                 }
-                if (agent.bypassPermissions) {
+                if (agent.bypassPermissions && !isDisabled) {
                     badges.push('<span class="badge bypass" title="Click to disable bypass permissions">Bypass Permissions</span>');
                 }
 
@@ -392,28 +423,35 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
                     ? \`<span class="agent-version">v\${agent.version}</span>\`
                     : '';
 
+                const disabledHtml = isDisabled && agent.disabledReason
+                    ? \`<span class="disabled-reason">(\${agent.disabledReason})</span>\`
+                    : '';
+
                 item.innerHTML = \`
                     <div class="agent-name">
                         <span>\${displayName}</span>
                         \${versionHtml}
+                        \${disabledHtml}
                     </div>
                     <div class="badges">\${badges.join('')}</div>
                 \`;
 
-                // Handle clicking on the agent name (switch agent)
-                const nameSpan = item.querySelector('.agent-name');
-                nameSpan.onclick = (e) => {
-                    e.stopPropagation();
-                    vscode.postMessage({ type: 'set-current-agent', agentId: agent.id, agentName: displayName });
-                };
-
-                // Handle clicking on the bypass badge (toggle bypass)
-                const bypassBadge = item.querySelector('.badge.bypass');
-                if (bypassBadge) {
-                    bypassBadge.onclick = (e) => {
+                // Handle clicking on the agent name (switch agent) - only if not disabled
+                if (!isDisabled) {
+                    const nameSpan = item.querySelector('.agent-name');
+                    nameSpan.onclick = (e) => {
                         e.stopPropagation();
-                        vscode.postMessage({ type: 'toggle-bypass-permissions', agentId: agent.id });
+                        vscode.postMessage({ type: 'set-current-agent', agentId: agent.id, agentName: displayName });
                     };
+
+                    // Handle clicking on the bypass badge (toggle bypass)
+                    const bypassBadge = item.querySelector('.badge.bypass');
+                    if (bypassBadge) {
+                        bypassBadge.onclick = (e) => {
+                            e.stopPropagation();
+                            vscode.postMessage({ type: 'toggle-bypass-permissions', agentId: agent.id });
+                        };
+                    }
                 }
 
                 list.appendChild(item);
