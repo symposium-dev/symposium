@@ -6,8 +6,8 @@
 use anyhow::Result;
 use elizacp::eliza::Eliza;
 use sacp::{
-    link::RemoteStyle, util::MatchMessage, Handled, JrConnectionCx, JrLink, JrMessageHandler,
-    JrNotification, JrPeer, JrRequest, JrResponsePayload, MessageCx,
+    link::RemoteStyle, util::MatchMessage, Component, Handled, JrConnectionCx, JrLink,
+    JrMessageHandler, JrNotification, JrPeer, JrRequest, JrResponsePayload, MessageCx,
 };
 use serde::{Deserialize, Serialize};
 
@@ -317,26 +317,182 @@ impl JrMessageHandler for LmBackendHandler {
 }
 
 // ============================================================================
-// Server
+// Component Implementation
 // ============================================================================
 
-/// The vscodelm server
-pub struct VsCodeLmServer;
+/// The LM backend component that can be used with sacp's Component infrastructure.
+pub struct LmBackend {
+    handler: LmBackendHandler,
+}
 
-impl VsCodeLmServer {
+impl LmBackend {
     pub fn new() -> Self {
-        Self
+        Self {
+            handler: LmBackendHandler::new(),
+        }
+    }
+}
+
+impl Default for LmBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl sacp::Component<LmBackendToVsCode> for LmBackend {
+    async fn serve(
+        self,
+        client: impl sacp::Component<VsCodeToLmBackend>,
+    ) -> Result<(), sacp::Error> {
+        LmBackendToVsCode::builder()
+            .with_handler(self.handler)
+            .serve(client)
+            .await
+    }
+}
+
+// ============================================================================
+// Server (for CLI usage)
+// ============================================================================
+
+/// Run the LM backend on stdio
+pub async fn serve_stdio() -> Result<()> {
+    LmBackend::new().serve(sacp_tokio::Stdio::new()).await?;
+    Ok(())
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sacp::Component;
+
+    #[tokio::test]
+    async fn test_provide_info() {
+        let (channel, server_future) = LmBackend::new().into_server();
+
+        // Spawn the server
+        let server_handle = tokio::spawn(server_future);
+
+        // Create a client connection
+        let result = VsCodeToLmBackend::builder()
+            .run_until(channel, async |cx| {
+                let response = cx
+                    .send_request(ProvideInfoRequest { silent: false })
+                    .block_task()
+                    .await?;
+
+                assert_eq!(response.models.len(), 1);
+                assert_eq!(response.models[0].id, "symposium-eliza");
+                assert_eq!(response.models[0].name, "Symposium (Eliza)");
+
+                Ok(())
+            })
+            .await;
+
+        result.expect("client should succeed");
+        server_handle.abort();
     }
 
-    /// Run the JSON-RPC server on stdio
-    pub async fn serve(self) -> Result<()> {
-        let handler = LmBackendHandler::new();
+    #[tokio::test]
+    async fn test_provide_token_count() {
+        let (channel, server_future) = LmBackend::new().into_server();
+        let server_handle = tokio::spawn(server_future);
 
-        LmBackendToVsCode::builder()
-            .with_handler(handler)
-            .serve(sacp_tokio::Stdio::new())
-            .await?;
+        let result = VsCodeToLmBackend::builder()
+            .run_until(channel, async |cx| {
+                let response = cx
+                    .send_request(ProvideTokenCountRequest {
+                        model_id: "symposium-eliza".to_string(),
+                        text: "Hello, world!".to_string(), // 13 chars -> ~3 tokens
+                    })
+                    .block_task()
+                    .await?;
 
-        Ok(())
+                assert_eq!(response.count, 3);
+
+                Ok(())
+            })
+            .await;
+
+        result.expect("client should succeed");
+        server_handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_chat_response() {
+        use std::sync::Arc;
+        use tokio::sync::Mutex;
+
+        let (channel, server_future) = LmBackend::new().into_server();
+        let server_handle = tokio::spawn(server_future);
+
+        // Collect streamed parts and track completion
+        let parts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let complete: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+        let parts_clone = parts.clone();
+        let complete_clone = complete.clone();
+
+        let result = VsCodeToLmBackend::builder()
+            .on_receive_notification(
+                async move |notif: ResponsePartNotification, _cx| {
+                    let ResponsePart::Text { value } = notif.part;
+                    parts_clone.lock().await.push(value);
+                    Ok(())
+                },
+                sacp::on_receive_notification!(),
+            )
+            .on_receive_notification(
+                async move |_notif: ResponseCompleteNotification, _cx| {
+                    *complete_clone.lock().await = true;
+                    Ok(())
+                },
+                sacp::on_receive_notification!(),
+            )
+            .run_until(channel, async |cx| {
+                let _response = cx
+                    .send_request(ProvideResponseRequest {
+                        model_id: "symposium-eliza".to_string(),
+                        messages: vec![Message {
+                            role: "user".to_string(),
+                            content: vec![ContentPart::Text {
+                                value: "I feel happy".to_string(),
+                            }],
+                        }],
+                    })
+                    .block_task()
+                    .await?;
+
+                // Wait a bit for notifications to arrive
+                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
+                Ok(())
+            })
+            .await;
+
+        result.expect("client should succeed");
+
+        // Verify we got streamed parts
+        let collected_parts = parts.lock().await;
+        assert!(!collected_parts.is_empty(), "should receive response parts");
+
+        // Reconstruct the full response
+        let full_response: String = collected_parts.iter().cloned().collect();
+        assert!(
+            full_response.contains("happy"),
+            "Eliza should echo back the sentiment, got: {}",
+            full_response
+        );
+
+        // Verify completion was signaled
+        assert!(
+            *complete.lock().await,
+            "should receive completion notification"
+        );
+
+        server_handle.abort();
     }
 }

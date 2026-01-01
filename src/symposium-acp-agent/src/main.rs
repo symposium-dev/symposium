@@ -119,7 +119,7 @@ async fn main() -> Result<()> {
         }
         Some(Command::Vscodelm) => {
             // Run as VS Code Language Model Provider backend
-            vscodelm::VsCodeLmServer::new().serve().await?;
+            vscodelm::serve_stdio().await?;
         }
         None => {
             // Run with a downstream agent
