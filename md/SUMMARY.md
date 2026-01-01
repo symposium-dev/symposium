@@ -12,8 +12,11 @@
 
 - [Introduction](./introduction.md)
 - [About](./about.md)
-    - [Rust Crate Sources Tool](./rust-expertise.md)
-    - [Rich Collaboration](./rich-collaboration.md)
+- [How it works](./how-it-works.md)
+- [How to install](./install.md)
+    - [VSCode](./install-vscode.md)
+    - [Other editors](./install-other.md)
+- [How to contribute](./contribute.md)
 
 # Design and implementation
 

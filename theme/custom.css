@@ -155,3 +155,51 @@ h6 {
 body[data-no-menu-bar] #content {
     padding-top: 4rem;
 }
+
+/* Editor install list */
+.editor-list {
+    list-style: none;
+    padding: 0;
+    margin: 2rem 0;
+    max-width: 400px;
+}
+
+.editor-list li {
+    margin: 0;
+    padding: 0;
+}
+
+.editor-list a {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1rem 1.5rem;
+    text-decoration: none;
+    color: inherit;
+    border-bottom: 1px solid #e0e0e0;
+    transition: background-color 0.2s ease;
+}
+
+.editor-list li:first-child a {
+    border-top: 1px solid #e0e0e0;
+}
+
+.editor-list a:hover {
+    background-color: #f5f5f5;
+}
+
+.editor-list img {
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+}
+
+.editor-list .editor-name {
+    font-size: 1.2rem;
+    font-weight: 500;
+}
+
+.editor-list .other-editors .editor-name {
+    margin-left: calc(48px + 1rem);
+    color: #666;
+}
