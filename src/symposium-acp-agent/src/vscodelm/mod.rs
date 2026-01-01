@@ -478,4 +478,20 @@ mod tests {
     // because they relied on the old in-process Eliza implementation.
     // With the new architecture, the session actor spawns an external
     // ACP agent process, which requires different test infrastructure.
+
+    #[test]
+    fn test_mcp_server_serialization() {
+        use sacp::schema::{McpServer, McpServerStdio};
+
+        let server = McpServer::Stdio(McpServerStdio::new("test", "echo"));
+        let json = serde_json::to_string_pretty(&server).unwrap();
+        println!("{}", json);
+
+        // Stdio variant uses #[serde(untagged)] so it serializes directly
+        // as McpServerStdio without any "type" discriminator
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["name"], "test");
+        assert_eq!(parsed["command"], "echo");
+        assert!(parsed.get("type").is_none());
+    }
 }

@@ -10,10 +10,46 @@ import * as vscode from "vscode";
 import * as cp from "child_process";
 import { getConductorCommand } from "./binaryPath";
 import { logger } from "./extension";
+import {
+  getCurrentAgent,
+  resolveDistribution,
+  ResolvedCommand,
+} from "./agentRegistry";
 
 interface ResponsePart {
   type: "text";
   value: string;
+}
+
+/**
+ * MCP Server configuration in the format expected by the Rust backend.
+ * This matches sacp::schema::McpServerStdio (the Stdio variant uses
+ * #[serde(untagged)] so it serializes as a flat object).
+ */
+interface McpServerStdio {
+  name: string;
+  command: string;
+  args: string[];
+  env: Array<{ name: string; value: string }>;
+}
+
+/**
+ * Convert a resolved agent command to McpServer format
+ */
+function resolvedCommandToMcpServer(
+  name: string,
+  resolved: ResolvedCommand,
+): McpServerStdio {
+  const envArray = resolved.env
+    ? Object.entries(resolved.env).map(([k, v]) => ({ name: k, value: v }))
+    : [];
+
+  return {
+    name,
+    command: resolved.command,
+    args: resolved.args,
+    env: envArray,
+  };
 }
 
 /**
@@ -273,6 +309,28 @@ export class SymposiumLanguageModelProvider
     progress: vscode.Progress<vscode.LanguageModelTextPart>,
     token: vscode.CancellationToken,
   ): Promise<void> {
+    // Get the current agent configuration
+    const agent = getCurrentAgent();
+    if (!agent) {
+      throw new Error("No agent configured");
+    }
+
+    // Resolve the agent distribution to a spawn command
+    const resolved = await resolveDistribution(agent);
+
+    // Handle symposium builtins specially - they're not external processes
+    if (resolved.isSymposiumBuiltin) {
+      throw new Error(
+        `Agent "${agent.name}" is a symposium builtin and cannot be used via the Language Model API`,
+      );
+    }
+
+    // Convert to MCP server format
+    const mcpServer = resolvedCommandToMcpServer(
+      agent.name ?? agent.id,
+      resolved,
+    );
+
     // Convert VS Code messages to our format
     const convertedMessages = messages.map((msg) => ({
       role: this.roleToString(msg.role),
@@ -281,7 +339,7 @@ export class SymposiumLanguageModelProvider
 
     logger.debug(
       "lm-provider",
-      `provideLanguageModelChatResponse: ${JSON.stringify(convertedMessages)}`,
+      `provideLanguageModelChatResponse: agent=${agent.id}, messages=${JSON.stringify(convertedMessages)}`,
     );
 
     // Set up cancellation
@@ -293,7 +351,7 @@ export class SymposiumLanguageModelProvider
 
     await this.sendRequest(
       "lm/provideLanguageModelChatResponse",
-      { modelId: model.id, messages: convertedMessages },
+      { modelId: model.id, messages: convertedMessages, agent: mcpServer },
       progress,
     );
   }
