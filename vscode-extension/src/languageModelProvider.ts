@@ -33,27 +33,33 @@ interface McpServerStdio {
 
 /**
  * Agent definition - matches session_actor::AgentDefinition in Rust.
- * This is an externally-tagged enum with snake_case variant names.
+ * The protocol supports both eliza and mcp_server variants, but the
+ * extension always sends mcp_server (resolving builtins to the binary path).
  */
-type AgentDefinition =
-  | { eliza: { deterministic?: boolean } }
-  | { mcp_server: McpServerStdio };
+type AgentDefinition = { mcp_server: McpServerStdio };
 
 /**
- * Convert a resolved agent command to AgentDefinition format
+ * Convert a resolved agent command to AgentDefinition format.
+ * Always produces mcp_server variant - symposium builtins are resolved
+ * to the embedded binary path.
  */
 function resolvedCommandToAgentDefinition(
   name: string,
   resolved: ResolvedCommand,
+  context: vscode.ExtensionContext,
 ): AgentDefinition {
-  // If it's a symposium builtin (like Eliza), return the eliza variant
+  let command: string;
+  let args: string[];
+
   if (resolved.isSymposiumBuiltin) {
-    // Check if deterministic flag was passed
-    const deterministic = resolved.args.includes("--deterministic");
-    return { eliza: { deterministic } };
+    // For symposium builtins, use the embedded binary with the subcommand
+    command = getConductorCommand(context);
+    args = [resolved.command, ...resolved.args];
+  } else {
+    command = resolved.command;
+    args = resolved.args;
   }
 
-  // Otherwise, it's an external MCP server
   const envArray = resolved.env
     ? Object.entries(resolved.env).map(([k, v]) => ({ name: k, value: v }))
     : [];
@@ -61,8 +67,8 @@ function resolvedCommandToAgentDefinition(
   return {
     mcp_server: {
       name,
-      command: resolved.command,
-      args: resolved.args,
+      command,
+      args,
       env: envArray,
     },
   };
@@ -334,10 +340,11 @@ export class SymposiumLanguageModelProvider
     // Resolve the agent distribution to a spawn command
     const resolved = await resolveDistribution(agent);
 
-    // Convert to AgentDefinition format (handles both Eliza and external agents)
+    // Convert to AgentDefinition format (resolves builtins to binary path)
     const agentDef = resolvedCommandToAgentDefinition(
       agent.name ?? agent.id,
       resolved,
+      this.context,
     );
 
     // Convert VS Code messages to our format
