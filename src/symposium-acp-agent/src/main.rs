@@ -7,16 +7,20 @@
 //! Usage:
 //!   symposium-acp-agent [OPTIONS] -- <agent-command> [agent-args...]
 //!   symposium-acp-agent eliza
+//!   symposium-acp-agent vscodelm
 //!
 //! Example:
 //!   symposium-acp-agent -- npx -y @zed-industries/claude-code-acp
 //!   symposium-acp-agent eliza
+//!   symposium-acp-agent vscodelm
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use sacp::Component;
 use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
+
+mod vscodelm;
 
 #[derive(Parser, Debug)]
 #[command(name = "symposium-acp-agent")]
@@ -66,6 +70,8 @@ struct Cli {
 enum Command {
     /// Run the built-in Eliza agent (useful for testing)
     Eliza,
+    /// Run as a VS Code Language Model Provider backend
+    Vscodelm,
 }
 
 fn parse_yes_no(s: &str) -> Result<bool, String> {
@@ -110,6 +116,10 @@ async fn main() -> Result<()> {
             elizacp::ElizaAgent::new(false)
                 .serve(sacp_tokio::Stdio::new())
                 .await?;
+        }
+        Some(Command::Vscodelm) => {
+            // Run as VS Code Language Model Provider backend
+            vscodelm::VsCodeLmServer::new().serve().await?;
         }
         None => {
             // Run with a downstream agent

@@ -21,6 +21,10 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+jsonrpcmsg = { workspace = true }
+futures = { workspace = true }
 
 # Symposium components
 symposium-acp-proxy = { path = "../symposium-acp-proxy", version = "1.1.1" }

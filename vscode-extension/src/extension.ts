@@ -4,6 +4,7 @@ import { SettingsViewProvider } from "./settingsViewProvider";
 import { DiscussCodeActionProvider } from "./discussCodeActionProvider";
 import { Logger } from "./logger";
 import { showAddAgentFromRegistryDialog } from "./agentRegistry";
+import { SymposiumLanguageModelProvider } from "./languageModelProvider";
 import { v4 as uuidv4 } from "uuid";
 
 // Global logger instance
@@ -50,6 +51,14 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Check agent availability at startup
   settingsProvider.refreshAvailability();
+
+  // Register the Language Model Provider
+  const lmProvider = new SymposiumLanguageModelProvider(context);
+  context.subscriptions.push(
+    vscode.lm.registerLanguageModelChatProvider("symposium", lmProvider),
+  );
+  context.subscriptions.push({ dispose: () => lmProvider.dispose() });
+  logger.info("extension", "Registered Symposium Language Model Provider");
 
   // Register the command to open chat
   context.subscriptions.push(

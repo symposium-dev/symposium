@@ -11,7 +11,7 @@
   "license": "MIT",
   "icon": "resources/extension-icon.png",
   "engines": {
-    "vscode": "^1.93.0"
+    "vscode": "^1.104.0"
   },
   "categories": [
     "Other"
@@ -21,6 +21,12 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "symposium",
+        "displayName": "Symposium"
+      }
+    ],
     "configuration": {
       "title": "Symposium",
       "properties": {
