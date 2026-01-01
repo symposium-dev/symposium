@@ -441,17 +441,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_chat_response() -> Result<(), sacp::Error> {
-        use std::sync::{Arc, Mutex};
-
-        let parts: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-        let parts_clone = parts.clone();
+        let mut full_response = String::new();
 
         VsCodeToLmBackend::builder()
             .on_receive_notification(
-                move |notif: ResponsePartNotification, _cx| {
+                async |notif: ResponsePartNotification, _cx| {
                     let ResponsePart::Text { value } = notif.part;
-                    parts_clone.lock().unwrap().push(value);
-                    async { Ok(()) }
+                    full_response.push_str(&value);
+                    Ok(())
                 },
                 sacp::on_receive_notification!(),
             )
@@ -472,9 +469,6 @@ mod tests {
                 Ok(())
             })
             .await?;
-
-        let collected_parts = parts.lock().unwrap();
-        let full_response: String = collected_parts.iter().cloned().collect();
 
         expect![[r#"Do you often feel happy?"#]].assert_eq(&full_response);
 
