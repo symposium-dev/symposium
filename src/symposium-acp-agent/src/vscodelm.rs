@@ -226,6 +226,7 @@ impl JrMessageHandler for LmBackendHandler {
         message: MessageCx,
         cx: JrConnectionCx<Self::Link>,
     ) -> Result<Handled<MessageCx>, sacp::Error> {
+        tracing::trace!(?message, "handle_message");
         MatchMessage::new(message)
             .if_request(async |_req: ProvideInfoRequest, request_cx| {
                 let response = ProvideInfoResponse {
@@ -249,6 +250,8 @@ impl JrMessageHandler for LmBackendHandler {
             })
             .await
             .if_request(async |req: ProvideResponseRequest, request_cx| {
+                tracing::debug!(?req, "ProvideResponseRequest");
+
                 // Get the request ID from the request context for notifications
                 let request_id = request_cx.id().clone();
 
@@ -261,8 +264,6 @@ impl JrMessageHandler for LmBackendHandler {
                     .map(|m| m.text())
                     .unwrap_or_default();
 
-                tracing::info!("user message: {}", user_message);
-
                 // Generate response from Eliza
                 let response_text = if user_message.is_empty() {
                     self.eliza.hello().to_string()
@@ -270,7 +271,7 @@ impl JrMessageHandler for LmBackendHandler {
                     self.eliza.respond(&user_message)
                 };
 
-                tracing::info!("eliza response: {}", response_text);
+                tracing::debug!(?response_text, "eliza response");
 
                 // Stream the response in chunks
                 for chunk in response_text.chars().collect::<Vec<_>>().chunks(5) {
