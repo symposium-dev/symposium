@@ -17,10 +17,14 @@ use uuid::Uuid;
 use super::{LmBackendToVsCode, Message, ResponsePart};
 
 /// Defines which agent backend to use for a session.
-#[derive(Debug, Clone)]
-pub(super) enum AgentDefinition {
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentDefinition {
     /// Use the in-process Eliza chatbot (for testing)
-    Eliza { deterministic: bool },
+    Eliza {
+        #[serde(default)]
+        deterministic: bool,
+    },
     /// Spawn an external ACP agent process
     McpServer(sacp::schema::McpServer),
 }

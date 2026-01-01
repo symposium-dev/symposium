@@ -11,7 +11,7 @@ use sacp::{
     JrMessageHandler, JrNotification, JrPeer, JrRequest, JrResponsePayload, MessageCx,
 };
 use serde::{Deserialize, Serialize};
-use session_actor::{AgentDefinition, SessionActor};
+use session_actor::SessionActor;
 use std::path::PathBuf;
 
 // ============================================================================
@@ -149,7 +149,7 @@ pub struct ProvideInfoResponse {
 pub struct ProvideResponseRequest {
     pub model_id: String,
     pub messages: Vec<Message>,
-    pub agent: sacp::schema::McpServer,
+    pub agent: session_actor::AgentDefinition,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JrResponsePayload)]
@@ -279,8 +279,7 @@ impl JrMessageHandler for LmBackendHandler {
                     );
                     session
                 } else {
-                    let agent_def = AgentDefinition::McpServer(req.agent.clone());
-                    let session = SessionActor::spawn(&cx, agent_def)?;
+                    let session = SessionActor::spawn(&cx, req.agent.clone())?;
                     self.sessions.push(session);
                     self.sessions.last_mut().unwrap()
                 };
@@ -480,18 +479,35 @@ mod tests {
     // ACP agent process, which requires different test infrastructure.
 
     #[test]
-    fn test_mcp_server_serialization() {
+    fn test_agent_definition_eliza_serialization() {
+        use super::session_actor::AgentDefinition;
+
+        let agent = AgentDefinition::Eliza {
+            deterministic: true,
+        };
+        let json = serde_json::to_string_pretty(&agent).unwrap();
+        println!("Eliza:\n{}", json);
+
+        // Should serialize as {"eliza": {"deterministic": true}}
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert!(parsed.get("eliza").is_some());
+        assert_eq!(parsed["eliza"]["deterministic"], true);
+    }
+
+    #[test]
+    fn test_agent_definition_mcp_server_serialization() {
+        use super::session_actor::AgentDefinition;
         use sacp::schema::{McpServer, McpServerStdio};
 
         let server = McpServer::Stdio(McpServerStdio::new("test", "echo"));
-        let json = serde_json::to_string_pretty(&server).unwrap();
-        println!("{}", json);
+        let agent = AgentDefinition::McpServer(server);
+        let json = serde_json::to_string_pretty(&agent).unwrap();
+        println!("McpServer:\n{}", json);
 
-        // Stdio variant uses #[serde(untagged)] so it serializes directly
-        // as McpServerStdio without any "type" discriminator
+        // Should serialize as {"mcp_server": {name, command, args, env}}
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["name"], "test");
-        assert_eq!(parsed["command"], "echo");
-        assert!(parsed.get("type").is_none());
+        assert!(parsed.get("mcp_server").is_some());
+        assert_eq!(parsed["mcp_server"]["name"], "test");
+        assert_eq!(parsed["mcp_server"]["command"], "echo");
     }
 }

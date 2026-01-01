@@ -22,9 +22,7 @@ interface ResponsePart {
 }
 
 /**
- * MCP Server configuration in the format expected by the Rust backend.
- * This matches sacp::schema::McpServerStdio (the Stdio variant uses
- * #[serde(untagged)] so it serializes as a flat object).
+ * MCP Server configuration matching sacp::schema::McpServerStdio
  */
 interface McpServerStdio {
   name: string;
@@ -34,21 +32,39 @@ interface McpServerStdio {
 }
 
 /**
- * Convert a resolved agent command to McpServer format
+ * Agent definition - matches session_actor::AgentDefinition in Rust.
+ * This is an externally-tagged enum with snake_case variant names.
  */
-function resolvedCommandToMcpServer(
+type AgentDefinition =
+  | { eliza: { deterministic?: boolean } }
+  | { mcp_server: McpServerStdio };
+
+/**
+ * Convert a resolved agent command to AgentDefinition format
+ */
+function resolvedCommandToAgentDefinition(
   name: string,
   resolved: ResolvedCommand,
-): McpServerStdio {
+): AgentDefinition {
+  // If it's a symposium builtin (like Eliza), return the eliza variant
+  if (resolved.isSymposiumBuiltin) {
+    // Check if deterministic flag was passed
+    const deterministic = resolved.args.includes("--deterministic");
+    return { eliza: { deterministic } };
+  }
+
+  // Otherwise, it's an external MCP server
   const envArray = resolved.env
     ? Object.entries(resolved.env).map(([k, v]) => ({ name: k, value: v }))
     : [];
 
   return {
-    name,
-    command: resolved.command,
-    args: resolved.args,
-    env: envArray,
+    mcp_server: {
+      name,
+      command: resolved.command,
+      args: resolved.args,
+      env: envArray,
+    },
   };
 }
 
@@ -318,15 +334,8 @@ export class SymposiumLanguageModelProvider
     // Resolve the agent distribution to a spawn command
     const resolved = await resolveDistribution(agent);
 
-    // Handle symposium builtins specially - they're not external processes
-    if (resolved.isSymposiumBuiltin) {
-      throw new Error(
-        `Agent "${agent.name}" is a symposium builtin and cannot be used via the Language Model API`,
-      );
-    }
-
-    // Convert to MCP server format
-    const mcpServer = resolvedCommandToMcpServer(
+    // Convert to AgentDefinition format (handles both Eliza and external agents)
+    const agentDef = resolvedCommandToAgentDefinition(
       agent.name ?? agent.id,
       resolved,
     );
@@ -351,7 +360,7 @@ export class SymposiumLanguageModelProvider
 
     await this.sendRequest(
       "lm/provideLanguageModelChatResponse",
-      { modelId: model.id, messages: convertedMessages, agent: mcpServer },
+      { modelId: model.id, messages: convertedMessages, agent: agentDef },
       progress,
     );
   }

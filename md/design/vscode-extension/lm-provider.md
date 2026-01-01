@@ -67,9 +67,13 @@ Future work will implement proper session caching with history diffing.
 
 ### Agent Configuration
 
-The agent to use is specified per-request via the `agent` field in the JSON-RPC protocol. This uses the same format as ACP's `McpServer::Stdio` type:
+The agent to use is specified per-request via the `agent` field in the JSON-RPC protocol. This is an `AgentDefinition` enum:
 
 ```typescript
+type AgentDefinition =
+  | { eliza: { deterministic?: boolean } }
+  | { mcp_server: McpServerStdio };
+
 interface McpServerStdio {
   name: string;
   command: string;
@@ -78,9 +82,10 @@ interface McpServerStdio {
 }
 ```
 
-The TypeScript extension reads the agent configuration from VS Code settings via the agent registry, resolves the distribution to get the actual command, and includes it in each request. The Rust backend spawns the agent process and manages ACP sessions.
+The TypeScript extension reads the agent configuration from VS Code settings via the agent registry, resolves the distribution to get the actual command, and includes it in each request. The Rust backend dispatches based on the variant:
 
-For testing purposes, the Rust backend also supports an in-process `Eliza` chatbot via the `AgentDefinition` enum, though this is not exposed via the JSON-RPC protocol.
+- **`eliza`**: Uses the in-process Eliza chatbot (useful for testing)
+- **`mcp_server`**: Spawns an external ACP agent process and manages sessions
 
 ## JSON-RPC Protocol
 
@@ -90,8 +95,32 @@ The protocol between TypeScript and Rust mirrors the `LanguageModelChatProvider`
 
 **`lm/provideLanguageModelChatResponse`**
 
-Each request includes the agent configuration. This uses the same format as ACP's `McpServer` type (specifically `McpServerStdio` which serializes flat due to `#[serde(untagged)]`).
+Each request includes the agent configuration via the `agent` field, which is an `AgentDefinition` enum with two variants:
 
+**External ACP agent (mcp_server)**:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "lm/provideLanguageModelChatResponse",
+  "params": {
+    "modelId": "symposium",
+    "messages": [
+      { "role": "user", "content": [{ "type": "text", "value": "Hello" }] }
+    ],
+    "agent": {
+      "mcp_server": {
+        "name": "my-agent",
+        "command": "/path/to/agent",
+        "args": ["--flag"],
+        "env": [{ "name": "KEY", "value": "value" }]
+      }
+    }
+  }
+}
+```
+
+**Built-in Eliza (for testing)**:
 ```json
 {
   "jsonrpc": "2.0",
@@ -103,16 +132,13 @@ Each request includes the agent configuration. This uses the same format as ACP'
       { "role": "user", "content": [{ "type": "text", "value": "Hello" }] }
     ],
     "agent": {
-      "name": "my-agent",
-      "command": "/path/to/agent",
-      "args": ["--flag"],
-      "env": [{ "name": "KEY", "value": "value" }]
+      "eliza": { "deterministic": true }
     }
   }
 }
 ```
 
-The `agent` field specifies which ACP agent to use for this request. The Rust backend spawns and manages the agent process. For testing, if an in-process Eliza is desired, the backend can be configured separately (this is not exposed via the protocol).
+The Rust backend dispatches based on the variant - spawning an external process for `mcp_server` or using the in-process Eliza for `eliza`.
 
 ### Notifications (Rust → TypeScript)
 
