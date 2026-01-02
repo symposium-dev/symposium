@@ -11,7 +11,7 @@ use sacp::{
         InitializeRequest, ProtocolVersion, RequestPermissionOutcome, RequestPermissionRequest,
         RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate,
     },
-    ClientToAgent, Component, JrMessage, MessageCx,
+    ClientToAgent, Component, MessageCx,
 };
 use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
@@ -275,7 +275,9 @@ impl SessionActor {
                                             &reply_tx,
                                             &mut pending_permission,
                                             session_id,
-                                        )? {
+                                        )
+                                        .await?
+                                        {
                                             break loop_result;
                                         }
                                     }
@@ -332,7 +334,8 @@ impl SessionActor {
                                                         &reply_tx,
                                                         &mut pending_permission,
                                                         session_id,
-                                                    )?
+                                                    )
+                                                    .await?
                                                 {
                                                     break loop_result;
                                                 }
@@ -393,133 +396,134 @@ impl SessionActor {
     /// Process a single session message from the agent.
     ///
     /// Returns `Some(result)` if we should exit the update loop, `None` to continue.
-    fn process_session_message(
+    async fn process_session_message(
         message: MessageCx,
         reply_tx: &mpsc::UnboundedSender<ResponsePart>,
         pending_permission: &mut Option<PendingPermission>,
         session_id: Uuid,
     ) -> Result<Option<UpdateLoopResult>, sacp::Error> {
-        match message {
-            MessageCx::Notification(notification) => {
-                // Try to parse as SessionNotification
-                if let Some(session_notif) =
-                    SessionNotification::parse_message(notification.method(), notification.params())
-                {
-                    let session_notif = session_notif?;
-                    if let SessionUpdate::AgentMessageChunk(chunk) = session_notif.update {
-                        let text = content_block_to_string(&chunk.content);
-                        if !text.is_empty() {
-                            if reply_tx
-                                .unbounded_send(ResponsePart::Text { value: text })
-                                .is_err()
-                            {
-                                tracing::debug!(
-                                    %session_id,
-                                    "reply channel closed, request cancelled"
-                                );
-                            }
+        use sacp::util::MatchMessage;
+
+        let mut loop_result: Option<UpdateLoopResult> = None;
+
+        MatchMessage::new(message)
+            .if_notification(async |notif: SessionNotification| {
+                if let SessionUpdate::AgentMessageChunk(chunk) = notif.update {
+                    let text = content_block_to_string(&chunk.content);
+                    if !text.is_empty() {
+                        if reply_tx
+                            .unbounded_send(ResponsePart::Text { value: text })
+                            .is_err()
+                        {
+                            tracing::debug!(
+                                %session_id,
+                                "reply channel closed, request cancelled"
+                            );
                         }
                     }
                 }
-                Ok(None)
-            }
-            MessageCx::Request(request, request_cx) => {
-                // Try to parse as RequestPermissionRequest
-                if let Some(perm_request) =
-                    RequestPermissionRequest::parse_message(request.method(), request.params())
-                {
-                    let perm_request = perm_request?;
-                    tracing::debug!(
-                        %session_id,
-                        ?perm_request,
-                        "received permission request from agent"
-                    );
+                Ok(())
+            })
+            .await
+            .if_request(async |perm_request: RequestPermissionRequest, request_cx| {
+                tracing::debug!(
+                    %session_id,
+                    ?perm_request,
+                    "received permission request from agent"
+                );
 
-                    // Extract tool call info
-                    let tool_call_id = perm_request.tool_call.tool_call_id.0.to_string();
-                    let title = perm_request
-                        .tool_call
-                        .fields
-                        .title
-                        .clone()
-                        .unwrap_or_else(|| "Agent action".to_string());
-                    let kind = perm_request
-                        .tool_call
-                        .fields
-                        .kind
-                        .as_ref()
-                        .map(|k| format!("{:?}", k))
-                        .unwrap_or_default();
+                // Extract tool call info
+                let tool_call_id = perm_request.tool_call.tool_call_id.0.to_string();
+                let title = perm_request
+                    .tool_call
+                    .fields
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| "Agent action".to_string());
+                let kind = perm_request
+                    .tool_call
+                    .fields
+                    .kind
+                    .as_ref()
+                    .map(|k| format!("{:?}", k))
+                    .unwrap_or_default();
 
-                    // Emit tool call to VS Code
-                    let _ = reply_tx.unbounded_send(ResponsePart::ToolCall {
-                        call_id: tool_call_id.clone(),
-                        name: "symposium-agent-action".to_string(),
-                        input: serde_json::json!({
-                            "toolCallId": tool_call_id,
-                            "title": title,
-                            "kind": kind,
-                        }),
-                    });
+                // Emit tool call to VS Code
+                let _ = reply_tx.unbounded_send(ResponsePart::ToolCall {
+                    call_id: tool_call_id.clone(),
+                    name: "symposium-agent-action".to_string(),
+                    input: serde_json::json!({
+                        "toolCallId": tool_call_id,
+                        "title": title,
+                        "kind": kind,
+                    }),
+                });
 
-                    // Create channel for permission decision
-                    let (decision_tx, decision_rx) = oneshot::channel();
+                // Create channel for permission decision
+                let (decision_tx, decision_rx) = oneshot::channel();
 
-                    // Store pending permission
-                    *pending_permission = Some(PendingPermission {
-                        tool_call_id: tool_call_id.clone(),
-                        decision_tx,
-                    });
+                // Store pending permission
+                *pending_permission = Some(PendingPermission {
+                    tool_call_id: tool_call_id.clone(),
+                    decision_tx,
+                });
 
-                    // Get the first option_id to use for approval
-                    let first_option_id = perm_request.options.first().map(|o| o.option_id.clone());
+                // Get the first option_id to use for approval
+                let first_option_id = perm_request.options.first().map(|o| o.option_id.clone());
 
-                    // Spawn task to wait for decision and respond to the agent
-                    tokio::spawn(async move {
-                        let response = match decision_rx.await {
-                            Ok(true) => {
-                                // Approved - respond with first option
-                                if let Some(option_id) = first_option_id {
-                                    RequestPermissionResponse::new(
-                                        RequestPermissionOutcome::Selected(
-                                            SelectedPermissionOutcome::new(option_id),
-                                        ),
-                                    )
-                                } else {
-                                    // No options, respond with cancelled
-                                    RequestPermissionResponse::new(
-                                        RequestPermissionOutcome::Cancelled,
-                                    )
-                                }
-                            }
-                            Ok(false) | Err(_) => {
-                                // Rejected or channel dropped - respond with cancelled
+                // Spawn task to wait for decision and respond to the agent
+                tokio::spawn(async move {
+                    let response = match decision_rx.await {
+                        Ok(true) => {
+                            // Approved - respond with first option
+                            if let Some(option_id) = first_option_id {
+                                RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
+                                    SelectedPermissionOutcome::new(option_id),
+                                ))
+                            } else {
+                                // No options, respond with cancelled
                                 RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
                             }
-                        };
-                        // Serialize to JSON value for the untyped request context
-                        if let Ok(json_response) = serde_json::to_value(response) {
-                            let _ = request_cx.respond(json_response);
                         }
-                    });
+                        Ok(false) | Err(_) => {
+                            // Rejected or channel dropped - respond with cancelled
+                            RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
+                        }
+                    };
+                    let _ = request_cx.respond(response);
+                });
 
-                    // Send marker to signal the handler that we're awaiting permission
-                    let _ = reply_tx.unbounded_send(ResponsePart::AwaitingPermission {
-                        tool_call_id: tool_call_id.clone(),
-                    });
+                // Send marker to signal the handler that we're awaiting permission
+                let _ = reply_tx.unbounded_send(ResponsePart::AwaitingPermission {
+                    tool_call_id: tool_call_id.clone(),
+                });
 
-                    return Ok(Some(UpdateLoopResult::AwaitingPermission { tool_call_id }));
+                loop_result = Some(UpdateLoopResult::AwaitingPermission { tool_call_id });
+                Ok(())
+            })
+            .await
+            .otherwise(async |message| {
+                match message {
+                    MessageCx::Request(request, _) => {
+                        tracing::warn!(
+                            %session_id,
+                            method = request.method(),
+                            "unknown request from agent"
+                        );
+                    }
+                    MessageCx::Notification(notif) => {
+                        tracing::trace!(
+                            %session_id,
+                            method = notif.method(),
+                            "ignoring unhandled notification"
+                        );
+                    }
                 }
+                Ok(())
+            })
+            .await?;
 
-                // Unknown request - log and ignore
-                tracing::warn!(
-                    %session_id,
-                    method = request.method(),
-                    "unknown request from agent"
-                );
-                Ok(None)
-            }
-        }
+        Ok(loop_result)
     }
 }
 
