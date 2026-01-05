@@ -428,17 +428,18 @@ impl SessionActor {
                         );
 
                         // Handle the tool invocation (emit ToolCall to VS Code, wait for result)
-                        let result = Self::handle_vscode_tool_invocation(
-                            &invocation,
+                        match Self::handle_vscode_tool_invocation(
+                            invocation,
                             &history_handle,
                             &mut request_rx,
-                            &mut request_state,
+                            request_state,
                             session_id,
                         )
-                        .await;
-
-                        // Send result back to the MCP server
-                        let _ = invocation.result_tx.send(result);
+                        .await
+                        {
+                            Ok(new_state) => request_state = new_state,
+                            Err(Canceled) => break true,
+                        }
                     }
 
                     Event::Canceled => {
@@ -647,14 +648,17 @@ impl SessionActor {
     /// 1. Emit a ToolCall part to VS Code
     /// 2. Signal response complete
     /// 3. Wait for the next request with ToolResult
-    /// 4. Return the result to the MCP server
+    /// 4. Send the result back to the MCP server via result_tx
+    ///
+    /// Takes ownership of request_state and returns the new state on success,
+    /// or Canceled if the tool invocation was canceled.
     async fn handle_vscode_tool_invocation(
-        invocation: &ToolInvocation,
+        invocation: ToolInvocation,
         history_handle: &HistoryActorHandle,
         request_rx: &mut Peekable<mpsc::UnboundedReceiver<SessionRequest>>,
-        request_state: &mut RequestState,
+        _request_state: RequestState,
         session_id: Uuid,
-    ) -> Result<rmcp::model::CallToolResult, String> {
+    ) -> Result<RequestState, Canceled> {
         // Generate a unique tool call ID for this invocation
         let tool_call_id = Uuid::new_v4().to_string();
 
@@ -670,51 +674,71 @@ impl SessionActor {
         };
 
         // Send tool call to history actor (which forwards to VS Code)
-        history_handle
+        if history_handle
             .send_from_session(session_id, SessionToHistoryMessage::Part(tool_call))
-            .map_err(|e| format!("failed to send tool call: {}", e))?;
+            .is_err()
+        {
+            let _ = invocation
+                .result_tx
+                .send(Err("failed to send tool call".to_string()));
+            return Err(Canceled);
+        }
 
         // Signal completion so VS Code invokes the tool
-        history_handle
+        if history_handle
             .send_from_session(session_id, SessionToHistoryMessage::Complete)
-            .map_err(|e| format!("failed to send complete: {}", e))?;
+            .is_err()
+        {
+            let _ = invocation
+                .result_tx
+                .send(Err("failed to send complete".to_string()));
+            return Err(Canceled);
+        }
 
         // Wait for the next request (which should have the tool result)
         let Some(next_request) = Pin::new(&mut *request_rx).peek().await else {
-            return Err("channel closed while waiting for tool result".to_string());
+            let _ = invocation.result_tx.send(Err(
+                "channel closed while waiting for tool result".to_string()
+            ));
+            return Err(Canceled);
         };
 
         // Check if canceled (history mismatch)
         if next_request.canceled {
-            return Err("tool invocation canceled".to_string());
+            let _ = invocation
+                .result_tx
+                .send(Err("tool invocation canceled".to_string()));
+            return Err(Canceled);
         }
 
         // Find the tool result in the response
-        let tool_result = next_request
-            .messages
-            .iter()
-            .find_map(|msg| {
-                msg.content.iter().find_map(|part| {
-                    if let ContentPart::ToolResult {
-                        tool_call_id: id,
-                        result,
-                    } = part
-                    {
-                        if id == &tool_call_id {
-                            Some(result.clone())
-                        } else {
-                            None
-                        }
+        let tool_result = next_request.messages.iter().find_map(|msg| {
+            msg.content.iter().find_map(|part| {
+                if let ContentPart::ToolResult {
+                    tool_call_id: id,
+                    result,
+                } = part
+                {
+                    if id == &tool_call_id {
+                        Some(result.clone())
                     } else {
                         None
                     }
-                })
+                } else {
+                    None
+                }
             })
-            .ok_or_else(|| "no tool result found in response".to_string())?;
+        });
 
-        // Consume the request and update state for the next iteration
+        let Some(tool_result) = tool_result else {
+            let _ = invocation
+                .result_tx
+                .send(Err("no tool result found in response".to_string()));
+            return Err(Canceled);
+        };
+
+        // Consume the request and get the new state
         let SessionRequest { state, .. } = request_rx.next().await.expect("message is waiting");
-        *request_state = state;
 
         // Convert the result to rmcp CallToolResult
         // The result from VS Code is a JSON value - convert to text content
@@ -723,11 +747,19 @@ impl SessionActor {
             other => other.to_string(),
         };
 
-        Ok(rmcp::model::CallToolResult::success(vec![
-            rmcp::model::Content::text(result_text),
-        ]))
+        let call_result =
+            rmcp::model::CallToolResult::success(vec![rmcp::model::Content::text(result_text)]);
+
+        // Send result back to the MCP server
+        let _ = invocation.result_tx.send(Ok(call_result));
+
+        Ok(state)
     }
 }
+
+/// Marker type indicating a tool invocation or request was canceled.
+#[derive(Debug)]
+struct Canceled;
 
 /// Convert a content block to a string representation
 fn content_block_to_string(block: &sacp::schema::ContentBlock) -> String {
