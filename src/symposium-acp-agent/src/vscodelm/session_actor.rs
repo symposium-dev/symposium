@@ -656,7 +656,7 @@ impl SessionActor {
         invocation: ToolInvocation,
         history_handle: &HistoryActorHandle,
         request_rx: &mut Peekable<mpsc::UnboundedReceiver<SessionRequest>>,
-        _request_state: RequestState,
+        mut request_state: RequestState,
         session_id: Uuid,
     ) -> Result<RequestState, Canceled> {
         // Generate a unique tool call ID for this invocation
@@ -695,12 +695,42 @@ impl SessionActor {
             return Err(Canceled);
         }
 
-        // Wait for the next request (which should have the tool result)
-        let Some(next_request) = Pin::new(&mut *request_rx).peek().await else {
-            let _ = invocation.result_tx.send(Err(
-                "channel closed while waiting for tool result".to_string()
-            ));
-            return Err(Canceled);
+        // Wait for the next request (which should have the tool result), racing against cancellation
+        enum PeekResult<'a> {
+            Request(&'a SessionRequest),
+            Canceled,
+            ChannelClosed,
+        }
+
+        let peek_result = (
+            async {
+                match Pin::new(&mut *request_rx).peek().await {
+                    Some(req) => PeekResult::Request(req),
+                    None => PeekResult::ChannelClosed,
+                }
+            },
+            async {
+                let _ = (&mut request_state.cancel_rx).await;
+                PeekResult::Canceled
+            },
+        )
+            .race()
+            .await;
+
+        let next_request = match peek_result {
+            PeekResult::Request(req) => req,
+            PeekResult::Canceled => {
+                let _ = invocation
+                    .result_tx
+                    .send(Err("tool invocation canceled".to_string()));
+                return Err(Canceled);
+            }
+            PeekResult::ChannelClosed => {
+                let _ = invocation.result_tx.send(Err(
+                    "channel closed while waiting for tool result".to_string(),
+                ));
+                return Err(Canceled);
+            }
         };
 
         // Check if canceled (history mismatch)
