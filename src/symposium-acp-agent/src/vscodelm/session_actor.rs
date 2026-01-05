@@ -13,12 +13,14 @@ use sacp::schema::{
 };
 use sacp::JrConnectionCx;
 use sacp::{
+    link::AgentToClient,
     schema::{
         InitializeRequest, ProtocolVersion, RequestPermissionOutcome, RequestPermissionRequest,
         RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate,
     },
     ClientToAgent, Component, MessageCx,
 };
+use sacp_conductor::{AgentOnly, Conductor, McpBridgeMode};
 use sacp_tokio::AcpAgent;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -273,23 +275,34 @@ impl SessionActor {
     }
 
     /// Run the session with a specific agent component.
+    ///
+    /// Wraps the agent in a Conductor to enable MCP-over-ACP negotiation,
+    /// which allows our synthetic MCP server to be discovered by the agent.
     async fn run_with_agent(
         request_rx: mpsc::UnboundedReceiver<SessionRequest>,
         history_handle: HistoryActorHandle,
-        agent: impl Component<sacp::link::AgentToClient>,
+        agent: impl Component<AgentToClient> + 'static,
         session_id: Uuid,
     ) -> Result<(), sacp::Error> {
+        // Create a conductor to wrap the agent. This enables MCP-over-ACP negotiation,
+        // which is required for our synthetic MCP server to be discovered by the agent.
+        let conductor = Conductor::new_agent(
+            "vscodelm-session",
+            AgentOnly(agent),
+            McpBridgeMode::default(),
+        );
+
         ClientToAgent::builder()
-            .connect_to(agent)?
+            .connect_to(conductor)?
             .run_until(async |cx| {
-                tracing::debug!(%session_id, "connected to agent, initializing");
+                tracing::debug!(%session_id, "connected to conductor, initializing");
 
                 let _init_response = cx
                     .send_request(InitializeRequest::new(ProtocolVersion::LATEST))
                     .block_task()
                     .await?;
 
-                tracing::debug!(%session_id, "agent initialized, creating session");
+                tracing::debug!(%session_id, "conductor initialized, creating session");
 
                 Self::run_with_cx(request_rx, history_handle, cx, session_id).await
             })

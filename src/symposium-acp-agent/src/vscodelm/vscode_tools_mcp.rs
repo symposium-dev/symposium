@@ -25,10 +25,10 @@ use std::sync::Arc;
 
 use futures::channel::{mpsc, oneshot};
 use rmcp::model::{
-    CallToolRequestParam, CallToolResult, ErrorCode, ListToolsResult, PaginatedRequestParam,
-    ServerCapabilities, ServerInfo, Tool,
+    CallToolRequestParam, CallToolResult, ErrorCode, InitializeRequestParam, InitializeResult,
+    ListToolsResult, PaginatedRequestParam, ServerCapabilities, ServerInfo, Tool,
 };
-use rmcp::service::RequestContext;
+use rmcp::service::{Peer, RequestContext};
 use rmcp::{ErrorData, RoleServer, ServerHandler};
 use tokio::sync::RwLock;
 
@@ -53,6 +53,8 @@ pub struct ToolInvocation {
 struct VscodeToolsState {
     /// Current list of tools from VS Code
     tools: Vec<VscodeTool>,
+    /// Peer handle for sending notifications (set on first request)
+    peer: Option<Peer<RoleServer>>,
 }
 
 /// Synthetic MCP server that exposes VS Code tools to ACP agents.
@@ -68,7 +70,10 @@ impl VscodeToolsMcpServer {
     /// Takes a sender for tool invocations that will be used when the agent calls a tool.
     pub fn new(invocation_tx: mpsc::UnboundedSender<ToolInvocation>) -> Self {
         Self {
-            state: Arc::new(RwLock::new(VscodeToolsState { tools: Vec::new() })),
+            state: Arc::new(RwLock::new(VscodeToolsState {
+                tools: Vec::new(),
+                peer: None,
+            })),
             invocation_tx,
         }
     }
@@ -88,10 +93,27 @@ pub struct VscodeToolsHandle {
 }
 
 impl VscodeToolsHandle {
-    /// Update the list of available tools.
+    /// Update the list of available tools and notify the client.
     pub async fn update_tools(&self, tools: Vec<VscodeTool>) {
-        let mut state = self.state.write().await;
-        state.tools = tools;
+        let tool_names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
+        tracing::debug!(
+            tool_count = tools.len(),
+            ?tool_names,
+            "updating VS Code tools"
+        );
+
+        let peer = {
+            let mut state = self.state.write().await;
+            state.tools = tools;
+            state.peer.clone()
+        };
+
+        // Notify the client that the tool list has changed
+        if let Some(peer) = peer {
+            if let Err(e) = peer.notify_tool_list_changed().await {
+                tracing::warn!(?e, "failed to notify tool list changed");
+            }
+        }
     }
 }
 
@@ -112,6 +134,40 @@ impl ServerHandler for VscodeToolsMcpServer {
             },
             instructions: Some("VS Code-provided tools bridged to ACP".to_string()),
         }
+    }
+
+    async fn initialize(
+        &self,
+        request: InitializeRequestParam,
+        context: RequestContext<RoleServer>,
+    ) -> Result<InitializeResult, ErrorData> {
+        tracing::debug!(
+            client_name = ?request.client_info.name,
+            client_version = ?request.client_info.version,
+            "MCP initialize called"
+        );
+
+        // Store the peer at initialization time so we can send notifications later
+        {
+            let mut state = self.state.write().await;
+            state.peer = Some(context.peer.clone());
+            tracing::debug!("stored peer handle at MCP initialization");
+        }
+
+        // Call the default implementation
+        if context.peer.peer_info().is_none() {
+            context.peer.set_peer_info(request);
+        }
+
+        let result = InitializeResult {
+            protocol_version: rmcp::model::ProtocolVersion::LATEST,
+            capabilities: self.get_info().capabilities,
+            server_info: self.get_info().server_info,
+            instructions: self.get_info().instructions,
+        };
+
+        tracing::debug!(?result.capabilities, "MCP initialize complete");
+        Ok(result)
     }
 
     async fn list_tools(
@@ -142,6 +198,9 @@ impl ServerHandler for VscodeToolsMcpServer {
             })
             .collect();
 
+        let tool_names: Vec<_> = tools.iter().map(|t| t.name.as_ref()).collect();
+        tracing::debug!(tool_count = tools.len(), ?tool_names, "list_tools called");
+
         Ok(ListToolsResult::with_all_items(tools))
     }
 
@@ -150,10 +209,13 @@ impl ServerHandler for VscodeToolsMcpServer {
         request: CallToolRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, ErrorData> {
+        tracing::debug!(tool_name = %request.name, ?request.arguments, "call_tool called");
+
         // Check if tool exists
         {
             let state = self.state.read().await;
             if !state.tools.iter().any(|t| t.name == request.name.as_ref()) {
+                tracing::warn!(tool_name = %request.name, "tool not found");
                 return Err(ErrorData::new(
                     ErrorCode::INVALID_PARAMS,
                     format!("tool '{}' not found", request.name),
