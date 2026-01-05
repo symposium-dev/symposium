@@ -8,19 +8,19 @@ use futures::channel::{mpsc, oneshot};
 use futures::stream::Peekable;
 use futures::StreamExt;
 use futures_concurrency::future::Race;
+use sacp::link::{AgentToClient, ConductorToProxy, ProxyToConductor};
 use sacp::schema::{
     ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
 use sacp::JrConnectionCx;
 use sacp::{
-    link::AgentToClient,
     schema::{
         InitializeRequest, ProtocolVersion, RequestPermissionOutcome, RequestPermissionRequest,
         RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate,
     },
-    ClientToAgent, Component, MessageCx,
+    ClientToAgent, Component, DynComponent, MessageCx,
 };
-use sacp_conductor::{AgentOnly, Conductor, McpBridgeMode};
+use sacp_conductor::{Conductor, McpBridgeMode};
 use sacp_tokio::AcpAgent;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -30,8 +30,41 @@ use uuid::Uuid;
 use sacp_rmcp::McpServerExt;
 
 use super::history_actor::{HistoryActorHandle, SessionToHistoryMessage};
-use super::vscode_tools_mcp::{ToolInvocation, VscodeTool, VscodeToolsMcpServer};
+use super::vscode_tools_mcp::{
+    ToolInvocation, VscodeTool, VscodeToolsHandle, VscodeToolsMcpServer,
+};
 use super::{ContentPart, Message, ToolDefinition, ROLE_USER, SYMPOSIUM_AGENT_ACTION};
+
+/// A proxy component that provides the VS Code tools MCP server to the Conductor.
+///
+/// This proxy sits in the Conductor's chain between the client and the agent,
+/// making our synthetic MCP server available to the agent via MCP-over-ACP bridging.
+struct VscodeToolsProxy {
+    mcp_server: VscodeToolsMcpServer,
+}
+
+impl VscodeToolsProxy {
+    fn new(mcp_server: VscodeToolsMcpServer) -> Self {
+        Self { mcp_server }
+    }
+}
+
+impl Component<ProxyToConductor> for VscodeToolsProxy {
+    async fn serve(self, client: impl Component<ConductorToProxy>) -> Result<(), sacp::Error> {
+        // Create the MCP server wrapper using sacp-rmcp
+        let mcp_server = self.mcp_server;
+        let mcp_server = sacp::mcp_server::McpServer::<ProxyToConductor, _>::from_rmcp(
+            "vscode-tools",
+            move || mcp_server.clone(),
+        );
+
+        ProxyToConductor::builder()
+            .name("vscode-tools-proxy")
+            .with_mcp_server(mcp_server)
+            .serve(client)
+            .await
+    }
+}
 
 /// Tracks the state of tool calls and renders them to markdown.
 ///
@@ -276,19 +309,35 @@ impl SessionActor {
 
     /// Run the session with a specific agent component.
     ///
-    /// Wraps the agent in a Conductor to enable MCP-over-ACP negotiation,
-    /// which allows our synthetic MCP server to be discovered by the agent.
+    /// Wraps the agent in a Conductor with a VscodeToolsProxy to enable MCP-over-ACP
+    /// negotiation, which allows our synthetic MCP server to be discovered by the agent.
     async fn run_with_agent(
         request_rx: mpsc::UnboundedReceiver<SessionRequest>,
         history_handle: HistoryActorHandle,
         agent: impl Component<AgentToClient> + 'static,
         session_id: Uuid,
     ) -> Result<(), sacp::Error> {
-        // Create a conductor to wrap the agent. This enables MCP-over-ACP negotiation,
-        // which is required for our synthetic MCP server to be discovered by the agent.
+        // Create the VS Code tools MCP server and get a handle for updating tools
+        let (invocation_tx, invocation_rx) = futures::channel::mpsc::unbounded();
+        let vscode_tools_server = VscodeToolsMcpServer::new(invocation_tx);
+        let tools_handle = vscode_tools_server.tools_handle();
+
+        // Create a proxy component that provides our MCP server to the Conductor
+        let vscode_tools_proxy = VscodeToolsProxy::new(vscode_tools_server);
+
+        // Create a conductor with the proxy and agent.
+        // The proxy provides the MCP server which the Conductor will bridge to the agent.
         let conductor = Conductor::new_agent(
             "vscodelm-session",
-            AgentOnly(agent),
+            move |init_req| {
+                let proxy = vscode_tools_proxy;
+                let agent = DynComponent::new(agent);
+                async move {
+                    let proxies: Vec<DynComponent<ProxyToConductor>> =
+                        vec![DynComponent::new(proxy)];
+                    Ok((init_req, proxies, agent))
+                }
+            },
             McpBridgeMode::default(),
         );
 
@@ -304,7 +353,15 @@ impl SessionActor {
 
                 tracing::debug!(%session_id, "conductor initialized, creating session");
 
-                Self::run_with_cx(request_rx, history_handle, cx, session_id).await
+                Self::run_with_cx(
+                    request_rx,
+                    history_handle,
+                    cx,
+                    tools_handle,
+                    invocation_rx,
+                    session_id,
+                )
+                .await
             })
             .await
     }
@@ -313,25 +370,13 @@ impl SessionActor {
         request_rx: mpsc::UnboundedReceiver<SessionRequest>,
         history_handle: HistoryActorHandle,
         cx: JrConnectionCx<ClientToAgent>,
+        tools_handle: VscodeToolsHandle,
+        mut invocation_rx: mpsc::UnboundedReceiver<ToolInvocation>,
         session_id: Uuid,
     ) -> Result<(), sacp::Error> {
-        // Create the VS Code tools MCP server
-        let (invocation_tx, mut invocation_rx) = futures::channel::mpsc::unbounded();
-        let vscode_tools_server = VscodeToolsMcpServer::new(invocation_tx);
-        let tools_handle = vscode_tools_server.tools_handle();
-
-        // Create the MCP server wrapper using sacp-rmcp
-        let mcp_server =
-            sacp::mcp_server::McpServer::<ClientToAgent, _>::from_rmcp("vscode-tools", move || {
-                // Clone the server for each connection
-                // Note: This requires VscodeToolsMcpServer to be Clone
-                vscode_tools_server.clone()
-            });
-
-        // Create a session with the MCP server injected
+        // Create a session (no MCP server here - it's provided by the proxy in the Conductor)
         let mut session = cx
             .build_session(PathBuf::from("."))
-            .with_mcp_server(mcp_server)?
             .block_task()
             .start_session()
             .await?;
