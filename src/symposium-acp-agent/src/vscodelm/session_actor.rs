@@ -33,6 +33,11 @@ use super::history_actor::{HistoryActorHandle, SessionToHistoryMessage};
 use super::vscode_tools_mcp::{ToolInvocation, VscodeTool, VscodeToolsMcpServer};
 use super::{ContentPart, Message, ToolDefinition, ROLE_USER, SYMPOSIUM_AGENT_ACTION};
 
+/// Helper to peek at the next item in a peekable stream.
+async fn peek<T>(stream: &mut Peekable<mpsc::UnboundedReceiver<T>>) -> Option<&T> {
+    Pin::new(stream).peek().await
+}
+
 /// Tracks the state of tool calls and renders them to markdown.
 ///
 /// Tool calls arrive as an initial `ToolCall` followed by `ToolCallUpdate` messages.
@@ -315,10 +320,38 @@ impl SessionActor {
         cx: JrConnectionCx<ClientToAgent>,
         session_id: Uuid,
     ) -> Result<(), sacp::Error> {
-        // Create the VS Code tools MCP server
+        // Wait for the first request to arrive so we have the initial tool list
+        // before creating the session. This avoids a race where the agent calls
+        // tools/list before VS Code has reported its available tools.
+        let mut request_rx = request_rx.peekable();
+        let initial_tools = {
+            let first_request = peek(&mut request_rx)
+                .await
+                .ok_or_else(|| sacp::Error::internal_error())?;
+            first_request
+                .vscode_tools
+                .iter()
+                .map(|t| VscodeTool {
+                    name: t.name.clone(),
+                    description: t.description.clone(),
+                    input_schema: t.input_schema.clone(),
+                })
+                .collect::<Vec<_>>()
+        };
+
+        tracing::debug!(
+            %session_id,
+            initial_tool_count = initial_tools.len(),
+            "received initial tools from first request"
+        );
+
+        // Create the VS Code tools MCP server with initial tools
         let (invocation_tx, mut invocation_rx) = futures::channel::mpsc::unbounded();
         let vscode_tools_server = VscodeToolsMcpServer::new(invocation_tx);
         let tools_handle = vscode_tools_server.tools_handle();
+
+        // Populate initial tools before advertising the MCP server
+        tools_handle.set_initial_tools(initial_tools).await;
 
         // Create the MCP server wrapper using sacp-rmcp
         let mcp_server =
@@ -338,7 +371,6 @@ impl SessionActor {
 
         tracing::debug!(%session_id, "session created with VS Code tools MCP server, waiting for messages");
 
-        let mut request_rx = request_rx.peekable();
         let mut tool_call_tracker = ToolCallTracker::new();
 
         while let Some(request) = request_rx.next().await {
@@ -596,7 +628,7 @@ impl SessionActor {
                 return_value = None;
 
                 // Wait for the next request (which will have the tool result if approved)
-                let Some(next_request) = Pin::new(&mut *request_rx).peek().await else {
+                let Some(next_request) = peek(request_rx).await else {
                     request_cx.respond(RequestPermissionResponse::new(
                         RequestPermissionOutcome::Cancelled,
                     ))?;

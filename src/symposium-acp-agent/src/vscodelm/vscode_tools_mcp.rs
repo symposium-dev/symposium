@@ -93,7 +93,21 @@ pub struct VscodeToolsHandle {
 }
 
 impl VscodeToolsHandle {
-    /// Update the list of available tools and notify the client.
+    /// Set the initial list of tools without sending a notification.
+    /// Use this before the MCP server is advertised to avoid race conditions.
+    pub async fn set_initial_tools(&self, tools: Vec<VscodeTool>) {
+        let tool_names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
+        tracing::debug!(
+            tool_count = tools.len(),
+            ?tool_names,
+            "setting initial VS Code tools"
+        );
+
+        let mut state = self.state.write().await;
+        state.tools = tools;
+    }
+
+    /// Update the list of available tools and notify the client if changed.
     pub async fn update_tools(&self, tools: Vec<VscodeTool>) {
         let tool_names: Vec<_> = tools.iter().map(|t| t.name.as_str()).collect();
         tracing::debug!(
@@ -102,19 +116,38 @@ impl VscodeToolsHandle {
             "updating VS Code tools"
         );
 
-        let peer = {
+        let (changed, peer) = {
             let mut state = self.state.write().await;
-            state.tools = tools;
-            state.peer.clone()
+
+            // Check if the tool list actually changed
+            let changed = !tools_equal(&state.tools, &tools);
+            if changed {
+                state.tools = tools;
+            }
+
+            (changed, state.peer.clone())
         };
 
-        // Notify the client that the tool list has changed
-        if let Some(peer) = peer {
-            if let Err(e) = peer.notify_tool_list_changed().await {
-                tracing::warn!(?e, "failed to notify tool list changed");
+        // Only notify if tools actually changed
+        if changed {
+            if let Some(peer) = peer {
+                if let Err(e) = peer.notify_tool_list_changed().await {
+                    tracing::warn!(?e, "failed to notify tool list changed");
+                }
             }
         }
     }
+}
+
+/// Check if two tool lists are equal (by name, since that's the identity).
+fn tools_equal(a: &[VscodeTool], b: &[VscodeTool]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    // Compare by name - tools are identified by name
+    let a_names: std::collections::HashSet<_> = a.iter().map(|t| &t.name).collect();
+    let b_names: std::collections::HashSet<_> = b.iter().map(|t| &t.name).collect();
+    a_names == b_names
 }
 
 impl ServerHandler for VscodeToolsMcpServer {
