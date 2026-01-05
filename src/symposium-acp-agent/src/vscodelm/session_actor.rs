@@ -7,6 +7,7 @@ use elizacp::ElizaAgent;
 use futures::channel::{mpsc, oneshot};
 use futures::stream::Peekable;
 use futures::StreamExt;
+use futures_concurrency::future::Race;
 use sacp::schema::{
     ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
@@ -365,14 +366,27 @@ impl SessionActor {
 
             // Read updates from the agent, also handling VS Code tool invocations
             let canceled = loop {
-                // Wait for either:
-                // - An update from the agent
-                // - A VS Code tool invocation from our MCP server
-                // - Cancellation
-                tokio::select! {
-                    // Agent update
-                    update = session.read_update() => {
-                        let update = update?;
+                // Race between agent update, tool invocation, and cancellation
+                enum Event {
+                    AgentUpdate(Result<sacp::SessionMessage, sacp::Error>),
+                    ToolInvocation(Option<ToolInvocation>),
+                    Canceled,
+                }
+
+                let event = (
+                    async { Event::AgentUpdate(session.read_update().await) },
+                    async { Event::ToolInvocation(invocation_rx.next().await) },
+                    async {
+                        let _ = (&mut request_state.cancel_rx).await;
+                        Event::Canceled
+                    },
+                )
+                    .race()
+                    .await;
+
+                match event {
+                    Event::AgentUpdate(result) => {
+                        let update = result?;
                         match update {
                             sacp::SessionMessage::SessionMessage(message) => {
                                 let new_state = Self::process_session_message(
@@ -400,8 +414,7 @@ impl SessionActor {
                         }
                     }
 
-                    // VS Code tool invocation from our synthetic MCP server
-                    invocation = invocation_rx.next() => {
+                    Event::ToolInvocation(invocation) => {
                         let Some(invocation) = invocation else {
                             // MCP server shut down unexpectedly
                             tracing::warn!(%session_id, "VS Code tools MCP server channel closed");
@@ -428,8 +441,7 @@ impl SessionActor {
                         let _ = invocation.result_tx.send(result);
                     }
 
-                    // Cancellation
-                    _ = &mut request_state.cancel_rx => {
+                    Event::Canceled => {
                         break true;
                     }
                 }
