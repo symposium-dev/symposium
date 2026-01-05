@@ -57,9 +57,10 @@ struct Cli {
     #[arg(long)]
     trace_dir: Option<PathBuf>,
 
-    /// Enable logging to stderr at the specified level (error, warn, info, debug, trace).
+    /// Enable logging to stderr. Accepts a level (error, warn, info, debug, trace)
+    /// or a RUST_LOG-style filter string (e.g., "sacp=debug,symposium=trace").
     #[arg(long)]
-    log: Option<tracing::Level>,
+    log: Option<String>,
 
     /// The agent command and arguments (e.g., npx -y @zed-industries/claude-code-acp)
     #[arg(last = true, num_args = 1..)]
@@ -102,10 +103,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Set up logging if requested
-    if let Some(level) = cli.log {
+    if let Some(filter) = cli.log {
         use tracing_subscriber::EnvFilter;
         tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::new(level.to_string()))
+            .with_env_filter(EnvFilter::new(filter))
             .with_writer(std::io::stderr)
             .init();
     }
