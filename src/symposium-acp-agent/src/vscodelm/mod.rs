@@ -663,6 +663,25 @@ mod tests {
                 .collect()
         }
 
+        /// Extract tool calls as (tool_call_id, tool_name, parameters_json) tuples.
+        fn tool_calls_with_ids(&self) -> Vec<(String, String, String)> {
+            self.0
+                .iter()
+                .filter_map(|p| match p {
+                    ContentPart::ToolCall {
+                        tool_call_id,
+                        tool_name,
+                        parameters,
+                    } => Some((
+                        tool_call_id.clone(),
+                        tool_name.clone(),
+                        parameters.to_string(),
+                    )),
+                    _ => None,
+                })
+                .collect()
+        }
+
         fn clear(&mut self) {
             self.0.clear();
         }
@@ -985,6 +1004,114 @@ mod tests {
                     ]
                 "#]]
                 .assert_debug_eq(&tool_calls);
+
+                Ok(())
+            })
+            .await
+    }
+
+    /// Test that providing a tool result causes elizacp to echo it back.
+    #[tokio::test]
+    async fn test_mcp_tool_result_flow() -> Result<(), sacp::Error> {
+        let parts = Arc::new(Mutex::new(CollectedParts::default()));
+        let (complete_tx, mut complete_rx) = mpsc::unbounded::<()>();
+
+        let parts_clone = parts.clone();
+        let complete_tx_clone = complete_tx.clone();
+        VsCodeToLmBackend::builder()
+            .on_receive_notification(
+                async move |n: ResponsePartNotification, _| {
+                    parts_clone.lock().unwrap().0.push(n.part);
+                    Ok(())
+                },
+                on_receive_notification!(),
+            )
+            .on_receive_notification(
+                async move |_: ResponseCompleteNotification, _| {
+                    let _ = complete_tx_clone.unbounded_send(());
+                    Ok(())
+                },
+                on_receive_notification!(),
+            )
+            .connect_to(LmBackend::new())?
+            .run_until(async |cx| {
+                let tools = vec![ToolDefinition {
+                    name: "read_file".to_string(),
+                    description: "Read contents of a file".to_string(),
+                    input_schema: serde_json::json!({
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"]
+                    }),
+                }];
+
+                // First request: trigger a tool call
+                send_chat(
+                    &cx,
+                    r#"use tool vscode-tools::read_file with {"path": "/tmp/test.txt"}"#,
+                    tools.clone(),
+                )
+                .await?;
+                tokio::time::timeout(Duration::from_secs(10), complete_rx.next())
+                    .await
+                    .expect("timeout waiting for tool call");
+
+                // Extract the tool call ID
+                let tool_calls = parts.lock().unwrap().tool_calls_with_ids();
+                assert_eq!(tool_calls.len(), 1, "expected exactly one tool call");
+                let (tool_call_id, tool_name, _params) = &tool_calls[0];
+                assert_eq!(tool_name, "read_file");
+                let tool_call_id = tool_call_id.clone();
+                parts.lock().unwrap().clear();
+
+                // Second request: provide the tool result
+                let messages = vec![
+                    Message {
+                        role: ROLE_USER.to_string(),
+                        content: vec![ContentPart::Text {
+                            value:
+                                r#"use tool vscode-tools::read_file with {"path": "/tmp/test.txt"}"#
+                                    .to_string(),
+                        }],
+                    },
+                    Message {
+                        role: ROLE_ASSISTANT.to_string(),
+                        content: vec![ContentPart::ToolCall {
+                            tool_call_id: tool_call_id.clone(),
+                            tool_name: "read_file".to_string(),
+                            parameters: serde_json::json!({"path": "/tmp/test.txt"}),
+                        }],
+                    },
+                    Message {
+                        role: ROLE_USER.to_string(),
+                        content: vec![ContentPart::ToolResult {
+                            tool_call_id: tool_call_id.clone(),
+                            result: serde_json::json!("Hello from the file!"),
+                        }],
+                    },
+                ];
+
+                cx.send_request(ProvideResponseRequest {
+                    model_id: "symposium-eliza".to_string(),
+                    messages,
+                    agent: AgentDefinition::Eliza {
+                        deterministic: true,
+                    },
+                    options: ChatRequestOptions {
+                        tools,
+                        tool_mode: Some(ToolMode::Auto),
+                    },
+                })
+                .block_task()
+                .await?;
+
+                tokio::time::timeout(Duration::from_secs(10), complete_rx.next())
+                    .await
+                    .expect("timeout waiting for response after tool result");
+
+                // Eliza should echo back the tool result
+                let response_text = parts.lock().unwrap().text();
+                expect![[r#"OK: CallToolResult { content: [Annotated { raw: Text(RawTextContent { text: "Hello from the file!", meta: None }), annotations: None }], structured_content: None, is_error: Some(false), meta: None }"#]].assert_eq(&response_text);
 
                 Ok(())
             })
