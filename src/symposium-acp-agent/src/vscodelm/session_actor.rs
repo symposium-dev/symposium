@@ -707,7 +707,7 @@ impl SessionActor {
         invocation: ToolInvocation,
         history_handle: &HistoryActorHandle,
         request_rx: &mut Peekable<mpsc::UnboundedReceiver<SessionRequest>>,
-        mut request_state: RequestState,
+        request_state: RequestState,
         session_id: Uuid,
     ) -> Result<RequestState, Canceled> {
         let ToolInvocation {
@@ -746,6 +746,10 @@ impl SessionActor {
         {
             return Err(cancel_tool_invocation(result_tx, "failed to send complete"));
         }
+
+        // This marks the end of the request from the VSCode point-of-view, so drop the
+        // `request_state`. We'll get a replacement in the next message.
+        drop(request_state);
 
         // Wait for the next request (which should have the tool result).
         //
