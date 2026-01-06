@@ -159,7 +159,7 @@ impl ServerHandler for VscodeToolsMcpServer {
                 .enable_tool_list_changed()
                 .build(),
             server_info: rmcp::model::Implementation {
-                name: "symposium-vscode-tools".to_string(),
+                name: "vscode_tools".to_string(),
                 title: None,
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 icons: None,

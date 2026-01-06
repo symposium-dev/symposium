@@ -428,7 +428,7 @@ async fn test_mcp_list_tools() -> Result<(), sacp::Error> {
                 },
             ];
 
-            send_chat(&cx, "list tools from vscode-tools", tools).await?;
+            send_chat(&cx, "list tools from vscode_tools", tools).await?;
             tokio::time::timeout(Duration::from_secs(10), complete_rx.next())
                 .await
                 .expect("timeout");
@@ -491,7 +491,7 @@ async fn test_mcp_invoke_tool() -> Result<(), sacp::Error> {
             tracing::info!("Step 1: sending tool use command");
             send_chat(
                 &cx,
-                r#"use tool vscode-tools::read_file with {"path": "/tmp/test.txt"}"#,
+                r#"use tool vscode_tools::read_file with {"path": "/tmp/test.txt"}"#,
                 tools.clone(),
             )
             .await?;
@@ -517,7 +517,7 @@ async fn test_mcp_invoke_tool() -> Result<(), sacp::Error> {
                 Message {
                     role: ROLE_USER.to_string(),
                     content: vec![ContentPart::Text {
-                        value: r#"use tool vscode-tools::read_file with {"path": "/tmp/test.txt"}"#
+                        value: r#"use tool vscode_tools::read_file with {"path": "/tmp/test.txt"}"#
                             .to_string(),
                     }],
                 },

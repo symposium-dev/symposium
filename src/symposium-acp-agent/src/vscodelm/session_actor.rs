@@ -355,7 +355,7 @@ impl SessionActor {
 
         // Create the MCP server wrapper using sacp-rmcp
         let mcp_server =
-            sacp::mcp_server::McpServer::<ClientToAgent, _>::from_rmcp("vscode-tools", move || {
+            sacp::mcp_server::McpServer::<ClientToAgent, _>::from_rmcp("vscode_tools", move || {
                 // Clone the server for each connection
                 // Note: This requires VscodeToolsMcpServer to be Clone
                 vscode_tools_server.clone()
