@@ -92,7 +92,23 @@ pub struct VscodeToolsHandle {
     state: Arc<RwLock<VscodeToolsState>>,
 }
 
+/// The prefix Claude Code uses for MCP tools from our vscode_tools server.
+const VSCODE_TOOLS_PREFIX: &str = "mcp__vscode_tools__";
+
 impl VscodeToolsHandle {
+    /// Check if a tool name (as seen by Claude Code) is one of our VS Code tools.
+    ///
+    /// Claude Code prefixes MCP tools with `mcp__<server_name>__<tool_name>`.
+    /// This checks if the given name matches that pattern for one of our tools.
+    pub async fn is_vscode_tool(&self, tool_name: &str) -> bool {
+        let Some(suffix) = tool_name.strip_prefix(VSCODE_TOOLS_PREFIX) else {
+            return false;
+        };
+
+        let state = self.state.read().await;
+        state.tools.iter().any(|t| t.name == suffix)
+    }
+
     /// Set the initial list of tools without sending a notification.
     /// Use this before the MCP server is advertised to avoid race conditions.
     pub async fn set_initial_tools(&self, tools: Vec<VscodeTool>) {
@@ -311,5 +327,40 @@ mod tests {
             assert_eq!(state.tools.len(), 1);
             assert_eq!(state.tools[0].name, "test_tool");
         }
+    }
+
+    #[tokio::test]
+    async fn test_is_vscode_tool() {
+        let (invocation_tx, _invocation_rx) = mpsc::unbounded();
+        let server = VscodeToolsMcpServer::new(invocation_tx);
+        let handle = server.tools_handle();
+
+        // Set up some tools
+        handle
+            .set_initial_tools(vec![
+                VscodeTool {
+                    name: "average".to_string(),
+                    description: "Compute average".to_string(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                },
+                VscodeTool {
+                    name: "sum".to_string(),
+                    description: "Compute sum".to_string(),
+                    input_schema: serde_json::json!({"type": "object"}),
+                },
+            ])
+            .await;
+
+        // Should match with correct prefix
+        assert!(handle.is_vscode_tool("mcp__vscode_tools__average").await);
+        assert!(handle.is_vscode_tool("mcp__vscode_tools__sum").await);
+
+        // Should not match tools that don't exist
+        assert!(!handle.is_vscode_tool("mcp__vscode_tools__unknown").await);
+
+        // Should not match wrong prefix
+        assert!(!handle.is_vscode_tool("mcp__other_server__average").await);
+        assert!(!handle.is_vscode_tool("average").await);
+        assert!(!handle.is_vscode_tool("").await);
     }
 }

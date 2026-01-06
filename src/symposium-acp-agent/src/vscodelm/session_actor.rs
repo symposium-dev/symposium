@@ -30,7 +30,9 @@ use uuid::Uuid;
 use sacp_rmcp::McpServerExt;
 
 use super::history_actor::{HistoryActorHandle, SessionToHistoryMessage};
-use super::vscode_tools_mcp::{ToolInvocation, VscodeTool, VscodeToolsMcpServer};
+use super::vscode_tools_mcp::{
+    ToolInvocation, VscodeTool, VscodeToolsHandle, VscodeToolsMcpServer,
+};
 use super::{ContentPart, Message, ToolDefinition, ROLE_USER, SYMPOSIUM_AGENT_ACTION};
 
 /// Helper to peek at the next item in a peekable stream.
@@ -452,6 +454,7 @@ impl SessionActor {
                                     &mut request_rx,
                                     request_state,
                                     &mut tool_call_tracker,
+                                    &tools_handle,
                                     session_id,
                                 )
                                 .await?;
@@ -532,6 +535,7 @@ impl SessionActor {
         request_rx: &mut Peekable<mpsc::UnboundedReceiver<SessionRequest>>,
         request_state: RequestState,
         tool_call_tracker: &mut ToolCallTracker,
+        tools_handle: &VscodeToolsHandle,
         session_id: Uuid,
     ) -> Result<Option<RequestState>, sacp::Error> {
         use sacp::util::MatchMessage;
@@ -575,6 +579,25 @@ impl SessionActor {
             .await
             .if_request(async |perm_request: RequestPermissionRequest, request_cx| {
                 tracing::debug!(%session_id, has_internal_tool, ?perm_request, "received permission request");
+
+                // Check if this is a VS Code tool - if so, auto-approve
+                // VS Code tools are ones we injected via our vscode_tools MCP server
+                let tool_title = perm_request.tool_call.fields.title.as_deref().unwrap_or("");
+                if tools_handle.is_vscode_tool(tool_title).await {
+                    tracing::info!(%session_id, %tool_title, "auto-approving VS Code tool");
+
+                    // Find the allow-once option and approve
+                    let approve_outcome = perm_request.options
+                        .iter()
+                        .find(|opt| matches!(opt.kind, sacp::schema::PermissionOptionKind::AllowOnce))
+                        .map(|opt| RequestPermissionOutcome::Selected(
+                            SelectedPermissionOutcome::new(opt.option_id.clone())
+                        ))
+                        .unwrap_or(RequestPermissionOutcome::Cancelled);
+
+                    request_cx.respond(RequestPermissionResponse::new(approve_outcome))?;
+                    return Ok(());
+                }
 
                 // If the internal tool is not available, auto-deny all permission requests
                 if !has_internal_tool {
