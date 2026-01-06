@@ -317,8 +317,8 @@ async fn test_multi_turn_conversation() -> Result<(), sacp::Error> {
                 .await
                 .expect("timeout");
 
-            expect!["How do you do. Please state your problem."]
-                .assert_eq(&parts.lock().unwrap().text());
+            let text = parts.lock().unwrap().text();
+            expect!["How do you do. Please state your problem."].assert_eq(&text);
             parts.lock().unwrap().clear();
 
             // Second turn - send full history
@@ -332,7 +332,7 @@ async fn test_multi_turn_conversation() -> Result<(), sacp::Error> {
                 Message {
                     role: ROLE_ASSISTANT.to_string(),
                     content: vec![ContentPart::Text {
-                        value: "How do you do. Please state your problem.".to_string(),
+                        value: text.to_string(),
                     }],
                 },
                 Message {
