@@ -20,7 +20,7 @@ use sacp::Component;
 use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
 
-mod vscodelm;
+use symposium_acp_agent::vscodelm;
 
 #[derive(Parser, Debug)]
 #[command(name = "symposium-acp-agent")]

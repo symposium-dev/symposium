@@ -4,7 +4,7 @@
 //! It uses sacp's JSON-RPC infrastructure for communication with the TypeScript extension.
 
 mod history_actor;
-mod session_actor;
+pub mod session_actor;
 #[cfg(test)]
 mod tests;
 mod vscode_tools_mcp;
@@ -22,8 +22,8 @@ use std::path::PathBuf;
 const SYMPOSIUM_AGENT_ACTION: &str = "symposium-agent-action";
 
 /// Role constants for message matching
-pub(crate) const ROLE_USER: &str = "user";
-pub(crate) const ROLE_ASSISTANT: &str = "assistant";
+pub const ROLE_USER: &str = "user";
+pub const ROLE_ASSISTANT: &str = "assistant";
 
 // ============================================================================
 // Peers

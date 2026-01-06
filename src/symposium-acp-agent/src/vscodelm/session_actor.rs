@@ -163,6 +163,8 @@ pub enum AgentDefinition {
         #[serde(default)]
         deterministic: bool,
     },
+    /// Use Claude Code (Zed's ACP implementation)
+    ClaudeCode,
     /// Spawn an external ACP agent process
     McpServer(sacp::schema::McpServer),
 }
@@ -263,6 +265,10 @@ impl SessionActor {
         let result = match agent_definition {
             AgentDefinition::Eliza { deterministic } => {
                 let agent = ElizaAgent::new(deterministic);
+                Self::run_with_agent(request_rx, history_handle.clone(), agent, session_id).await
+            }
+            AgentDefinition::ClaudeCode => {
+                let agent = AcpAgent::zed_claude_code();
                 Self::run_with_agent(request_rx, history_handle.clone(), agent, session_id).await
             }
             AgentDefinition::McpServer(config) => {

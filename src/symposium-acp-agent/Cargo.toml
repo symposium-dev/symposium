@@ -37,5 +37,9 @@ uuid = { workspace = true, features = ["v4"] }
 futures-concurrency = "7"
 futures = "0.3"
 
+[[example]]
+name = "vscodelm_cli"
+path = "examples/vscodelm_cli.rs"
+
 [dev-dependencies]
 expect-test.workspace = true
