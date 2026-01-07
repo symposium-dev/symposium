@@ -184,17 +184,55 @@ export function getExtensionDisplayInfo(
 }
 
 /**
+ * Check if extensions match the default configuration
+ */
+function isDefaultExtensions(extensions: ExtensionSettingsEntry[]): boolean {
+  if (extensions.length !== DEFAULT_EXTENSIONS.length) {
+    return false;
+  }
+
+  for (let i = 0; i < extensions.length; i++) {
+    const ext = extensions[i];
+    const def = DEFAULT_EXTENSIONS[i];
+    if (
+      ext.id !== def.id ||
+      ext._enabled !== def._enabled ||
+      ext._source !== def._source
+    ) {
+      return false;
+    }
+    // Custom extensions have extra fields, so they're not default
+    if (ext.distribution || ext.name || ext.description) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
  * Save extensions to user settings
+ * If extensions match defaults, removes the key from settings
  */
 export async function saveExtensions(
   extensions: ExtensionSettingsEntry[],
 ): Promise<void> {
   const config = vscode.workspace.getConfiguration("symposium");
-  await config.update(
-    "extensions",
-    extensions,
-    vscode.ConfigurationTarget.Global,
-  );
+
+  // If it's the default config, remove the key entirely
+  if (isDefaultExtensions(extensions)) {
+    await config.update(
+      "extensions",
+      undefined,
+      vscode.ConfigurationTarget.Global,
+    );
+  } else {
+    await config.update(
+      "extensions",
+      extensions,
+      vscode.ConfigurationTarget.Global,
+    );
+  }
 }
 
 /**
