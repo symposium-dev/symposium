@@ -1,3 +1,0 @@
-# Symposium references
-
-A *symposium reference* is a way for your IDE or other tools to communicate with your agent. It works by pasting a small bit of XML, something like `<symposium-ref id="..."/>` into your chat; the UUID that appears in that reference is also sent to the MCP server, along with some other information. The agent can then use the [`expand_reference`](../design/mcp-tools/reference-system.md) tool to read that extra information. This mechanism is used when you select text and choose "Discuss in Symposium" or when you [reply to comments in a walkthrough](./walkthrough.md). You can embed multiple references, whatever makes sense to you.

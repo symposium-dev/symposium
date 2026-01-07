@@ -875,6 +875,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "dissimilar"
+version = "1.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8975ffdaa0ef3661bfe02dbdcc06c9f829dfafe6a3c474de366a8d5e44276921"
+
+[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1004,6 +1010,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad9cdb4b747e485a12abb0e6566612956c7a1bafa3bdb8d682c5b6d403589e48"
 dependencies = [
  "num-traits",
+]
+
+[[package]]
+name = "expect-test"
+version = "1.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63af43ff4431e848fb47472a920f14fa71c24de13255a5692e93d4e90302acb0"
+dependencies = [
+ "dissimilar",
+ "once_cell",
 ]
 
 [[package]]
@@ -3597,16 +3613,25 @@ name = "symposium-acp-agent"
 version = "1.1.1"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
  "elizacp",
+ "expect-test",
+ "futures",
+ "futures-concurrency",
+ "rmcp",
  "sacp",
  "sacp-conductor",
+ "sacp-rmcp",
  "sacp-tokio",
+ "serde",
+ "serde_json",
  "symposium-acp-proxy",
  "symposium-ferris",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

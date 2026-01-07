@@ -90,3 +90,27 @@ These allow protocol extensions beyond the ACP specification. Not currently need
 - [ ] Session restoration after VSCode restart
 - [ ] Workspace-specific state persistence
 - [ ] Tab history and conversation export
+
+## Language Model Provider (Experimental)
+
+> Set `symposium.enableExperimentalLM: true` in VS Code settings to enable.
+
+This feature exposes ACP agents via VS Code's `LanguageModelChatProvider` API, allowing them to appear in the model picker for use by Copilot and other extensions.
+
+**Status:** Experimental, disabled by default. May not be the right approach.
+
+- [x] TypeScript: LanguageModelChatProvider registration
+- [x] TypeScript: JSON-RPC client over stdio
+- [x] TypeScript: Progress callback integration
+- [x] Rust: `vscodelm` subcommand
+- [x] Rust: Session actor with history management
+- [x] Rust: Tool bridging (symposium-agent-action for permissions)
+- [x] Rust: VS Code tools via synthetic MCP server
+- [x] Feature flag gating (`symposium.enableExperimentalLM`)
+- [ ] Fix: Multiple MCP tools cause invocation failures
+
+**Known issue:** Tool invocation works with a single isolated tool but fails when multiple VS Code-provided tools are bridged. Root cause unknown.
+
+**Open question:** VS Code LM consumers inject their own context (project details, editor state, etc.) into requests. ACP agents like Claude Code also inject context. These competing context layers may confuse the model, making the LM API better suited for raw model access than wrapping full agents.
+
+See [Language Model Provider](./lm-provider.md) and [Tool Bridging](./lm-tool-bridging.md) for architecture details.

@@ -16,11 +16,15 @@ path = "src/main.rs"
 sacp-conductor.workspace = true
 sacp.workspace = true
 sacp-tokio.workspace = true
+sacp-rmcp.workspace = true
+rmcp.workspace = true
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Symposium components
 symposium-acp-proxy = { path = "../symposium-acp-proxy", version = "1.1.1" }
@@ -28,3 +32,14 @@ symposium-ferris = { path = "../symposium-ferris", version = "1.0.1" }
 
 # Built-in agents
 elizacp.workspace = true
+chrono = "0.4.42"
+uuid = { workspace = true, features = ["v4"] }
+futures-concurrency = "7"
+futures = "0.3"
+
+[[example]]
+name = "vscodelm_cli"
+path = "examples/vscodelm_cli.rs"
+
+[dev-dependencies]
+expect-test.workspace = true

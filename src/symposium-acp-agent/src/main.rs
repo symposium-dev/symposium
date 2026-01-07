@@ -7,16 +7,20 @@
 //! Usage:
 //!   symposium-acp-agent [OPTIONS] -- <agent-command> [agent-args...]
 //!   symposium-acp-agent eliza
+//!   symposium-acp-agent vscodelm
 //!
 //! Example:
 //!   symposium-acp-agent -- npx -y @zed-industries/claude-code-acp
 //!   symposium-acp-agent eliza
+//!   symposium-acp-agent vscodelm
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use sacp::Component;
 use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
+
+use symposium_acp_agent::vscodelm;
 
 #[derive(Parser, Debug)]
 #[command(name = "symposium-acp-agent")]
@@ -53,9 +57,10 @@ struct Cli {
     #[arg(long)]
     trace_dir: Option<PathBuf>,
 
-    /// Enable logging to stderr at the specified level (error, warn, info, debug, trace).
+    /// Enable logging to stderr. Accepts a level (error, warn, info, debug, trace)
+    /// or a RUST_LOG-style filter string (e.g., "sacp=debug,symposium=trace").
     #[arg(long)]
-    log: Option<tracing::Level>,
+    log: Option<String>,
 
     /// The agent command and arguments (e.g., npx -y @zed-industries/claude-code-acp)
     #[arg(last = true, num_args = 1..)]
@@ -66,6 +71,8 @@ struct Cli {
 enum Command {
     /// Run the built-in Eliza agent (useful for testing)
     Eliza,
+    /// Run as a VS Code Language Model Provider backend
+    Vscodelm,
 }
 
 fn parse_yes_no(s: &str) -> Result<bool, String> {
@@ -96,10 +103,10 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Set up logging if requested
-    if let Some(level) = cli.log {
+    if let Some(filter) = cli.log {
         use tracing_subscriber::EnvFilter;
         tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::new(level.to_string()))
+            .with_env_filter(EnvFilter::new(filter))
             .with_writer(std::io::stderr)
             .init();
     }
@@ -110,6 +117,10 @@ async fn main() -> Result<()> {
             elizacp::ElizaAgent::new(false)
                 .serve(sacp_tokio::Stdio::new())
                 .await?;
+        }
+        Some(Command::Vscodelm) => {
+            // Run as VS Code Language Model Provider backend
+            vscodelm::serve_stdio(cli.trace_dir).await?;
         }
         None => {
             // Run with a downstream agent

@@ -2,7 +2,7 @@
   "name": "symposium",
   "displayName": "Symposium",
   "description": "AI the Rust Way",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "publisher": "symposium-dev",
   "repository": {
     "type": "git",
@@ -11,7 +11,7 @@
   "license": "MIT",
   "icon": "resources/extension-icon.png",
   "engines": {
-    "vscode": "^1.93.0"
+    "vscode": "^1.104.0"
   },
   "categories": [
     "Other"
@@ -21,6 +21,39 @@
   ],
   "main": "./out/extension.js",
   "contributes": {
+    "languageModelChatProviders": [
+      {
+        "vendor": "symposium",
+        "displayName": "Symposium"
+      }
+    ],
+    "languageModelTools": [
+      {
+        "name": "symposium-agent-action",
+        "toolReferenceName": "symposiumAction",
+        "displayName": "Agent Action",
+        "modelDescription": "Request permission for an agent to execute an internal tool",
+        "userDescription": "Allow the agent to execute a tool",
+        "canBeReferencedInPrompt": true,
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Human-readable title for the action"
+            },
+            "kind": {
+              "type": "string",
+              "description": "The kind of tool (e.g., bash, file_edit)"
+            },
+            "raw_input": {
+              "type": "object",
+              "description": "The raw input parameters for the tool"
+            }
+          }
+        }
+      }
+    ],
     "configuration": {
       "title": "Symposium",
       "properties": {
@@ -176,6 +209,11 @@
           },
           "default": [],
           "description": "List of agent IDs that automatically approve all tool execution requests."
+        },
+        "symposium.enableExperimentalLM": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable experimental Language Model provider integration. This allows other VS Code extensions to use Symposium agents via the Language Model API. Requires restart."
         }
       }
     },

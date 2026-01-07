@@ -17,6 +17,16 @@ const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
   debug: 2,
 };
 
+// Regex to match ANSI escape codes
+const ANSI_ESCAPE_REGEX = /\x1b\[[0-9;]*m/g;
+
+/**
+ * Strip ANSI escape codes from a string.
+ */
+function stripAnsi(str: string): string {
+  return str.replace(ANSI_ESCAPE_REGEX, "");
+}
+
 /**
  * Structured logger that writes to Output channel and emits events for testing.
  * Respects the symposium.logLevel configuration setting.
@@ -126,9 +136,9 @@ export class Logger {
       return;
     }
 
-    // Format for output channel
+    // Format for output channel (strip ANSI codes for clean display)
     const levelStr = `[${category}]`;
-    let output = `${levelStr} ${message}`;
+    let output = `${levelStr} ${stripAnsi(message)}`;
 
     if (data) {
       output += ` ${JSON.stringify(data)}`;

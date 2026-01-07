@@ -6,6 +6,9 @@ import {
   checkForRegistryUpdates,
   checkAllBuiltInAvailability,
   AvailabilityStatus,
+  fetchRegistry,
+  addAgentFromRegistry,
+  RegistryEntry,
 } from "./agentRegistry";
 
 export class SettingsViewProvider implements vscode.WebviewViewProvider {
@@ -13,6 +16,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   #view?: vscode.WebviewView;
   #extensionUri: vscode.Uri;
   #availabilityCache: Map<string, AvailabilityStatus> = new Map();
+  #registryCache: RegistryEntry[] = [];
 
   constructor(extensionUri: vscode.Uri) {
     this.#extensionUri = extensionUri;
@@ -26,11 +30,17 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * Refresh availability checks for built-in agents.
+   * Refresh availability checks for built-in agents and fetch registry.
    * Call this at activation and when the settings panel becomes visible.
    */
   async refreshAvailability(): Promise<void> {
-    this.#availabilityCache = await checkAllBuiltInAvailability();
+    // Fetch both in parallel
+    const [availability, registry] = await Promise.all([
+      checkAllBuiltInAvailability(),
+      fetchRegistry().catch(() => [] as RegistryEntry[]),
+    ]);
+    this.#availabilityCache = availability;
+    this.#registryCache = registry;
     this.#sendConfiguration();
   }
 
@@ -64,6 +74,15 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
           this.#sendConfiguration();
           break;
         case "set-current-agent":
+          // If not installed, install from registry first
+          if (!message.installed) {
+            const registryEntry = this.#registryCache.find(
+              (e) => e.id === message.agentId,
+            );
+            if (registryEntry) {
+              await addAgentFromRegistry(registryEntry);
+            }
+          }
           // Update current agent setting
           const vsConfig = vscode.workspace.getConfiguration("symposium");
           await vsConfig.update(
@@ -185,7 +204,9 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
 
     // Get effective agents (built-ins + settings) and merge bypass/availability settings
     const effectiveAgents = getEffectiveAgents();
-    const agents = effectiveAgents.map((agent) => {
+    const effectiveIds = new Set(effectiveAgents.map((a) => a.id));
+
+    const installedAgents = effectiveAgents.map((agent) => {
       const availability = this.#availabilityCache.get(agent.id);
       return {
         ...agent,
@@ -193,8 +214,24 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         // Only built-in agents have availability checks (registry agents are always available)
         disabled: availability ? !availability.available : false,
         disabledReason: availability?.reason,
+        installed: true,
       };
     });
+
+    // Add uninstalled registry agents
+    const uninstalledAgents = this.#registryCache
+      .filter((entry) => !effectiveIds.has(entry.id))
+      .map((entry) => ({
+        ...entry,
+        bypassPermissions: false,
+        disabled: false,
+        disabledReason: undefined,
+        installed: false,
+      }));
+
+    const agents = [...installedAgents, ...uninstalledAgents].sort((a, b) =>
+      (a.name ?? a.id).localeCompare(b.name ?? b.id),
+    );
 
     const currentAgentId = getCurrentAgentId();
     const requireModifierToSend = config.get<boolean>(
@@ -326,10 +363,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         <div class="agent-list" id="agent-list">
             <div>Loading...</div>
         </div>
-        <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 6px;">
-            <a href="#" id="add-agent-link" style="color: var(--vscode-textLink-foreground); text-decoration: none;">
-                + Add agent from registry...
-            </a>
+        <div style="margin-top: 12px;">
             <a href="#" id="check-updates-link" style="color: var(--vscode-textLink-foreground); text-decoration: none;">
                 ↻ Check for updates
             </a>
@@ -365,12 +399,6 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         document.getElementById('configure-link').onclick = (e) => {
             e.preventDefault();
             vscode.postMessage({ type: 'open-settings' });
-        };
-
-        // Handle add agent link
-        document.getElementById('add-agent-link').onclick = (e) => {
-            e.preventDefault();
-            vscode.postMessage({ type: 'add-agent-from-registry' });
         };
 
         // Handle check for updates link
@@ -441,7 +469,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
                     const nameSpan = item.querySelector('.agent-name');
                     nameSpan.onclick = (e) => {
                         e.stopPropagation();
-                        vscode.postMessage({ type: 'set-current-agent', agentId: agent.id, agentName: displayName });
+                        vscode.postMessage({ type: 'set-current-agent', agentId: agent.id, agentName: displayName, installed: agent.installed });
                     };
 
                     // Handle clicking on the bypass badge (toggle bypass)
