@@ -142,8 +142,7 @@ fn print_completion_message(
     println!();
 
     if installed_acp {
-        println!("📦 ACP binaries installed to ~/.cargo/bin/:");
-        println!("   • elizacp");
+        println!("📦 ACP binary installed to ~/.cargo/bin/:");
         println!("   • symposium-acp-agent");
         println!();
     }

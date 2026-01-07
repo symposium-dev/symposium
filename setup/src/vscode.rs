@@ -20,7 +20,8 @@ pub fn build_and_install_extension(repo_root: &Path, dry_run: bool) -> Result<()
     if dry_run {
         println!("   Would build symposium-acp-agent (cargo build --release)");
         println!("   Would copy binary to extension bin/ directory");
-        println!("   Would install dependencies (npm install)");
+        println!("   Would install vendor dependencies (npm install in vendor/mynah-ui)");
+        println!("   Would install extension dependencies (npm install)");
         println!("   Would build extension (npm run webpack-dev)");
         println!("   Would package extension (npx vsce package)");
         println!("   Would install extension (code --install-extension)");
@@ -31,7 +32,10 @@ pub fn build_and_install_extension(repo_root: &Path, dry_run: bool) -> Result<()
         // Copy the symposium-acp-agent binary into the extension
         copy_binary_to_extension(repo_root, &extension_dir)?;
 
-        // Install dependencies
+        // Install vendor dependencies (mynah-ui)
+        install_vendor_dependencies(repo_root)?;
+
+        // Install extension dependencies
         install_dependencies(&extension_dir)?;
 
         // Build extension
@@ -115,6 +119,36 @@ fn copy_binary_to_extension(repo_root: &Path, extension_dir: &Path) -> Result<()
     })?;
 
     println!("   Copied {} to {}", source.display(), dest.display());
+
+    Ok(())
+}
+
+/// Install vendor dependencies (mynah-ui)
+fn install_vendor_dependencies(repo_root: &Path) -> Result<()> {
+    let mynah_dir = repo_root.join("vendor").join("mynah-ui");
+
+    if !mynah_dir.exists() {
+        return Err(anyhow!(
+            "❌ vendor/mynah-ui directory not found at: {}",
+            mynah_dir.display()
+        ));
+    }
+
+    println!("📥 Installing vendor dependencies (mynah-ui)...");
+
+    let output = Command::new("npm")
+        .args(["install"])
+        .current_dir(&mynah_dir)
+        .output()
+        .context("Failed to execute npm install in vendor/mynah-ui")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(anyhow!(
+            "❌ Failed to install vendor dependencies:\n   Error: {}",
+            stderr.trim()
+        ));
+    }
 
     Ok(())
 }

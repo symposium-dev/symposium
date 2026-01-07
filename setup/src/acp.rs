@@ -11,9 +11,6 @@ pub fn install_acp_binaries(repo_root: &Path, dry_run: bool) -> Result<()> {
     // Verify we're in the symposium repository
     verify_symposium_repo(repo_root)?;
 
-    // Install from crates.io
-    install_from_crates_io(&["elizacp"], dry_run)?;
-
     // Install symposium-acp-agent from local repository
     install_local_binaries(repo_root, dry_run)?;
 
@@ -39,35 +36,6 @@ fn verify_symposium_repo(repo_root: &Path) -> Result<()> {
         return Err(anyhow!(
             "❌ This doesn't appear to be the symposium repository.\n   Expected to find 'symposium-acp-agent' in workspace members."
         ));
-    }
-
-    Ok(())
-}
-
-/// Install binaries from crates.io
-fn install_from_crates_io(crates: &[&str], dry_run: bool) -> Result<()> {
-    for crate_name in crates {
-        if dry_run {
-            println!("   Would install {} from crates.io", crate_name);
-        } else {
-            println!("   Installing {} from crates.io...", crate_name);
-
-            let output = Command::new("cargo")
-                .args(["install", crate_name, "--force"])
-                .output()
-                .context(format!("Failed to execute cargo install {}", crate_name))?;
-
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                return Err(anyhow!(
-                    "❌ Failed to install {}:\n   Error: {}",
-                    crate_name,
-                    stderr.trim()
-                ));
-            }
-
-            println!("   ✅ {} installed", crate_name);
-        }
     }
 
     Ok(())
