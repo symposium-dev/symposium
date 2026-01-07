@@ -460,11 +460,57 @@ export interface RegistryEntry {
 }
 
 /**
- * Registry JSON format
+ * Registry JSON format - contains both agents and extensions
  */
 interface RegistryJson {
-  version: string;
+  date: string;
   agents: RegistryEntry[];
+  extensions?: RegistryEntry[];
+}
+
+/**
+ * Cached registry data (both agents and extensions)
+ */
+let registryCache: RegistryJson | null = null;
+
+/**
+ * Fetch the full registry JSON (agents and extensions)
+ */
+export async function fetchFullRegistry(): Promise<RegistryJson> {
+  const response = await fetch(REGISTRY_URL);
+  if (!response.ok) {
+    throw new Error(
+      `Failed to fetch registry: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  registryCache = (await response.json()) as RegistryJson;
+  return registryCache;
+}
+
+/**
+ * Get cached registry or fetch if not available
+ */
+export async function getRegistry(): Promise<RegistryJson> {
+  if (registryCache) {
+    return registryCache;
+  }
+  return fetchFullRegistry();
+}
+
+/**
+ * Clear the registry cache (call when refreshing)
+ */
+export function clearRegistryCache(): void {
+  registryCache = null;
+}
+
+/**
+ * Fetch extensions from the registry
+ */
+export async function fetchRegistryExtensions(): Promise<RegistryEntry[]> {
+  const registry = await getRegistry();
+  return registry.extensions ?? [];
 }
 
 /**
@@ -472,35 +518,21 @@ interface RegistryJson {
  * Returns agents that are NOT already in the user's effective agents list.
  */
 export async function fetchAvailableRegistryAgents(): Promise<RegistryEntry[]> {
-  const response = await fetch(REGISTRY_URL);
-  if (!response.ok) {
-    throw new Error(
-      `Failed to fetch registry: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  const registryJson = (await response.json()) as RegistryJson;
+  const registry = await getRegistry();
 
   // Filter out agents already configured
   const effectiveAgents = getEffectiveAgents();
   const existingIds = new Set(effectiveAgents.map((a) => a.id));
 
-  return registryJson.agents.filter((entry) => !existingIds.has(entry.id));
+  return registry.agents.filter((entry) => !existingIds.has(entry.id));
 }
 
 /**
  * Fetch all agents from the registry (without filtering)
  */
 export async function fetchRegistry(): Promise<RegistryEntry[]> {
-  const response = await fetch(REGISTRY_URL);
-  if (!response.ok) {
-    throw new Error(
-      `Failed to fetch registry: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  const registryJson = (await response.json()) as RegistryJson;
-  return registryJson.agents;
+  const registry = await getRegistry();
+  return registry.agents;
 }
 
 /**

@@ -251,7 +251,7 @@ export class AcpAgentActor {
 
     // Add extension proxies from configuration
     for (const ext of config.extensions) {
-      if (ext.enabled) {
+      if (ext._enabled) {
         spawnArgs.push("--proxy", ext.id);
       }
     }

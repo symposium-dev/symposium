@@ -4,19 +4,11 @@ import {
   getCurrentAgentId,
   DEFAULT_AGENT_ID,
 } from "./agentRegistry";
-
-/** Extension configuration */
-export interface ExtensionConfig {
-  id: string;
-  enabled: boolean;
-}
-
-/** Default extensions when none configured */
-const DEFAULT_EXTENSIONS: ExtensionConfig[] = [
-  { id: "sparkle", enabled: true },
-  { id: "ferris", enabled: true },
-  { id: "cargo", enabled: true },
-];
+import {
+  ExtensionSettingsEntry,
+  DEFAULT_EXTENSIONS,
+  getExtensionsFromSettings,
+} from "./extensionRegistry";
 
 /**
  * AgentConfiguration - Identifies a unique agent setup
@@ -29,7 +21,7 @@ export class AgentConfiguration {
   constructor(
     public readonly agentId: string,
     public readonly workspaceFolder: vscode.WorkspaceFolder,
-    public readonly extensions: ExtensionConfig[],
+    public readonly extensions: ExtensionSettingsEntry[],
   ) {}
 
   /**
@@ -38,7 +30,7 @@ export class AgentConfiguration {
    */
   key(): string {
     const enabledExtensions = this.extensions
-      .filter((e) => e.enabled)
+      .filter((e) => e._enabled)
       .map((e) => e.id)
       .join(",");
     return `${this.agentId}:${this.workspaceFolder.uri.fsPath}:${enabledExtensions}`;
@@ -70,11 +62,7 @@ export class AgentConfiguration {
     const currentAgentId = getCurrentAgentId();
 
     // Get extensions configuration
-    const config = vscode.workspace.getConfiguration("symposium");
-    const extensions = config.get<ExtensionConfig[]>(
-      "extensions",
-      DEFAULT_EXTENSIONS,
-    );
+    const extensions = getExtensionsFromSettings();
 
     // Determine workspace folder
     let folder = workspaceFolder;

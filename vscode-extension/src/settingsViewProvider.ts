@@ -9,30 +9,16 @@ import {
   fetchRegistry,
   addAgentFromRegistry,
   RegistryEntry,
+  fetchRegistryExtensions,
 } from "./agentRegistry";
-
-/** Built-in extensions with their default state */
-const BUILTIN_EXTENSIONS = [
-  { id: "sparkle", enabled: true },
-  { id: "ferris", enabled: true },
-  { id: "cargo", enabled: true },
-];
-
-/** Extension metadata for display */
-const EXTENSION_INFO: Record<string, { name: string; description: string }> = {
-  sparkle: {
-    name: "Sparkle",
-    description: "AI collaboration identity and embodiment",
-  },
-  ferris: {
-    name: "Ferris",
-    description: "Rust development tools (crate sources)",
-  },
-  cargo: {
-    name: "Cargo",
-    description: "Cargo build and run tools",
-  },
-};
+import {
+  ExtensionSettingsEntry,
+  ExtensionRegistryEntry,
+  getExtensionsFromSettings,
+  getExtensionDisplayInfo,
+  saveExtensions,
+  showAddExtensionDialog,
+} from "./extensionRegistry";
 
 export class SettingsViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = "symposium.settingsView";
@@ -40,6 +26,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   #extensionUri: vscode.Uri;
   #availabilityCache: Map<string, AvailabilityStatus> = new Map();
   #registryCache: RegistryEntry[] = [];
+  #extensionRegistryCache: ExtensionRegistryEntry[] = [];
 
   constructor(extensionUri: vscode.Uri) {
     this.#extensionUri = extensionUri;
@@ -57,13 +44,15 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
    * Call this at activation and when the settings panel becomes visible.
    */
   async refreshAvailability(): Promise<void> {
-    // Fetch both in parallel
-    const [availability, registry] = await Promise.all([
+    // Fetch all in parallel
+    const [availability, registry, extensionRegistry] = await Promise.all([
       checkAllBuiltInAvailability(),
       fetchRegistry().catch(() => [] as RegistryEntry[]),
+      fetchRegistryExtensions().catch(() => [] as ExtensionRegistryEntry[]),
     ]);
     this.#availabilityCache = availability;
     this.#registryCache = registry;
+    this.#extensionRegistryCache = extensionRegistry;
     this.#sendConfiguration();
   }
 
@@ -152,8 +141,8 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
           await this.#deleteExtension(message.extensionId);
           break;
         case "add-extension":
-          // Add an extension back to the list
-          await this.#addExtension(message.extensionId);
+          // Show the add extension dialog
+          await this.#showAddExtensionDialog();
           break;
         case "reorder-extensions":
           // Reorder extensions
@@ -200,70 +189,45 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
   }
 
   async #toggleExtension(extensionId: string) {
-    const config = vscode.workspace.getConfiguration("symposium");
-    const extensions = config.get<Array<{ id: string; enabled: boolean }>>(
-      "extensions",
-      BUILTIN_EXTENSIONS,
-    );
-
+    const extensions = getExtensionsFromSettings();
     const newExtensions = extensions.map((ext) =>
-      ext.id === extensionId ? { ...ext, enabled: !ext.enabled } : ext,
+      ext.id === extensionId ? { ...ext, _enabled: !ext._enabled } : ext,
     );
-
-    await config.update(
-      "extensions",
-      newExtensions,
-      vscode.ConfigurationTarget.Global,
-    );
+    await saveExtensions(newExtensions);
     this.#sendConfiguration();
   }
 
   async #deleteExtension(extensionId: string) {
-    const config = vscode.workspace.getConfiguration("symposium");
-    const extensions = config.get<Array<{ id: string; enabled: boolean }>>(
-      "extensions",
-      BUILTIN_EXTENSIONS,
-    );
-
+    const extensions = getExtensionsFromSettings();
     const newExtensions = extensions.filter((ext) => ext.id !== extensionId);
-
-    await config.update(
-      "extensions",
-      newExtensions,
-      vscode.ConfigurationTarget.Global,
-    );
+    await saveExtensions(newExtensions);
     this.#sendConfiguration();
   }
 
-  async #addExtension(extensionId: string) {
-    const config = vscode.workspace.getConfiguration("symposium");
-    const extensions = config.get<Array<{ id: string; enabled: boolean }>>(
-      "extensions",
-      BUILTIN_EXTENSIONS,
-    );
-
-    // Don't add if already exists
-    if (extensions.some((ext) => ext.id === extensionId)) {
-      return;
+  async #showAddExtensionDialog() {
+    const added = await showAddExtensionDialog(this.#extensionRegistryCache);
+    if (added) {
+      this.#sendConfiguration();
     }
-
-    const newExtensions = [...extensions, { id: extensionId, enabled: true }];
-
-    await config.update(
-      "extensions",
-      newExtensions,
-      vscode.ConfigurationTarget.Global,
-    );
-    this.#sendConfiguration();
   }
 
   async #reorderExtensions(newOrder: Array<{ id: string; enabled: boolean }>) {
-    const config = vscode.workspace.getConfiguration("symposium");
-    await config.update(
-      "extensions",
-      newOrder,
-      vscode.ConfigurationTarget.Global,
-    );
+    const extensions = getExtensionsFromSettings();
+
+    // Preserve full entries, just reorder and update enabled state
+    // Note: webview sends 'enabled', we store as '_enabled'
+    const byId = new Map(extensions.map((e) => [e.id, e]));
+    const reordered = newOrder
+      .map((item) => {
+        const entry = byId.get(item.id);
+        if (entry) {
+          return { ...entry, _enabled: item.enabled };
+        }
+        return null;
+      })
+      .filter((e): e is ExtensionSettingsEntry => e !== null);
+
+    await saveExtensions(reordered);
     this.#sendConfiguration();
   }
 
@@ -347,27 +311,22 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     );
 
     // Get extensions configuration
-    const extensions = config.get<Array<{ id: string; enabled: boolean }>>(
-      "extensions",
-      BUILTIN_EXTENSIONS,
-    );
+    const extensions = getExtensionsFromSettings();
 
     // Build extensions data with display info
-    const extensionsWithInfo = extensions.map((ext) => ({
-      ...ext,
-      name: EXTENSION_INFO[ext.id]?.name ?? ext.id,
-      description: EXTENSION_INFO[ext.id]?.description ?? "",
-    }));
-
-    // Find which built-in extensions are not in the current list (deleted)
-    const currentIds = new Set(extensions.map((e) => e.id));
-    const availableToAdd = BUILTIN_EXTENSIONS.filter(
-      (e) => !currentIds.has(e.id),
-    ).map((e) => ({
-      id: e.id,
-      name: EXTENSION_INFO[e.id]?.name ?? e.id,
-      description: EXTENSION_INFO[e.id]?.description ?? "",
-    }));
+    const extensionsWithInfo = extensions.map((ext) => {
+      const displayInfo = getExtensionDisplayInfo(
+        ext,
+        this.#extensionRegistryCache,
+      );
+      return {
+        id: ext.id,
+        enabled: ext._enabled,
+        name: displayInfo.name,
+        description: displayInfo.description,
+        source: ext._source,
+      };
+    });
 
     this.#view.webview.postMessage({
       type: "config",
@@ -375,7 +334,6 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
       currentAgentId,
       requireModifierToSend,
       extensions: extensionsWithInfo,
-      availableExtensions: availableToAdd,
     });
   }
 
@@ -555,25 +513,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         .add-extension-link:hover {
             text-decoration: underline;
         }
-        .add-extension-menu {
-            display: none;
-            margin-top: 8px;
-            padding: 8px;
-            background: var(--vscode-dropdown-background);
-            border: 1px solid var(--vscode-dropdown-border);
-            border-radius: 4px;
-        }
-        .add-extension-menu.visible {
-            display: block;
-        }
-        .add-extension-option {
-            padding: 6px 8px;
-            cursor: pointer;
-            border-radius: 3px;
-        }
-        .add-extension-option:hover {
-            background: var(--vscode-list-hoverBackground);
-        }
+
         .no-extensions {
             color: var(--vscode-descriptionForeground);
             font-style: italic;
@@ -602,7 +542,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         <a href="#" id="add-extension-link" class="add-extension-link" style="display: none;">
             + Add extension
         </a>
-        <div id="add-extension-menu" class="add-extension-menu"></div>
+
     </div>
 
     <div class="section">
@@ -654,7 +594,7 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
             if (message.type === 'config') {
                 renderAgents(message.agents, message.currentAgentId);
                 renderPreferences(message.requireModifierToSend);
-                renderExtensions(message.extensions, message.availableExtensions);
+                renderExtensions(message.extensions);
             }
         });
 
@@ -725,11 +665,10 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
         // Current extensions state for drag-and-drop
         let currentExtensions = [];
 
-        function renderExtensions(extensions, availableExtensions) {
+        function renderExtensions(extensions) {
             currentExtensions = extensions;
             const list = document.getElementById('extension-list');
             const addLink = document.getElementById('add-extension-link');
-            const addMenu = document.getElementById('add-extension-menu');
 
             list.innerHTML = '';
 
@@ -808,43 +747,15 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
                 }
             }
 
-            // Show/hide add extension link based on available extensions
-            if (availableExtensions && availableExtensions.length > 0) {
-                addLink.style.display = 'inline-block';
-
-                // Build the menu
-                addMenu.innerHTML = '';
-                for (const ext of availableExtensions) {
-                    const option = document.createElement('div');
-                    option.className = 'add-extension-option';
-                    option.innerHTML = \`<strong>\${ext.name}</strong><br><small>\${ext.description}</small>\`;
-                    option.onclick = () => {
-                        vscode.postMessage({ type: 'add-extension', extensionId: ext.id });
-                        addMenu.classList.remove('visible');
-                    };
-                    addMenu.appendChild(option);
-                }
-            } else {
-                addLink.style.display = 'none';
-                addMenu.classList.remove('visible');
-            }
+            // Always show the add extension link - it opens a dialog
+            addLink.style.display = 'inline-block';
         }
 
-        // Handle add extension link
+        // Handle add extension link - opens QuickPick dialog
         document.getElementById('add-extension-link').onclick = (e) => {
             e.preventDefault();
-            const menu = document.getElementById('add-extension-menu');
-            menu.classList.toggle('visible');
+            vscode.postMessage({ type: 'add-extension' });
         };
-
-        // Close menu when clicking outside
-        document.addEventListener('click', (e) => {
-            const menu = document.getElementById('add-extension-menu');
-            const link = document.getElementById('add-extension-link');
-            if (!menu.contains(e.target) && e.target !== link) {
-                menu.classList.remove('visible');
-            }
-        });
 
     </script>
 </body>
