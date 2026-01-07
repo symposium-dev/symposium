@@ -35,6 +35,7 @@ The extension uses a fallback chain for finding the conductor binary:
 
 1. **Bundled binary** in `bin/<platform>/` (production)
 2. **PATH lookup** (development)
+3. **User override** via the `symposium.acpAgentPath` setting — if set, this path is used verbatim and takes precedence
 
 This enables local development without packaging - developers can `cargo install` the binary and the extension finds it in PATH.
 

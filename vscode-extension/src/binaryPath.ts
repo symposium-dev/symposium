@@ -52,11 +52,19 @@ export function getBundledBinaryPath(
 export function getConductorCommand(
   context: vscode.ExtensionContext,
 ): string {
+  // 1) Honor explicit user setting override
+  const config = vscode.workspace.getConfiguration("symposium");
+  const override = config.get<string>("acpAgentPath", "");
+  if (override && override.trim().length > 0) {
+    return override;
+  }
+
+  // 2) Use the bundled binary if present
   const bundledPath = getBundledBinaryPath(context);
   if (bundledPath) {
     return bundledPath;
   }
 
-  // Fall back to expecting it in PATH (development mode)
+  // 3) Fall back to expecting it in PATH (development mode)
   return "symposium-acp-agent";
 }

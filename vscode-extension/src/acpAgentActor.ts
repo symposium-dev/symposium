@@ -256,6 +256,11 @@ export class AcpAgentActor {
       }
     }
 
+    const agentSpawnArgs = vsConfig.get<string[]>("agentSpawnArgs", []);
+    for (const arg of agentSpawnArgs) {
+      spawnArgs.push(arg);
+    }
+
     if (resolved.isSymposiumBuiltin) {
       // Symposium builtin (e.g., eliza) - wrap with conductor using the same binary
       spawnArgs.push(

@@ -249,6 +249,20 @@
             }
           ],
           "description": "Agent extensions (proxies) to include in the Symposium chain. Order matters - extensions are applied in the order listed."
+        },
+        "symposium.agentSpawnArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional args to pass to `symposium-acp-agent`"
+        }
+        ,
+        "symposium.acpAgentPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the `symposium-acp-agent` binary to use. If set, this overrides the bundled binary and PATH lookup. Leave empty to use bundled or PATH resolution."
         }
       }
     },
