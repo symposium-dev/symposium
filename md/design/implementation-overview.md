@@ -4,20 +4,9 @@ Symposium uses a **conductor** to orchestrate a dynamic chain of component proxi
 
 ## Two Deployment Modes
 
-Symposium provides two binaries for different deployment scenarios:
+The `symposium-acp-agent` binary supports two deployment modes via subcommands:
 
-### Proxy Mode (`symposium-acp-proxy`)
-
-Sits between an editor and an existing agent, enriching the connection:
-
-```mermaid
-flowchart LR
-    Editor --> Proxy[symposium-acp-proxy] --> Agent
-```
-
-Use this when the editor spawns agents separately and you want to insert Symposium's capabilities in between.
-
-### Agent Mode (`symposium-acp-agent`)
+### Agent Mode (`act-as-agent`)
 
 Acts as a complete agent that wraps a downstream agent:
 
@@ -30,8 +19,38 @@ Use this when you want a single binary that editors can spawn directly. This is 
 
 Example:
 ```bash
-symposium-acp-agent -- npx -y @zed-industries/claude-code-acp
+symposium-acp-agent act-as-agent --proxy defaults -- npx -y @anthropic-ai/claude-code-acp
 ```
+
+### Proxy Mode (`act-as-proxy`)
+
+Sits between an editor and an existing agent, enriching the connection:
+
+```mermaid
+flowchart LR
+    Editor --> Proxy[symposium-acp-agent] --> Agent
+```
+
+Use this when the editor spawns agents separately and you want to insert Symposium's capabilities in between.
+
+Example:
+```bash
+symposium-acp-agent act-as-proxy --proxy sparkle --proxy ferris
+```
+
+## Proxy Configuration
+
+Use `--proxy <name>` to specify which extensions to include. Order matters - proxies are chained in the order specified.
+
+Known proxies: `sparkle`, `ferris`, `cargo`
+
+The special value `defaults` expands to all known proxies:
+```bash
+--proxy defaults           # equivalent to: --proxy sparkle --proxy ferris --proxy cargo
+--proxy foo --proxy defaults --proxy bar  # foo, then all defaults, then bar
+```
+
+If no `--proxy` flags are given, no proxies are included (pure passthrough).
 
 ## Internal Structure
 

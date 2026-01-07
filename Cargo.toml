@@ -3,7 +3,6 @@ members = [
     "setup",
     "md-rfd-preprocessor",
     "ci",
-    "src/symposium-acp-proxy",
     "src/symposium-acp-agent",
     "src/symposium-ferris",
     "src/symposium-math",

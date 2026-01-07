@@ -1,42 +1,103 @@
 //! Symposium ACP Agent
 //!
-//! A standalone agent binary that combines the Symposium component chain with
-//! a downstream agent. This is the "I am the agent" mode - Zed or other editors
-//! spawn this binary directly, and it provides an enriched agent experience.
+//! A unified binary for running Symposium-enriched ACP agents and proxies.
 //!
-//! Usage:
-//!   symposium-acp-agent --proxy sparkle --proxy ferris -- <agent-command> [agent-args...]
-//!   symposium-acp-agent eliza
-//!   symposium-acp-agent vscodelm
+//! ## Commands
 //!
-//! Example:
-//!   symposium-acp-agent --proxy sparkle --proxy ferris --proxy cargo -- npx -y @zed-industries/claude-code-acp
-//!   symposium-acp-agent eliza
-//!   symposium-acp-agent vscodelm
+//! ### act-as-agent
+//! Wraps a downstream agent with Symposium's proxy chain:
+//! ```bash
+//! symposium-acp-agent act-as-agent --proxy sparkle --proxy ferris -- npx -y @anthropic-ai/claude-code-acp
+//! ```
+//!
+//! ### act-as-proxy
+//! Sits between an editor and an existing agent as a pure proxy:
+//! ```bash
+//! symposium-acp-agent act-as-proxy --proxy sparkle --proxy ferris
+//! ```
+//!
+//! ### eliza
+//! Runs the built-in Eliza test agent:
+//! ```bash
+//! symposium-acp-agent eliza
+//! ```
+//!
+//! ### vscodelm
+//! Runs as a VS Code Language Model Provider backend:
+//! ```bash
+//! symposium-acp-agent vscodelm
+//! ```
+//!
+//! ## Proxy Configuration
+//!
+//! Use `--proxy <name>` to specify extensions. Order matters - proxies are
+//! chained in the order specified.
+//!
+//! Known proxies: sparkle, ferris, cargo
+//!
+//! Special value `defaults` expands to all known proxies:
+//! ```bash
+//! --proxy defaults           # equivalent to: --proxy sparkle --proxy ferris --proxy cargo
+//! --proxy foo --proxy defaults --proxy bar  # foo, sparkle, ferris, cargo, bar
+//! ```
 
 use anyhow::Result;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use sacp::Component;
 use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
 
-use symposium_acp_agent::vscodelm;
+mod symposium;
+pub mod vscodelm;
+
+use symposium::{Symposium, SymposiumConfig, KNOWN_PROXIES};
 
 #[derive(Parser, Debug)]
 #[command(name = "symposium-acp-agent")]
-#[command(about = "Symposium-enriched ACP agent")]
-#[command(
-    long_about = "Combines the Symposium component chain with a downstream agent.\n\n\
-                  This binary acts as an enriched agent - editors spawn it directly,\n\
-                  and it provides Symposium's capabilities on top of the underlying agent."
-)]
+#[command(about = "Symposium-enriched ACP agent and proxy")]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Command>,
+    command: Command,
+}
 
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Wrap a downstream agent with Symposium's proxy chain
+    ActAsAgent {
+        #[command(flatten)]
+        proxy_opts: ProxyOptions,
+
+        /// The agent command and arguments (e.g., npx -y @anthropic-ai/claude-code-acp)
+        #[arg(last = true, required = true, num_args = 1..)]
+        agent: Vec<String>,
+    },
+
+    /// Run as a proxy between editor and an existing agent
+    ActAsProxy {
+        #[command(flatten)]
+        proxy_opts: ProxyOptions,
+    },
+
+    /// Run the built-in Eliza agent (useful for testing)
+    Eliza,
+
+    /// Run as a VS Code Language Model Provider backend
+    Vscodelm {
+        /// Enable trace logging to the specified directory
+        #[arg(long)]
+        trace_dir: Option<PathBuf>,
+    },
+}
+
+/// Shared proxy configuration options
+#[derive(Args, Debug)]
+struct ProxyOptions {
     /// Extension proxy to include in the chain (can be specified multiple times).
     /// Order matters - proxies are chained in the order specified.
+    ///
     /// Known proxies: sparkle, ferris, cargo
+    ///
+    /// Special value "defaults" expands to all known proxies.
     #[arg(long = "proxy", value_name = "NAME")]
     proxies: Vec<String>,
 
@@ -49,74 +110,100 @@ struct Cli {
     /// or a RUST_LOG-style filter string (e.g., "sacp=debug,symposium=trace").
     #[arg(long)]
     log: Option<String>,
-
-    /// The agent command and arguments (e.g., npx -y @zed-industries/claude-code-acp)
-    #[arg(last = true, num_args = 1..)]
-    agent: Vec<String>,
 }
 
-#[derive(Subcommand, Debug)]
-enum Command {
-    /// Run the built-in Eliza agent (useful for testing)
-    Eliza,
-    /// Run as a VS Code Language Model Provider backend
-    Vscodelm,
+impl ProxyOptions {
+    /// Expand proxy names, handling "defaults" expansion.
+    /// Returns an error if any proxy name is unknown.
+    fn expand_proxy_names(&self) -> Result<Vec<String>> {
+        let mut result = Vec::new();
+
+        for name in &self.proxies {
+            if name == "defaults" {
+                // Expand "defaults" to all known proxies
+                result.extend(KNOWN_PROXIES.iter().map(|s| s.to_string()));
+            } else if KNOWN_PROXIES.contains(&name.as_str()) {
+                result.push(name.clone());
+            } else {
+                anyhow::bail!(
+                    "Unknown proxy name: '{}'. Known proxies: {}, defaults",
+                    name,
+                    KNOWN_PROXIES.join(", ")
+                );
+            }
+        }
+
+        Ok(result)
+    }
+
+    /// Build a SymposiumConfig from these options.
+    fn into_config(self) -> Result<SymposiumConfig> {
+        let proxy_names = self.expand_proxy_names()?;
+        let mut config = SymposiumConfig::from_proxy_names(proxy_names);
+
+        if let Some(trace_dir) = self.trace_dir {
+            config = config.trace_dir(trace_dir);
+        }
+
+        Ok(config)
+    }
+
+    /// Set up logging if requested.
+    fn setup_logging(&self) {
+        if let Some(filter) = &self.log {
+            use tracing_subscriber::EnvFilter;
+            tracing_subscriber::fmt()
+                .with_env_filter(EnvFilter::new(filter))
+                .with_writer(std::io::stderr)
+                .init();
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // Set up logging if requested
-    if let Some(filter) = cli.log {
-        use tracing_subscriber::EnvFilter;
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::new(filter))
-            .with_writer(std::io::stderr)
-            .init();
-    }
-
     match cli.command {
-        Some(Command::Eliza) => {
+        Command::ActAsAgent { proxy_opts, agent } => {
+            proxy_opts.setup_logging();
+
+            let config = proxy_opts.into_config()?;
+            let agent = AcpAgent::from_args(&agent)?;
+
+            tracing::debug!(
+                "Starting in agent mode with downstream: {:?}",
+                agent.server()
+            );
+
+            Symposium::new(config)
+                .with_agent(agent)
+                .serve(sacp_tokio::Stdio::new())
+                .await?;
+        }
+
+        Command::ActAsProxy { proxy_opts } => {
+            proxy_opts.setup_logging();
+
+            let config = proxy_opts.into_config()?;
+
+            tracing::debug!("Starting in proxy mode");
+
+            Symposium::new(config)
+                .serve(sacp_tokio::Stdio::new())
+                .await?;
+        }
+
+        Command::Eliza => {
             // Run the built-in Eliza agent directly (no Symposium wrapping)
             elizacp::ElizaAgent::new(false)
                 .serve(sacp_tokio::Stdio::new())
                 .await?;
         }
-        Some(Command::Vscodelm) => {
+
+        Command::Vscodelm { trace_dir } => {
             // Run as VS Code Language Model Provider backend
-            vscodelm::serve_stdio(cli.trace_dir).await?;
-        }
-        None => {
-            // Run with a downstream agent
-            if cli.agent.is_empty() {
-                anyhow::bail!(
-                    "No agent command provided. Use -- <agent-command> or 'eliza' subcommand."
-                );
-            }
-
-            if cli.proxies.is_empty() {
-                anyhow::bail!(
-                    "No proxies specified. Use --proxy <name> to specify extensions.\n\
-                     Known proxies: sparkle, ferris, cargo\n\
-                     Example: --proxy sparkle --proxy ferris --proxy cargo"
-                );
-            }
-
-            let agent: AcpAgent = AcpAgent::from_args(&cli.agent)?;
-            tracing::debug!("agent: {:?}", agent.server());
-
-            // Run Symposium with the agent as the downstream component
-            let mut symposium = symposium_acp_proxy::Symposium::from_proxy_names(&cli.proxies)?;
-
-            if let Some(trace_dir) = cli.trace_dir {
-                symposium = symposium.trace_dir(trace_dir);
-            }
-
-            symposium
-                .with_agent(agent)
-                .serve(sacp_tokio::Stdio::new())
-                .await?;
+            vscodelm::serve_stdio(trace_dir).await?;
         }
     }
 

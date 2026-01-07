@@ -39,7 +39,7 @@ struct Args {
     #[arg(long)]
     all: bool,
 
-    /// Install ACP binaries (sacp-conductor, elizacp, sacp-tee, symposium-acp-proxy)
+    /// Install ACP binaries (elizacp, symposium-acp-agent)
     #[arg(long)]
     acp: bool,
 

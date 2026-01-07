@@ -102,12 +102,12 @@ async fn run_benchmark(benchmark: &Benchmark, output_dir: &PathBuf) -> Result<()
 
     // Build Symposium agent with ferris proxy only (no sparkle for benchmarks)
     let agent = AcpAgent::from_str("npx -y '@zed-industries/claude-code-acp'")?;
-    let symposium = symposium_acp_proxy::Symposium::from_proxy_names(&[
+    let config = symposium_acp_agent::symposium::SymposiumConfig::from_proxy_names(vec![
         "ferris".to_string(),
         "cargo".to_string(),
-    ])?
-    .trace_dir(".")
-    .with_agent(agent);
+    ])
+    .trace_dir(".");
+    let symposium = symposium_acp_agent::symposium::Symposium::new(config).with_agent(agent);
 
     // Run prompt
     let response = yopo::prompt(symposium, research_prompt).await?;

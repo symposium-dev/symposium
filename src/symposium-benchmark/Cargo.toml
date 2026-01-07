@@ -6,7 +6,7 @@ publish = false
 
 [dependencies]
 # Symposium components
-symposium-acp-proxy = { path = "../symposium-acp-proxy" }
+symposium-acp-agent = { path = "../symposium-acp-agent" }
 symposium-ferris = { path = "../symposium-ferris" }
 
 # ACP framework

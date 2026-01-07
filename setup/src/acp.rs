@@ -23,7 +23,7 @@ pub fn install_acp_binaries(repo_root: &Path, dry_run: bool) -> Result<()> {
     Ok(())
 }
 
-/// Verify we're in a repository with symposium-acp-proxy in the workspace
+/// Verify we're in a repository with symposium-acp-agent in the workspace
 fn verify_symposium_repo(repo_root: &Path) -> Result<()> {
     let cargo_toml = repo_root.join("Cargo.toml");
     if !cargo_toml.exists() {
@@ -35,9 +35,9 @@ fn verify_symposium_repo(repo_root: &Path) -> Result<()> {
 
     let contents = std::fs::read_to_string(&cargo_toml).context("Failed to read Cargo.toml")?;
 
-    if !contents.contains("symposium-acp-proxy") {
+    if !contents.contains("symposium-acp-agent") {
         return Err(anyhow!(
-            "❌ This doesn't appear to be the symposium repository.\n   Expected to find 'symposium-acp-proxy' in workspace members."
+            "❌ This doesn't appear to be the symposium repository.\n   Expected to find 'symposium-acp-agent' in workspace members."
         ));
     }
 

@@ -116,14 +116,8 @@ The shared registry includes both agents and extensions:
 ┌─────────────────▼───────────────────────────────┐
 │  symposium-acp-agent                            │
 │  - Parses --proxy arguments                     │
-│  - Validates proxy names                        │
-│  - Builds proxy chain in specified order        │
-└─────────────────┬───────────────────────────────┘
-                  │
-┌─────────────────▼───────────────────────────────┐
-│  symposium-acp-proxy (Symposium struct)         │
-│  - from_proxy_names() creates config            │
-│  - build_proxies() instantiates components      │
+│  - Validates proxy names (incl. "defaults")     │
+│  - SymposiumConfig builds proxy chain in order  │
 │  - Conductor orchestrates the chain             │
 └─────────────────────────────────────────────────┘
 ```

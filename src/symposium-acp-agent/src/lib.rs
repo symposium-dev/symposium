@@ -1,6 +1,7 @@
 //! Symposium ACP Agent library
 //!
-//! This crate provides the VS Code Language Model Provider backend and related
-//! functionality for the Symposium ACP Agent.
+//! This crate provides the Symposium proxy chain orchestration and the VS Code
+//! Language Model Provider backend.
 
+pub mod symposium;
 pub mod vscodelm;
