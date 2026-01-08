@@ -15,6 +15,7 @@ interface AgentConfig {
     symposium?: { subcommand: string; args?: string[] };
     npx?: { package: string; args?: string[] };
     pipx?: { package: string; args?: string[] };
+    cargo?: { crate: string; version?: string; binary?: string; args?: string[] };
     binary?: {
       [platform: string]: {    // e.g., "darwin-aarch64", "linux-x86_64"
         archive: string;
@@ -105,11 +106,40 @@ At spawn time, the extension resolves the distribution to a command (priority or
 2. Else if `distribution.symposium` exists → run as symposium subcommand
 3. Else if `distribution.npx` exists → `npx -y {package} {args...}`
 4. Else if `distribution.pipx` exists → `pipx run {package} {args...}`
-5. Else if `distribution.binary[currentPlatform]` exists:
+5. Else if `distribution.cargo` exists → install and run Rust crate (see below)
+6. Else if `distribution.binary[currentPlatform]` exists:
    - Check `~/.symposium/bin/{id}/{version}/` for cached binary
    - If not present, download and extract from `archive`
    - Execute `{cache-path}/{cmd} {args...}`
-6. Else → error (no compatible distribution for this platform)
+7. Else → error (no compatible distribution for this platform)
+
+### Cargo Distribution
+
+The cargo distribution installs agents/extensions from crates.io:
+
+```json
+{
+  "id": "my-rust-extension",
+  "distribution": {
+    "cargo": {
+      "crate": "my-acp-extension",
+      "version": "0.1.0"
+    }
+  }
+}
+```
+
+Resolution process:
+
+1. **Version resolution**: If no version specified, query crates.io for the latest stable version
+2. **Binary discovery**: Query crates.io API for the crate's `bin_names` field to determine the executable name
+3. **Cache check**: Look for `~/.symposium/bin/{id}/{version}/bin/{binary}`
+4. **Installation**: If not cached:
+   - Try `cargo binstall --no-confirm --root {cache-dir} {crate}@{version}` (uses prebuilt binaries, fast)
+   - If binstall fails or unavailable, fall back to `cargo install --root {cache-dir} {crate}@{version}` (builds from source)
+5. **Cleanup**: Delete old versions when installing a new one
+
+The `binary` field is optional—if omitted, it's discovered from crates.io. If the crate has multiple binaries, the field is required to disambiguate.
 
 ### Platform Detection
 

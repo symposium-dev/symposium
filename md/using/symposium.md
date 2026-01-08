@@ -13,6 +13,7 @@ To select an agent, click on it in the agent picker. Symposium will download and
 Some agents may require additional tools to be available on your system:
 - **npx** - for agents distributed via npm
 - **uvx** - for agents distributed via Python
+- **cargo** - for agents distributed via crates.io (uses `cargo binstall` if available, falls back to `cargo install`)
 
 Symposium checks for updates and installs new versions automatically as they become available.
 
@@ -33,7 +34,7 @@ In the Extensions section you can:
 When adding extensions, you can choose from:
 - **Built-in** extensions (Sparkle, Ferris, Cargo)
 - **Registry** extensions from the shared catalog
-- **Custom** extensions via executable, npx, pipx, or URL
+- **Custom** extensions via executable, npx, pipx, cargo, or URL
 
 ## Builtin Extensions
 
