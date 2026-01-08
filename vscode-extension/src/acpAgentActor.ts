@@ -262,18 +262,8 @@ export class AcpAgentActor {
       spawnArgs.push(arg);
     }
 
-    if (resolved.isSymposiumBuiltin) {
-      // Symposium builtin (e.g., eliza) - run with the same binary
-      spawnArgs.push(
-        "--",
-        conductorCommand,
-        resolved.command,
-        ...resolved.args,
-      );
-    } else {
-      // External agent - wrap with conductor
-      spawnArgs.push("--", resolved.command, ...resolved.args);
-    }
+    // Add the downstream agent command after "--"
+    spawnArgs.push("--", resolved.command, ...resolved.args);
 
     logger.important("agent", "Spawning ACP agent", {
       command: conductorCommand,

@@ -25,6 +25,8 @@ const REGISTRY_URL: &str =
 pub struct RegistryJson {
     pub version: String,
     pub agents: Vec<RegistryEntry>,
+    #[serde(default)]
+    pub extensions: Vec<RegistryEntry>,
 }
 
 /// A single entry in the registry (agent or extension)
@@ -195,6 +197,39 @@ pub async fn list_agents() -> Result<Vec<AgentListEntry>> {
     }
 
     Ok(agents)
+}
+
+/// Extension listing entry - what `registry list-extensions` outputs
+#[derive(Debug, Clone, Serialize)]
+pub struct ExtensionListEntry {
+    pub id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+/// List all available extensions from the registry
+pub async fn list_extensions() -> Result<Vec<ExtensionListEntry>> {
+    let registry = fetch_registry().await?;
+
+    let extensions: Vec<ExtensionListEntry> = registry
+        .extensions
+        .into_iter()
+        .map(|e| ExtensionListEntry {
+            id: e.id,
+            name: e.name,
+            version: if e.version.is_empty() {
+                None
+            } else {
+                Some(e.version)
+            },
+            description: e.description,
+        })
+        .collect();
+
+    Ok(extensions)
 }
 
 // ============================================================================

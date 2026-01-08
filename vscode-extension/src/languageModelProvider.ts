@@ -83,32 +83,24 @@ type AgentDefinition = { mcp_server: McpServerStdio };
 
 /**
  * Convert a resolved agent command to AgentDefinition format.
- * Always produces mcp_server variant - symposium builtins are resolved
- * to the embedded binary path.
  */
 function resolvedCommandToAgentDefinition(
   name: string,
   resolved: ResolvedCommand,
-  context: vscode.ExtensionContext,
 ): AgentDefinition {
-  let command: string;
-  let args: string[];
-
-  if (resolved.isSymposiumBuiltin) {
-    // For symposium builtins, use the embedded binary with the subcommand
-    command = getConductorCommand(context);
-    args = [resolved.command, ...resolved.args];
-  } else {
-    command = resolved.command;
-    args = resolved.args;
-  }
-
   const envArray = resolved.env
     ? Object.entries(resolved.env).map(([k, v]) => ({ name: k, value: v }))
     : [];
 
   // eslint-disable-next-line @typescript-eslint/naming-convention -- matches Rust serde naming
-  return { mcp_server: { name, command, args, env: envArray } };
+  return {
+    mcp_server: {
+      name,
+      command: resolved.command,
+      args: resolved.args,
+      env: envArray,
+    },
+  };
 }
 
 interface JsonRpcMessage {
@@ -420,11 +412,10 @@ export class SymposiumLanguageModelProvider
     // Resolve the agent distribution to a spawn command
     const resolved = await resolveDistribution(agent);
 
-    // Convert to AgentDefinition format (resolves builtins to binary path)
+    // Convert to AgentDefinition format
     const agentDef = resolvedCommandToAgentDefinition(
       agent.name ?? agent.id,
       resolved,
-      this.context,
     );
 
     // Convert VS Code messages to our format
@@ -648,7 +639,7 @@ export class SymposiumLanguageModelProvider
       name: registryEntry.name,
       version: registryEntry.version,
       description: registryEntry.description,
-      distribution: registryEntry.distribution,
+      distribution: {}, // resolved via `registry resolve` at spawn time
       _source: "registry",
     };
   }

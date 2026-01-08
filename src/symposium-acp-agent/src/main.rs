@@ -116,6 +116,9 @@ enum RegistryCommand {
     /// List all available agents (built-ins + registry)
     List,
 
+    /// List all available extensions from the registry
+    ListExtensions,
+
     /// Resolve an agent ID to an executable McpServer configuration.
     /// Downloads binaries if needed.
     Resolve {
@@ -288,6 +291,10 @@ async fn main() -> Result<()> {
             RegistryCommand::List => {
                 let agents = registry::list_agents().await?;
                 println!("{}", serde_json::to_string(&agents)?);
+            }
+            RegistryCommand::ListExtensions => {
+                let extensions = registry::list_extensions().await?;
+                println!("{}", serde_json::to_string(&extensions)?);
             }
             RegistryCommand::Resolve { agent_id } => {
                 let server = registry::resolve_agent(&agent_id).await?;
