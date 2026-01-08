@@ -110,31 +110,13 @@ impl SymposiumUserConfig {
     }
 }
 
-/// Known downstream agents that can be configured.
-pub struct KnownAgent {
-    pub name: &'static str,
-    pub command: &'static str,
+/// An agent available for configuration.
+#[derive(Debug, Clone)]
+pub struct AvailableAgent {
+    pub id: String,
+    pub name: String,
+    pub command: String,
 }
-
-/// List of known agents for the configuration wizard.
-pub const KNOWN_AGENTS: &[KnownAgent] = &[
-    KnownAgent {
-        name: "Claude Code",
-        command: "npx -y @zed-industries/claude-code-acp",
-    },
-    KnownAgent {
-        name: "Gemini CLI",
-        command: "npx -y -- @google/gemini-cli@latest --experimental-acp",
-    },
-    KnownAgent {
-        name: "Codex",
-        command: "npx -y @zed-industries/codex-acp",
-    },
-    KnownAgent {
-        name: "Kiro CLI",
-        command: "kiro-cli-chat acp",
-    },
-];
 
 // ============================================================================
 // Configuration Agent
@@ -162,14 +144,28 @@ struct ConfigSessionData {
 #[derive(Clone)]
 pub struct ConfigurationAgent {
     sessions: Arc<Mutex<HashMap<SessionId, ConfigSessionData>>>,
+    /// Available agents (fetched from registry + built-ins)
+    agents: Vec<AvailableAgent>,
     /// Custom config path for testing. If None, uses the default ~/.symposium/config.jsonc
     config_path: Option<PathBuf>,
 }
 
 impl ConfigurationAgent {
-    pub fn new() -> Self {
+    /// Create a new ConfigurationAgent with agents from the registry.
+    pub async fn new() -> Self {
+        let agents = Self::fetch_agents().await;
         Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            agents,
+            config_path: None,
+        }
+    }
+
+    /// Create with a pre-set list of agents (for testing).
+    pub fn with_agents(agents: Vec<AvailableAgent>) -> Self {
+        Self {
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            agents,
             config_path: None,
         }
     }
@@ -178,6 +174,69 @@ impl ConfigurationAgent {
     pub fn with_config_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.config_path = Some(path.into());
         self
+    }
+
+    /// Fetch available agents from the registry.
+    async fn fetch_agents() -> Vec<AvailableAgent> {
+        use crate::registry;
+
+        match registry::list_agents().await {
+            Ok(agents) => {
+                let mut result = Vec::new();
+                for agent in agents {
+                    // Resolve each agent to get its command
+                    match registry::resolve_agent(&agent.id).await {
+                        Ok(server) => {
+                            let command = Self::server_to_command(&server);
+                            result.push(AvailableAgent {
+                                id: agent.id,
+                                name: agent.name,
+                                command,
+                            });
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to resolve agent {}: {}", agent.id, e);
+                        }
+                    }
+                }
+                result
+            }
+            Err(e) => {
+                tracing::warn!("Failed to fetch registry, using fallback agents: {}", e);
+                Self::fallback_agents()
+            }
+        }
+    }
+
+    /// Convert an McpServer to a shell command string.
+    fn server_to_command(server: &sacp::schema::McpServer) -> String {
+        match server {
+            sacp::schema::McpServer::Stdio(stdio) => {
+                let mut parts = vec![stdio.command.to_string_lossy().to_string()];
+                parts.extend(stdio.args.iter().cloned());
+                // Add env vars as prefix
+                let env_prefix: Vec<String> = stdio
+                    .env
+                    .iter()
+                    .map(|e| format!("{}={}", e.name, e.value))
+                    .collect();
+                if env_prefix.is_empty() {
+                    shell_words::join(&parts)
+                } else {
+                    format!("{} {}", env_prefix.join(" "), shell_words::join(&parts))
+                }
+            }
+            _ => String::new(),
+        }
+    }
+
+    /// Fallback agents if registry fetch fails.
+    fn fallback_agents() -> Vec<AvailableAgent> {
+        vec![AvailableAgent {
+            id: "gemini".to_string(),
+            name: "Gemini CLI".to_string(),
+            command: "npx -y @google/gemini-cli@latest --experimental-acp".to_string(),
+        }]
     }
 
     fn create_session(&self, session_id: &SessionId) {
@@ -203,31 +262,31 @@ impl ConfigurationAgent {
     }
 
     /// Generate the welcome message with agent options.
-    fn welcome_message() -> String {
+    fn welcome_message(&self) -> String {
         let mut msg = String::from(
             "Welcome to Symposium!\n\n\
              No configuration found. Let's set up your AI agent.\n\n\
              Which agent would you like to use?\n\n",
         );
 
-        for (i, agent) in KNOWN_AGENTS.iter().enumerate() {
+        for (i, agent) in self.agents.iter().enumerate() {
             msg.push_str(&format!("  {}. {}\n", i + 1, agent.name));
         }
 
         msg.push_str("\nType a number (1-");
-        msg.push_str(&KNOWN_AGENTS.len().to_string());
+        msg.push_str(&self.agents.len().to_string());
         msg.push_str(") to select:");
 
         msg
     }
 
     /// Generate invalid input message.
-    fn invalid_input_message() -> String {
+    fn invalid_input_message(&self) -> String {
         let mut msg = String::from("Invalid selection. Please type a number from 1 to ");
-        msg.push_str(&KNOWN_AGENTS.len().to_string());
+        msg.push_str(&self.agents.len().to_string());
         msg.push_str(".\n\n");
 
-        for (i, agent) in KNOWN_AGENTS.iter().enumerate() {
+        for (i, agent) in self.agents.iter().enumerate() {
             msg.push_str(&format!("  {}. {}\n", i + 1, agent.name));
         }
 
@@ -257,11 +316,11 @@ impl ConfigurationAgent {
                 // Parse input as number
                 let trimmed = input.trim();
                 if let Ok(num) = trimmed.parse::<usize>() {
-                    if num >= 1 && num <= KNOWN_AGENTS.len() {
-                        let agent = &KNOWN_AGENTS[num - 1];
+                    if num >= 1 && num <= self.agents.len() {
+                        let agent = &self.agents[num - 1];
 
                         // Save configuration
-                        let config = SymposiumUserConfig::with_agent(agent.command);
+                        let config = SymposiumUserConfig::with_agent(&agent.command);
                         let save_result = match &self.config_path {
                             Some(path) => config.save_to(path),
                             None => config.save(),
@@ -271,12 +330,12 @@ impl ConfigurationAgent {
                         }
 
                         self.set_state(session_id, ConfigState::Done);
-                        return Self::success_message(agent.name);
+                        return Self::success_message(&agent.name);
                     }
                 }
 
                 // Invalid input
-                Self::invalid_input_message()
+                self.invalid_input_message()
             }
             ConfigState::Done => {
                 "Configuration is complete. Please restart your editor to use Symposium."
@@ -297,7 +356,7 @@ impl ConfigurationAgent {
         // Send welcome message immediately
         cx.send_notification(SessionNotification::new(
             session_id.clone(),
-            SessionUpdate::AgentMessageChunk(ContentChunk::new(Self::welcome_message().into())),
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(self.welcome_message().into())),
         ))?;
 
         request_cx.respond(NewSessionResponse::new(session_id))
@@ -332,12 +391,6 @@ impl ConfigurationAgent {
         ))?;
 
         request_cx.respond(PromptResponse::new(StopReason::EndTurn))
-    }
-}
-
-impl Default for ConfigurationAgent {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -392,6 +445,32 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
 
+    /// Test agents for unit tests (no network access needed)
+    fn test_agents() -> Vec<AvailableAgent> {
+        vec![
+            AvailableAgent {
+                id: "claude-code".to_string(),
+                name: "Claude Code".to_string(),
+                command: "npx -y @zed-industries/claude-code-acp".to_string(),
+            },
+            AvailableAgent {
+                id: "gemini".to_string(),
+                name: "Gemini CLI".to_string(),
+                command: "npx -y @google/gemini-cli@latest --experimental-acp".to_string(),
+            },
+            AvailableAgent {
+                id: "codex".to_string(),
+                name: "Codex".to_string(),
+                command: "npx -y @zed-industries/codex-acp".to_string(),
+            },
+            AvailableAgent {
+                id: "kiro".to_string(),
+                name: "Kiro CLI".to_string(),
+                command: "kiro-cli-chat acp".to_string(),
+            },
+        ]
+    }
+
     /// Extract text from a ContentBlock.
     fn content_block_text(block: &ContentBlock) -> Option<String> {
         match block {
@@ -433,7 +512,7 @@ mod tests {
                 },
                 on_receive_notification!(),
             )
-            .connect_to(ConfigurationAgent::new())?
+            .connect_to(ConfigurationAgent::with_agents(test_agents()))?
             .run_until(async |cx| {
                 // Initialize the agent
                 let init_response = cx
@@ -492,7 +571,9 @@ mod tests {
                 },
                 on_receive_notification!(),
             )
-            .connect_to(ConfigurationAgent::new().with_config_path(&config_path))?
+            .connect_to(
+                ConfigurationAgent::with_agents(test_agents()).with_config_path(&config_path),
+            )?
             .run_until(async |cx| {
                 // Initialize
                 cx.send_request(InitializeRequest::new(ProtocolVersion::LATEST))
@@ -562,7 +643,7 @@ mod tests {
                 },
                 on_receive_notification!(),
             )
-            .connect_to(ConfigurationAgent::new())?
+            .connect_to(ConfigurationAgent::with_agents(test_agents()))?
             .run_until(async |cx| {
                 // Initialize
                 cx.send_request(InitializeRequest::new(ProtocolVersion::LATEST))
@@ -619,7 +700,9 @@ mod tests {
                 },
                 on_receive_notification!(),
             )
-            .connect_to(ConfigurationAgent::new().with_config_path(&config_path))?
+            .connect_to(
+                ConfigurationAgent::with_agents(test_agents()).with_config_path(&config_path),
+            )?
             .run_until(async |cx| {
                 // Initialize
                 cx.send_request(InitializeRequest::new(ProtocolVersion::LATEST))

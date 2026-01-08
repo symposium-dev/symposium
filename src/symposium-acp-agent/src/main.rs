@@ -48,6 +48,7 @@ use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
 
 mod config;
+mod registry;
 mod symposium;
 pub mod vscodelm;
 
@@ -102,6 +103,24 @@ enum Command {
         /// or a RUST_LOG-style filter string.
         #[arg(long)]
         log: Option<String>,
+    },
+
+    /// Agent registry commands (for tooling integration)
+    #[command(subcommand)]
+    Registry(RegistryCommand),
+}
+
+/// Registry subcommands - output JSON for tooling integration
+#[derive(Subcommand, Debug)]
+enum RegistryCommand {
+    /// List all available agents (built-ins + registry)
+    List,
+
+    /// Resolve an agent ID to an executable McpServer configuration.
+    /// Downloads binaries if needed.
+    Resolve {
+        /// The agent ID to resolve
+        agent_id: String,
     },
 }
 
@@ -258,11 +277,23 @@ async fn main() -> Result<()> {
                 None => {
                     // No config - run configuration agent
                     config::ConfigurationAgent::new()
+                        .await
                         .serve(sacp_tokio::Stdio::new())
                         .await?;
                 }
             }
         }
+
+        Command::Registry(registry_cmd) => match registry_cmd {
+            RegistryCommand::List => {
+                let agents = registry::list_agents().await?;
+                println!("{}", serde_json::to_string(&agents)?);
+            }
+            RegistryCommand::Resolve { agent_id } => {
+                let server = registry::resolve_agent(&agent_id).await?;
+                println!("{}", serde_json::to_string(&server)?);
+            }
+        },
     }
 
     Ok(())

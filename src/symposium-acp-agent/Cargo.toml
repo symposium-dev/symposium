@@ -44,6 +44,13 @@ serde_jsonc = "1"
 shell-words = "1"
 dirs = "5"
 
+# Registry
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+url = "2"
+flate2 = "1"
+tar = "0.4"
+zip = "2"
+
 [[example]]
 name = "vscodelm_cli"
 path = "examples/vscodelm_cli.rs"
