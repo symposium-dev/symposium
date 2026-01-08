@@ -24,7 +24,7 @@
     - [Ferris](./using/ferris.md)
     - [Cargo](./using/cargo.md)
 
-# Contributing
+# Development guide
 
 - [How to contribute](./contribute.md)
 - [Overview](./design/implementation-overview.md)
