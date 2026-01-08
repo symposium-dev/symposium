@@ -11,12 +11,14 @@ interface AgentConfig {
   // Required fields
   id: string;
   distribution: {
+    local?: { command: string; args?: string[]; env?: Record<string, string> };
+    symposium?: { subcommand: string; args?: string[] };
     npx?: { package: string; args?: string[] };
     pipx?: { package: string; args?: string[] };
     binary?: {
       [platform: string]: {    // e.g., "darwin-aarch64", "linux-x86_64"
-        url: string;
-        executable: string;
+        archive: string;
+        cmd: string;
         args?: string[];
       };
     };
@@ -40,19 +42,20 @@ Three agents ship as defaults with `_source: "custom"`:
 ```json
 [
   {
-    "id": "claude-code",
+    "id": "zed-claude-code",
     "name": "Claude Code",
     "distribution": { "npx": { "package": "@zed-industries/claude-code-acp@latest" } }
   },
   {
-    "id": "codex",
-    "name": "Codex",
-    "distribution": { "npx": { "package": "@zed-industries/codex-acp@latest" } }
+    "id": "elizacp",
+    "name": "ElizACP",
+    "description": "Built-in Eliza agent for testing",
+    "distribution": { "symposium": { "subcommand": "eliza" } }
   },
   {
-    "id": "gemini",
-    "name": "Gemini",
-    "distribution": { "npx": { "package": "@google/gemini-cli@latest", "args": ["--experimental-acp"] } }
+    "id": "kiro-cli",
+    "name": "Kiro CLI",
+    "distribution": { "local": { "command": "kiro-cli-chat", "args": ["acp"] } }
   }
 ]
 ```
@@ -96,15 +99,17 @@ https://github.com/agentclientprotocol/registry/releases/latest/download/registr
 
 ## Spawning an Agent
 
-At spawn time, the extension resolves the distribution to a command:
+At spawn time, the extension resolves the distribution to a command (priority order):
 
-1. If `distribution.npx` exists → `npx -y {package} {args...}`
-2. Else if `distribution.pipx` exists → `pipx run {package} {args...}`
-3. Else if `distribution.binary[currentPlatform]` exists:
+1. If `distribution.local` exists → `{command} {args...}` with optional env vars
+2. Else if `distribution.symposium` exists → run as symposium subcommand
+3. Else if `distribution.npx` exists → `npx -y {package} {args...}`
+4. Else if `distribution.pipx` exists → `pipx run {package} {args...}`
+5. Else if `distribution.binary[currentPlatform]` exists:
    - Check `~/.symposium/bin/{id}/{version}/` for cached binary
-   - If not present, download and extract from `url`
-   - Execute `{cache-path}/{executable} {args...}`
-4. Else → error (no compatible distribution for this platform)
+   - If not present, download and extract from `archive`
+   - Execute `{cache-path}/{cmd} {args...}`
+6. Else → error (no compatible distribution for this platform)
 
 ### Platform Detection
 
@@ -130,34 +135,9 @@ The extension provides UI for:
 
 ### Add from Registry Flow
 
-The dialog only shows agents not already in the user's configuration:
-
-```
-┌─────────────────────────────────────────┐
-│  Add Agent from Registry                │
-├─────────────────────────────────────────┤
-│  ○ Auggie CLI                           │
-│    Augment Code's software agent        │
-│                                         │
-│  ○ Mistral Vibe                         │
-│    Mistral's open-source coding asst    │
-│                                         │
-│  ○ OpenCode                             │
-│    Open source coding agent             │
-│                                         │
-│  ○ Qwen Code                            │
-│    Alibaba's Qwen coding assistant      │
-│                                         │
-│  [Cancel]                    [Add]      │
-└─────────────────────────────────────────┘
-```
-
-## Open Questions
-
-- **When to refresh registry agents**: When should we check for updates to `_source: "registry"` agents? Options include: on extension activation, first time an agent is used in a session, manual refresh only. One proposal: check the first time the user opens a tab with a given agent during a session.
-
-- **Registry caching**: Should we cache `registry.json` locally for offline "Add from registry" support?
+Uses VSCode's QuickPick dialog to show agents not already configured. The registry is fetched on-demand when the user triggers the action. Each item shows the agent name, version, and description.
 
 ## Decisions
 
 - **Binary cleanup**: Delete old versions when downloading a new one. No accumulation.
+- **Registry caching**: Registry is cached in memory during a session and fetched fresh on first access.

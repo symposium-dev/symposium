@@ -24,13 +24,14 @@
     - [Ferris](./using/ferris.md)
     - [Cargo](./using/cargo.md)
 
-# Contributing
+# Development guide
 
 - [How to contribute](./contribute.md)
 - [Overview](./design/implementation-overview.md)
 - [Common Issues](./design/common-issues.md)
 - [Distribution](./design/distribution.md)
 - [Components](./design/components.md)
+- [Act-as-Configured Mode](./design/act-as-configured.md)
 - [Rust Crate Sources](./design/rust-crate-sources.md)
 - [VSCode Extension](./design/vscode-extension/architecture.md)
     - [Message Protocol](./design/vscode-extension/message-protocol.md)

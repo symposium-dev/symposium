@@ -1,31 +1,42 @@
 # Symposium Zed Extension
 
-This extension adds Symposium as an agent server in Zed.
+This extension adds the Symposium agent server to Zed, enriching AI agents with Rust-focused tools.
 
 ## What is Symposium?
 
-Symposium wraps Claude Code with additional components:
+Symposium wraps AI agents with additional capabilities:
 
 - **Sparkle**: Collaborative AI identity and memory
-- **Rust Crate Researcher**: Rust crate documentation lookup
+- **Ferris**: Rust crate source inspection and research
+- **Cargo**: Cargo build/test/check integration
+
+## First-Time Setup
+
+On first run, Symposium will guide you through configuration:
+
+1. Select your preferred AI agent (Claude Code, Gemini, Codex, or Kiro CLI)
+2. Configuration is saved to `~/.symposium/config.jsonc`
+3. Restart Zed to use your configured agent
+
+## Requirements
+
+- **Node.js**: Required for Claude Code, Codex, and Gemini (uses npx)
+- **API keys**: Each agent requires its respective API key configured
 
 ## Installation
 
-Install from the Zed extension marketplace, or manually:
+Install from the Zed extension marketplace:
 
 1. Open Zed
-2. Open the command palette (Cmd+Shift+P)
+2. Open the command palette (Cmd+Shift+P / Ctrl+Shift+P)
 3. Search for "Extensions: Install Extension"
 4. Search for "Symposium"
 
 ## Usage
 
-After installation, Symposium will appear as an available agent in Zed's agent panel.
+After installation, select "Symposium" in Zed's agent panel. On first use, you'll be guided through selecting your preferred AI agent.
 
-## Requirements
-
-- Node.js (for npx to run Claude Code)
-- Anthropic API key configured for Claude Code
+To change your agent later, edit `~/.symposium/config.jsonc` or delete it to run setup again.
 
 ## Links
 

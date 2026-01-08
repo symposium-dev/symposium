@@ -9,7 +9,6 @@ import {
   fetchRegistry,
   addAgentFromRegistry,
   RegistryEntry,
-  fetchRegistryExtensions,
 } from "./agentRegistry";
 import {
   ExtensionSettingsEntry,
@@ -18,6 +17,7 @@ import {
   getExtensionDisplayInfo,
   saveExtensions,
   showAddExtensionDialog,
+  fetchRegistryExtensions,
 } from "./extensionRegistry";
 
 export class SettingsViewProvider implements vscode.WebviewViewProvider {

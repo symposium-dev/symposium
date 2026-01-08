@@ -39,7 +39,7 @@ struct Args {
     #[arg(long)]
     all: bool,
 
-    /// Install ACP binaries (sacp-conductor, elizacp, sacp-tee, symposium-acp-proxy)
+    /// Install ACP binaries (elizacp, symposium-acp-agent)
     #[arg(long)]
     acp: bool,
 
@@ -142,8 +142,7 @@ fn print_completion_message(
     println!();
 
     if installed_acp {
-        println!("📦 ACP binaries installed to ~/.cargo/bin/:");
-        println!("   • elizacp");
+        println!("📦 ACP binary installed to ~/.cargo/bin/:");
         println!("   • symposium-acp-agent");
         println!();
     }
@@ -157,12 +156,9 @@ fn print_completion_message(
     }
 
     if configured_zed {
-        let agents = zed::detect_zed_agents();
-        if !agents.is_empty() {
-            println!("🔧 Zed configured with {} agent(s)", agents.len());
-            println!("   Restart Zed to use the new configuration");
-            println!();
-        }
+        println!("🔧 Zed configured with Symposium agent");
+        println!("   Restart Zed to use the new configuration");
+        println!();
     }
 
     Ok(())

@@ -17,6 +17,7 @@ sacp-conductor.workspace = true
 sacp.workspace = true
 sacp-tokio.workspace = true
 sacp-rmcp.workspace = true
+sacp-tee.workspace = true
 rmcp.workspace = true
 tokio = { workspace = true }
 anyhow = { workspace = true }
@@ -26,16 +27,29 @@ clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# Symposium components
-symposium-acp-proxy = { path = "../symposium-acp-proxy", version = "1.1.1" }
+# Symposium proxy components
 symposium-ferris = { path = "../symposium-ferris", version = "1.0.1" }
+symposium-cargo = "0.2.0"
+sparkle.workspace = true
 
 # Built-in agents
 elizacp.workspace = true
-chrono = "0.4.42"
+chrono = "0.4"
 uuid = { workspace = true, features = ["v4"] }
 futures-concurrency = "7"
 futures = "0.3"
+
+# Configuration
+serde_jsonc = "1"
+shell-words = "1"
+dirs = "5"
+
+# Registry
+reqwest = { version = "0.12", features = ["json", "blocking"] }
+url = "2"
+flate2 = "1"
+tar = "0.4"
+zip = "2"
 
 [[example]]
 name = "vscodelm_cli"
@@ -43,3 +57,4 @@ path = "examples/vscodelm_cli.rs"
 
 [dev-dependencies]
 expect-test.workspace = true
+tempfile = "3"

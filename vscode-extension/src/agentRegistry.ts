@@ -3,19 +3,80 @@
  *
  * Supports multiple distribution methods (npx, pipx, binary) and
  * merges built-in agents with user-configured agents from settings.
+ *
+ * Registry fetching and distribution resolution are delegated to the
+ * symposium-acp-agent binary via `registry list` and `registry resolve`
+ * subcommands.
  */
-
-const REGISTRY_URL =
-  "https://github.com/agentclientprotocol/registry/releases/latest/download/registry.json";
 
 import * as vscode from "vscode";
 import * as os from "os";
 import * as path from "path";
 import * as fs from "fs";
 import { promisify } from "util";
-import { exec } from "child_process";
+import { exec, spawn } from "child_process";
+import { getConductorCommand } from "./binaryPath";
 
 const execAsync = promisify(exec);
+
+/**
+ * Extension context - must be set via setExtensionContext before using registry functions
+ */
+let extensionContext: vscode.ExtensionContext | undefined;
+
+/**
+ * Set the extension context for binary path resolution
+ */
+export function setExtensionContext(context: vscode.ExtensionContext): void {
+  extensionContext = context;
+}
+
+/**
+ * Run a symposium-acp-agent registry subcommand and return stdout.
+ * Exported for use by extensionRegistry.ts.
+ */
+export async function runRegistryCommand(args: string[]): Promise<string> {
+  if (!extensionContext) {
+    throw new Error(
+      "Extension context not set - call setExtensionContext first",
+    );
+  }
+
+  const command = getConductorCommand(extensionContext);
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn(command, ["registry", ...args], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+
+    proc.stdout.on("data", (data) => {
+      stdout += data.toString();
+    });
+
+    proc.stderr.on("data", (data) => {
+      stderr += data.toString();
+    });
+
+    proc.on("error", (err) => {
+      reject(new Error(`Failed to spawn ${command}: ${err.message}`));
+    });
+
+    proc.on("close", (code) => {
+      if (code === 0) {
+        resolve(stdout.trim());
+      } else {
+        reject(
+          new Error(
+            `${command} registry ${args.join(" ")} failed with code ${code}: ${stderr}`,
+          ),
+        );
+      }
+    });
+  });
+}
 
 /**
  * Availability status for built-in agents
@@ -198,37 +259,6 @@ export const BUILT_IN_AGENTS: AgentConfig[] = [
 export const DEFAULT_AGENT_ID = "zed-claude-code";
 
 /**
- * Get the current platform key for binary distribution lookup
- */
-export function getPlatformKey(): string {
-  const platform = process.platform;
-  const arch = process.arch;
-
-  const platformMap: Record<string, Record<string, string>> = {
-    darwin: {
-      arm64: "darwin-aarch64",
-      x64: "darwin-x86_64",
-    },
-    linux: {
-      x64: "linux-x86_64",
-      arm64: "linux-aarch64",
-    },
-    win32: {
-      x64: "windows-x86_64",
-    },
-  };
-
-  return platformMap[platform]?.[arch] ?? `${platform}-${arch}`;
-}
-
-/**
- * Get the cache directory for binary agents
- */
-export function getBinaryCacheDir(agentId: string, version: string): string {
-  return path.join(os.homedir(), ".symposium", "bin", agentId, version);
-}
-
-/**
  * Merge built-in agents with user settings.
  * Settings entries override built-ins with the same id.
  */
@@ -280,36 +310,63 @@ export interface ResolvedCommand {
   command: string;
   args: string[];
   env?: Record<string, string>;
-  /** If true, this is a built-in symposium subcommand - use the same binary as the downstream agent */
-  isSymposiumBuiltin?: boolean;
+}
+
+/**
+ * Output format from `registry resolve` command
+ */
+interface RegistryResolveOutput {
+  name: string;
+  command: string;
+  args: string[];
+  env: Array<{ name: string; value: string }>;
 }
 
 /**
  * Resolve an agent's distribution to a spawn command.
- * Priority: symposium > npx > pipx > binary
+ *
+ * First tries `registry resolve <id>` which handles:
+ * - Built-in agents (elizacp, etc.)
+ * - Registry agents (gemini, auggie, etc.)
+ * - Binary downloads and caching
+ *
+ * Falls back to local distribution resolution for custom agents
+ * configured in settings with explicit distribution.
  *
  * @throws Error if no compatible distribution is found
  */
 export async function resolveDistribution(
   agent: AgentConfig,
 ): Promise<ResolvedCommand> {
+  // First, try resolving via the binary (handles built-ins and registry agents)
+  try {
+    const output = await runRegistryCommand(["resolve", agent.id]);
+    const resolved = JSON.parse(output) as RegistryResolveOutput;
+
+    // Convert env array to record
+    const env: Record<string, string> = {};
+    for (const { name, value } of resolved.env) {
+      env[name] = value;
+    }
+
+    return {
+      command: resolved.command,
+      args: resolved.args,
+      env: Object.keys(env).length > 0 ? env : undefined,
+    };
+  } catch {
+    // Agent not in registry - fall back to local resolution
+  }
+
+  // Fall back to local distribution resolution for custom agents
   const dist = agent.distribution;
 
-  // Try local first (explicit path takes priority)
+  // Try local (explicit path)
   if (dist.local) {
     return {
       command: dist.local.command,
       args: dist.local.args ?? [],
       env: dist.local.env,
-    };
-  }
-
-  // Try symposium builtin (e.g., eliza subcommand)
-  if (dist.symposium) {
-    return {
-      command: dist.symposium.subcommand,
-      args: dist.symposium.args ?? [],
-      isSymposiumBuiltin: true,
     };
   }
 
@@ -329,173 +386,43 @@ export async function resolveDistribution(
     };
   }
 
-  // Try binary for current platform
-  if (dist.binary) {
-    const platformKey = getPlatformKey();
-    const binaryDist = dist.binary[platformKey];
-
-    if (binaryDist) {
-      const version = agent.version ?? "latest";
-      const cacheDir = getBinaryCacheDir(agent.id, version);
-      // cmd may have leading "./" - strip it for the path
-      const executable = binaryDist.cmd.replace(/^\.\//, "");
-      const executablePath = path.join(cacheDir, executable);
-
-      // Check if binary exists in cache
-      const fs = await import("fs/promises");
-      try {
-        await fs.access(executablePath);
-      } catch {
-        // Binary not cached - need to download
-        await downloadAndCacheBinary(agent, binaryDist, cacheDir);
-      }
-
-      return {
-        command: executablePath,
-        args: binaryDist.args ?? [],
-      };
-    }
-  }
-
-  throw new Error(
-    `No compatible distribution found for agent "${agent.id}" on platform ${getPlatformKey()}`,
-  );
+  throw new Error(`No compatible distribution found for agent "${agent.id}"`);
 }
 
 /**
- * Download and cache a binary distribution
- */
-async function downloadAndCacheBinary(
-  agent: AgentConfig,
-  binaryDist: BinaryDistribution,
-  cacheDir: string,
-): Promise<void> {
-  const fs = await import("fs/promises");
-
-  // Clean up old versions first
-  const parentDir = path.dirname(cacheDir);
-  try {
-    const entries = await fs.readdir(parentDir);
-    for (const entry of entries) {
-      const entryPath = path.join(parentDir, entry);
-      if (entryPath !== cacheDir) {
-        await fs.rm(entryPath, { recursive: true, force: true });
-      }
-    }
-  } catch {
-    // Parent directory doesn't exist yet, that's fine
-  }
-
-  // Create cache directory
-  await fs.mkdir(cacheDir, { recursive: true });
-
-  // Download the binary
-  const response = await fetch(binaryDist.archive);
-  if (!response.ok) {
-    throw new Error(
-      `Failed to download binary for ${agent.id}: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  const buffer = await response.arrayBuffer();
-  const url = new URL(binaryDist.archive);
-  const filename = path.basename(url.pathname);
-  const downloadPath = path.join(cacheDir, filename);
-
-  await fs.writeFile(downloadPath, Buffer.from(buffer));
-
-  // Extract if it's an archive
-  if (
-    filename.endsWith(".tar.gz") ||
-    filename.endsWith(".tgz") ||
-    filename.endsWith(".zip")
-  ) {
-    await extractArchive(downloadPath, cacheDir);
-    // Remove the archive after extraction
-    await fs.unlink(downloadPath);
-  }
-
-  // Make executable on Unix
-  if (process.platform !== "win32") {
-    const executable = binaryDist.cmd.replace(/^\.\//, "");
-    const executablePath = path.join(cacheDir, executable);
-    await fs.chmod(executablePath, 0o755);
-  }
-}
-
-/**
- * Extract an archive to a directory
- */
-async function extractArchive(
-  archivePath: string,
-  destDir: string,
-): Promise<void> {
-  const { exec } = await import("child_process");
-  const { promisify } = await import("util");
-  const execAsync = promisify(exec);
-
-  if (archivePath.endsWith(".zip")) {
-    if (process.platform === "win32") {
-      await execAsync(
-        `powershell -command "Expand-Archive -Path '${archivePath}' -DestinationPath '${destDir}'"`,
-      );
-    } else {
-      await execAsync(`unzip -o "${archivePath}" -d "${destDir}"`);
-    }
-  } else {
-    // tar.gz or tgz
-    await execAsync(`tar -xzf "${archivePath}" -C "${destDir}"`);
-  }
-}
-
-/**
- * Registry entry format (as returned from the registry API)
+ * Registry entry format (as returned from `registry list` command)
+ * Note: distribution is not included - use `registry resolve` to get spawn command
  */
 export interface RegistryEntry {
   id: string;
   name: string;
-  version: string;
+  version?: string;
   description?: string;
-  distribution: Distribution;
 }
 
 /**
- * Registry JSON format - contains both agents and extensions
+ * Cached registry list
  */
-interface RegistryJson {
-  date: string;
-  agents: RegistryEntry[];
-  extensions?: RegistryEntry[];
-}
+let registryCache: RegistryEntry[] | null = null;
 
 /**
- * Cached registry data (both agents and extensions)
+ * Fetch all agents from the registry via `symposium-acp-agent registry list`.
+ * Includes both built-in agents and registry agents.
  */
-let registryCache: RegistryJson | null = null;
-
-/**
- * Fetch the full registry JSON (agents and extensions)
- */
-export async function fetchFullRegistry(): Promise<RegistryJson> {
-  const response = await fetch(REGISTRY_URL);
-  if (!response.ok) {
-    throw new Error(
-      `Failed to fetch registry: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  registryCache = (await response.json()) as RegistryJson;
+export async function fetchRegistry(): Promise<RegistryEntry[]> {
+  const output = await runRegistryCommand(["list"]);
+  registryCache = JSON.parse(output) as RegistryEntry[];
   return registryCache;
 }
 
 /**
  * Get cached registry or fetch if not available
  */
-export async function getRegistry(): Promise<RegistryJson> {
+export async function getRegistry(): Promise<RegistryEntry[]> {
   if (registryCache) {
     return registryCache;
   }
-  return fetchFullRegistry();
+  return fetchRegistry();
 }
 
 /**
@@ -506,37 +433,21 @@ export function clearRegistryCache(): void {
 }
 
 /**
- * Fetch extensions from the registry
- */
-export async function fetchRegistryExtensions(): Promise<RegistryEntry[]> {
-  const registry = await getRegistry();
-  return registry.extensions ?? [];
-}
-
-/**
- * Fetch the agent registry from GitHub releases.
- * Returns agents that are NOT already in the user's effective agents list.
+ * Fetch agents from the registry that are NOT already in the user's effective agents list.
  */
 export async function fetchAvailableRegistryAgents(): Promise<RegistryEntry[]> {
   const registry = await getRegistry();
 
-  // Filter out agents already configured
+  // Filter out agents already configured in settings
   const effectiveAgents = getEffectiveAgents();
   const existingIds = new Set(effectiveAgents.map((a) => a.id));
 
-  return registry.agents.filter((entry) => !existingIds.has(entry.id));
+  return registry.filter((entry) => !existingIds.has(entry.id));
 }
 
 /**
- * Fetch all agents from the registry (without filtering)
- */
-export async function fetchRegistry(): Promise<RegistryEntry[]> {
-  const registry = await getRegistry();
-  return registry.agents;
-}
-
-/**
- * Add an agent from the registry to user settings
+ * Add an agent from the registry to user settings.
+ * Only stores metadata - distribution is resolved at spawn time via `registry resolve`.
  */
 export async function addAgentFromRegistry(
   entry: RegistryEntry,
@@ -548,7 +459,8 @@ export async function addAgentFromRegistry(
     name: entry.name,
     version: entry.version,
     description: entry.description,
-    distribution: entry.distribution,
+    // distribution not stored - resolved via `registry resolve` at spawn time
+    distribution: {}, // empty distribution signals registry-sourced agent
     _source: "registry",
   };
 
@@ -614,7 +526,7 @@ export async function checkForRegistryUpdates(): Promise<{
         name: registryEntry.name,
         version: registryEntry.version,
         description: registryEntry.description,
-        distribution: registryEntry.distribution,
+        distribution: {}, // resolved via `registry resolve` at spawn time
         _source: "registry",
       };
       result.updated.push(registryEntry.name);

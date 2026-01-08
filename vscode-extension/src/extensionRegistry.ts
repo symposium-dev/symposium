@@ -2,12 +2,12 @@
  * Extension Registry - Types and built-in extension definitions
  *
  * Extensions enrich agent capabilities through the Symposium proxy chain.
- * Uses the same distribution format as agents, with extensions stored
- * in the same registry JSON under an "extensions" array.
+ * Registry fetching is delegated to the symposium-acp-agent binary via
+ * `registry list-extensions` subcommand.
  */
 
 import * as vscode from "vscode";
-import { Distribution } from "./agentRegistry";
+import { Distribution, runRegistryCommand } from "./agentRegistry";
 
 /**
  * Source tracking for extensions
@@ -80,6 +80,37 @@ export const BUILT_IN_EXTENSIONS: ExtensionConfig[] = [
 export const BUILT_IN_EXTENSION_IDS = new Set(
   BUILT_IN_EXTENSIONS.map((e) => e.id),
 );
+
+/**
+ * Registry extension entry format (as returned from `registry list-extensions` command)
+ * Note: distribution is not included in the listing
+ */
+interface RegistryExtensionListEntry {
+  id: string;
+  name: string;
+  version?: string;
+  description?: string;
+}
+
+/**
+ * Fetch extensions from the ACP registry via `symposium-acp-agent registry list-extensions`
+ */
+export async function fetchRegistryExtensions(): Promise<
+  ExtensionRegistryEntry[]
+> {
+  const output = await runRegistryCommand(["list-extensions"]);
+  const entries = JSON.parse(output) as RegistryExtensionListEntry[];
+
+  // Convert to ExtensionRegistryEntry format (add empty distribution since
+  // extensions are resolved at runtime, similar to agents)
+  return entries.map((e) => ({
+    id: e.id,
+    name: e.name,
+    version: e.version ?? "",
+    description: e.description,
+    distribution: {}, // resolved at runtime
+  }));
+}
 
 /**
  * Default extensions configuration (all built-ins enabled)

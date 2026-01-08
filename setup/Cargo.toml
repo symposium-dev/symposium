@@ -15,6 +15,10 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+json5 = "0.4"
 
 # Additional dependencies for setup functionality
 which = { workspace = true }
+
+[dev-dependencies]
+serde_jsonc = "1"

@@ -3,7 +3,10 @@ import { ChatViewProvider } from "./chatViewProvider";
 import { SettingsViewProvider } from "./settingsViewProvider";
 import { DiscussCodeActionProvider } from "./discussCodeActionProvider";
 import { Logger } from "./logger";
-import { showAddAgentFromRegistryDialog } from "./agentRegistry";
+import {
+  showAddAgentFromRegistryDialog,
+  setExtensionContext,
+} from "./agentRegistry";
 import { SymposiumLanguageModelProvider } from "./languageModelProvider";
 import { AgentActionTool } from "./agentActionTool";
 import { v4 as uuidv4 } from "uuid";
@@ -20,6 +23,9 @@ export function getChatProviderForTesting(): ChatViewProvider | undefined {
 
 export function activate(context: vscode.ExtensionContext) {
   logger.important("extension", "Symposium extension is now active");
+
+  // Set extension context for agent registry (needed for binary path resolution)
+  setExtensionContext(context);
 
   // Generate extension activation ID for this VSCode session
   const extensionActivationId = uuidv4();

@@ -1,9 +1,9 @@
 id = "symposium"
 name = "Symposium"
-version = "1.1.1"
+version = "1.2"
 schema_version = 1
 authors = ["Niko Matsakis <niko@alum.mit.edu>"]
-description = "AI the Rust Way"
+description = "AI the Rust way - enriches AI agents with Rust-focused tools (Sparkle, Ferris, Cargo)"
 repository = "https://github.com/symposium-dev/symposium"
 
 [agent_servers.symposium]
@@ -13,24 +13,24 @@ icon = "./icons/symposium.svg"
 [agent_servers.symposium.targets.darwin-aarch64]
 archive = "https://github.com/symposium-dev/symposium/releases/latest/download/symposium-darwin-arm64.tar.gz"
 cmd = "./symposium-acp-agent"
-args = ["--", "npx", "-y", "@anthropic-ai/claude-code@latest"]
+args = ["act-as-configured"]
 
 [agent_servers.symposium.targets.darwin-x86_64]
 archive = "https://github.com/symposium-dev/symposium/releases/latest/download/symposium-darwin-x64.tar.gz"
 cmd = "./symposium-acp-agent"
-args = ["--", "npx", "-y", "@anthropic-ai/claude-code@latest"]
+args = ["act-as-configured"]
 
 [agent_servers.symposium.targets.linux-x86_64]
 archive = "https://github.com/symposium-dev/symposium/releases/latest/download/symposium-linux-x64.tar.gz"
 cmd = "./symposium-acp-agent"
-args = ["--", "npx", "-y", "@anthropic-ai/claude-code@latest"]
+args = ["act-as-configured"]
 
 [agent_servers.symposium.targets.linux-aarch64]
 archive = "https://github.com/symposium-dev/symposium/releases/latest/download/symposium-linux-arm64.tar.gz"
 cmd = "./symposium-acp-agent"
-args = ["--", "npx", "-y", "@anthropic-ai/claude-code@latest"]
+args = ["act-as-configured"]
 
 [agent_servers.symposium.targets.windows-x86_64]
 archive = "https://github.com/symposium-dev/symposium/releases/latest/download/symposium-windows-x64.zip"
 cmd = "./symposium-acp-agent.exe"
-args = ["--", "npx", "-y", "@anthropic-ai/claude-code@latest"]
+args = ["act-as-configured"]

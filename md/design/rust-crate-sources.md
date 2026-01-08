@@ -250,12 +250,10 @@ Each `rust_crate_query` call creates exactly one research session and expects ex
 
 ## Integration with Symposium
 
-The component is registered with the conductor in `symposium-acp-proxy/src/lib.rs`:
+The component is registered with the conductor in `symposium-acp-agent/src/symposium.rs`:
 
 ```rust
-components.push(sacp::DynComponent::new(
-    symposium_crate_sources_proxy::CrateSourcesProxy {},
-));
+proxies.push(DynComponent::new(symposium_ferris::FerrisComponent::new(ferris_config)));
 ```
 
 The component implements `Component::serve()` to:
