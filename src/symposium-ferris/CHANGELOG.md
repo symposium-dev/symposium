@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.2](https://github.com/symposium-dev/symposium/compare/symposium-ferris-v1.0.1...symposium-ferris-v1.0.2) - 2026-01-08
+
+### Other
+
+- include claude code and do not block
+
 ## [1.0.1](https://github.com/symposium-dev/symposium/compare/symposium-ferris-v1.0.0...symposium-ferris-v1.0.1) - 2025-12-31
 
 ### Other

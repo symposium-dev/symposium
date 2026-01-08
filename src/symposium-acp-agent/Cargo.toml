@@ -1,6 +1,6 @@
 [package]
 name = "symposium-acp-agent"
-version = "1.2.0"
+version = "1.3.0"
 edition = "2021"
 license = "Apache-2.0"
 description = "Symposium-enriched ACP agent that wraps downstream agents with enhanced capabilities"
@@ -28,7 +28,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Symposium proxy components
-symposium-ferris = { path = "../symposium-ferris", version = "1.0.1" }
+symposium-ferris = { path = "../symposium-ferris", version = "1.0.2" }
 symposium-cargo = "0.2.0"
 sparkle.workspace = true
 

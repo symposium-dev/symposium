@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.3.0](https://github.com/symposium-dev/symposium/compare/symposium-acp-agent-v1.2.0...symposium-acp-agent-v1.3.0) - 2026-01-08
+
+### Added
+
+- add cargo distribution type for extensions
+
+### Fixed
+
+- use rustls instead of native-tls for reqwest
+
+### Other
+
+- include claude code and do not block
+- Rename CLI commands: act-as-configured -> run, run -> run-with
+- Unify CLI to 'run' command and centralize registry access
+
 ## [1.2.0](https://github.com/symposium-dev/symposium/compare/symposium-acp-agent-v1.1.1...symposium-acp-agent-v1.2.0) - 2026-01-08
 
 ### Added
