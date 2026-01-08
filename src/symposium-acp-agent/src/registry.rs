@@ -266,7 +266,7 @@ pub async fn resolve_agent(agent_id: &str) -> Result<McpServer> {
     // Check built-ins first
     for agent in built_in_agents()? {
         if agent.id == agent_id {
-            return resolve_distribution(&agent);
+            return resolve_distribution(&agent).await;
         }
     }
 
@@ -278,11 +278,11 @@ pub async fn resolve_agent(agent_id: &str) -> Result<McpServer> {
         .find(|a| a.id == agent_id)
         .with_context(|| format!("Agent '{}' not found in registry", agent_id))?;
 
-    resolve_distribution(&entry)
+    resolve_distribution(&entry).await
 }
 
 /// Resolve a registry entry's distribution to an McpServer
-fn resolve_distribution(entry: &RegistryEntry) -> Result<McpServer> {
+async fn resolve_distribution(entry: &RegistryEntry) -> Result<McpServer> {
     let dist = &entry.distribution;
 
     // Priority: local > npx > pipx > binary
@@ -339,8 +339,7 @@ fn resolve_distribution(entry: &RegistryEntry) -> Result<McpServer> {
 
             // Check if we need to download
             if !executable_path.exists() {
-                // For now, we'll do blocking download. Could make this async in future.
-                download_and_cache_binary(&entry.id, version, binary, &cache_dir)?;
+                download_and_cache_binary(&entry.id, version, binary, &cache_dir).await?;
             }
 
             return Ok(McpServer::Stdio(
@@ -357,7 +356,25 @@ fn resolve_distribution(entry: &RegistryEntry) -> Result<McpServer> {
 }
 
 /// Download and cache a binary distribution
-fn download_and_cache_binary(
+async fn download_and_cache_binary(
+    agent_id: &str,
+    version: &str,
+    binary: &BinaryDistribution,
+    cache_dir: &PathBuf,
+) -> Result<()> {
+    let agent_id = agent_id.to_string();
+    let version = version.to_string();
+    let binary = binary.clone();
+    let cache_dir = cache_dir.clone();
+    tokio::task::spawn_blocking(move || {
+        download_and_cache_binary_sync(&agent_id, &version, &binary, &cache_dir)
+    })
+    .await
+    .context("Download task panicked")?
+}
+
+/// Download and cache a binary distribution (blocking implementation)
+fn download_and_cache_binary_sync(
     agent_id: &str,
     version: &str,
     binary: &BinaryDistribution,
