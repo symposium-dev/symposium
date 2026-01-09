@@ -1,6 +1,6 @@
-# Recommending Extensions
+# Recommending Agent Extensions
 
-There are two ways to recommend extensions to users:
+There are two ways to recommend agent extensions to users:
 
 1. **Central recommendations** - submit to the Symposium recommendations registry
 2. **Crate metadata** - add recommendations directly in your crate's Cargo.toml

@@ -1,14 +1,16 @@
-# Creating Extensions
+# Creating Agent Extensions
 
-A Symposium extension is an MCP (Model Context Protocol) server that provides tools, prompts, or resources to AI agents. Extensions are typically distributed as Rust crates on crates.io.
+A Symposium agent extension is an [ACP (Agent Client Protocol)](https://agentclientprotocol.com/) proxy that sits between the client and the agent. Proxies can intercept and transform messages, inject context, provide MCP tools, and coordinate agent behavior. Agent extensions are typically distributed as Rust crates on crates.io.
 
 ## Basic Structure
 
 Your extension crate should:
 
-1. Implement an MCP server (see [MCP specification](https://modelcontextprotocol.io/))
-2. Produce a binary that speaks MCP over stdio
+1. Implement an ACP proxy using the `sacp` crate
+2. Produce a binary that speaks ACP over stdio
 3. Include Symposium metadata in Cargo.toml
+
+See the [sacp cookbook on building proxies](https://docs.rs/sacp-cookbook/latest/sacp_cookbook/#building-proxies) for implementation details and examples.
 
 ## Cargo.toml Metadata
 
@@ -25,7 +27,7 @@ description = "Help agents work with MyLibrary"
 binary = "my-extension"
 
 # Optional: arguments to pass when spawning
-args = ["--mcp"]
+args = []
 
 # Optional: environment variables
 env = { MY_CONFIG = "value" }
@@ -33,28 +35,10 @@ env = { MY_CONFIG = "value" }
 
 The `name`, `description`, and `version` come from the standard `[package]` section.
 
-## Example
-
-A minimal extension that provides a single tool:
-
-```rust
-use mcp_server::{Server, Tool, ToolResult};
-
-#[tokio::main]
-async fn main() {
-    let server = Server::new("my-extension")
-        .tool("greet", "Say hello", |name: String| async move {
-            ToolResult::text(format!("Hello, {}!", name))
-        });
-    
-    server.run_stdio().await;
-}
-```
-
 ## Testing Your Extension
 
 Before publishing:
 
 1. Install locally: `cargo install --path .`
-2. Test with Symposium: add to your local config and verify tools appear
-3. Check MCP compliance: ensure your server handles initialization correctly
+2. Test with Symposium: add to your local config and verify it loads correctly
+3. Check ACP compliance: ensure your proxy handles `proxy/initialize` correctly
