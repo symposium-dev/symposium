@@ -45,8 +45,41 @@ jobs:
       - *checkout
       - *install-rust
       - name: Run release-plz
+        id: release-plz
         uses: release-plz/action@v0.5
         with:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+
+      - name: Sync extension versions
+        if: steps.release-plz.outputs.prs_created == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
+        run: |
+          # Checkout the PR branch
+          PR_BRANCH="${{ fromJSON(steps.release-plz.outputs.pr).head_branch }}"
+          git checkout "$PR_BRANCH"
+
+          # Extract version from symposium-acp-agent Cargo.toml
+          NEW_VERSION=$(grep '^version = ' src/symposium-acp-agent/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
+
+          # Extract current version from package.json
+          CURRENT_VERSION=$(grep '"version"' vscode-extension/package.json | head -1 | sed 's/.*"\([0-9.]*\)".*/\1/')
+
+          if [ "$NEW_VERSION" = "$CURRENT_VERSION" ]; then
+            echo "Version unchanged ($NEW_VERSION), skipping sync"
+            exit 0
+          fi
+
+          echo "Syncing versions: $CURRENT_VERSION -> $NEW_VERSION"
+
+          # Run sync script
+          ./ci/sync-versions.sh "$NEW_VERSION"
+
+          # Commit and push
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: sync extension versions to $NEW_VERSION"
+          git push
