@@ -2,7 +2,7 @@
   "name": "symposium",
   "displayName": "Symposium",
   "description": "AI the Rust Way",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "publisher": "symposium-dev",
   "repository": {
     "type": "git",

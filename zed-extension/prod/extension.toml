@@ -1,6 +1,6 @@
 id = "symposium"
 name = "Symposium"
-version = "1.2"
+version = "1.3"
 schema_version = 1
 authors = ["Niko Matsakis <niko@alum.mit.edu>"]
 description = "AI the Rust way - enriches AI agents with Rust-focused tools (Sparkle, Ferris, Cargo)"
@@ -11,26 +11,26 @@ name = "Symposium"
 icon = "./icons/symposium.svg"
 
 [agent_servers.symposium.targets.darwin-aarch64]
-archive = "https://github.com/symposium-dev/symposium/releases/latest/download/symposium-darwin-arm64.tar.gz"
+archive = "https://github.com/symposium-dev/symposium/releases/download/symposium-acp-agent-v1.3.0/symposium-darwin-arm64.tar.gz"
 cmd = "./symposium-acp-agent"
 args = ["run"]
 
 [agent_servers.symposium.targets.darwin-x86_64]
-archive = "https://github.com/symposium-dev/symposium/releases/latest/download/symposium-darwin-x64.tar.gz"
+archive = "https://github.com/symposium-dev/symposium/releases/download/symposium-acp-agent-v1.3.0/symposium-darwin-x64.tar.gz"
 cmd = "./symposium-acp-agent"
 args = ["run"]
 
 [agent_servers.symposium.targets.linux-x86_64]
-archive = "https://github.com/symposium-dev/symposium/releases/latest/download/symposium-linux-x64.tar.gz"
+archive = "https://github.com/symposium-dev/symposium/releases/download/symposium-acp-agent-v1.3.0/symposium-linux-x64.tar.gz"
 cmd = "./symposium-acp-agent"
 args = ["run"]
 
 [agent_servers.symposium.targets.linux-aarch64]
-archive = "https://github.com/symposium-dev/symposium/releases/latest/download/symposium-linux-arm64.tar.gz"
+archive = "https://github.com/symposium-dev/symposium/releases/download/symposium-acp-agent-v1.3.0/symposium-linux-arm64.tar.gz"
 cmd = "./symposium-acp-agent"
 args = ["run"]
 
 [agent_servers.symposium.targets.windows-x86_64]
-archive = "https://github.com/symposium-dev/symposium/releases/latest/download/symposium-windows-x64.zip"
+archive = "https://github.com/symposium-dev/symposium/releases/download/symposium-acp-agent-v1.3.0/symposium-windows-x64.zip"
 cmd = "./symposium-acp-agent.exe"
 args = ["run"]
