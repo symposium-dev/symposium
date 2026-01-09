@@ -10,7 +10,10 @@
 use sacp::link::{AgentToClient, ConductorToProxy, ProxyToConductor};
 use sacp::{Component, DynComponent};
 use sacp_conductor::{Conductor, McpBridgeMode};
+use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
+
+use crate::registry::{CargoDistribution, Distribution, RegistryEntry};
 
 /// Known proxy/extension names that can be configured.
 pub const KNOWN_PROXIES: &[&str] = &["sparkle", "ferris", "cargo"];
@@ -47,13 +50,37 @@ impl SymposiumConfig {
     }
 
     /// Build proxy components from the configured names, preserving order.
-    fn build_proxies(&self) -> Vec<DynComponent<ProxyToConductor>> {
+    async fn build_proxies(&self) -> Result<Vec<DynComponent<ProxyToConductor>>, sacp::Error> {
         let mut proxies: Vec<DynComponent<ProxyToConductor>> = vec![];
 
         for name in &self.proxy_names {
             match name.as_str() {
                 "sparkle" => {
-                    proxies.push(DynComponent::new(sparkle::SparkleComponent::new()));
+                    // Sparkle is installed via cargo-binstall from crates.io
+                    let entry = RegistryEntry {
+                        id: "sparkle".to_string(),
+                        name: "Sparkle".to_string(),
+                        version: String::new(),
+                        description: Some(
+                            "Sparkle AI Collaboration Identity Framework".to_string(),
+                        ),
+                        distribution: Distribution {
+                            local: None,
+                            npx: None,
+                            pipx: None,
+                            binary: None,
+                            cargo: Some(CargoDistribution {
+                                crate_name: "sparkle-mcp".to_string(),
+                                version: None, // Use latest
+                                binary: None,  // Auto-discover from crates.io
+                                args: vec![],
+                            }),
+                        },
+                    };
+                    let server = crate::registry::resolve_distribution(&entry)
+                        .await
+                        .map_err(|e| sacp::Error::new(-32603, e.to_string()))?;
+                    proxies.push(DynComponent::new(AcpAgent::new(server)));
                 }
                 "ferris" => {
                     proxies.push(DynComponent::new(
@@ -69,7 +96,7 @@ impl SymposiumConfig {
             }
         }
 
-        proxies
+        Ok(proxies)
     }
 
     /// Configure a conductor with tracing and other settings.
@@ -135,7 +162,7 @@ impl Component<ProxyToConductor> for Symposium {
                         "Building proxy chain with extensions: {:?}",
                         config.proxy_names
                     );
-                    let proxies = config.build_proxies();
+                    let proxies = config.build_proxies().await?;
                     Ok((init_req, proxies))
                 }
             },
@@ -185,7 +212,7 @@ impl Component<AgentToClient> for SymposiumAgent {
                         "Building proxy chain with extensions: {:?}",
                         config.proxy_names
                     );
-                    let proxies = config.build_proxies();
+                    let proxies = config.build_proxies().await?;
                     Ok((init_req, proxies, agent))
                 }
             },

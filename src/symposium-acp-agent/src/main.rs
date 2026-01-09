@@ -46,11 +46,10 @@ use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
 
 mod config;
-mod registry;
-mod symposium;
-pub mod vscodelm;
 
-use symposium::{Symposium, SymposiumConfig, KNOWN_PROXIES};
+use symposium_acp_agent::registry;
+use symposium_acp_agent::symposium::{Symposium, SymposiumConfig, KNOWN_PROXIES};
+use symposium_acp_agent::vscodelm;
 
 #[derive(Parser, Debug)]
 #[command(name = "symposium-acp-agent")]
