@@ -24,7 +24,13 @@
     - [Ferris](./using/ferris.md)
     - [Cargo](./using/cargo.md)
 
-# Development guide
+# Crate Author's Guide
+
+- [Creating Extensions](./extensions/creating-extensions.md)
+- [Publishing Extensions](./extensions/publishing-extensions.md)
+- [Recommending Extensions](./extensions/recommending-extensions.md)
+
+# Contributing to Symposium
 
 - [How to contribute](./contribute.md)
 - [Overview](./design/implementation-overview.md)
@@ -57,3 +63,4 @@
         - [Language Features](./research/lsp-overview/language-features.md)
         - [Implementation Guide](./research/lsp-overview/implementation-guide.md)
         - [Message Reference](./research/lsp-overview/message-reference.md)
+
