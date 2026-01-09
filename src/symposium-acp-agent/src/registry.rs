@@ -525,7 +525,7 @@ pub async fn resolve_agent(agent_id: &str) -> Result<McpServer> {
 }
 
 /// Resolve a registry entry's distribution to an McpServer
-async fn resolve_distribution(entry: &RegistryEntry) -> Result<McpServer> {
+pub async fn resolve_distribution(entry: &RegistryEntry) -> Result<McpServer> {
     let dist = &entry.distribution;
 
     // Priority: local > npx > pipx > binary

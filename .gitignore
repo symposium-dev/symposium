@@ -52,3 +52,6 @@ yarn-error.log*
 # Kiro directory
 .kiro/
 .sparkle-space/
+
+# Used for planning that shouldn't be committed
+WIP.md

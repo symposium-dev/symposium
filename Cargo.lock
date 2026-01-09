@@ -1046,15 +1046,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "encoding_rs"
-version = "0.8.35"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
-dependencies = [
- "cfg-if",
-]
-
-[[package]]
 name = "env_filter"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1127,23 +1118,6 @@ name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
-
-[[package]]
-name = "feed-rs"
-version = "2.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4c0591d23efd0d595099af69a31863ac1823046b1b021e3b06ba3aae7e00991"
-dependencies = [
- "chrono",
- "mediatype",
- "quick-xml",
- "regex",
- "serde",
- "serde_json",
- "siphasher",
- "url",
- "uuid",
-]
 
 [[package]]
 name = "filedescriptor"
@@ -2240,15 +2214,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mediatype"
-version = "0.19.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33746aadcb41349ec291e7f2f0a3aa6834d1d7c58066fb4b01f68efc4c4b7631"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "memchr"
 version = "2.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2782,16 +2747,6 @@ name = "pulldown-cmark-escape"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bd348ff538bc9caeda7ee8cad2d1d48236a1f443c1fa3913c6a02fe0043b1dd3"
-
-[[package]]
-name = "quick-xml"
-version = "0.37.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "331e97a1af0bf59823e6eadffe373d7b27f485be8748f71471c662c1f269b7fb"
-dependencies = [
- "encoding_rs",
- "memchr",
-]
 
 [[package]]
 name = "quinn"
@@ -3662,34 +3617,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sparkle-mcp"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e761d4198a5c1b8b623fd81105baab318b4a5f3fa27a7e96cbfbda8b4b79e10e"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "dirs",
- "feed-rs",
- "futures",
- "reqwest",
- "rmcp",
- "sacp",
- "sacp-rmcp",
- "sacp-tokio",
- "schemars",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tokio-util",
- "toml 0.8.23",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "spin"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3811,7 +3738,6 @@ dependencies = [
  "serde_json",
  "serde_jsonc",
  "shell-words",
- "sparkle-mcp",
  "symposium-cargo",
  "symposium-ferris",
  "tar",
