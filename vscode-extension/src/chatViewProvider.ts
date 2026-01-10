@@ -126,6 +126,32 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           });
         }
       },
+      onUserText: (agentSessionId, text) => {
+        const receiveTime = Date.now();
+        const tabId = this.#agentSessionToTab.get(agentSessionId);
+        if (tabId) {
+          // Capture for testing if enabled
+          if (this.#testResponseCapture.has(tabId)) {
+            this.#testResponseCapture.get(tabId)!.push(text);
+          }
+
+          logger.debug("perf", "Received chunk from user", {
+            receiveTime,
+            textLength: text.length,
+          });
+          this.#sendToWebview({
+            type: "user-text",
+            tabId,
+            text,
+            timestamp: receiveTime,
+          });
+          const sendTime = Date.now();
+          logger.debug("perf", "Sent chunk to webview", {
+            sendTime,
+            delay: sendTime - receiveTime,
+          });
+        }
+      },
       onAgentComplete: (agentSessionId) => {
         const tabId = this.#agentSessionToTab.get(agentSessionId);
         if (tabId) {
