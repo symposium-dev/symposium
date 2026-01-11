@@ -687,6 +687,27 @@ window.addEventListener("message", (event: MessageEvent) => {
     console.log(
       `[PERF] Append: ${appendEnd - appendStart}ms, UI update: ${uiUpdateEnd - uiUpdateStart}ms, total: ${uiUpdateEnd - receiveTime}ms`,
     );
+  } else if (message.type === "user-text") {
+    const extensionDelay = message.timestamp
+      ? receiveTime - message.timestamp
+      : "unknown";
+    console.log(
+      `[PERF] Webview received chunk at ${receiveTime}, extension->webview delay=${extensionDelay}ms, length=${message.text.length}`,
+    );
+
+    // We don't expect a stream here - so just add an item
+    const newMessageId = uuidv4();
+    mynahUI.addChatItem(message.tabId, {
+      type: ChatItemType.SYSTEM_PROMPT,
+      body: message.text,
+    });
+
+    // Assume that all messages here count as *prompts*
+    mynahUI.updateStore(message.tabId, {
+      loadingChat: true,
+    });
+
+    saveState();
   } else if (message.type === "agent-complete") {
     // Hide loading/thinking indicator
     mynahUI.updateStore(message.tabId, {

@@ -39,6 +39,7 @@ export interface SlashCommandInfo {
  */
 export interface AcpAgentCallbacks {
   onAgentText: (agentSessionId: string, text: string) => void;
+  onUserText: (agentSessionId: string, text: string) => void;
   onAgentComplete: (agentSessionId: string) => void;
   onRequestPermission?: (
     params: acp.RequestPermissionRequest,
@@ -168,6 +169,17 @@ class SymposiumClient implements acp.Client {
         });
         if (this.callbacks.onAvailableCommands) {
           this.callbacks.onAvailableCommands(params.sessionId, commands);
+        }
+        break;
+      }
+      case "user_message_chunk": {
+        if (update.content.type === "text") {
+          const text = update.content.text;
+          logger.debug("user", "Text chunk", {
+            length: text.length,
+            text: text.length > 50 ? text.slice(0, 50) + "..." : text,
+          });
+          this.callbacks.onUserText(params.sessionId, update.content.text);
         }
         break;
       }
