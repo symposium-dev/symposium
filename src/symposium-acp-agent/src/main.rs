@@ -36,6 +36,7 @@ use clap::{Parser, Subcommand};
 use sacp::{Component, DynComponent, ProxyToConductor};
 use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 mod config;
 
@@ -144,16 +145,7 @@ enum RegistryCommand {
 fn build_proxies(raw_proxies: Vec<String>) -> Result<Vec<DynComponent<ProxyToConductor>>> {
     let mut proxies = Vec::with_capacity(raw_proxies.len());
     for proxy in raw_proxies {
-        let proxy = proxy.trim();
-
-        if proxy.starts_with('{') {
-            let server: sacp::schema::McpServer = serde_json::from_str(proxy)
-                .map_err(|e| sacp::util::internal_error(format!("Failed to parse JSON: {}", e)))?;
-            proxies.push(DynComponent::new(AcpAgent::new(server)));
-            continue;
-        }
-
-        anyhow::bail!("Expected json from `registry resolve-extension`.");
+        proxies.push(DynComponent::new(AcpAgent::from_str(&proxy)?));
     }
 
     Ok(proxies)
