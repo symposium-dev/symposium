@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.0.0](https://github.com/symposium-dev/symposium/compare/symposium-acp-agent-v1.3.0...symposium-acp-agent-v2.0.0) - 2026-01-16
+
+### Added
+
+- install sparkle via cargo-binstall instead of bundling
+
+### Other
+
+- Use AcpAgent::from_str
+- resolve_extension should use registry extensions
+- Resolve always on the Rust side
+- Add a proxy-shim command and always return and expect registry entries
+- Some rearranging to move more of the notions of builtin proxies out of symposium.rs and into just main.rs
+- Rename ProxySource::McpServer to ProxySource::AcpProxy, and fix tests
+- Fix custom extensions by passing json
+- add integration test for cargo binstall workflow
+
 ## [1.3.0](https://github.com/symposium-dev/symposium/compare/symposium-acp-agent-v1.2.0...symposium-acp-agent-v1.3.0) - 2026-01-08
 
 ### Added
