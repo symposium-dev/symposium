@@ -7,11 +7,13 @@
 //! - Delegating sessions to appropriate conductors
 
 mod conductor_actor;
+mod config_mode_actor;
 mod uberconductor_actor;
 
 use crate::user_config::SymposiumUserConfig;
 use conductor_actor::ConductorHandle;
-use futures::channel::mpsc::{unbounded, UnboundedReceiver};
+use config_mode_actor::{ConfigModeHandle, ConfigModeOutput};
+use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::StreamExt;
 use fxhash::FxHashMap;
 use sacp::link::AgentToClient;
@@ -48,11 +50,11 @@ fn get_session_id(message: &MessageCx) -> Result<Option<SessionId>, sacp::Error>
 enum SessionState {
     /// User is in configuration mode.
     ///
-    /// - `current_config`: The configuration being edited (starts from disk or default)
+    /// - `actor`: Handle to the config mode actor
     /// - `return_to`: If Some, this config session was spawned from `/symposium:config`
     ///   and should return to the original session when done
     Config {
-        current_config: SymposiumUserConfig,
+        actor: ConfigModeHandle,
         return_to: Option<ConductorHandle>,
     },
 
@@ -111,12 +113,13 @@ impl ConfigAgent {
         mut self,
         uberconductor: UberconductorHandle,
         mut rx: UnboundedReceiver<ConfigAgentMessage>,
+        tx: futures::channel::mpsc::UnboundedSender<ConfigAgentMessage>,
         cx: JrConnectionCx<AgentToClient>,
     ) -> Result<(), sacp::Error> {
         while let Some(message) = rx.next().await {
             match message {
                 ConfigAgentMessage::MessageFromClient(message) => {
-                    self.handle_message_from_client(message, &uberconductor, &cx)
+                    self.handle_message_from_client(message, &uberconductor, &cx, &tx)
                         .await?
                 }
 
@@ -133,8 +136,101 @@ impl ConfigAgent {
                     // Now respond to the client
                     request_cx.respond(response)?;
                 }
+
+                ConfigAgentMessage::ConfigModeOutput(session_id, output) => {
+                    self.handle_config_mode_output(session_id, output, &cx)
+                        .await?;
+                }
             }
         }
+        Ok(())
+    }
+
+    /// Handle output from a config mode actor.
+    async fn handle_config_mode_output(
+        &mut self,
+        session_id: SessionId,
+        output: ConfigModeOutput,
+        cx: &JrConnectionCx<AgentToClient>,
+    ) -> Result<(), sacp::Error> {
+        match output {
+            ConfigModeOutput::SendMessage(text) => {
+                cx.send_notification(SessionNotification::new(
+                    session_id,
+                    SessionUpdate::AgentMessageChunk(ContentChunk::new(text.into())),
+                ))?;
+            }
+
+            ConfigModeOutput::Done { config } => {
+                // Save the configuration
+                if let Err(e) = config.save() {
+                    cx.send_notification(SessionNotification::new(
+                        session_id.clone(),
+                        SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                            format!("Error saving configuration: {}", e).into(),
+                        )),
+                    ))?;
+                }
+
+                // Get the return_to conductor if any
+                let return_to = match self.sessions.get(&session_id) {
+                    Some(SessionState::Config { return_to, .. }) => return_to.clone(),
+                    _ => None,
+                };
+
+                if let Some(conductor) = return_to {
+                    // Return to the previous session
+                    self.sessions
+                        .insert(session_id.clone(), SessionState::Delegating { conductor });
+                    cx.send_notification(SessionNotification::new(
+                        session_id,
+                        SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                            "Configuration saved. Returning to your session.".into(),
+                        )),
+                    ))?;
+                } else {
+                    // No session to return to - this was initial setup or standalone
+                    // For now, just remove the session
+                    self.sessions.remove(&session_id);
+                    cx.send_notification(SessionNotification::new(
+                        session_id,
+                        SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                            "Configuration saved. Please start a new session.".into(),
+                        )),
+                    ))?;
+                }
+            }
+
+            ConfigModeOutput::Cancelled => {
+                // Get the return_to conductor if any
+                let return_to = match self.sessions.get(&session_id) {
+                    Some(SessionState::Config { return_to, .. }) => return_to.clone(),
+                    _ => None,
+                };
+
+                if let Some(conductor) = return_to {
+                    // Return to the previous session without saving
+                    self.sessions
+                        .insert(session_id.clone(), SessionState::Delegating { conductor });
+                    cx.send_notification(SessionNotification::new(
+                        session_id,
+                        SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                            "Configuration cancelled. Returning to your session.".into(),
+                        )),
+                    ))?;
+                } else {
+                    // No session to return to
+                    self.sessions.remove(&session_id);
+                    cx.send_notification(SessionNotification::new(
+                        session_id,
+                        SessionUpdate::AgentMessageChunk(ContentChunk::new(
+                            "Configuration cancelled.".into(),
+                        )),
+                    ))?;
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -188,6 +284,7 @@ impl ConfigAgent {
         session_id: SessionId,
         request_cx: JrRequestCx<PromptResponse>,
         cx: &JrConnectionCx<AgentToClient>,
+        config_agent_tx: &UnboundedSender<ConfigAgentMessage>,
     ) -> Result<(), sacp::Error> {
         // Get the current session state to potentially preserve the conductor
         let return_to = match self.sessions.get(&session_id) {
@@ -201,33 +298,25 @@ impl ConfigAgent {
             .map_err(|e| sacp::Error::new(-32603, e.to_string()))?
             .unwrap_or_else(|| SymposiumUserConfig::with_agent(""));
 
+        // Spawn the config mode actor
+        let actor_handle = ConfigModeHandle::spawn(
+            current_config,
+            session_id.clone(),
+            config_agent_tx.clone(),
+            cx,
+        )?;
+
         // Transition to config state
         self.sessions.insert(
-            session_id.clone(),
+            session_id,
             SessionState::Config {
-                current_config,
+                actor: actor_handle,
                 return_to,
             },
         );
 
-        // Send welcome message
-        let welcome = self.config_mode_welcome();
-        cx.send_notification(SessionNotification::new(
-            session_id,
-            SessionUpdate::AgentMessageChunk(ContentChunk::new(welcome.into())),
-        ))?;
-
-        // Respond to the prompt
+        // Respond to the prompt (the actor will send the welcome message)
         request_cx.respond(PromptResponse::new(StopReason::EndTurn))
-    }
-
-    /// Generate the config mode welcome message.
-    fn config_mode_welcome(&self) -> String {
-        "# Symposium Configuration\n\n\
-         You're now in configuration mode.\n\n\
-         (Configuration options coming soon...)\n\n\
-         Type `exit` to return to your session."
-            .to_string()
     }
 
     /// Check if the prompt is invoking the config slash command.
@@ -255,6 +344,7 @@ impl ConfigAgent {
         request: PromptRequest,
         request_cx: JrRequestCx<PromptResponse>,
         cx: &JrConnectionCx<AgentToClient>,
+        config_agent_tx: &UnboundedSender<ConfigAgentMessage>,
     ) -> Result<(), sacp::Error> {
         let session_id = request.session_id.clone();
 
@@ -265,21 +355,44 @@ impl ConfigAgent {
             Some(SessionState::Delegating { conductor }) => {
                 // Check if this is the config command
                 if Self::is_config_command(&request) {
-                    self.enter_config_mode(session_id, request_cx, cx).await
+                    self.enter_config_mode(session_id, request_cx, cx, config_agent_tx)
+                        .await
                 } else {
                     // Forward to conductor
                     conductor.send_prompt(request, request_cx).await
                 }
             }
-            Some(SessionState::InitialSetup) | Some(SessionState::Config { .. }) => {
-                // Handle config input
+            Some(SessionState::InitialSetup) => {
+                // Handle initial setup input (not yet using actor)
                 self.handle_config_input(request, request_cx, cx).await
+            }
+            Some(SessionState::Config { actor, .. }) => {
+                // Forward input to the config mode actor
+                let input = Self::extract_prompt_text(&request);
+                if actor.send_input(input).await.is_err() {
+                    return request_cx
+                        .respond_with_error(sacp::Error::new(-32603, "Config mode actor closed"));
+                }
+                request_cx.respond(PromptResponse::new(StopReason::EndTurn))
             }
             None => {
                 // Unknown session
                 request_cx.respond_with_error(sacp::Error::new(-32600, "Unknown session"))
             }
         }
+    }
+
+    /// Extract text content from a prompt request.
+    fn extract_prompt_text(request: &PromptRequest) -> String {
+        request
+            .prompt
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text(TextContent { text, .. }) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// Handle input during configuration mode.
@@ -392,6 +505,7 @@ impl ConfigAgent {
         message: MessageCx,
         uberconductor: &UberconductorHandle,
         cx: &JrConnectionCx<AgentToClient>,
+        config_agent_tx: &UnboundedSender<ConfigAgentMessage>,
     ) -> Result<(), sacp::Error> {
         MatchMessage::new(message)
             .if_request(
@@ -412,7 +526,8 @@ impl ConfigAgent {
             .await
             .if_request(
                 async |request: PromptRequest, request_cx: JrRequestCx<PromptResponse>| {
-                    self.handle_prompt(request, request_cx, cx).await
+                    self.handle_prompt(request, request_cx, cx, config_agent_tx)
+                        .await
                 },
             )
             .await
@@ -450,6 +565,9 @@ pub enum ConfigAgentMessage {
         ConductorHandle,
         JrRequestCx<NewSessionResponse>,
     ),
+
+    /// Output from a config mode actor.
+    ConfigModeOutput(SessionId, ConfigModeOutput),
 }
 
 impl Default for ConfigAgent {
@@ -466,12 +584,13 @@ impl Component<AgentToClient> for ConfigAgent {
         let (tx, rx) = unbounded();
         let trace_dir = self.trace_dir.clone();
         let tx_for_message = tx.clone();
+        let tx_for_run = tx.clone();
         AgentToClient::builder()
             .with_spawned({
                 async move |cx| {
                     // Create the uberconductor actor
                     let uberconductor = UberconductorHandle::spawn(trace_dir, tx.clone(), &cx)?;
-                    self.run(uberconductor, rx, cx).await
+                    self.run(uberconductor, rx, tx_for_run, cx).await
                 }
             })
             .on_receive_message(
