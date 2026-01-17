@@ -157,22 +157,32 @@ Users can modify configuration at any time via the `/symposium:config` slash com
 
 ### Entering Config Mode
 
-When ConfigAgent detects the config command in a prompt:
+When ConfigAgent detects the config command in a prompt, it pauses the conductor before entering config mode. This ensures the conductor doesn't process any messages from the downstream agent while the user is configuring.
 
 ```mermaid
 sequenceDiagram
     participant Client
     participant ConfigAgent
-    participant ConfigMode as ConfigModeActor
     participant Conductor
+    participant ConfigMode as ConfigModeActor
 
     Client->>ConfigAgent: PromptRequest("/symposium:config")
     ConfigAgent->>ConfigAgent: Detect config command
-    ConfigAgent->>ConfigMode: spawn actor
-    ConfigAgent->>ConfigAgent: Store session state as Config{actor, return_to: conductor}
+    ConfigAgent->>Conductor: Pause(resume_tx_sender)
+    Conductor->>Conductor: Create oneshot channel
+    Conductor-->>ConfigAgent: resume_tx
+    Note over Conductor: Awaiting resume_rx (paused)
+    ConfigAgent->>ConfigMode: spawn(config, resume_tx)
+    ConfigAgent->>ConfigAgent: Store session state as Config{actor, return_to}
     ConfigMode-->>Client: Main menu (via notification)
     ConfigAgent-->>Client: PromptResponse(EndTurn)
 ```
+
+The pause/resume protocol:
+1. ConfigAgent sends `Pause` to conductor with a channel to receive `resume_tx`
+2. Conductor creates a oneshot channel, sends `resume_tx` back, then awaits `resume_rx`
+3. ConfigModeActor holds `resume_tx` - when it exits, dropping `resume_tx` signals the conductor to resume
+4. While paused, the conductor processes no messages
 
 The session transitions from `Delegating{conductor}` to `Config{actor, return_to}`. The `return_to` field preserves the conductor handle so we can resume the session after config mode exits.
 
@@ -208,16 +218,21 @@ Commands return a `MenuAction` to control redisplay:
 
 ### Exiting Config Mode
 
+When the user saves or cancels, the ConfigModeActor exits and drops `resume_tx`, which signals the conductor to resume:
+
 ```mermaid
 sequenceDiagram
     participant Client
     participant ConfigAgent
     participant ConfigMode as ConfigModeActor
+    participant Conductor
 
     Client->>ConfigAgent: PromptRequest("SAVE")
     ConfigAgent->>ConfigMode: send input
     ConfigMode->>ConfigMode: Save config to disk
     ConfigMode-->>ConfigAgent: ConfigModeOutput::Done{config}
+    Note over ConfigMode: Actor exits, drops resume_tx
+    Note over Conductor: resume_rx completes, resumes
     ConfigAgent->>ConfigAgent: Restore session to Delegating{return_to}
     ConfigAgent-->>Client: "Configuration saved. Returning to your session."
 ```

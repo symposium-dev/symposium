@@ -82,7 +82,7 @@ async fn run_actor(
                 request_cx,
             } => {
                 // Get or create conductor for this config
-                let conductor = match conductors.get(&config) {
+                let handle = match conductors.get(&config) {
                     Some(handle) => handle.clone(),
                     None => {
                         let handle = ConductorHandle::spawn(
@@ -99,7 +99,7 @@ async fn run_actor(
 
                 // Forward the session request to the conductor
                 // The conductor will send NewSessionCreated back to ConfigAgent
-                conductor.send_new_session(request, request_cx).await?;
+                handle.send_new_session(request, request_cx).await?;
             }
         }
     }

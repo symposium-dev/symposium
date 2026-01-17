@@ -18,7 +18,7 @@ use sacp::{DynComponent, JrConnectionCx, JrRequestCx, MessageCx};
 use sacp_conductor::{Conductor, McpBridgeMode};
 use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 /// Messages that can be sent to the ConductorActor.
 pub enum ConductorMessage {
@@ -36,6 +36,15 @@ pub enum ConductorMessage {
 
     /// Forward an arbitrary message to the conductor.
     ForwardMessage { message: MessageCx },
+
+    /// Pause the conductor. It will stop processing messages until the returned
+    /// oneshot is dropped or receives a value.
+    ///
+    /// The sender provides a channel to receive the resume signal sender.
+    Pause {
+        /// Channel to send the resume signal sender back to the caller.
+        resume_tx_sender: oneshot::Sender<oneshot::Sender<()>>,
+    },
 }
 
 /// Handle for communicating with a ConductorActor.
@@ -105,6 +114,24 @@ impl ConductorHandle {
     pub async fn forward_message(&self, message: MessageCx) -> Result<(), sacp::Error> {
         self.tx
             .send(ConductorMessage::ForwardMessage { message })
+            .await
+            .map_err(|_| sacp::util::internal_error("Conductor actor closed"))
+    }
+
+    /// Pause the conductor. Returns a sender that, when dropped or sent to,
+    /// will resume the conductor.
+    ///
+    /// While paused, the conductor will not process any messages from the
+    /// downstream agent or accept new requests.
+    pub async fn pause(&self) -> Result<oneshot::Sender<()>, sacp::Error> {
+        let (resume_tx_sender, resume_tx_receiver) = oneshot::channel();
+
+        self.tx
+            .send(ConductorMessage::Pause { resume_tx_sender })
+            .await
+            .map_err(|_| sacp::util::internal_error("Conductor actor closed"))?;
+
+        resume_tx_receiver
             .await
             .map_err(|_| sacp::util::internal_error("Conductor actor closed"))
     }
@@ -220,6 +247,22 @@ async fn run_actor(
                         {
                             tracing::error!("Failed to forward message to conductor: {}", e);
                         }
+                    }
+
+                    ConductorMessage::Pause { resume_tx_sender } => {
+                        // Create the resume channel
+                        let (resume_tx, resume_rx) = oneshot::channel::<()>();
+
+                        // Send the resume_tx back to the caller
+                        if resume_tx_sender.send(resume_tx).is_err() {
+                            tracing::warn!("Failed to send resume_tx - caller dropped");
+                            continue;
+                        }
+
+                        // Wait for resume signal (or channel drop)
+                        tracing::debug!("Conductor paused, waiting for resume");
+                        let _ = resume_rx.await;
+                        tracing::debug!("Conductor resumed");
                     }
                 }
             }

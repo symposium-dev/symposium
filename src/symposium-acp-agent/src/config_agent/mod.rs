@@ -292,17 +292,25 @@ impl ConfigAgent {
             _ => None,
         };
 
+        // Pause the conductor if we have one - it will resume when config mode exits
+        let resume_tx = if let Some(ref conductor) = return_to {
+            Some(conductor.pause().await?)
+        } else {
+            None
+        };
+
         // Load current config (or start with empty agent)
         let current_config = self
             .load_config()
             .map_err(|e| sacp::Error::new(-32603, e.to_string()))?
             .unwrap_or_else(|| SymposiumUserConfig::with_agent(""));
 
-        // Spawn the config mode actor
+        // Spawn the config mode actor (it holds resume_tx and drops it on exit)
         let actor_handle = ConfigModeHandle::spawn(
             current_config,
             session_id.clone(),
             config_agent_tx.clone(),
+            resume_tx,
             cx,
         )?;
 

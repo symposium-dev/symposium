@@ -14,6 +14,7 @@ use sacp::link::AgentToClient;
 use sacp::schema::SessionId;
 use sacp::JrConnectionCx;
 use std::sync::LazyLock;
+use tokio::sync::oneshot;
 
 /// Result of handling menu input.
 enum MenuAction {
@@ -56,10 +57,15 @@ impl ConfigModeHandle {
     /// Spawn a new config mode actor.
     ///
     /// Returns a handle for sending input to the actor.
+    ///
+    /// The `resume_tx` is an optional oneshot sender that, when dropped, will
+    /// signal the conductor to resume processing. If provided, it will be
+    /// dropped when the actor exits (either save or cancel).
     pub fn spawn(
         config: SymposiumUserConfig,
         session_id: SessionId,
         config_agent_tx: UnboundedSender<ConfigAgentMessage>,
+        resume_tx: Option<oneshot::Sender<()>>,
         cx: &JrConnectionCx<AgentToClient>,
     ) -> Result<Self, sacp::Error> {
         let (tx, rx) = mpsc::channel(32);
@@ -71,6 +77,7 @@ impl ConfigModeHandle {
             config_agent_tx,
             rx,
             available_agents: Vec::new(),
+            _resume_tx: resume_tx,
         };
 
         cx.spawn(actor.run())?;
@@ -94,6 +101,9 @@ struct ConfigModeActor {
     config_agent_tx: UnboundedSender<ConfigAgentMessage>,
     rx: mpsc::Receiver<ConfigModeInput>,
     available_agents: Vec<AgentListEntry>,
+    /// When dropped, signals the conductor to resume. We never send to this,
+    /// just hold it until the actor exits.
+    _resume_tx: Option<oneshot::Sender<()>>,
 }
 
 impl ConfigModeActor {
