@@ -55,7 +55,15 @@ impl ConfigModeHandle {
         let (tx, rx) = mpsc::channel(32);
         let handle = Self { tx };
 
-        cx.spawn(run_actor(config, session_id, config_agent_tx, rx))?;
+        let actor = ConfigModeActor {
+            config,
+            session_id,
+            config_agent_tx,
+            rx,
+            available_agents: Vec::new(),
+        };
+
+        cx.spawn(actor.run())?;
 
         Ok(handle)
     }
@@ -69,8 +77,8 @@ impl ConfigModeHandle {
     }
 }
 
-/// Context passed through the actor's async functions.
-struct ActorContext {
+/// The config mode actor state.
+struct ConfigModeActor {
     config: SymposiumUserConfig,
     session_id: SessionId,
     config_agent_tx: UnboundedSender<ConfigAgentMessage>,
@@ -78,7 +86,20 @@ struct ActorContext {
     available_agents: Vec<AgentListEntry>,
 }
 
-impl ActorContext {
+impl ConfigModeActor {
+    /// Main entry point - runs the actor.
+    async fn run(mut self) -> Result<(), sacp::Error> {
+        // Fetch available agents
+        match registry::list_agents().await {
+            Ok(agents) => self.available_agents = agents,
+            Err(e) => self.send_message(format!("Warning: Failed to fetch registry: {}", e)),
+        }
+
+        self.main_menu_loop().await;
+
+        Ok(())
+    }
+
     /// Wait for the next user input.
     async fn next_input(&mut self) -> Option<String> {
         match self.rx.next().await {
@@ -118,227 +139,190 @@ impl ActorContext {
             ))
             .ok();
     }
-}
 
-/// The main actor loop.
-async fn run_actor(
-    config: SymposiumUserConfig,
-    session_id: SessionId,
-    config_agent_tx: UnboundedSender<ConfigAgentMessage>,
-    rx: mpsc::Receiver<ConfigModeInput>,
-) -> Result<(), sacp::Error> {
-    // Fetch available agents
-    let available_agents = match registry::list_agents().await {
-        Ok(agents) => agents,
-        Err(e) => {
-            config_agent_tx
-                .unbounded_send(ConfigAgentMessage::ConfigModeOutput(
-                    session_id.clone(),
-                    ConfigModeOutput::SendMessage(format!(
-                        "Warning: Failed to fetch registry: {}",
-                        e
-                    )),
-                ))
-                .ok();
-            Vec::new()
-        }
-    };
+    /// Main menu loop.
+    async fn main_menu_loop(&mut self) {
+        loop {
+            self.show_main_menu();
 
-    let mut ctx = ActorContext {
-        config,
-        session_id,
-        config_agent_tx,
-        rx,
-        available_agents,
-    };
+            let Some(input) = self.next_input().await else {
+                return;
+            };
 
-    main_menu_loop(&mut ctx).await;
-
-    Ok(())
-}
-
-/// Main menu loop.
-async fn main_menu_loop(ctx: &mut ActorContext) {
-    loop {
-        show_main_menu(ctx);
-
-        let Some(input) = ctx.next_input().await else {
-            return;
-        };
-
-        if !handle_main_menu_input(ctx, &input).await {
-            return;
+            if !self.handle_main_menu_input(&input).await {
+                return;
+            }
         }
     }
-}
 
-/// Handle input in the main menu. Returns false if we should exit.
-async fn handle_main_menu_input(ctx: &mut ActorContext, text: &str) -> bool {
-    let text = text.trim();
-    let text_upper = text.to_uppercase();
-
-    // Exit commands
-    if text_upper == "EXIT" || text_upper == "DONE" || text_upper == "QUIT" {
-        ctx.done();
-        return false;
-    }
-
-    // Cancel without saving
-    if text_upper == "CANCEL" {
-        ctx.cancelled();
-        return false;
-    }
-
-    // Agent selection
-    if text_upper == "A" || text_upper == "AGENT" {
-        agent_selection_loop(ctx).await;
-        return true;
-    }
-
-    // Toggle proxy by index
-    if let Ok(index) = text.parse::<usize>() {
-        if index < ctx.config.proxies.len() {
-            ctx.config.proxies[index].enabled = !ctx.config.proxies[index].enabled;
-            let proxy = &ctx.config.proxies[index];
-            let status = if proxy.enabled { "enabled" } else { "disabled" };
-            ctx.send_message(format!("Proxy `{}` is now {}.", proxy.name, status));
-        } else {
-            ctx.send_message(format!(
-                "Invalid index. Please enter 0-{}.",
-                ctx.config.proxies.len().saturating_sub(1)
-            ));
-        }
-        return true;
-    }
-
-    // Move command: "move X to Y"
-    static MOVE_RE: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?i)^move\s+(\d+)\s+to\s+(\d+)$").unwrap());
-
-    if let Some(caps) = MOVE_RE.captures(text) {
-        let from: usize = caps[1].parse().unwrap();
-        let to: usize = caps[2].parse().unwrap();
-
-        if from < ctx.config.proxies.len() && to <= ctx.config.proxies.len() {
-            let proxy = ctx.config.proxies.remove(from);
-            let insert_at = if to > from { to - 1 } else { to };
-            ctx.send_message(format!("Moved `{}` from {} to {}.", proxy.name, from, to));
-            ctx.config
-                .proxies
-                .insert(insert_at.min(ctx.config.proxies.len()), proxy);
-        } else {
-            ctx.send_message("Invalid indices for move.");
-        }
-        return true;
-    }
-
-    // Unknown command
-    ctx.send_message(format!("Unknown command: `{}`", text));
-    true
-}
-
-/// Agent selection loop.
-async fn agent_selection_loop(ctx: &mut ActorContext) {
-    loop {
-        show_agent_selection(ctx);
-
-        let Some(input) = ctx.next_input().await else {
-            return;
-        };
-
-        let text = input.trim();
+    /// Handle input in the main menu. Returns false if we should exit.
+    async fn handle_main_menu_input(&mut self, text: &str) -> bool {
+        let text = text.trim();
         let text_upper = text.to_uppercase();
 
-        // Back to main menu
-        if text_upper == "BACK" || text_upper == "CANCEL" {
-            return;
+        // Exit commands
+        if text_upper == "EXIT" || text_upper == "DONE" || text_upper == "QUIT" {
+            self.done();
+            return false;
         }
 
-        // Select by index
+        // Cancel without saving
+        if text_upper == "CANCEL" {
+            self.cancelled();
+            return false;
+        }
+
+        // Agent selection
+        if text_upper == "A" || text_upper == "AGENT" {
+            self.agent_selection_loop().await;
+            return true;
+        }
+
+        // Toggle proxy by index
         if let Ok(index) = text.parse::<usize>() {
-            if index < ctx.available_agents.len() {
-                let agent = &ctx.available_agents[index];
-                ctx.config.agent = agent.id.clone();
-                ctx.send_message(format!("Agent set to `{}`.", agent.name));
-                return;
+            if index < self.config.proxies.len() {
+                self.config.proxies[index].enabled = !self.config.proxies[index].enabled;
+                let proxy = &self.config.proxies[index];
+                let status = if proxy.enabled { "enabled" } else { "disabled" };
+                self.send_message(format!("Proxy `{}` is now {}.", proxy.name, status));
             } else {
-                ctx.send_message(format!(
+                self.send_message(format!(
                     "Invalid index. Please enter 0-{}.",
-                    ctx.available_agents.len().saturating_sub(1)
+                    self.config.proxies.len().saturating_sub(1)
                 ));
             }
-            continue;
+            return true;
         }
 
-        ctx.send_message(format!(
-            "Unknown input: `{}`. Enter a number or `back`.",
-            text
-        ));
+        // Move command: "move X to Y"
+        static MOVE_RE: LazyLock<Regex> =
+            LazyLock::new(|| Regex::new(r"(?i)^move\s+(\d+)\s+to\s+(\d+)$").unwrap());
+
+        if let Some(caps) = MOVE_RE.captures(text) {
+            let from: usize = caps[1].parse().unwrap();
+            let to: usize = caps[2].parse().unwrap();
+
+            if from < self.config.proxies.len() && to <= self.config.proxies.len() {
+                let proxy = self.config.proxies.remove(from);
+                let insert_at = if to > from { to - 1 } else { to };
+                self.send_message(format!("Moved `{}` from {} to {}.", proxy.name, from, to));
+                self.config
+                    .proxies
+                    .insert(insert_at.min(self.config.proxies.len()), proxy);
+            } else {
+                self.send_message("Invalid indices for move.");
+            }
+            return true;
+        }
+
+        // Unknown command
+        self.send_message(format!("Unknown command: `{}`", text));
+        true
     }
-}
 
-/// Show the main menu.
-fn show_main_menu(ctx: &ActorContext) {
-    let mut msg = String::new();
-    msg.push_str("# Symposium Configuration\n\n");
+    /// Agent selection loop.
+    async fn agent_selection_loop(&mut self) {
+        loop {
+            self.show_agent_selection();
 
-    // Current agent
-    msg.push_str("**Agent:** ");
-    if ctx.config.agent.is_empty() {
-        msg.push_str("(not configured)\n\n");
-    } else {
-        // Try to find the agent name
-        let agent_name = ctx
-            .available_agents
-            .iter()
-            .find(|a| a.id == ctx.config.agent)
-            .map(|a| a.name.as_str())
-            .unwrap_or(&ctx.config.agent);
-        msg.push_str(&format!("`{}`\n\n", agent_name));
-    }
+            let Some(input) = self.next_input().await else {
+                return;
+            };
 
-    // Proxies
-    msg.push_str("**Proxies:**\n");
-    if ctx.config.proxies.is_empty() {
-        msg.push_str("  (none configured)\n");
-    } else {
-        for (i, proxy) in ctx.config.proxies.iter().enumerate() {
-            let status = if proxy.enabled { "✓" } else { "✗" };
-            msg.push_str(&format!("  `{}` [{}] {}\n", i, status, proxy.name));
+            let text = input.trim();
+            let text_upper = text.to_uppercase();
+
+            // Back to main menu
+            if text_upper == "BACK" || text_upper == "CANCEL" {
+                return;
+            }
+
+            // Select by index
+            if let Ok(index) = text.parse::<usize>() {
+                if index < self.available_agents.len() {
+                    let agent = &self.available_agents[index];
+                    self.config.agent = agent.id.clone();
+                    self.send_message(format!("Agent set to `{}`.", agent.name));
+                    return;
+                } else {
+                    self.send_message(format!(
+                        "Invalid index. Please enter 0-{}.",
+                        self.available_agents.len().saturating_sub(1)
+                    ));
+                }
+                continue;
+            }
+
+            self.send_message(format!(
+                "Unknown input: `{}`. Enter a number or `back`.",
+                text
+            ));
         }
     }
-    msg.push('\n');
 
-    // Commands
-    msg.push_str("**Commands:**\n");
-    msg.push_str("  `A` or `AGENT` - Select a different agent\n");
-    msg.push_str("  `0`, `1`, ... - Toggle proxy enabled/disabled\n");
-    msg.push_str("  `move X to Y` - Reorder proxies\n");
-    msg.push_str("  `done` - Save and exit\n");
-    msg.push_str("  `cancel` - Exit without saving\n");
+    /// Show the main menu.
+    fn show_main_menu(&self) {
+        let mut msg = String::new();
+        msg.push_str("# Symposium Configuration\n\n");
 
-    ctx.send_message(msg);
-}
+        // Current agent
+        msg.push_str("**Agent:** ");
+        if self.config.agent.is_empty() {
+            msg.push_str("(not configured)\n\n");
+        } else {
+            // Try to find the agent name
+            let agent_name = self
+                .available_agents
+                .iter()
+                .find(|a| a.id == self.config.agent)
+                .map(|a| a.name.as_str())
+                .unwrap_or(&self.config.agent);
+            msg.push_str(&format!("`{}`\n\n", agent_name));
+        }
 
-/// Show the agent selection menu.
-fn show_agent_selection(ctx: &ActorContext) {
-    let mut msg = String::new();
-    msg.push_str("# Select Agent\n\n");
+        // Proxies
+        msg.push_str("**Proxies:**\n");
+        if self.config.proxies.is_empty() {
+            msg.push_str("  (none configured)\n");
+        } else {
+            for (i, proxy) in self.config.proxies.iter().enumerate() {
+                let status = if proxy.enabled { "✓" } else { "✗" };
+                msg.push_str(&format!("  `{}` [{}] {}\n", i, status, proxy.name));
+            }
+        }
+        msg.push('\n');
 
-    if ctx.available_agents.is_empty() {
-        msg.push_str("No agents available.\n\n");
-    } else {
-        for (i, agent) in ctx.available_agents.iter().enumerate() {
-            msg.push_str(&format!("`{}` **{}**", i, agent.name));
-            if let Some(desc) = &agent.description {
-                msg.push_str(&format!(" - {}", desc));
+        // Commands
+        msg.push_str("**Commands:**\n");
+        msg.push_str("  `A` or `AGENT` - Select a different agent\n");
+        msg.push_str("  `0`, `1`, ... - Toggle proxy enabled/disabled\n");
+        msg.push_str("  `move X to Y` - Reorder proxies\n");
+        msg.push_str("  `done` - Save and exit\n");
+        msg.push_str("  `cancel` - Exit without saving\n");
+
+        self.send_message(msg);
+    }
+
+    /// Show the agent selection menu.
+    fn show_agent_selection(&self) {
+        let mut msg = String::new();
+        msg.push_str("# Select Agent\n\n");
+
+        if self.available_agents.is_empty() {
+            msg.push_str("No agents available.\n\n");
+        } else {
+            for (i, agent) in self.available_agents.iter().enumerate() {
+                msg.push_str(&format!("`{}` **{}**", i, agent.name));
+                if let Some(desc) = &agent.description {
+                    msg.push_str(&format!(" - {}", desc));
+                }
+                msg.push('\n');
             }
             msg.push('\n');
         }
-        msg.push('\n');
+
+        msg.push_str("Enter a number to select, or `back` to return.\n");
+
+        self.send_message(msg);
     }
-
-    msg.push_str("Enter a number to select, or `back` to return.\n");
-
-    ctx.send_message(msg);
 }
