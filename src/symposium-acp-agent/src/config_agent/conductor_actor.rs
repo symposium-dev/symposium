@@ -14,7 +14,7 @@ use sacp::link::{AgentToClient, ClientToAgent};
 use sacp::schema::{
     InitializeRequest, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
 };
-use sacp::{ClientPeer, DynComponent, JrConnectionCx, JrRequestCx, MessageCx};
+use sacp::{DynComponent, JrConnectionCx, JrRequestCx, MessageCx};
 use sacp_conductor::{Conductor, McpBridgeMode};
 use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
@@ -64,7 +64,6 @@ impl ConductorHandle {
             trace_dir.cloned(),
             config_agent_tx,
             handle.clone(),
-            client_cx.clone(),
             rx,
         ))?;
 
@@ -117,7 +116,6 @@ async fn run_actor(
     trace_dir: Option<PathBuf>,
     config_agent_tx: UnboundedSender<ConfigAgentMessage>,
     self_handle: ConductorHandle,
-    client_cx: JrConnectionCx<AgentToClient>,
     mut rx: mpsc::Receiver<ConductorMessage>,
 ) -> Result<(), sacp::Error> {
     // Build the symposium config
@@ -156,8 +154,10 @@ async fn run_actor(
     ClientToAgent::builder()
         .on_receive_message(
             async |message_cx: MessageCx, _cx| {
-                // Incoming message from the conductor: forward to the client
-                client_cx.send_proxied_message_to(ClientPeer, message_cx)
+                // Incoming message from the conductor: forward via ConfigAgent to client
+                config_agent_tx
+                    .unbounded_send(ConfigAgentMessage::MessageToClient(message_cx))
+                    .map_err(|_| sacp::util::internal_error("ConfigAgent closed"))
             },
             sacp::on_receive_message!(),
         )

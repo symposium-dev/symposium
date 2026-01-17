@@ -21,7 +21,7 @@ use sacp::schema::{
     SessionNotification, SessionUpdate, StopReason, TextContent,
 };
 use sacp::util::MatchMessage;
-use sacp::{Component, JrConnectionCx, JrRequestCx, MessageCx};
+use sacp::{ClientPeer, Component, JrConnectionCx, JrRequestCx, MessageCx};
 use std::path::PathBuf;
 use uberconductor_actor::UberconductorHandle;
 
@@ -115,6 +115,11 @@ impl ConfigAgent {
                 ConfigAgentMessage::MessageFromClient(message) => {
                     self.handle_message_from_client(message, &uberconductor, &cx)
                         .await?
+                }
+
+                ConfigAgentMessage::MessageToClient(message) => {
+                    // Forward message from conductor to client
+                    cx.send_proxied_message_to(ClientPeer, message)?;
                 }
 
                 ConfigAgentMessage::NewSessionCreated(response, conductor, request_cx) => {
@@ -326,6 +331,10 @@ impl ConfigAgent {
 pub enum ConfigAgentMessage {
     /// Sent when a client sends a message to the agent.
     MessageFromClient(MessageCx),
+
+    /// Sent when a conductor wants to send a message to the client.
+    /// ConfigAgent forwards this (and can inject additional messages like session updates).
+    MessageToClient(MessageCx),
 
     /// Sent when a conductor has established a session.
     /// ConfigAgent stores the session mapping, then responds to the client.
