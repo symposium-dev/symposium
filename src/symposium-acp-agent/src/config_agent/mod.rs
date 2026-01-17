@@ -25,6 +25,9 @@ use sacp::{ClientPeer, Component, JrConnectionCx, JrRequestCx, MessageCx};
 use std::path::PathBuf;
 use uberconductor_actor::UberconductorHandle;
 
+/// The slash command name for entering config mode.
+const CONFIG_SLASH_COMMAND: &str = "symposium:config";
+
 /// Extract the session ID from a message, if present.
 fn get_session_id(message: &MessageCx) -> Result<Option<SessionId>, sacp::Error> {
     let params = match message {
@@ -176,6 +179,76 @@ impl ConfigAgent {
         }
     }
 
+    /// Enter configuration mode for a session.
+    ///
+    /// If the session was delegating to a conductor, we store the conductor handle
+    /// so we can return to it when config mode exits.
+    async fn enter_config_mode(
+        &mut self,
+        session_id: SessionId,
+        request_cx: JrRequestCx<PromptResponse>,
+        cx: &JrConnectionCx<AgentToClient>,
+    ) -> Result<(), sacp::Error> {
+        // Get the current session state to potentially preserve the conductor
+        let return_to = match self.sessions.get(&session_id) {
+            Some(SessionState::Delegating { conductor }) => Some(conductor.clone()),
+            _ => None,
+        };
+
+        // Load current config (or start with empty agent)
+        let current_config = self
+            .load_config()
+            .map_err(|e| sacp::Error::new(-32603, e.to_string()))?
+            .unwrap_or_else(|| SymposiumUserConfig::with_agent(""));
+
+        // Transition to config state
+        self.sessions.insert(
+            session_id.clone(),
+            SessionState::Config {
+                current_config,
+                return_to,
+            },
+        );
+
+        // Send welcome message
+        let welcome = self.config_mode_welcome();
+        cx.send_notification(SessionNotification::new(
+            session_id,
+            SessionUpdate::AgentMessageChunk(ContentChunk::new(welcome.into())),
+        ))?;
+
+        // Respond to the prompt
+        request_cx.respond(PromptResponse::new(StopReason::EndTurn))
+    }
+
+    /// Generate the config mode welcome message.
+    fn config_mode_welcome(&self) -> String {
+        "# Symposium Configuration\n\n\
+         You're now in configuration mode.\n\n\
+         (Configuration options coming soon...)\n\n\
+         Type `exit` to return to your session."
+            .to_string()
+    }
+
+    /// Check if the prompt is invoking the config slash command.
+    fn is_config_command(request: &PromptRequest) -> bool {
+        // Extract text from the prompt
+        let text: String = request
+            .prompt
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text(TextContent { text, .. }) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        let text = text.trim();
+
+        // Check for /symposium:config (with or without the leading slash)
+        text == format!("/{}", CONFIG_SLASH_COMMAND) || text == CONFIG_SLASH_COMMAND
+    }
+
     /// Handle a prompt request.
     async fn handle_prompt(
         &mut self,
@@ -190,8 +263,13 @@ impl ConfigAgent {
 
         match session_state {
             Some(SessionState::Delegating { conductor }) => {
-                // Forward to conductor
-                conductor.send_prompt(request, request_cx).await
+                // Check if this is the config command
+                if Self::is_config_command(&request) {
+                    self.enter_config_mode(session_id, request_cx, cx).await
+                } else {
+                    // Forward to conductor
+                    conductor.send_prompt(request, request_cx).await
+                }
             }
             Some(SessionState::InitialSetup) | Some(SessionState::Config { .. }) => {
                 // Handle config input
@@ -293,7 +371,7 @@ impl ConfigAgent {
                 if let SessionUpdate::AvailableCommandsUpdate(ref mut update) = notif.update {
                     // Inject the /symposium:config command
                     update.available_commands.push(AvailableCommand::new(
-                        "symposium:config",
+                        CONFIG_SLASH_COMMAND,
                         "Configure Symposium settings",
                     ));
                 }
