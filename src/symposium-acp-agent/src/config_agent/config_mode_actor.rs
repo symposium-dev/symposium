@@ -188,17 +188,19 @@ impl ConfigModeActor {
                 return None;
             }
 
-            // Select by index
-            if let Ok(index) = text.parse::<usize>() {
-                if index < self.available_agents.len() {
-                    let agent = &self.available_agents[index];
+            // Select by index (1-based)
+            if let Ok(display_index) = text.parse::<usize>() {
+                if display_index >= 1 && display_index <= self.available_agents.len() {
+                    let agent = &self.available_agents[display_index - 1];
                     self.send_message(format!("Agent set to `{}`.", agent.name));
                     // Create default config with selected agent
                     return Some(SymposiumUserConfig::with_agent(&agent.id));
+                } else if self.available_agents.is_empty() {
+                    self.send_message("No agents available.");
                 } else {
                     self.send_message(format!(
-                        "Invalid index. Please enter 0-{}.",
-                        self.available_agents.len().saturating_sub(1)
+                        "Invalid index. Please enter 1-{}.",
+                        self.available_agents.len()
                     ));
                 }
                 continue;
@@ -295,43 +297,73 @@ impl ConfigModeActor {
             return MenuAction::Redisplay;
         }
 
-        // Toggle proxy by index
-        if let Ok(index) = text.parse::<usize>() {
-            if index < config.proxies.len() {
+        // Toggle extension by index (1-based)
+        if let Ok(display_index) = text.parse::<usize>() {
+            if display_index >= 1 && display_index <= config.proxies.len() {
+                let index = display_index - 1; // Convert to 0-based
                 config.proxies[index].enabled = !config.proxies[index].enabled;
                 let proxy = &config.proxies[index];
                 let status = if proxy.enabled { "enabled" } else { "disabled" };
-                self.send_message(format!("Proxy `{}` is now {}.", proxy.name, status));
+                self.send_message(format!("Extension `{}` is now {}.", proxy.name, status));
                 return MenuAction::Redisplay;
+            } else if config.proxies.is_empty() {
+                self.send_message("No extensions configured.");
+                return MenuAction::Continue;
             } else {
                 self.send_message(format!(
-                    "Invalid index. Please enter 0-{}.",
-                    config.proxies.len().saturating_sub(1)
+                    "Invalid index. Please enter 1-{}.",
+                    config.proxies.len()
                 ));
                 return MenuAction::Continue;
             }
         }
 
-        // Move command: "move X to Y"
+        // Move command: "move X to Y" or "move X to start/end" (1-based)
         static MOVE_RE: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"(?i)^move\s+(\d+)\s+to\s+(\d+)$").unwrap());
+            LazyLock::new(|| Regex::new(r"(?i)^move\s+(\d+)\s+to\s+(\d+|start|end)$").unwrap());
 
         if let Some(caps) = MOVE_RE.captures(text) {
-            let from: usize = caps[1].parse().unwrap();
-            let to: usize = caps[2].parse().unwrap();
+            let from_display: usize = caps[1].parse().unwrap();
+            let to_str = caps[2].to_lowercase();
 
-            if from < config.proxies.len() && to <= config.proxies.len() {
-                let proxy = config.proxies.remove(from);
-                let insert_at = if to > from { to - 1 } else { to };
-                self.send_message(format!("Moved `{}` from {} to {}.", proxy.name, from, to));
-                config
-                    .proxies
-                    .insert(insert_at.min(config.proxies.len()), proxy);
-                return MenuAction::Redisplay;
-            } else {
-                self.send_message("Invalid indices for move.");
+            // Convert 1-based display index to 0-based
+            if from_display < 1 || from_display > config.proxies.len() {
+                self.send_message(format!(
+                    "Invalid source index. Please enter 1-{}.",
+                    config.proxies.len()
+                ));
                 return MenuAction::Continue;
             }
+            let from = from_display - 1;
+
+            // Parse destination: number (1-based), "start", or "end"
+            let to = if to_str == "start" {
+                0
+            } else if to_str == "end" {
+                config.proxies.len() - 1
+            } else {
+                let to_display: usize = to_str.parse().unwrap();
+                if to_display < 1 || to_display > config.proxies.len() {
+                    self.send_message(format!(
+                        "Invalid destination index. Please enter 1-{}, `start`, or `end`.",
+                        config.proxies.len()
+                    ));
+                    return MenuAction::Continue;
+                }
+                to_display - 1
+            };
+
+            let proxy = config.proxies.remove(from);
+            let insert_at = if to > from { to } else { to };
+            config
+                .proxies
+                .insert(insert_at.min(config.proxies.len()), proxy.clone());
+            self.send_message(format!(
+                "Moved `{}` to position {}.",
+                proxy.name,
+                insert_at + 1
+            ));
+            return MenuAction::Redisplay;
         }
 
         // Unknown command
@@ -356,17 +388,19 @@ impl ConfigModeActor {
                 return;
             }
 
-            // Select by index
-            if let Ok(index) = text.parse::<usize>() {
-                if index < self.available_agents.len() {
-                    let agent = &self.available_agents[index];
+            // Select by index (1-based)
+            if let Ok(display_index) = text.parse::<usize>() {
+                if display_index >= 1 && display_index <= self.available_agents.len() {
+                    let agent = &self.available_agents[display_index - 1];
                     config.agent = agent.id.clone();
                     self.send_message(format!("Agent set to `{}`.", agent.name));
                     return;
+                } else if self.available_agents.is_empty() {
+                    self.send_message("No agents available.");
                 } else {
                     self.send_message(format!(
-                        "Invalid index. Please enter 0-{}.",
-                        self.available_agents.len().saturating_sub(1)
+                        "Invalid index. Please enter 1-{}.",
+                        self.available_agents.len()
                     ));
                 }
                 continue;
@@ -382,42 +416,50 @@ impl ConfigModeActor {
     /// Show the main menu.
     fn show_main_menu(&self, config: &SymposiumUserConfig) {
         let mut msg = String::new();
-        msg.push_str("# Symposium Configuration\n\n");
+        msg.push_str("# Configuration\n\n");
 
         // Current agent
-        msg.push_str("**Agent:** ");
-        if config.agent.is_empty() {
-            msg.push_str("(not configured)\n\n");
+        let agent_name = if config.agent.is_empty() {
+            "(not configured)".to_string()
         } else {
-            // Try to find the agent name
-            let agent_name = self
-                .available_agents
+            self.available_agents
                 .iter()
                 .find(|a| a.id == config.agent)
-                .map(|a| a.name.as_str())
-                .unwrap_or(&config.agent);
-            msg.push_str(&format!("`{}`\n\n", agent_name));
-        }
+                .map(|a| a.name.clone())
+                .unwrap_or_else(|| config.agent.clone())
+        };
 
-        // Proxies
-        msg.push_str("**Proxies:**\n");
+        msg.push_str(&format!("* **Agent:** {}\n", agent_name));
+
+        // Extensions (formerly proxies)
+        msg.push_str("* **Extensions:**\n");
         if config.proxies.is_empty() {
-            msg.push_str("  (none configured)\n");
+            msg.push_str("    * (none configured)\n");
         } else {
             for (i, proxy) in config.proxies.iter().enumerate() {
-                let status = if proxy.enabled { "✓" } else { "✗" };
-                msg.push_str(&format!("  `{}` [{}] {}\n", i, status, proxy.name));
+                // 1-based indexing for display
+                let display_index = i + 1;
+                if proxy.enabled {
+                    msg.push_str(&format!("    {}. {}\n", display_index, proxy.name));
+                } else {
+                    msg.push_str(&format!(
+                        "    {}. ~~{}~~ (disabled)\n",
+                        display_index, proxy.name
+                    ));
+                }
             }
         }
         msg.push('\n');
 
         // Commands
-        msg.push_str("**Commands:**\n");
-        msg.push_str("  `A` or `AGENT` - Select a different agent\n");
-        msg.push_str("  `0`, `1`, ... - Toggle proxy enabled/disabled\n");
-        msg.push_str("  `move X to Y` - Reorder proxies\n");
-        msg.push_str("  `save` - Save for future sessions\n");
-        msg.push_str("  `cancel` - Exit without saving\n");
+        msg.push_str("# Commands\n\n");
+        msg.push_str("- `A` or `AGENT` - Select a different agent\n");
+        if !config.proxies.is_empty() {
+            msg.push_str("- `1`, `2`, ... - Toggle extension enabled/disabled\n");
+            msg.push_str("- `move X to Y` - Reorder extensions (or `start`/`end`)\n");
+        }
+        msg.push_str("- `save` - Save for future sessions\n");
+        msg.push_str("- `cancel` - Exit without saving\n");
 
         self.send_message(msg);
     }
@@ -430,12 +472,17 @@ impl ConfigModeActor {
         if self.available_agents.is_empty() {
             msg.push_str("No agents available.\n\n");
         } else {
+            // Table header
+            msg.push_str("| # | Agent | Description |\n");
+            msg.push_str("|---|-------|-------------|\n");
             for (i, agent) in self.available_agents.iter().enumerate() {
-                msg.push_str(&format!("`{}` **{}**", i, agent.name));
-                if let Some(desc) = &agent.description {
-                    msg.push_str(&format!(" - {}", desc));
-                }
-                msg.push('\n');
+                // 1-based indexing for display
+                let display_index = i + 1;
+                let description = agent.description.as_deref().unwrap_or("");
+                msg.push_str(&format!(
+                    "| {} | {} | {} |\n",
+                    display_index, agent.name, description
+                ));
             }
             msg.push('\n');
         }

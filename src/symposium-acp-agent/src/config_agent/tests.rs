@@ -132,19 +132,21 @@ async fn test_no_config_initial_setup() -> Result<(), sacp::Error> {
                 No configuration found. Let's set up your AI agent.
                 # Select Agent
 
-                `0` **Claude Code** - AI coding assistant
-                `1` **Gemini CLI** - Google's AI
+                | # | Agent | Description |
+                |---|-------|-------------|
+                | 1 | Claude Code | AI coding assistant |
+                | 2 | Gemini CLI | Google's AI |
 
                 Enter a number to select, or `back` to return.
             "#]]
             .assert_eq(&text);
 
-            // Select an agent (Claude Code = 0)
+            // Select an agent (Claude Code = 1, using 1-based indexing)
             notifications.lock().unwrap().clear();
             let prompt_response = cx
                 .send_request(PromptRequest::new(
                     session_id,
-                    vec![ContentBlock::Text(TextContent::new("0"))],
+                    vec![ContentBlock::Text(TextContent::new("1"))],
                 ))
                 .block_task()
                 .await?;
@@ -160,7 +162,7 @@ async fn test_no_config_initial_setup() -> Result<(), sacp::Error> {
                 "Expected agent selection confirmation"
             );
             assert!(
-                text.contains("Symposium Configuration"),
+                text.contains("# Configuration"),
                 "Expected main menu after selection"
             );
 
@@ -313,19 +315,17 @@ async fn test_config_mode_entry() -> Result<(), sacp::Error> {
             // Should have received config mode welcome with menu
             let text = notifications.lock().unwrap().text();
             expect![[r#"
-                # Symposium Configuration
+                # Configuration
 
-                **Agent:** `elizacp --deterministic acp`
+                * **Agent:** elizacp --deterministic acp
+                * **Extensions:**
+                    * (none configured)
 
-                **Proxies:**
-                  (none configured)
+                # Commands
 
-                **Commands:**
-                  `A` or `AGENT` - Select a different agent
-                  `0`, `1`, ... - Toggle proxy enabled/disabled
-                  `move X to Y` - Reorder proxies
-                  `save` - Save for future sessions
-                  `cancel` - Exit without saving
+                - `A` or `AGENT` - Select a different agent
+                - `save` - Save for future sessions
+                - `cancel` - Exit without saving
             "#]]
             .assert_eq(&text);
 
