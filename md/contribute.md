@@ -4,7 +4,7 @@ Symposium is an open-source project in active development. We're iterating heavi
 
 ## Come chat with us
 
-The best way to get involved is to join us on [Zulip](https://symposium.zulipchat.com/). We use it for design discussions, coordination, and general conversation about AI-assisted development.
+The best way to get involved is to join us on [Zulip](https://symposium-dev.zulipchat.com/). We use it for design discussions, coordination, and general conversation about AI-assisted development.
 
 Drop in, say hello, and tell us what you're interested in working on.
 
