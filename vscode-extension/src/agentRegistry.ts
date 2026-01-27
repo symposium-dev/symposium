@@ -34,7 +34,6 @@ export function setExtensionContext(context: vscode.ExtensionContext): void {
 
 /**
  * Run a symposium-acp-agent registry subcommand and return stdout.
- * Exported for use by extensionRegistry.ts.
  */
 export async function runRegistryCommand(args: string[]): Promise<string> {
   if (!extensionContext) {

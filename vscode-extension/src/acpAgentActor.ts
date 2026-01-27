@@ -10,9 +10,7 @@ import { Writable, Readable } from "stream";
 import * as acp from "@agentclientprotocol/sdk";
 import * as vscode from "vscode";
 import { AgentConfiguration } from "./agentConfiguration";
-import { getAgentById, resolveAgentJson } from "./agentRegistry";
 import { logger } from "./extension";
-import { resolveExtensionJson } from "./extensionRegistry";
 
 /**
  * Tool call information passed to callbacks
@@ -219,7 +217,7 @@ export class AcpAgentActor {
 
   /**
    * Initialize the ACP connection by spawning the agent process
-   * @param config - Agent configuration
+   * @param config - Agent configuration (just workspace folder now)
    * @param conductorCommand - Path to the conductor/agent binary
    */
   async initialize(
@@ -228,18 +226,6 @@ export class AcpAgentActor {
   ): Promise<void> {
     // Read settings to build the command
     const vsConfig = vscode.workspace.getConfiguration("symposium");
-
-    // Get the agent definition
-    const agent = getAgentById(config.agentId);
-
-    if (!agent) {
-      throw new Error(
-        `Agent "${config.agentId}" not found in configured agents`,
-      );
-    }
-
-    // Resolve agent to JSON
-    const agentJson = await resolveAgentJson(agent);
 
     // Get log level if configured
     let agentLogLevel = vsConfig.get<string>("agentLogLevel", "");
@@ -250,8 +236,9 @@ export class AcpAgentActor {
       }
     }
 
-    // Build the spawn command and args
-    const spawnArgs: string[] = ["run-with"];
+    // Build the spawn command and args - just use "run" mode
+    // Symposium's ConfigAgent handles agent selection and extensions
+    const spawnArgs: string[] = ["run"];
 
     if (agentLogLevel) {
       spawnArgs.push("--log", agentLogLevel);
@@ -262,19 +249,10 @@ export class AcpAgentActor {
       spawnArgs.push("--trace-dir", traceDir);
     }
 
-    // Add extension proxies from configuration
-    const extensions = await Promise.all(config.extensions.filter(ext => ext._enabled).map(ext => resolveExtensionJson(ext)));
-    for (const ext of extensions) {
-      spawnArgs.push("--proxy", ext);
-    }
-
     const agentSpawnArgs = vsConfig.get<string[]>("agentSpawnArgs", []);
     for (const arg of agentSpawnArgs) {
       spawnArgs.push(arg);
     }
-
-    // Add the agent JSON
-    spawnArgs.push("--agent", agentJson);
 
     logger.important("agent", "Spawning ACP agent", {
       command: conductorCommand,

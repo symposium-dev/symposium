@@ -1,39 +1,21 @@
 import * as vscode from "vscode";
-import {
-  getAgentById,
-  getCurrentAgentId,
-  DEFAULT_AGENT_ID,
-} from "./agentRegistry";
-import {
-  ExtensionSettingsEntry,
-  DEFAULT_EXTENSIONS,
-  getExtensionsFromSettings,
-} from "./extensionRegistry";
 
 /**
  * AgentConfiguration - Identifies a unique agent setup
  *
- * Consists of the agent ID, workspace folder, and enabled extensions.
- * Tabs with the same configuration can share an ACP agent process.
+ * Currently just the workspace folder. Symposium's ConfigAgent handles
+ * agent selection and extensions via its own configuration system.
  */
 
 export class AgentConfiguration {
-  constructor(
-    public readonly agentId: string,
-    public readonly workspaceFolder: vscode.WorkspaceFolder,
-    public readonly extensions: ExtensionSettingsEntry[],
-  ) {}
+  constructor(public readonly workspaceFolder: vscode.WorkspaceFolder) {}
 
   /**
    * Get a unique key for this configuration.
-   * Includes enabled extensions so different extension configs get different agents.
+   * Just the workspace path now.
    */
   key(): string {
-    const enabledExtensions = this.extensions
-      .filter((e) => e._enabled)
-      .map((e) => e.id)
-      .join(",");
-    return `${this.agentId}:${this.workspaceFolder.uri.fsPath}:${enabledExtensions}`;
+    return this.workspaceFolder.uri.fsPath;
   }
 
   /**
@@ -47,8 +29,7 @@ export class AgentConfiguration {
    * Get a human-readable description
    */
   describe(): string {
-    const agent = getAgentById(this.agentId);
-    return agent?.name ?? this.agentId;
+    return this.workspaceFolder.name;
   }
 
   /**
@@ -58,12 +39,6 @@ export class AgentConfiguration {
   static async fromSettings(
     workspaceFolder?: vscode.WorkspaceFolder,
   ): Promise<AgentConfiguration> {
-    // Get current agent ID
-    const currentAgentId = getCurrentAgentId();
-
-    // Get extensions configuration
-    const extensions = getExtensionsFromSettings();
-
     // Determine workspace folder
     let folder = workspaceFolder;
     if (!folder) {
@@ -84,6 +59,6 @@ export class AgentConfiguration {
       }
     }
 
-    return new AgentConfiguration(currentAgentId, folder, extensions);
+    return new AgentConfiguration(folder);
   }
 }
