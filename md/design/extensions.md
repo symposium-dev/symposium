@@ -93,8 +93,8 @@ Symposium can suggest extensions based on a project's dependencies. This creates
 Extensions are identified using a `source` field with multiple options:
 
 ```toml
-source.crate = "foo"           # Rust crate on crates.io
-source.acp = "bar"             # Extension ID in ACP registry
+source.cargo = "foo"           # Rust crate on crates.io
+source.registry = "bar"        # Extension ID in ACP registry
 source.url = "https://..."     # Direct URL to extension.jsonc
 ```
 
@@ -109,7 +109,7 @@ recommended = ["foo", "bar"]
 
 # Or explicit with full source specification
 [[package.metadata.symposium.recommended]]
-source.acp = "some-extension"
+source.registry = "some-extension"
 ```
 
 When Symposium detects this crate in a user's dependencies, it surfaces these recommendations.
@@ -120,12 +120,12 @@ Symposium maintains a recommendations file that maps crates to suggested extensi
 
 ```toml
 [[recommendation]]
-source.crate = "tokio-helper"
-when-using-crate = "tokio"
+source.cargo = "tokio-helper"
+when.using-crate = "tokio"
 
 [[recommendation]]
-source.crate = "sqlx-helper"
-when-using-crates = ["sqlx", "sea-orm"]
+source.cargo = "sqlx-helper"
+when.using-crates = ["sqlx", "sea-orm"]
 ```
 
 Users can add their own recommendation files for custom mappings.
@@ -149,7 +149,7 @@ Standard package fields (`name`, `description`, `version`) come from `[package]`
 2. Symposium loads the recommendations file (external mappings)
 3. Symposium scans the user's Cargo.lock for dependencies
 4. For each dependency, check:
-   - Does the recommendations file have an entry with matching `when-using-crate(s)`?
+   - Does the recommendations file have an entry with matching `when.using-crate(s)`?
    - Does the dependency's Cargo.toml have `[package.metadata.symposium.recommended]`?
 5. Surface matching extensions in the UI as suggestions
 

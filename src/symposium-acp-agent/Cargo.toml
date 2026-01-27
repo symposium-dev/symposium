@@ -43,6 +43,7 @@ futures = "0.3"
 serde_jsonc = "1"
 shell-words = "1"
 dirs = "5"
+toml = "0.8"
 sha2 = "0.10"
 
 # Registry
@@ -53,6 +54,9 @@ tar = "0.4"
 zip = "2"
 fxhash.workspace = true
 regex = "1.12.2"
+ignore = "0.4.25"
+glob = "0.3.3"
+cargo_metadata = "0.23"
 
 [[example]]
 name = "vscodelm_cli"
@@ -60,4 +64,5 @@ path = "examples/vscodelm_cli.rs"
 
 [dev-dependencies]
 expect-test.workspace = true
+serial_test = "3.3.1"
 tempfile = "3"

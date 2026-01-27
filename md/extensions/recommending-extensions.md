@@ -11,8 +11,8 @@ Extensions are referenced using a `source` field:
 
 | Source | Syntax | Description |
 |--------|--------|-------------|
-| crates.io | `source.crate = "name"` | Rust crate installed via cargo |
-| ACP Registry | `source.acp = "id"` | Extension from the ACP registry |
+| crates.io | `source.cargo = "name"` | Rust crate installed via cargo |
+| ACP Registry | `source.registry = "id"` | Extension from the ACP registry |
 | Direct URL | `source.url = "https://..."` | Direct link to extension.json |
 
 ## Central Recommendations
@@ -21,13 +21,13 @@ Submit a PR to [symposium-dev/recommendations](https://github.com/symposium-dev/
 
 ```toml
 [[recommendation]]
-source.crate = "my-extension"
-when-using-crate = "my-library"
+source.cargo = "my-extension"
+when.using-crate = "my-library"
 
 # Or for multiple trigger crates:
 [[recommendation]]
-source.crate = "my-extension"
-when-using-crates = ["my-library", "my-library-derive"]
+source.cargo = "my-extension"
+when.using-crates = ["my-library", "my-library-derive"]
 ```
 
 This tells Symposium: "If a project depends on `my-library`, suggest `my-extension`."
@@ -54,11 +54,11 @@ For extensions from other sources:
 ```toml
 # Recommend a crates.io extension
 [[package.metadata.symposium.recommended]]
-source.crate = "some-extension"
+source.cargo = "some-extension"
 
 # Recommend an extension from the ACP registry
 [[package.metadata.symposium.recommended]]
-source.acp = "some-acp-extension"
+source.registry = "some-acp-extension"
 
 # Recommend an extension from a direct URL
 [[package.metadata.symposium.recommended]]

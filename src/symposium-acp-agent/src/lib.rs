@@ -4,6 +4,7 @@
 //! Language Model Provider backend.
 
 pub mod config_agent;
+pub mod recommendations;
 pub mod registry;
 pub mod symposium;
 pub mod user_config;

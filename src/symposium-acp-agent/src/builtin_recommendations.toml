@@ -1,0 +1,18 @@
+# Built-in recommendations for Symposium
+#
+# This file defines the extensions that Symposium recommends.
+# These recommendations are compiled into the binary.
+
+# Sparkle - AI collaboration identity (always recommended)
+[[recommendation]]
+source.cargo = { crate = "sparkle-mcp", args = ["--acp"] }
+
+# Ferris - Rust development tools (recommended for Rust projects)
+[[recommendation]]
+source.builtin = "ferris"
+when.file-exists = "Cargo.toml"
+
+# Cargo - Cargo build/test tools (recommended for Rust projects)
+[[recommendation]]
+source.builtin = "cargo"
+when.file-exists = "Cargo.toml"

@@ -6,18 +6,11 @@
 //! The configuration uses `ComponentSource` as the identity for both
 //! agents and extensions, enabling easy diffing with recommendations.
 
+use crate::recommendations::When;
 use crate::registry::ComponentSource;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-
-/// Conditions for when a recommendation applies.
-///
-/// Placeholder - will be replaced by recommendations module.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct When {
-    // Placeholder - will be fleshed out in the recommendations commit
-}
 
 /// Extension configuration entry
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
@@ -341,7 +334,15 @@ mod tests {
                             "ferris",
                         ),
                         enabled: true,
-                        when: When,
+                        when: When {
+                            file_exists: None,
+                            files_exist: None,
+                            using_crate: None,
+                            using_crates: None,
+                            grep: None,
+                            any: None,
+                            all: None,
+                        },
                     },
                     ExtensionConfig {
                         source: Cargo(
@@ -355,7 +356,15 @@ mod tests {
                             },
                         ),
                         enabled: true,
-                        when: When,
+                        when: When {
+                            file_exists: None,
+                            files_exist: None,
+                            using_crate: None,
+                            using_crates: None,
+                            grep: None,
+                            any: None,
+                            all: None,
+                        },
                     },
                 ],
             }
