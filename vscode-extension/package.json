@@ -311,7 +311,7 @@
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src --ext ts",
-    "pretest": "SYMPOSIUM_CONFIG_DIR=\"$PWD/test-workspace/.symposium\" symposium-acp-agent init \"$PWD/test-workspace\" --agent elizacp",
+    "pretest": "SYMPOSIUM_CONFIG_DIR=\"$PWD/test-workspace/.symposium\" symposium-acp-agent init \"$PWD/test-workspace\" --agent elizacp --no-extensions",
     "test": "SYMPOSIUM_CONFIG_DIR=\"$PWD/test-workspace/.symposium\" npm run compile && SYMPOSIUM_CONFIG_DIR=\"$PWD/test-workspace/.symposium\" vscode-test"
   },
   "devDependencies": {
