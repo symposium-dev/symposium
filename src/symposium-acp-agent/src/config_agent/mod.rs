@@ -14,7 +14,6 @@ mod uberconductor_actor;
 mod tests;
 
 use crate::recommendations::{Recommendations, WorkspaceRecommendations};
-use crate::registry::ComponentSource;
 use crate::user_config::{ConfigPaths, WorkspaceConfig};
 use conductor_actor::ConductorHandle;
 use config_mode_actor::{ConfigModeHandle, ConfigModeOutput};
@@ -86,9 +85,6 @@ pub struct ConfigAgent {
     /// Override for recommendations (for testing). If None, loads builtin recommendations.
     recommendations_override: Option<Recommendations>,
 
-    /// Override for the default agent (for testing). If set, bypasses GlobalAgentConfig loading.
-    default_agent_override: Option<ComponentSource>,
-
     /// Configuration paths (where to read/write config files).
     config_paths: ConfigPaths,
 }
@@ -102,7 +98,6 @@ impl ConfigAgent {
             sessions: Default::default(),
             trace_dir: None,
             recommendations_override: None,
-            default_agent_override: None,
             config_paths: ConfigPaths::default_location()?,
         })
     }
@@ -115,7 +110,6 @@ impl ConfigAgent {
             sessions: Default::default(),
             trace_dir: None,
             recommendations_override: None,
-            default_agent_override: None,
             config_paths,
         }
     }
@@ -130,13 +124,6 @@ impl ConfigAgent {
     /// If not set, builtin recommendations are loaded fresh on each new session.
     pub fn with_recommendations(mut self, recommendations: Recommendations) -> Self {
         self.recommendations_override = Some(recommendations);
-        self
-    }
-
-    /// Set default agent override (for testing).
-    /// If set, bypasses GlobalAgentConfig::load() during initial setup.
-    pub fn with_default_agent(mut self, agent: ComponentSource) -> Self {
-        self.default_agent_override = Some(agent);
         self
     }
 
@@ -384,7 +371,6 @@ impl ConfigAgent {
                 workspace_path.clone(),
                 self.config_paths.clone(),
                 workspace_recs,
-                self.default_agent_override.clone(),
                 session_id.clone(),
                 config_agent_tx.clone(),
                 None,
@@ -487,7 +473,6 @@ impl ConfigAgent {
                 current_config,
                 workspace_path.clone(),
                 self.config_paths.clone(),
-                self.default_agent_override.clone(),
                 session_id.clone(),
                 config_agent_tx.clone(),
                 resume_tx,
@@ -500,7 +485,6 @@ impl ConfigAgent {
                     workspace_path.clone(),
                     self.config_paths.clone(),
                     workspace_recs,
-                    self.default_agent_override.clone(),
                     session_id.clone(),
                     config_agent_tx.clone(),
                     Some(resume_tx),

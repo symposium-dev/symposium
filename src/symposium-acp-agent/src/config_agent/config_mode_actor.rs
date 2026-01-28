@@ -73,14 +73,10 @@ impl ConfigModeHandle {
     /// The `resume_tx` is a oneshot sender that, when dropped, will
     /// signal the conductor to resume processing. It will be dropped
     /// when the actor exits (either save or cancel).
-    ///
-    /// The `default_agent_override` is used for testing - if Some, it bypasses
-    /// loading the global agent config.
     pub fn spawn_reconfig(
         config: WorkspaceConfig,
         workspace_path: PathBuf,
         config_paths: ConfigPaths,
-        default_agent_override: Option<ComponentSource>,
         session_id: SessionId,
         config_agent_tx: UnboundedSender<ConfigAgentMessage>,
         resume_tx: oneshot::Sender<()>,
@@ -91,7 +87,6 @@ impl ConfigModeHandle {
             workspace_path,
             config_paths,
             None,
-            default_agent_override,
             session_id,
             config_agent_tx,
             Some(resume_tx),
@@ -109,14 +104,10 @@ impl ConfigModeHandle {
     /// The `resume_tx` is an optional oneshot sender that, when dropped, will
     /// signal the conductor to resume processing. If provided, it will be
     /// dropped when the actor exits (either save or cancel).
-    ///
-    /// The `default_agent_override` is used for testing - if Some, it bypasses
-    /// loading the global agent config.
     pub fn spawn_initial_config(
         workspace_path: PathBuf,
         config_paths: ConfigPaths,
         recommendations: WorkspaceRecommendations,
-        default_agent_override: Option<ComponentSource>,
         session_id: SessionId,
         config_agent_tx: UnboundedSender<ConfigAgentMessage>,
         resume_tx: Option<oneshot::Sender<()>>,
@@ -127,7 +118,6 @@ impl ConfigModeHandle {
             workspace_path,
             config_paths,
             None,
-            default_agent_override,
             session_id,
             config_agent_tx,
             resume_tx,
@@ -155,7 +145,6 @@ impl ConfigModeHandle {
             workspace_path,
             config_paths,
             Some(diff),
-            None,
             session_id,
             config_agent_tx,
             None, // No resume_tx for diff-only mode
@@ -168,7 +157,6 @@ impl ConfigModeHandle {
         workspace_path: PathBuf,
         config_paths: ConfigPaths,
         diff: Option<RecommendationDiff>,
-        default_agent_override: Option<ComponentSource>,
         session_id: SessionId,
         config_agent_tx: UnboundedSender<ConfigAgentMessage>,
         resume_tx: Option<oneshot::Sender<()>>,
@@ -181,7 +169,6 @@ impl ConfigModeHandle {
             workspace_path,
             config_paths,
             diff: diff.unwrap_or_default(),
-            default_agent_override,
             session_id,
             config_agent_tx,
             rx,
@@ -218,9 +205,6 @@ struct ConfigModeActor {
     config_paths: ConfigPaths,
     /// Diff of the current config vs recommendations.
     diff: RecommendationDiff,
-    /// Override for the global agent config. If Some, bypasses loading global agent config.
-    /// Used for testing.
-    default_agent_override: Option<ComponentSource>,
     session_id: SessionId,
     config_agent_tx: UnboundedSender<ConfigAgentMessage>,
     rx: mpsc::Receiver<ConfigModeInput>,
@@ -238,17 +222,13 @@ impl ConfigModeActor {
             StartingConfiguration::NewWorkspace(recommendations) => {
                 self.send_message("Welcome to Symposium!\n\n");
 
-                // Check for global agent config (or use override for testing)
-                let global_agent = if let Some(agent) = self.default_agent_override.take() {
-                    Some(agent)
-                } else {
-                    match self.config_paths.load_global_agent_config() {
-                        Ok(Some(global)) => Some(global.agent),
-                        Ok(None) => None,
-                        Err(e) => {
-                            tracing::warn!("Failed to load global agent config: {}", e);
-                            None
-                        }
+                // Check for global agent config
+                let global_agent = match self.config_paths.load_global_agent_config() {
+                    Ok(Some(global)) => Some(global.agent),
+                    Ok(None) => None,
+                    Err(e) => {
+                        tracing::warn!("Failed to load global agent config: {}", e);
+                        None
                     }
                 };
 

@@ -95,7 +95,15 @@ async fn test_no_config_initial_setup() -> Result<(), sacp::Error> {
 
     // Use a fake workspace path (doesn't need to exist on disk for this test)
     let workspace_path = PathBuf::from("/fake/workspace");
-    // Don't create the config file - we want to test the "no config" path
+    // Don't create the workspace config file - we want to test the "no config" path
+
+    // Pre-populate the global agent config so we skip agent selection
+    let default_agent = test_default_agent();
+    config_paths
+        .save_global_agent_config(&crate::user_config::GlobalAgentConfig::new(
+            default_agent.clone(),
+        ))
+        .unwrap();
 
     let notifications = Arc::new(Mutex::new(CollectedNotifications::default()));
     let notifications_clone = notifications.clone();
@@ -103,12 +111,8 @@ async fn test_no_config_initial_setup() -> Result<(), sacp::Error> {
     // Use test recommendations
     let recommendations = test_recommendations();
 
-    // Use a hardcoded default agent for testing (bypasses global agent config loading)
-    let default_agent = test_default_agent();
-
     let agent = ConfigAgent::with_config_paths(config_paths.clone())
-        .with_recommendations(recommendations)
-        .with_default_agent(default_agent);
+        .with_recommendations(recommendations);
 
     ClientToAgent::builder()
         .on_receive_notification(
