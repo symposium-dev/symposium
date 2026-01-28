@@ -250,13 +250,13 @@
           ],
           "description": "Agent extensions (proxies) to include in the Symposium chain. Order matters - extensions are applied in the order listed."
         },
-        "symposium.agentSpawnArgs": {
+        "symposium.proxySpawnArgs": {
           "type": "array",
           "items": {
             "type": "string"
           },
           "default": [],
-          "description": "Additional args to pass to `symposium-acp-agent`"
+          "description": "Additional args to pass to `symposium-acp-agent` for proxy configuration (e.g., --proxy flags)"
         }
         ,
         "symposium.acpAgentPath": {

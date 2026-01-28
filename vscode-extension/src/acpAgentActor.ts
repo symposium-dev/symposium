@@ -249,8 +249,8 @@ export class AcpAgentActor {
       spawnArgs.push("--trace-dir", traceDir);
     }
 
-    const agentSpawnArgs = vsConfig.get<string[]>("agentSpawnArgs", []);
-    for (const arg of agentSpawnArgs) {
+    const proxySpawnArgs = vsConfig.get<string[]>("proxySpawnArgs", []);
+    for (const arg of proxySpawnArgs) {
       spawnArgs.push(arg);
     }
 
