@@ -3,35 +3,15 @@ import * as vscode from "vscode";
 import { logger } from "../extension";
 import { LogEvent } from "../logger";
 
-function dumpLogs(logEvents: LogEvent[], label: string) {
-  console.log(`\n=== ${label} - All log events (${logEvents.length}) ===`);
-  for (const event of logEvents) {
-    console.log(
-      `[${event.category}] ${event.message}`,
-      event.data ? JSON.stringify(event.data) : "",
-    );
-  }
-  console.log(`=== End ${label} ===\n`);
-}
-
 suite("Multi-Tab Tests", () => {
   test("Should handle conversations across multiple tabs", async function () {
     // This test needs time for multiple agents and conversations
     this.timeout(40000);
 
-    console.log(
-      `SYMPOSIUM_CONFIG_DIR: ${process.env.SYMPOSIUM_CONFIG_DIR || "(not set)"}`,
-    );
-
     // Capture log events
     const logEvents: LogEvent[] = [];
     const logDisposable = logger.onLog((event) => {
       logEvents.push(event);
-      // Also log in real-time for CI visibility
-      console.log(
-        `[LOG ${event.category}] ${event.message}`,
-        event.data ? JSON.stringify(event.data) : "",
-      );
     });
 
     // Activate the extension
@@ -103,30 +83,15 @@ suite("Multi-Tab Tests", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    // Poll for responses instead of fixed wait
-    let response1 = "";
-    let response2 = "";
-    const startTime = Date.now();
-    const maxWaitMs = 20000;
-    while (Date.now() - startTime < maxWaitMs) {
-      response1 = (await vscode.commands.executeCommand(
-        "symposium.test.getResponse",
-        "tab-1",
-      )) as string;
-      response2 = (await vscode.commands.executeCommand(
-        "symposium.test.getResponse",
-        "tab-2",
-      )) as string;
-      if (response1 && response1.length > 0 && response2 && response2.length > 0) {
-        console.log(`Got both responses after ${Date.now() - startTime}ms`);
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-
-    if (!response1 || response1.length === 0 || !response2 || response2.length === 0) {
-      dumpLogs(logEvents, "Missing responses");
-    }
+    // Get responses
+    const response1 = (await vscode.commands.executeCommand(
+      "symposium.test.getResponse",
+      "tab-1",
+    )) as string;
+    const response2 = (await vscode.commands.executeCommand(
+      "symposium.test.getResponse",
+      "tab-2",
+    )) as string;
 
     console.log(`\nTab 1 response: ${response1}`);
     console.log(`Tab 2 response: ${response2}`);

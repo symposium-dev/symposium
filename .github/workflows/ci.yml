@@ -102,7 +102,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: vscode-extension/.vscode-test
-          key: ${{ runner.os }}-vscode-test-1.108.2
+          key: ${{ runner.os }}-vscode-test-1.108.0
 
       - name: Install ACP tools
         run: |

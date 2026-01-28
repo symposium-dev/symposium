@@ -257,8 +257,6 @@ export class AcpAgentActor {
     logger.important("agent", "Spawning ACP agent", {
       command: conductorCommand,
       args: spawnArgs,
-      cwd: config.workspaceFolder.uri.fsPath,
-      SYMPOSIUM_CONFIG_DIR: process.env.SYMPOSIUM_CONFIG_DIR || "(not set)",
     });
 
     // Spawn the agent process
@@ -266,16 +264,6 @@ export class AcpAgentActor {
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
       cwd: config.workspaceFolder.uri.fsPath,
-    });
-
-    // Log spawn errors
-    this.agentProcess.on("error", (err) => {
-      logger.important("agent", "Agent spawn error", { error: err.message });
-    });
-
-    // Log when the agent exits
-    this.agentProcess.on("exit", (code, signal) => {
-      logger.important("agent", "Agent process exited", { code, signal });
     });
 
     // Capture stderr and pipe to logger

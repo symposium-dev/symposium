@@ -3,17 +3,6 @@ import * as vscode from "vscode";
 import { logger } from "../extension";
 import { LogEvent } from "../logger";
 
-function dumpLogs(logEvents: LogEvent[], label: string) {
-  console.log(`\n=== ${label} - All log events (${logEvents.length}) ===`);
-  for (const event of logEvents) {
-    console.log(
-      `[${event.category}] ${event.message}`,
-      event.data ? JSON.stringify(event.data) : "",
-    );
-  }
-  console.log(`=== End ${label} ===\n`);
-}
-
 suite("Conversation Tests", () => {
   test("Should have conversation with ElizACP", async function () {
     // This test needs time for agent spawning and response
@@ -23,11 +12,6 @@ suite("Conversation Tests", () => {
     const logEvents: LogEvent[] = [];
     const logDisposable = logger.onLog((event) => {
       logEvents.push(event);
-      // Also log in real-time for CI visibility
-      console.log(
-        `[LOG ${event.category}] ${event.message}`,
-        event.data ? JSON.stringify(event.data) : "",
-      );
     });
 
     // Activate the extension
@@ -70,30 +54,13 @@ suite("Conversation Tests", () => {
     );
 
     // Wait for response (ElizACP should respond quickly)
-    // Poll for response instead of fixed wait to fail fast or succeed fast
-    let response = "";
-    const startTime = Date.now();
-    const maxWaitMs = 15000;
-    while (Date.now() - startTime < maxWaitMs) {
-      response = (await vscode.commands.executeCommand(
-        "symposium.test.getResponse",
-        "test-tab-conversation",
-      )) as string;
-      if (response && response.length > 0) {
-        console.log(
-          `Got response after ${Date.now() - startTime}ms: ${response}`,
-        );
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    if (!response || response.length === 0) {
-      dumpLogs(logEvents, "No response received");
-      console.log(
-        `SYMPOSIUM_CONFIG_DIR: ${process.env.SYMPOSIUM_CONFIG_DIR || "(not set)"}`,
-      );
-    }
+    // Get the response
+    const response = (await vscode.commands.executeCommand(
+      "symposium.test.getResponse",
+      "test-tab-conversation",
+    )) as string;
 
     console.log(`ElizACP response: ${response}`);
 

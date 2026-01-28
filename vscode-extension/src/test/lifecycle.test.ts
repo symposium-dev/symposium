@@ -3,17 +3,6 @@ import * as vscode from "vscode";
 import { logger } from "../extension";
 import { LogEvent } from "../logger";
 
-function dumpLogs(logEvents: LogEvent[], label: string) {
-  console.log(`\n=== ${label} - All log events (${logEvents.length}) ===`);
-  for (const event of logEvents) {
-    console.log(
-      `[${event.category}] ${event.message}`,
-      event.data ? JSON.stringify(event.data) : "",
-    );
-  }
-  console.log(`=== End ${label} ===\n`);
-}
-
 suite("Webview Lifecycle Tests", () => {
   test("Chat view should persist tabs across hide/show", async function () {
     // This test may need more time for webview operations and agent spawning
@@ -23,11 +12,6 @@ suite("Webview Lifecycle Tests", () => {
     const logEvents: LogEvent[] = [];
     const logDisposable = logger.onLog((event) => {
       logEvents.push(event);
-      // Also log in real-time for CI visibility
-      console.log(
-        `[LOG ${event.category}] ${event.message}`,
-        event.data ? JSON.stringify(event.data) : "",
-      );
     });
 
     // Activate the extension
@@ -48,27 +32,8 @@ suite("Webview Lifecycle Tests", () => {
       "test-tab-1",
     );
 
-    // Wait for session to be created (poll instead of fixed wait)
-    console.log(
-      `SYMPOSIUM_CONFIG_DIR: ${process.env.SYMPOSIUM_CONFIG_DIR || "(not set)"}`,
-    );
-    const startTime = Date.now();
-    const maxWaitMs = 10000;
-    let gotSession = false;
-    while (Date.now() - startTime < maxWaitMs) {
-      const sessions = logEvents.filter(
-        (e) => e.category === "agent" && e.message === "Agent session created",
-      );
-      if (sessions.length > 0) {
-        gotSession = true;
-        console.log(`Session created after ${Date.now() - startTime}ms`);
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
-    if (!gotSession) {
-      dumpLogs(logEvents, "No session created");
-    }
+    // Give time for agent to spawn and session to be created
+    await new Promise((resolve) => setTimeout(resolve, 3000));
 
     // Verify the tab was created
     let tabs = (await vscode.commands.executeCommand(
