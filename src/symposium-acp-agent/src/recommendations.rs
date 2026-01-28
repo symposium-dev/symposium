@@ -243,14 +243,12 @@ fn has_dependency_recursive(
 }
 
 impl When {
-    /// Check if this condition is met for the given workspace
+    /// Check if this condition is met for the given workspace.
+    /// All specified conditions must be true (AND semantics).
+    /// If no conditions are specified, returns true.
     pub fn is_met(&self, workspace_path: &Path) -> bool {
-        // All specified conditions must be true (AND semantics)
-        let mut conditions_checked = false;
-
         // file-exists
         if let Some(path) = &self.file_exists {
-            conditions_checked = true;
             if !workspace_path.join(path).exists() {
                 return false;
             }
@@ -258,7 +256,6 @@ impl When {
 
         // files-exist (all must exist)
         if let Some(paths) = &self.files_exist {
-            conditions_checked = true;
             for path in paths {
                 if !workspace_path.join(path).exists() {
                     return false;
@@ -268,7 +265,6 @@ impl When {
 
         // using-crate
         if let Some(crate_name) = &self.using_crate {
-            conditions_checked = true;
             if !is_using_crate(workspace_path, crate_name) {
                 return false;
             }
@@ -276,7 +272,6 @@ impl When {
 
         // using-crates (all must be dependencies)
         if let Some(crate_names) = &self.using_crates {
-            conditions_checked = true;
             for crate_name in crate_names {
                 if !is_using_crate(workspace_path, crate_name) {
                     return false;
@@ -286,7 +281,6 @@ impl When {
 
         // grep
         if let Some(grep) = &self.grep {
-            conditions_checked = true;
             if !grep.is_met(workspace_path) {
                 return false;
             }
@@ -294,7 +288,6 @@ impl When {
 
         // any (OR - at least one must match)
         if let Some(conditions) = &self.any {
-            conditions_checked = true;
             if !conditions.iter().any(|c| c.is_met(workspace_path)) {
                 return false;
             }
@@ -302,15 +295,9 @@ impl When {
 
         // all (explicit AND - all must match)
         if let Some(conditions) = &self.all {
-            conditions_checked = true;
             if !conditions.iter().all(|c| c.is_met(workspace_path)) {
                 return false;
             }
-        }
-
-        // If no conditions were specified, always recommend
-        if !conditions_checked {
-            return true;
         }
 
         true

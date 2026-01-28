@@ -128,8 +128,9 @@ impl ConfigAgent {
     }
 
     /// Load configuration for a workspace from disk.
-    fn load_config(&self, workspace_path: &Path) -> anyhow::Result<Option<WorkspaceConfig>> {
+    fn load_config(&self, workspace_path: &Path) -> Result<Option<WorkspaceConfig>, sacp::Error> {
         WorkspaceConfig::load(&self.config_paths, workspace_path)
+            .map_err(|e| sacp::util::internal_error(e.to_string()))
     }
 
     /// Load recommendations, using override if set, otherwise loading builtin.
@@ -349,9 +350,7 @@ impl ConfigAgent {
         let workspace_path = request.cwd.clone();
 
         // Load configuration for this workspace
-        let config = self
-            .load_config(&workspace_path)
-            .map_err(|e| sacp::Error::new(-32603, e.to_string()))?;
+        let config = self.load_config(&workspace_path)?;
 
         let Some(config) = config else {
             tracing::debug!("handle_new_session: no existing config");
@@ -466,9 +465,7 @@ impl ConfigAgent {
         let resume_tx = return_to.pause().await?;
 
         // Load current config (None triggers initial setup in the actor)
-        let current_config = self
-            .load_config(&workspace_path)
-            .map_err(|e| sacp::Error::new(-32603, e.to_string()))?;
+        let current_config = self.load_config(&workspace_path)?;
 
         // Spawn the config mode actor (it holds resume_tx and drops it on exit)
         let actor_handle = match current_config {

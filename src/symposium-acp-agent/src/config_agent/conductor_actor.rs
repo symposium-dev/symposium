@@ -160,10 +160,11 @@ async fn build_proxies(
                 error = %e,
                 "Failed to resolve extension"
             );
-            sacp::Error::new(
-                -32603,
-                format!("Failed to resolve {}: {}", source.display_name(), e),
-            )
+            sacp::util::internal_error(format!(
+                "Failed to resolve {}: {}",
+                source.display_name(),
+                e
+            ))
         })?;
         proxies.push(DynComponent::new(AcpAgent::new(server)));
     }
@@ -188,7 +189,7 @@ async fn run_actor(
         .agent
         .resolve()
         .await
-        .map_err(|e| sacp::Error::new(-32603, format!("Failed to resolve agent: {}", e)))?;
+        .map_err(|e| sacp::util::internal_error(format!("Failed to resolve agent: {}", e)))?;
 
     // TODO: Apply trace_dir to conductor when needed
 
