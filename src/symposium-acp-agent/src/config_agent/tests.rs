@@ -378,11 +378,14 @@ async fn test_config_mode_entry() -> Result<(), sacp::Error> {
             // Should have received config mode welcome with menu
             let text = notifications.lock().unwrap().text();
             assert!(text.contains("# Configuration"), "Expected config menu");
-            assert!(text.contains("Workspace:"), "Expected workspace path");
+            assert!(
+                text.contains("Extensions for workspace"),
+                "Expected workspace path in extensions header"
+            );
             assert!(text.contains("eliza"), "Expected eliza agent");
             assert!(text.contains("(none configured)"), "Expected no extensions");
-            assert!(text.contains("save"), "Expected save command");
-            assert!(text.contains("cancel"), "Expected cancel command");
+            assert!(text.contains("SAVE"), "Expected save command");
+            assert!(text.contains("CANCEL"), "Expected cancel command");
 
             Ok(())
         })
