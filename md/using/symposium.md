@@ -1,6 +1,6 @@
 # Using Symposium
 
-Symposium focuses on creating the best environment for Rust coding through **Agent Extensions** - MCP servers that add specialized tools and context to your agent.
+Symposium focuses on creating the best environment for Rust coding through **Agent Mods** - MCP servers that add specialized tools and context to your agent.
 
 Symposium is built on the Agent Client Protocol (ACP), which means the core functionality is portable across editors and environments. VSCode is the showcase environment with experimental GUI support, but the basic functionality can be configured in any ACP-supporting editor.
 
@@ -19,26 +19,22 @@ Symposium checks for updates and installs new versions automatically as they bec
 
 For adding custom agents not in the registry, see [VSCode Installation - Custom Agents](../install-vscode.md#custom-agents).
 
-## Managing Extensions
+## Managing Mods
 
-Extensions add capabilities to your agent. Open the **Settings** panel to manage them.
+Mods add capabilities to your agent. To configure mods, type `/symposium:config` in the chat.
 
-In the Extensions section you can:
-- **Enable/disable** extensions via the checkbox
-- **Reorder** extensions by dragging the handle
-- **Add** extensions via the "+ Add extension" link
-- **Delete** extensions from the list
+The configuration menu lets you:
+- **Toggle** mods on/off by typing their number
+- **Reorder** mods with `move X to Y`
+- **Save** changes with `SAVE` or discard with `CANCEL`
 
-**Order matters** - extensions are applied in the order listed. The first extension is closest to the editor, and the last is closest to the agent.
+**Order matters** - mods are applied in the order listed. The first mod is closest to the editor, and the last is closest to the agent.
 
-When adding extensions, you can choose from:
-- **Built-in** extensions (Sparkle, Ferris, Cargo)
-- **Registry** extensions from the shared catalog
-- **Custom** extensions via executable, npx, pipx, cargo, or URL
+On first run, Symposium recommends mods based on your workspace (e.g., Cargo mod for Rust projects). You can adjust these recommendations in the config menu.
 
-## Builtin Extensions
+## Builtin Mods
 
-Symposium ships with three builtin extensions:
+Symposium ships with three builtin mods:
 
 - **[Sparkle](./sparkle.md)** - AI collaboration framework that learns your working patterns
 - **[Ferris](./ferris.md)** - Rust crate source inspection

@@ -91,17 +91,15 @@ These allow protocol extensions beyond the ACP specification. Not currently need
 - [ ] Workspace-specific state persistence
 - [ ] Tab history and conversation export
 
-## Agent Extensions
+## Agent Mods
 
-Agent extensions are proxy components that enrich the agent's capabilities. See [Agent Extensions](./extensions.md) for details.
+Agent mods are proxy components that enrich the agent's capabilities. See [Agent Mods](./mods.md) for details.
 
 - [x] CLI support (`--proxy` argument for `symposium-acp-agent`)
-- [x] VS Code setting (`symposium.extensions` array)
-- [x] Settings UI with enable/disable checkboxes
-- [x] Drag-to-reorder in Settings UI
-- [x] Delete and add extensions back
-- [ ] Registry extensions (install from agent registry with `type = 'extension'`)
-- [ ] Per-extension configuration (e.g., which Ferris tools to enable)
+- [x] Config agent with interactive `/symposium:config` command
+- [x] Per-workspace mod configuration
+- [ ] Registry mods (install from agent registry with `type = 'mod'`)
+- [ ] Per-mod configuration (e.g., which Ferris tools to enable)
 
 ## Language Model Provider (Experimental)
 

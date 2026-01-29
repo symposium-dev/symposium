@@ -11,20 +11,9 @@ Install the Symposium extension from:
 
 ## Step 2: Activate the panel and start chatting
 
-<div class="panel-guide">
-<img src="./artwork/screenshots/screenshot-vscode-panel.jpg" alt="Symposium panel in VSCode"/>
-<div class="panel-legend">
+Click the Symposium icon in the activity bar to open the panel, then click **New tab** to start a conversation.
 
-1. **Activity bar icon** — Click to open the Symposium panel
-2. **New tab** — Start a new conversation with the current settings
-3. **Settings** — Expand to configure agent and extensions
-4. **Agent selector** — Choose which agent to use (Claude Code, Gemini CLI, etc.)
-5. **Extensions** — Enable MCP servers that add capabilities to your agent
-6. **Add extension** — Add custom extensions
-7. **Edit all settings** — Access full settings
-
-</div>
-</div>
+On first run, Symposium will guide you through selecting an agent. After that, you can change your agent or mods at any time by typing `/symposium:config` in the chat.
 
 ## Custom Agents
 

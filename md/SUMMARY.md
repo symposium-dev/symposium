@@ -50,7 +50,7 @@
       - [Testing](./design/vscode-extension/testing.md)
       - [Testing Implementation](./design/vscode-extension/testing-implementation.md)
       - [Packaging](./design/vscode-extension/packaging.md)
-      - [Mod UI](./design/vscode-extension/mods.md)
+      - [Mods UI](./design/vscode-extension/mods.md)
       - [Language Model Provider](./design/vscode-extension/lm-provider.md)
       - [Language Model Tool Bridging](./design/vscode-extension/lm-tool-bridging.md)
       - [Implementation Status](./design/vscode-extension/implementation-status.md)
