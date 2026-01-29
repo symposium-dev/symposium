@@ -1,36 +1,21 @@
-# What we want to achieve
+# What Symposium is
 
-You fire up your agent of choice through Symposium. It has a more collaborative style, remembers the way you like to work. It knows about your dependencies and incorporates advice supplied by the crate authors on how best to use them. You can install extensions that transform the agent — new skills, new MCP servers, or more advanced capabilities like custom GUI interfaces and new ways of working.
+Symposium is a wrapper that extends your AI agent of choice to be a more proficient Rust coder. Symposium is built on the [Agent Client Protocol (ACP)](https://agentclientprotocol.com/) which means it is compatible with any AI agent ([Claude Code, Codex, Kiro CLI, etc](./using/symposium.md#selecting-an-agent)) and any editor ([VSCode](./install-vscode.md), [Zed](./install-zed.md), [Rust Rover](./install-rust-rover.md), [NeoVim, Emacs, etc](./install-other.md)).
 
-## AI the Rust Way
+# Agent mods: a portable extension mechanism
 
-Symposium brings Rust's design philosophy to AI-assisted development.
+Symposium is based on the idea of [agent mods](./about-mods.md). Mods extend what your agent can do. You might already be familiar with MCP servers or agent skills -- both of these work as mods. But mods can also do things those can't, like intercepting messages or transforming tool output before the agent sees it. And unlike things like Claude Code Plugins, mods work with any ACP-supporting agent.
 
-<div class="pillars">
+# Leverage the wisdom of crates.io
 
-<div class="pillar">
-<h3>Leverage the wisdom of <s>the crowd</s> crates.io</h3>
+Symposium ships with mods for [Rust development](./using/mods.md). But Symposium's superpower is the ecosystem. Anyone can publish mods, and crate authors can recommend mods that help your agent use their libraries well. Just like Rust's crate ecosystem, the community teaches your agent new tricks.
 
-Rust embraces a small stdlib and a rich crate ecosystem. Symposium brings that philosophy to AI: your dependencies can teach your agent how to use them. Add a crate, and your agent learns its idioms, patterns, and best practices.
+# How do I use it?
 
-Beyond crate knowledge, we want to make it easy to publish agent extensions that others can try out and adopt just by adding a line to their configuration — the same way you'd add a dependency to `Cargo.toml`.
+Ready to give Symposium a try? It's as easy as [installing an extension in your editor of choice](./install.md):
 
-</div>
-
-<div class="pillar">
-<h3>Stability without stagnation</h3>
-
-Rust evolves quickly and agents' training data goes stale. Symposium helps your agent take advantage of the latest Rust features and learn how to use new or private crates — things not found in its training data.
-
-We provide guides and context that keep models up-to-date, helping them write idiomatic Rust rather than JavaScript-in-disguise.
-
-</div>
-
-<div class="pillar">
-<h3>Open, portable, and vendor neutral</h3>
-
-Open source tools that everyone can improve. Build extensions once, use them with any ACP-compatible agent. No vendor lock-in.
-
-</div>
-
-</div>
+* [VSCode](./install-vscode.md)
+* [Zed](./install-zed.md)
+* [Rust Rover](./install-rust-rover.md)
+* [NeoVim, Emacs, etc](./install-other.md)
+* [...and more!](./install.md)
