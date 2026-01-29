@@ -27,7 +27,7 @@ pub struct RegistryJson {
     pub version: String,
     pub agents: Vec<RegistryEntry>,
     #[serde(default)]
-    pub extensions: Vec<RegistryEntry>,
+    pub mods: Vec<RegistryEntry>,
 }
 
 /// A single entry in the registry (agent or extension)
@@ -395,9 +395,9 @@ fn entry_to_component_source(entry: &RegistryEntry) -> ComponentSource {
     }
 }
 
-/// Extension listing entry - what `registry list-extensions` outputs
+/// Mod listing entry - what `registry list-mods` outputs
 #[derive(Debug, Clone, Serialize)]
-pub struct ExtensionListEntry {
+pub struct ModListEntry {
     pub id: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -406,26 +406,26 @@ pub struct ExtensionListEntry {
     pub description: Option<String>,
 }
 
-/// List all available extensions from the registry
-pub async fn list_extensions() -> Result<Vec<ExtensionListEntry>> {
+/// List all available mods from the registry
+pub async fn list_mods() -> Result<Vec<ModListEntry>> {
     let registry = fetch_registry().await?;
 
-    let extensions: Vec<ExtensionListEntry> = registry
-        .extensions
+    let mods: Vec<ModListEntry> = registry
+        .mods
         .into_iter()
-        .map(|e| ExtensionListEntry {
-            id: e.id,
-            name: e.name,
-            version: if e.version.is_empty() {
+        .map(|m| ModListEntry {
+            id: m.id,
+            name: m.name,
+            version: if m.version.is_empty() {
                 None
             } else {
-                Some(e.version)
+                Some(m.version)
             },
-            description: e.description,
+            description: m.description,
         })
         .collect();
 
-    Ok(extensions)
+    Ok(mods)
 }
 
 // ============================================================================
@@ -703,10 +703,10 @@ pub async fn resolve_agent(agent: &str) -> Result<McpServer> {
     );
 }
 
-/// Resolve an agent JSON or ID to an McpServer configuration
-pub async fn resolve_extension(extension: &str) -> Result<McpServer> {
-    let ext_id = if extension.starts_with('{') {
-        let entry: RegistryEntry = serde_json::from_str(extension)
+/// Resolve a mod JSON or ID to an McpServer configuration
+pub async fn resolve_mod(mod_spec: &str) -> Result<McpServer> {
+    let mod_id = if mod_spec.starts_with('{') {
+        let entry: RegistryEntry = serde_json::from_str(mod_spec)
             .map_err(|e| sacp::util::internal_error(format!("Failed to parse JSON: {}", e)))?;
 
         let resolved = resolve_distribution(&entry).await?;
@@ -715,23 +715,22 @@ pub async fn resolve_extension(extension: &str) -> Result<McpServer> {
         }
         entry.id
     } else {
-        extension.to_string()
+        mod_spec.to_string()
     };
-
-    // Fetch registry and find the extension
+    // Fetch registry and find the mod
     let registry = fetch_registry().await?;
     let entry = registry
-        .extensions
+        .mods
         .into_iter()
-        .find(|a| a.id == ext_id)
-        .with_context(|| format!("Extension '{}' not found in registry", ext_id))?;
+        .find(|m| m.id == mod_id)
+        .with_context(|| format!("Mod '{}' not found in registry", mod_id))?;
 
     if let Some(agent) = resolve_distribution(&entry).await? {
         return Ok(agent);
     }
 
     bail!(
-        "No compatible distribution found for extension '{}' on platform {}",
+        "No compatible distribution found for mod '{}' on platform {}",
         entry.id,
         get_platform_key()
     );
@@ -780,8 +779,8 @@ async fn resolve_from_registry(id: &str) -> Result<McpServer> {
         }
     }
 
-    // Check extensions
-    if let Some(entry) = registry.extensions.iter().find(|e| e.id == id) {
+    // Check mods
+    if let Some(entry) = registry.mods.iter().find(|m| m.id == id) {
         if let Some(server) = resolve_distribution(entry).await? {
             return Ok(server);
         }

@@ -19,16 +19,16 @@
     - [VSCode](./install-vscode.md)
     - [Other editors](./install-other.md)
 - [Using Symposium](./using/symposium.md)
-- [Built-in extensions](./using/extensions.md)
+- [Built-in mods](./using/mods.md)
     - [Sparkle](./using/sparkle.md)
     - [Ferris](./using/ferris.md)
     - [Cargo](./using/cargo.md)
 
-# Authoring Agent Extensions
+# Authoring Agent Mods
 
-- [Creating Agent Extensions](./extensions/creating-extensions.md)
-- [Recommending Agent Extensions](./extensions/recommending-extensions.md)
-- [Publishing Agent Extensions](./extensions/publishing-extensions.md)
+- [Creating Agent Mods](./mods/creating-mods.md)
+- [Recommending Agent Mods](./mods/recommending-mods.md)
+- [Publishing Agent Mods](./mods/publishing-mods.md)
 
 # Contributing to Symposium
 
@@ -37,7 +37,7 @@
   - [Common Issues](./design/common-issues.md)
   - [Distribution](./design/distribution.md)
   - [Agent Registry](./design/agent-registry.md)
-  - [Agent Extensions](./design/extensions.md)
+  - [Agent Mods](./design/mods.md)
   - [Components](./design/components.md)
   - [Run Mode](./design/run-mode.md)
   - [Rust Crate Sources](./design/rust-crate-sources.md)
@@ -49,7 +49,7 @@
       - [Testing](./design/vscode-extension/testing.md)
       - [Testing Implementation](./design/vscode-extension/testing-implementation.md)
       - [Packaging](./design/vscode-extension/packaging.md)
-      - [Extension UI](./design/vscode-extension/extensions.md)
+      - [Mod UI](./design/vscode-extension/mods.md)
       - [Language Model Provider](./design/vscode-extension/lm-provider.md)
       - [Language Model Tool Bridging](./design/vscode-extension/lm-tool-bridging.md)
       - [Implementation Status](./design/vscode-extension/implementation-status.md)

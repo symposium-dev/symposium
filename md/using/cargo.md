@@ -20,4 +20,4 @@ Instead of running raw cargo commands through bash, your agent can use Cargo's s
 
 ## Why Not Just Bash?
 
-Raw `cargo build` output can be verbose, especially with many dependencies or detailed error messages. The Cargo extension processes this output to extract what the agent actually needs to see, making it more efficient at diagnosing and fixing issues.
+Raw `cargo build` output can be verbose, especially with many dependencies or detailed error messages. The Cargo mod processes this output to extract what the agent actually needs to see, making it more efficient at diagnosing and fixing issues.

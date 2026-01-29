@@ -9,7 +9,7 @@
 use super::conductor_actor::ConductorHandle;
 use super::ConfigAgentMessage;
 use crate::registry::ComponentSource;
-use crate::user_config::ExtensionConfig;
+use crate::user_config::ModConfig;
 use futures::channel::mpsc::UnboundedSender;
 use fxhash::FxHashMap;
 use sacp::link::AgentToClient;
@@ -24,7 +24,7 @@ pub enum UberconductorMessage {
     NewSession {
         workspace_path: PathBuf,
         agent: ComponentSource,
-        extensions: Vec<ExtensionConfig>,
+        mods: Vec<ModConfig>,
         request: NewSessionRequest,
         request_cx: JrRequestCx<NewSessionResponse>,
     },
@@ -50,12 +50,12 @@ impl UberconductorHandle {
         Ok(Self { tx })
     }
 
-    /// Request a new session with the given agent and extensions.
+    /// Request a new session with the given agent and mods.
     pub async fn new_session(
         &self,
         workspace_path: PathBuf,
         agent: ComponentSource,
-        extensions: Vec<ExtensionConfig>,
+        mods: Vec<ModConfig>,
         request: NewSessionRequest,
         request_cx: JrRequestCx<NewSessionResponse>,
     ) -> Result<(), sacp::Error> {
@@ -63,7 +63,7 @@ impl UberconductorHandle {
             .send(UberconductorMessage::NewSession {
                 workspace_path,
                 agent,
-                extensions,
+                mods,
                 request,
                 request_cx,
             })
@@ -87,7 +87,7 @@ async fn run_actor(
             UberconductorMessage::NewSession {
                 workspace_path,
                 agent,
-                extensions,
+                mods,
                 request,
                 request_cx,
             } => {
@@ -98,7 +98,7 @@ async fn run_actor(
                         let handle = ConductorHandle::spawn(
                             workspace_path.clone(),
                             agent,
-                            extensions,
+                            mods,
                             trace_dir.as_ref(),
                             config_agent_tx.clone(),
                             &client_cx,

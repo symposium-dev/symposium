@@ -8,7 +8,7 @@
 
 use super::ConfigAgentMessage;
 use crate::registry::ComponentSource;
-use crate::user_config::ExtensionConfig;
+use crate::user_config::ModConfig;
 use futures::channel::mpsc::UnboundedSender;
 use sacp::link::{AgentToClient, ClientToAgent, ProxyToConductor};
 use sacp::schema::{
@@ -54,18 +54,18 @@ pub struct ConductorHandle {
 }
 
 impl ConductorHandle {
-    /// Spawn a new conductor actor for the given agent and extensions.
+    /// Spawn a new conductor actor for the given agent and mods.
     ///
     /// Returns a handle for sending messages to the actor.
     pub async fn spawn(
         workspace_path: PathBuf,
         agent: ComponentSource,
-        extensions: Vec<ExtensionConfig>,
+        mods: Vec<ModConfig>,
         trace_dir: Option<&PathBuf>,
         config_agent_tx: UnboundedSender<ConfigAgentMessage>,
         client_cx: &JrConnectionCx<AgentToClient>,
     ) -> Result<Self, sacp::Error> {
-        tracing::debug!(?workspace_path, ?agent, ?extensions, "ConductorHandle::spawn");
+        tracing::debug!(?workspace_path, ?agent, ?mods, "ConductorHandle::spawn");
 
         // Create the channel for receiving messages
         let (tx, rx) = mpsc::channel(32);
@@ -75,7 +75,7 @@ impl ConductorHandle {
         client_cx.spawn(run_actor(
             workspace_path,
             agent,
-            extensions,
+            mods,
             trace_dir.cloned(),
             config_agent_tx,
             handle.clone(),
@@ -151,16 +151,16 @@ impl ConductorHandle {
 
 /// Build proxy components from ComponentSources.
 async fn build_proxies(
-    extension_sources: Vec<ComponentSource>,
+    mod_sources: Vec<ComponentSource>,
 ) -> Result<Vec<DynComponent<ProxyToConductor>>, sacp::Error> {
     let mut proxies = vec![];
-    for source in &extension_sources {
-        tracing::debug!(extension = %source.display_name(), "Resolving extension");
+    for source in &mod_sources {
+        tracing::debug!(mod_name = %source.display_name(), "Resolving mod");
         let server = source.resolve().await.map_err(|e| {
             tracing::error!(
-                extension = %source.display_name(),
+                mod_name = %source.display_name(),
                 error = %e,
-                "Failed to resolve extension"
+                "Failed to resolve mod"
             );
             sacp::util::internal_error(format!(
                 "Failed to resolve {}: {}",
@@ -174,12 +174,12 @@ async fn build_proxies(
     Ok(proxies)
 }
 
-/// Get enabled extension sources from the list
-fn enabled_extension_sources(extensions: &[ExtensionConfig]) -> Vec<ComponentSource> {
-    extensions
+/// Get enabled mod sources from the list
+fn enabled_mod_sources(mods: &[ModConfig]) -> Vec<ComponentSource> {
+    mods
         .iter()
-        .filter(|ext| ext.enabled)
-        .map(|ext| ext.source.clone())
+        .filter(|m| m.enabled)
+        .map(|m| m.source.clone())
         .collect()
 }
 
@@ -187,14 +187,14 @@ fn enabled_extension_sources(extensions: &[ExtensionConfig]) -> Vec<ComponentSou
 async fn run_actor(
     workspace_path: PathBuf,
     agent: ComponentSource,
-    extensions: Vec<ExtensionConfig>,
+    mods: Vec<ModConfig>,
     _trace_dir: Option<PathBuf>,
     config_agent_tx: UnboundedSender<ConfigAgentMessage>,
     self_handle: ConductorHandle,
     mut rx: mpsc::Receiver<ConductorMessage>,
 ) -> Result<(), sacp::Error> {
-    // Get enabled extensions
-    let extension_sources = enabled_extension_sources(&extensions);
+    // Get enabled mods
+    let mod_sources = enabled_mod_sources(&mods);
 
     // Resolve the agent
     let agent_server = agent
@@ -212,13 +212,13 @@ async fn run_actor(
         {
             async move |init_req| {
                 tracing::info!(
-                    "Building proxy chain with extensions: {:?}",
-                    extension_sources
+                    "Building proxy chain with mods: {:?}",
+                    mod_sources
                         .iter()
                         .map(|s| s.display_name())
                         .collect::<Vec<_>>()
                 );
-                let proxies = build_proxies(extension_sources).await?;
+                let proxies = build_proxies(mod_sources).await?;
                 Ok((init_req, proxies, DynComponent::new(agent)))
             }
         },

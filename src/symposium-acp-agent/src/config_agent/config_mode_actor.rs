@@ -7,7 +7,7 @@
 use super::ConfigAgentMessage;
 use crate::recommendations::{RecommendationDiff, WorkspaceRecommendations};
 use crate::registry::{list_agents_with_sources, ComponentSource};
-use crate::user_config::{ConfigPaths, GlobalAgentConfig, WorkspaceExtensionsConfig};
+use crate::user_config::{ConfigPaths, GlobalAgentConfig, WorkspaceModsConfig};
 use futures::channel::mpsc::{self, UnboundedSender};
 use futures::StreamExt;
 use regex::Regex;
@@ -44,8 +44,8 @@ pub enum ConfigModeOutput {
     Done {
         /// The agent to save globally.
         agent: ComponentSource,
-        /// The extensions to save per-workspace.
-        extensions: WorkspaceExtensionsConfig,
+        /// The mods to save per-workspace.
+        mods: WorkspaceModsConfig,
     },
 
     /// User cancelled - exit without saving.
@@ -60,10 +60,10 @@ pub struct ConfigModeHandle {
 
 /// The starting configuration
 enum StartingConfiguration {
-    /// An existing configuration with agent and extensions
+    /// An existing configuration with agent and mods
     ExistingConfig {
         agent: ComponentSource,
-        extensions: WorkspaceExtensionsConfig,
+        mods: WorkspaceModsConfig,
     },
 
     /// A new workspace - needs agent selection
@@ -80,7 +80,7 @@ impl ConfigModeHandle {
     /// when the actor exits (either save or cancel).
     pub fn spawn_reconfig(
         agent: ComponentSource,
-        extensions: WorkspaceExtensionsConfig,
+        mods: WorkspaceModsConfig,
         workspace_path: PathBuf,
         config_paths: ConfigPaths,
         session_id: SessionId,
@@ -89,7 +89,7 @@ impl ConfigModeHandle {
         cx: &JrConnectionCx<AgentToClient>,
     ) -> Result<Self, sacp::Error> {
         Self::spawn_inner(
-            StartingConfiguration::ExistingConfig { agent, extensions },
+            StartingConfiguration::ExistingConfig { agent, mods },
             workspace_path,
             config_paths,
             None,
@@ -138,7 +138,7 @@ impl ConfigModeHandle {
     /// `DiffCompleted` or `DiffCancelled` instead of showing the main menu.
     pub fn spawn_with_recommendations(
         agent: ComponentSource,
-        mut extensions: WorkspaceExtensionsConfig,
+        mut mods: WorkspaceModsConfig,
         workspace_path: PathBuf,
         config_paths: ConfigPaths,
         diff: RecommendationDiff,
@@ -146,9 +146,9 @@ impl ConfigModeHandle {
         config_agent_tx: UnboundedSender<ConfigAgentMessage>,
         cx: &JrConnectionCx<AgentToClient>,
     ) -> Result<Self, sacp::Error> {
-        diff.apply(&mut extensions);
+        diff.apply(&mut mods);
         Self::spawn_inner(
-            StartingConfiguration::ExistingConfig { agent, extensions },
+            StartingConfiguration::ExistingConfig { agent, mods },
             workspace_path,
             config_paths,
             Some(diff),
@@ -223,9 +223,9 @@ struct ConfigModeActor {
 impl ConfigModeActor {
     /// Main entry point - runs the actor.
     async fn run(mut self, config: StartingConfiguration) -> Result<(), sacp::Error> {
-        // Extract or create agent and extensions
-        let (mut agent, mut extensions) = match config {
-            StartingConfiguration::ExistingConfig { agent, extensions } => (agent, extensions),
+        // Extract or create agent and mods
+        let (mut agent, mut mods) = match config {
+            StartingConfiguration::ExistingConfig { agent, mods } => (agent, mods),
             StartingConfiguration::NewWorkspace(recommendations) => {
                 self.send_message("Welcome to Symposium!\n\n");
 
@@ -268,20 +268,20 @@ impl ConfigModeActor {
                     }
                 };
 
-                // Create extensions from recommendations
-                let extensions =
-                    WorkspaceExtensionsConfig::from_sources(recommendations.extension_sources());
+                // Create mods from recommendations
+                let mods =
+                    WorkspaceModsConfig::from_sources(recommendations.mod_sources());
 
-                self.send_message("Configuration created with recommended extensions.\n\n");
-                (agent, extensions)
+                self.send_message("Configuration created with recommended mods.\n\n");
+                (agent, mods)
             }
         };
 
         // If there is an active diff, present it first
         if !self.diff.is_empty() {
-            match self.present_diff(&mut extensions).await {
+            match self.present_diff(&mut mods).await {
                 DiffResult::Save => {
-                    self.done(&agent, &extensions);
+                    self.done(&agent, &mods);
                     return Ok(());
                 }
                 DiffResult::Config => { /* continue to main menu */ }
@@ -289,23 +289,23 @@ impl ConfigModeActor {
         }
 
         // Enter main menu loop
-        self.main_menu_loop(&mut agent, &mut extensions).await;
+        self.main_menu_loop(&mut agent, &mut mods).await;
 
         Ok(())
     }
 
     /// Handle the recommendation diff prompt.
     /// Returns the result of the interaction.
-    async fn present_diff(&mut self, extensions: &mut WorkspaceExtensionsConfig) -> DiffResult {
+    async fn present_diff(&mut self, mods: &mut WorkspaceModsConfig) -> DiffResult {
         self.send_message("# Recommendations have changed\n\n");
 
         if !self.diff.to_add.is_empty() {
-            self.send_message("The following extensions are now recommended:\n");
-            for extension in &self.diff.to_add {
+            self.send_message("The following mods are now recommended:\n");
+            for m in &self.diff.to_add {
                 self.send_message(&format!(
                     "- {} [{}]\n",
-                    extension.source.display_name(),
-                    extension.when.explain_why_added().join(", ")
+                    m.source.display_name(),
+                    m.when.explain_why_added().join(", ")
                 ));
             }
             self.send_message("\n");
@@ -313,13 +313,13 @@ impl ConfigModeActor {
 
         if !self.diff.to_remove.is_empty() {
             self.send_message(
-                "The following extensions were removed as they are no longer recommended:\n",
+                "The following mods were removed as they are no longer recommended:\n",
             );
-            for extension in &self.diff.to_remove {
+            for m in &self.diff.to_remove {
                 self.send_message(&format!(
                     "- {} [{}]\n",
-                    extension.source.display_name(),
-                    extension.when.explain_why_stale().join(", ")
+                    m.source.display_name(),
+                    m.when.explain_why_stale().join(", ")
                 ));
             }
             self.send_message("\n");
@@ -330,7 +330,7 @@ impl ConfigModeActor {
             self.send_message("* `SAVE` - Accept the new recommendations\n");
             self.send_message("* `IGNORE` - Disable all new recommendations\n");
             self.send_message(
-                "* `CONFIG` - Select which extensions to enable or make other changes\n",
+                "* `CONFIG` - Select which mods to enable or make other changes\n",
             );
 
             let Some(input) = self.next_input().await else {
@@ -344,11 +344,11 @@ impl ConfigModeActor {
                 "SAVE" => return DiffResult::Save,
 
                 "IGNORE" => {
-                    // Disable all the new recommended extensions
+                    // Disable all the new recommended mods
                     for to_add in &self.diff.to_add {
-                        for extension in &mut extensions.extensions {
-                            if extension.source == to_add.source {
-                                extension.enabled = false;
+                        for m in &mut mods.mods {
+                            if m.source == to_add.source {
+                                m.enabled = false;
                                 break;
                             }
                         }
@@ -442,13 +442,13 @@ impl ConfigModeActor {
     }
 
     /// Signal that configuration is done (save and exit).
-    fn done(&self, agent: &ComponentSource, extensions: &WorkspaceExtensionsConfig) {
+    fn done(&self, agent: &ComponentSource, mods: &WorkspaceModsConfig) {
         self.config_agent_tx
             .unbounded_send(ConfigAgentMessage::ConfigModeOutput(
                 self.session_id.clone(),
                 ConfigModeOutput::Done {
                     agent: agent.clone(),
-                    extensions: extensions.clone(),
+                    mods: mods.clone(),
                 },
             ))
             .ok();
@@ -469,18 +469,18 @@ impl ConfigModeActor {
     async fn main_menu_loop(
         &mut self,
         agent: &mut ComponentSource,
-        extensions: &mut WorkspaceExtensionsConfig,
+        mods: &mut WorkspaceModsConfig,
     ) {
-        self.show_main_menu(agent, extensions);
+        self.show_main_menu(agent, mods);
 
         loop {
             let Some(input) = self.next_input().await else {
                 return;
             };
 
-            match self.handle_main_menu_input(&input, agent, extensions).await {
+            match self.handle_main_menu_input(&input, agent, mods).await {
                 MenuAction::Done => return,
-                MenuAction::Redisplay => self.show_main_menu(agent, extensions),
+                MenuAction::Redisplay => self.show_main_menu(agent, mods),
                 MenuAction::Continue => {}
             }
         }
@@ -491,14 +491,14 @@ impl ConfigModeActor {
         &mut self,
         text: &str,
         agent: &mut ComponentSource,
-        extensions: &mut WorkspaceExtensionsConfig,
+        mods: &mut WorkspaceModsConfig,
     ) -> MenuAction {
         let text = text.trim();
         let text_upper = text.to_uppercase();
 
         // Save and exit
         if text_upper == "SAVE" {
-            self.done(agent, extensions);
+            self.done(agent, mods);
             return MenuAction::Done;
         }
 
@@ -518,28 +518,28 @@ impl ConfigModeActor {
             return MenuAction::Redisplay;
         }
 
-        // Toggle extension by index (1-based)
+        // Toggle mod by index (1-based)
         if let Ok(display_index) = text.parse::<usize>() {
-            if display_index >= 1 && display_index <= extensions.extensions.len() {
-                let extension = &mut extensions.extensions[display_index - 1];
-                extension.enabled = !extension.enabled;
+            if display_index >= 1 && display_index <= mods.mods.len() {
+                let m = &mut mods.mods[display_index - 1];
+                m.enabled = !m.enabled;
                 self.send_message(format!(
-                    "Extension `{}` is now {}.",
-                    extension.source.display_name(),
-                    if extension.enabled {
+                    "Mod `{}` is now {}.",
+                    m.source.display_name(),
+                    if m.enabled {
                         "enabled"
                     } else {
                         "disabled"
                     },
                 ));
                 return MenuAction::Redisplay;
-            } else if extensions.extensions.is_empty() {
-                self.send_message("No extensions configured.");
+            } else if mods.mods.is_empty() {
+                self.send_message("No mods configured.");
                 return MenuAction::Continue;
             } else {
                 self.send_message(format!(
                     "Invalid index. Please enter 1-{}.",
-                    extensions.extensions.len()
+                    mods.mods.len()
                 ));
                 return MenuAction::Continue;
             }
@@ -553,7 +553,7 @@ impl ConfigModeActor {
 
         if MOVE_RE.captures(text).is_some() {
             self.send_message(
-                "Extension reordering is not yet supported with the new config format.",
+                "Mod reordering is not yet supported with the new config format.",
             );
             return MenuAction::Continue;
         }
@@ -564,24 +564,24 @@ impl ConfigModeActor {
     }
 
     /// Show the main menu.
-    fn show_main_menu(&self, agent: &ComponentSource, extensions: &WorkspaceExtensionsConfig) {
+    fn show_main_menu(&self, agent: &ComponentSource, mods: &WorkspaceModsConfig) {
         let mut msg = String::new();
         msg.push_str("# Configuration\n\n");
 
         // Current agent (global)
         msg.push_str(&format!("**Agent:** {}\n\n", agent.display_name()));
 
-        // Extensions (per-workspace)
+        // Mods (per-workspace)
         msg.push_str(&format!(
-            "**Extensions for workspace `{}`:**\n",
+            "**Mods for workspace `{}`:**\n",
             self.workspace_path.display()
         ));
-        if extensions.extensions.is_empty() {
+        if mods.mods.is_empty() {
             msg.push_str("  * (none configured)\n");
         } else {
-            for (extension, display_index) in extensions.extensions.iter().zip(1..) {
-                let name = extension.source.display_name();
-                if extension.enabled {
+            for (m, display_index) in mods.mods.iter().zip(1..) {
+                let name = m.source.display_name();
+                if m.enabled {
                     msg.push_str(&format!("  {}. {}\n", display_index, name));
                 } else {
                     msg.push_str(&format!("  {}. ~~{}~~ (disabled)\n", display_index, name));
@@ -593,11 +593,11 @@ impl ConfigModeActor {
         // Commands
         msg.push_str("# Commands\n\n");
         msg.push_str("- `AGENT` - Change agent (affects all workspaces)\n");
-        match extensions.extensions.len() {
+        match mods.mods.len() {
             0 => {}
-            1 => msg.push_str("- `1` - Toggle extension enabled/disabled in this workspace\n"),
+            1 => msg.push_str("- `1` - Toggle mod enabled/disabled in this workspace\n"),
             n => msg.push_str(&format!(
-                "- `1` through `{n}` - Toggle extension enabled/disabled in this workspace\n"
+                "- `1` through `{n}` - Toggle mod enabled/disabled in this workspace\n"
             )),
         }
         msg.push_str("- `SAVE` - Save for future sessions\n");

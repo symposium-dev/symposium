@@ -6,7 +6,7 @@ Sparkle is an AI collaboration framework that transforms your agent from a helpf
 
 | What | How |
 |------|-----|
-| Activate | Automatic when extension is enabled |
+| Activate | Automatic when mod is enabled |
 | Teach a pattern | Say "meta moment" during a session |
 | Save session | Use `/checkpoint` before ending |
 | Local state | `.sparkle-space/` (add to .gitignore) |
@@ -14,7 +14,7 @@ Sparkle is an AI collaboration framework that transforms your agent from a helpf
 
 ## How It Works
 
-**Automatic activation** - When the Sparkle extension is enabled, it activates automatically when you create a new thread. No manual setup required.
+**Automatic activation** - When the Sparkle mod is enabled, it activates automatically when you create a new thread. No manual setup required.
 
 **Local workspace state** - Sparkle creates a `.sparkle-space/` directory in your workspace to store working memory and session checkpoints. Add this to your `.gitignore`.
 

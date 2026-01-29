@@ -1,11 +1,11 @@
 //! Recommendations - what components to suggest for a workspace
 //!
-//! This module handles recommending extensions based on workspace
+//! This module handles recommending mods based on workspace
 //! characteristics. Recommendations are loaded from a built-in TOML file that
 //! is embedded in the binary.
 
 use crate::registry::ComponentSource;
-use crate::user_config::{ExtensionConfig, WorkspaceExtensionsConfig};
+use crate::user_config::{ModConfig, WorkspaceModsConfig};
 use anyhow::{Context, Result};
 use cargo_metadata::{Metadata, MetadataCommand, Package, PackageId};
 use serde::{Deserialize, Serialize};
@@ -321,14 +321,14 @@ struct RecommendationsFile {
 /// Loaded recommendations
 #[derive(Debug, Clone)]
 pub struct Recommendations {
-    /// All extension recommendations
-    pub extensions: Vec<Recommendation>,
+    /// All mod recommendations
+    pub mods: Vec<Recommendation>,
 }
 
 impl Recommendations {
     /// Create empty recommendations (for testing)
     pub fn empty() -> Self {
-        Self { extensions: vec![] }
+        Self { mods: vec![] }
     }
 
     /// Load the built-in recommendations
@@ -342,14 +342,14 @@ impl Recommendations {
             toml::from_str(toml_str).context("Failed to parse recommendations TOML")?;
 
         Ok(Self {
-            extensions: file.recommendations,
+            mods: file.recommendations,
         })
     }
 
     /// Get recommendations that apply to a specific workspace
     pub fn for_workspace(&self, workspace_path: &Path) -> WorkspaceRecommendations {
-        let extensions: Vec<Recommendation> = self
-            .extensions
+        let mods: Vec<Recommendation> = self
+            .mods
             .iter()
             .filter(|r| {
                 r.when
@@ -360,59 +360,59 @@ impl Recommendations {
             .cloned()
             .collect();
 
-        WorkspaceRecommendations { extensions }
+        WorkspaceRecommendations { mods }
     }
 }
 
 /// Recommendations filtered for a specific workspace
 #[derive(Debug, Clone, Default)]
 pub struct WorkspaceRecommendations {
-    pub extensions: Vec<Recommendation>,
+    pub mods: Vec<Recommendation>,
 }
 
 impl WorkspaceRecommendations {
-    /// Get all extension sources as a set (for diffing with config)
-    pub fn extension_sources(&self) -> Vec<ComponentSource> {
-        self.extensions.iter().map(|r| r.source.clone()).collect()
+    /// Get all mod sources as a set (for diffing with config)
+    pub fn mod_sources(&self) -> Vec<ComponentSource> {
+        self.mods.iter().map(|r| r.source.clone()).collect()
     }
 
     /// Get a recommendation by its source
     pub fn get_recommendation(&self, source: &ComponentSource) -> Option<&Recommendation> {
-        self.extensions.iter().find(|r| &r.source == source)
+        self.mods.iter().find(|r| &r.source == source)
     }
 
-    /// Compare these recommendations against the workspace extensions config.
+    /// Compare these recommendations against the workspace mods config.
     ///
     /// If the config already matches the recommendations, returns None.
     ///
     /// Otherwise, returns the diff showing what to add and remove.
-    pub fn diff_against(&self, config: &WorkspaceExtensionsConfig) -> Option<RecommendationDiff> {
+    pub fn diff_against(&self, config: &WorkspaceModsConfig) -> Option<RecommendationDiff> {
         // Get the set of recommended sources
         let recommended_sources: HashSet<_> =
-            self.extensions.iter().map(|r| r.source.clone()).collect();
+            self.mods.iter().map(|r| r.source.clone()).collect();
 
         // Get the set of configured sources
         let configured_sources: HashSet<_> =
-            config.extensions.iter().map(|e| e.source.clone()).collect();
+            config.mods.iter().map(|m| m.source.clone()).collect();
 
         // New = recommended but not configured
         let mut to_add = Vec::new();
-        for extension in &self.extensions {
-            if !configured_sources.contains(&extension.source) {
+        for m in &self.mods {
+            if !configured_sources.contains(&m.source) {
                 // New recommendation - add it enabled
-                to_add.push(ExtensionConfig {
-                    source: extension.source.clone(),
+                to_add.push(ModConfig {
+                    source: m.source.clone(),
                     enabled: true,
-                    when: extension.when.clone().unwrap_or_default(),
+                    when: m.when.clone().unwrap_or_default(),
                 });
             }
         }
 
         let mut to_remove = vec![];
-        for extension in &config.extensions {
-            if !recommended_sources.contains(&extension.source) {
+        for m in &config.mods {
+            if !recommended_sources.contains(&m.source) {
                 // Stale - remove it
-                to_remove.push(extension.clone());
+                to_remove.push(m.clone());
             }
         }
 
@@ -427,11 +427,11 @@ impl WorkspaceRecommendations {
 /// A new recommendation that isn't in the user's config yet
 #[derive(Debug, Clone, Default)]
 pub struct RecommendationDiff {
-    /// Sources for extension that were newly recommended
-    pub to_add: Vec<ExtensionConfig>,
+    /// Sources for mods that were newly recommended
+    pub to_add: Vec<ModConfig>,
 
-    /// Configuration for extensions that were removed
-    pub to_remove: Vec<ExtensionConfig>,
+    /// Configuration for mods that were removed
+    pub to_remove: Vec<ModConfig>,
 }
 
 impl RecommendationDiff {
@@ -440,21 +440,21 @@ impl RecommendationDiff {
         self.to_add.is_empty() && self.to_remove.is_empty()
     }
 
-    /// Apply this diff to the given workspace extensions config
-    pub fn apply(&self, config: &mut WorkspaceExtensionsConfig) {
+    /// Apply this diff to the given workspace mods config
+    pub fn apply(&self, config: &mut WorkspaceModsConfig) {
         if self.is_empty() {
             return;
         }
 
         // Add new recommendations
-        for ext in &self.to_add {
-            config.extensions.push(ext.clone());
+        for m in &self.to_add {
+            config.mods.push(m.clone());
         }
 
         // Remove stale recommendations
         config
-            .extensions
-            .retain(|ext| !self.to_remove.iter().any(|r| r.source == ext.source));
+            .mods
+            .retain(|m| !self.to_remove.iter().any(|r| r.source == m.source));
     }
 }
 
@@ -476,15 +476,15 @@ mod tests {
     fn test_load_builtin_recommendations() {
         let recs = Recommendations::load_builtin().expect("Should load builtin recommendations");
 
-        // Should have some extension recommendations
+        // Should have some mod recommendations
         assert!(
-            !recs.extensions.is_empty(),
-            "Should have extension recommendations"
+            !recs.mods.is_empty(),
+            "Should have mod recommendations"
         );
 
         // Should have sparkle (always recommended) - it's a cargo source
         assert!(
-            recs.extensions.iter().any(|r| matches!(
+            recs.mods.iter().any(|r| matches!(
                 &r.source,
                 ComponentSource::Cargo(dist) if dist.crate_name == "sparkle-mcp"
             )),
@@ -509,16 +509,16 @@ when.file-exists = "Cargo.toml"
         let temp_dir = tempfile::tempdir().unwrap();
         let workspace_recs = recs.for_workspace(temp_dir.path());
 
-        // Should only have the "always-on" extension
-        assert_eq!(workspace_recs.extensions.len(), 1);
-        assert_eq!(workspace_recs.extensions[0].display_name(), "always-on");
+        // Should only have the "always-on" mod
+        assert_eq!(workspace_recs.mods.len(), 1);
+        assert_eq!(workspace_recs.mods[0].display_name(), "always-on");
 
         // Now create Cargo.toml
         std::fs::write(temp_dir.path().join("Cargo.toml"), "[package]").unwrap();
         let workspace_recs = recs.for_workspace(temp_dir.path());
 
-        // Should have both extensions
-        assert_eq!(workspace_recs.extensions.len(), 2);
+        // Should have both mods
+        assert_eq!(workspace_recs.mods.len(), 2);
     }
 
     #[test]
@@ -537,18 +537,18 @@ when.any = [
 
         // No matching files
         let workspace_recs = recs.for_workspace(temp_dir.path());
-        assert_eq!(workspace_recs.extensions.len(), 0);
+        assert_eq!(workspace_recs.mods.len(), 0);
 
         // Create Cargo.toml
         std::fs::write(temp_dir.path().join("Cargo.toml"), "[package]").unwrap();
         let workspace_recs = recs.for_workspace(temp_dir.path());
-        assert_eq!(workspace_recs.extensions.len(), 1);
+        assert_eq!(workspace_recs.mods.len(), 1);
 
         // Remove Cargo.toml, create package.json
         std::fs::remove_file(temp_dir.path().join("Cargo.toml")).unwrap();
         std::fs::write(temp_dir.path().join("package.json"), "{}").unwrap();
         let workspace_recs = recs.for_workspace(temp_dir.path());
-        assert_eq!(workspace_recs.extensions.len(), 1);
+        assert_eq!(workspace_recs.mods.len(), 1);
     }
 
     #[test]
@@ -565,27 +565,27 @@ when.files-exist = ["src/lib.rs"]
 
         // Neither file
         let workspace_recs = recs.for_workspace(temp_dir.path());
-        assert_eq!(workspace_recs.extensions.len(), 0);
+        assert_eq!(workspace_recs.mods.len(), 0);
 
         // Only Cargo.toml
         std::fs::write(temp_dir.path().join("Cargo.toml"), "[package]").unwrap();
         let workspace_recs = recs.for_workspace(temp_dir.path());
-        assert_eq!(workspace_recs.extensions.len(), 0);
+        assert_eq!(workspace_recs.mods.len(), 0);
 
         // Both files
         std::fs::create_dir_all(temp_dir.path().join("src")).unwrap();
         std::fs::write(temp_dir.path().join("src/lib.rs"), "").unwrap();
         let workspace_recs = recs.for_workspace(temp_dir.path());
-        assert_eq!(workspace_recs.extensions.len(), 1);
+        assert_eq!(workspace_recs.mods.len(), 1);
     }
 
     // ========================================================================
     // Diff tests
     // ========================================================================
 
-    fn make_workspace_recs(extensions: Vec<(&str, Option<When>)>) -> WorkspaceRecommendations {
+    fn make_workspace_recs(mods: Vec<(&str, Option<When>)>) -> WorkspaceRecommendations {
         WorkspaceRecommendations {
-            extensions: extensions
+            mods: mods
                 .into_iter()
                 .map(|(name, when)| Recommendation {
                     source: ComponentSource::Builtin(name.to_string()),
@@ -607,14 +607,14 @@ when.files-exist = ["src/lib.rs"]
             ),
             ("bar", None),
         ]);
-        let config = WorkspaceExtensionsConfig::new(vec![]); // Empty config
+        let config = WorkspaceModsConfig::new(vec![]); // Empty config
 
         let diff = recs.diff_against(&config).expect("should have changes");
 
         expect![[r#"
             RecommendationDiff {
                 to_add: [
-                    ExtensionConfig {
+                    ModConfig {
                         source: Builtin(
                             "foo",
                         ),
@@ -630,7 +630,7 @@ when.files-exist = ["src/lib.rs"]
                             all: None,
                         },
                     },
-                    ExtensionConfig {
+                    ModConfig {
                         source: Builtin(
                             "bar",
                         ),
@@ -652,13 +652,13 @@ when.files-exist = ["src/lib.rs"]
     }
 
     #[test]
-    fn test_diff_stale_extensions() {
+    fn test_diff_stale_mods() {
         let recs = make_workspace_recs(vec![]); // No recommendations
-        let mut config = WorkspaceExtensionsConfig::new(vec![]);
+        let mut config = WorkspaceModsConfig::new(vec![]);
 
-        // Add an extension that's not recommended
-        config.extensions.push(ExtensionConfig {
-            source: ComponentSource::Builtin("old-ext".to_string()),
+        // Add a mod that's not recommended
+        config.mods.push(ModConfig {
+            source: ComponentSource::Builtin("old-mod".to_string()),
             enabled: true,
             when: When {
                 file_exists: Some("old.txt".to_string()),
@@ -672,9 +672,9 @@ when.files-exist = ["src/lib.rs"]
             RecommendationDiff {
                 to_add: [],
                 to_remove: [
-                    ExtensionConfig {
+                    ModConfig {
                         source: Builtin(
-                            "old-ext",
+                            "old-mod",
                         ),
                         enabled: true,
                         when: When {
@@ -697,10 +697,10 @@ when.files-exist = ["src/lib.rs"]
     #[test]
     fn test_diff_no_changes_when_in_sync() {
         let recs = make_workspace_recs(vec![("foo", None)]);
-        let mut config = WorkspaceExtensionsConfig::new(vec![]);
+        let mut config = WorkspaceModsConfig::new(vec![]);
 
-        // Add the same extension that's recommended
-        config.extensions.push(ExtensionConfig {
+        // Add the same mod that's recommended
+        config.mods.push(ModConfig {
             source: ComponentSource::Builtin("foo".to_string()),
             enabled: true,
             when: When::default(),
@@ -711,11 +711,11 @@ when.files-exist = ["src/lib.rs"]
     }
 
     #[test]
-    fn test_diff_disabled_extension_not_new() {
-        // If an extension is in config but disabled, it's still "known" - not new
+    fn test_diff_disabled_mod_not_new() {
+        // If a mod is in config but disabled, it's still "known" - not new
         let recs = make_workspace_recs(vec![("foo", None)]);
-        let mut config = WorkspaceExtensionsConfig::new(vec![]);
-        config.extensions.push(ExtensionConfig {
+        let mut config = WorkspaceModsConfig::new(vec![]);
+        config.mods.push(ModConfig {
             source: ComponentSource::Builtin("foo".to_string()),
             enabled: false, // Disabled
             when: When::default(),
@@ -723,16 +723,16 @@ when.files-exist = ["src/lib.rs"]
 
         let diff = recs.diff_against(&config);
         // foo is not new because it's already in config (even though disabled)
-        assert!(diff.is_none(), "Disabled extension should not count as new");
+        assert!(diff.is_none(), "Disabled mod should not count as new");
     }
 
     #[test]
     fn test_diff_apply() {
         let recs = make_workspace_recs(vec![("foo", None), ("bar", None)]);
-        let mut config = WorkspaceExtensionsConfig::new(vec![]);
+        let mut config = WorkspaceModsConfig::new(vec![]);
 
-        // Add a stale extension
-        config.extensions.push(ExtensionConfig {
+        // Add a stale mod
+        config.mods.push(ModConfig {
             source: ComponentSource::Builtin("old".to_string()),
             enabled: true,
             when: When::default(),
@@ -743,16 +743,16 @@ when.files-exist = ["src/lib.rs"]
 
         // foo and bar should be added and enabled
         let foo_source = ComponentSource::Builtin("foo".to_string());
-        let foo_ext = config.extensions.iter().find(|e| e.source == foo_source);
-        assert!(foo_ext.is_some() && foo_ext.unwrap().enabled);
+        let foo_mod = config.mods.iter().find(|m| m.source == foo_source);
+        assert!(foo_mod.is_some() && foo_mod.unwrap().enabled);
 
         let bar_source = ComponentSource::Builtin("bar".to_string());
-        let bar_ext = config.extensions.iter().find(|e| e.source == bar_source);
-        assert!(bar_ext.is_some() && bar_ext.unwrap().enabled);
+        let bar_mod = config.mods.iter().find(|m| m.source == bar_source);
+        assert!(bar_mod.is_some() && bar_mod.unwrap().enabled);
 
         // old should be removed
         let old_source = ComponentSource::Builtin("old".to_string());
-        assert!(!config.extensions.iter().any(|e| e.source == old_source));
+        assert!(!config.mods.iter().any(|m| m.source == old_source));
     }
 
     #[test]
@@ -872,7 +872,7 @@ edition = "2021"
         write_synced(&temp_dir.path().join("src/lib.rs"), "");
 
         let workspace_recs = recs.for_workspace(temp_dir.path());
-        assert_eq!(workspace_recs.extensions.len(), 0);
+        assert_eq!(workspace_recs.mods.len(), 0);
 
         // Add serde dependency
         write_synced(
@@ -889,7 +889,7 @@ serde = "1"
         );
 
         let workspace_recs = recs.for_workspace(temp_dir.path());
-        assert_eq!(workspace_recs.extensions.len(), 1);
-        assert_eq!(workspace_recs.extensions[0].display_name(), "serde-helper");
+        assert_eq!(workspace_recs.mods.len(), 1);
+        assert_eq!(workspace_recs.mods[0].display_name(), "serde-helper");
     }
 }

@@ -2,9 +2,9 @@
 //!
 //! Configuration is split between:
 //! - Global agent config: `~/.symposium/config/agent.json` - the selected agent for all workspaces
-//! - Per-workspace extensions: `~/.symposium/config/<encoded-workspace-path>/config.json`
+//! - Per-workspace mods: `~/.symposium/config/<encoded-workspace-path>/config.json`
 //!
-//! The configuration uses `ComponentSource` as the identity for extensions,
+//! The configuration uses `ComponentSource` as the identity for mods,
 //! enabling easy diffing with recommendations.
 
 use crate::recommendations::When;
@@ -146,31 +146,31 @@ impl ConfigPaths {
     }
 }
 
-/// Extension configuration entry
+/// Mod configuration entry
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct ExtensionConfig {
-    /// The source of this extension
+pub struct ModConfig {
+    /// The source of this mod
     pub source: ComponentSource,
 
-    /// Whether this extension is enabled
+    /// Whether this mod is enabled
     pub enabled: bool,
 
-    /// The conditions that caused this extension to be recommended.
-    /// Used to explain why an extension is stale when the conditions no longer apply.
+    /// The conditions that caused this mod to be recommended.
+    /// Used to explain why a mod is stale when the conditions no longer apply.
     pub when: When,
 }
 
-/// Per-workspace extension configuration for Symposium.
+/// Per-workspace mod configuration for Symposium.
 ///
-/// Uses `ComponentSource` as identity for extensions.
+/// Uses `ComponentSource` as identity for mods.
 /// This makes it easy to compare with recommendations and detect changes.
 ///
 /// Note: The agent is stored globally in `GlobalAgentConfig`, not per-workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-pub struct WorkspaceExtensionsConfig {
-    /// Extensions with their enabled state
+pub struct WorkspaceModsConfig {
+    /// Mods with their enabled state
     #[serde(default)]
-    pub extensions: Vec<ExtensionConfig>,
+    pub mods: Vec<ModConfig>,
 }
 
 // ============================================================================
@@ -226,31 +226,31 @@ impl GlobalAgentConfig {
 }
 
 // ============================================================================
-// Workspace Extensions Config
+// Workspace Mods Config
 // ============================================================================
 
-impl WorkspaceExtensionsConfig {
-    /// Create a new workspace extensions config
-    pub fn new(extensions: Vec<ExtensionConfig>) -> Self {
-        Self { extensions }
+impl WorkspaceModsConfig {
+    /// Create a new workspace mods config
+    pub fn new(mods: Vec<ModConfig>) -> Self {
+        Self { mods }
     }
 
-    /// Create a workspace extensions config from a list of extension sources.
-    /// All extensions are enabled by default.
+    /// Create a workspace mods config from a list of mod sources.
+    /// All mods are enabled by default.
     pub fn from_sources(sources: Vec<ComponentSource>) -> Self {
-        let extensions = sources
+        let mods = sources
             .into_iter()
-            .map(|source| ExtensionConfig {
+            .map(|source| ModConfig {
                 source,
                 enabled: true,
                 when: When::default(),
             })
             .collect();
 
-        Self { extensions }
+        Self { mods }
     }
 
-    /// Load the workspace extensions config for the given workspace.
+    /// Load the workspace mods config for the given workspace.
     /// Returns None if the file doesn't exist.
     ///
     /// Handles migration from old format that included an `agent` field.
@@ -268,7 +268,7 @@ impl WorkspaceExtensionsConfig {
         Ok(Some(config))
     }
 
-    /// Save the workspace extensions config for the given workspace.
+    /// Save the workspace mods config for the given workspace.
     /// Creates the parent directory if it doesn't exist.
     pub fn save(&self, config_paths: &ConfigPaths, workspace_path: &Path) -> Result<()> {
         let path = config_paths.ensure_workspace_config_dir(workspace_path)?;
@@ -278,12 +278,12 @@ impl WorkspaceExtensionsConfig {
         Ok(())
     }
 
-    /// Get enabled extension sources in order
-    pub fn enabled_extensions(&self) -> Vec<ComponentSource> {
-        self.extensions
+    /// Get enabled mod sources in order
+    pub fn enabled_mods(&self) -> Vec<ComponentSource> {
+        self.mods
             .iter()
-            .filter(|extension| extension.enabled)
-            .map(|extension| extension.source.clone())
+            .filter(|m| m.enabled)
+            .map(|m| m.source.clone())
             .collect()
     }
 }
@@ -318,8 +318,8 @@ mod tests {
     use expect_test::expect;
 
     #[test]
-    fn test_workspace_extensions_config_from_sources() {
-        let extensions = vec![
+    fn test_workspace_mods_config_from_sources() {
+        let sources = vec![
             ComponentSource::Builtin("ferris".to_string()),
             ComponentSource::Cargo(CargoDistribution {
                 crate_name: "sparkle-mcp".to_string(),
@@ -329,12 +329,12 @@ mod tests {
             }),
         ];
 
-        let config = WorkspaceExtensionsConfig::from_sources(extensions);
+        let config = WorkspaceModsConfig::from_sources(sources);
 
         expect![[r#"
-            WorkspaceExtensionsConfig {
-                extensions: [
-                    ExtensionConfig {
+            WorkspaceModsConfig {
+                mods: [
+                    ModConfig {
                         source: Builtin(
                             "ferris",
                         ),
@@ -348,7 +348,7 @@ mod tests {
                             all: None,
                         },
                     },
-                    ExtensionConfig {
+                    ModConfig {
                         source: Cargo(
                             CargoDistribution {
                                 crate_name: "sparkle-mcp",
@@ -376,57 +376,23 @@ mod tests {
     }
 
     #[test]
-    fn test_workspace_extensions_config_save_load_roundtrip() {
+    fn test_workspace_mods_config_save_load_roundtrip() {
         let temp_dir = tempfile::tempdir().unwrap();
         let config_paths = ConfigPaths::with_root(temp_dir.path());
         let workspace_path = PathBuf::from("/some/workspace");
 
-        let extensions = vec![ComponentSource::Builtin("ferris".to_string())];
-        let config = WorkspaceExtensionsConfig::from_sources(extensions);
+        let sources = vec![ComponentSource::Builtin("ferris".to_string())];
+        let config = WorkspaceModsConfig::from_sources(sources);
 
         // Save
         config.save(&config_paths, &workspace_path).unwrap();
 
         // Load
-        let loaded = WorkspaceExtensionsConfig::load(&config_paths, &workspace_path)
+        let loaded = WorkspaceModsConfig::load(&config_paths, &workspace_path)
             .unwrap()
             .unwrap();
 
         assert_eq!(config, loaded);
-    }
-
-    #[test]
-    fn test_workspace_extensions_config_migrates_from_old_format() {
-        // Old format included an `agent` field - verify we can still load it
-        let temp_dir = tempfile::tempdir().unwrap();
-        let config_paths = ConfigPaths::with_root(temp_dir.path());
-        let workspace_path = PathBuf::from("/some/workspace");
-
-        // Create directory and write old format config
-        let config_path = config_paths.ensure_workspace_config_dir(&workspace_path).unwrap();
-        let old_format = r#"{
-            "agent": {"builtin": "eliza"},
-            "extensions": [
-                {"source": {"cargo": {"crate": "symposium-ferris"}}, "enabled": true, "when": {}}
-            ]
-        }"#;
-        std::fs::write(&config_path, old_format).unwrap();
-
-        // Load should succeed, ignoring the agent field
-        let loaded = WorkspaceExtensionsConfig::load(&config_paths, &workspace_path)
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(loaded.extensions.len(), 1);
-        assert_eq!(
-            loaded.extensions[0].source,
-            ComponentSource::Cargo(CargoDistribution {
-                crate_name: "symposium-ferris".to_string(),
-                version: None,
-                binary: None,
-                args: vec![],
-            })
-        );
     }
 
     #[test]

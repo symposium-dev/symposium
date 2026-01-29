@@ -57,7 +57,7 @@ jobs:
   release:
     permissions:
       contents: write  # Required - cannot be set by called workflow
-    uses: symposium-dev/package-agent-extension/.github/workflows/build.yml@v1
+    uses: symposium-dev/package-agent-mod/.github/workflows/build.yml@v1
     secrets: inherit
 ```
 
@@ -124,7 +124,7 @@ Analysis of ripgrep, bat, fd, delta, nushell, and hyperfine:
 ## Recommended Workflow Structure
 
 ```yaml
-name: Build and Release Extension
+name: Build and Release Mod
 
 on:
   workflow_call:
@@ -199,7 +199,7 @@ jobs:
   release:
     permissions:
       contents: write
-    uses: symposium-dev/package-agent-extension/.github/workflows/build.yml@v1
+    uses: symposium-dev/package-agent-mod/.github/workflows/build.yml@v1
     with:
       musl: true
     secrets: inherit

@@ -28,8 +28,8 @@
 //!
 //! ## Proxy Configuration
 //!
-//! Use `--proxy <json>` to specify extensions. Order matters - proxies are
-//! chained in the order specified. Use `registry resolve-extension` to get json.
+//! Use `--proxy <json>` to specify mods. Order matters - proxies are
+//! chained in the order specified. Use `registry resolve-mod` to get json.
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -41,7 +41,7 @@ use std::str::FromStr;
 use symposium_acp_agent::recommendations::Recommendations;
 use symposium_acp_agent::registry;
 use symposium_acp_agent::symposium::{Symposium, SymposiumConfig};
-use symposium_acp_agent::user_config::{ConfigPaths, GlobalAgentConfig, WorkspaceExtensionsConfig};
+use symposium_acp_agent::user_config::{ConfigPaths, GlobalAgentConfig, WorkspaceModsConfig};
 use symposium_acp_agent::vscodelm;
 use symposium_acp_agent::ConfigAgent;
 
@@ -85,10 +85,10 @@ enum Command {
     /// Without --agent: proxy mode (sits between editor and existing agent)
     /// With --agent: agent mode (wraps the specified downstream agent)
     RunWith {
-        /// Extension proxy to include in the chain (can be specified multiple times).
+        /// Mod proxy to include in the chain (can be specified multiple times).
         /// Order matters - proxies are chained in the order specified.
         ///
-        /// JSON from `registry resolve-extension` is expected.
+        /// JSON from `registry resolve-mod` is expected.
         #[arg(long = "proxy", value_name = "NAME")]
         proxies: Vec<String>,
 
@@ -135,9 +135,9 @@ enum Command {
         #[arg(long, default_value = "elizacp")]
         agent: String,
 
-        /// Skip extension recommendations (create config with no extensions)
+        /// Skip mod recommendations (create config with no mods)
         #[arg(long)]
-        no_extensions: bool,
+        no_mods: bool,
     },
 }
 
@@ -147,8 +147,8 @@ enum RegistryCommand {
     /// List all available agents (built-ins + registry)
     List,
 
-    /// List all available extensions from the registry
-    ListExtensions,
+    /// List all available mods from the registry
+    ListMods,
 
     /// Resolve an agent ID to an executable McpServer configuration.
     /// Downloads binaries if needed.
@@ -157,9 +157,9 @@ enum RegistryCommand {
         agent_id: String,
     },
 
-    ResolveExtension {
-        /// The extension to resolve
-        extension_id: String,
+    ResolveMod {
+        /// The mod to resolve
+        mod_id: String,
     },
 }
 
@@ -280,16 +280,16 @@ async fn main() -> Result<()> {
                 let agents = registry::list_agents().await?;
                 println!("{}", serde_json::to_string(&agents)?);
             }
-            RegistryCommand::ListExtensions => {
-                let extensions = registry::list_extensions().await?;
-                println!("{}", serde_json::to_string(&extensions)?);
+            RegistryCommand::ListMods => {
+                let mods = registry::list_mods().await?;
+                println!("{}", serde_json::to_string(&mods)?);
             }
             RegistryCommand::ResolveAgent { agent_id: agent } => {
                 let server = registry::resolve_agent(&agent).await?;
                 println!("{}", serde_json::to_string(&server)?);
             }
-            RegistryCommand::ResolveExtension { extension_id } => {
-                let server = registry::resolve_extension(&extension_id).await?;
+            RegistryCommand::ResolveMod { mod_id } => {
+                let server = registry::resolve_mod(&mod_id).await?;
                 println!("{}", serde_json::to_string(&server)?);
             }
         },
@@ -297,22 +297,22 @@ async fn main() -> Result<()> {
         Command::Init {
             workspace,
             agent,
-            no_extensions,
+            no_mods,
         } => {
             let config_paths = ConfigPaths::default_location()?;
             let agent = registry::lookup_agent_source(&agent).await?;
 
-            let extensions = if no_extensions {
+            let mods = if no_mods {
                 vec![]
             } else {
                 Recommendations::load_builtin()
-                    .map(|r| r.for_workspace(&workspace).extension_sources())
+                    .map(|r| r.for_workspace(&workspace).mod_sources())
                     .unwrap_or_default()
             };
 
-            // Save workspace extensions
-            let extensions_config = WorkspaceExtensionsConfig::from_sources(extensions);
-            extensions_config.save(&config_paths, &workspace)?;
+            // Save workspace mods
+            let mods_config = WorkspaceModsConfig::from_sources(mods);
+            mods_config.save(&config_paths, &workspace)?;
 
             // Save global agent
             let global_config = GlobalAgentConfig::new(agent);

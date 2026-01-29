@@ -15,7 +15,7 @@ mod tests;
 
 use crate::recommendations::{Recommendations, WorkspaceRecommendations};
 use crate::registry::ComponentSource;
-use crate::user_config::{ConfigPaths, GlobalAgentConfig, WorkspaceExtensionsConfig};
+use crate::user_config::{ConfigPaths, GlobalAgentConfig, WorkspaceModsConfig};
 use conductor_actor::ConductorHandle;
 use config_mode_actor::{ConfigModeHandle, ConfigModeOutput};
 use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
@@ -135,12 +135,12 @@ impl ConfigAgent {
             .map_err(|e| sacp::util::internal_error(e.to_string()))
     }
 
-    /// Load workspace extensions configuration from disk.
-    fn load_extensions(
+    /// Load workspace mods configuration from disk.
+    fn load_mods(
         &self,
         workspace_path: &Path,
-    ) -> Result<Option<WorkspaceExtensionsConfig>, sacp::Error> {
-        WorkspaceExtensionsConfig::load(&self.config_paths, workspace_path)
+    ) -> Result<Option<WorkspaceModsConfig>, sacp::Error> {
+        WorkspaceModsConfig::load(&self.config_paths, workspace_path)
             .map_err(|e| sacp::util::internal_error(e.to_string()))
     }
 
@@ -241,7 +241,7 @@ impl ConfigAgent {
                 ))?;
             }
 
-            ConfigModeOutput::Done { agent, extensions } => {
+            ConfigModeOutput::Done { agent, mods } => {
                 // Get session info (workspace_path and return_to)
                 let (workspace_path, return_to) = match self.sessions.get(&session_id) {
                     Some(SessionState::Config {
@@ -266,12 +266,12 @@ impl ConfigAgent {
                     ))?;
                 }
 
-                // Save the workspace extensions configuration
-                if let Err(e) = extensions.save(&self.config_paths, &workspace_path) {
+                // Save the workspace mods configuration
+                if let Err(e) = mods.save(&self.config_paths, &workspace_path) {
                     cx.send_notification(SessionNotification::new(
                         session_id.clone(),
                         SessionUpdate::AgentMessageChunk(ContentChunk::new(
-                            format!("Error saving extensions configuration: {}", e).into(),
+                            format!("Error saving mods configuration: {}", e).into(),
                         )),
                     ))?;
                 }
@@ -405,32 +405,32 @@ impl ConfigAgent {
             return Ok(());
         };
 
-        // Load workspace extensions configuration
-        let extensions_config = self.load_extensions(&workspace_path)?;
+        // Load workspace mods configuration
+        let mods_config = self.load_mods(&workspace_path)?;
 
-        // If no extensions config, create one from recommendations and proceed
-        let extensions_config = match extensions_config {
+        // If no mods config, create one from recommendations and proceed
+        let mods_config = match mods_config {
             Some(config) => config,
             None => {
-                tracing::debug!("handle_new_session: no workspace extensions, applying recommendations");
+                tracing::debug!("handle_new_session: no workspace mods, applying recommendations");
                 let workspace_recs = self.recommendations_for_workspace(&workspace_path);
-                let config = WorkspaceExtensionsConfig::from_sources(workspace_recs.extension_sources());
+                let config = WorkspaceModsConfig::from_sources(workspace_recs.mod_sources());
 
-                // Save the new extensions config
+                // Save the new mods config
                 if let Err(e) = config.save(&self.config_paths, &workspace_path) {
-                    tracing::warn!("Failed to save initial extensions config: {}", e);
+                    tracing::warn!("Failed to save initial mods config: {}", e);
                 }
 
                 config
             }
         };
 
-        tracing::debug!(?agent, ?extensions_config, "handle_new_session: found configuration");
+        tracing::debug!(?agent, ?mods_config, "handle_new_session: found configuration");
 
-        // Check for recommendation diff on extensions
+        // Check for recommendation diff on mods
         if let Some(recs) = self.load_recommendations() {
             let workspace_recs = recs.for_workspace(&workspace_path);
-            if let Some(diff) = workspace_recs.diff_against(&extensions_config) {
+            if let Some(diff) = workspace_recs.diff_against(&mods_config) {
                 tracing::debug!(?diff, "handle_new_session: diff computed");
 
                 let session_id = SessionId::new(uuid::Uuid::new_v4().to_string());
@@ -438,7 +438,7 @@ impl ConfigAgent {
 
                 let actor_handle = ConfigModeHandle::spawn_with_recommendations(
                     agent,
-                    extensions_config,
+                    mods_config,
                     workspace_path.clone(),
                     self.config_paths.clone(),
                     diff,
@@ -460,14 +460,14 @@ impl ConfigAgent {
             }
         }
 
-        tracing::debug!(?agent, ?extensions_config, "handle_new_session: launching new session");
+        tracing::debug!(?agent, ?mods_config, "handle_new_session: launching new session");
 
         // No diff changes - proceed directly to uberconductor
         uberconductor
             .new_session(
                 workspace_path,
                 agent,
-                extensions_config.extensions,
+                mods_config.mods,
                 request,
                 request_cx,
             )
@@ -503,16 +503,16 @@ impl ConfigAgent {
         // Pause the conductor if we have one - it will resume when config mode exits
         let resume_tx = return_to.pause().await?;
 
-        // Load current agent and extensions
+        // Load current agent and mods
         let agent = self.load_global_agent()?;
-        let extensions = self.load_extensions(&workspace_path)?;
+        let mods = self.load_mods(&workspace_path)?;
 
         // Spawn the config mode actor (it holds resume_tx and drops it on exit)
-        let actor_handle = match (agent, extensions) {
+        let actor_handle = match (agent, mods) {
             // The normal case: both exist, configure them
-            (Some(agent), Some(extensions)) => ConfigModeHandle::spawn_reconfig(
+            (Some(agent), Some(mods)) => ConfigModeHandle::spawn_reconfig(
                 agent,
-                extensions,
+                mods,
                 workspace_path.clone(),
                 self.config_paths.clone(),
                 session_id.clone(),

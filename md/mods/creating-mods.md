@@ -1,10 +1,10 @@
-# Creating Agent Extensions
+# Creating Agent Mods
 
-A Symposium agent extension is an [ACP (Agent Client Protocol)](https://agentclientprotocol.com/) proxy that sits between the client and the agent. Proxies can intercept and transform messages, inject context, provide MCP tools, and coordinate agent behavior. Agent extensions are typically distributed as Rust crates on crates.io.
+A Symposium agent mod is an [ACP (Agent Client Protocol)](https://agentclientprotocol.com/) proxy that sits between the client and the agent. Proxies can intercept and transform messages, inject context, provide MCP tools, and coordinate agent behavior. Agent mods are typically distributed as Rust crates on crates.io.
 
 ## Basic Structure
 
-Your extension crate should:
+Your mod crate should:
 
 1. Implement an ACP proxy using the `sacp` crate
 2. Produce a binary that speaks ACP over stdio
@@ -14,17 +14,17 @@ See the [sacp cookbook on building proxies](https://docs.rs/sacp-cookbook/latest
 
 ## Cargo.toml Metadata
 
-Add metadata to tell Symposium how to run your extension:
+Add metadata to tell Symposium how to run your mod:
 
 ```toml
 [package]
-name = "my-extension"
+name = "my-mod"
 version = "0.1.0"
 description = "Help agents work with MyLibrary"
 
 [package.metadata.symposium]
 # Optional: specify which binary if your crate has multiple
-binary = "my-extension"
+binary = "my-mod"
 
 # Optional: arguments to pass when spawning
 args = []
@@ -35,7 +35,7 @@ env = { MY_CONFIG = "value" }
 
 The `name`, `description`, and `version` come from the standard `[package]` section.
 
-## Testing Your Extension
+## Testing Your Mod
 
 Before publishing:
 

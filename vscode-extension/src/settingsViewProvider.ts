@@ -3,7 +3,7 @@ import * as vscode from "vscode";
 /**
  * Settings View Provider
  *
- * Provides a minimal settings webview. Agent and extension configuration
+ * Provides a minimal settings webview. Agent and mod configuration
  * is handled by the Symposium Rust agent via ConfigAgent.
  */
 export class SettingsViewProvider implements vscode.WebviewViewProvider {
@@ -150,8 +150,8 @@ export class SettingsViewProvider implements vscode.WebviewViewProvider {
     <div class="section">
         <h2>Configuration</h2>
         <p class="info-text">
-            Agent and extension configuration is managed by Symposium.
-            Use the chat to run <code>/config</code> to configure agents and extensions.
+            Agent and mod configuration is managed by Symposium.
+            Use the chat to run <code>/config</code> to configure agents and mods.
         </p>
     </div>
 

@@ -27,7 +27,7 @@ The file uses JSONC (JSON with comments) format:
 | Field | Type | Description |
 |-------|------|-------------|
 | `agent` | string | Shell command to spawn the downstream agent. Parsed using shell word splitting. |
-| `proxies` | array | List of proxy extensions with `name` and `enabled` fields. |
+| `proxies` | array | List of proxy mods with `name` and `enabled` fields. |
 
 ## Architecture: Three-Actor Pattern
 
@@ -195,9 +195,9 @@ ConfigModeActor presents an interactive "phone tree" menu:
 
 **Agent:** Claude Code
 
-**Extensions:**
+**Mods:**
 1. [x] sparkle
-2. [x] ferris  
+2. [x] ferris
 3. [x] cargo
 
 ## Commands
@@ -205,8 +205,8 @@ ConfigModeActor presents an interactive "phone tree" menu:
 - `SAVE` - Save changes and exit
 - `CANCEL` - Discard changes and exit
 - `A` or `AGENT` - Change agent
-- `1`, `2`, `3` - Toggle extension on/off
-- `move X to Y` - Reorder extensions
+- `1`, `2`, `3` - Toggle mod on/off
+- `move X to Y` - Reorder mods
 ```
 
 The actor uses **async control flow as a state machine**: nested async loops replace explicit state enums. Each submenu (like agent selection) is a function that awaits input and returns when complete.

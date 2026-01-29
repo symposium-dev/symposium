@@ -3,7 +3,7 @@
 use super::*;
 use crate::recommendations::{Recommendation, Recommendations};
 use crate::registry::{ComponentSource, LocalDistribution};
-use crate::user_config::{ConfigPaths, GlobalAgentConfig, WorkspaceExtensionsConfig};
+use crate::user_config::{ConfigPaths, GlobalAgentConfig, WorkspaceModsConfig};
 use sacp::link::ClientToAgent;
 use sacp::on_receive_notification;
 use sacp::schema::{ContentChunk, ProtocolVersion, TextContent};
@@ -44,17 +44,17 @@ impl CollectedNotifications {
 }
 
 /// Helper to write workspace config using the given ConfigPaths.
-/// Now writes both agent (global) and extensions (per-workspace).
+/// Now writes both agent (global) and mods (per-workspace).
 fn write_workspace_config(
     config_paths: &ConfigPaths,
     workspace_path: &std::path::Path,
     agent: &ComponentSource,
-    extensions: &WorkspaceExtensionsConfig,
+    mods: &WorkspaceModsConfig,
 ) {
     GlobalAgentConfig::new(agent.clone())
         .save(config_paths)
         .unwrap();
-    extensions.save(config_paths, workspace_path).unwrap();
+    mods.save(config_paths, workspace_path).unwrap();
 }
 
 /// Create a config that uses elizacp as the backend agent.
@@ -67,15 +67,15 @@ fn elizacp_agent() -> ComponentSource {
     })
 }
 
-/// Create empty extensions config for testing.
-fn empty_extensions() -> WorkspaceExtensionsConfig {
-    WorkspaceExtensionsConfig::new(vec![])
+/// Create empty mods config for testing.
+fn empty_mods() -> WorkspaceModsConfig {
+    WorkspaceModsConfig::new(vec![])
 }
 
 /// Create test recommendations for testing initial setup flow.
 fn test_recommendations() -> Recommendations {
     Recommendations {
-        extensions: vec![Recommendation {
+        mods: vec![Recommendation {
             source: ComponentSource::Builtin("ferris".to_string()),
             when: None, // Always recommended
         }],
@@ -162,7 +162,7 @@ async fn test_no_config_initial_setup() -> Result<(), sacp::Error> {
                 text
             );
             assert!(
-                text.contains("Configuration created with recommended extensions"),
+                text.contains("Configuration created with recommended mods"),
                 "Expected config creation message, got: {}",
                 text
             );
@@ -178,7 +178,7 @@ async fn test_no_config_initial_setup() -> Result<(), sacp::Error> {
             );
             assert!(
                 text.contains("ferris"),
-                "Expected ferris extension, got: {}",
+                "Expected ferris mod, got: {}",
                 text
             );
 
@@ -209,11 +209,11 @@ async fn test_no_config_initial_setup() -> Result<(), sacp::Error> {
             // Verify config was written
             let loaded_agent = GlobalAgentConfig::load(&config_paths).unwrap();
             assert!(loaded_agent.is_some(), "Agent config should have been saved");
-            let loaded_extensions =
-                WorkspaceExtensionsConfig::load(&config_paths, &workspace_path).unwrap();
+            let loaded_mods =
+                WorkspaceModsConfig::load(&config_paths, &workspace_path).unwrap();
             assert!(
-                loaded_extensions.is_some(),
-                "Extensions config should have been saved"
+                loaded_mods.is_some(),
+                "Mods config should have been saved"
             );
 
             Ok(())
@@ -234,7 +234,7 @@ async fn test_new_session_with_config() -> Result<(), sacp::Error> {
     // Use a fake workspace path
     let workspace_path = PathBuf::from("/fake/workspace");
     let agent_source = elizacp_agent();
-    let extensions = empty_extensions();
+    let extensions = empty_mods();
     write_workspace_config(&config_paths, &workspace_path, &agent_source, &extensions);
 
     let notifications = Arc::new(Mutex::new(CollectedNotifications::default()));
@@ -326,7 +326,7 @@ async fn test_config_mode_entry() -> Result<(), sacp::Error> {
     // Use a fake workspace path
     let workspace_path = PathBuf::from("/fake/workspace");
     let agent_source = elizacp_agent();
-    let extensions = empty_extensions();
+    let extensions = empty_mods();
     write_workspace_config(&config_paths, &workspace_path, &agent_source, &extensions);
 
     let notifications = Arc::new(Mutex::new(CollectedNotifications::default()));
@@ -379,11 +379,11 @@ async fn test_config_mode_entry() -> Result<(), sacp::Error> {
             let text = notifications.lock().unwrap().text();
             assert!(text.contains("# Configuration"), "Expected config menu");
             assert!(
-                text.contains("Extensions for workspace"),
-                "Expected workspace path in extensions header"
+                text.contains("Mods for workspace"),
+                "Expected workspace path in mods header"
             );
             assert!(text.contains("eliza"), "Expected eliza agent");
-            assert!(text.contains("(none configured)"), "Expected no extensions");
+            assert!(text.contains("(none configured)"), "Expected no mods");
             assert!(text.contains("SAVE"), "Expected save command");
             assert!(text.contains("CANCEL"), "Expected cancel command");
 

@@ -64,11 +64,11 @@ You can edit `~/.symposium/config.jsonc` directly for more control. The format i
 
 - **`agent`**: The command to run your downstream AI agent. This is passed to the shell, so you can use any command that works in your terminal.
 
-- **`proxies`**: List of Symposium extensions to enable. Each entry has:
-  - `name`: The extension name
+- **`proxies`**: List of Symposium mods to enable. Each entry has:
+  - `name`: The mod name
   - `enabled`: Set to `true` or `false` to enable/disable
 
-### Built-in Extensions
+### Built-in Mods
 
 | Name | Description |
 |------|-------------|

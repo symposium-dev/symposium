@@ -1,19 +1,19 @@
-# Recommending Agent Extensions
+# Recommending Agent Mods
 
-There are two ways to recommend agent extensions to users:
+There are two ways to recommend agent mods to users:
 
 1. **Central recommendations** - submit to the Symposium recommendations registry
 2. **Crate metadata** - add recommendations directly in your crate's Cargo.toml
 
-## Extension Sources
+## Mod Sources
 
-Extensions are referenced using a `source` field:
+Mods are referenced using a `source` field:
 
 | Source | Syntax | Description |
 |--------|--------|-------------|
 | crates.io | `source.cargo = "name"` | Rust crate installed via cargo |
-| ACP Registry | `source.registry = "id"` | Extension from the ACP registry |
-| Direct URL | `source.url = "https://..."` | Direct link to extension.json |
+| ACP Registry | `source.registry = "id"` | Mod from the ACP registry |
+| Direct URL | `source.url = "https://..."` | Direct link to mod.json |
 
 ## Central Recommendations
 
@@ -21,48 +21,48 @@ Submit a PR to [symposium-dev/recommendations](https://github.com/symposium-dev/
 
 ```toml
 [[recommendation]]
-source.cargo = "my-extension"
+source.cargo = "my-mod"
 when.using-crate = "my-library"
 
 # Or for multiple trigger crates:
 [[recommendation]]
-source.cargo = "my-extension"
+source.cargo = "my-mod"
 when.using-crates = ["my-library", "my-library-derive"]
 ```
 
-This tells Symposium: "If a project depends on `my-library`, suggest `my-extension`."
+This tells Symposium: "If a project depends on `my-library`, suggest `my-mod`."
 
-Users can also add their own local recommendation files for internal/proprietary extensions.
+Users can also add their own local recommendation files for internal/proprietary mods.
 
 ## Crate Metadata Recommendations
 
-If you maintain a library, you can recommend extensions directly in your Cargo.toml. Users of your crate will see these suggestions in Symposium.
+If you maintain a library, you can recommend mods directly in your Cargo.toml. Users of your crate will see these suggestions in Symposium.
 
 ### Shorthand Syntax
 
-For crates.io extensions:
+For crates.io mods:
 
 ```toml
 [package.metadata.symposium]
-recommended = ["some-extension", "another-extension"]
+recommended = ["some-mod", "another-mod"]
 ```
 
 ### Full Syntax
 
-For extensions from other sources:
+For mods from other sources:
 
 ```toml
-# Recommend a crates.io extension
+# Recommend a crates.io mod
 [[package.metadata.symposium.recommended]]
-source.cargo = "some-extension"
+source.cargo = "some-mod"
 
-# Recommend an extension from the ACP registry
+# Recommend a mod from the ACP registry
 [[package.metadata.symposium.recommended]]
-source.registry = "some-acp-extension"
+source.registry = "some-acp-mod"
 
-# Recommend an extension from a direct URL
+# Recommend a mod from a direct URL
 [[package.metadata.symposium.recommended]]
-source.url = "https://example.com/extension.json"
+source.url = "https://example.com/mod.json"
 ```
 
 ### Example

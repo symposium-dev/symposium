@@ -1,12 +1,12 @@
 # Agent Registry
 
-Symposium supports multiple ACP-compatible agents and extensions. Users can select from built-in defaults or add entries from the [ACP Agent Registry](https://github.com/agentclientprotocol/registry).
+Symposium supports multiple ACP-compatible agents and mods. Users can select from built-in defaults or add entries from the [ACP Agent Registry](https://github.com/agentclientprotocol/registry).
 
 The registry resolution logic lives in `symposium-acp-agent` and is shared across all editor integrations.
 
 ## Agent Configuration
 
-Each agent or extension is represented as an `AgentConfig` object:
+Each agent or mod is represented as an `AgentConfig` object:
 
 ```typescript
 interface AgentConfig {
@@ -117,14 +117,14 @@ At spawn time, the extension resolves the distribution to a command (priority or
 
 ### Cargo Distribution
 
-The cargo distribution installs agents/extensions from crates.io:
+The cargo distribution installs agents/mods from crates.io:
 
 ```json
 {
-  "id": "my-rust-extension",
+  "id": "my-rust-mod",
   "distribution": {
     "cargo": {
-      "crate": "my-acp-extension",
+      "crate": "my-acp-mod",
       "version": "0.1.0"
     }
   }

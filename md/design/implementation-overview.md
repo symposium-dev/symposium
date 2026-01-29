@@ -37,7 +37,7 @@ symposium-acp-agent run-with --proxy sparkle --proxy ferris
 
 ## Proxy Configuration
 
-Use `--proxy <name>` to specify which extensions to include. Order matters - proxies are chained in the order specified.
+Use `--proxy <name>` to specify which mods to include. Order matters - proxies are chained in the order specified.
 
 Known proxies: `sparkle`, `ferris`, `cargo`
 

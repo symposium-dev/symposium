@@ -237,7 +237,7 @@ export class AcpAgentActor {
     }
 
     // Build the spawn command and args - just use "run" mode
-    // Symposium's ConfigAgent handles agent selection and extensions
+    // Symposium's ConfigAgent handles agent selection and mods
     const spawnArgs: string[] = ["run"];
 
     if (agentLogLevel) {
