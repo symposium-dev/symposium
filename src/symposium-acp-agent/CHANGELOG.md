@@ -1,5 +1,70 @@
 # Changelog
 
+## [2.0.0](https://github.com/symposium-dev/symposium/compare/symposium-acp-agent-v1.3.0...symposium-acp-agent-v2.0.0) - 2026-01-29
+
+### Added
+
+- add --log-dir option for file-based logging
+- *(config_agent)* integrate workspace config and recommendations
+- *(recommendations)* add condition-based extension recommendation system
+- *(user_config)* add per-workspace WorkspaceConfig and GlobalAgentConfig
+- improve config mode UI with better markdown formatting
+- unify initial setup with config mode
+- wire ConfigAgent into main.rs run command
+- add ConfigAgent tests and mockable registry
+- add pause/resume protocol for config mode
+- add MenuAction enum for smarter menu redisplay
+- add ConfigModeActor for interactive config phone tree UI
+- detect /symposium:config command and enter config mode
+- inject /symposium:config command into AvailableCommandsUpdate
+- forward session-bound messages to conductors
+- three-actor ConfigAgent architecture
+- install sparkle via cargo-binstall instead of bundling
+
+### Fixed
+
+- temporarily disable ferris
+- update-expect
+- update test to match new config menu format
+- sleep more
+- store test configuration in a different path
+- init agent directory for vscode tests
+- --acp
+- add --acp flag to sparkle-mcp proxy invocation
+
+### Other
+
+- rename agent extensions to agent mods
+- remove built_in_proxies() and use cargo distribution for all extensions
+- Add symposium-rust-analyzer and switch cargo to be cargo distribution
+- remove when.grep condition from recommendations
+- cleanup display, wait to save agent
+- make agent config global, extensions per-workspace
+- address PR #110 feedback - use internal_error and simplify
+- ignore flaky test_no_config_initial_setup in CI
+- apply cargo fmt
+- Revert "WIP: add eprintln"
+- add eprintln
+- ignore flaky cargo metadata tests in CI
+- simplify ConfigPaths to path-only API with cleaner load/save
+- remove default_agent_override in favor of ConfigPaths
+- introduce ConfigPaths for test isolation
+- *(registry)* add ComponentSource enum as identity type
+- use SAVE/CANCEL instead of DONE/CANCEL
+- move actor functions to &mut self methods
+- use async control flow as state machine
+- use regex for move command parsing
+- route conductor messages through ConfigAgent
+- WIP
+- Use AcpAgent::from_str
+- resolve_extension should use registry extensions
+- Resolve always on the Rust side
+- Add a proxy-shim command and always return and expect registry entries
+- Some rearranging to move more of the notions of builtin proxies out of symposium.rs and into just main.rs
+- Rename ProxySource::McpServer to ProxySource::AcpProxy, and fix tests
+- Fix custom extensions by passing json
+- add integration test for cargo binstall workflow
+
 ## [1.3.0](https://github.com/symposium-dev/symposium/compare/symposium-acp-agent-v1.2.0...symposium-acp-agent-v1.3.0) - 2026-01-08
 
 ### Added
