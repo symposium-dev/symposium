@@ -4,6 +4,7 @@ name: Release Binaries
 on:
   release:
     types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -11,12 +12,12 @@ permissions:
 jobs:
   build-binaries:
     name: Build ${{ matrix.target }}
-    if: startsWith(github.ref_name, 'symposium-acp-agent-v')
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref_name, 'symposium-acp-agent-v')
     strategy:
       matrix:
         include:
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-13
             artifact: symposium-darwin-x64
           - target: aarch64-apple-darwin
             os: macos-latest
@@ -25,7 +26,7 @@ jobs:
             os: ubuntu-latest
             artifact: symposium-linux-x64
           - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             artifact: symposium-linux-arm64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
@@ -45,26 +46,14 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install musl tools (x86_64)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+      - name: Install musl tools
+        if: endsWith(matrix.target, '-musl')
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
 
-      - name: Install musl cross-compilation tools (aarch64)
-        if: matrix.target == 'aarch64-unknown-linux-musl'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu musl-dev
-          # Install aarch64 musl cross toolchain
-          wget -q https://musl.cc/aarch64-linux-musl-cross.tgz
-          tar -xzf aarch64-linux-musl-cross.tgz
-          echo "$PWD/aarch64-linux-musl-cross/bin" >> $GITHUB_PATH
-
       - name: Build
         run: cargo build --release --target ${{ matrix.target }} -p symposium-acp-agent
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-musl-gcc
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
