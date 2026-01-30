@@ -116,7 +116,13 @@ When Symposium detects this crate in a user's dependencies, it surfaces these re
 
 ### External Recommendations
 
-Symposium maintains a recommendations file that maps crates to suggested mods. This allows recommendations without requiring upstream crate changes:
+Symposium downloads recommendations from a remote URL at startup:
+
+```
+http://recommendations.symposium.dev/recommendations.toml
+```
+
+This file maps crates to suggested mods, allowing recommendations without requiring upstream crate changes:
 
 ```toml
 [[recommendation]]
@@ -128,7 +134,25 @@ source.cargo = "sqlx-helper"
 when.using-crates = ["sqlx", "sea-orm"]
 ```
 
-Users can add their own recommendation files for custom mappings.
+**Caching behavior:**
+- On successful download: cache the file locally
+- On download failure: use the cached version if available
+- If no cache and download fails: refuse to start (prevents running with no recommendations)
+
+Cache location: `<config_dir>/cache/recommendations.toml`
+
+### User Local Recommendations
+
+Users can add their own recommendation file for custom mappings (e.g., internal/proprietary mods):
+
+Location: `<config_dir>/config/recommendations.toml`
+
+Platform-specific config directories:
+- Linux: `~/.config/symposium/`
+- macOS: `~/Library/Application Support/symposium/`
+- Windows: `%APPDATA%\symposium\`
+
+Local recommendations are merged with remote recommendations.
 
 ### Mod Crate Metadata
 

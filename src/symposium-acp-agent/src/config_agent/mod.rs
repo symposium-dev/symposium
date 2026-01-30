@@ -14,7 +14,7 @@ mod uberconductor_actor;
 mod tests;
 
 use crate::recommendations::{Recommendations, RecommendationsExt, WorkspaceRecommendations};
-use symposium_recommendations::ComponentSource;
+use crate::remote_recommendations;
 use crate::user_config::{ConfigPaths, GlobalAgentConfig, WorkspaceModsConfig};
 use conductor_actor::ConductorHandle;
 use config_mode_actor::{ConfigModeHandle, ConfigModeOutput};
@@ -30,6 +30,7 @@ use sacp::schema::{
 use sacp::util::MatchMessage;
 use sacp::{ClientPeer, Component, JrConnectionCx, JrRequestCx, MessageCx};
 use std::path::{Path, PathBuf};
+use symposium_recommendations::ComponentSource;
 use uberconductor_actor::UberconductorHandle;
 
 /// The slash command name for entering config mode.
@@ -83,34 +84,54 @@ pub struct ConfigAgent {
     /// Trace directory for conductors.
     trace_dir: Option<PathBuf>,
 
-    /// Override for recommendations (for testing). If None, loads builtin recommendations.
-    recommendations_override: Option<Recommendations>,
+    /// Loaded recommendations (from remote + local sources).
+    /// None only if loading failed and we're in a degraded state.
+    recommendations: Option<Recommendations>,
 
     /// Configuration paths (where to read/write config files).
     config_paths: ConfigPaths,
 }
 
 impl ConfigAgent {
-    /// Create a new ConfigAgent using the default config location (`~/.symposium`).
+    /// Create a new ConfigAgent using the default config location.
     ///
-    /// Returns an error if the home directory cannot be determined.
-    pub fn new() -> anyhow::Result<Self> {
+    /// This loads recommendations from remote sources (with caching fallback).
+    /// Returns an error if:
+    /// - The config directory cannot be determined
+    /// - Recommendations cannot be loaded (no remote access AND no cache)
+    pub async fn new() -> anyhow::Result<Self> {
+        let config_paths = ConfigPaths::default_location()?;
+        let recommendations = remote_recommendations::load_recommendations(&config_paths).await?;
         Ok(Self {
             sessions: Default::default(),
             trace_dir: None,
-            recommendations_override: None,
-            config_paths: ConfigPaths::default_location()?,
+            recommendations: Some(recommendations),
+            config_paths,
         })
     }
 
-    /// Create a new ConfigAgent with a custom config paths.
+    /// Create a new ConfigAgent with custom config paths.
     ///
-    /// Useful for tests to isolate configuration from the user's home.
+    /// This loads recommendations from remote sources (with caching fallback).
+    /// Useful for integration tests that need real recommendation loading behavior.
+    pub async fn with_config_paths_async(config_paths: ConfigPaths) -> anyhow::Result<Self> {
+        let recommendations = remote_recommendations::load_recommendations(&config_paths).await?;
+        Ok(Self {
+            sessions: Default::default(),
+            trace_dir: None,
+            recommendations: Some(recommendations),
+            config_paths,
+        })
+    }
+
+    /// Create a new ConfigAgent with custom config paths and no recommendation loading.
+    ///
+    /// Useful for unit tests that will set recommendations via `with_recommendations()`.
     pub fn with_config_paths(config_paths: ConfigPaths) -> Self {
         Self {
             sessions: Default::default(),
             trace_dir: None,
-            recommendations_override: None,
+            recommendations: None,
             config_paths,
         }
     }
@@ -121,10 +142,9 @@ impl ConfigAgent {
         self
     }
 
-    /// Set recommendations override (for testing).
-    /// If not set, builtin recommendations are loaded fresh on each new session.
+    /// Set recommendations (for testing).
     pub fn with_recommendations(mut self, recommendations: Recommendations) -> Self {
-        self.recommendations_override = Some(recommendations);
+        self.recommendations = Some(recommendations);
         self
     }
 
@@ -136,22 +156,17 @@ impl ConfigAgent {
     }
 
     /// Load workspace mods configuration from disk.
-    fn load_mods(
-        &self,
-        workspace_path: &Path,
-    ) -> Result<Option<WorkspaceModsConfig>, sacp::Error> {
+    fn load_mods(&self, workspace_path: &Path) -> Result<Option<WorkspaceModsConfig>, sacp::Error> {
         WorkspaceModsConfig::load(&self.config_paths, workspace_path)
             .map_err(|e| sacp::util::internal_error(e.to_string()))
     }
 
-    /// Load recommendations, using override if set, otherwise loading builtin.
-    fn load_recommendations(&self) -> Option<Recommendations> {
-        if let Some(ref recs) = self.recommendations_override {
-            return Some(recs.clone());
-        }
-        Recommendations::load_builtin()
-            .map_err(|e| tracing::warn!("Failed to load recommendations: {}", e))
-            .ok()
+    /// Get the loaded recommendations.
+    ///
+    /// Returns None only if the agent was created without loading recommendations
+    /// (e.g., via `with_config_paths()` for testing without calling `with_recommendations()`).
+    fn load_recommendations(&self) -> Option<&Recommendations> {
+        self.recommendations.as_ref()
     }
 
     /// Load the recommendations for a particular workspace
@@ -425,7 +440,11 @@ impl ConfigAgent {
             }
         };
 
-        tracing::debug!(?agent, ?mods_config, "handle_new_session: found configuration");
+        tracing::debug!(
+            ?agent,
+            ?mods_config,
+            "handle_new_session: found configuration"
+        );
 
         // Check for recommendation diff on mods
         if let Some(recs) = self.load_recommendations() {
@@ -460,17 +479,15 @@ impl ConfigAgent {
             }
         }
 
-        tracing::debug!(?agent, ?mods_config, "handle_new_session: launching new session");
+        tracing::debug!(
+            ?agent,
+            ?mods_config,
+            "handle_new_session: launching new session"
+        );
 
         // No diff changes - proceed directly to uberconductor
         uberconductor
-            .new_session(
-                workspace_path,
-                agent,
-                mods_config.mods,
-                request,
-                request_cx,
-            )
+            .new_session(workspace_path, agent, mods_config.mods, request, request_cx)
             .await
     }
 

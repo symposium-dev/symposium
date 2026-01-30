@@ -113,15 +113,159 @@ impl Recommendations {
             all_recs.push(rec);
         }
 
-        // Serialize back to TOML
-        let output = Recommendations { mods: all_recs };
-        let file = RecommendationsFile {
-            recommendations: output.mods,
-        };
-
-        // toml crate serializes Vec with [[array]] syntax
-        toml::to_string_pretty(&file).context("Failed to serialize recommendations")
+        Self::to_toml(&Recommendations { mods: all_recs })
     }
+
+    /// Serialize recommendations to compact TOML format.
+    ///
+    /// Produces output like:
+    /// ```toml
+    /// [[recommendation]]
+    /// source.cargo = { crate = "sparkle-mcp", args = ["--acp"] }
+    ///
+    /// [[recommendation]]
+    /// source.cargo = { crate = "symposium-cargo" }
+    /// when.file-exists = "Cargo.toml"
+    /// ```
+    pub fn to_toml(&self) -> Result<String> {
+        let mut output = String::new();
+
+        for (i, rec) in self.mods.iter().enumerate() {
+            if i > 0 {
+                output.push('\n');
+            }
+            output.push_str("[[recommendation]]\n");
+            output.push_str(&serialize_recommendation(rec)?);
+        }
+
+        Ok(output)
+    }
+}
+
+/// Serialize a single recommendation to compact TOML lines.
+fn serialize_recommendation(rec: &Recommendation) -> Result<String> {
+    let mut lines = Vec::new();
+
+    // Serialize source as inline table
+    let source_line = serialize_source(&rec.source)?;
+    lines.push(source_line);
+
+    // Serialize when conditions if present
+    if let Some(when) = &rec.when {
+        let when_lines = serialize_when(when)?;
+        lines.extend(when_lines);
+    }
+
+    Ok(lines.join("\n") + "\n")
+}
+
+/// Serialize ComponentSource to a single line like `source.cargo = { crate = "foo" }`
+fn serialize_source(source: &ComponentSource) -> Result<String> {
+    // Use serde_json to get the value, then convert to TOML inline format
+    let json_value = serde_json::to_value(source)?;
+
+    if let serde_json::Value::Object(map) = json_value {
+        // ComponentSource serializes as { "variant": value }
+        if let Some((variant, value)) = map.into_iter().next() {
+            let inline = json_to_toml_inline(&value);
+            return Ok(format!("source.{} = {}", variant, inline));
+        }
+    }
+
+    anyhow::bail!("Unexpected source format")
+}
+
+/// Serialize When conditions to lines like `when.file-exists = "Cargo.toml"`
+fn serialize_when(when: &When) -> Result<Vec<String>> {
+    let mut lines = Vec::new();
+
+    if let Some(path) = &when.file_exists {
+        lines.push(format!(
+            "when.file-exists = \"{}\"",
+            escape_toml_string(path)
+        ));
+    }
+
+    if let Some(paths) = &when.files_exist {
+        let arr = paths
+            .iter()
+            .map(|p| format!("\"{}\"", escape_toml_string(p)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("when.files-exist = [{}]", arr));
+    }
+
+    if let Some(crate_name) = &when.using_crate {
+        lines.push(format!(
+            "when.using-crate = \"{}\"",
+            escape_toml_string(crate_name)
+        ));
+    }
+
+    if let Some(crate_names) = &when.using_crates {
+        let arr = crate_names
+            .iter()
+            .map(|c| format!("\"{}\"", escape_toml_string(c)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        lines.push(format!("when.using-crates = [{}]", arr));
+    }
+
+    if let Some(conditions) = &when.any {
+        let arr = conditions
+            .iter()
+            .map(|w| serialize_when_inline(w))
+            .collect::<Result<Vec<_>>>()?
+            .join(", ");
+        lines.push(format!("when.any = [{}]", arr));
+    }
+
+    if let Some(conditions) = &when.all {
+        let arr = conditions
+            .iter()
+            .map(|w| serialize_when_inline(w))
+            .collect::<Result<Vec<_>>>()?
+            .join(", ");
+        lines.push(format!("when.all = [{}]", arr));
+    }
+
+    Ok(lines)
+}
+
+/// Serialize a When as an inline table for use in arrays
+fn serialize_when_inline(when: &When) -> Result<String> {
+    let json_value = serde_json::to_value(when)?;
+    Ok(json_to_toml_inline(&json_value))
+}
+
+/// Convert a serde_json Value to TOML inline format
+fn json_to_toml_inline(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::String(s) => format!("\"{}\"", escape_toml_string(s)),
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(json_to_toml_inline).collect();
+            format!("[{}]", items.join(", "))
+        }
+        serde_json::Value::Object(map) => {
+            let pairs: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{} = {}", k, json_to_toml_inline(v)))
+                .collect();
+            format!("{{ {} }}", pairs.join(", "))
+        }
+    }
+}
+
+/// Escape special characters in a TOML string
+fn escape_toml_string(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
 }
 
 #[cfg(test)]
@@ -178,5 +322,50 @@ when.file-exists = "Cargo.toml"
         let combined = Recommendations::concatenate_files(&[file1, file2]).unwrap();
         let recs = Recommendations::from_toml(&combined).unwrap();
         assert_eq!(recs.mods.len(), 2);
+    }
+
+    #[test]
+    fn test_to_toml_compact_format() {
+        use expect_test::expect;
+
+        let file1 = r#"
+[recommendation]
+source.cargo = { crate = "sparkle-mcp", args = ["--acp"] }
+"#;
+
+        let file2 = r#"
+[recommendation]
+source.cargo = { crate = "symposium-cargo" }
+when.file-exists = "Cargo.toml"
+"#;
+
+        let file3 = r#"
+[recommendation]
+source.cargo = { crate = "symposium-rust-analyzer" }
+when.file-exists = "Cargo.toml"
+"#;
+
+        let combined = Recommendations::concatenate_files(&[file1, file2, file3]).unwrap();
+
+        expect![[r#"
+            [[recommendation]]
+            source.cargo = { args = ["--acp"], crate = "sparkle-mcp" }
+
+            [[recommendation]]
+            source.cargo = { crate = "symposium-cargo" }
+            when.file-exists = "Cargo.toml"
+
+            [[recommendation]]
+            source.cargo = { crate = "symposium-rust-analyzer" }
+            when.file-exists = "Cargo.toml"
+        "#]]
+        .assert_eq(&combined);
+
+        // Verify it parses back correctly
+        let recs = Recommendations::from_toml(&combined).unwrap();
+        assert_eq!(recs.mods.len(), 3);
+        assert_eq!(recs.mods[0].display_name(), "sparkle-mcp");
+        assert_eq!(recs.mods[1].display_name(), "symposium-cargo");
+        assert_eq!(recs.mods[2].display_name(), "symposium-rust-analyzer");
     }
 }

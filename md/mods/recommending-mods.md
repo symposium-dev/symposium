@@ -32,7 +32,23 @@ when.using-crates = ["my-library", "my-library-derive"]
 
 This tells Symposium: "If a project depends on `my-library`, suggest `my-mod`."
 
-Users can also add their own local recommendation files for internal/proprietary mods.
+### How Recommendations Are Loaded
+
+Symposium downloads recommendations from `http://recommendations.symposium.dev/recommendations.toml` at startup. The file is cached locally so that Symposium can work offline:
+
+- On success: the downloaded file is cached
+- On failure: the cached version is used (if available)
+- If no cache exists and download fails: Symposium refuses to start with an error
+
+## Local User Recommendations
+
+Users can add their own recommendation files for internal or proprietary mods. Create a file at:
+
+- Linux: `~/.config/symposium/config/recommendations.toml`
+- macOS: `~/Library/Application Support/symposium/config/recommendations.toml`
+- Windows: `%APPDATA%\symposium\config\recommendations.toml`
+
+Local recommendations are merged with the central recommendations.
 
 ## Crate Metadata Recommendations
 

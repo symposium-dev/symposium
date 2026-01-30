@@ -6,6 +6,7 @@
 pub mod config_agent;
 pub mod recommendations;
 pub mod registry;
+pub mod remote_recommendations;
 pub mod symposium;
 pub mod user_config;
 pub mod vscodelm;

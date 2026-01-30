@@ -38,8 +38,9 @@ use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use symposium_acp_agent::recommendations::{Recommendations, RecommendationsExt};
+use symposium_acp_agent::recommendations::RecommendationsExt;
 use symposium_acp_agent::registry;
+use symposium_acp_agent::remote_recommendations;
 use symposium_acp_agent::symposium::{Symposium, SymposiumConfig};
 use symposium_acp_agent::user_config::{ConfigPaths, GlobalAgentConfig, WorkspaceModsConfig};
 use symposium_acp_agent::vscodelm;
@@ -268,7 +269,10 @@ async fn main() -> Result<()> {
             // - If config exists: creates conductors and delegates sessions
             // - If no config: runs initial setup wizard
             // - Handles /symposium:config command for runtime configuration
-            let mut agent = ConfigAgent::new()?;
+            //
+            // ConfigAgent::new() loads recommendations from remote (with cache fallback).
+            // If recommendations can't be loaded at all, we fail here with a clear error.
+            let mut agent = ConfigAgent::new().await?;
             if let Some(dir) = logging.trace_dir {
                 agent = agent.with_trace_dir(dir);
             }
@@ -305,9 +309,10 @@ async fn main() -> Result<()> {
             let mods = if no_mods {
                 vec![]
             } else {
-                Recommendations::load_builtin()
-                    .map(|r| r.for_workspace(&workspace).mod_sources())
-                    .unwrap_or_default()
+                // Load recommendations from remote (with cache fallback)
+                let recommendations =
+                    remote_recommendations::load_recommendations(&config_paths).await?;
+                recommendations.for_workspace(&workspace).mod_sources()
             };
 
             // Save workspace mods
