@@ -212,7 +212,10 @@ impl RecommendationsExt for Recommendations {
     }
 
     fn for_workspace(&self, workspace_path: &Path) -> WorkspaceRecommendations {
-        let mods: Vec<Recommendation> = self
+        use crate::remote_recommendations::load_workspace_recommendations;
+
+        // Filter global recommendations by workspace conditions
+        let mut mods: Vec<Recommendation> = self
             .mods
             .iter()
             .filter(|r| {
@@ -223,6 +226,29 @@ impl RecommendationsExt for Recommendations {
             })
             .cloned()
             .collect();
+
+        // Merge workspace-specific recommendations if present
+        match load_workspace_recommendations(workspace_path) {
+            Ok(Some(workspace_recs)) => {
+                // Filter workspace recommendations by their conditions too
+                for rec in workspace_recs.mods {
+                    let meets_condition = rec
+                        .when
+                        .as_ref()
+                        .map(|w| w.is_met(workspace_path))
+                        .unwrap_or(true);
+                    if meets_condition {
+                        mods.push(rec);
+                    }
+                }
+            }
+            Ok(None) => {
+                // No workspace recommendations file - that's fine
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load workspace recommendations: {}", e);
+            }
+        }
 
         WorkspaceRecommendations { mods }
     }
@@ -757,5 +783,78 @@ serde = "1"
         let workspace_recs = recs.for_workspace(temp_dir.path());
         assert_eq!(workspace_recs.mods.len(), 1);
         assert_eq!(workspace_recs.mods[0].display_name(), "serde-helper");
+    }
+
+    #[test]
+    fn test_for_workspace_merges_workspace_recommendations() {
+        // Global recommendations with one mod
+        let toml = r#"
+[[recommendation]]
+source.builtin = "global-mod"
+"#;
+        let global_recs = Recommendations::from_toml(toml).unwrap();
+
+        // Create workspace with .symposium/recommendations.toml
+        let temp_dir = tempfile::tempdir().unwrap();
+        let symposium_dir = temp_dir.path().join(".symposium");
+        std::fs::create_dir_all(&symposium_dir).unwrap();
+        std::fs::write(
+            symposium_dir.join("recommendations.toml"),
+            r#"
+[[recommendation]]
+source.builtin = "workspace-mod"
+"#,
+        )
+        .unwrap();
+
+        let workspace_recs = global_recs.for_workspace(temp_dir.path());
+
+        // Should have both global and workspace mods
+        assert_eq!(workspace_recs.mods.len(), 2);
+        let names: Vec<_> = workspace_recs.mods.iter().map(|r| r.display_name()).collect();
+        assert!(names.contains(&"global-mod".to_string()));
+        assert!(names.contains(&"workspace-mod".to_string()));
+    }
+
+    #[test]
+    fn test_for_workspace_filters_workspace_recommendations_by_condition() {
+        // Global recommendations
+        let toml = r#"
+[[recommendation]]
+source.builtin = "global-mod"
+"#;
+        let global_recs = Recommendations::from_toml(toml).unwrap();
+
+        // Create workspace with conditional recommendation
+        let temp_dir = tempfile::tempdir().unwrap();
+        let symposium_dir = temp_dir.path().join(".symposium");
+        std::fs::create_dir_all(&symposium_dir).unwrap();
+        std::fs::write(
+            symposium_dir.join("recommendations.toml"),
+            r#"
+[[recommendation]]
+source.builtin = "always-mod"
+
+[[recommendation]]
+source.builtin = "rust-only-mod"
+when.file-exists = "Cargo.toml"
+"#,
+        )
+        .unwrap();
+
+        // Without Cargo.toml
+        let workspace_recs = global_recs.for_workspace(temp_dir.path());
+        assert_eq!(workspace_recs.mods.len(), 2); // global-mod + always-mod
+        let names: Vec<_> = workspace_recs.mods.iter().map(|r| r.display_name()).collect();
+        assert!(names.contains(&"global-mod".to_string()));
+        assert!(names.contains(&"always-mod".to_string()));
+        assert!(!names.contains(&"rust-only-mod".to_string()));
+
+        // With Cargo.toml
+        std::fs::write(temp_dir.path().join("Cargo.toml"), "[package]").unwrap();
+        let workspace_recs = global_recs.for_workspace(temp_dir.path());
+        assert_eq!(workspace_recs.mods.len(), 3); // all three mods
+        let names: Vec<_> = workspace_recs.mods.iter().map(|r| r.display_name()).collect();
+        assert!(names.contains(&"rust-only-mod".to_string()));
     }
 }

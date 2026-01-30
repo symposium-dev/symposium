@@ -4,10 +4,12 @@
 //! - Fetching recommendations from the remote URL
 //! - Caching the result locally
 //! - Loading local user recommendations
+//! - Loading workspace-specific recommendations
 //! - Merging all recommendation sources
 
 use crate::user_config::ConfigPaths;
 use anyhow::{bail, Context, Result};
+use std::path::Path;
 use std::time::Duration;
 use symposium_recommendations::Recommendations;
 
@@ -20,6 +22,12 @@ const CACHED_RECOMMENDATIONS_FILENAME: &str = "recommendations.toml";
 
 /// Filename for user's local recommendations.
 const LOCAL_RECOMMENDATIONS_FILENAME: &str = "recommendations.toml";
+
+/// Directory for workspace-specific symposium config.
+const WORKSPACE_SYMPOSIUM_DIR: &str = ".symposium";
+
+/// Filename for workspace-specific recommendations.
+const WORKSPACE_RECOMMENDATIONS_FILENAME: &str = "recommendations.toml";
 
 /// HTTP request timeout in seconds.
 const HTTP_TIMEOUT_SECS: u64 = 30;
@@ -172,6 +180,43 @@ fn load_local_recommendations(config_paths: &ConfigPaths) -> Result<Option<Recom
     Ok(Some(recommendations))
 }
 
+/// Load workspace-specific recommendations if they exist.
+///
+/// Location: `<workspace>/.symposium/recommendations.toml`
+///
+/// This allows projects to declare their own recommended mods that should
+/// be suggested when working in that workspace.
+pub fn load_workspace_recommendations(workspace_path: &Path) -> Result<Option<Recommendations>> {
+    let workspace_recs_path = workspace_path
+        .join(WORKSPACE_SYMPOSIUM_DIR)
+        .join(WORKSPACE_RECOMMENDATIONS_FILENAME);
+
+    if !workspace_recs_path.exists() {
+        return Ok(None);
+    }
+
+    tracing::debug!(
+        "Loading workspace recommendations from {}",
+        workspace_recs_path.display()
+    );
+
+    let content = std::fs::read_to_string(&workspace_recs_path).with_context(|| {
+        format!(
+            "Failed to read workspace recommendations from {}",
+            workspace_recs_path.display()
+        )
+    })?;
+
+    let recommendations = Recommendations::from_toml(&content).with_context(|| {
+        format!(
+            "Failed to parse workspace recommendations from {}",
+            workspace_recs_path.display()
+        )
+    })?;
+
+    Ok(Some(recommendations))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,5 +317,69 @@ source.builtin = "cached-mod"
         let recs = Recommendations::from_toml(&cache_content).unwrap();
         assert_eq!(recs.mods.len(), 1);
         assert_eq!(recs.mods[0].display_name(), "cached-mod");
+    }
+
+    #[test]
+    fn test_load_workspace_recommendations_when_present() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+
+        // Create .symposium/recommendations.toml
+        let symposium_dir = workspace_path.join(WORKSPACE_SYMPOSIUM_DIR);
+        std::fs::create_dir_all(&symposium_dir).unwrap();
+        std::fs::write(
+            symposium_dir.join(WORKSPACE_RECOMMENDATIONS_FILENAME),
+            r#"
+[[recommendation]]
+source.builtin = "workspace-mod"
+"#,
+        )
+        .unwrap();
+
+        let recs = load_workspace_recommendations(workspace_path)
+            .unwrap()
+            .expect("Should load workspace recommendations");
+
+        assert_eq!(recs.mods.len(), 1);
+        assert_eq!(recs.mods[0].display_name(), "workspace-mod");
+    }
+
+    #[test]
+    fn test_load_workspace_recommendations_when_absent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+
+        // No .symposium directory
+        let recs = load_workspace_recommendations(workspace_path).unwrap();
+        assert!(recs.is_none(), "Should return None when no file exists");
+    }
+
+    #[test]
+    fn test_load_workspace_recommendations_with_conditions() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let workspace_path = temp_dir.path();
+
+        // Create .symposium/recommendations.toml with a conditional recommendation
+        let symposium_dir = workspace_path.join(WORKSPACE_SYMPOSIUM_DIR);
+        std::fs::create_dir_all(&symposium_dir).unwrap();
+        std::fs::write(
+            symposium_dir.join(WORKSPACE_RECOMMENDATIONS_FILENAME),
+            r#"
+[[recommendation]]
+source.builtin = "always-mod"
+
+[[recommendation]]
+source.builtin = "rust-only-mod"
+when.file-exists = "Cargo.toml"
+"#,
+        )
+        .unwrap();
+
+        let recs = load_workspace_recommendations(workspace_path)
+            .unwrap()
+            .expect("Should load workspace recommendations");
+
+        // Both mods are loaded (conditions are evaluated later in for_workspace)
+        assert_eq!(recs.mods.len(), 2);
     }
 }

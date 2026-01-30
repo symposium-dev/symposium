@@ -50,6 +50,29 @@ Users can add their own recommendation files for internal or proprietary mods. C
 
 Local recommendations are merged with the central recommendations.
 
+## Workspace Recommendations
+
+Projects can include workspace-specific recommendations by creating a `.symposium/recommendations.toml` file in the project root. This is useful for:
+
+- Recommending internal or proprietary mods to team members
+- Project-specific mods that aren't relevant globally
+- Mods that should be suggested for this workspace only
+
+```toml
+# .symposium/recommendations.toml
+
+# Always recommend for this workspace
+[[recommendation]]
+source.cargo = "my-internal-mod"
+
+# Conditional - only when using a specific crate
+[[recommendation]]
+source.cargo = "my-graphql-mod"
+when.using-crate = "async-graphql"
+```
+
+Workspace recommendations are merged with central and user recommendations, with the same `when` condition filtering applied.
+
 ## Crate Metadata Recommendations
 
 If you maintain a library, you can recommend mods directly in your Cargo.toml. Users of your crate will see these suggestions in Symposium.
