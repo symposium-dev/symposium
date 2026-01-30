@@ -22,6 +22,7 @@
     - [Rust Rover](./install-rust-rover.md)
     - [Other editors](./install-other.md)
 - [Using Symposium](./using/symposium.md)
+- [Configuration](./using/configuration.md)
 - [Built-in mods](./using/mods.md)
     - [Sparkle](./using/sparkle.md)
     - [Ferris](./using/ferris.md)

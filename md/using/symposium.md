@@ -32,6 +32,15 @@ The configuration menu lets you:
 
 On first run, Symposium recommends mods based on your workspace (e.g., Cargo mod for Rust projects). You can adjust these recommendations in the config menu.
 
+## Adding Your Own Recommendations
+
+You can add recommendations for mods that Symposium should suggest to you:
+
+- **For all your workspaces**: Create a `recommendations.toml` file in your [config directory](./configuration.md#configuration-location)
+- **For a specific project**: Create a `.symposium/recommendations.toml` file in the project root
+
+This is useful for internal or proprietary mods, or mods that aren't in the central recommendations yet. See [Recommending Mods](../mods/recommending-mods.md) for the file format.
+
 ## Builtin Mods
 
 Symposium ships with three builtin mods:
