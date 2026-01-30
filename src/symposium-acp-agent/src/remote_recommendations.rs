@@ -260,10 +260,6 @@ source.builtin = "test-local-mod"
         // Load should succeed (fetches from remote) and include local mod
         let recs = load_recommendations(&config_paths).await.unwrap();
 
-        // Explicitly use temp_dir after the await to ensure it's not dropped early.
-        // In async Rust, the compiler may drop unused variables before await points.
-        drop(temp_dir);
-
         // Should have the local mod merged in
         let names: Vec<_> = recs.mods.iter().map(|r| r.display_name()).collect();
         assert!(
@@ -294,9 +290,6 @@ source.builtin = "test-local-mod"
         // Cache should be valid TOML
         let cache_content = std::fs::read_to_string(&cache_path).unwrap();
         Recommendations::from_toml(&cache_content).expect("Cache should be valid TOML");
-
-        // Keep temp_dir alive across the await point
-        drop(temp_dir);
     }
 
     #[tokio::test]
