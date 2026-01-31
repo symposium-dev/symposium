@@ -1,5 +1,23 @@
 # Changelog
 
+## [3.0.0](https://github.com/symposium-dev/symposium/compare/symposium-acp-agent-v2.0.1...symposium-acp-agent-v3.0.0) - 2026-01-31
+
+### Added
+
+- add workspace-specific recommendations via .symposium/recommendations.toml
+- download recommendations from remote URL with caching
+
+### Fixed
+
+- revert false statements
+- keep TempDir alive across await points in tests
+
+### Other
+
+- add diagnostic output to track CI test failure
+- use platform-specific config directories
+- extract symposium-recommendations crate
+
 ## [2.0.1](https://github.com/symposium-dev/symposium/compare/symposium-acp-agent-v1.3.0...symposium-acp-agent-v2.0.1) - 2026-01-29
 
 ### Added
