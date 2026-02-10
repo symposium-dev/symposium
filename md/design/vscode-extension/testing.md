@@ -11,6 +11,7 @@
 8. [Debugging Tests](#debugging-tests)
 9. [Common Patterns](#common-patterns)
 10. [Tools and Libraries](#tools-and-libraries)
+11. [Startup Failure Matrix Coverage](#startup-failure-matrix-coverage)
 
 ---
 
@@ -1062,6 +1063,31 @@ suite('Chat Extension Test Suite', () => {
   });
 });
 ```
+
+---
+
+## Startup Failure Matrix Coverage
+
+The startup watchdog path now has dedicated integration coverage in
+`vscode-extension/src/test/startup-failure-matrix.test.ts`.
+
+### Scenarios
+
+- `exit`: fake agent exits during initialize; test verifies stderr is logged and `agent-error` is queued for the tab.
+- `hang`: fake agent never responds; test verifies slow-threshold warning and outbound `agent-startup-slow` chat feedback are observed before hard-timeout `agent-error`.
+- `close`: fake agent closes stdout during initialize; test verifies watchdog failure reason `stdout-close` and a queued `agent-error`.
+- `acp-error`: fake agent returns an ACP initialize error; test verifies watchdog failure reason `initialize-rejected` and a queued `agent-error`.
+
+### Determinism and Speed
+
+- Tests force tiny startup thresholds (`100ms` slow, `300ms` hard timeout) through VS Code settings.
+- Assertions use queue/log polling helpers instead of fixed `sleep` windows.
+- Test harness uses `vscode-extension/test-fixtures/fake-startup-agent.cjs` to provide deterministic startup behavior.
+
+### Test Harness Commands
+
+- `symposium.test.getQueuedMessages` returns a per-tab queue view (`index`, `type`, `tabId`, `error`) for deterministic ordering/type assertions without exposing full payload bodies.
+- `symposium.test.resetState` clears in-memory actor/session state between scenarios to prevent cross-test leakage (`symposium.test.resetActors` remains as a compatibility alias).
 
 ---
 

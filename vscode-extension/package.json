@@ -197,6 +197,18 @@
           "default": "",
           "description": "Log level for the symposium-acp-agent process. Logs appear in the Symposium output channel. Leave empty to disable."
         },
+        "symposium.startupSlowThresholdMs": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10000,
+          "description": "Milliseconds before showing non-fatal slow-start feedback while Symposium waits for agent startup. Startup continues after this warning."
+        },
+        "symposium.startupHardTimeoutMs": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30000,
+          "description": "Milliseconds before agent startup fails with a hard timeout error. This stops startup and reports an error."
+        },
         "symposium.requireModifierToSend": {
           "type": "boolean",
           "default": false,
@@ -270,6 +282,10 @@
       {
         "command": "symposium.openChat",
         "title": "Open Symposium Chat"
+      },
+      {
+        "command": "symposium.showOutput",
+        "title": "Symposium: Show Output"
       },
       {
         "command": "symposium.discussSelection",

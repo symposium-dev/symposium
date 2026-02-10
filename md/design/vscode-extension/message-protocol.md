@@ -136,6 +136,21 @@ sessionId → tabId    (for agent → extension messages)
 
 ## Error Handling
 
+**Startup/session initialization failures:** Tab startup errors (configuration lookup, actor spawn/initialize, session creation) are emitted as `agent-error` messages through the same indexed `#sendToWebview` queue used for normal chat traffic. This keeps delivery consistent with visibility buffering/replay and ensures errors appear directly in chat without toast-only dependencies.
+
+**Startup watchdog thresholds:** Startup uses two settings:
+- `symposium.startupSlowThresholdMs` (default `10000`) for non-fatal slow-start diagnostics
+- `symposium.startupHardTimeoutMs` (default `30000`) for fail-fast startup termination
+
+When the slow threshold is exceeded, the extension publishes an `agent-startup-slow` chat message (system note) so the user sees non-fatal startup progress in the conversation UI.
+
+When startup fails (for example `process-exit`, `stdout-close`, hard timeout, or ACP initialize rejection), the extension publishes an `agent-error` chat message payload instead of relying on ephemeral notifications.
+The chat payload is intentionally compact (`context` + user-facing `message`) and excludes stack traces or diagnostics.
+Detailed failure diagnostics remain available in structured extension logs (for example `ACP startup watchdog failure` events).
+In the webview, startup status uses a single warning card lifecycle: slow-threshold feedback creates a warning card, and startup failure updates the same card instead of adding a second error block.
+The card includes a `More details` action that opens the extension Output channel (`Symposium`), and users can always re-open logs with the `Symposium: Show Output` command.
+While startup is pending (or if startup fails), the prompt input is frozen in that tab (`promptInputDisabledState = true`) to prevent sending prompts before a session is ready.
+
 **Agent crashes:** Extension detects process exit, notifies all active tabs. Tabs display error state. User can trigger agent restart.
 
 **Webview disposal:** Extension maintains agent sessions. If webview is recreated (VSCode restart), extension can restore tab → session mappings and continue existing sessions.

@@ -49,10 +49,45 @@ const result = await vscode.commands.executeCommand(
 **Current Testing Commands:**
 - `symposium.test.simulateNewTab(tabId)` - Create a tab
 - `symposium.test.getTabs()` - Get list of tab IDs
+- `symposium.test.getQueuedMessages(tabId)` - Inspect indexed outbound messages queued for a tab
+- `symposium.test.resetState()` - Clear actors/sessions/message queues between scenarios
+- `symposium.test.resetActors()` - Legacy reset hook used by older startup tests
 - `symposium.test.sendPrompt(tabId, prompt)` - Send prompt to tab
 - `symposium.test.startCapturingResponses(tabId)` - Begin capturing agent responses
 - `symposium.test.getResponse(tabId)` - Get accumulated response text
 - `symposium.test.stopCapturingResponses(tabId)` - Stop capturing
+- `symposium.test.hasActivePrompt(tabId)` - Check whether a prompt is currently in flight
+
+### Startup Watchdog Integration Coverage
+
+Startup failure integration coverage is implemented in
+`vscode-extension/src/test/startup-failure-matrix.test.ts`.
+
+The suite drives deterministic startup behavior by replacing the real agent with
+`vscode-extension/test-fixtures/fake-startup-agent.cjs`:
+
+1. Set `symposium.acpAgentPath` to the fake agent script.
+2. Set `symposium.proxySpawnArgs` to `--startup-scenario=<scenario>`.
+3. Force tiny watchdog thresholds for test speed and determinism:
+   - `symposium.startupSlowThresholdMs = 100`
+   - `symposium.startupHardTimeoutMs = 300`
+
+Assertions are made through first-class extension test hooks rather than UI scraping:
+
+- `symposium.test.resetState` to isolate each scenario.
+- `symposium.test.getQueuedMessages` to assert user-visible `agent-error` delivery.
+- `logger.onLog` capture to assert ordering (for example, slow-threshold warning before hard-timeout failure).
+
+### Startup Failure Mode Assertion Matrix
+
+| Scenario | Fake-agent behavior | Expected assertions |
+| --- | --- | --- |
+| `exit` | Process exits during initialize after writing scenario banner to stderr | `agent-stderr` log includes scenario banner; watchdog failure log reason is usually `process-exit`/`stdout-close` (and can be `hard-timeout` under scheduler races); queued `agent-error` contains a startup failure summary |
+| `hang` | Process never responds to initialize | Slow-threshold warning log appears first; outbound `agent-startup-slow` chat message is emitted; watchdog failure log follows with reason `hard-timeout`; queued `agent-error` contains a startup failure summary |
+| `close` | Process closes stdout during initialize | Watchdog failure log reason is `stdout-close`; queued `agent-error` contains a startup failure summary |
+| `acp-error` | Process returns ACP initialize error response | Watchdog failure log reason is `initialize-rejected`; queued `agent-error` includes the initialize rejection summary |
+
+The key contract is that startup failures are asserted through queued chat traffic (`agent-error`) plus structured logs, not through transient notifications. User-facing chat payloads remain concise while logs carry detailed diagnostics.
 
 ### Adding New Test Commands
 
@@ -182,15 +217,16 @@ assert.strictEqual(events[0].data.relevantData, expectedValue);
 
 **Alternative:** Mock agent responses with canned data
 
-**Chosen:** Real ElizACP over ACP protocol
+**Chosen:** Hybrid strategy
+- Real ACP agent for end-to-end behavior and prompt/stream integration paths
+- Deterministic fake startup agent for watchdog/failure-mode matrix coverage
 
 **Rationale:**
 - Tests the full protocol stack (JSON-RPC, stdio, conductor)
 - Verifies conductor integration
 - Catches protocol-level bugs
-- Provides realistic timing and behavior
-
-ElizACP is lightweight, deterministic, and fast enough for testing.
+- Keeps startup-failure assertions deterministic (no flaky timing windows)
+- Enables explicit coverage of process-exit/stdout-close/hard-timeout/initialize-rejected paths
 
 ### Event-Based Logging
 
@@ -249,9 +285,10 @@ suite("Feature Tests", () => {
 - Use `async function()` (not arrow functions) to access `this.timeout()`
 - Extend timeout for operations involving agent spawning
 - Always dispose log listeners
-- Add delays for async operations (agent responses, UI updates)
+- Prefer polling helpers over fixed sleeps when asserting asynchronous queue/log state
 
 ## Related Documentation
 
 - [Message Protocol](./message-protocol.md) - Extension ↔ webview communication
 - [State Persistence](./state-persistence.md) - How state survives webview lifecycle
+- [Testing](./testing.md) - Broader VS Code extension testing patterns and startup matrix notes

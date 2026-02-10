@@ -25,4 +25,16 @@ suite("Extension Test Suite", () => {
     // the extension activated without errors
     assert.strictEqual(extension.isActive, true);
   });
+
+  test("Show output command should be registered", async () => {
+    const extension = vscode.extensions.getExtension("symposium-dev.symposium");
+    assert.ok(extension);
+    await extension.activate();
+
+    const allCommands = await vscode.commands.getCommands(true);
+    assert.ok(
+      allCommands.includes("symposium.showOutput"),
+      "symposium.showOutput should be registered",
+    );
+  });
 });
