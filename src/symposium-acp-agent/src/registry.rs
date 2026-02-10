@@ -7,15 +7,15 @@
 //! - Download and cache binary distributions
 
 use crate::user_config::ConfigPaths;
-use anyhow::{bail, Context, Result};
-use sacp::schema::{EnvVariable, McpServer, McpServerStdio};
+use anyhow::{Context, Result, bail};
+use sacp::schema::{EnvVariable, McpServer, McpServerHttp, McpServerSse, McpServerStdio};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use symposium_recommendations::{
-    BinaryDistribution, CargoDistribution, ComponentSource, LocalDistribution, NpxDistribution,
-    PipxDistribution,
+    BinaryDistribution, CargoDistribution, ComponentSource, HttpDistribution, LocalDistribution,
+    NpxDistribution, PipxDistribution,
 };
 
 /// Registry URL - same as VSCode extension uses
@@ -83,6 +83,8 @@ impl ComponentSourceExt for ComponentSource {
             ComponentSource::Pipx(pipx) => resolve_pipx(pipx),
             ComponentSource::Cargo(cargo) => resolve_cargo(cargo).await,
             ComponentSource::Binary(binary_map) => resolve_binary(binary_map).await,
+            ComponentSource::Http(dist) => Ok(resolve_http(dist)),
+            ComponentSource::Sse(dist) => Ok(resolve_sse(dist)),
         }
     }
 }
@@ -123,6 +125,7 @@ pub fn built_in_agents() -> Result<Vec<RegistryEntry>> {
         description: Some("Built-in Eliza agent for testing".to_string()),
         distribution: Distribution {
             local: Some(LocalDistribution {
+                name: None,
                 command: exe_str.clone(),
                 args: vec!["eliza".to_string()],
                 env: BTreeMap::new(),
@@ -143,6 +146,7 @@ pub fn built_in_agents() -> Result<Vec<RegistryEntry>> {
             description: Some("Kiro CLI agent".to_string()),
             distribution: Distribution {
                 local: Some(LocalDistribution {
+                    name: None,
                     command: "kiro-cli".to_string(),
                     args: vec!["acp".to_string()],
                     env: BTreeMap::new(),
@@ -723,8 +727,14 @@ fn resolve_local(local: &LocalDistribution) -> Result<McpServer> {
         .map(|(k, v)| EnvVariable::new(k.clone(), v.clone()))
         .collect();
 
+    let name = local.name.clone().unwrap_or_else(|| {
+        Path::new(&local.command)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| local.command.clone())
+    });
     Ok(McpServer::Stdio(
-        McpServerStdio::new(&local.command, &local.command)
+        McpServerStdio::new(name, &local.command)
             .args(local.args.clone())
             .env(env),
     ))
@@ -926,6 +936,24 @@ pub async fn resolve_distribution(entry: &RegistryEntry) -> Result<Option<McpSer
     }
 
     Ok(None)
+}
+
+fn resolve_http(dist: &HttpDistribution) -> McpServer {
+    let headers = dist
+        .headers
+        .iter()
+        .map(|h| sacp::schema::HttpHeader::new(h.name.clone(), h.value.clone()))
+        .collect();
+    McpServer::Http(McpServerHttp::new(dist.name.clone(), dist.url.clone()).headers(headers))
+}
+
+fn resolve_sse(dist: &HttpDistribution) -> McpServer {
+    let headers = dist
+        .headers
+        .iter()
+        .map(|h| sacp::schema::HttpHeader::new(h.name.clone(), h.value.clone()))
+        .collect();
+    McpServer::Sse(McpServerSse::new(dist.name.clone(), dist.url.clone()).headers(headers))
 }
 
 /// Download and cache a binary distribution

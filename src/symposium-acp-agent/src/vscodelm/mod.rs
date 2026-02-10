@@ -12,8 +12,8 @@ mod vscode_tools_mcp;
 use anyhow::Result;
 use history_actor::{HistoryActor, HistoryActorHandle};
 use sacp::{
-    link::RemoteStyle, util::MatchMessage, Component, Handled, JrConnectionCx, JrLink,
-    JrMessageHandler, JrNotification, JrPeer, JrRequest, JrResponsePayload, MessageCx,
+    Component, Handled, JrConnectionCx, JrLink, JrMessageHandler, JrNotification, JrPeer,
+    JrRequest, JrResponsePayload, MessageCx, link::RemoteStyle, util::MatchMessage,
 };
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;

@@ -17,9 +17,9 @@
 
 use anyhow::Result;
 use clap::Parser;
-use futures::channel::mpsc;
 use futures::StreamExt;
-use sacp::{on_receive_notification, JrLink};
+use futures::channel::mpsc;
+use sacp::{JrLink, on_receive_notification};
 use serde_json::json;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
@@ -38,9 +38,9 @@ struct Args {
 // Import vscodelm types - we need to make these pub or use a different approach
 use symposium_acp_agent::vscodelm::session_actor::AgentDefinition;
 use symposium_acp_agent::vscodelm::{
-    ChatRequestOptions, ContentPart, LmBackend, Message, ProvideResponseRequest,
-    ResponseCompleteNotification, ResponsePartNotification, ToolDefinition, ToolMode,
-    VsCodeToLmBackend, ROLE_ASSISTANT, ROLE_USER,
+    ChatRequestOptions, ContentPart, LmBackend, Message, ProvideResponseRequest, ROLE_ASSISTANT,
+    ROLE_USER, ResponseCompleteNotification, ResponsePartNotification, ToolDefinition, ToolMode,
+    VsCodeToLmBackend,
 };
 
 /// The "average" tool that we provide to Claude Code.

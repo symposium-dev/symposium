@@ -8,17 +8,18 @@
 
 use super::ConfigAgentMessage;
 use crate::registry::ComponentSourceExt;
-use symposium_recommendations::ComponentSource;
 use crate::user_config::ModConfig;
 use futures::channel::mpsc::UnboundedSender;
 use sacp::link::{AgentToClient, ClientToAgent, ProxyToConductor};
 use sacp::schema::{
-    InitializeRequest, NewSessionRequest, NewSessionResponse, PromptRequest, PromptResponse,
+    InitializeRequest, McpServer, NewSessionRequest, NewSessionResponse, PromptRequest,
+    PromptResponse,
 };
 use sacp::{DynComponent, JrConnectionCx, JrRequestCx, MessageCx};
 use sacp_conductor::{Conductor, McpBridgeMode};
 use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
+use symposium_recommendations::{ComponentSource, ModKind};
 use tokio::sync::{mpsc, oneshot};
 
 /// Messages that can be sent to the ConductorActor.
@@ -175,11 +176,45 @@ async fn build_proxies(
     Ok(proxies)
 }
 
-/// Get enabled mod sources from the list
-fn enabled_mod_sources(mods: &[ModConfig]) -> Vec<ComponentSource> {
-    mods
-        .iter()
+/// Build proxy components from ComponentSources.
+async fn build_mcp_servers(
+    mod_sources: Vec<ComponentSource>,
+) -> Result<Vec<McpServer>, sacp::Error> {
+    let mut servers = vec![];
+    for source in &mod_sources {
+        tracing::debug!(mod_name = %source.display_name(), "Resolving mod");
+        let server = source.resolve().await.map_err(|e| {
+            tracing::error!(
+                mod_name = %source.display_name(),
+                error = %e,
+                "Failed to resolve mod"
+            );
+            sacp::util::internal_error(format!(
+                "Failed to resolve {}: {}",
+                source.display_name(),
+                e
+            ))
+        })?;
+        servers.push(server);
+    }
+
+    Ok(servers)
+}
+
+/// Get enabled proxies from the list
+fn enabled_proxies(mods: &[ModConfig]) -> Vec<ComponentSource> {
+    mods.iter()
         .filter(|m| m.enabled)
+        .filter(|m| matches!(m.kind, ModKind::Proxy))
+        .map(|m| m.source.clone())
+        .collect()
+}
+
+/// Get enabled mcp servers from the list
+fn enabled_mcp_servers(mods: &[ModConfig]) -> Vec<ComponentSource> {
+    mods.iter()
+        .filter(|m| m.enabled)
+        .filter(|m| matches!(m.kind, ModKind::MCP))
         .map(|m| m.source.clone())
         .collect()
 }
@@ -194,14 +229,19 @@ async fn run_actor(
     self_handle: ConductorHandle,
     mut rx: mpsc::Receiver<ConductorMessage>,
 ) -> Result<(), sacp::Error> {
-    // Get enabled mods
-    let mod_sources = enabled_mod_sources(&mods);
+    // Get enabled proxies
+    let proxies = enabled_proxies(&mods);
 
     // Resolve the agent
     let agent_server = agent
         .resolve()
         .await
         .map_err(|e| sacp::util::internal_error(format!("Failed to resolve agent: {}", e)))?;
+
+    // MCP servers are represented as mods with `ModKind::MCP` in `mods`.
+    // Build MCP servers from enabled MCP-type mods so they can be attached to sessions.
+    let mcp_sources = enabled_mcp_servers(&mods);
+    let mcp_servers = build_mcp_servers(mcp_sources).await?;
 
     // TODO: Apply trace_dir to conductor when needed
 
@@ -214,12 +254,9 @@ async fn run_actor(
             async move |init_req| {
                 tracing::info!(
                     "Building proxy chain with mods: {:?}",
-                    mod_sources
-                        .iter()
-                        .map(|s| s.display_name())
-                        .collect::<Vec<_>>()
+                    proxies.iter().map(|s| s.display_name()).collect::<Vec<_>>()
                 );
-                let proxies = build_proxies(mod_sources).await?;
+                let proxies = build_proxies(proxies).await?;
                 Ok((init_req, proxies, DynComponent::new(agent)))
             }
         },
@@ -249,9 +286,11 @@ async fn run_actor(
             while let Some(message) = rx.recv().await {
                 match message {
                     ConductorMessage::NewSession {
-                        request,
+                        mut request,
                         request_cx,
                     } => {
+                        request.mcp_servers.extend(mcp_servers.clone());
+
                         let config_agent_tx = config_agent_tx.clone();
                         let self_handle = self_handle.clone();
                         let workspace_path = workspace_path.clone();

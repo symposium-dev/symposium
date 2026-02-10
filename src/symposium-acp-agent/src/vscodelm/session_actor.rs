@@ -4,21 +4,21 @@
 //! messages from the HistoryActor and sends response parts back to it.
 
 use elizacp::ElizaAgent;
+use futures::StreamExt;
 use futures::channel::{mpsc, oneshot};
 use futures::stream::Peekable;
-use futures::StreamExt;
 use futures_concurrency::future::Race;
+use sacp::JrConnectionCx;
 use sacp::schema::{
     ToolCall, ToolCallContent, ToolCallId, ToolCallStatus, ToolCallUpdate, ToolCallUpdateFields,
 };
-use sacp::JrConnectionCx;
 use sacp::{
+    ClientToAgent, Component, MessageCx,
     link::AgentToClient,
     schema::{
         InitializeRequest, ProtocolVersion, RequestPermissionOutcome, RequestPermissionRequest,
         RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate,
     },
-    ClientToAgent, Component, MessageCx,
 };
 use sacp_conductor::{AgentOnly, Conductor, McpBridgeMode};
 use sacp_tokio::AcpAgent;
@@ -33,7 +33,7 @@ use super::history_actor::{HistoryActorHandle, SessionToHistoryMessage};
 use super::vscode_tools_mcp::{
     ToolInvocation, VscodeTool, VscodeToolsHandle, VscodeToolsMcpServer,
 };
-use super::{ContentPart, Message, ToolDefinition, ROLE_USER, SYMPOSIUM_AGENT_ACTION};
+use super::{ContentPart, Message, ROLE_USER, SYMPOSIUM_AGENT_ACTION, ToolDefinition};
 
 /// Helper to peek at the next item in a peekable stream.
 async fn peek<T>(stream: &mut Peekable<mpsc::UnboundedReceiver<T>>) -> Option<&T> {
@@ -817,11 +817,7 @@ impl SessionActor {
                 {
                     let matches = id == &tool_call_id;
                     tracing::trace!(result_id = %id, %matches, "found ToolResult");
-                    if matches {
-                        Some(result.clone())
-                    } else {
-                        None
-                    }
+                    if matches { Some(result.clone()) } else { None }
                 } else {
                     None
                 }
@@ -918,10 +914,12 @@ mod tests {
         let tool_call = ToolCall::new("test-456", "grep -n pattern file.rs")
             .kind(ToolKind::Search)
             .status(ToolCallStatus::Completed)
-            .content(vec![ContentBlock::Text(TextContent::new(
-                "10: let pattern = \"hello\";\n20: println!(\"{}\", pattern);",
-            ))
-            .into()]);
+            .content(vec![
+                ContentBlock::Text(TextContent::new(
+                    "10: let pattern = \"hello\";\n20: println!(\"{}\", pattern);",
+                ))
+                .into(),
+            ]);
 
         let markdown = tracker.handle_tool_call(tool_call);
 
@@ -950,10 +948,9 @@ mod tests {
             "test-789",
             ToolCallUpdateFields::new()
                 .status(ToolCallStatus::Completed)
-                .content(vec![ContentBlock::Text(TextContent::new(
-                    "Build succeeded!",
-                ))
-                .into()]),
+                .content(vec![
+                    ContentBlock::Text(TextContent::new("Build succeeded!")).into(),
+                ]),
         );
 
         let markdown = tracker.handle_tool_call_update(update).unwrap();

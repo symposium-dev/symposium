@@ -207,6 +207,7 @@ export interface SymposiumDistribution {
 export interface LocalDistribution {
   command: string;
   args?: string[];
+  name?: string;
   env?: Record<string, string>;
 }
 

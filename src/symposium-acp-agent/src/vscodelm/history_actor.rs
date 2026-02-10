@@ -5,14 +5,15 @@
 //! and from SessionActors (outgoing parts). This centralizes all mutable
 //! state in one actor with proper &mut access.
 
-use futures::channel::{mpsc, oneshot};
 use futures::StreamExt;
+use futures::channel::{mpsc, oneshot};
 use uuid::Uuid;
 
 use super::session_actor::{AgentDefinition, SessionActor};
 use super::{
-    normalize_messages, ContentPart, Message, ProvideResponseRequest, ProvideResponseResponse,
-    ResponseCompleteNotification, ResponsePartNotification, ROLE_ASSISTANT, SYMPOSIUM_AGENT_ACTION,
+    ContentPart, Message, ProvideResponseRequest, ProvideResponseResponse, ROLE_ASSISTANT,
+    ResponseCompleteNotification, ResponsePartNotification, SYMPOSIUM_AGENT_ACTION,
+    normalize_messages,
 };
 use sacp::JrConnectionCx;
 

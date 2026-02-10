@@ -33,9 +33,25 @@ pub use when::When;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ModKind {
+    Proxy,
+    MCP,
+}
+
+impl Default for ModKind {
+    fn default() -> Self {
+        ModKind::Proxy
+    }
+}
+
 /// A recommendation for a component
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Recommendation {
+    #[serde(default = "ModKind::default")]
+    pub kind: ModKind,
+
     /// The source of the component (this IS the identity)
     pub source: ComponentSource,
 
@@ -145,6 +161,9 @@ impl Recommendations {
 /// Serialize a single recommendation to compact TOML lines.
 fn serialize_recommendation(rec: &Recommendation) -> Result<String> {
     let mut lines = Vec::new();
+
+    // Serialize kind
+    lines.push(format!("kind = {}", serde_json::to_value(rec.kind)?));
 
     // Serialize source as inline table
     let source_line = serialize_source(&rec.source)?;
@@ -349,13 +368,16 @@ when.file-exists = "Cargo.toml"
 
         expect![[r#"
             [[recommendation]]
+            kind = "proxy"
             source.cargo = { args = ["--acp"], crate = "sparkle-mcp" }
 
             [[recommendation]]
+            kind = "proxy"
             source.cargo = { crate = "symposium-cargo" }
             when.file-exists = "Cargo.toml"
 
             [[recommendation]]
+            kind = "proxy"
             source.cargo = { crate = "symposium-rust-analyzer" }
             when.file-exists = "Cargo.toml"
         "#]]

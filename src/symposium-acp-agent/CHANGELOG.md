@@ -1,5 +1,44 @@
 # Changelog
 
+## [3.0.0](https://github.com/symposium-dev/symposium/compare/symposium-acp-agent-v2.0.1...symposium-acp-agent-v3.0.0) - 2026-02-09
+
+### Added
+
+- add workspace-specific recommendations via .symposium/recommendations.toml
+- download recommendations from remote URL with caching
+
+### Fixed
+
+- revert false statements
+- keep TempDir alive across await points in tests
+
+### Other
+
+- Use local.name for mcp server name if available
+- Couple minor review changes
+- Print file exists after write
+- add optional name to local distributions (MCP/studio) and doc updates
+- add optional  to LocalDistribution
+- A couple minor bits
+- Format
+- Display all mods
+- Draw the rest of the elephant
+- Some minor config things
+- More logging for recommendations
+- Remove mcp_servers config option
+- Add ModKind to mods and add MCP. Thread through.
+- add interactive MCP server management in config mode
+- Fmt - and don't bail if McpServer is not stdio
+- Add integration test
+- Add mcp server injection
+- Add config for mcp servers
+- Add kiro-cli as conditional built-in agent
+- Use tracing::fs and init_tracing
+- Don't use ComponentSource::Builtin in tests
+- add diagnostic output to track CI test failure
+- use platform-specific config directories
+- extract symposium-recommendations crate
+
 ## [2.0.1](https://github.com/symposium-dev/symposium/compare/symposium-acp-agent-v1.3.0...symposium-acp-agent-v2.0.1) - 2026-01-29
 
 ### Added

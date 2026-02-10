@@ -33,7 +33,57 @@ Configuration
 | `SAVE` | Write changes to disk. They persist across sessions. |
 | `CANCEL` | Discard changes and exit. |
 
+
 Changes take effect immediately for the current session. Use `SAVE` to keep them for future sessions.
+
+## Local Recommendations (`RECS`)
+
+`RECS` opens an interactive menu for managing the file `config/recommendations.toml`.
+
+| Command | Description |
+|---------|-------------|
+| `ADD` | Add a new recommendation interactively. |
+| `REMOVE N` | Remove recommendation number `N` from the local recommendations list. |
+| `BACK` | Return to the main configuration menu. |
+
+The `ADD` flow currently creates a recommendation without an interactive `when` condition; by default the recommendation will apply unconditionally.
+
+## Recommendation Diffs
+
+When remote recommendations change you may be prompted with a short diff. The prompt accepts the following commands:
+
+- `SAVE` — Accept the new recommendations and apply them to the workspace.
+- `IGNORE` — Disable all newly recommended mods (keeps current config but marks the new recommendations as disabled).
+- `CONFIG` — Open the interactive configuration menu so you can selectively enable/disable or otherwise edit recommendations before saving.
+
+
+## MCP Servers
+
+MCP servers are configured as mods of kind `MCP` in the workspace `mods` list.
+They will be resolved and attached to every new session for that workspace by
+the conductor.
+
+Example `config.json` snippet (http and stdio MCPs represented as mod sources):
+
+```json
+{
+  "mods": [
+    {
+      "kind": "MCP",
+      "source": { "cargo": { "crate": "github-mcp", "args": ["--acp"] } },
+      "enabled": true
+    },
+    {
+      "kind": "MCP",
+      "source": { "http": { "name": "db", "url": "https://example.com/mcp" } },
+      "enabled": true
+    }
+  ]
+}
+```
+
+The `name`/`id` for HTTP/SSE MCP servers is taken from the `Http`/`Sse` source
+`name` field and becomes the MCP server tool prefix.
 
 ## Configuration Location
 

@@ -33,6 +33,10 @@ pub enum ComponentSource {
 
     /// Platform-specific binary downloads
     Binary(BTreeMap<String, BinaryDistribution>),
+
+    Http(HttpDistribution),
+
+    Sse(HttpDistribution),
 }
 
 impl ComponentSource {
@@ -46,13 +50,17 @@ impl ComponentSource {
                 url.rsplit('/').next().unwrap_or(url).to_string()
             }
             ComponentSource::Local(local) => {
-                // Use last component of command path
-                local
-                    .command
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&local.command)
-                    .to_string()
+                // If an explicit name is provided, use it. Otherwise use last component of command path
+                if let Some(name) = &local.name {
+                    name.clone()
+                } else {
+                    local
+                        .command
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&local.command)
+                        .to_string()
+                }
             }
             ComponentSource::Npx(npx) => {
                 // Extract package name without scope and version
@@ -68,6 +76,8 @@ impl ComponentSource {
             ComponentSource::Pipx(pipx) => pipx.package.clone(),
             ComponentSource::Cargo(cargo) => cargo.crate_name.clone(),
             ComponentSource::Binary(_) => "binary".to_string(),
+            ComponentSource::Http(dist) => dist.name.clone(),
+            ComponentSource::Sse(dist) => dist.name.clone(),
         }
     }
 
@@ -83,6 +93,8 @@ pub struct LocalDistribution {
     pub command: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
 }
@@ -131,6 +143,26 @@ pub struct BinaryDistribution {
     pub args: Vec<String>,
 }
 
+/// An HTTP header to set when making requests.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
+pub struct HttpHeader {
+    /// The name of the HTTP header.
+    pub name: String,
+    /// The value to set for the HTTP header.
+    pub value: String,
+}
+
+/// Available as an http server
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
+pub struct HttpDistribution {
+    /// Human-readable name
+    pub name: String,
+    /// URL to the server/
+    pub url: String,
+    /// HTTP headers to set when making requests.
+    pub headers: Vec<HttpHeader>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -167,6 +199,7 @@ mod tests {
         assert!(ComponentSource::Local(LocalDistribution {
             command: "/usr/bin/foo".to_string(),
             args: vec![],
+            name: None,
             env: BTreeMap::new(),
         })
         .is_local());

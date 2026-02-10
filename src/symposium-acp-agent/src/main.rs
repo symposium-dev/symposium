@@ -38,13 +38,13 @@ use sacp_tokio::AcpAgent;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use symposium_acp_agent::ConfigAgent;
 use symposium_acp_agent::recommendations::RecommendationsExt;
 use symposium_acp_agent::registry;
 use symposium_acp_agent::remote_recommendations;
 use symposium_acp_agent::symposium::{Symposium, SymposiumConfig};
 use symposium_acp_agent::user_config::{ConfigPaths, GlobalAgentConfig, WorkspaceModsConfig};
 use symposium_acp_agent::vscodelm;
-use symposium_acp_agent::ConfigAgent;
 
 #[derive(Parser, Debug)]
 #[command(name = "symposium-acp-agent")]
@@ -306,22 +306,22 @@ async fn main() -> Result<()> {
             let config_paths = ConfigPaths::default_location()?;
             let agent = registry::lookup_agent_source(&agent).await?;
 
-            let mods = if no_mods {
+            let recs = if no_mods {
                 vec![]
             } else {
                 // Load recommendations from remote (with cache fallback)
                 let recommendations =
                     remote_recommendations::load_recommendations(&config_paths).await?;
-                recommendations.for_workspace(&workspace).mod_sources()
+                recommendations.for_workspace(&workspace).mods
             };
 
             // Save workspace mods
-            let mods_config = WorkspaceModsConfig::from_sources(mods);
-            mods_config.save(&config_paths, &workspace)?;
+            let mods_config = WorkspaceModsConfig::from_recommendations(recs);
+            mods_config.save(&config_paths, &workspace).await?;
 
             // Save global agent
             let global_config = GlobalAgentConfig::new(agent);
-            global_config.save(&config_paths)?;
+            global_config.save(&config_paths).await?;
 
             eprintln!("Initialized config for {}", workspace.display());
         }

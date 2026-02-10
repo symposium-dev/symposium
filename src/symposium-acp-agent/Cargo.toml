@@ -1,7 +1,7 @@
 [package]
 name = "symposium-acp-agent"
-version = "2.0.1"
-edition = "2021"
+version = "3.0.0"
+edition = "2024"
 license = "Apache-2.0"
 description = "Symposium-enriched ACP agent that wraps downstream agents with enhanced capabilities"
 repository = "https://github.com/symposium-dev/symposium"
@@ -11,6 +11,10 @@ readme = "README.md"
 [[bin]]
 name = "symposium-acp-agent"
 path = "src/main.rs"
+
+[[bin]]
+name = "mcp-test-server"
+path = "src/bin/mcp-test-server.rs"
 
 [dependencies]
 sacp-conductor.workspace = true
@@ -26,6 +30,7 @@ tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+schemars = { workspace = true }
 
 # Symposium proxy components are installed at runtime via cargo distribution
 

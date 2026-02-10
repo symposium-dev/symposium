@@ -18,8 +18,8 @@ use crate::remote_recommendations;
 use crate::user_config::{ConfigPaths, GlobalAgentConfig, WorkspaceModsConfig};
 use conductor_actor::ConductorHandle;
 use config_mode_actor::{ConfigModeHandle, ConfigModeOutput};
-use futures::channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::StreamExt;
+use futures::channel::mpsc::{UnboundedReceiver, UnboundedSender, unbounded};
 use fxhash::FxHashMap;
 use sacp::link::AgentToClient;
 use sacp::schema::{
@@ -272,7 +272,7 @@ impl ConfigAgent {
 
                 // Save the global agent configuration
                 let global_agent_config = GlobalAgentConfig::new(agent);
-                if let Err(e) = global_agent_config.save(&self.config_paths) {
+                if let Err(e) = global_agent_config.save(&self.config_paths).await {
                     cx.send_notification(SessionNotification::new(
                         session_id.clone(),
                         SessionUpdate::AgentMessageChunk(ContentChunk::new(
@@ -282,7 +282,7 @@ impl ConfigAgent {
                 }
 
                 // Save the workspace mods configuration
-                if let Err(e) = mods.save(&self.config_paths, &workspace_path) {
+                if let Err(e) = mods.save(&self.config_paths, &workspace_path).await {
                     cx.send_notification(SessionNotification::new(
                         session_id.clone(),
                         SessionUpdate::AgentMessageChunk(ContentChunk::new(
@@ -427,10 +427,10 @@ impl ConfigAgent {
             None => {
                 tracing::debug!("handle_new_session: no workspace mods, applying recommendations");
                 let workspace_recs = self.recommendations_for_workspace(&workspace_path);
-                let config = WorkspaceModsConfig::from_sources(workspace_recs.mod_sources());
+                let config = WorkspaceModsConfig::from_recommendations(workspace_recs.mods);
 
                 // Save the new mods config
-                if let Err(e) = config.save(&self.config_paths, &workspace_path) {
+                if let Err(e) = config.save(&self.config_paths, &workspace_path).await {
                     tracing::warn!("Failed to save initial mods config: {}", e);
                 }
 
@@ -446,6 +446,7 @@ impl ConfigAgent {
 
         // Check for recommendation diff on mods
         if let Some(recs) = self.load_recommendations() {
+            tracing::debug!(?recs);
             let workspace_recs = recs.for_workspace(&workspace_path);
             if let Some(diff) = workspace_recs.diff_against(&mods_config) {
                 tracing::debug!(?diff, "handle_new_session: diff computed");

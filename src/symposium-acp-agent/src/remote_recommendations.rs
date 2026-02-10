@@ -8,10 +8,10 @@
 //! - Merging all recommendation sources
 
 use crate::user_config::ConfigPaths;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::Path;
 use std::time::Duration;
-use symposium_recommendations::Recommendations;
+use symposium_recommendations::{Recommendation, Recommendations};
 
 /// URL for the remote recommendations file.
 const REMOTE_RECOMMENDATIONS_URL: &str =
@@ -47,7 +47,7 @@ pub async fn load_recommendations(config_paths: &ConfigPaths) -> Result<Recommen
     tracing::debug!(?combined);
 
     // 2. Load user's local recommendations if present and merge
-    if let Some(local_recs) = load_local_recommendations(config_paths)? {
+    if let Some(local_recs) = load_local_recommendations(config_paths).await? {
         tracing::debug!(?local_recs);
         combined.mods.extend(local_recs.mods);
     }
@@ -62,21 +62,21 @@ pub async fn load_recommendations(config_paths: &ConfigPaths) -> Result<Recommen
 /// Returns an error if:
 /// - Remote fetch fails AND no cached version exists
 async fn load_remote_with_cache(config_paths: &ConfigPaths) -> Result<Recommendations> {
-    let cache_path = config_paths
-        .cache_dir()
-        .join(CACHED_RECOMMENDATIONS_FILENAME);
-
     // Try to fetch from remote
     match fetch_remote_recommendations().await {
         Ok((toml_content, recommendations)) => {
             // Successfully fetched - cache the raw TOML string
-            if let Err(e) = cache_recommendations(config_paths, &toml_content) {
+            if let Err(e) = cache_recommendations(config_paths, &toml_content).await {
                 tracing::warn!("Failed to cache recommendations: {}", e);
             }
             Ok(recommendations)
         }
         Err(fetch_error) => {
             tracing::warn!("Failed to fetch remote recommendations: {}", fetch_error);
+
+            let cache_path = config_paths
+                .cache_dir()
+                .join(CACHED_RECOMMENDATIONS_FILENAME);
 
             // Try to load from cache
             if cache_path.exists() {
@@ -137,13 +137,14 @@ async fn fetch_remote_recommendations() -> Result<(String, Recommendations)> {
 }
 
 /// Cache recommendations to disk.
-fn cache_recommendations(config_paths: &ConfigPaths, content: &str) -> Result<()> {
-    config_paths.ensure_cache_dir()?;
+async fn cache_recommendations(config_paths: &ConfigPaths, content: &str) -> Result<()> {
+    config_paths.ensure_cache_dir().await?;
     let cache_path = config_paths
         .cache_dir()
         .join(CACHED_RECOMMENDATIONS_FILENAME);
 
-    std::fs::write(&cache_path, content)
+    tokio::fs::write(&cache_path, content)
+        .await
         .with_context(|| format!("Failed to write cache to {}", cache_path.display()))?;
 
     tracing::debug!("Cached recommendations to {}", cache_path.display());
@@ -153,11 +154,16 @@ fn cache_recommendations(config_paths: &ConfigPaths, content: &str) -> Result<()
 /// Load user's local recommendations file if it exists.
 ///
 /// Location: `<config_dir>/config/recommendations.toml`
-fn load_local_recommendations(config_paths: &ConfigPaths) -> Result<Option<Recommendations>> {
+pub async fn load_local_recommendations(
+    config_paths: &ConfigPaths,
+) -> Result<Option<Recommendations>> {
     let local_path = config_paths
         .root()
         .join("config")
         .join(LOCAL_RECOMMENDATIONS_FILENAME);
+
+    tracing::debug!(?local_path);
+    tracing::debug!(exists = ?local_path.exists());
 
     if !local_path.exists() {
         return Ok(None);
@@ -183,6 +189,31 @@ fn load_local_recommendations(config_paths: &ConfigPaths) -> Result<Option<Recom
     })?;
 
     Ok(Some(recommendations))
+}
+
+/// Save recommendations to user's local recommendations file.
+///
+/// Location: `<config_dir>/config/recommendations.toml`
+pub async fn save_local_recommendations(
+    config_paths: &ConfigPaths,
+    mods: Vec<Recommendation>,
+) -> Result<()> {
+    let config_dir = config_paths.root().join("config");
+    let local_path = config_dir.join(LOCAL_RECOMMENDATIONS_FILENAME);
+
+    tracing::debug!(?local_path);
+    tracing::debug!(exists = ?local_path.exists());
+
+    if !mods.is_empty() {
+        tokio::fs::create_dir_all(&config_dir).await?;
+
+        let recs = Recommendations { mods };
+        tokio::fs::write(local_path, recs.to_toml()?).await?;
+    } else {
+        tokio::fs::remove_file(local_path).await?;
+    }
+
+    Ok(())
 }
 
 /// Load workspace-specific recommendations if they exist.
@@ -228,7 +259,6 @@ mod tests {
 
     fn init_tracing() {
         let _ = tracing_subscriber::fmt()
-            .with_test_writer()
             .compact()
             .with_ansi(false)
             .with_env_filter(
@@ -264,16 +294,24 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let config_paths = ConfigPaths::with_root(temp_dir.path());
 
+        tracing::debug!(?temp_dir, ?config_paths);
+
         // Create local recommendations with a unique mod
         let local_dir = config_paths.root().join("config");
         tokio::fs::create_dir_all(&local_dir).await.unwrap();
+        let recs_file = local_dir.join(LOCAL_RECOMMENDATIONS_FILENAME);
+        tracing::debug!(?recs_file);
         tokio::fs::write(
-            local_dir.join(LOCAL_RECOMMENDATIONS_FILENAME),
+            &recs_file,
             r#"
 [[recommendation]]
 source.builtin = "test-local-mod"
 "#,
-        ).await.unwrap();
+        )
+        .await
+        .unwrap();
+
+        tracing::debug!(?recs_file, exists = ?recs_file.exists());
 
         // Load should succeed (fetches from remote) and include local mod
         let recs = load_recommendations(&config_paths).await.unwrap();
@@ -316,7 +354,7 @@ source.builtin = "test-local-mod"
         let config_paths = ConfigPaths::with_root(temp_dir.path());
 
         // Pre-populate cache
-        config_paths.ensure_cache_dir().unwrap();
+        config_paths.ensure_cache_dir().await.unwrap();
         let cache_path = config_paths
             .cache_dir()
             .join(CACHED_RECOMMENDATIONS_FILENAME);

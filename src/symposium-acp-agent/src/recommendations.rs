@@ -9,7 +9,6 @@ use anyhow::Result;
 use cargo_metadata::{Metadata, MetadataCommand, Package, PackageId};
 use std::collections::HashSet;
 use std::path::Path;
-use symposium_recommendations::ComponentSource;
 
 // Re-export types from symposium-recommendations
 pub use symposium_recommendations::{Recommendation, Recommendations, When};
@@ -265,16 +264,6 @@ pub struct WorkspaceRecommendations {
 }
 
 impl WorkspaceRecommendations {
-    /// Get all mod sources as a set (for diffing with config)
-    pub fn mod_sources(&self) -> Vec<ComponentSource> {
-        self.mods.iter().map(|r| r.source.clone()).collect()
-    }
-
-    /// Get a recommendation by its source
-    pub fn get_recommendation(&self, source: &ComponentSource) -> Option<&Recommendation> {
-        self.mods.iter().find(|r| &r.source == source)
-    }
-
     /// Compare these recommendations against the workspace mods config.
     ///
     /// If the config already matches the recommendations, returns None.
@@ -282,12 +271,10 @@ impl WorkspaceRecommendations {
     /// Otherwise, returns the diff showing what to add and remove.
     pub fn diff_against(&self, config: &WorkspaceModsConfig) -> Option<RecommendationDiff> {
         // Get the set of recommended sources
-        let recommended_sources: HashSet<_> =
-            self.mods.iter().map(|r| r.source.clone()).collect();
+        let recommended_sources: HashSet<_> = self.mods.iter().map(|r| r.source.clone()).collect();
 
         // Get the set of configured sources
-        let configured_sources: HashSet<_> =
-            config.mods.iter().map(|m| m.source.clone()).collect();
+        let configured_sources: HashSet<_> = config.mods.iter().map(|m| m.source.clone()).collect();
 
         // New = recommended but not configured
         let mut to_add = Vec::new();
@@ -295,9 +282,10 @@ impl WorkspaceRecommendations {
             if !configured_sources.contains(&m.source) {
                 // New recommendation - add it enabled
                 to_add.push(ModConfig {
+                    kind: m.kind,
                     source: m.source.clone(),
-                    enabled: true,
                     when: m.when.clone().unwrap_or_default(),
+                    enabled: true,
                 });
             }
         }
@@ -358,6 +346,7 @@ mod tests {
     use expect_test::expect;
     use serial_test::serial;
     use std::io::Write;
+    use symposium_recommendations::{ComponentSource, ModKind};
 
     /// Write content to a file and sync to disk to avoid race conditions with cargo metadata
     fn write_synced(path: &Path, content: &str) {
@@ -368,8 +357,7 @@ mod tests {
 
     #[test]
     fn test_load_builtin_recommendations() {
-        let recs =
-            Recommendations::load_builtin().expect("Should load builtin recommendations");
+        let recs = Recommendations::load_builtin().expect("Should load builtin recommendations");
 
         // Should have some mod recommendations
         assert!(!recs.mods.is_empty(), "Should have mod recommendations");
@@ -480,6 +468,7 @@ when.files-exist = ["src/lib.rs"]
             mods: mods
                 .into_iter()
                 .map(|(name, when)| Recommendation {
+                    kind: ModKind::Proxy,
                     source: ComponentSource::Builtin(name.to_string()),
                     when,
                 })
@@ -507,6 +496,7 @@ when.files-exist = ["src/lib.rs"]
             RecommendationDiff {
                 to_add: [
                     ModConfig {
+                        kind: Proxy,
                         source: Builtin(
                             "foo",
                         ),
@@ -523,6 +513,7 @@ when.files-exist = ["src/lib.rs"]
                         },
                     },
                     ModConfig {
+                        kind: Proxy,
                         source: Builtin(
                             "bar",
                         ),
@@ -550,6 +541,7 @@ when.files-exist = ["src/lib.rs"]
 
         // Add a mod that's not recommended
         config.mods.push(ModConfig {
+            kind: ModKind::Proxy,
             source: ComponentSource::Builtin("old-mod".to_string()),
             enabled: true,
             when: When {
@@ -565,6 +557,7 @@ when.files-exist = ["src/lib.rs"]
                 to_add: [],
                 to_remove: [
                     ModConfig {
+                        kind: Proxy,
                         source: Builtin(
                             "old-mod",
                         ),
@@ -593,6 +586,7 @@ when.files-exist = ["src/lib.rs"]
 
         // Add the same mod that's recommended
         config.mods.push(ModConfig {
+            kind: ModKind::Proxy,
             source: ComponentSource::Builtin("foo".to_string()),
             enabled: true,
             when: When::default(),
@@ -608,6 +602,7 @@ when.files-exist = ["src/lib.rs"]
         let recs = make_workspace_recs(vec![("foo", None)]);
         let mut config = WorkspaceModsConfig::new(vec![]);
         config.mods.push(ModConfig {
+            kind: ModKind::Proxy,
             source: ComponentSource::Builtin("foo".to_string()),
             enabled: false, // Disabled
             when: When::default(),
@@ -625,6 +620,7 @@ when.files-exist = ["src/lib.rs"]
 
         // Add a stale mod
         config.mods.push(ModConfig {
+            kind: ModKind::Proxy,
             source: ComponentSource::Builtin("old".to_string()),
             enabled: true,
             when: When::default(),
@@ -811,7 +807,11 @@ source.builtin = "workspace-mod"
 
         // Should have both global and workspace mods
         assert_eq!(workspace_recs.mods.len(), 2);
-        let names: Vec<_> = workspace_recs.mods.iter().map(|r| r.display_name()).collect();
+        let names: Vec<_> = workspace_recs
+            .mods
+            .iter()
+            .map(|r| r.display_name())
+            .collect();
         assert!(names.contains(&"global-mod".to_string()));
         assert!(names.contains(&"workspace-mod".to_string()));
     }
@@ -845,7 +845,11 @@ when.file-exists = "Cargo.toml"
         // Without Cargo.toml
         let workspace_recs = global_recs.for_workspace(temp_dir.path());
         assert_eq!(workspace_recs.mods.len(), 2); // global-mod + always-mod
-        let names: Vec<_> = workspace_recs.mods.iter().map(|r| r.display_name()).collect();
+        let names: Vec<_> = workspace_recs
+            .mods
+            .iter()
+            .map(|r| r.display_name())
+            .collect();
         assert!(names.contains(&"global-mod".to_string()));
         assert!(names.contains(&"always-mod".to_string()));
         assert!(!names.contains(&"rust-only-mod".to_string()));
@@ -854,7 +858,11 @@ when.file-exists = "Cargo.toml"
         std::fs::write(temp_dir.path().join("Cargo.toml"), "[package]").unwrap();
         let workspace_recs = global_recs.for_workspace(temp_dir.path());
         assert_eq!(workspace_recs.mods.len(), 3); // all three mods
-        let names: Vec<_> = workspace_recs.mods.iter().map(|r| r.display_name()).collect();
+        let names: Vec<_> = workspace_recs
+            .mods
+            .iter()
+            .map(|r| r.display_name())
+            .collect();
         assert!(names.contains(&"rust-only-mod".to_string()));
     }
 }

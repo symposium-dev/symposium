@@ -2,7 +2,6 @@
 
 use super::*;
 use crate::recommendations::Recommendations;
-use symposium_recommendations::{ComponentSource, LocalDistribution};
 use crate::user_config::{ConfigPaths, GlobalAgentConfig, WorkspaceModsConfig};
 use sacp::link::ClientToAgent;
 use sacp::on_receive_notification;
@@ -11,15 +10,18 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use symposium_recommendations::{ComponentSource, LocalDistribution};
 use tempfile::TempDir;
 
 /// Initialize tracing for tests. Call at the start of tests that need logging.
 /// Set RUST_LOG=trace (or debug, info, etc.) to see output.
 #[allow(dead_code)]
 fn init_tracing() {
-    use tracing_subscriber::EnvFilter;
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(tracing::Level::DEBUG.into()),
+        )
         .with_test_writer()
         .try_init();
 }
@@ -45,7 +47,7 @@ impl CollectedNotifications {
 
 /// Helper to write workspace config using the given ConfigPaths.
 /// Now writes both agent (global) and mods (per-workspace).
-fn write_workspace_config(
+async fn write_workspace_config(
     config_paths: &ConfigPaths,
     workspace_path: &std::path::Path,
     agent: &ComponentSource,
@@ -53,8 +55,9 @@ fn write_workspace_config(
 ) {
     GlobalAgentConfig::new(agent.clone())
         .save(config_paths)
+        .await
         .unwrap();
-    mods.save(config_paths, workspace_path).unwrap();
+    mods.save(config_paths, workspace_path).await.unwrap();
 }
 
 /// Create a config that uses elizacp as the backend agent.
@@ -63,6 +66,7 @@ fn elizacp_agent() -> ComponentSource {
     ComponentSource::Local(LocalDistribution {
         command: "elizacp".to_string(),
         args: vec!["--deterministic".to_string(), "acp".to_string()],
+        name: None,
         env: BTreeMap::new(),
     })
 }
@@ -93,13 +97,13 @@ async fn test_no_config_initial_setup() -> Result<(), sacp::Error> {
     // Pre-populate the global agent config so we skip agent selection
     let default_agent = elizacp_agent();
     let global_config = crate::user_config::GlobalAgentConfig::new(default_agent.clone());
-    global_config.save(&config_paths).unwrap();
+    global_config.save(&config_paths).await.unwrap();
 
     let notifications = Arc::new(Mutex::new(CollectedNotifications::default()));
     let notifications_clone = notifications.clone();
 
-    let agent =
-        ConfigAgent::with_config_paths(config_paths.clone()).with_recommendations(Recommendations::empty());
+    let agent = ConfigAgent::with_config_paths(config_paths.clone())
+        .with_recommendations(Recommendations::empty());
 
     ClientToAgent::builder()
         .name("test_client")
@@ -188,13 +192,12 @@ async fn test_no_config_initial_setup() -> Result<(), sacp::Error> {
 
             // Verify config was written
             let loaded_agent = GlobalAgentConfig::load(&config_paths).unwrap();
-            assert!(loaded_agent.is_some(), "Agent config should have been saved");
-            let loaded_mods =
-                WorkspaceModsConfig::load(&config_paths, &workspace_path).unwrap();
             assert!(
-                loaded_mods.is_some(),
-                "Mods config should have been saved"
+                loaded_agent.is_some(),
+                "Agent config should have been saved"
             );
+            let loaded_mods = WorkspaceModsConfig::load(&config_paths, &workspace_path).unwrap();
+            assert!(loaded_mods.is_some(), "Mods config should have been saved");
 
             Ok(())
         })
@@ -215,7 +218,7 @@ async fn test_new_session_with_config() -> Result<(), sacp::Error> {
     let workspace_path = PathBuf::from("/fake/workspace");
     let agent_source = elizacp_agent();
     let extensions = empty_mods();
-    write_workspace_config(&config_paths, &workspace_path, &agent_source, &extensions);
+    write_workspace_config(&config_paths, &workspace_path, &agent_source, &extensions).await;
 
     let notifications = Arc::new(Mutex::new(CollectedNotifications::default()));
     let notifications_clone = notifications.clone();
@@ -307,7 +310,7 @@ async fn test_config_mode_entry() -> Result<(), sacp::Error> {
     let workspace_path = PathBuf::from("/fake/workspace");
     let agent_source = elizacp_agent();
     let extensions = empty_mods();
-    write_workspace_config(&config_paths, &workspace_path, &agent_source, &extensions);
+    write_workspace_config(&config_paths, &workspace_path, &agent_source, &extensions).await;
 
     let notifications = Arc::new(Mutex::new(CollectedNotifications::default()));
     let notifications_clone = notifications.clone();

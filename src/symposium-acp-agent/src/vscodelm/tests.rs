@@ -6,9 +6,11 @@ use expect_test::expect;
 /// Initialize tracing for tests. Call at the start of tests that need logging.
 /// Set RUST_LOG=trace (or debug, info, etc.) to see output.
 fn init_tracing() {
-    use tracing_subscriber::EnvFilter;
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(tracing::Level::DEBUG.into()),
+        )
         .with_test_writer()
         .try_init();
 }
@@ -139,8 +141,8 @@ fn test_agent_definition_mcp_server_serialization() {
 // ============================================================================
 
 use super::session_actor::AgentDefinition;
-use futures::channel::mpsc;
 use futures::StreamExt;
+use futures::channel::mpsc;
 use sacp::on_receive_notification;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
