@@ -5,7 +5,7 @@
  * communication via the Agent Client Protocol over stdio.
  */
 
-import { spawn, ChildProcess } from "child_process";
+import { spawn, ChildProcess, SpawnOptions } from "child_process";
 import { Writable, Readable } from "stream";
 import * as acp from "@agentclientprotocol/sdk";
 import * as vscode from "vscode";
@@ -40,6 +40,7 @@ export interface AcpAgentCallbacks {
   onAgentText: (agentSessionId: string, text: string) => void;
   onUserText: (agentSessionId: string, text: string) => void;
   onAgentComplete: (agentSessionId: string) => void;
+  onStartupSlow?: (context: StartupWatchdogContext) => void;
   onRequestPermission?: (
     params: acp.RequestPermissionRequest,
   ) => Promise<acp.RequestPermissionResponse>;
@@ -49,6 +50,317 @@ export interface AcpAgentCallbacks {
     agentSessionId: string,
     commands: SlashCommandInfo[],
   ) => void;
+}
+
+const DEFAULT_STARTUP_WATCHDOG = {
+  slowThresholdMs: 10000,
+  hardTimeoutMs: 30000,
+} as const;
+
+type StartupFailureReason =
+  | "initialize-rejected"
+  | "hard-timeout"
+  | "process-exit"
+  | "stdout-close"
+  | "process-error";
+
+export interface StartupWatchdogFailureDetails {
+  reason: StartupFailureReason;
+  phase: "initialize";
+  elapsedMs: number;
+  slowThresholdMs: number;
+  hardTimeoutMs: number;
+  slowThresholdExceeded: boolean;
+  command: string;
+  args: string[];
+  pid?: number;
+  exitCode?: number | null;
+  signal?: NodeJS.Signals | null;
+  initializeError?: string;
+  killIssued?: boolean;
+}
+
+type StartupWatchdogDiagnosticReason =
+  | "initialize_error"
+  | "hard_timeout"
+  | "process_exit"
+  | "stdout_close"
+  | "process_error";
+
+export interface StartupWatchdogDiagnostics {
+  reason: StartupWatchdogDiagnosticReason;
+  phase: "initialize";
+  elapsedMs: number;
+  slowThresholdMs: number;
+  hardTimeoutMs: number;
+  command: string;
+  args: string[];
+  pid?: number;
+  exitCode?: number | null;
+  signal?: NodeJS.Signals | null;
+  stream?: "stdout";
+  errorMessage?: string;
+}
+
+function toStartupWatchdogDiagnostics(
+  details: StartupWatchdogFailureDetails,
+): StartupWatchdogDiagnostics {
+  const reasonMap: Record<StartupFailureReason, StartupWatchdogDiagnosticReason> = {
+    "initialize-rejected": "initialize_error",
+    "hard-timeout": "hard_timeout",
+    "process-exit": "process_exit",
+    "stdout-close": "stdout_close",
+    "process-error": "process_error",
+  };
+
+  return {
+    reason: reasonMap[details.reason],
+    phase: details.phase,
+    elapsedMs: details.elapsedMs,
+    slowThresholdMs: details.slowThresholdMs,
+    hardTimeoutMs: details.hardTimeoutMs,
+    command: details.command,
+    args: details.args,
+    pid: details.pid,
+    exitCode: details.exitCode,
+    signal: details.signal,
+    stream: details.reason === "stdout-close" ? "stdout" : undefined,
+    errorMessage: details.initializeError,
+  };
+}
+
+export interface StartupWatchdogContext {
+  phase: "initialize";
+  elapsedMs: number;
+  slowThresholdMs: number;
+  hardTimeoutMs: number;
+  command: string;
+  args: string[];
+  pid?: number;
+}
+
+export class StartupWatchdogError extends Error {
+  readonly details: StartupWatchdogFailureDetails;
+  readonly diagnostics: StartupWatchdogDiagnostics;
+
+  constructor(details: StartupWatchdogFailureDetails) {
+    super(formatStartupWatchdogError(details));
+    this.name = "StartupWatchdogError";
+    this.details = details;
+    this.diagnostics = toStartupWatchdogDiagnostics(details);
+  }
+}
+
+interface StartupWatchdogConfig {
+  slowThresholdMs: number;
+  hardTimeoutMs: number;
+}
+
+interface RunStartupWatchdogOptions<T> {
+  phase: "initialize";
+  command: string;
+  args: string[];
+  process: ChildProcess;
+  slowThresholdMs: number;
+  hardTimeoutMs: number;
+  initialize: () => Promise<T>;
+  onSlowThreshold?: (context: StartupWatchdogContext) => void;
+  onHardTimeout?: (context: StartupWatchdogContext) => void;
+}
+
+type AcpConnection = Pick<
+  acp.ClientSideConnection,
+  "initialize" | "newSession" | "prompt" | "cancel"
+>;
+
+type SpawnProcessFn = (
+  command: string,
+  args: string[],
+  options: SpawnOptions,
+) => ChildProcess;
+
+type CreateConnectionFn = (
+  client: SymposiumClient,
+  input: WritableStream<Uint8Array>,
+  output: ReadableStream<Uint8Array>,
+) => AcpConnection;
+
+export interface AcpAgentActorDependencies {
+  spawnProcess?: SpawnProcessFn;
+  createConnection?: CreateConnectionFn;
+  startupWatchdog?: StartupWatchdogConfig;
+}
+
+function formatStartupWatchdogError(
+  details: StartupWatchdogFailureDetails,
+): string {
+  const segments = [
+    "ACP startup failed",
+    `reason=${details.reason}`,
+    `phase=${details.phase}`,
+    `elapsedMs=${details.elapsedMs}`,
+    `slowThresholdMs=${details.slowThresholdMs}`,
+    `hardTimeoutMs=${details.hardTimeoutMs}`,
+  ];
+
+  if (details.exitCode !== undefined) {
+    segments.push(`exitCode=${details.exitCode}`);
+  }
+  if (details.signal !== undefined) {
+    segments.push(`signal=${details.signal}`);
+  }
+  if (details.initializeError) {
+    segments.push(`initializeError=${details.initializeError}`);
+  }
+
+  return segments.join(" ");
+}
+
+export async function runStartupWatchdog<T>(
+  options: RunStartupWatchdogOptions<T>,
+): Promise<T> {
+  const startedAt = Date.now();
+  let slowThresholdExceeded = false;
+  let settled = false;
+
+  const buildContext = (): StartupWatchdogContext => ({
+    phase: options.phase,
+    elapsedMs: Date.now() - startedAt,
+    slowThresholdMs: options.slowThresholdMs,
+    hardTimeoutMs: options.hardTimeoutMs,
+    command: options.command,
+    args: options.args,
+    pid: options.process.pid,
+  });
+
+  const buildDetails = (
+    reason: StartupFailureReason,
+    extras: Partial<StartupWatchdogFailureDetails> = {},
+  ): StartupWatchdogFailureDetails => ({
+    reason,
+    phase: options.phase,
+    elapsedMs: Date.now() - startedAt,
+    slowThresholdMs: options.slowThresholdMs,
+    hardTimeoutMs: options.hardTimeoutMs,
+    slowThresholdExceeded,
+    command: options.command,
+    args: options.args,
+    pid: options.process.pid,
+    ...extras,
+  });
+
+  const toErrorMessage = (error: unknown): string => {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    if (typeof error === "string") {
+      return error;
+    }
+    if (
+      error &&
+      typeof error === "object" &&
+      "message" in error &&
+      typeof (error as Record<string, unknown>).message === "string"
+    ) {
+      return (error as Record<string, string>).message;
+    }
+
+    return JSON.stringify(error);
+  };
+
+  return new Promise<T>((resolve, reject) => {
+    let slowTimer: NodeJS.Timeout | undefined;
+    let hardTimer: NodeJS.Timeout | undefined;
+
+    const cleanup = () => {
+      if (slowTimer) {
+        clearTimeout(slowTimer);
+        slowTimer = undefined;
+      }
+      if (hardTimer) {
+        clearTimeout(hardTimer);
+        hardTimer = undefined;
+      }
+      options.process.off("exit", onProcessExit);
+      options.process.off("error", onProcessError);
+      options.process.stdout?.off("close", onStdoutClose);
+    };
+
+    const fail = (
+      reason: StartupFailureReason,
+      extras: Partial<StartupWatchdogFailureDetails> = {},
+      failOptions: { killProcess?: boolean; triggerHardTimeout?: boolean } = {},
+    ) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+
+      if (failOptions.triggerHardTimeout) {
+        options.onHardTimeout?.(buildContext());
+      }
+
+      if (failOptions.killProcess && !options.process.killed) {
+        options.process.kill();
+        extras.killIssued = true;
+      }
+
+      cleanup();
+      reject(new StartupWatchdogError(buildDetails(reason, extras)));
+    };
+
+    const onProcessExit = (
+      code: number | null,
+      signal: NodeJS.Signals | null,
+    ) => {
+      fail("process-exit", { exitCode: code, signal });
+    };
+    const onStdoutClose = () => {
+      fail("stdout-close");
+    };
+    const onProcessError = (processError: Error) => {
+      fail("process-error", { initializeError: processError.message });
+    };
+
+    options.process.once("exit", onProcessExit);
+    options.process.once("error", onProcessError);
+    options.process.stdout?.once("close", onStdoutClose);
+
+    slowTimer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      slowThresholdExceeded = true;
+      options.onSlowThreshold?.(buildContext());
+    }, options.slowThresholdMs);
+
+    hardTimer = setTimeout(() => {
+      fail("hard-timeout", {}, { triggerHardTimeout: true, killProcess: false });
+    }, options.hardTimeoutMs);
+
+    setImmediate(() => {
+      if (settled) {
+        return;
+      }
+
+      options
+        .initialize()
+        .then((result) => {
+          if (settled) {
+            return;
+          }
+          settled = true;
+          cleanup();
+          resolve(result);
+        })
+        .catch((initializeError: unknown) => {
+          fail("initialize-rejected", {
+            initializeError: toErrorMessage(initializeError),
+          });
+        });
+    });
+  });
 }
 
 /**
@@ -216,12 +528,66 @@ export class SymposiumClient implements acp.Client {
 }
 
 export class AcpAgentActor {
-  private connection?: acp.ClientSideConnection;
+  private connection?: AcpConnection;
   private agentProcess?: ChildProcess;
   private callbacks: AcpAgentCallbacks;
+  private readonly spawnProcess: SpawnProcessFn;
+  private readonly createConnection: CreateConnectionFn;
+  private readonly startupWatchdog: StartupWatchdogConfig;
+  private readonly hasStartupWatchdogOverride: boolean;
 
-  constructor(callbacks: AcpAgentCallbacks) {
+  constructor(
+    callbacks: AcpAgentCallbacks,
+    dependencies: AcpAgentActorDependencies = {},
+  ) {
     this.callbacks = callbacks;
+    this.spawnProcess = dependencies.spawnProcess ?? spawn;
+    this.createConnection =
+      dependencies.createConnection ??
+      ((client, input, output) => {
+        const stream = acp.ndJsonStream(input, output);
+        return new acp.ClientSideConnection((_agent) => client, stream);
+      });
+    this.hasStartupWatchdogOverride = dependencies.startupWatchdog !== undefined;
+    this.startupWatchdog =
+      dependencies.startupWatchdog ?? DEFAULT_STARTUP_WATCHDOG;
+  }
+
+  private resolveStartupWatchdogFromSettings(
+    config: vscode.WorkspaceConfiguration,
+  ): StartupWatchdogConfig {
+    if (this.hasStartupWatchdogOverride) {
+      return this.startupWatchdog;
+    }
+
+    const slowThresholdMs = config.get<number>(
+      "startupSlowThresholdMs",
+      DEFAULT_STARTUP_WATCHDOG.slowThresholdMs,
+    );
+    const hardTimeoutMs = config.get<number>(
+      "startupHardTimeoutMs",
+      DEFAULT_STARTUP_WATCHDOG.hardTimeoutMs,
+    );
+
+    if (!Number.isInteger(slowThresholdMs) || slowThresholdMs <= 0) {
+      throw new Error(
+        "Invalid symposium.startupSlowThresholdMs setting. Expected a positive integer (milliseconds).",
+      );
+    }
+
+    if (!Number.isInteger(hardTimeoutMs) || hardTimeoutMs <= 0) {
+      throw new Error(
+        "Invalid symposium.startupHardTimeoutMs setting. Expected a positive integer (milliseconds).",
+      );
+    }
+
+    if (hardTimeoutMs <= slowThresholdMs) {
+      throw new Error(
+        "Invalid startup timeout settings: symposium.startupHardTimeoutMs must be greater than symposium.startupSlowThresholdMs.",
+      );
+    }
+
+    return { slowThresholdMs, hardTimeoutMs };
   }
 
   /**
@@ -235,6 +601,7 @@ export class AcpAgentActor {
   ): Promise<void> {
     // Read settings to build the command
     const vsConfig = vscode.workspace.getConfiguration("symposium");
+    const startupWatchdog = this.resolveStartupWatchdogFromSettings(vsConfig);
 
     // Get log level if configured
     let agentLogLevel = vsConfig.get<string>("agentLogLevel", "");
@@ -269,11 +636,15 @@ export class AcpAgentActor {
     });
 
     // Spawn the agent process
-    this.agentProcess = spawn(conductorCommand, spawnArgs, {
+    this.agentProcess = this.spawnProcess(conductorCommand, spawnArgs, {
       stdio: ["pipe", "pipe", "pipe"],
       env: process.env,
       cwd: config.workspaceFolder.uri.fsPath,
     });
+
+    if (!this.agentProcess.stdin || !this.agentProcess.stdout) {
+      throw new Error("ACP agent process missing stdio pipes");
+    }
 
     // Capture stderr and pipe to logger
     if (this.agentProcess.stderr) {
@@ -289,18 +660,16 @@ export class AcpAgentActor {
     }
 
     // Create streams for communication
-    const input = Writable.toWeb(this.agentProcess.stdin!);
+    const input = Writable.toWeb(this.agentProcess.stdin);
     const output = Readable.toWeb(
-      this.agentProcess.stdout!,
+      this.agentProcess.stdout,
     ) as ReadableStream<Uint8Array>;
 
     // Create the client connection
     const client = new SymposiumClient(this.callbacks);
-    const stream = acp.ndJsonStream(input, output);
-    this.connection = new acp.ClientSideConnection((_agent) => client, stream);
+    this.connection = this.createConnection(client, input, output);
 
-    // Initialize the connection
-    const initResult = await this.connection.initialize({
+    const initializeRequest: acp.InitializeRequest = {
       protocolVersion: acp.PROTOCOL_VERSION,
       clientCapabilities: {
         fs: {
@@ -308,11 +677,76 @@ export class AcpAgentActor {
           writeTextFile: false,
         },
       },
-    });
+    };
 
-    logger.important("agent", "Connected to ACP agent", {
-      protocolVersion: initResult.protocolVersion,
-    });
+    try {
+      const initResult = await this.initializeConnectionWithWatchdog(
+        () => this.connection!.initialize(initializeRequest),
+        {
+          command: conductorCommand,
+          args: spawnArgs,
+        },
+        startupWatchdog,
+      );
+
+      logger.important("agent", "Connected to ACP agent", {
+        protocolVersion: initResult.protocolVersion,
+      });
+    } catch (error) {
+      this.connection = undefined;
+      if (
+        this.agentProcess &&
+        this.agentProcess.exitCode === null &&
+        this.agentProcess.signalCode === null &&
+        !this.agentProcess.killed
+      ) {
+        this.agentProcess.kill();
+      }
+      this.agentProcess = undefined;
+      throw error;
+    }
+  }
+
+  private async initializeConnectionWithWatchdog(
+    runInitialize: () => Promise<acp.InitializeResponse>,
+    startupContext: { command: string; args: string[] },
+    startupWatchdog: StartupWatchdogConfig,
+  ): Promise<acp.InitializeResponse> {
+    if (!this.agentProcess) {
+      throw new Error("ACP agent process not started");
+    }
+
+    const processForInit = this.agentProcess;
+
+    try {
+      return await runStartupWatchdog({
+        phase: "initialize",
+        command: startupContext.command,
+        args: startupContext.args,
+        process: processForInit,
+        slowThresholdMs: startupWatchdog.slowThresholdMs,
+        hardTimeoutMs: startupWatchdog.hardTimeoutMs,
+        initialize: runInitialize,
+        onSlowThreshold: (context) => {
+          logger.warn("agent", "ACP startup exceeded slow threshold", context);
+          this.callbacks.onStartupSlow?.(context);
+        },
+        onHardTimeout: () => {
+          if (
+            processForInit.exitCode === null &&
+            processForInit.signalCode === null &&
+            !processForInit.killed
+          ) {
+            processForInit.kill();
+          }
+        },
+      });
+    } catch (error) {
+      if (error instanceof StartupWatchdogError) {
+        logger.error("agent", "ACP startup watchdog failure", error.details);
+      }
+      throw error;
+    }
   }
 
   /**

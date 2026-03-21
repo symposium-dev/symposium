@@ -29,6 +29,15 @@ const tabCurrentStreamType: { [tabId: string]: "text" | "tool" } = {};
 // Track active tool calls per tab: toolCallId → messageId
 const tabToolCalls: { [tabId: string]: { [toolCallId: string]: string } } = {};
 
+// Track startup status card state per tab (single warning card lifecycle).
+const tabStartupStatusMessageId: { [tabId: string]: string } = {};
+const tabStartupStatusBody: { [tabId: string]: string } = {};
+
+const STARTUP_PENDING_INPUT_INFO =
+  "Agent is still starting. Input is temporarily disabled.";
+const STARTUP_FAILED_INPUT_INFO =
+  "Agent startup failed for this tab. Open a new tab to retry.";
+
 // Tool call status type (matches ACP)
 type ToolCallStatus =
   | "pending"
@@ -407,6 +416,19 @@ const config: any = {
     },
   },
   onInBodyButtonClicked: (tabId: string, messageId: string, action: any) => {
+    if (action?.id === "show-output") {
+      vscode.postMessage({
+        type: "show-output",
+      });
+
+      const currentBody = tabStartupStatusBody[tabId];
+      if (currentBody) {
+        // Re-render to keep the button actionable for repeated clicks.
+        renderStartupStatusCard(tabId, currentBody);
+      }
+      return;
+    }
+
     // Check if this is an approval button
     const approvalContext = (window as any)[`approval_${messageId}`];
     if (approvalContext) {
@@ -421,6 +443,8 @@ const config: any = {
     }
   },
   onTabAdd: (tabId: string) => {
+    freezePromptInput(tabId, STARTUP_PENDING_INPUT_INFO);
+
     // Notify extension that a new tab was created
     console.log("New tab created:", tabId);
     vscode.postMessage({
@@ -433,6 +457,8 @@ const config: any = {
   onTabRemove: (tabId: string) => {
     // Save state when tab is closed
     console.log("Tab removed:", tabId);
+    delete tabStartupStatusBody[tabId];
+    delete tabStartupStatusMessageId[tabId];
     saveState();
   },
   onContextSelected: (contextItem: any, tabId: string) => {
@@ -615,6 +641,190 @@ function saveState() {
   });
 }
 
+function formatAgentErrorBody(error: unknown): string {
+  if (typeof error === "string") {
+    const trimmed = error.trim();
+    return trimmed || "Unknown error";
+  }
+
+  if (error === undefined || error === null) {
+    return "Unknown error";
+  }
+
+  if (typeof error === "object") {
+    const structured = error as Record<string, unknown>;
+    const context =
+      typeof structured.context === "string" ? structured.context.trim() : "";
+
+    let message = "Operation failed";
+    if (typeof structured.message === "string") {
+      const trimmedMessage = structured.message.trim();
+      if (trimmedMessage.length > 0) {
+        message = trimmedMessage;
+      }
+    }
+
+    if (context.length > 0) {
+      return `${context}\n\n${message}`;
+    }
+
+    return message;
+  }
+
+  return String(error);
+}
+
+function isStartupInitializationError(error: unknown): boolean {
+  if (typeof error === "string") {
+    return error.includes("Failed to initialize chat session");
+  }
+
+  if (error && typeof error === "object") {
+    const structured = error as Record<string, unknown>;
+    return structured.context === "Failed to initialize chat session";
+  }
+
+  return false;
+}
+
+function freezePromptInput(tabId: string, info: string): void {
+  mynahUI.updateStore(tabId, {
+    promptInputDisabledState: true,
+    promptInputInfo: info,
+  });
+}
+
+function unfreezePromptInput(tabId: string): void {
+  mynahUI.updateStore(tabId, {
+    promptInputDisabledState: false,
+    promptInputInfo: "",
+  });
+}
+
+function parseStartupKeyValuePairs(message: string): Record<string, string> {
+  const pairs: Record<string, string> = {};
+  const matches = message.matchAll(/([A-Za-z][A-Za-z0-9]*)=([^\s]+)/g);
+  for (const match of matches) {
+    const key = match[1];
+    const value = match[2];
+    if (key && value) {
+      pairs[key] = value;
+    }
+  }
+  return pairs;
+}
+
+function formatStartupFailureBody(error: unknown): string {
+  let startupMessage = "Operation failed";
+
+  if (error && typeof error === "object") {
+    const structured = error as Record<string, unknown>;
+    if (typeof structured.message === "string" && structured.message.trim()) {
+      startupMessage = structured.message.trim();
+    } else {
+      startupMessage = formatAgentErrorBody(error);
+    }
+  } else if (typeof error === "string" && error.trim()) {
+    startupMessage = error.trim();
+  } else {
+    startupMessage = formatAgentErrorBody(error);
+  }
+
+  const diagnostics = parseStartupKeyValuePairs(startupMessage);
+  const reason = diagnostics.reason ?? "unknown";
+  const phase = diagnostics.phase;
+  const elapsedMs = diagnostics.elapsedMs;
+  const slowThresholdMs = diagnostics.slowThresholdMs;
+  const hardTimeoutMs = diagnostics.hardTimeoutMs;
+
+  const timingParts: string[] = [];
+  if (hardTimeoutMs) {
+    timingParts.push(`hard timeout **${hardTimeoutMs}ms**`);
+  }
+  if (slowThresholdMs) {
+    timingParts.push(`slow threshold **${slowThresholdMs}ms**`);
+  }
+  if (elapsedMs) {
+    timingParts.push(`elapsed **${elapsedMs}ms**`);
+  }
+
+  const summaryLines = [
+    "⚠️ **Agent startup failed**",
+    `- **Reason:** \`${reason}\`${phase ? ` · **Phase:** \`${phase}\`` : ""}`,
+    timingParts.length > 0
+      ? `- **Timing:** ${timingParts.join(" · ")}`
+      : `- **Details:** ${startupMessage}`,
+    "",
+    "Click **More details** to open Output (`Symposium`). You can also run `Symposium: Show Output` from Command Palette.",
+  ];
+
+  return summaryLines.join("\n");
+}
+
+function getStartupStatusMessageId(tabId: string): string {
+  if (!tabStartupStatusMessageId[tabId]) {
+    tabStartupStatusMessageId[tabId] = `startup-status-${tabId}`;
+  }
+  return tabStartupStatusMessageId[tabId];
+}
+
+function renderStartupStatusCard(tabId: string, body: string): void {
+  const messageId = getStartupStatusMessageId(tabId);
+  const card: ChatItem = {
+    type: ChatItemType.ANSWER,
+    messageId,
+    body,
+    status: "warning",
+    buttons: [
+      {
+        id: "show-output",
+        text: "More details",
+        status: "warning",
+        keepCardAfterClick: true,
+      },
+    ],
+  };
+
+  if (tabStartupStatusBody[tabId]) {
+    mynahUI.updateChatAnswerWithMessageId(tabId, messageId, card);
+  } else {
+    mynahUI.addChatItem(tabId, card);
+  }
+
+  tabStartupStatusBody[tabId] = body;
+}
+
+function formatStartupSlowBody(message: any): string {
+  const slowThresholdMs =
+    typeof message.slowThresholdMs === "number"
+      ? message.slowThresholdMs
+      : undefined;
+  const hardTimeoutMs =
+    typeof message.hardTimeoutMs === "number"
+      ? message.hardTimeoutMs
+      : undefined;
+  const elapsedMs =
+    typeof message.elapsedMs === "number" ? message.elapsedMs : undefined;
+
+  if (
+    slowThresholdMs !== undefined &&
+    hardTimeoutMs !== undefined &&
+    elapsedMs !== undefined
+  ) {
+    return [
+      "⚠️ **Agent startup is taking longer than expected**",
+      `- **Slow threshold:** **${slowThresholdMs}ms**`,
+      `- **Hard timeout:** **${hardTimeoutMs}ms**`,
+      `- **Elapsed:** **${elapsedMs}ms**`,
+      "",
+      "Click **More details** to open Output (`Symposium`). You can also run `Symposium: Show Output` from Command Palette.",
+    ].join("\n");
+  }
+
+  const text = typeof message.text === "string" ? message.text : "Startup is slow.";
+  return `${text}\n\nClick **More details** to open Output (\`Symposium\`). You can also run \`Symposium: Show Output\` from Command Palette.`;
+}
+
 // Handle messages from the extension
 window.addEventListener("message", (event: MessageEvent) => {
   const message = event.data;
@@ -733,6 +943,10 @@ window.addEventListener("message", (event: MessageEvent) => {
     delete tabAgentResponses[message.tabId];
     delete tabCurrentMessageId[message.tabId];
     delete tabCurrentStreamType[message.tabId];
+  } else if (message.type === "agent-startup-slow") {
+    // Single startup status card (warning) to avoid duplicated startup UI.
+    renderStartupStatusCard(message.tabId, formatStartupSlowBody(message));
+    freezePromptInput(message.tabId, STARTUP_PENDING_INPUT_INFO);
   } else if (message.type === "set-tab-title") {
     // Update the tab title
     mynahUI.updateStore(message.tabId, {
@@ -748,6 +962,8 @@ window.addEventListener("message", (event: MessageEvent) => {
     // Handle tool call update
     handleToolCall(message.tabId, message.toolCall);
   } else if (message.type === "available-commands") {
+    unfreezePromptInput(message.tabId);
+
     // Convert ACP commands to MynahUI quickActionCommands format
     const commands = message.commands as SlashCommandInfo[];
     const quickActionCommands = [
@@ -767,6 +983,8 @@ window.addEventListener("message", (event: MessageEvent) => {
       quickActionCommands,
     });
   } else if (message.type === "available-context") {
+    unfreezePromptInput(message.tabId);
+
     // Convert file list and symbols to MynahUI contextCommands format
     const files = message.files as string[];
     const symbols = (message.symbols || []) as Array<{
@@ -920,28 +1138,21 @@ window.addEventListener("message", (event: MessageEvent) => {
       loadingChat: false,
     });
 
-    // Add error card to chat - try to pretty print if it contains JSON
-    let errorBody = message.error;
-    const jsonMatch = errorBody.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[0]);
-        const prefix = errorBody.slice(0, jsonMatch.index).trim();
-        errorBody = prefix
-          ? `${prefix}\n\n\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``
-          : `\`\`\`json\n${JSON.stringify(parsed, null, 2)}\n\`\`\``;
-      } catch {
-        errorBody = `\`\`\`\n${errorBody}\n\`\`\``;
-      }
+    if (isStartupInitializationError(message.error)) {
+      renderStartupStatusCard(
+        message.tabId,
+        formatStartupFailureBody(message.error),
+      );
+      freezePromptInput(message.tabId, STARTUP_FAILED_INPUT_INFO);
     } else {
-      errorBody = `\`\`\`\n${errorBody}\n\`\`\``;
-    }
+      const errorBody = formatAgentErrorBody(message.error);
 
-    mynahUI.addChatItem(message.tabId, {
-      type: ChatItemType.ANSWER,
-      body: `### Error\n\n${errorBody}`,
-      status: "error",
-    });
+      mynahUI.addChatItem(message.tabId, {
+        type: ChatItemType.ANSWER,
+        body: `### Error\n\n${errorBody}`,
+        status: "error",
+      });
+    }
 
     // Clear any pending response state
     delete tabAgentResponses[message.tabId];

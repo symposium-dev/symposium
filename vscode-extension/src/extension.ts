@@ -94,6 +94,13 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   );
 
+  // Register command to open the Symposium output channel.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("symposium.showOutput", () => {
+      logger.show();
+    }),
+  );
+
   // Debug command to inspect saved state
   context.subscriptions.push(
     vscode.commands.registerCommand("symposium.inspectState", async () => {
@@ -182,6 +189,27 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand("symposium.test.getTabs", () => {
       return chatProvider.getTabsForTesting();
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand(
+      "symposium.test.getQueuedMessages",
+      (tabId: string) => {
+        return chatProvider.getQueuedMessagesForTesting(tabId);
+      },
+    ),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("symposium.test.resetState", () => {
+      chatProvider.resetForTesting();
+    }),
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("symposium.test.resetActors", () => {
+      chatProvider.resetForTesting();
     }),
   );
 

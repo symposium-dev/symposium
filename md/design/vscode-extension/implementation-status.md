@@ -14,6 +14,7 @@ This chapter tracks what's been implemented, what's in progress, and what's plan
 ## Error Handling
 
 - [x] Agent crash detection (partially implemented - detection works, UI error display incomplete)
+- [x] Startup watchdog for ACP initialize (slow-threshold warning + hard-timeout fail-fast)
 - [ ] Complete error recovery UX (restart agent button, error notifications)
 - [ ] Agent health monitoring and automatic restart
 
@@ -29,6 +30,7 @@ This chapter tracks what's been implemented, what's in progress, and what's plan
 
 - [x] Client-side connection (`ClientSideConnection`)
 - [x] Protocol initialization and capability negotiation
+- [x] Deterministic initialize failure when process exits or stdout closes early
 - [x] Session creation (`newSession`)
 - [x] Prompt sending (`prompt`)
 - [x] Streaming response handling (`sessionUpdate`)

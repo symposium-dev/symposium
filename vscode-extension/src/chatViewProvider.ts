@@ -1,6 +1,11 @@
 import * as vscode from "vscode";
 import * as acp from "@agentclientprotocol/sdk";
-import { AcpAgentActor, ToolCallInfo, SlashCommandInfo } from "./acpAgentActor";
+import {
+  AcpAgentActor,
+  ToolCallInfo,
+  SlashCommandInfo,
+  StartupWatchdogContext,
+} from "./acpAgentActor";
 import { AgentConfiguration } from "./agentConfiguration";
 import { WorkspaceFileIndex } from "./workspaceFileIndex";
 import { getConductorCommand } from "./binaryPath";
@@ -15,6 +20,19 @@ interface IndexedMessage {
   type: string;
   tabId: string;
   text?: string;
+  error?: unknown;
+}
+
+interface QueuedMessageView {
+  index: number;
+  type: string;
+  tabId: string;
+  error?: unknown;
+}
+
+interface AgentErrorPayload {
+  context: string;
+  message: string;
 }
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -82,7 +100,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
    * Get or create an ACP actor for the given configuration.
    * Actors are shared across tabs with the same configuration.
    */
-  async #getOrCreateActor(config: AgentConfiguration): Promise<AcpAgentActor> {
+  async #getOrCreateActor(
+    config: AgentConfiguration,
+    startupTabId?: string,
+  ): Promise<AcpAgentActor> {
     const key = config.key();
 
     // Return existing actor if we have one for this config
@@ -162,6 +183,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             type: "agent-complete",
             tabId,
           });
+        }
+      },
+      onStartupSlow: (context: StartupWatchdogContext) => {
+        if (startupTabId) {
+          this.#publishStartupSlowFeedback(startupTabId, context);
         }
       },
       onRequestPermission: async (
@@ -563,7 +589,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             });
 
             // Get or create an actor for this configuration (may spawn process)
-            const actor = await this.#getOrCreateActor(config);
+            const actor = await this.#getOrCreateActor(config, message.tabId);
 
             logger.important("agent", "Spawned actor", {
               actor,
@@ -596,9 +622,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               config: config.describe(),
             });
           } catch (err) {
-            logger.error("agent", "Failed to create agent session", {
-              error: err,
-            });
+            this.#publishAgentError(
+              message.tabId,
+              "Failed to initialize chat session",
+              err,
+            );
           }
           break;
 
@@ -771,15 +799,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           // Send prompt to agent (responses come via callbacks)
           try {
             await tabActor.sendPrompt(agentSessionId, contentBlocks);
-          } catch (err: any) {
+          } catch (err: unknown) {
             // Clear active prompt flag on error
             this.#tabsWithActivePrompt.delete(message.tabId);
-            logger.error("agent", "Failed to send prompt", { error: err });
-            this.#sendToWebview({
-              type: "agent-error",
-              tabId: message.tabId,
-              error: err?.message || String(err),
-            });
+            this.#publishAgentError(message.tabId, "Failed to send prompt", err);
           }
           break;
 
@@ -792,6 +815,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case "log":
           // Webview sending a log message
           logger.debug("webview", message.message, message.data);
+          break;
+
+        case "show-output":
+          // Webview requested to open extension output channel.
+          logger.show();
           break;
 
         case "selected-tab-response":
@@ -1015,14 +1043,78 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       logger.debug("webview", "Sending message to webview", {
         tabId,
         messageIndex: index,
+        messageType: message.type,
       });
       this.#view.webview.postMessage(indexedMessage);
     } else {
       logger.debug("webview", "Queued message (webview hidden)", {
         tabId,
         messageIndex: index,
+        messageType: message.type,
       });
     }
+  }
+
+  #publishStartupSlowFeedback(
+    tabId: string,
+    context: StartupWatchdogContext,
+  ): void {
+    logger.warn("agent", "Startup is slow; publishing chat feedback", {
+      tabId,
+      ...context,
+    });
+
+    this.#sendToWebview({
+      type: "agent-startup-slow",
+      tabId,
+      text: `Agent startup is taking longer than expected (${context.slowThresholdMs}ms threshold). Still waiting for startup; hard timeout is ${context.hardTimeoutMs}ms.`,
+      elapsedMs: context.elapsedMs,
+      slowThresholdMs: context.slowThresholdMs,
+      hardTimeoutMs: context.hardTimeoutMs,
+    });
+  }
+
+  #toAgentErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message || "Unknown error";
+    }
+
+    if (typeof error === "string") {
+      const trimmed = error.trim();
+      return trimmed || "Unknown error";
+    }
+
+    if (error && typeof error === "object") {
+      const errorObject = error as Record<string, unknown>;
+      if (typeof errorObject.message === "string") {
+        const trimmed = errorObject.message.trim();
+        if (trimmed.length > 0) {
+          return trimmed;
+        }
+      }
+
+      return "Operation failed";
+    }
+
+    if (error === undefined || error === null) {
+      return "Unknown error";
+    }
+
+    return String(error);
+  }
+
+  #publishAgentError(tabId: string, context: string, error: unknown): void {
+    logger.error("agent", context, { error });
+    const messagePayload: AgentErrorPayload = {
+      context,
+      message: this.#toAgentErrorMessage(error),
+    };
+
+    this.#sendToWebview({
+      type: "agent-error",
+      tabId,
+      error: messagePayload,
+    });
   }
 
   /**
@@ -1237,6 +1329,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this.#fileIndexes.clear();
     this.#tabToFileIndex.clear();
+    this.#selectionDisposable?.dispose();
+    this.#selectionDisposable = null;
   }
 
   // Testing API - only use from integration tests
@@ -1265,6 +1359,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return Array.from(this.#tabToAgentSession.keys());
   }
 
+  public getQueuedMessagesForTesting(tabId: string): QueuedMessageView[] {
+    const queue = this.#messageQueues.get(tabId) ?? [];
+    return queue.map((message) => ({
+      index: message.index,
+      type: message.type,
+      tabId: message.tabId,
+      error: message.error,
+    }));
+  }
+
   // Store agent responses for testing
   #testResponseCapture: Map<string, string[]> = new Map();
 
@@ -1289,6 +1393,33 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     return this.#tabsWithActivePrompt.has(tabId);
   }
 
+  public resetForTesting(): void {
+    for (const actor of this.#configToActor.values()) {
+      actor.dispose();
+    }
+    this.#configToActor.clear();
+    this.#tabToConfig.clear();
+    this.#tabToAgentSession.clear();
+    this.#agentSessionToTab.clear();
+    this.#messageQueues.clear();
+    this.#nextMessageIndex.clear();
+    this.#testResponseCapture.clear();
+    this.#pendingSessionNotifications.clear();
+    this.#tabsWithActivePrompt.clear();
+    this.#selectedTabRequests.clear();
+
+    for (const pending of this.#pendingApprovals.values()) {
+      pending.reject(new Error("Reset for testing"));
+    }
+    this.#pendingApprovals.clear();
+
+    for (const index of this.#fileIndexes.values()) {
+      index.dispose();
+    }
+    this.#fileIndexes.clear();
+    this.#tabToFileIndex.clear();
+  }
+
   async #handleWebviewMessage(message: any): Promise<void> {
     // This is the same logic from resolveWebviewView's onDidReceiveMessage
     // We'll need to refactor to share this code
@@ -1306,7 +1437,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             title: AGENT_DISPLAY_NAME,
           });
 
-          const actor = await this.#getOrCreateActor(config);
+          const actor = await this.#getOrCreateActor(config, message.tabId);
           const agentSessionId = await actor.createSession(
             config.workspaceFolder.uri.fsPath,
           );
@@ -1331,9 +1462,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             agentSessionId,
           });
         } catch (err) {
-          logger.error("agent", "Failed to create agent session", {
-            error: err,
-          });
+          this.#publishAgentError(
+            message.tabId,
+            "Failed to initialize chat session",
+            err,
+          );
         }
         break;
 
@@ -1393,15 +1526,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
           // Send prompt to agent (responses come via callbacks)
           await tabActor.sendPrompt(agentSessionId, message.prompt);
-        } catch (err: any) {
+        } catch (err: unknown) {
           // Clear active prompt flag on error
           this.#tabsWithActivePrompt.delete(message.tabId);
-          logger.error("agent", "Failed to send prompt", { error: err });
-          this.#sendToWebview({
-            type: "agent-error",
-            tabId: message.tabId,
-            error: err?.message || String(err),
-          });
+          this.#publishAgentError(message.tabId, "Failed to send prompt", err);
         }
         break;
 
@@ -1426,6 +1554,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             approvalId: message.approvalId,
           });
         }
+        break;
+
+      case "show-output":
+        // Webview requested to open extension output channel.
+        logger.show();
         break;
     }
   }
