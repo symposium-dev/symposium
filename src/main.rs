@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use std::process::ExitCode;
 
 mod cargo_cmd;
+mod mcp;
 pub mod tutorial;
 
 #[derive(Parser)]
@@ -22,6 +23,9 @@ enum Commands {
 
     /// Show the Symposium tutorial for agents and humans
     Tutorial,
+
+    /// Run as an MCP server (stdio transport)
+    Mcp,
 }
 
 fn main() -> ExitCode {
@@ -33,6 +37,16 @@ fn main() -> ExitCode {
             print!("{}", tutorial::render_cli());
             ExitCode::SUCCESS
         }
+        Some(Commands::Mcp) => {
+            let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+            match rt.block_on(mcp::serve()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("MCP server error: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         None => {
             println!("symposium — AI the Rust Way");
             println!();
@@ -41,6 +55,7 @@ fn main() -> ExitCode {
             println!("Commands:");
             println!("  cargo      Run cargo commands with token-optimized output");
             println!("  tutorial   Show the Symposium tutorial for agents and humans");
+            println!("  mcp        Run as an MCP server (stdio transport)");
             println!("  help       Show this message");
             println!();
             println!("Run `symposium <command> --help` for more information.");
