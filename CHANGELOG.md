@@ -1,0 +1,360 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0](https://github.com/symposium-dev/symposium/releases/tag/v0.1.0) - 2026-03-26
+
+### Added
+
+- add hook format argument and configuration docs
+- add hooks integration, logging, and config
+- Claude Code plugin
+- MCP server
+- tutorial renderer
+- CLI scaffolding and cargo wrapper
+- add workspace-specific recommendations via .symposium/recommendations.toml
+- download recommendations from remote URL with caching
+- add --log-dir option for file-based logging
+- *(config_agent)* integrate workspace config and recommendations
+- *(recommendations)* add condition-based extension recommendation system
+- *(user_config)* add per-workspace WorkspaceConfig and GlobalAgentConfig
+- improve config mode UI with better markdown formatting
+- unify initial setup with config mode
+- wire ConfigAgent into main.rs run command
+- add ConfigAgent tests and mockable registry
+- add pause/resume protocol for config mode
+- add MenuAction enum for smarter menu redisplay
+- add ConfigModeActor for interactive config phone tree UI
+- detect /symposium:config command and enter config mode
+- inject /symposium:config command into AvailableCommandsUpdate
+- forward session-bound messages to conductors
+- three-actor ConfigAgent architecture
+- make symposium-ferris a standalone agent extension
+- auto-sync extension versions with symposium-acp-agent
+- install sparkle via cargo-binstall instead of bundling
+- add cargo distribution type for extensions
+- open-ended extension registry with QuickPick dialog
+- add configurable agent extensions UI
+- move the LM stuff behind an experimental pref
+- add --log-file option to vscodelm_cli example
+- add vscodelm_cli example for debugging tool invocation
+- accept RUST_LOG-style filter strings in --log argument
+- race peek against cancellation in handle_vscode_tool_invocation
+- show all registry agents in settings panel with auto-install
+- show all registry agents in LM picker with auto-install
+- expose one language model per ACP agent
+- stream tool calls as markdown in VS Code LM provider
+- pass chat request options from VS Code to Rust backend
+- introduce HistoryActor for centralized session state management
+- implement agent-internal tool permission bridging for vscodelm
+- add cancellation support for vscodelm
+- support AgentDefinition enum in vscodelm protocol
+- add configurable agent backend to vscodelm
+- add session UUID logging to vscodelm
+- add session actor for VS Code LM provider
+- *(vscodelm)* implement Component trait and add tests
+- *(vscode)* add Language Model Provider prototype
+- *(vscode)* add availability checks for built-in agents
+- *(vscode)* add local distribution type for agents
+- add built-in ElizACP agent for testing
+- *(vscode)* add 'Check for updates' for registry agents
+- *(vscode)* add agent registry fetch and 'Add from registry' dialog
+- *(vscode)* implement agent registry with built-in agents
+- add --cargo flag to CLI binaries
+- add cargo tools to symposium proxy
+- thread cwd through to cargo metadata commands
+- add extension marketplace icon
+- add theme-specific styling for no-tabs image
+- add configurable no-tabs background image to mynah-ui
+- update VSCode activity bar icon to ferris-in-a-robe
+- *(zed)* add dev extension using local symposium-acp-agent
+- *(zed)* add Zed extension for Symposium agent server
+- *(ci)* enable Open VSX publishing
+- *(ci)* enable VSCode Marketplace publishing
+- *(ci)* add release workflow for binaries and VSCode extensions
+- *(vscode)* include components in AgentConfiguration
+- *(vscode)* add Sparkle and Rust Crate Researcher component toggles
+- *(vscode)* add requireModifierToSend checkbox to Settings panel
+- *(vscode)* add requireModifierToSend setting
+- add requireModifierToSendPrompt config option
+
+### Fixed
+
+- gitignore, cargo.lock
+- do not clear the notifications after sending the prompt
+- *(windows)* use platform_binary_name to resolve sparkle-mcp.exe path
+- *(setup)* build mynah-ui during vscode extension setup
+- *(vscode-extension)* show ACP tool calls in chat
+- revert false statements
+- keep TempDir alive across await points in tests
+- correct CI code to use --no-mods
+- temporarily disable ferris
+- update-expect
+- update test to match new config menu format
+- sleep more
+- skip extensions in vscode test setup to avoid cargo install timeout
+- store test configuration in a different path
+- init agent directory for vscode tests
+- --acp
+- add --acp flag to sparkle-mcp proxy invocation
+- exclude sparkle from tests and cache VS Code download
+- use rustls instead of native-tls for reqwest
+- remove extensions key from settings when matching defaults
+- migrate old extension format and default to enabled
+- rename settings link to 'Edit all settings...'
+- include extensions in AgentConfiguration key
+- strip mcp__ prefix in vscode_tools call_tool handler
+- auto-approve tool requests from vscode tools
+- don't race against stale cancel_rx when waiting for tool result
+- don't race against stale cancel_rx when waiting for tool result
+- use actual Eliza response in multi-turn test history
+- defer session creation until first request arrives
+- use VscodeToolsProxy in Conductor chain for MCP-over-ACP
+- wrap agent in Conductor for MCP-over-ACP negotiation
+- normalize messages for history matching
+- remove toolCallId from agent action input schema
+- correct McpServer serialization format in TypeScript
+- handle all VS Code LM message part types correctly
+- always log commands to VSCode's output window
+- *(vscode)* correct misleading comment about symposium builtin wrapping
+- *(vscode)* route approval requests to correct tab by agentId
+- *(vscode)* route ElizACP through conductor proxy chain
+- *(vscode)* use agentId for bypass permission settings lookup
+- *(vscode)* align agent registry schema with actual registry format
+- --zed implies --acp in setup tool
+- use PNG instead of SVG in README
+- increase activity bar icon stroke-width to 5
+- clean old vsix files before packaging
+- *(ci)* add contents:write permission for release uploads
+- *(ci)* add --force to mdbook install for cache compatibility
+- *(ci)* update mdbook to 0.5.1 and force reinstall mermaid
+- *(ci)* enable long paths on Windows for mynah-ui snapshots
+- *(vendor)* stop ignoring package-lock.json in mynah-ui
+- *(vscode)* use correct extension ID in tests
+- *(ci)* build vendored mynah-ui before vscode extension
+
+### Other
+
+- GitHub Actions workflows
+- Python wheel packaging with maturin
+- mdbook documentation
+- build scripts for plugin generation
+- remove old codebase
+- upgrade to 11.0, rmcp 1.2
+- Install specific elizacp version
+- Update from sacp 10 to 11
+- bump symposium-ferris to 1.1.0
+- release
+- Use local.name for mcp server name if available
+- Couple minor review changes
+- Print file exists after write
+- add optional name to local distributions (MCP/studio) and doc updates
+- account for optional name field in LocalDistribution tests
+- add optional  to LocalDistribution
+- document optional name for local MCP servers
+- allow optional name on local component sources; use for display_name
+- modkind as lowercase, update tests
+- A couple minor bits
+- Format
+- Display all mods
+- Draw the rest of the elephant
+- Some minor config things
+- More logging for recommendations
+- Remove mcp_servers config option
+- Add ModKind to mods and add MCP. Thread through.
+- document MCP server management in  UI
+- add interactive MCP server management in config mode
+- Fmt - and don't bail if McpServer is not stdio
+- Add integration test
+- Add mcp server injection
+- Add config for mcp servers
+- Merge pull request #127 from pragmatic-rustacean/fix/windows-command-extensions
+- Add Windows .cmd extension for npm/npx/code commands
+- Merge pull request #125 from nikomatsakis/main
+- add diagnostic output to track CI test failure
+- expand user-facing documentation for configuration and recommendations
+- add Cargo.lock
+- bump release to v0.1.1
+- use platform-specific config directories
+- extract symposium-recommendations crate
+- bump release number
+- drop x86_64 macOS builds
+- use native runners for ARM builds
+- release
+- switch Linux builds from glibc to musl
+- add Zed and Rust Rover install stub pages
+- remove references to cut VSCode extension UI
+- add agent mods explainer page
+- rewrite about page to explain what Symposium is
+- rename agent extensions to agent mods
+- remove built_in_proxies() and use cargo distribution for all extensions
+- Add symposium-rust-analyzer and switch cargo to be cargo distribution
+- Merge pull request #110 from nikomatsakis/config-per-workspace
+- remove when.grep condition from recommendations
+- cleanup display, wait to save agent
+- make agent config global, extensions per-workspace
+- rename agentSpawnArgs to proxySpawnArgs
+- address PR #110 feedback - use internal_error and simplify
+- ignore flaky test_no_config_initial_setup in CI
+- apply cargo fmt
+- Revert "WIP: add eprintln"
+- add eprintln
+- Revert "test(WIP): add diagnostic logging for CI test timeouts"
+- *(WIP)* add diagnostic logging for CI test timeouts
+- upgrade vscode for tests to 1.108.2
+- ignore flaky cargo metadata tests in CI
+- simplify ConfigPaths to path-only API with cleaner load/save
+- remove default_agent_override in favor of ConfigPaths
+- introduce ConfigPaths for test isolation
+- *(setup)* rename Zed agent to SymposiumDev
+- *(registry)* add ComponentSource enum as identity type
+- *(vscode)* simplify extension to use Rust-side config
+- install elizacp in test job for ConfigAgent tests
+- update run-mode.md with ConfigAgent architecture
+- use SAVE/CANCEL instead of DONE/CANCEL
+- move actor functions to &mut self methods
+- use async control flow as state machine
+- use regex for move command parsing
+- route conductor messages through ConfigAgent
+- WIP
+- document design for new run mode
+- Use AcpAgent::from_str
+- resolve_extension should use registry extensions
+- Resolve always on the Rust side
+- Add a proxy-shim command and always return and expect registry entries
+- Some rearranging to move more of the notions of builtin proxies out of symposium.rs and into just main.rs
+- Rename ProxySource::McpServer to ProxySource::AcpProxy, and fix tests
+- Fix custom extensions by passing json
+- add new ref doc
+- add integration test for cargo binstall workflow
+- clarify agent extensions documentation
+- add extension discovery design and crate author's guide
+- Add a SYSTEM_PROMPT when receiving a user_message_chunk
+- release
+- split extensions docs into general and VSCode-specific
+- move agent-registry.md to top-level design docs
+- document cargo distribution type
+- include claude code and do not block
+- update the icon
+- Rename CLI commands: act-as-configured -> run, run -> run-with
+- Unify CLI to 'run' command and centralize registry access
+- release
+- Use spawn_blocking for binary download in resolve_distribution
+- VSCode extension uses symposium-acp-agent registry commands
+- Add registry subcommands and dynamic agent fetching
+- rename contributing section
+- Add editor-specific ACP instructions for JetBrains, NeoVim, and Emacs
+- Update Zed extension icon to Ferris-in-a-robe
+- Add note about manual editor configuration for non-VSCode/Zed editors
+- Improve installation docs for other editors
+- upgrade zed extension to 1.2
+- Simplify Ferris component initialization
+- Add unit tests for ConfigurationAgent
+- Simplify Zed setup to use act-as-configured mode
+- Add act-as-configured mode for simplified editor setup
+- Update Zed extension with all agents and correct args
+- Add 'Installing from source' section to install docs
+- Update install docs with Zed setup instructions
+- Update Zed setup: fix args, add all agent options
+- Update setup tool: remove elizacp, add vendor npm install
+- Update VS Code extension to use act-as-agent subcommand
+- Consolidate symposium-acp-proxy into symposium-acp-agent
+- Add agentSpawnArgs and acpAgentPath
+- update intro page styling and fix Get Started link
+- add Using Symposium section with extension guides
+- improve VSCode installation guide with screenshots
+- update extensions.md for new registry and custom extensions
+- move Common Issues to top-level design docs
+- add Common Issues section to VS Code architecture
+- document experimental status of Language Model Provider
+- rename mcp server
+- clarify why we are dropping request_state
+- more DRY
+- move vscodelm tests to separate module
+- remove flaky vscodelm integration tests
+- add vscodelm integration tests with expect_test assertions
+- Revert "fix: use VscodeToolsProxy in Conductor chain for MCP-over-ACP"
+- add RequestState::on_cancel helper for racing cancellation
+- add cancel_tool_invocation helper and clean up race formatting
+- handle_vscode_tool_invocation takes ownership pattern
+- replace tokio::select! with futures-concurrency race
+- pass invocation_tx to VscodeToolsMcpServer constructor
+- sort agent lists alphabetically
+- remove Codex and Gemini from built-in agents
+- bump vscode extension version to 1.2.0
+- apply edits from nikomatsakis review
+- refactor session model and unify ContentPart type
+- use MatchMessage in process_session_message
+- use futures channels and merged streams for vscodelm cancellation
+- add Language Model Tool Bridging design and VS Code API references
+- resolve symposium builtins to embedded binary path
+- update lm-provider design doc with agent configuration protocol
+- cleanup logging a bit
+- cleanup the method flow
+- cleanup the test to avoid mutex
+- remove outdated content
+- *(vscodelm)* use expect-test for snapshot testing
+- *(vscodelm)* remove unnecessary Arc<Mutex> from Eliza state
+- *(vscodelm)* use sacp infrastructure for JSON-RPC
+- Fix cwd when spawning an agent process
+- Update VSCode and Zed extension versions to 1.1.1
+- release v1.1.1
+- rewrite website with 'AI the Rust Way' messaging
+- update dependencies
+- Merge pull request #82 from symposium-dev/copilot/sub-pr-80
+- release
+- upgrade sacp crates to latest versions
+- upgrade elizacp to 11.0.0
+- *(vscode)* move bypassPermissions to separate array setting
+- *(vscode)* remove component toggle settings
+- add agent registry integration design
+- update versions to 1.0.0
+- release v1.0.0-alpha.3
+- upgrade sparkle-mcp to 0.5.0
+- bump VSCode and Zed extension versions to 1.0.0
+- upgrade sacp crates to 10.0.0
+- bump all packages to 1.0.0-alpha.2
+- release
+- upgrade sacp crates to alpha.4, sparkle-mcp to 0.4.1
+- use the ability to disable tools
+- move mcp out from module
+- move rust_researcher to top-level
+- put mcp under the tool, not centralized
+- rename rust module to crate_sources
+- simplify sig with impl trait
+- [**breaking**] flatten public API of crate
+- consolidate Ferris MCP server with configurable tools
+- bump vsix and zed package versions to 10.0.0-alpha.2
+- upgrade sacp to 10.0.0-alpha.2, sparkle to 0.3.0, rmcp to 0.12
+- rename symposium-eg to symposium-ferris with MCP server
+- extract symposium-eg crate from crate-sources-proxy
+- expand README and symlink into extension for marketplace
+- bump VSCode extension version to 1.0.0-alpha.1
+- Bump crate versions to 1.0.0-alpha.1
+- Update mdbook styling: Poppins headers, remove redundant title
+- Update logos to symposium5 vase-ferris design
+- remove zed-dev-wrapper job
+- update sparkle-mcp to v0.2.1 from crates.io
+- upgrade sacp crates to v9.0.0
+- upgrade to sacp 6.x with simplified session API
+- simplify benchmark harness using yopo Component support
+- simplify Zed setup to use agent_servers config
+- bump symposium-acp-agent to 0.2.2
+- bump to 0.2.1 to test CI infra
+- release-plz set-version 0.2.0
+- *(zed)* move extension to prod directory
+- *(vscode)* skip timing-dependent cancellation test
+- add distribution chapter covering release orchestration
+- *(vscode)* rewrite packaging docs to focus on design decisions
+- configure release-plz
+- *(vscode)* add packaging chapter and fix .vscodeignore
+- *(vscode)* add settings configuration tests
+- *(vscode)* remove debug logging for prompt input persistence
+- *(vscode)* use vendored mynah-ui fork via git subtree
+- Merge commit 'efc4f9b5334f7245df23a1f6120fe24514861e85' as 'vendor/mynah-ui'
+- Squashed 'vendor/mynah-ui/' content from commit 345fd24b
