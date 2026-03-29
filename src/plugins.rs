@@ -3,10 +3,10 @@ use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 
-use crate::config::{home_dir, plugins_dir};
+use crate::config::plugins_dir;
 use crate::hook::HookEvent;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Plugin {
     pub name: String,
     #[serde(default)]
@@ -15,16 +15,39 @@ pub struct Plugin {
     pub hooks: Vec<Hook>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Installation {
     pub commands: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Hook {
     pub name: String,
     pub event: HookEvent,
     pub command: String,
+}
+
+/// Return all hooks (with their plugin name) that match `event`.
+pub fn hooks_for_event(event: &HookEvent) -> Result<Vec<(String, Hook)>> {
+    let mut out = Vec::new();
+    let dir = plugins_dir();
+
+    let plugin_results = load_plugins_from_dir(dir)?;
+    for plugin_res in plugin_results {
+        match plugin_res {
+            Ok(plugin) => {
+                let name = plugin.name.clone();
+                for hook in plugin.hooks.into_iter() {
+                    if hook.event == *event {
+                        out.push((name.clone(), hook));
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "failed to load plugin file"),
+        }
+    }
+
+    Ok(out)
 }
 
 /// Load all plugins from a directory containing TOML plugin files.
@@ -55,11 +78,6 @@ pub fn load_plugins_from_dir<P: AsRef<Path>>(dir: P) -> Result<Vec<Result<Plugin
         }
     }
     Ok(plugins)
-}
-
-pub fn load_global_plugins() -> Result<Vec<Result<Plugin>>> {
-    let dir = plugins_dir();
-    load_plugins_from_dir(dir)
 }
 
 pub fn from_str(s: &str) -> Result<Plugin> {

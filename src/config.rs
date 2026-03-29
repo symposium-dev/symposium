@@ -106,8 +106,8 @@ pub fn log_level() -> Level {
 /// Initialize logging and config. Call once at startup.
 pub fn init() {
     use std::fs::OpenOptions;
-    use tracing_subscriber::fmt;
     use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::fmt;
 
     let logs = logs_dir();
     let now = chrono::Local::now();
