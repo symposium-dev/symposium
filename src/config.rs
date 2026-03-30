@@ -56,6 +56,12 @@ pub fn logs_dir() -> PathBuf {
     dir
 }
 
+pub fn plugins_dir() -> PathBuf {
+    let dir = home_dir().join("plugins");
+    let _ = fs::create_dir_all(&dir);
+    dir
+}
+
 /// Returns the path to the config file (~/.symposium/config.toml).
 pub fn config_path() -> PathBuf {
     home_dir().join("config.toml")
@@ -100,8 +106,8 @@ pub fn log_level() -> Level {
 /// Initialize logging and config. Call once at startup.
 pub fn init() {
     use std::fs::OpenOptions;
-    use tracing_subscriber::fmt;
     use tracing_subscriber::EnvFilter;
+    use tracing_subscriber::fmt;
 
     let logs = logs_dir();
     let now = chrono::Local::now();

@@ -4,6 +4,7 @@ use std::process::ExitCode;
 mod config;
 mod hook;
 mod mcp;
+mod plugins;
 pub mod tutorial;
 
 #[derive(Parser)]

@@ -24,7 +24,7 @@ Symposium is a single Rust binary crate. The source is in `src/` with five files
 cargo check
 cargo test
 cargo run -- tutorial      # print the tutorial
-cargo run -- hook claude:pre-tool-use  # reads event JSON from stdin
+cargo run -- hook pre-tool-use  # reads event JSON from stdin
 ```
 
 ## Agent plugin generation

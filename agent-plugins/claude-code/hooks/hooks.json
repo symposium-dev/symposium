@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/symposium.sh hook claude:pre-tool-use"
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/symposium.sh hook pre-tool-use"
           }
         ]
       }

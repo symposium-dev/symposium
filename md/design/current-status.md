@@ -53,7 +53,7 @@ If Symposium is on your PATH:
 
 ```bash
 symposium tutorial
-symposium hook claude:pre-tool-use  # reads event JSON from stdin
+symposium hook pre-tool-use  # reads event JSON from stdin
 ```
 
 ## What's not yet implemented
