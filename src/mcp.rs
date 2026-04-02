@@ -44,12 +44,12 @@ fn build_server() -> McpServer<role::mcp::Client, impl RunWithConnectionTo<role:
 
                 let workspace = crate_sources::workspace_semver_pairs(&cwd);
 
-                let plugins = crate::plugins::load_all_plugins();
+                let registry = crate::plugins::load_registry();
 
                 let output = match input {
-                    CrateToolInput::List => skills::list_output(&plugins, &workspace).await,
+                    CrateToolInput::List => skills::list_output(&registry, &workspace).await,
                     CrateToolInput::Info { name, version } => {
-                        skills::info_output(&name, version.as_deref(), &plugins, &workspace)
+                        skills::info_output(&name, version.as_deref(), &registry, &workspace)
                             .await
                             .map_err(|e| sacp::util::internal_error(format!("{e}")))?
                     }

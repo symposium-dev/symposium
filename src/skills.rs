@@ -9,14 +9,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::advice_for::{self, Predicate};
-use crate::plugins::{ParsedPlugin, SkillGroup};
+use crate::plugins::{ParsedPlugin, PluginRegistry, SkillGroup};
 
 /// Format the list of skills available for workspace crates as display text.
 pub async fn list_output(
-    plugins: &[crate::plugins::ParsedPlugin],
+    registry: &PluginRegistry,
     workspace: &[(String, semver::Version)],
 ) -> String {
-    let skills = list(plugins, workspace).await;
+    let skills = list(registry, workspace).await;
     if skills.is_empty() {
         "No skills available for crates in the current dependencies.".to_string()
     } else {
@@ -33,7 +33,7 @@ pub async fn list_output(
 pub async fn info_output(
     name: &str,
     version: Option<&str>,
-    plugins: &[crate::plugins::ParsedPlugin],
+    registry: &PluginRegistry,
     workspace: &[(String, semver::Version)],
 ) -> anyhow::Result<String> {
     let mut fetch = crate::crate_sources::RustCrateFetch::new(name, workspace);
@@ -50,7 +50,7 @@ pub async fn info_output(
         result.path.display()
     );
 
-    let advice = guidance(&result.name, plugins, workspace).await;
+    let advice = guidance(&result.name, registry, workspace).await;
     if !advice.is_empty() {
         output.push_str(&advice.format_output());
     }
@@ -59,7 +59,8 @@ pub async fn info_output(
 }
 
 /// Activation mode for a skill.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Activation {
     /// Skill content is printed inline with crate output.
     Default,
@@ -205,45 +206,56 @@ impl SkillWithGroupContext {
     }
 }
 
-/// List skills available for crates in the workspace.
+/// Resolve all applicable skills from the registry.
 ///
-/// Returns skills whose group-level and skill-level `applies-when` constraints
-/// all match the workspace. Skills are returned with their group context so
-/// callers can determine effective advice-for crate names.
-async fn list(
-    plugins: &[crate::plugins::ParsedPlugin],
+/// When `for_crate` is `Some`, filters by `advice-for` at both group and skill level
+/// (used for crate-specific guidance). When `None`, returns all skills that match
+/// the workspace (used for listing).
+///
+/// Both group-level and skill-level `applies-when` constraints must match the workspace.
+async fn resolve_skills(
+    registry: &PluginRegistry,
+    for_crate: Option<&str>,
     workspace: &[(String, semver::Version)],
 ) -> Vec<SkillWithGroupContext> {
     let mut results = Vec::new();
-    for ParsedPlugin { path, plugin } in plugins {
-        for group in &plugin.skills {
-            let (group_af, skills) = load_skills_for_group(path, group, None, workspace).await;
 
-            for skill in skills {
-                if !skill.applies_to(workspace) {
-                    continue;
-                }
-                results.push(SkillWithGroupContext {
-                    skill,
-                    group_advice_for: group_af.clone(),
-                });
-            }
+    // Skills from plugin manifests. We iterate these separately
+    // because we lazilly load skill groups, so there
+    // is extra logic.
+    for ParsedPlugin { path, plugin } in &registry.plugins {
+        for group in &plugin.skills {
+            let (group_af, skills) = load_skills_for_group(path, group, for_crate, workspace).await;
+
+            collect_matching_skills(&skills, &group_af, for_crate, workspace, &mut results);
         }
     }
+
+    // Standalone skills -- these are already loaded as part of the plugin
+    // registry.
+    collect_matching_skills(
+        &registry.standalone_skills,
+        &[],
+        for_crate,
+        workspace,
+        &mut results,
+    );
+
     results
 }
 
+/// List skills available for crates in the workspace.
+async fn list(
+    registry: &PluginRegistry,
+    workspace: &[(String, semver::Version)],
+) -> Vec<SkillWithGroupContext> {
+    resolve_skills(registry, None, workspace).await
+}
+
 /// Get guidance for a specific crate from installed plugin skills.
-///
-/// Uses AND-composition: both group-level and skill-level criteria must match.
-///
-/// 1. Group `advice-for` (if present): does `crate_name` match any atom?
-/// 2. Skill `advice-for` (if present): does `crate_name` match any atom?
-/// 3. Group `applies-when` (if present): do all atoms match the workspace?
-/// 4. Skill `applies-when` (if present): do all atoms match the workspace?
 async fn guidance(
     crate_name: &str,
-    plugins: &[crate::plugins::ParsedPlugin],
+    registry: &PluginRegistry,
     workspace: &[(String, semver::Version)],
 ) -> CrateAdvice {
     let mut advice = CrateAdvice {
@@ -251,30 +263,17 @@ async fn guidance(
         optional_skills: Vec::new(),
     };
 
-    for ParsedPlugin { path, plugin } in plugins {
-        for group in &plugin.skills {
-            let (_, skills) = load_skills_for_group(path, group, Some(crate_name), workspace).await;
-
-            for skill in skills {
-                if !skill.advises_on(crate_name) {
-                    continue;
-                }
-                if !skill.applies_to(workspace) {
-                    continue;
-                }
-
-                match skill.activation {
-                    Activation::Default => {
-                        let name = skill.name().to_string();
-                        let path = skill.path.clone();
-                        advice
-                            .default_content
-                            .push((name, path, skill.body.clone()));
-                    }
-                    Activation::Optional => {
-                        advice.optional_skills.push(skill);
-                    }
-                }
+    for entry in resolve_skills(registry, Some(crate_name), workspace).await {
+        match entry.skill.activation {
+            Activation::Default => {
+                let name = entry.skill.name().to_string();
+                let path = entry.skill.path.clone();
+                advice
+                    .default_content
+                    .push((name, path, entry.skill.body.clone()));
+            }
+            Activation::Optional => {
+                advice.optional_skills.push(entry.skill);
             }
         }
     }
@@ -343,33 +342,21 @@ async fn load_skills_for_group(
     for_crate: Option<&str>,
     workspace: &[(String, semver::Version)],
 ) -> (Vec<Predicate>, Vec<Skill>) {
-    let advice_for = match parse_advice_for_atoms_opt(&group.advice_for) {
-        Ok(af) => af,
-        Err(e) => {
-            tracing::warn!(plugin = %plugin_path.display(), error = %e, "bad group advice-for");
-            return (Vec::new(), Vec::new());
-        }
-    };
-    let applies_when = match parse_advice_for_atoms_opt(&group.applies_when) {
-        Ok(aw) => aw,
-        Err(e) => {
-            tracing::warn!(plugin = %plugin_path.display(), error = %e, "bad group applies-when");
-            return (Vec::new(), Vec::new());
-        }
-    };
+    let advice_for = group.advice_for.as_deref().unwrap_or_default();
+    let applies_when = group.applies_when.as_deref().unwrap_or_default();
 
     // Pre-fetch filtering: skip groups that can't match.
     if let Some(crate_name) = for_crate {
         if !advice_for.iter().any(|p| p.references_crate(crate_name)) {
-            return (advice_for, Vec::new());
+            return (advice_for.to_vec(), Vec::new());
         }
     }
-    if !atoms_all_match(&applies_when, workspace) {
-        return (advice_for, Vec::new());
+    if !atoms_all_match(applies_when, workspace) {
+        return (advice_for.to_vec(), Vec::new());
     }
 
     let Some(dir) = resolve_skill_dir(plugin_path, group).await else {
-        return (advice_for, Vec::new());
+        return (advice_for.to_vec(), Vec::new());
     };
 
     let mut skills = Vec::new();
@@ -382,49 +369,61 @@ async fn load_skills_for_group(
         }
     }
 
-    (advice_for, skills)
+    (advice_for.to_vec(), skills)
 }
 
-/// Discover all skills found in a given directory. A skill is identified as a directory that
-/// contain a SKILL.md file.
+/// Discover all skills found in a given directory.
+///
+/// Recursively searches for `SKILL.md` files, then prunes nested candidates
+/// (if `A/SKILL.md` exists, `A/B/SKILL.md` is excluded — skills don't nest).
 pub(crate) fn discover_skills(skills_dir: &Path, group: &SkillGroup) -> Vec<Result<Skill>> {
     if !skills_dir.is_dir() {
         return Vec::new();
     }
 
-    let entries = match std::fs::read_dir(&skills_dir) {
+    let mut skill_files = Vec::new();
+    find_skill_files_recursive(skills_dir, &mut skill_files);
+    prune_nested_skills(&mut skill_files);
+
+    skill_files
+        .into_iter()
+        .map(|skill_md| load_skill(&skill_md, group))
+        .collect()
+}
+
+/// Recursively walk a directory collecting paths to `SKILL.md` files.
+pub(crate) fn find_skill_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(e) => {
-            tracing::warn!(error = %e, dir = %skills_dir.display(), "failed to read skills directory");
-            return Vec::new();
-        }
+        Err(_) => return,
     };
-
-    let mut skills = Vec::new();
-    for entry in entries {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(e) => {
-                skills.push(Err(e.into()));
-                continue;
-            }
-        };
-
+    for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_dir() {
-            continue;
+        if path.is_dir() {
+            find_skill_files_recursive(&path, out);
+        } else if path.file_name().is_some_and(|f| f == "SKILL.md") {
+            out.push(path);
         }
-
-        let skill_md = path.join("SKILL.md");
-        if !skill_md.is_file() {
-            tracing::debug!(dir = %path.display(), "skill directory has no SKILL.md, skipping");
-            continue;
-        }
-
-        skills.push(load_skill(&skill_md, group));
     }
+}
 
-    skills
+/// Remove nested skill candidates: if `A/SKILL.md` and `A/B/SKILL.md` both
+/// exist, keep only the shallower `A/SKILL.md`.
+pub(crate) fn prune_nested_skills(paths: &mut Vec<PathBuf>) {
+    // Sort shallowest first so we encounter parents before children.
+    paths.sort_by_key(|p| p.components().count());
+    let mut kept: Vec<PathBuf> = Vec::new();
+    for path in paths.drain(..) {
+        let skill_dir = path.parent().unwrap();
+        let nested = kept.iter().any(|k| {
+            let k_dir = k.parent().unwrap();
+            skill_dir.starts_with(k_dir)
+        });
+        if !nested {
+            kept.push(path);
+        }
+    }
+    *paths = kept;
 }
 
 /// Fetch a skill group's git source, returning the cached directory path.
@@ -455,6 +454,24 @@ async fn resolve_skill_dir(plugin_path: &Path, group: &SkillGroup) -> Option<Pat
     }
 
     None
+}
+
+/// Load a standalone skill from a SKILL.md file (no plugin group context).
+///
+/// Standalone skills must be self-contained: all metadata (advice-for,
+/// applies-when, activation) comes from the SKILL.md frontmatter.
+/// Returns an error if `advice-for` is missing (standalone skills have
+/// no group to inherit from).
+pub fn load_standalone_skill(skill_md_path: &Path) -> Result<Skill> {
+    let skill = load_skill(skill_md_path, &SkillGroup::default())?;
+    if skill.advice_for.is_empty() {
+        bail!(
+            "standalone skill `{}` is missing `advice-for` in frontmatter \
+             (standalone skills have no plugin group to inherit from)",
+            skill.name()
+        );
+    }
+    Ok(skill)
 }
 
 /// Load a single skill from a SKILL.md file.
@@ -488,10 +505,10 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
         .get("name")
         .context("SKILL.md frontmatter missing required `name` field")?;
 
-    // Parse skill-level advice-for as atoms (crate names only, no combinators).
+    // Parse skill-level advice-for predicates.
     // This is independent of group-level — both layers are ANDed at match time.
     let advice_for = if !fm.advice_for.is_empty() {
-        advice_for::parse_atoms(&fm.advice_for)?
+        advice_for::parse_predicates(&fm.advice_for)?
     } else {
         Vec::new()
     };
@@ -505,9 +522,9 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
         );
     }
 
-    // Parse skill-level applies-when as atoms (same as advice-for: crate names only).
+    // Parse skill-level applies-when predicates.
     let applies_when = if !fm.applies_when.is_empty() {
-        advice_for::parse_atoms(&fm.applies_when)?
+        advice_for::parse_predicates(&fm.applies_when)?
     } else {
         Vec::new()
     };
@@ -515,10 +532,8 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
     // Resolve activation: frontmatter overrides group-level
     let activation = if let Some(act) = frontmatter.get("activation") {
         parse_activation(act)?
-    } else if let Some(ref act) = group.activation {
-        parse_activation(act)?
     } else {
-        Activation::default()
+        group.activation.clone().unwrap_or_default()
     };
 
     Ok(Skill {
@@ -531,12 +546,37 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
     })
 }
 
-/// Parse an optional list of atom strings into predicates.
-fn parse_advice_for_atoms_opt(strings: &Option<Vec<String>>) -> Result<Vec<Predicate>> {
-    match strings {
-        Some(s) => advice_for::parse_atoms(s),
-        None => Ok(Vec::new()),
+/// Filter skills by crate and workspace constraints, collecting matches with group context.
+fn collect_matching_skills(
+    skills: &[Skill],
+    group_advice_for: &[Predicate],
+    for_crate: Option<&str>,
+    workspace: &[(String, semver::Version)],
+    results: &mut Vec<SkillWithGroupContext>,
+) {
+    for skill in skills {
+        if !skill_matches(skill, for_crate, workspace) {
+            continue;
+        }
+        results.push(SkillWithGroupContext {
+            skill: skill.clone(),
+            group_advice_for: group_advice_for.to_vec(),
+        });
     }
+}
+
+/// Check whether a skill matches the given crate (if any) and workspace constraints.
+fn skill_matches(
+    skill: &Skill,
+    for_crate: Option<&str>,
+    workspace: &[(String, semver::Version)],
+) -> bool {
+    if let Some(crate_name) = for_crate {
+        if !skill.advises_on(crate_name) {
+            return false;
+        }
+    }
+    skill.applies_to(workspace)
 }
 
 /// Check that all atom predicates match the workspace (AND semantics).
@@ -619,23 +659,31 @@ fn parse_activation(s: &str) -> Result<Activation> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use indoc::indoc;
     use std::fs;
+
+    /// Parse a predicate string for use in test fixtures.
+    fn pred(s: &str) -> Predicate {
+        crate::advice_for::parse_predicates(&[s.to_string()])
+            .unwrap()
+            .remove(0)
+    }
 
     // --- Frontmatter parsing ---
 
     #[test]
     fn parse_frontmatter_basic() {
-        let content = "\
----
-name: my-skill
-description: A test skill
-advice-for: serde
----
+        let content = indoc! {"
+            ---
+            name: my-skill
+            description: A test skill
+            advice-for: serde
+            ---
 
-# Body content
+            # Body content
 
-Some instructions here.
-";
+            Some instructions here.
+        "};
         let fm = parse_frontmatter(content).unwrap();
         assert_eq!(fm.fields.get("name").unwrap(), "my-skill");
         assert_eq!(fm.fields.get("description").unwrap(), "A test skill");
@@ -646,16 +694,16 @@ Some instructions here.
 
     #[test]
     fn parse_frontmatter_multiple_advice_for() {
-        let content = "\
----
-name: multi
-advice-for: serde
-advice-for: serde_json>=1.0
-advice-for: any(toml, toml_edit)
----
+        let content = indoc! {"
+            ---
+            name: multi
+            advice-for: serde
+            advice-for: serde_json>=1.0
+            advice-for: any(toml, toml_edit)
+            ---
 
-Body.
-";
+            Body.
+        "};
         let fm = parse_frontmatter(content).unwrap();
         assert_eq!(
             fm.advice_for,
@@ -683,16 +731,16 @@ Body.
         let skill_md = tmp.path().join("SKILL.md");
         fs::write(
             &skill_md,
-            "\
----
-name: test-skill
-description: Test
-advice-for: serde
-activation: default
----
+            indoc! {"
+                ---
+                name: test-skill
+                description: Test
+                advice-for: serde
+                activation: default
+                ---
 
-Use serde like this.
-",
+                Use serde like this.
+            "},
         )
         .unwrap();
 
@@ -712,20 +760,20 @@ Use serde like this.
         let skill_md = tmp.path().join("SKILL.md");
         fs::write(
             &skill_md,
-            "\
----
-name: inherited
-description: Inherits advice-for from TOML
----
+            indoc! {"
+                ---
+                name: inherited
+                description: Inherits advice-for from TOML
+                ---
 
-Body.
-",
+                Body.
+            "},
         )
         .unwrap();
 
         let defaults = SkillGroup {
-            advice_for: Some(vec!["tokio".into()]),
-            activation: Some("default".into()),
+            advice_for: Some(vec![pred("tokio")]),
+            activation: Some(Activation::Default),
             ..Default::default()
         };
         let skill = load_skill(&skill_md, &defaults).unwrap();
@@ -742,21 +790,21 @@ Body.
         let skill_md = tmp.path().join("SKILL.md");
         fs::write(
             &skill_md,
-            "\
----
-name: override
-advice-for: serde
-activation: optional
----
+            indoc! {"
+                ---
+                name: override
+                advice-for: serde
+                activation: optional
+                ---
 
-Body.
-",
+                Body.
+            "},
         )
         .unwrap();
 
         let defaults = SkillGroup {
-            advice_for: Some(vec!["tokio".into()]),
-            activation: Some("default".into()),
+            advice_for: Some(vec![pred("tokio")]),
+            activation: Some(Activation::Default),
             ..Default::default()
         };
         let skill = load_skill(&skill_md, &defaults).unwrap();
@@ -774,14 +822,14 @@ Body.
         let skill_md = tmp.path().join("SKILL.md");
         fs::write(
             &skill_md,
-            "\
----
-name: no-advice
-description: Missing advice-for
----
+            indoc! {"
+                ---
+                name: no-advice
+                description: Missing advice-for
+                ---
 
-Body.
-",
+                Body.
+            "},
         )
         .unwrap();
 
@@ -797,20 +845,20 @@ Body.
         let skill_md = tmp.path().join("SKILL.md");
         fs::write(
             &skill_md,
-            "\
----
-name: no-own-advice
-description: Plugin provides advice-for
----
+            indoc! {"
+                ---
+                name: no-own-advice
+                description: Plugin provides advice-for
+                ---
 
-Body.
-",
+                Body.
+            "},
         )
         .unwrap();
 
         // Plugin defaults provide advice-for, so the skill doesn't need its own
         let defaults = SkillGroup {
-            advice_for: Some(vec!["serde".into()]),
+            advice_for: Some(vec![pred("serde")]),
             ..Default::default()
         };
         let skill = load_skill(&skill_md, &defaults).unwrap();
@@ -819,28 +867,27 @@ Body.
     }
 
     #[test]
-    fn load_skill_advice_for_rejects_combinators() {
+    fn load_skill_advice_for_accepts_combinators() {
         let tmp = tempfile::tempdir().unwrap();
         let skill_md = tmp.path().join("SKILL.md");
         fs::write(
             &skill_md,
-            "\
----
-name: bad-advice
-advice-for: any(serde, tokio)
----
+            indoc! {"
+                ---
+                name: combo-advice
+                advice-for: any(serde, tokio)
+                ---
 
-Body.
-",
+                Body.
+            "},
         )
         .unwrap();
 
         let defaults = SkillGroup::default();
-        let err = load_skill(&skill_md, &defaults).unwrap_err();
-        assert!(
-            err.to_string().contains("not a combinator"),
-            "expected combinator rejection, got: {err}"
-        );
+        let skill = load_skill(&skill_md, &defaults).unwrap();
+        assert_eq!(skill.advice_for.len(), 1);
+        assert!(skill.advice_for[0].references_crate("serde"));
+        assert!(skill.advice_for[0].references_crate("tokio"));
     }
 
     #[test]
@@ -849,16 +896,16 @@ Body.
         let skill_md = tmp.path().join("SKILL.md");
         fs::write(
             &skill_md,
-            "\
----
-name: guarded
-advice-for: serde
-applies-when: serde
-applies-when: serde_json>=1.0
----
+            indoc! {"
+                ---
+                name: guarded
+                advice-for: serde
+                applies-when: serde
+                applies-when: serde_json>=1.0
+                ---
 
-Body.
-",
+                Body.
+            "},
         )
         .unwrap();
 
@@ -867,6 +914,268 @@ Body.
         assert_eq!(skill.applies_when.len(), 2);
         assert!(skill.applies_when[0].references_crate("serde"));
         assert!(skill.applies_when[1].references_crate("serde_json"));
+    }
+
+    // --- Standalone skills ---
+
+    #[test]
+    fn load_standalone_skill_self_contained() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("my-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: my-standalone
+                description: A standalone skill
+                advice-for: serde
+                activation: default
+                ---
+
+                Standalone body.
+            "},
+        )
+        .unwrap();
+
+        let skill = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap();
+        assert_eq!(skill.name(), "my-standalone");
+        assert!(skill.advice_for[0].references_crate("serde"));
+        assert_eq!(skill.activation, Activation::Default);
+        assert!(skill.body.contains("Standalone body."));
+    }
+
+    #[test]
+    fn validate_standalone_skill_bad_advice_for() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("bad-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: bad
+                advice-for: >=not_valid!!
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let err = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap_err();
+        assert!(
+            err.to_string().contains("failed to parse predicate"),
+            "expected parse error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_standalone_skill_bad_applies_when() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("bad-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: bad
+                advice-for: serde
+                applies-when: >=garbage!!
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let err = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap_err();
+        assert!(
+            err.to_string().contains("failed to parse predicate"),
+            "expected parse error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_standalone_skill_bad_activation() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("bad-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: bad
+                advice-for: serde
+                activation: bogus
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let err = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown activation mode"),
+            "expected activation error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn validate_standalone_skill_missing_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("bad-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                advice-for: serde
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let err = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap_err();
+        assert!(
+            err.to_string().contains("missing required `name` field"),
+            "expected missing name error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn standalone_skill_requires_advice_for() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("no-advice");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: no-advice
+                description: Missing advice-for
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let err = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap_err();
+        assert!(
+            err.to_string().contains("missing `advice-for`"),
+            "expected advice-for error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_includes_standalone_skills() {
+        use crate::plugins::PluginRegistry;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("my-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: standalone-serde
+                description: Standalone serde skill
+                advice-for: serde
+                activation: default
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let skill = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap();
+        let registry = PluginRegistry {
+            plugins: Vec::new(),
+            standalone_skills: vec![skill],
+        };
+
+        let workspace = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let results = list(&registry, &workspace).await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].skill.name(), "standalone-serde");
+        // No group context for standalone skills
+        assert!(results[0].group_advice_for.is_empty());
+    }
+
+    #[tokio::test]
+    async fn guidance_includes_standalone_skills() {
+        use crate::plugins::PluginRegistry;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("my-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: standalone-serde
+                description: Standalone serde skill
+                advice-for: serde
+                activation: default
+                ---
+
+                Use serde standalone.
+            "},
+        )
+        .unwrap();
+
+        let skill = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap();
+        let registry = PluginRegistry {
+            plugins: Vec::new(),
+            standalone_skills: vec![skill],
+        };
+
+        let workspace = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let advice = guidance("serde", &registry, &workspace).await;
+        assert_eq!(advice.default_content.len(), 1);
+        assert_eq!(advice.default_content[0].0, "standalone-serde");
+        assert!(
+            advice.default_content[0]
+                .2
+                .contains("Use serde standalone.")
+        );
+    }
+
+    #[tokio::test]
+    async fn guidance_skips_standalone_skill_wrong_crate() {
+        use crate::plugins::PluginRegistry;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("my-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: tokio-skill
+                advice-for: tokio
+                activation: default
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let skill = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap();
+        let registry = PluginRegistry {
+            plugins: Vec::new(),
+            standalone_skills: vec![skill],
+        };
+
+        let workspace = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let advice = guidance("serde", &registry, &workspace).await;
+        assert!(advice.is_empty());
     }
 
     // --- Discovery ---
@@ -881,15 +1190,15 @@ Body.
         fs::create_dir_all(&skill_dir).unwrap();
         fs::write(
             skill_dir.join("SKILL.md"),
-            "\
----
-name: my-skill
-description: A discovered skill
-advice-for: serde
----
+            indoc! {"
+                ---
+                name: my-skill
+                description: A discovered skill
+                advice-for: serde
+                ---
 
-Discovered body.
-",
+                Discovered body.
+            "},
         )
         .unwrap();
 
@@ -899,6 +1208,102 @@ Discovered body.
         assert_eq!(skills.len(), 1);
         let skill = skills.into_iter().next().unwrap().unwrap();
         assert_eq!(skill.frontmatter.get("name").unwrap(), "my-skill");
+    }
+
+    #[test]
+    fn discover_skills_in_subdirectory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        // Create a skill nested two levels deep: group/sub/SKILL.md
+        let skill_dir = root.join("group").join("sub");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: nested-skill
+                advice-for: tokio
+                ---
+
+                Nested body.
+            "},
+        )
+        .unwrap();
+
+        let defaults = SkillGroup::default();
+        let skills = discover_skills(root, &defaults);
+
+        assert_eq!(skills.len(), 1);
+        let skill = skills.into_iter().next().unwrap().unwrap();
+        assert_eq!(skill.frontmatter.get("name").unwrap(), "nested-skill");
+    }
+
+    #[test]
+    fn discover_skills_prunes_nested() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        // Create a shallow skill: alpha/SKILL.md
+        let shallow = root.join("alpha");
+        fs::create_dir_all(&shallow).unwrap();
+        fs::write(
+            shallow.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: shallow
+                advice-for: serde
+                ---
+
+                Shallow.
+            "},
+        )
+        .unwrap();
+
+        // Create a nested skill inside alpha: alpha/beta/SKILL.md
+        let nested = root.join("alpha").join("beta");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            nested.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: nested
+                advice-for: serde
+                ---
+
+                Nested.
+            "},
+        )
+        .unwrap();
+
+        // Also create a sibling skill: gamma/SKILL.md (should be kept)
+        let sibling = root.join("gamma");
+        fs::create_dir_all(&sibling).unwrap();
+        fs::write(
+            sibling.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: sibling
+                advice-for: tokio
+                ---
+
+                Sibling.
+            "},
+        )
+        .unwrap();
+
+        let defaults = SkillGroup::default();
+        let skills = discover_skills(root, &defaults);
+
+        // Should find shallow + sibling, but NOT nested (pruned by shallow)
+        let names: Vec<String> = skills
+            .into_iter()
+            .map(|r| r.unwrap().frontmatter.get("name").unwrap().clone())
+            .collect();
+        assert!(names.contains(&"shallow".to_string()));
+        assert!(names.contains(&"sibling".to_string()));
+        assert!(!names.contains(&"nested".to_string()));
+        assert_eq!(names.len(), 2);
     }
 
     #[test]

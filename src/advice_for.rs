@@ -13,6 +13,9 @@
 use anyhow::{Context, Result, bail};
 
 /// A predicate over workspace crate dependencies.
+///
+/// Serializes to/from its string representation (e.g., `"serde>=1.0"`,
+/// `"any(serde, tokio)"`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum Predicate {
     /// Matches a single crate, optionally constrained by version.
@@ -55,11 +58,6 @@ impl Predicate {
         }
     }
 
-    /// Returns true if this is an atom (a `Crate` variant, not `Any`/`All`).
-    pub fn is_atom(&self) -> bool {
-        matches!(self, Predicate::Crate { .. })
-    }
-
     /// Collect all crate names referenced by this predicate into a set.
     pub fn collect_crate_names(&self, out: &mut std::collections::BTreeSet<String>) {
         match self {
@@ -75,23 +73,14 @@ impl Predicate {
     }
 }
 
-/// Parse a list of atom strings into predicates.
+/// Parse a list of predicate strings.
 ///
-/// Each string must be a bare crate name with optional version constraint
-/// (e.g., `"serde"`, `"serde>=1.0"`). Combinators like `any(...)` are rejected.
-pub fn parse_atoms(strings: &[String]) -> Result<Vec<Predicate>> {
+/// Each string can be a bare crate name, a crate with version constraint,
+/// or a combinator like `any(...)` / `all(...)`.
+pub fn parse_predicates(strings: &[String]) -> Result<Vec<Predicate>> {
     strings
         .iter()
-        .map(|s| {
-            let pred =
-                parse(s).with_context(|| format!("failed to parse advice-for atom: {s:?}"))?;
-            if !pred.is_atom() {
-                bail!(
-                    "advice-for must be a crate name (with optional version), not a combinator: {s:?}"
-                );
-            }
-            Ok(pred)
-        })
+        .map(|s| parse(s).with_context(|| format!("failed to parse predicate: {s:?}")))
         .collect()
 }
 
@@ -240,6 +229,24 @@ impl<'a> Parser<'a> {
             name: name.to_string(),
             version_req,
         })
+    }
+}
+
+impl serde::Serialize for Predicate {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Predicate {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        parse(&s).map_err(serde::de::Error::custom)
     }
 }
 

@@ -24,14 +24,14 @@ pub struct PluginSource {
 /// source for the skill files.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SkillGroup {
-    /// Crate atoms this group advises on (e.g., `["serde", "serde_json>=1.0"]`).
+    /// Crate predicates this group advises on (e.g., `["serde", "serde_json>=1.0"]`).
     #[serde(default, rename = "advice-for")]
-    pub advice_for: Option<Vec<String>>,
-    /// Workspace constraints: all listed crate atoms must be present (AND semantics).
+    pub advice_for: Option<Vec<crate::advice_for::Predicate>>,
+    /// Workspace constraints: all listed predicates must match (AND semantics).
     #[serde(default, rename = "applies-when")]
-    pub applies_when: Option<Vec<String>>,
-    /// Activation mode for skills in this group ("default" or "optional").
-    pub activation: Option<String>,
+    pub applies_when: Option<Vec<crate::advice_for::Predicate>>,
+    /// Activation mode for skills in this group.
+    pub activation: Option<crate::skills::Activation>,
     /// Remote source for skills.
     #[serde(default)]
     pub source: PluginSource,
@@ -89,6 +89,24 @@ pub struct PluginInfo {
     pub skill_groups_count: usize,
 }
 
+/// Loaded plugin registry: plugins from TOML manifests and standalone skills
+/// discovered directly in plugin source directories.
+#[derive(Debug)]
+pub struct PluginRegistry {
+    /// Plugins loaded from `.toml` manifest files.
+    pub plugins: Vec<ParsedPlugin>,
+    /// Skills discovered as standalone directories containing a `SKILL.md`
+    /// file directly in a plugin source directory (no TOML manifest needed).
+    pub standalone_skills: Vec<crate::skills::Skill>,
+}
+
+/// Raw scan results from a plugin source directory.
+struct SourceDirContents {
+    plugins: Vec<Result<ParsedPlugin>>,
+    /// Paths to discovered `SKILL.md` files (after recursive search and pruning).
+    skill_files: Vec<PathBuf>,
+}
+
 /// Raw TOML manifest deserialized from a plugin `.toml` file.
 #[derive(Debug, Deserialize)]
 struct PluginManifest {
@@ -137,26 +155,10 @@ pub async fn ensure_plugin_sources(update: UpdateLevel) {
 
 /// Load all plugins from all configured plugin source directories,
 /// discarding load errors with warnings.
+///
+/// Use `load_registry()` instead if you also need standalone skills.
 pub fn load_all_plugins() -> Vec<ParsedPlugin> {
-    let plugin_results = match load_all_plugin_results() {
-        Ok(ps) => ps,
-
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to load plugins");
-            return Vec::new();
-        }
-    };
-
-    let mut out = Vec::new();
-    for plugin_res in plugin_results {
-        match plugin_res {
-            Ok(p) => out.push(p),
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to load plugin");
-            }
-        }
-    }
-    out
+    load_registry().plugins
 }
 
 /// Sync plugin sources.
@@ -204,7 +206,8 @@ pub fn list_plugins() -> Vec<ProviderInfo> {
     for source in &sources {
         let source_path = resolve_plugin_source_dir(source);
         let plugins: Vec<PluginInfo> = source_path
-            .and_then(|p| load_plugins_from_dir(&p).ok())
+            .and_then(|p| scan_source_dir(&p).ok())
+            .map(|c| c.plugins)
             .unwrap_or_default()
             .into_iter()
             .filter_map(|r| r.ok())
@@ -234,8 +237,8 @@ pub fn find_plugin(name: &str) -> Option<ParsedPlugin> {
     for source in &sources {
         let source_path = resolve_plugin_source_dir(source);
         if let Some(ref path) = source_path {
-            if let Ok(results) = load_plugins_from_dir(path) {
-                for result in results {
+            if let Ok(contents) = scan_source_dir(path) {
+                for result in contents.plugins {
                     if let Ok(parsed_plugin) = result {
                         if parsed_plugin.plugin.name == name {
                             return Some(parsed_plugin);
@@ -313,33 +316,63 @@ async fn fetch_plugin_source(git_url: &str, update: UpdateLevel) -> Result<PathB
     cache_mgr.get_or_fetch(&source, git_url, update).await
 }
 
-/// Load all plugins from all configured plugin source directories.
+/// Scan all configured plugin source directories and load the registry.
 ///
-/// Scans each directory returned by `resolve_plugin_source_dirs()`.
-fn load_all_plugin_results() -> Result<Vec<Result<ParsedPlugin>>> {
-    let mut all = Vec::new();
+/// Discovers TOML plugin manifests and standalone skill directories,
+/// then loads both into a `PluginRegistry`.
+pub fn load_registry() -> PluginRegistry {
+    let mut plugins = Vec::new();
+    let mut standalone_skills = Vec::new();
+
     for dir in resolve_plugin_source_dirs() {
-        match load_plugins_from_dir(&dir) {
-            Ok(results) => all.extend(results),
+        match scan_source_dir(&dir) {
+            Ok(contents) => {
+                for result in contents.plugins {
+                    match result {
+                        Ok(p) => plugins.push(p),
+                        Err(e) => tracing::warn!(error = %e, "failed to load plugin"),
+                    }
+                }
+                for skill_md in contents.skill_files {
+                    match crate::skills::load_standalone_skill(&skill_md) {
+                        Ok(skill) => standalone_skills.push(skill),
+                        Err(e) => tracing::warn!(
+                            path = %skill_md.display(),
+                            error = %e,
+                            "failed to load standalone skill"
+                        ),
+                    }
+                }
+            }
             Err(e) => {
-                tracing::warn!(dir = %dir.display(), error = %e, "failed to load plugin source dir");
+                tracing::warn!(dir = %dir.display(), error = %e, "failed to scan plugin source dir");
             }
         }
     }
-    Ok(all)
+
+    PluginRegistry {
+        plugins,
+        standalone_skills,
+    }
 }
 
-/// Load all plugins from a directory.
+/// Scan a plugin source directory for TOML plugin manifests and standalone skills.
 ///
-/// Plugins are `.toml` files. They can live as standalone files or inside
-/// directories (as `symposium.toml`). Either way, the TOML is the plugin.
-fn load_plugins_from_dir<P: AsRef<Path>>(dir: P) -> Result<Vec<Result<ParsedPlugin>>> {
+/// Plugins are `.toml` files at the top level. Standalone skills are discovered
+/// by recursively searching for `SKILL.md` files, then pruning nested candidates
+/// (if `A/SKILL.md` exists, `A/B/SKILL.md` is excluded).
+fn scan_source_dir<P: AsRef<Path>>(dir: P) -> Result<SourceDirContents> {
     let mut plugins = Vec::new();
     let dir = dir.as_ref();
 
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(plugins),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SourceDirContents {
+                plugins,
+                skill_files: Vec::new(),
+            });
+        }
         Err(e) => return Err(e.into()),
     };
 
@@ -358,15 +391,139 @@ fn load_plugins_from_dir<P: AsRef<Path>>(dir: P) -> Result<Vec<Result<ParsedPlug
             );
 
             plugins.push(plugin);
-        } else {
-            tracing::debug!(
-                path = %path.display(),
-                "skipping non-plugin entry in plugins directory"
-            );
         }
     }
 
-    Ok(plugins)
+    // Recursively find all SKILL.md files, then prune nested ones.
+    let mut skill_files = Vec::new();
+    crate::skills::find_skill_files_recursive(dir, &mut skill_files);
+    crate::skills::prune_nested_skills(&mut skill_files);
+
+    for path in &skill_files {
+        tracing::debug!(
+            path = %path.display(),
+            "found standalone skill",
+        );
+    }
+
+    Ok(SourceDirContents {
+        plugins,
+        skill_files,
+    })
+}
+
+/// Result of validating a single item in a plugin source directory.
+#[derive(Debug)]
+pub struct ValidationResult {
+    /// Path to the validated file (TOML manifest or SKILL.md).
+    pub path: PathBuf,
+    /// What kind of item was validated.
+    pub kind: ValidationKind,
+    /// `Ok(())` if valid, `Err` with the validation error.
+    pub result: Result<()>,
+}
+
+/// The kind of item that was validated.
+#[derive(Debug)]
+pub enum ValidationKind {
+    Plugin,
+    Skill,
+}
+
+impl std::fmt::Display for ValidationKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValidationKind::Plugin => write!(f, "plugin"),
+            ValidationKind::Skill => write!(f, "skill"),
+        }
+    }
+}
+
+/// Validate a directory as a plugin source.
+///
+/// Scans for TOML plugin manifests and standalone SKILL.md files,
+/// attempts to load each, and returns validation results for all items found.
+pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
+    let contents = scan_source_dir(dir)?;
+    let mut results = Vec::new();
+
+    for plugin_result in contents.plugins {
+        let (path, result) = match plugin_result {
+            Ok(parsed) => (parsed.path, Ok(())),
+            Err(e) => {
+                // Extract the path from the error context if possible,
+                // otherwise use a placeholder.
+                let path = dir.join("<unknown>.toml");
+                (path, Err(e))
+            }
+        };
+        results.push(ValidationResult {
+            path,
+            kind: ValidationKind::Plugin,
+            result,
+        });
+    }
+
+    for skill_md in contents.skill_files {
+        let result = crate::skills::load_standalone_skill(&skill_md).map(|_| ());
+        results.push(ValidationResult {
+            path: skill_md,
+            kind: ValidationKind::Skill,
+            result,
+        });
+    }
+
+    Ok(results)
+}
+
+/// Collect all crate names referenced in predicates across a plugin source directory.
+///
+/// Scans TOML plugin manifests (skill group `advice-for`/`applies-when`) and
+/// standalone SKILL.md files, returning deduplicated crate names.
+/// Items that fail to load are silently skipped.
+pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
+    let contents = scan_source_dir(dir)?;
+    let mut names = std::collections::BTreeSet::new();
+
+    for plugin_result in contents.plugins.into_iter().flatten() {
+        for group in &plugin_result.plugin.skills {
+            if let Some(preds) = &group.advice_for {
+                for pred in preds {
+                    pred.collect_crate_names(&mut names);
+                }
+            }
+            if let Some(preds) = &group.applies_when {
+                for pred in preds {
+                    pred.collect_crate_names(&mut names);
+                }
+            }
+        }
+    }
+
+    for skill_md in contents.skill_files {
+        if let Ok(skill) = crate::skills::load_standalone_skill(&skill_md) {
+            for pred in &skill.advice_for {
+                pred.collect_crate_names(&mut names);
+            }
+            for pred in &skill.applies_when {
+                pred.collect_crate_names(&mut names);
+            }
+        }
+    }
+
+    Ok(names.into_iter().collect())
+}
+
+/// Check whether a crate name exists on crates.io.
+pub async fn check_crate_exists(crate_name: &str) -> bool {
+    let client = match crates_io_api::AsyncClient::new(
+        "symposium (https://github.com/nikomatsakis/symposium)",
+        std::time::Duration::from_millis(1000),
+    ) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    client.get_crate(crate_name).await.is_ok()
 }
 
 /// Load a single plugin from a TOML manifest.
@@ -438,18 +595,256 @@ mod tests {
         assert_eq!(plugin.name, "remote-plugin");
         assert_eq!(plugin.skills.len(), 1);
         let group = &plugin.skills[0];
-        assert_eq!(
-            group.advice_for.as_deref(),
-            Some(["serde".to_string()].as_slice())
-        );
-        assert_eq!(
-            group.applies_when.as_deref(),
-            Some(["serde>=1.0".to_string()].as_slice())
-        );
+        let af = group.advice_for.as_ref().unwrap();
+        assert_eq!(af.len(), 1);
+        assert!(af[0].references_crate("serde"));
+        let aw = group.applies_when.as_ref().unwrap();
+        assert_eq!(aw.len(), 1);
+        assert!(aw[0].references_crate("serde"));
         assert_eq!(
             group.source.git.as_ref().map(|s| s.as_str()),
             Some("https://github.com/org/repo/tree/main/serde")
         );
+    }
+
+    #[test]
+    fn scan_source_dir_finds_toml_and_standalone_skills() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // Create a TOML plugin
+        std::fs::write(
+            dir.join("my-plugin.toml"),
+            indoc! {r#"
+                name = "my-plugin"
+
+                [[hooks]]
+                name = "test"
+                event = "PreToolUse"
+                command = "echo hi"
+            "#},
+        )
+        .unwrap();
+
+        // Create a standalone skill directory
+        let skill_dir = dir.join("assert-struct");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: assert-struct
+                description: Check struct layout
+                advice-for: serde
+                activation: default
+                ---
+
+                Use this skill.
+            "},
+        )
+        .unwrap();
+
+        // Create a random directory without SKILL.md (should be ignored)
+        std::fs::create_dir_all(dir.join("not-a-skill")).unwrap();
+
+        let contents = scan_source_dir(dir).unwrap();
+        assert_eq!(contents.plugins.len(), 1);
+        assert_eq!(
+            contents.plugins[0].as_ref().unwrap().plugin.name,
+            "my-plugin"
+        );
+        assert_eq!(contents.skill_files.len(), 1);
+        assert!(contents.skill_files[0].ends_with("assert-struct/SKILL.md"));
+    }
+
+    #[test]
+    fn scan_source_dir_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let contents = scan_source_dir(tmp.path()).unwrap();
+        assert!(contents.plugins.is_empty());
+        assert!(contents.skill_files.is_empty());
+    }
+
+    #[test]
+    fn scan_source_dir_missing() {
+        let contents = scan_source_dir("/nonexistent/path/abc123").unwrap();
+        assert!(contents.plugins.is_empty());
+        assert!(contents.skill_files.is_empty());
+    }
+
+    #[test]
+    fn scan_source_dir_finds_root_level_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // A single skill directory used as a plugin source:
+        // the SKILL.md is at the root level.
+        std::fs::write(
+            dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: root-skill
+                advice-for: serde
+                ---
+
+                Root level skill.
+            "},
+        )
+        .unwrap();
+
+        let contents = scan_source_dir(dir).unwrap();
+        assert!(contents.plugins.is_empty());
+        assert_eq!(contents.skill_files.len(), 1);
+        assert!(contents.skill_files[0].ends_with("SKILL.md"));
+    }
+
+    #[test]
+    fn validate_source_dir_mixed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // Valid TOML plugin
+        std::fs::write(
+            dir.join("good.toml"),
+            indoc! {r#"
+                name = "good-plugin"
+            "#},
+        )
+        .unwrap();
+
+        // Invalid TOML plugin
+        std::fs::write(dir.join("bad.toml"), "not valid toml {{{").unwrap();
+
+        // Valid standalone skill
+        let skill_dir = dir.join("my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: my-skill
+                advice-for: serde
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        // Invalid standalone skill (missing name)
+        let bad_skill = dir.join("bad-skill");
+        std::fs::create_dir_all(&bad_skill).unwrap();
+        std::fs::write(
+            bad_skill.join("SKILL.md"),
+            indoc! {"
+                ---
+                advice-for: serde
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let results = validate_source_dir(dir).unwrap();
+        let ok_count = results.iter().filter(|r| r.result.is_ok()).count();
+        let err_count = results.iter().filter(|r| r.result.is_err()).count();
+        assert_eq!(results.len(), 4);
+        assert_eq!(ok_count, 2);
+        assert_eq!(err_count, 2);
+    }
+
+    #[test]
+    fn collect_crate_names_from_source_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // TOML plugin with skill groups referencing crates
+        std::fs::write(
+            dir.join("my-plugin.toml"),
+            indoc! {r#"
+                name = "my-plugin"
+
+                [[skills]]
+                advice-for = ["serde", "serde_json>=1.0"]
+                applies-when = ["tokio>=1.0"]
+            "#},
+        )
+        .unwrap();
+
+        // Standalone skill referencing another crate
+        let skill_dir = dir.join("my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: my-skill
+                advice-for: anyhow
+                applies-when: tracing
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let names = collect_crate_names_in_source_dir(dir).unwrap();
+        // BTreeSet means sorted output
+        assert_eq!(
+            names,
+            vec!["anyhow", "serde", "serde_json", "tokio", "tracing"]
+        );
+    }
+
+    #[test]
+    fn collect_crate_names_skips_invalid_items() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // Invalid TOML (skipped)
+        std::fs::write(dir.join("bad.toml"), "not valid {{{").unwrap();
+
+        // Valid standalone skill
+        let skill_dir = dir.join("good-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: good
+                advice-for: serde
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        // Invalid standalone skill (missing advice-for, skipped)
+        let bad_skill = dir.join("bad-skill");
+        std::fs::create_dir_all(&bad_skill).unwrap();
+        std::fs::write(
+            bad_skill.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: bad
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let names = collect_crate_names_in_source_dir(dir).unwrap();
+        // Only the valid skill's crate name
+        assert_eq!(names, vec!["serde"]);
+    }
+
+    #[tokio::test]
+    async fn check_crate_exists_on_crates_io() {
+        assert!(check_crate_exists("serde").await);
+        assert!(!check_crate_exists("this-crate-definitely-does-not-exist-zzz").await);
     }
 
     #[test]
@@ -468,13 +863,7 @@ mod tests {
         let plugin = from_str(toml).expect("parse");
         assert_eq!(plugin.name, "multi-group");
         assert_eq!(plugin.skills.len(), 2);
-        assert_eq!(
-            plugin.skills[0].advice_for.as_deref(),
-            Some(["serde".to_string()].as_slice())
-        );
-        assert_eq!(
-            plugin.skills[1].advice_for.as_deref(),
-            Some(["tokio".to_string()].as_slice())
-        );
+        assert!(plugin.skills[0].advice_for.as_ref().unwrap()[0].references_crate("serde"));
+        assert!(plugin.skills[1].advice_for.as_ref().unwrap()[0].references_crate("tokio"));
     }
 }

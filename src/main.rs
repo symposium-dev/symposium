@@ -83,10 +83,14 @@ enum PluginCommand {
         plugin: String,
     },
 
-    /// Validate a plugin manifest file
+    /// Validate a plugin source directory or a single TOML manifest
     Validate {
-        /// Path to the plugin TOML file
+        /// Path to a directory (scanned for .toml plugins and SKILL.md files) or a single .toml file
         path: std::path::PathBuf,
+
+        /// Skip checking that crate names in predicates exist on crates.io
+        #[arg(long)]
+        no_check_crates: bool,
     },
 }
 
@@ -125,13 +129,13 @@ async fn main() -> ExitCode {
 
             if list {
                 let workspace = crate_sources::workspace_semver_pairs(&cwd);
-                let plugins = plugins::load_all_plugins();
-                print!("{}", skills::list_output(&plugins, &workspace).await);
+                let registry = plugins::load_registry();
+                print!("{}", skills::list_output(&registry, &workspace).await);
                 ExitCode::SUCCESS
             } else if let Some(name) = name {
                 let workspace = crate_sources::workspace_semver_pairs(&cwd);
-                let plugins = plugins::load_all_plugins();
-                match skills::info_output(&name, version.as_deref(), &plugins, &workspace).await {
+                let registry = plugins::load_registry();
+                match skills::info_output(&name, version.as_deref(), &registry, &workspace).await {
                     Ok(output) => {
                         print!("{output}");
                         ExitCode::SUCCESS
@@ -194,16 +198,85 @@ async fn main() -> ExitCode {
                 }
                 ExitCode::SUCCESS
             }
-            PluginCommand::Validate { path } => match plugins::load_plugin(&path) {
-                Ok(ParsedPlugin { path: _, plugin }) => {
-                    println!("{}", toml::to_string_pretty(&plugin).unwrap());
-                    ExitCode::SUCCESS
+            PluginCommand::Validate {
+                path,
+                no_check_crates,
+            } => {
+                if path.is_dir() {
+                    let mut errors = 0;
+
+                    // Structural validation
+                    match plugins::validate_source_dir(&path) {
+                        Ok(results) => {
+                            if results.is_empty() {
+                                eprintln!("No plugins or skills found in {}", path.display());
+                                return ExitCode::FAILURE;
+                            }
+                            for r in &results {
+                                match &r.result {
+                                    Ok(()) => {
+                                        println!("ok: {} ({})", r.path.display(), r.kind);
+                                    }
+                                    Err(e) => {
+                                        eprintln!("FAIL: {} ({}): {e}", r.path.display(), r.kind);
+                                        errors += 1;
+                                    }
+                                }
+                            }
+                            let total = results.len();
+                            let passed = total - errors;
+                            println!("\n{passed}/{total} valid");
+                        }
+                        Err(e) => {
+                            eprintln!("{}: {e}", path.display());
+                            return ExitCode::FAILURE;
+                        }
+                    }
+
+                    // Crate existence check
+                    if !no_check_crates {
+                        match plugins::collect_crate_names_in_source_dir(&path) {
+                            Ok(crate_names) => {
+                                if !crate_names.is_empty() {
+                                    println!(
+                                        "\nChecking {} crate name(s) on crates.io...",
+                                        crate_names.len()
+                                    );
+                                    for name in &crate_names {
+                                        if plugins::check_crate_exists(name).await {
+                                            println!("  ok: {name}");
+                                        } else {
+                                            eprintln!("  FAIL: {name} not found on crates.io");
+                                            errors += 1;
+                                        }
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("failed to collect crate names: {e}");
+                                errors += 1;
+                            }
+                        }
+                    }
+
+                    if errors > 0 {
+                        ExitCode::FAILURE
+                    } else {
+                        ExitCode::SUCCESS
+                    }
+                } else {
+                    match plugins::load_plugin(&path) {
+                        Ok(ParsedPlugin { path: _, plugin }) => {
+                            println!("{}", toml::to_string_pretty(&plugin).unwrap());
+                            ExitCode::SUCCESS
+                        }
+                        Err(e) => {
+                            eprintln!("{}: {e}", path.display());
+                            ExitCode::FAILURE
+                        }
+                    }
                 }
-                Err(e) => {
-                    eprintln!("{}: {e}", path.display());
-                    ExitCode::FAILURE
-                }
-            },
+            }
             PluginCommand::Show { plugin } => match plugins::find_plugin(&plugin) {
                 Some(ParsedPlugin { path, plugin }) => {
                     println!("# Source: {}", path.display());
