@@ -476,6 +476,56 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
     Ok(results)
 }
 
+/// Collect all crate names referenced in predicates across a plugin source directory.
+///
+/// Scans TOML plugin manifests (skill group `advice-for`/`applies-when`) and
+/// standalone SKILL.md files, returning deduplicated crate names.
+/// Items that fail to load are silently skipped.
+pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
+    let contents = scan_source_dir(dir)?;
+    let mut names = std::collections::BTreeSet::new();
+
+    for plugin_result in contents.plugins.into_iter().flatten() {
+        for group in &plugin_result.plugin.skills {
+            if let Some(preds) = &group.advice_for {
+                for pred in preds {
+                    pred.collect_crate_names(&mut names);
+                }
+            }
+            if let Some(preds) = &group.applies_when {
+                for pred in preds {
+                    pred.collect_crate_names(&mut names);
+                }
+            }
+        }
+    }
+
+    for skill_md in contents.skill_files {
+        if let Ok(skill) = crate::skills::load_standalone_skill(&skill_md) {
+            for pred in &skill.advice_for {
+                pred.collect_crate_names(&mut names);
+            }
+            for pred in &skill.applies_when {
+                pred.collect_crate_names(&mut names);
+            }
+        }
+    }
+
+    Ok(names.into_iter().collect())
+}
+
+/// Check whether a crate name exists on crates.io.
+pub async fn check_crate_exists(crate_name: &str) -> bool {
+    let client = match crates_io_api::AsyncClient::new(
+        "symposium (https://github.com/nikomatsakis/symposium)",
+        std::time::Duration::from_millis(1000),
+    ) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    client.get_crate(crate_name).await.is_ok()
+}
+
 /// Load a single plugin from a TOML manifest.
 ///
 /// `local_dir` is the containing directory when the manifest lives inside a

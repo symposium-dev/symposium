@@ -87,6 +87,10 @@ enum PluginCommand {
     Validate {
         /// Path to a directory (scanned for .toml plugins and SKILL.md files) or a single .toml file
         path: std::path::PathBuf,
+
+        /// Check that crate names in advice-for/applies-when predicates exist on crates.io
+        #[arg(long)]
+        check_crates: bool,
     },
 }
 
@@ -194,44 +198,68 @@ async fn main() -> ExitCode {
                 }
                 ExitCode::SUCCESS
             }
-            PluginCommand::Validate { path } => {
+            PluginCommand::Validate { path, check_crates } => {
                 if path.is_dir() {
+                    let mut errors = 0;
+
+                    // Structural validation
                     match plugins::validate_source_dir(&path) {
                         Ok(results) => {
                             if results.is_empty() {
                                 eprintln!("No plugins or skills found in {}", path.display());
-                                ExitCode::FAILURE
-                            } else {
-                                let mut errors = 0;
-                                for r in &results {
-                                    match &r.result {
-                                        Ok(()) => {
-                                            println!("ok: {} ({})", r.path.display(), r.kind);
-                                        }
-                                        Err(e) => {
-                                            eprintln!(
-                                                "FAIL: {} ({}): {e}",
-                                                r.path.display(),
-                                                r.kind
-                                            );
+                                return ExitCode::FAILURE;
+                            }
+                            for r in &results {
+                                match &r.result {
+                                    Ok(()) => {
+                                        println!("ok: {} ({})", r.path.display(), r.kind);
+                                    }
+                                    Err(e) => {
+                                        eprintln!("FAIL: {} ({}): {e}", r.path.display(), r.kind);
+                                        errors += 1;
+                                    }
+                                }
+                            }
+                            let total = results.len();
+                            let passed = total - errors;
+                            println!("\n{passed}/{total} valid");
+                        }
+                        Err(e) => {
+                            eprintln!("{}: {e}", path.display());
+                            return ExitCode::FAILURE;
+                        }
+                    }
+
+                    // Crate existence check
+                    if check_crates {
+                        match plugins::collect_crate_names_in_source_dir(&path) {
+                            Ok(crate_names) => {
+                                if !crate_names.is_empty() {
+                                    println!(
+                                        "\nChecking {} crate name(s) on crates.io...",
+                                        crate_names.len()
+                                    );
+                                    for name in &crate_names {
+                                        if plugins::check_crate_exists(name).await {
+                                            println!("  ok: {name}");
+                                        } else {
+                                            eprintln!("  FAIL: {name} not found on crates.io");
                                             errors += 1;
                                         }
                                     }
                                 }
-                                let total = results.len();
-                                let passed = total - errors;
-                                println!("\n{passed}/{total} valid",);
-                                if errors > 0 {
-                                    ExitCode::FAILURE
-                                } else {
-                                    ExitCode::SUCCESS
-                                }
+                            }
+                            Err(e) => {
+                                eprintln!("failed to collect crate names: {e}");
+                                errors += 1;
                             }
                         }
-                        Err(e) => {
-                            eprintln!("{}: {e}", path.display());
-                            ExitCode::FAILURE
-                        }
+                    }
+
+                    if errors > 0 {
+                        ExitCode::FAILURE
+                    } else {
+                        ExitCode::SUCCESS
                     }
                 } else {
                     match plugins::load_plugin(&path) {
