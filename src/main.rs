@@ -88,9 +88,9 @@ enum PluginCommand {
         /// Path to a directory (scanned for .toml plugins and SKILL.md files) or a single .toml file
         path: std::path::PathBuf,
 
-        /// Check that crate names in advice-for/applies-when predicates exist on crates.io
+        /// Skip checking that crate names in predicates exist on crates.io
         #[arg(long)]
-        check_crates: bool,
+        no_check_crates: bool,
     },
 }
 
@@ -198,7 +198,10 @@ async fn main() -> ExitCode {
                 }
                 ExitCode::SUCCESS
             }
-            PluginCommand::Validate { path, check_crates } => {
+            PluginCommand::Validate {
+                path,
+                no_check_crates,
+            } => {
                 if path.is_dir() {
                     let mut errors = 0;
 
@@ -231,7 +234,7 @@ async fn main() -> ExitCode {
                     }
 
                     // Crate existence check
-                    if check_crates {
+                    if !no_check_crates {
                         match plugins::collect_crate_names_in_source_dir(&path) {
                             Ok(crate_names) => {
                                 if !crate_names.is_empty() {

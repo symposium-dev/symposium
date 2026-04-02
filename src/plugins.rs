@@ -755,6 +755,99 @@ mod tests {
     }
 
     #[test]
+    fn collect_crate_names_from_source_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // TOML plugin with skill groups referencing crates
+        std::fs::write(
+            dir.join("my-plugin.toml"),
+            indoc! {r#"
+                name = "my-plugin"
+
+                [[skills]]
+                advice-for = ["serde", "serde_json>=1.0"]
+                applies-when = ["tokio>=1.0"]
+            "#},
+        )
+        .unwrap();
+
+        // Standalone skill referencing another crate
+        let skill_dir = dir.join("my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: my-skill
+                advice-for: anyhow
+                applies-when: tracing
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let names = collect_crate_names_in_source_dir(dir).unwrap();
+        // BTreeSet means sorted output
+        assert_eq!(
+            names,
+            vec!["anyhow", "serde", "serde_json", "tokio", "tracing"]
+        );
+    }
+
+    #[test]
+    fn collect_crate_names_skips_invalid_items() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // Invalid TOML (skipped)
+        std::fs::write(dir.join("bad.toml"), "not valid {{{").unwrap();
+
+        // Valid standalone skill
+        let skill_dir = dir.join("good-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: good
+                advice-for: serde
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        // Invalid standalone skill (missing advice-for, skipped)
+        let bad_skill = dir.join("bad-skill");
+        std::fs::create_dir_all(&bad_skill).unwrap();
+        std::fs::write(
+            bad_skill.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: bad
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let names = collect_crate_names_in_source_dir(dir).unwrap();
+        // Only the valid skill's crate name
+        assert_eq!(names, vec!["serde"]);
+    }
+
+    #[tokio::test]
+    async fn check_crate_exists_on_crates_io() {
+        assert!(check_crate_exists("serde").await);
+        assert!(!check_crate_exists("this-crate-definitely-does-not-exist-zzz").await);
+    }
+
+    #[test]
     fn parse_manifest_with_multiple_skill_groups() {
         let toml = indoc! {r#"
             name = "multi-group"
