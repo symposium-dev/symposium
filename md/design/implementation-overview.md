@@ -13,7 +13,7 @@ Symposium is a single Rust binary crate. The source is in `src/`:
 | `plugins.rs` | Plugin registry: loads TOML manifests from configured plugin sources, produces `Vec<Plugin>` as a table of contents. Defines `SkillGroup`, `PluginSource`, `Hook` types. Does not load skill content — that is handled by the skills layer. |
 | `git_source.rs` | GitHub URL parsing, API client, and plugin cache manager. Downloads tarballs, extracts subdirectories, caches under `~/.symposium/cache/` with commit SHA freshness checking. Used by both plugin source fetching and skill source fetching. |
 | `skills.rs` | Skill model, frontmatter parsing, discovery, and crate advice output. Given loaded plugins, resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, evaluates `crates` predicates, and formats output. Skills follow the [agentskills.io](https://agentskills.io/specification.md) format. Shared `list_output()` and `info_output()` helpers used by both CLI and MCP. |
-| `advice_for.rs` | Parser and evaluator for crate predicates. Supports crate atoms (`serde`, `tokio>=1.0`) with optional version constraints. |
+| `predicate.rs` | Parser and evaluator for crate predicates. Supports crate atoms (`serde`, `tokio>=1.0`) with optional version constraints. |
 
 ## Key dependencies
 

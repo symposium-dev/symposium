@@ -26,10 +26,10 @@ pub struct PluginSource {
 pub struct SkillGroup {
     /// Crate predicates this group advises on (e.g., `"serde"` or `["serde", "serde_json>=1.0"]`).
     #[serde(default, deserialize_with = "deserialize_string_or_vec_opt")]
-    pub crates: Option<Vec<crate::advice_for::Predicate>>,
+    pub crates: Option<Vec<crate::predicate::Predicate>>,
     /// Workspace constraints: all listed predicates must match (AND semantics).
     #[serde(default, rename = "applies-when")]
-    pub applies_when: Option<Vec<crate::advice_for::Predicate>>,
+    pub applies_when: Option<Vec<crate::predicate::Predicate>>,
     /// Activation mode for skills in this group.
     pub activation: Option<crate::skills::Activation>,
     /// Remote source for skills.
@@ -41,7 +41,7 @@ pub struct SkillGroup {
 /// and parse each as a `Predicate`. Returns `None` if absent, `Some(vec)` otherwise.
 fn deserialize_string_or_vec_opt<'de, D>(
     deserializer: D,
-) -> std::result::Result<Option<Vec<crate::advice_for::Predicate>>, D::Error>
+) -> std::result::Result<Option<Vec<crate::predicate::Predicate>>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -50,7 +50,7 @@ where
     struct StringOrVec;
 
     impl<'de> de::Visitor<'de> for StringOrVec {
-        type Value = Option<Vec<crate::advice_for::Predicate>>;
+        type Value = Option<Vec<crate::predicate::Predicate>>;
 
         fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
             formatter.write_str("a string or array of predicate strings")
@@ -61,7 +61,7 @@ where
         }
 
         fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Self::Value, E> {
-            let pred = crate::advice_for::parse(v).map_err(de::Error::custom)?;
+            let pred = crate::predicate::parse(v).map_err(de::Error::custom)?;
             Ok(Some(vec![pred]))
         }
 
@@ -71,7 +71,7 @@ where
         ) -> std::result::Result<Self::Value, A::Error> {
             let mut preds = Vec::new();
             while let Some(s) = seq.next_element::<String>()? {
-                let pred = crate::advice_for::parse(&s).map_err(de::Error::custom)?;
+                let pred = crate::predicate::parse(&s).map_err(de::Error::custom)?;
                 preds.push(pred);
             }
             Ok(Some(preds))

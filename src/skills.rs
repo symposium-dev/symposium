@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use crate::advice_for::{self, Predicate};
+use crate::predicate::{self, Predicate};
 use crate::plugins::{ParsedPlugin, PluginRegistry, SkillGroup};
 
 /// Format the list of skills available for workspace crates as display text.
@@ -508,7 +508,7 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
     // Parse skill-level crates predicates (comma-separated).
     // This is independent of group-level — both layers are ANDed at match time.
     let crates = if let Some(ref crates_str) = fm.crates {
-        advice_for::parse_comma_separated(crates_str)?
+        predicate::parse_comma_separated(crates_str)?
     } else {
         Vec::new()
     };
@@ -524,7 +524,7 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
 
     // Parse skill-level applies-when predicates.
     let applies_when = if !fm.applies_when.is_empty() {
-        advice_for::parse_predicates(&fm.applies_when)?
+        predicate::parse_predicates(&fm.applies_when)?
     } else {
         Vec::new()
     };
@@ -665,7 +665,7 @@ mod tests {
 
     /// Parse a predicate string for use in test fixtures.
     fn pred(s: &str) -> Predicate {
-        crate::advice_for::parse_predicates(&[s.to_string()])
+        crate::predicate::parse_predicates(&[s.to_string()])
             .unwrap()
             .remove(0)
     }

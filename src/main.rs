@@ -3,7 +3,7 @@ use std::process::ExitCode;
 
 use crate::plugins::ParsedPlugin;
 
-mod advice_for;
+mod predicate;
 mod config;
 mod crate_sources;
 mod git_source;
