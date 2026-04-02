@@ -372,46 +372,58 @@ async fn load_skills_for_group(
     (advice_for.to_vec(), skills)
 }
 
-/// Discover all skills found in a given directory. A skill is identified as a directory that
-/// contain a SKILL.md file.
+/// Discover all skills found in a given directory.
+///
+/// Recursively searches for `SKILL.md` files, then prunes nested candidates
+/// (if `A/SKILL.md` exists, `A/B/SKILL.md` is excluded — skills don't nest).
 pub(crate) fn discover_skills(skills_dir: &Path, group: &SkillGroup) -> Vec<Result<Skill>> {
     if !skills_dir.is_dir() {
         return Vec::new();
     }
 
-    let entries = match std::fs::read_dir(&skills_dir) {
+    let mut skill_files = Vec::new();
+    find_skill_files_recursive(skills_dir, &mut skill_files);
+    prune_nested_skills(&mut skill_files);
+
+    skill_files
+        .into_iter()
+        .map(|skill_md| load_skill(&skill_md, group))
+        .collect()
+}
+
+/// Recursively walk a directory collecting paths to `SKILL.md` files.
+pub(crate) fn find_skill_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        Err(e) => {
-            tracing::warn!(error = %e, dir = %skills_dir.display(), "failed to read skills directory");
-            return Vec::new();
-        }
+        Err(_) => return,
     };
-
-    let mut skills = Vec::new();
-    for entry in entries {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(e) => {
-                skills.push(Err(e.into()));
-                continue;
-            }
-        };
-
+    for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_dir() {
-            continue;
+        if path.is_dir() {
+            find_skill_files_recursive(&path, out);
+        } else if path.file_name().is_some_and(|f| f == "SKILL.md") {
+            out.push(path);
         }
-
-        let skill_md = path.join("SKILL.md");
-        if !skill_md.is_file() {
-            tracing::debug!(dir = %path.display(), "skill directory has no SKILL.md, skipping");
-            continue;
-        }
-
-        skills.push(load_skill(&skill_md, group));
     }
+}
 
-    skills
+/// Remove nested skill candidates: if `A/SKILL.md` and `A/B/SKILL.md` both
+/// exist, keep only the shallower `A/SKILL.md`.
+pub(crate) fn prune_nested_skills(paths: &mut Vec<PathBuf>) {
+    // Sort shallowest first so we encounter parents before children.
+    paths.sort_by_key(|p| p.components().count());
+    let mut kept: Vec<PathBuf> = Vec::new();
+    for path in paths.drain(..) {
+        let skill_dir = path.parent().unwrap();
+        let nested = kept.iter().any(|k| {
+            let k_dir = k.parent().unwrap();
+            skill_dir.starts_with(k_dir)
+        });
+        if !nested {
+            kept.push(path);
+        }
+    }
+    *paths = kept;
 }
 
 /// Fetch a skill group's git source, returning the cached directory path.
@@ -1161,6 +1173,102 @@ mod tests {
         assert_eq!(skills.len(), 1);
         let skill = skills.into_iter().next().unwrap().unwrap();
         assert_eq!(skill.frontmatter.get("name").unwrap(), "my-skill");
+    }
+
+    #[test]
+    fn discover_skills_in_subdirectory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        // Create a skill nested two levels deep: group/sub/SKILL.md
+        let skill_dir = root.join("group").join("sub");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: nested-skill
+                advice-for: tokio
+                ---
+
+                Nested body.
+            "},
+        )
+        .unwrap();
+
+        let defaults = SkillGroup::default();
+        let skills = discover_skills(root, &defaults);
+
+        assert_eq!(skills.len(), 1);
+        let skill = skills.into_iter().next().unwrap().unwrap();
+        assert_eq!(skill.frontmatter.get("name").unwrap(), "nested-skill");
+    }
+
+    #[test]
+    fn discover_skills_prunes_nested() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        // Create a shallow skill: alpha/SKILL.md
+        let shallow = root.join("alpha");
+        fs::create_dir_all(&shallow).unwrap();
+        fs::write(
+            shallow.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: shallow
+                advice-for: serde
+                ---
+
+                Shallow.
+            "},
+        )
+        .unwrap();
+
+        // Create a nested skill inside alpha: alpha/beta/SKILL.md
+        let nested = root.join("alpha").join("beta");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(
+            nested.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: nested
+                advice-for: serde
+                ---
+
+                Nested.
+            "},
+        )
+        .unwrap();
+
+        // Also create a sibling skill: gamma/SKILL.md (should be kept)
+        let sibling = root.join("gamma");
+        fs::create_dir_all(&sibling).unwrap();
+        fs::write(
+            sibling.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: sibling
+                advice-for: tokio
+                ---
+
+                Sibling.
+            "},
+        )
+        .unwrap();
+
+        let defaults = SkillGroup::default();
+        let skills = discover_skills(root, &defaults);
+
+        // Should find shallow + sibling, but NOT nested (pruned by shallow)
+        let names: Vec<String> = skills
+            .into_iter()
+            .map(|r| r.unwrap().frontmatter.get("name").unwrap().clone())
+            .collect();
+        assert!(names.contains(&"shallow".to_string()));
+        assert!(names.contains(&"sibling".to_string()));
+        assert!(!names.contains(&"nested".to_string()));
+        assert_eq!(names.len(), 2);
     }
 
     #[test]

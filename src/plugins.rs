@@ -103,7 +103,8 @@ pub struct PluginRegistry {
 /// Raw scan results from a plugin source directory.
 struct SourceDirContents {
     plugins: Vec<Result<ParsedPlugin>>,
-    skill_dirs: Vec<PathBuf>,
+    /// Paths to discovered `SKILL.md` files (after recursive search and pruning).
+    skill_files: Vec<PathBuf>,
 }
 
 /// Raw TOML manifest deserialized from a plugin `.toml` file.
@@ -332,8 +333,7 @@ pub fn load_registry() -> PluginRegistry {
                         Err(e) => tracing::warn!(error = %e, "failed to load plugin"),
                     }
                 }
-                for skill_dir in contents.skill_dirs {
-                    let skill_md = skill_dir.join("SKILL.md");
+                for skill_md in contents.skill_files {
                     match crate::skills::load_standalone_skill(&skill_md) {
                         Ok(skill) => standalone_skills.push(skill),
                         Err(e) => tracing::warn!(
@@ -356,13 +356,13 @@ pub fn load_registry() -> PluginRegistry {
     }
 }
 
-/// Scan a plugin source directory for TOML plugin manifests and standalone skill directories.
+/// Scan a plugin source directory for TOML plugin manifests and standalone skills.
 ///
-/// Plugins are `.toml` files. Standalone skills are directories containing a `SKILL.md` file
-/// directly (no TOML manifest needed).
+/// Plugins are `.toml` files at the top level. Standalone skills are discovered
+/// by recursively searching for `SKILL.md` files, then pruning nested candidates
+/// (if `A/SKILL.md` exists, `A/B/SKILL.md` is excluded).
 fn scan_source_dir<P: AsRef<Path>>(dir: P) -> Result<SourceDirContents> {
     let mut plugins = Vec::new();
-    let mut skill_dirs = Vec::new();
     let dir = dir.as_ref();
 
     let entries = match fs::read_dir(dir) {
@@ -370,7 +370,7 @@ fn scan_source_dir<P: AsRef<Path>>(dir: P) -> Result<SourceDirContents> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             return Ok(SourceDirContents {
                 plugins,
-                skill_dirs,
+                skill_files: Vec::new(),
             });
         }
         Err(e) => return Err(e.into()),
@@ -391,23 +391,24 @@ fn scan_source_dir<P: AsRef<Path>>(dir: P) -> Result<SourceDirContents> {
             );
 
             plugins.push(plugin);
-        } else if path.is_dir() && path.join("SKILL.md").is_file() {
-            tracing::debug!(
-                path = %path.display(),
-                "found standalone skill directory",
-            );
-            skill_dirs.push(path);
-        } else {
-            tracing::debug!(
-                path = %path.display(),
-                "skipping non-plugin entry in plugins directory"
-            );
         }
+    }
+
+    // Recursively find all SKILL.md files, then prune nested ones.
+    let mut skill_files = Vec::new();
+    crate::skills::find_skill_files_recursive(dir, &mut skill_files);
+    crate::skills::prune_nested_skills(&mut skill_files);
+
+    for path in &skill_files {
+        tracing::debug!(
+            path = %path.display(),
+            "found standalone skill",
+        );
     }
 
     Ok(SourceDirContents {
         plugins,
-        skill_dirs,
+        skill_files,
     })
 }
 
@@ -538,8 +539,8 @@ mod tests {
             contents.plugins[0].as_ref().unwrap().plugin.name,
             "my-plugin"
         );
-        assert_eq!(contents.skill_dirs.len(), 1);
-        assert!(contents.skill_dirs[0].ends_with("assert-struct"));
+        assert_eq!(contents.skill_files.len(), 1);
+        assert!(contents.skill_files[0].ends_with("assert-struct/SKILL.md"));
     }
 
     #[test]
@@ -547,14 +548,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let contents = scan_source_dir(tmp.path()).unwrap();
         assert!(contents.plugins.is_empty());
-        assert!(contents.skill_dirs.is_empty());
+        assert!(contents.skill_files.is_empty());
     }
 
     #[test]
     fn scan_source_dir_missing() {
         let contents = scan_source_dir("/nonexistent/path/abc123").unwrap();
         assert!(contents.plugins.is_empty());
-        assert!(contents.skill_dirs.is_empty());
+        assert!(contents.skill_files.is_empty());
     }
 
     #[test]
