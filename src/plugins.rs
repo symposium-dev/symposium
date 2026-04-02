@@ -412,6 +412,70 @@ fn scan_source_dir<P: AsRef<Path>>(dir: P) -> Result<SourceDirContents> {
     })
 }
 
+/// Result of validating a single item in a plugin source directory.
+#[derive(Debug)]
+pub struct ValidationResult {
+    /// Path to the validated file (TOML manifest or SKILL.md).
+    pub path: PathBuf,
+    /// What kind of item was validated.
+    pub kind: ValidationKind,
+    /// `Ok(())` if valid, `Err` with the validation error.
+    pub result: Result<()>,
+}
+
+/// The kind of item that was validated.
+#[derive(Debug)]
+pub enum ValidationKind {
+    Plugin,
+    Skill,
+}
+
+impl std::fmt::Display for ValidationKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ValidationKind::Plugin => write!(f, "plugin"),
+            ValidationKind::Skill => write!(f, "skill"),
+        }
+    }
+}
+
+/// Validate a directory as a plugin source.
+///
+/// Scans for TOML plugin manifests and standalone SKILL.md files,
+/// attempts to load each, and returns validation results for all items found.
+pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
+    let contents = scan_source_dir(dir)?;
+    let mut results = Vec::new();
+
+    for plugin_result in contents.plugins {
+        let (path, result) = match plugin_result {
+            Ok(parsed) => (parsed.path, Ok(())),
+            Err(e) => {
+                // Extract the path from the error context if possible,
+                // otherwise use a placeholder.
+                let path = dir.join("<unknown>.toml");
+                (path, Err(e))
+            }
+        };
+        results.push(ValidationResult {
+            path,
+            kind: ValidationKind::Plugin,
+            result,
+        });
+    }
+
+    for skill_md in contents.skill_files {
+        let result = crate::skills::load_standalone_skill(&skill_md).map(|_| ());
+        results.push(ValidationResult {
+            path: skill_md,
+            kind: ValidationKind::Skill,
+            result,
+        });
+    }
+
+    Ok(results)
+}
+
 /// Load a single plugin from a TOML manifest.
 ///
 /// `local_dir` is the containing directory when the manifest lives inside a
@@ -556,6 +620,88 @@ mod tests {
         let contents = scan_source_dir("/nonexistent/path/abc123").unwrap();
         assert!(contents.plugins.is_empty());
         assert!(contents.skill_files.is_empty());
+    }
+
+    #[test]
+    fn scan_source_dir_finds_root_level_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // A single skill directory used as a plugin source:
+        // the SKILL.md is at the root level.
+        std::fs::write(
+            dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: root-skill
+                advice-for: serde
+                ---
+
+                Root level skill.
+            "},
+        )
+        .unwrap();
+
+        let contents = scan_source_dir(dir).unwrap();
+        assert!(contents.plugins.is_empty());
+        assert_eq!(contents.skill_files.len(), 1);
+        assert!(contents.skill_files[0].ends_with("SKILL.md"));
+    }
+
+    #[test]
+    fn validate_source_dir_mixed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // Valid TOML plugin
+        std::fs::write(
+            dir.join("good.toml"),
+            indoc! {r#"
+                name = "good-plugin"
+            "#},
+        )
+        .unwrap();
+
+        // Invalid TOML plugin
+        std::fs::write(dir.join("bad.toml"), "not valid toml {{{").unwrap();
+
+        // Valid standalone skill
+        let skill_dir = dir.join("my-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: my-skill
+                advice-for: serde
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        // Invalid standalone skill (missing name)
+        let bad_skill = dir.join("bad-skill");
+        std::fs::create_dir_all(&bad_skill).unwrap();
+        std::fs::write(
+            bad_skill.join("SKILL.md"),
+            indoc! {"
+                ---
+                advice-for: serde
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let results = validate_source_dir(dir).unwrap();
+        let ok_count = results.iter().filter(|r| r.result.is_ok()).count();
+        let err_count = results.iter().filter(|r| r.result.is_err()).count();
+        assert_eq!(results.len(), 4);
+        assert_eq!(ok_count, 2);
+        assert_eq!(err_count, 2);
     }
 
     #[test]

@@ -460,8 +460,18 @@ async fn resolve_skill_dir(plugin_path: &Path, group: &SkillGroup) -> Option<Pat
 ///
 /// Standalone skills must be self-contained: all metadata (advice-for,
 /// applies-when, activation) comes from the SKILL.md frontmatter.
+/// Returns an error if `advice-for` is missing (standalone skills have
+/// no group to inherit from).
 pub fn load_standalone_skill(skill_md_path: &Path) -> Result<Skill> {
-    load_skill(skill_md_path, &SkillGroup::default())
+    let skill = load_skill(skill_md_path, &SkillGroup::default())?;
+    if skill.advice_for.is_empty() {
+        bail!(
+            "standalone skill `{}` is missing `advice-for` in frontmatter \
+             (standalone skills have no plugin group to inherit from)",
+            skill.name()
+        );
+    }
+    Ok(skill)
 }
 
 /// Load a single skill from a SKILL.md file.
@@ -1033,6 +1043,31 @@ mod tests {
         assert!(
             err.to_string().contains("missing required `name` field"),
             "expected missing name error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn standalone_skill_requires_advice_for() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("no-advice");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: no-advice
+                description: Missing advice-for
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let err = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap_err();
+        assert!(
+            err.to_string().contains("missing `advice-for`"),
+            "expected advice-for error, got: {err}"
         );
     }
 

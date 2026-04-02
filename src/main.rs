@@ -83,9 +83,9 @@ enum PluginCommand {
         plugin: String,
     },
 
-    /// Validate a plugin manifest (.toml) or standalone skill directory
+    /// Validate a plugin source directory or a single TOML manifest
     Validate {
-        /// Path to a plugin TOML file or a directory containing SKILL.md
+        /// Path to a directory (scanned for .toml plugins and SKILL.md files) or a single .toml file
         path: std::path::PathBuf,
     },
 }
@@ -196,37 +196,40 @@ async fn main() -> ExitCode {
             }
             PluginCommand::Validate { path } => {
                 if path.is_dir() {
-                    let skill_md = path.join("SKILL.md");
-                    match skills::load_standalone_skill(&skill_md) {
-                        Ok(skill) => {
-                            println!("Valid standalone skill: {}", skill.name());
-                            if !skill.advice_for.is_empty() {
-                                println!(
-                                    "  advice-for: {}",
-                                    skill
-                                        .advice_for
-                                        .iter()
-                                        .map(|p| p.to_string())
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
-                                );
+                    match plugins::validate_source_dir(&path) {
+                        Ok(results) => {
+                            if results.is_empty() {
+                                eprintln!("No plugins or skills found in {}", path.display());
+                                ExitCode::FAILURE
+                            } else {
+                                let mut errors = 0;
+                                for r in &results {
+                                    match &r.result {
+                                        Ok(()) => {
+                                            println!("ok: {} ({})", r.path.display(), r.kind);
+                                        }
+                                        Err(e) => {
+                                            eprintln!(
+                                                "FAIL: {} ({}): {e}",
+                                                r.path.display(),
+                                                r.kind
+                                            );
+                                            errors += 1;
+                                        }
+                                    }
+                                }
+                                let total = results.len();
+                                let passed = total - errors;
+                                println!("\n{passed}/{total} valid",);
+                                if errors > 0 {
+                                    ExitCode::FAILURE
+                                } else {
+                                    ExitCode::SUCCESS
+                                }
                             }
-                            if !skill.applies_when.is_empty() {
-                                println!(
-                                    "  applies-when: {}",
-                                    skill
-                                        .applies_when
-                                        .iter()
-                                        .map(|p| p.to_string())
-                                        .collect::<Vec<_>>()
-                                        .join(", ")
-                                );
-                            }
-                            println!("  activation: {:?}", skill.activation);
-                            ExitCode::SUCCESS
                         }
                         Err(e) => {
-                            eprintln!("{}: {e}", skill_md.display());
+                            eprintln!("{}: {e}", path.display());
                             ExitCode::FAILURE
                         }
                     }
