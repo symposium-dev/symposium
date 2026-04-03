@@ -4,18 +4,13 @@ use clap::{Parser, Subcommand};
 use std::path::Path;
 use std::process::ExitCode;
 
-use crate::plugins::ParsedPlugin;
-
-mod predicate;
-mod config;
-mod crate_sources;
-mod dispatch;
-mod git_source;
-mod hook;
-mod mcp;
-mod plugins;
-mod skills;
-pub mod tutorial;
+use symposium::config;
+use symposium::dispatch;
+use symposium::git_source;
+use symposium::hook;
+use symposium::mcp;
+use symposium::plugins::{self, ParsedPlugin};
+use symposium::tutorial;
 
 #[derive(Parser)]
 #[command(name = "symposium", version, about = "AI the Rust Way")]

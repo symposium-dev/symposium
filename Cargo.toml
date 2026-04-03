@@ -7,6 +7,10 @@ description = "AI the Rust Way"
 repository = "https://github.com/symposium-dev/symposium"
 readme = "README.md"
 
+[lib]
+name = "symposium"
+path = "src/lib.rs"
+
 [[bin]]
 name = "symposium"
 path = "src/main.rs"

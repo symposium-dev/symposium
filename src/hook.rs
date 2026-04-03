@@ -166,7 +166,7 @@ pub async fn run(sym: &Symposium, event: HookEvent) -> ExitCode {
 }
 
 /// Built-in hook logic. Returns typed `HookOutput` for the integration test harness.
-pub async fn dispatch_builtin(sym: &Symposium, payload: &HookPayload) -> HookOutput {
+pub async fn dispatch_builtin(_sym: &Symposium, payload: &HookPayload) -> HookOutput {
     tracing::info!(?payload, "hook invoked (builtin)");
 
     match &payload.sub_payload {
