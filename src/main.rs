@@ -25,7 +25,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show the Symposium tutorial for agents and humans
+    /// Get Rust guidance and list available crate skills for the workspace
+    Start,
+
+    /// Show the Symposium tutorial (static text only, no workspace scanning)
     Tutorial,
 
     /// Run as an MCP server (stdio transport)
@@ -104,6 +107,10 @@ async fn main() -> ExitCode {
     plugins::ensure_plugin_sources(&sym, cli.update).await;
 
     match cli.command {
+        Some(Commands::Start) => {
+            let cwd = std::env::current_dir().expect("failed to get current directory");
+            dispatch_and_print(&sym, &["start".to_string()], &cwd).await
+        }
         Some(Commands::Tutorial) => {
             print!("{}", tutorial::render_cli());
             ExitCode::SUCCESS
