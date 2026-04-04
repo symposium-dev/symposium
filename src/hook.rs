@@ -166,7 +166,7 @@ pub async fn run(sym: &Symposium, event: HookEvent) -> ExitCode {
 }
 
 /// Built-in hook logic. Returns typed `HookOutput` for the integration test harness.
-pub async fn dispatch_builtin(_sym: &Symposium, payload: &HookPayload) -> HookOutput {
+pub async fn dispatch_builtin(sym: &Symposium, payload: &HookPayload) -> HookOutput {
     tracing::info!(?payload, "hook invoked (builtin)");
 
     match &payload.sub_payload {
@@ -174,14 +174,168 @@ pub async fn dispatch_builtin(_sym: &Symposium, payload: &HookPayload) -> HookOu
             // No built-in logic for PreToolUse — plugin hooks only.
             HookOutput::empty()
         }
-        HookSubPayload::PostToolUse(_post) => {
-            // TODO (Step 7): activation recording
-            HookOutput::empty()
+        HookSubPayload::PostToolUse(post) => {
+            handle_post_tool_use(sym, post).await
         }
         HookSubPayload::UserPromptSubmit(_prompt) => {
             // TODO (Step 8): nudge logic
             HookOutput::empty()
         }
+    }
+}
+
+/// Handle PostToolUse: detect and record skill activations.
+async fn handle_post_tool_use(sym: &Symposium, post: &PostToolUsePayload) -> HookOutput {
+    let Some(ref session_id) = post.session_id else {
+        return HookOutput::empty();
+    };
+    let Some(ref cwd_str) = post.cwd else {
+        return HookOutput::empty();
+    };
+
+    let cwd = std::path::Path::new(cwd_str);
+
+    // Open DB and ensure workspace data is fresh
+    let mut db = match crate::state::open_db(sym.config_dir()).await {
+        Ok(db) => db,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to open state DB in PostToolUse");
+            return HookOutput::empty();
+        }
+    };
+
+    if let Err(e) = crate::workspace::ensure_fresh(sym, &mut db, cwd).await {
+        tracing::warn!(error = %e, "failed to refresh workspace in PostToolUse");
+        return HookOutput::empty();
+    }
+
+    // Detect activation via symposium crate command (Bash tool)
+    if let Some(crate_name) = detect_crate_activation_bash(post) {
+        record_activation(&mut db, session_id, &crate_name).await;
+    }
+
+    // Detect activation via MCP rust tool with ["crate", "<name>"]
+    if let Some(crate_name) = detect_crate_activation_mcp(post) {
+        record_activation(&mut db, session_id, &crate_name).await;
+    }
+
+    // Detect activation via file path matching an AvailableSkill
+    if let Some(crate_names) = detect_path_activation(&mut db, post, cwd_str).await {
+        for crate_name in crate_names {
+            record_activation(&mut db, session_id, &crate_name).await;
+        }
+    }
+
+    HookOutput::empty()
+}
+
+/// Detect if a Bash tool successfully ran `symposium crate <name>`.
+fn detect_crate_activation_bash(post: &PostToolUsePayload) -> Option<String> {
+    if post.tool_name != "Bash" {
+        return None;
+    }
+
+    // Check for successful exit
+    let exit_code = post.tool_response.get("exit_code")?.as_i64()?;
+    if exit_code != 0 {
+        return None;
+    }
+
+    // Check if command contains "symposium crate <name>"
+    let command = post.tool_input.get("command")?.as_str()?;
+    let trimmed = command.trim();
+
+    // Match patterns like "symposium crate tokio" or "symposium crate tokio --version 1.0"
+    let rest = trimmed
+        .strip_prefix("symposium crate ")
+        .or_else(|| trimmed.strip_prefix("symposium crate\t"))?;
+
+    // First word after "symposium crate " is the crate name (skip flags)
+    let crate_name = rest.split_whitespace().find(|w| !w.starts_with('-'))?;
+
+    if crate_name.is_empty() || crate_name == "--list" {
+        return None;
+    }
+
+    Some(crate_name.to_string())
+}
+
+/// Detect if an MCP rust tool was called with ["crate", "<name>"].
+fn detect_crate_activation_mcp(post: &PostToolUsePayload) -> Option<String> {
+    // MCP tool names include the server prefix, e.g., "mcp__symposium__rust"
+    if !post.tool_name.contains("rust") {
+        return None;
+    }
+
+    let args = post.tool_input.get("args")?.as_array()?;
+    if args.len() >= 2 && args[0].as_str()? == "crate" {
+        let name = args[1].as_str()?;
+        if !name.starts_with('-') && !name.is_empty() {
+            return Some(name.to_string());
+        }
+    }
+
+    None
+}
+
+/// Detect if Read/Bash accessed a path matching an AvailableSkill.skill_dir_path.
+async fn detect_path_activation(
+    db: &mut toasty::Db,
+    post: &PostToolUsePayload,
+    cwd: &str,
+) -> Option<Vec<String>> {
+    let target_path = match post.tool_name.as_str() {
+        "Read" => post.tool_input.get("file_path")?.as_str()?,
+        "Bash" => {
+            // Check if the command accessed a file path (heuristic: look at stdout for paths)
+            // This is intentionally conservative — we only check Read tool paths.
+            return None;
+        }
+        _ => return None,
+    };
+
+    use crate::state::AvailableSkill;
+    // Look up AvailableSkill rows for this cwd where the path matches
+    let available: Vec<AvailableSkill> =
+        match AvailableSkill::filter_by_cwd(cwd).exec(db).await {
+            Ok(skills) => skills,
+            Err(_) => return None,
+        };
+
+    let mut crate_names = Vec::new();
+    for skill in &available {
+        if target_path.starts_with(&skill.skill_dir_path) {
+            crate_names.push(skill.crate_name.clone());
+        }
+    }
+
+    if crate_names.is_empty() {
+        None
+    } else {
+        Some(crate_names)
+    }
+}
+
+/// Record a skill activation in the DB.
+async fn record_activation(db: &mut toasty::Db, session_id: &str, crate_name: &str) {
+    use crate::state::SkillActivation;
+    let now = chrono::Utc::now().to_rfc3339();
+    if let Err(e) = toasty::create!(SkillActivation {
+        session_id: session_id.to_string(),
+        crate_name: crate_name.to_string(),
+        activated_at: now,
+    })
+    .exec(db)
+    .await
+    {
+        tracing::warn!(
+            session_id,
+            crate_name,
+            error = %e,
+            "failed to record skill activation"
+        );
+    } else {
+        tracing::info!(session_id, crate_name, "recorded skill activation");
     }
 }
 
@@ -428,5 +582,91 @@ mod tests {
         let output = HookOutput::empty();
         let json = serde_json::to_value(&output).unwrap();
         assert!(json.get("hookSpecificOutput").is_none());
+    }
+
+    // --- Activation detection unit tests ---
+
+    #[test]
+    fn detect_bash_crate_activation() {
+        let post = PostToolUsePayload {
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({"command": "symposium crate tokio"}),
+            tool_response: serde_json::json!({"exit_code": 0, "stdout": "..."}),
+            session_id: Some("s1".to_string()),
+            cwd: Some("/tmp".to_string()),
+        };
+        assert_eq!(detect_crate_activation_bash(&post), Some("tokio".to_string()));
+    }
+
+    #[test]
+    fn detect_bash_crate_activation_with_version() {
+        let post = PostToolUsePayload {
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({"command": "symposium crate serde --version 1.0"}),
+            tool_response: serde_json::json!({"exit_code": 0}),
+            session_id: Some("s1".to_string()),
+            cwd: Some("/tmp".to_string()),
+        };
+        assert_eq!(detect_crate_activation_bash(&post), Some("serde".to_string()));
+    }
+
+    #[test]
+    fn detect_bash_crate_list_not_activation() {
+        let post = PostToolUsePayload {
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({"command": "symposium crate --list"}),
+            tool_response: serde_json::json!({"exit_code": 0}),
+            session_id: Some("s1".to_string()),
+            cwd: Some("/tmp".to_string()),
+        };
+        assert_eq!(detect_crate_activation_bash(&post), None);
+    }
+
+    #[test]
+    fn detect_bash_failed_not_activation() {
+        let post = PostToolUsePayload {
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({"command": "symposium crate tokio"}),
+            tool_response: serde_json::json!({"exit_code": 1}),
+            session_id: Some("s1".to_string()),
+            cwd: Some("/tmp".to_string()),
+        };
+        assert_eq!(detect_crate_activation_bash(&post), None);
+    }
+
+    #[test]
+    fn detect_mcp_crate_activation() {
+        let post = PostToolUsePayload {
+            tool_name: "mcp__symposium__rust".to_string(),
+            tool_input: serde_json::json!({"args": ["crate", "tokio"]}),
+            tool_response: serde_json::json!({"output": "..."}),
+            session_id: Some("s1".to_string()),
+            cwd: Some("/tmp".to_string()),
+        };
+        assert_eq!(detect_crate_activation_mcp(&post), Some("tokio".to_string()));
+    }
+
+    #[test]
+    fn detect_mcp_crate_list_not_activation() {
+        let post = PostToolUsePayload {
+            tool_name: "mcp__symposium__rust".to_string(),
+            tool_input: serde_json::json!({"args": ["crate", "--list"]}),
+            tool_response: serde_json::json!({"output": "..."}),
+            session_id: Some("s1".to_string()),
+            cwd: Some("/tmp".to_string()),
+        };
+        assert_eq!(detect_crate_activation_mcp(&post), None);
+    }
+
+    #[test]
+    fn detect_mcp_start_not_activation() {
+        let post = PostToolUsePayload {
+            tool_name: "mcp__symposium__rust".to_string(),
+            tool_input: serde_json::json!({"args": ["start"]}),
+            tool_response: serde_json::json!({"output": "..."}),
+            session_id: Some("s1".to_string()),
+            cwd: Some("/tmp".to_string()),
+        };
+        assert_eq!(detect_crate_activation_mcp(&post), None);
     }
 }
