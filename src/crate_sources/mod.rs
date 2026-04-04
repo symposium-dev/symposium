@@ -1,6 +1,6 @@
 //! Rust crate source fetching and management
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -27,15 +27,17 @@ pub struct RustCrateFetch<'a> {
     crate_name: String,
     version_spec: Option<String>,
     workspace: &'a [(String, semver::Version)],
+    cache_dir: &'a Path,
 }
 
 impl<'a> RustCrateFetch<'a> {
     /// Create a new fetch request for the given crate name
-    pub fn new(name: &str, workspace: &'a [(String, semver::Version)]) -> Self {
+    pub fn new(name: &str, workspace: &'a [(String, semver::Version)], cache_dir: &'a Path) -> Self {
         Self {
             crate_name: name.to_string(),
             version_spec: None,
             workspace,
+            cache_dir,
         }
     }
 
@@ -52,7 +54,7 @@ impl<'a> RustCrateFetch<'a> {
             .resolve(&self.crate_name, self.version_spec.as_deref())
             .await?;
 
-        let cache_manager = cache::CacheManager::new()?;
+        let cache_manager = cache::CacheManager::new(self.cache_dir)?;
         let extractor = extraction::CrateExtractor::new();
 
         let path = cache_manager

@@ -187,12 +187,12 @@ pub struct PluginCacheManager {
 }
 
 impl PluginCacheManager {
-    /// Create a cache manager for the given subdirectory under `~/.symposium/cache/`.
+    /// Create a cache manager for the given subdirectory under the cache root.
     ///
     /// Use `"plugins"` for individual skill git sources,
     /// `"plugin-sources"` for plugin source repositories.
-    pub fn new(subdir: &str) -> Self {
-        let cache_dir = crate::config::cache_dir().join(subdir);
+    pub fn new(cache_root: &std::path::Path, subdir: &str) -> Self {
+        let cache_dir = cache_root.join(subdir);
         Self {
             cache_dir,
             client: GitHubClient::new(),

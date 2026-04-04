@@ -8,15 +8,17 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use crate::config::Symposium;
 use crate::predicate::{self, Predicate};
 use crate::plugins::{ParsedPlugin, PluginRegistry, SkillGroup};
 
 /// Format the list of skills available for workspace crates as display text.
 pub async fn list_output(
+    sym: &Symposium,
     registry: &PluginRegistry,
     workspace: &[(String, semver::Version)],
 ) -> String {
-    let skills = list(registry, workspace).await;
+    let skills = list(sym, registry, workspace).await;
     if skills.is_empty() {
         "No skills available for crates in the current dependencies.".to_string()
     } else {
@@ -31,12 +33,13 @@ pub async fn list_output(
 
 /// Fetch crate sources and format info with any matching guidance.
 pub async fn info_output(
+    sym: &Symposium,
     name: &str,
     version: Option<&str>,
     registry: &PluginRegistry,
     workspace: &[(String, semver::Version)],
 ) -> anyhow::Result<String> {
-    let mut fetch = crate::crate_sources::RustCrateFetch::new(name, workspace);
+    let mut fetch = crate::crate_sources::RustCrateFetch::new(name, workspace, sym.cache_dir());
     if let Some(v) = version {
         fetch = fetch.version(v);
     }
@@ -50,7 +53,7 @@ pub async fn info_output(
         result.path.display()
     );
 
-    let advice = guidance(&result.name, registry, workspace).await;
+    let advice = guidance(sym, &result.name, registry, workspace).await;
     if !advice.is_empty() {
         output.push_str(&advice.format_output());
     }
@@ -210,6 +213,7 @@ impl SkillWithGroupContext {
 ///
 /// Both group-level and skill-level `applies-when` constraints must match the workspace.
 async fn resolve_skills(
+    sym: &Symposium,
     registry: &PluginRegistry,
     for_crate: Option<&str>,
     workspace: &[(String, semver::Version)],
@@ -222,7 +226,7 @@ async fn resolve_skills(
     for ParsedPlugin { path, plugin } in &registry.plugins {
         for group in &plugin.skills {
             let (group_crates, skills) =
-                load_skills_for_group(path, group, for_crate, workspace).await;
+                load_skills_for_group(sym, path, group, for_crate, workspace).await;
 
             collect_matching_skills(&skills, &group_crates, for_crate, workspace, &mut results);
         }
@@ -243,14 +247,25 @@ async fn resolve_skills(
 
 /// List skills available for crates in the workspace.
 async fn list(
+    sym: &Symposium,
     registry: &PluginRegistry,
     workspace: &[(String, semver::Version)],
 ) -> Vec<SkillWithGroupContext> {
-    resolve_skills(registry, None, workspace).await
+    resolve_skills(sym, registry, None, workspace).await
+}
+
+/// List skills with their group context (public, for workspace module).
+pub async fn list_output_raw(
+    sym: &Symposium,
+    registry: &PluginRegistry,
+    workspace: &[(String, semver::Version)],
+) -> Vec<SkillWithGroupContext> {
+    list(sym, registry, workspace).await
 }
 
 /// Get guidance for a specific crate from installed plugin skills.
 async fn guidance(
+    sym: &Symposium,
     crate_name: &str,
     registry: &PluginRegistry,
     workspace: &[(String, semver::Version)],
@@ -260,7 +275,7 @@ async fn guidance(
         optional_skills: Vec::new(),
     };
 
-    for entry in resolve_skills(registry, Some(crate_name), workspace).await {
+    for entry in resolve_skills(sym, registry, Some(crate_name), workspace).await {
         match entry.skill.activation {
             Activation::Always => {
                 let name = entry.skill.name().to_string();
@@ -334,6 +349,7 @@ fn format_skill_entry(skill: &Skill, crate_names: &[String]) -> String {
 /// Checks `crates` and `applies-when` predicates before fetching
 /// git sources, to avoid unnecessary downloads.
 async fn load_skills_for_group(
+    sym: &Symposium,
     plugin_path: &Path,
     group: &SkillGroup,
     for_crate: Option<&str>,
@@ -352,7 +368,7 @@ async fn load_skills_for_group(
         return (group_crates.to_vec(), Vec::new());
     }
 
-    let Some(dir) = resolve_skill_dir(plugin_path, group).await else {
+    let Some(dir) = resolve_skill_dir(sym, plugin_path, group).await else {
         return (group_crates.to_vec(), Vec::new());
     };
 
@@ -424,9 +440,9 @@ pub(crate) fn prune_nested_skills(paths: &mut Vec<PathBuf>) {
 }
 
 /// Fetch a skill group's git source, returning the cached directory path.
-async fn fetch_skill_source(git_url: &str) -> Result<PathBuf> {
+async fn fetch_skill_source(sym: &Symposium, git_url: &str) -> Result<PathBuf> {
     let source = crate::git_source::parse_github_url(git_url)?;
-    let cache_mgr = crate::git_source::PluginCacheManager::new("plugins");
+    let cache_mgr = crate::git_source::PluginCacheManager::new(sym.cache_dir(), "plugins");
     cache_mgr
         .get_or_fetch(&source, git_url, crate::git_source::UpdateLevel::None)
         .await
@@ -435,13 +451,13 @@ async fn fetch_skill_source(git_url: &str) -> Result<PathBuf> {
 /// Resolve the skill directory for a group, fetching from git if needed.
 ///
 /// Returns `None` if the group has no source and the plugin has no local dir.
-async fn resolve_skill_dir(plugin_path: &Path, group: &SkillGroup) -> Option<PathBuf> {
+async fn resolve_skill_dir(sym: &Symposium, plugin_path: &Path, group: &SkillGroup) -> Option<PathBuf> {
     if let Some(path) = &group.source.path {
         return Some(plugin_path.join(path));
     }
 
     if let Some(git_source) = &group.source.git {
-        match fetch_skill_source(&git_source).await {
+        match fetch_skill_source(sym, &git_source).await {
             Ok(path) => return Some(path),
             Err(e) => {
                 tracing::warn!(git = %git_source, error = %e, "failed to fetch skill source");
@@ -1092,8 +1108,9 @@ mod tests {
             standalone_skills: vec![skill],
         };
 
+        let sym = crate::config::Symposium::from_dir(tmp.path());
         let workspace = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
-        let results = list(&registry, &workspace).await;
+        let results = list(&sym, &registry, &workspace).await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].skill.name(), "standalone-serde");
         // No group context for standalone skills
@@ -1128,8 +1145,9 @@ mod tests {
             standalone_skills: vec![skill],
         };
 
+        let sym = crate::config::Symposium::from_dir(tmp.path());
         let workspace = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
-        let advice = guidance("serde", &registry, &workspace).await;
+        let advice = guidance(&sym, "serde", &registry, &workspace).await;
         assert_eq!(advice.default_content.len(), 1);
         assert_eq!(advice.default_content[0].0, "standalone-serde");
         assert!(
@@ -1166,8 +1184,9 @@ mod tests {
             standalone_skills: vec![skill],
         };
 
+        let sym = crate::config::Symposium::from_dir(tmp.path());
         let workspace = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
-        let advice = guidance("serde", &registry, &workspace).await;
+        let advice = guidance(&sym, "serde", &registry, &workspace).await;
         assert!(advice.is_empty());
     }
 

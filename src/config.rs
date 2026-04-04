@@ -1,8 +1,7 @@
 use serde::Deserialize;
-use std::cell::RefCell;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing::Level;
 
 #[derive(Debug, Deserialize, Clone)]
@@ -20,6 +19,31 @@ pub struct Config {
     /// User-defined plugin sources (git repos or local paths).
     #[serde(default, rename = "plugin-source")]
     pub plugin_source: Vec<PluginSourceConfig>,
+
+    /// Hook behavior settings.
+    #[serde(default)]
+    pub hooks: HooksConfig,
+}
+
+/// Configuration for hook behavior.
+#[derive(Debug, Deserialize, Clone)]
+pub struct HooksConfig {
+    /// Number of prompts before re-nudging about an unloaded crate skill.
+    /// Set to 0 to disable nudges entirely.
+    #[serde(default = "default_nudge_interval", rename = "nudge-interval")]
+    pub nudge_interval: i64,
+}
+
+impl Default for HooksConfig {
+    fn default() -> Self {
+        Self {
+            nudge_interval: default_nudge_interval(),
+        }
+    }
+}
+
+fn default_nudge_interval() -> i64 {
+    50
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -43,6 +67,7 @@ impl Default for Config {
             cache_dir: None,
             defaults: DefaultsConfig::default(),
             plugin_source: Vec::new(),
+            hooks: HooksConfig::default(),
         }
     }
 }
@@ -87,78 +112,102 @@ pub struct PluginSourceConfig {
     pub auto_update: bool,
 }
 
-/// Initialize logging and config. Call once at startup.
-pub fn init() {
-    use std::fs::OpenOptions;
-    use tracing_subscriber::EnvFilter;
-    use tracing_subscriber::fmt;
+const BUILTIN_RECOMMENDATIONS_URL: &str = "https://github.com/symposium-dev/recommendations";
 
-    let logs = logs_dir();
-    let now = chrono::Local::now();
-    let filename = now.format("symposium-%Y%m%d-%H%M%S.log").to_string();
-    let log_path = logs.join(&filename);
-
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)
-        .expect("failed to open log file");
-
-    let level = log_level();
-    let filter = EnvFilter::new(level.as_str());
-
-    fmt()
-        .with_env_filter(filter)
-        .with_writer(file)
-        .with_ansi(false)
-        .init();
-}
-
-/// Returns the config directory, creating it if needed.
+/// Central context for the Symposium application.
 ///
-/// Resolution order:
-/// 1. `SYMPOSIUM_HOME` env var
-/// 2. `XDG_CONFIG_HOME/symposium`
-/// 3. `~/.symposium`
-pub fn config_dir() -> PathBuf {
-    let dir = if let Ok(home) = env::var("SYMPOSIUM_HOME") {
-        PathBuf::from(home)
-    } else if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
-        PathBuf::from(xdg).join("symposium")
-    } else {
-        default_home()
-    };
-    let _ = fs::create_dir_all(&dir);
-    dir
+/// Owns `Config`, resolved directory paths, and (later) the DB handle.
+/// Thread `&Symposium` through all call sites instead of using global state.
+pub struct Symposium {
+    pub config: Config,
+    config_dir: PathBuf,
+    cache_dir: PathBuf,
 }
 
-/// Returns the cache directory, creating it if needed.
-///
-/// Resolution order:
-/// 1. `cache_dir` in config.toml (if set)
-/// 2. `SYMPOSIUM_HOME/cache`
-/// 3. `XDG_CACHE_HOME/symposium`
-/// 4. `~/.symposium/cache`
-pub fn cache_dir() -> PathBuf {
-    let dir = with_config(|c| {
-        if let Some(ref dir) = c.cache_dir {
-            return dir.clone();
-        }
-        if let Ok(home) = env::var("SYMPOSIUM_HOME") {
-            return PathBuf::from(home).join("cache");
-        }
-        if let Ok(xdg) = env::var("XDG_CACHE_HOME") {
-            return PathBuf::from(xdg).join("symposium");
-        }
-        default_home().join("cache")
-    });
-    let _ = fs::create_dir_all(&dir);
-    dir
-}
+impl Symposium {
+    /// Production constructor: resolves paths from environment.
+    ///
+    /// Resolution order for config dir:
+    /// 1. `SYMPOSIUM_HOME` env var
+    /// 2. `XDG_CONFIG_HOME/symposium`
+    /// 3. `~/.symposium`
+    pub fn from_environment() -> Self {
+        let config_dir = resolve_config_dir_from_env();
+        let _ = fs::create_dir_all(&config_dir);
 
-/// Returns the effective list of plugin sources, including built-in defaults.
-pub fn plugin_sources() -> Vec<PluginSourceConfig> {
-    with_config(|c| {
+        let config = load_config_from(&config_dir);
+
+        let cache_dir = resolve_cache_dir(&config, &config_dir);
+        let _ = fs::create_dir_all(&cache_dir);
+
+        Self {
+            config,
+            config_dir,
+            cache_dir,
+        }
+    }
+
+    /// Test constructor: everything rooted under a single directory.
+    ///
+    /// Creates `config.toml` from the provided config if not already present.
+    pub fn from_dir(root: &Path) -> Self {
+        let config_dir = root.to_path_buf();
+        let _ = fs::create_dir_all(&config_dir);
+
+        let config = load_config_from(&config_dir);
+
+        let cache_dir = if let Some(ref dir) = config.cache_dir {
+            dir.clone()
+        } else {
+            config_dir.join("cache")
+        };
+        let _ = fs::create_dir_all(&cache_dir);
+
+        Self {
+            config,
+            config_dir,
+            cache_dir,
+        }
+    }
+
+    /// Initialize logging. Call once at startup.
+    pub fn init_logging(&self) {
+        use std::fs::OpenOptions;
+        use tracing_subscriber::EnvFilter;
+        use tracing_subscriber::fmt;
+
+        let logs = self.logs_dir();
+        let now = chrono::Local::now();
+        let filename = now.format("symposium-%Y%m%d-%H%M%S.log").to_string();
+        let log_path = logs.join(&filename);
+
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .expect("failed to open log file");
+
+        let level = self.log_level();
+        let filter = EnvFilter::new(level.as_str());
+
+        fmt()
+            .with_env_filter(filter)
+            .with_writer(file)
+            .with_ansi(false)
+            .init();
+    }
+
+    pub fn config_dir(&self) -> &Path {
+        &self.config_dir
+    }
+
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache_dir
+    }
+
+    /// Returns the effective list of plugin sources, including built-in defaults.
+    pub fn plugin_sources(&self) -> Vec<PluginSourceConfig> {
+        let c = &self.config;
         let mut sources = Vec::new();
 
         if c.defaults.symposium_recommendations {
@@ -181,28 +230,64 @@ pub fn plugin_sources() -> Vec<PluginSourceConfig> {
 
         sources.extend(c.plugin_source.clone());
         sources
-    })
-}
+    }
 
-#[cfg(test)]
-pub fn plugins_dir() -> PathBuf {
-    let dir = config_dir().join("plugins");
-    let _ = fs::create_dir_all(&dir);
-    dir
-}
+    #[cfg(test)]
+    pub fn plugins_dir(&self) -> PathBuf {
+        let dir = self.config_dir.join("plugins");
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
 
-fn with_config<T>(f: impl FnOnce(&Config) -> T) -> T {
-    CONFIG.with(|cell| {
-        let mut opt = cell.borrow_mut();
-        if opt.is_none() {
-            *opt = Some(load_config());
+    fn logs_dir(&self) -> PathBuf {
+        let dir = self.config_dir.join("logs");
+        let _ = fs::create_dir_all(&dir);
+        dir
+    }
+
+    fn log_level(&self) -> Level {
+        match self.config.logging.level.to_lowercase().as_str() {
+            "trace" => Level::TRACE,
+            "debug" => Level::DEBUG,
+            "info" => Level::INFO,
+            "warn" => Level::WARN,
+            "error" => Level::ERROR,
+            other => {
+                eprintln!("warning: unknown log level '{other}', defaulting to info");
+                Level::INFO
+            }
         }
-        f(opt.as_ref().unwrap())
-    })
+    }
 }
 
-fn load_config() -> Config {
-    let path = config_path();
+/// Resolve config dir from environment variables.
+fn resolve_config_dir_from_env() -> PathBuf {
+    if let Ok(home) = env::var("SYMPOSIUM_HOME") {
+        PathBuf::from(home)
+    } else if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
+        PathBuf::from(xdg).join("symposium")
+    } else {
+        default_home()
+    }
+}
+
+/// Resolve cache dir from config and environment.
+fn resolve_cache_dir(config: &Config, config_dir: &Path) -> PathBuf {
+    if let Some(ref dir) = config.cache_dir {
+        return dir.clone();
+    }
+    if let Ok(home) = env::var("SYMPOSIUM_HOME") {
+        return PathBuf::from(home).join("cache");
+    }
+    if let Ok(xdg) = env::var("XDG_CACHE_HOME") {
+        return PathBuf::from(xdg).join("symposium");
+    }
+    config_dir.join("cache")
+}
+
+/// Load config from a config directory.
+fn load_config_from(config_dir: &Path) -> Config {
+    let path = config_dir.join("config.toml");
     match fs::read_to_string(&path) {
         Ok(contents) => toml::from_str(&contents).unwrap_or_else(|e| {
             eprintln!("warning: failed to parse {}: {e}", path.display());
@@ -212,55 +297,11 @@ fn load_config() -> Config {
     }
 }
 
-/// Returns the path to the config file.
-fn config_path() -> PathBuf {
-    config_dir().join("config.toml")
-}
-
-/// Returns the logs directory, creating it if needed.
-///
-/// Resolution order:
-/// 1. `SYMPOSIUM_HOME/logs`
-/// 2. `XDG_DATA_HOME/symposium/logs`
-/// 3. `~/.symposium/logs`
-fn logs_dir() -> PathBuf {
-    let dir = if let Ok(home) = env::var("SYMPOSIUM_HOME") {
-        PathBuf::from(home).join("logs")
-    } else if let Ok(xdg) = env::var("XDG_DATA_HOME") {
-        PathBuf::from(xdg).join("symposium").join("logs")
-    } else {
-        default_home().join("logs")
-    };
-    let _ = fs::create_dir_all(&dir);
-    dir
-}
-
-/// Returns the configured log level.
-fn log_level() -> Level {
-    with_config(|c| match c.logging.level.to_lowercase().as_str() {
-        "trace" => Level::TRACE,
-        "debug" => Level::DEBUG,
-        "info" => Level::INFO,
-        "warn" => Level::WARN,
-        "error" => Level::ERROR,
-        other => {
-            eprintln!("warning: unknown log level '{other}', defaulting to info");
-            Level::INFO
-        }
-    })
-}
-
 /// Returns the default symposium home directory (~/.symposium).
 fn default_home() -> PathBuf {
     dirs::home_dir()
         .expect("could not determine home directory")
         .join(".symposium")
-}
-
-const BUILTIN_RECOMMENDATIONS_URL: &str = "https://github.com/symposium-dev/recommendations";
-
-thread_local! {
-    static CONFIG: RefCell<Option<Config>> = const { RefCell::new(None) };
 }
 
 fn default_true() -> bool {
@@ -362,5 +403,29 @@ mod tests {
         assert_eq!(config.plugin_source[0].name, "org-a");
         assert_eq!(config.plugin_source[1].name, "org-b");
         assert_eq!(config.plugin_source[2].name, "local");
+    }
+
+    #[test]
+    fn from_dir_creates_default_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(tmp.path());
+        assert!(sym.config.defaults.symposium_recommendations);
+        assert_eq!(sym.config_dir(), tmp.path());
+        assert_eq!(sym.cache_dir(), tmp.path().join("cache"));
+    }
+
+    #[test]
+    fn from_dir_reads_config_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            indoc! {"
+                [defaults]
+                symposium-recommendations = false
+            "},
+        )
+        .unwrap();
+        let sym = Symposium::from_dir(tmp.path());
+        assert!(!sym.config.defaults.symposium_recommendations);
     }
 }

@@ -1,17 +1,16 @@
+use std::sync::Arc;
+
 use clap::{Parser, Subcommand};
+use std::path::Path;
 use std::process::ExitCode;
 
-use crate::plugins::ParsedPlugin;
-
-mod predicate;
-mod config;
-mod crate_sources;
-mod git_source;
-mod hook;
-mod mcp;
-mod plugins;
-mod skills;
-pub mod tutorial;
+use symposium::config;
+use symposium::dispatch;
+use symposium::git_source;
+use symposium::hook;
+use symposium::mcp;
+use symposium::plugins::{self, ParsedPlugin};
+use symposium::tutorial;
 
 #[derive(Parser)]
 #[command(name = "symposium", version, about = "AI the Rust Way")]
@@ -26,7 +25,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Show the Symposium tutorial for agents and humans
+    /// Get Rust guidance and list available crate skills for the workspace
+    Start,
+
+    /// Show the Symposium tutorial (static text only, no workspace scanning)
     Tutorial,
 
     /// Run as an MCP server (stdio transport)
@@ -96,29 +98,35 @@ enum PluginCommand {
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    config::init();
+    let sym = Arc::new(config::Symposium::from_environment());
+    sym.init_logging();
 
     let cli = Cli::parse();
 
     // Ensure git-based plugin sources are up to date (non-blocking on failure).
-    plugins::ensure_plugin_sources(cli.update).await;
+    plugins::ensure_plugin_sources(&sym, cli.update).await;
 
     match cli.command {
+        Some(Commands::Start) => {
+            let cwd = std::env::current_dir().expect("failed to get current directory");
+            dispatch_and_print(&sym, &["start".to_string()], &cwd).await
+        }
         Some(Commands::Tutorial) => {
             print!("{}", tutorial::render_cli());
             ExitCode::SUCCESS
         }
-        Some(Commands::Mcp) => match mcp::serve().await {
+        Some(Commands::Mcp) => match mcp::serve(sym.clone()).await {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("MCP server error: {e}");
                 ExitCode::FAILURE
             }
         },
-        Some(Commands::Hook { event }) => hook::run(event).await,
+        Some(Commands::Hook { event }) => hook::run(&sym, event).await,
         Some(Commands::Rust { command }) => {
-            print!("{}", mcp::execute_rust_command(&command));
-            ExitCode::SUCCESS
+            let cwd = std::env::current_dir().expect("failed to get current directory");
+            let args = vec![command];
+            dispatch_and_print(&sym, &args, &cwd).await
         }
         Some(Commands::Crate {
             name,
@@ -126,33 +134,22 @@ async fn main() -> ExitCode {
             list,
         }) => {
             let cwd = std::env::current_dir().expect("failed to get current directory");
-
+            let mut args = vec!["crate".to_string()];
             if list {
-                let workspace = crate_sources::workspace_semver_pairs(&cwd);
-                let registry = plugins::load_registry();
-                print!("{}", skills::list_output(&registry, &workspace).await);
-                ExitCode::SUCCESS
-            } else if let Some(name) = name {
-                let workspace = crate_sources::workspace_semver_pairs(&cwd);
-                let registry = plugins::load_registry();
-                match skills::info_output(&name, version.as_deref(), &registry, &workspace).await {
-                    Ok(output) => {
-                        print!("{output}");
-                        ExitCode::SUCCESS
-                    }
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        ExitCode::FAILURE
-                    }
-                }
-            } else {
-                eprintln!("Provide a crate name or use --list");
-                ExitCode::FAILURE
+                args.push("--list".to_string());
             }
+            if let Some(name) = name {
+                args.push(name);
+            }
+            if let Some(version) = version {
+                args.push("--version".to_string());
+                args.push(version);
+            }
+            dispatch_and_print(&sym, &args, &cwd).await
         }
         Some(Commands::Plugin { command }) => match command {
             PluginCommand::Sync { provider } => {
-                match plugins::sync_plugin_source(provider.as_deref()).await {
+                match plugins::sync_plugin_source(&sym, provider.as_deref()).await {
                     Ok(synced) => {
                         if synced.is_empty() {
                             if let Some(ref p) = provider {
@@ -174,7 +171,7 @@ async fn main() -> ExitCode {
                 }
             }
             PluginCommand::List => {
-                let providers = plugins::list_plugins();
+                let providers = plugins::list_plugins(&sym);
                 for provider in &providers {
                     println!("Provider: {}", provider.name);
                     println!("  Type: {}", provider.source_type);
@@ -277,7 +274,7 @@ async fn main() -> ExitCode {
                     }
                 }
             }
-            PluginCommand::Show { plugin } => match plugins::find_plugin(&plugin) {
+            PluginCommand::Show { plugin } => match plugins::find_plugin(&sym, &plugin) {
                 Some(ParsedPlugin { path, plugin }) => {
                     println!("# Source: {}", path.display());
                     println!();
@@ -296,6 +293,7 @@ async fn main() -> ExitCode {
             println!("Usage: symposium <command>");
             println!();
             println!("Commands:");
+            println!("  start      Get Rust guidance and list available crate skills");
             println!("  tutorial   Show the Symposium tutorial for agents and humans");
             println!("  rust       Get Rust development guidance");
             println!("  crate      Find crate sources and guidance");
@@ -306,6 +304,19 @@ async fn main() -> ExitCode {
             println!();
             println!("Run `symposium <command> --help` for more information.");
             ExitCode::SUCCESS
+        }
+    }
+}
+
+async fn dispatch_and_print(sym: &config::Symposium, args: &[String], cwd: &Path) -> ExitCode {
+    match dispatch::dispatch(sym, args, cwd).await {
+        dispatch::DispatchResult::Ok(output) => {
+            print!("{output}");
+            ExitCode::SUCCESS
+        }
+        dispatch::DispatchResult::Err(e) => {
+            eprintln!("Error: {e}");
+            ExitCode::FAILURE
         }
     }
 }

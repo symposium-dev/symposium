@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use super::extraction::CrateExtractor;
-use crate::config;
 
 /// Manages access to cargo's registry cache and our extraction cache.
 ///
@@ -23,12 +22,12 @@ impl CacheManager {
     ///
     /// Fails if `CARGO_HOME` cannot be determined (e.g., `$HOME` is unset
     /// and no `CARGO_HOME` environment variable is provided).
-    pub fn new() -> Result<Self> {
+    pub fn new(cache_dir: &std::path::Path) -> Result<Self> {
         let cargo_home = home::cargo_home().context("could not determine CARGO_HOME directory")?;
 
         let cargo_registry_dir = cargo_home.join("registry");
 
-        let extraction_cache_dir = config::cache_dir().join("extractions");
+        let extraction_cache_dir = cache_dir.join("extractions");
 
         Ok(Self {
             cargo_registry_dir,
