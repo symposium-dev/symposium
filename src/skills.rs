@@ -254,6 +254,15 @@ async fn list(
     resolve_skills(sym, registry, None, workspace).await
 }
 
+/// List skills with their group context (public, for workspace module).
+pub async fn list_output_raw(
+    sym: &Symposium,
+    registry: &PluginRegistry,
+    workspace: &[(String, semver::Version)],
+) -> Vec<SkillWithGroupContext> {
+    list(sym, registry, workspace).await
+}
+
 /// Get guidance for a specific crate from installed plugin skills.
 async fn guidance(
     sym: &Symposium,
