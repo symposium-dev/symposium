@@ -33,7 +33,7 @@ pub async fn compute_skills_applicable_to_workspace(
 ) -> Result<Vec<ApplicableSkill>> {
     let deps = crate::crate_sources::workspace_semver_pairs(cwd);
     let registry = crate::plugins::load_registry(sym);
-    let skills = crate::skills::resolve_applicable_skills(sym, &registry, &deps).await;
+    let skills = crate::skills::skills_applicable_to(sym, &registry, &deps).await;
 
     let mut applicable = Vec::new();
     for entry in &skills {

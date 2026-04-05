@@ -18,7 +18,7 @@ pub async fn list_output(
     registry: &PluginRegistry,
     workspace: &[(String, semver::Version)],
 ) -> String {
-    let skills = resolve_skills(sym, registry, workspace).await;
+    let skills = skills_applicable_to(sym, registry, workspace).await;
     if skills.is_empty() {
         "No skills available for crates in the current dependencies.".to_string()
     } else {
@@ -201,10 +201,12 @@ impl SkillWithGroupContext {
 
 /// Resolve all applicable skills from the registry.
 ///
+/// Resolve all skills applicable to the given crates.
+///
 /// `for_crates` is the set of crate name/version pairs to match against.
 /// For `crate --list`, this is the full workspace deps.
 /// For `crate <name>`, this is a single-element slice with the resolved crate.
-async fn resolve_skills(
+pub async fn skills_applicable_to(
     sym: &Symposium,
     registry: &PluginRegistry,
     for_crates: &[(String, semver::Version)],
@@ -235,14 +237,6 @@ async fn resolve_skills(
     results
 }
 
-/// Resolve skills applicable to the given crates (public, for workspace module).
-pub async fn resolve_applicable_skills(
-    sym: &Symposium,
-    registry: &PluginRegistry,
-    workspace: &[(String, semver::Version)],
-) -> Vec<SkillWithGroupContext> {
-    resolve_skills(sym, registry, workspace).await
-}
 
 /// Get guidance for a specific crate from installed plugin skills.
 async fn guidance(
@@ -257,7 +251,7 @@ async fn guidance(
     };
 
     let for_crates = [(crate_name.to_string(), crate_version.clone())];
-    for entry in resolve_skills(sym, registry, &for_crates).await {
+    for entry in skills_applicable_to(sym, registry, &for_crates).await {
         match entry.skill.activation {
             Activation::Always => {
                 let name = entry.skill.name().to_string();
@@ -1040,7 +1034,7 @@ mod tests {
 
         let sym = crate::config::Symposium::from_dir(tmp.path());
         let workspace = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
-        let results = resolve_skills(&sym, &registry, &workspace).await;
+        let results = skills_applicable_to(&sym, &registry, &workspace).await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].skill.name(), "standalone-serde");
         // No group context for standalone skills
