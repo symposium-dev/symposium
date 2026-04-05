@@ -5,28 +5,33 @@
 
 use std::path::{Path, PathBuf};
 
+use clap::Parser;
+
 use symposium::config::Symposium;
-use symposium::dispatch::{self, DispatchResult};
+use symposium::dispatch::{self, DispatchResult, SharedArgs};
 use symposium::hook::{self, HookOutput, HookPayload};
 
 /// Test context wrapping an isolated `Symposium` instance.
 pub struct TestContext {
     pub sym: Symposium,
     /// The temporary directory (kept alive for the test's duration).
-    _tempdir: tempfile::TempDir,
+    pub _tempdir: tempfile::TempDir,
     /// Root of the overlaid workspace (if a workspace fixture was included).
-    workspace_root: Option<PathBuf>,
+    pub workspace_root: Option<PathBuf>,
 }
 
 impl TestContext {
     /// Call the shared dispatch function, returning the output string.
+    ///
+    /// Args are parsed via Clap just as the MCP server would.
     pub async fn invoke(&self, args: &[&str]) -> Result<String, String> {
-        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let parsed = SharedArgs::try_parse_from(args)
+            .map_err(|e| format!("failed to parse args: {e}"))?;
         let cwd = self
             .workspace_root
             .as_deref()
             .unwrap_or_else(|| self.sym.config_dir());
-        match dispatch::dispatch(&self.sym, &args, cwd).await {
+        match dispatch::dispatch(&self.sym, parsed.command, cwd).await {
             DispatchResult::Ok(output) => Ok(output),
             DispatchResult::Err(e) => Err(e),
         }
@@ -36,11 +41,6 @@ impl TestContext {
     pub async fn invoke_hook(&self, payload: &HookPayload) -> HookOutput {
         hook::dispatch_builtin(&self.sym, payload).await
     }
-
-    /// Path to the workspace root (if a workspace fixture was included).
-    pub fn workspace_root(&self) -> Option<&Path> {
-        self.workspace_root.as_deref()
-    }
 }
 
 /// Create a test context by overlaying fixture fragments into a tempdir.
@@ -48,7 +48,31 @@ impl TestContext {
 /// Each fixture name corresponds to a directory under `tests/fixtures/`.
 /// Files are copied in order, so later fixtures override earlier ones.
 ///
-/// If any fixture contains a `Cargo.toml`, its path is recorded as the workspace root.
+/// # Workspace root detection
+///
+/// The function scans each fixture for a `Cargo.toml`. If found at the fixture
+/// root, the tempdir root becomes `workspace_root`. If found in a subdirectory,
+/// that subdirectory path (under the tempdir) becomes `workspace_root`.
+///
+/// # Example
+///
+/// ```text
+/// fixtures/
+///     plugins0/
+///         config.toml
+///         plugins/my-skill/SKILL.md
+///     workspace0/
+///         Cargo.toml
+///         src/lib.rs
+///
+/// with_fixture(&["plugins0", "workspace0"])
+///
+/// $tmpdir/                          <-- sym.config_dir()
+///     config.toml                   <-- from plugins0
+///     plugins/my-skill/SKILL.md     <-- from plugins0
+///     Cargo.toml                    <-- from workspace0, workspace_root = $tmpdir
+///     src/lib.rs                    <-- from workspace0
+/// ```
 pub fn with_fixture(fixtures: &[&str]) -> TestContext {
     let tempdir = tempfile::tempdir().expect("failed to create tempdir");
     let root = tempdir.path();
@@ -65,9 +89,19 @@ pub fn with_fixture(fixtures: &[&str]) -> TestContext {
         );
         copy_dir_recursive(&fixture_dir, root);
 
-        // Detect workspace root
+        // Detect workspace root: check fixture root and subdirectories
         if fixture_dir.join("Cargo.toml").exists() {
             workspace_root = Some(root.to_path_buf());
+        } else {
+            // Scan one level of subdirectories for Cargo.toml
+            if let Ok(entries) = std::fs::read_dir(&fixture_dir) {
+                for entry in entries.flatten() {
+                    if entry.path().is_dir() && entry.path().join("Cargo.toml").exists() {
+                        workspace_root =
+                            Some(root.join(entry.file_name()));
+                    }
+                }
+            }
         }
     }
 

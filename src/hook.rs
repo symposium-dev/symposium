@@ -1,130 +1,14 @@
 use std::io::{Read, Write};
 use std::process::{Command, ExitCode, Stdio};
 
-use serde::{Deserialize, Serialize};
-
 use crate::config::Symposium;
 use crate::plugins::ParsedPlugin;
 
-#[derive(Debug, Clone, clap::ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
-pub enum HookEvent {
-    #[value(name = "pre-tool-use")]
-    #[serde(rename = "PreToolUse")]
-    PreToolUse,
-
-    #[value(name = "post-tool-use")]
-    #[serde(rename = "PostToolUse")]
-    PostToolUse,
-
-    #[value(name = "user-prompt-submit")]
-    #[serde(rename = "UserPromptSubmit")]
-    UserPromptSubmit,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HookPayload {
-    #[serde(flatten)]
-    pub sub_payload: HookSubPayload,
-    #[serde(flatten)]
-    pub rest: serde_json::Map<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "hook_event_name")]
-pub enum HookSubPayload {
-    #[serde(rename = "PreToolUse")]
-    PreToolUse(PreToolUsePayload),
-
-    #[serde(rename = "PostToolUse")]
-    PostToolUse(PostToolUsePayload),
-
-    #[serde(rename = "UserPromptSubmit")]
-    UserPromptSubmit(UserPromptSubmitPayload),
-}
-
-impl HookSubPayload {
-    pub fn hook_event(&self) -> HookEvent {
-        match self {
-            HookSubPayload::PreToolUse(_) => HookEvent::PreToolUse,
-            HookSubPayload::PostToolUse(_) => HookEvent::PostToolUse,
-            HookSubPayload::UserPromptSubmit(_) => HookEvent::UserPromptSubmit,
-        }
-    }
-
-    #[tracing::instrument(ret)]
-    pub fn matches_matcher(&self, matcher: &str) -> bool {
-        // TODO: I'm not sure what exactly Claude's rules are, but this is fine for now
-        if matcher == "*" {
-            return true;
-        }
-        match self {
-            HookSubPayload::PreToolUse(payload) => matcher.contains(&payload.tool_name),
-            HookSubPayload::PostToolUse(payload) => matcher.contains(&payload.tool_name),
-            HookSubPayload::UserPromptSubmit(_) => true,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PreToolUsePayload {
-    pub tool_name: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PostToolUsePayload {
-    pub tool_name: String,
-    pub tool_input: serde_json::Value,
-    pub tool_response: serde_json::Value,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub cwd: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UserPromptSubmitPayload {
-    #[serde(default)]
-    pub prompt: String,
-    #[serde(default)]
-    pub session_id: Option<String>,
-    #[serde(default)]
-    pub cwd: Option<String>,
-}
-
-/// Structured output from built-in hook logic.
-///
-/// Serialized to JSON on stdout for Claude Code to consume.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct HookOutput {
-    /// If set, injected into the LLM conversation as additional context.
-    #[serde(rename = "hookSpecificOutput", skip_serializing_if = "Option::is_none")]
-    pub hook_specific_output: Option<HookSpecificOutput>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HookSpecificOutput {
-    #[serde(rename = "hookEventName")]
-    pub hook_event_name: String,
-    #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
-    pub additional_context: Option<String>,
-}
-
-impl HookOutput {
-    /// Create a HookOutput with additional context for the given event.
-    pub fn with_context(event_name: &str, context: String) -> Self {
-        Self {
-            hook_specific_output: Some(HookSpecificOutput {
-                hook_event_name: event_name.to_string(),
-                additional_context: Some(context),
-            }),
-        }
-    }
-
-    /// Create an empty HookOutput (no additional context).
-    pub fn empty() -> Self {
-        Self::default()
-    }
-}
+// Re-export hook schema types from the symposium-schema crate.
+pub use symposium_schema::{
+    HookEvent, HookOutput, HookPayload, HookSpecificOutput, HookSubPayload, PostToolUsePayload,
+    PreToolUsePayload, UserPromptSubmitPayload,
+};
 
 /// CLI entry point: read payload from stdin, dispatch, print output.
 pub async fn run(sym: &Symposium, event: HookEvent) -> ExitCode {
@@ -194,8 +78,8 @@ async fn handle_post_tool_use(sym: &Symposium, post: &PostToolUsePayload) -> Hoo
 
     let cwd = std::path::Path::new(cwd_str);
 
-    // Open DB and ensure workspace data is fresh
-    let mut db = match crate::state::open_db(sym.config_dir()).await {
+    // Get DB handle
+    let mut db = match sym.db().await {
         Ok(db) => db,
         Err(e) => {
             tracing::warn!(error = %e, "failed to open state DB in PostToolUse");
@@ -203,25 +87,23 @@ async fn handle_post_tool_use(sym: &Symposium, post: &PostToolUsePayload) -> Hoo
         }
     };
 
-    if let Err(e) = crate::workspace::ensure_fresh(sym, &mut db, cwd).await {
-        tracing::warn!(error = %e, "failed to refresh workspace in PostToolUse");
-        return HookOutput::empty();
-    }
-
     // Detect activation via symposium crate command (Bash tool)
     if let Some(crate_name) = detect_crate_activation_bash(post) {
-        record_activation(&mut db, session_id, &crate_name).await;
+        crate::state::session::record_activation(&mut *db, session_id, &crate_name).await;
     }
 
     // Detect activation via MCP rust tool with ["crate", "<name>"]
     if let Some(crate_name) = detect_crate_activation_mcp(post) {
-        record_activation(&mut db, session_id, &crate_name).await;
+        crate::state::session::record_activation(&mut *db, session_id, &crate_name).await;
     }
 
-    // Detect activation via file path matching an AvailableSkill
-    if let Some(crate_names) = detect_path_activation(&mut db, post, cwd_str).await {
+    // Detect activation via file path matching available skills
+    let available = crate::workspace::compute_available_skills(sym, cwd)
+        .await
+        .unwrap_or_default();
+    if let Some(crate_names) = detect_path_activation(&available, post) {
         for crate_name in crate_names {
-            record_activation(&mut db, session_id, &crate_name).await;
+            crate::state::session::record_activation(&mut *db, session_id, &crate_name).await;
         }
     }
 
@@ -277,32 +159,18 @@ fn detect_crate_activation_mcp(post: &PostToolUsePayload) -> Option<String> {
     None
 }
 
-/// Detect if Read/Bash accessed a path matching an AvailableSkill.skill_dir_path.
-async fn detect_path_activation(
-    db: &mut toasty::Db,
+/// Detect if Read tool accessed a path matching an available skill directory.
+fn detect_path_activation(
+    available: &[crate::workspace::AvailableSkill],
     post: &PostToolUsePayload,
-    cwd: &str,
 ) -> Option<Vec<String>> {
     let target_path = match post.tool_name.as_str() {
         "Read" => post.tool_input.get("file_path")?.as_str()?,
-        "Bash" => {
-            // Check if the command accessed a file path (heuristic: look at stdout for paths)
-            // This is intentionally conservative — we only check Read tool paths.
-            return None;
-        }
         _ => return None,
     };
 
-    use crate::state::AvailableSkill;
-    // Look up AvailableSkill rows for this cwd where the path matches
-    let available: Vec<AvailableSkill> =
-        match AvailableSkill::filter_by_cwd(cwd).exec(db).await {
-            Ok(skills) => skills,
-            Err(_) => return None,
-        };
-
     let mut crate_names = Vec::new();
-    for skill in &available {
+    for skill in available {
         if target_path.starts_with(&skill.skill_dir_path) {
             crate_names.push(skill.crate_name.clone());
         }
@@ -315,35 +183,13 @@ async fn detect_path_activation(
     }
 }
 
-/// Record a skill activation in the DB.
-async fn record_activation(db: &mut toasty::Db, session_id: &str, crate_name: &str) {
-    use crate::state::SkillActivation;
-    let now = chrono::Utc::now().to_rfc3339();
-    if let Err(e) = toasty::create!(SkillActivation {
-        session_id: session_id.to_string(),
-        crate_name: crate_name.to_string(),
-        activated_at: now,
-    })
-    .exec(db)
-    .await
-    {
-        tracing::warn!(
-            session_id,
-            crate_name,
-            error = %e,
-            "failed to record skill activation"
-        );
-    } else {
-        tracing::info!(session_id, crate_name, "recorded skill activation");
-    }
-}
 
 /// Handle UserPromptSubmit: scan for crate mentions and nudge about unloaded skills.
 async fn handle_user_prompt_submit(
     sym: &Symposium,
     prompt_payload: &UserPromptSubmitPayload,
 ) -> HookOutput {
-    let nudge_interval = sym.config.hooks.nudge_interval;
+    let nudge_interval = sym.settings.hooks.nudge_interval;
 
     // If nudge-interval is 0, disable nudges entirely
     if nudge_interval == 0 {
@@ -359,30 +205,10 @@ async fn handle_user_prompt_submit(
 
     let cwd = std::path::Path::new(cwd_str);
 
-    // Open DB and ensure workspace data is fresh
-    let mut db = match crate::state::open_db(sym.config_dir()).await {
-        Ok(db) => db,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to open state DB in UserPromptSubmit");
-            return HookOutput::empty();
-        }
-    };
-
-    if let Err(e) = crate::workspace::ensure_fresh(sym, &mut db, cwd).await {
-        tracing::warn!(error = %e, "failed to refresh workspace in UserPromptSubmit");
-        return HookOutput::empty();
-    }
-
-    // Increment prompt count
-    let prompt_count = increment_prompt_count(&mut db, session_id).await;
-
-    // Get available skills for this cwd
-    use crate::state::AvailableSkill;
-    let available: Vec<AvailableSkill> =
-        match AvailableSkill::filter_by_cwd(cwd_str).exec(&mut db).await {
-            Ok(skills) => skills,
-            Err(_) => return HookOutput::empty(),
-        };
+    // Compute available skills for this workspace (no caching)
+    let available = crate::workspace::compute_available_skills(sym, cwd)
+        .await
+        .unwrap_or_default();
 
     if available.is_empty() {
         return HookOutput::empty();
@@ -399,62 +225,28 @@ async fn handle_user_prompt_submit(
         return HookOutput::empty();
     }
 
-    // Check activations for this session
-    use crate::state::SkillActivation;
-    let activations: Vec<SkillActivation> =
-        match SkillActivation::filter_by_session_id(session_id)
-            .exec(&mut db)
-            .await
-        {
-            Ok(a) => a,
-            Err(_) => Vec::new(),
-        };
-    let activated_crates: std::collections::HashSet<&str> =
-        activations.iter().map(|a| a.crate_name.as_str()).collect();
-
-    // Check nudges for this session
-    use crate::state::SkillNudge;
-    let nudges: Vec<SkillNudge> = match SkillNudge::filter_by_session_id(session_id)
-        .exec(&mut db)
-        .await
-    {
-        Ok(n) => n,
-        Err(_) => Vec::new(),
+    // Get DB handle for session state
+    let mut db = match sym.db().await {
+        Ok(db) => db,
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to open state DB in UserPromptSubmit");
+            return HookOutput::empty();
+        }
     };
 
-    // Build nudge messages
-    let mut nudge_crates = Vec::new();
+    // Increment prompt count
+    let prompt_count =
+        crate::state::session::increment_prompt_count(&mut *db, session_id).await;
 
-    for crate_name in &mentioned {
-        // Skip if already activated
-        if activated_crates.contains(crate_name.as_str()) {
-            continue;
-        }
-
-        // Find the most recent nudge for this crate (highest at_prompt)
-        let existing_nudge = nudges
-            .iter()
-            .filter(|n| n.crate_name == *crate_name)
-            .max_by_key(|n| n.at_prompt);
-
-        match existing_nudge {
-            None => {
-                // Never nudged — nudge now
-                nudge_crates.push(crate_name.clone());
-                record_nudge(&mut db, session_id, crate_name, prompt_count).await;
-            }
-            Some(nudge) => {
-                // Check if enough prompts have elapsed for re-nudge
-                if prompt_count - nudge.at_prompt >= nudge_interval {
-                    nudge_crates.push(crate_name.clone());
-                    // We can't easily update a single nudge, so just record the new prompt count.
-                    // The nudge check uses the latest at_prompt for each crate, so inserting
-                    // a new row with the current prompt count effectively "updates" the nudge.
-                    record_nudge(&mut db, session_id, crate_name, prompt_count).await;
-                }
-            }
-        }
-    }
+    // Determine which crates to nudge about (delegates all DB logic to state::session)
+    let nudge_crates = crate::state::session::compute_nudges(
+        &mut *db,
+        session_id,
+        &mentioned,
+        nudge_interval,
+        prompt_count,
+    )
+    .await;
 
     if nudge_crates.is_empty() {
         return HookOutput::empty();
@@ -472,41 +264,6 @@ async fn handle_user_prompt_submit(
     HookOutput::with_context("UserPromptSubmit", context.trim_end().to_string())
 }
 
-/// Increment the session prompt count, returning the new count.
-async fn increment_prompt_count(db: &mut toasty::Db, session_id: &str) -> i64 {
-    use crate::state::SessionState;
-
-    match SessionState::get_by_session_id(db, session_id).await {
-        Ok(mut state) => {
-            state.prompt_count += 1;
-            let count = state.prompt_count;
-            let _ = state.update().exec(db).await;
-            count
-        }
-        Err(_) => {
-            // First prompt in this session
-            let _ = toasty::create!(SessionState {
-                session_id: session_id.to_string(),
-                prompt_count: 1,
-            })
-            .exec(db)
-            .await;
-            1
-        }
-    }
-}
-
-/// Record a nudge in the DB.
-async fn record_nudge(db: &mut toasty::Db, session_id: &str, crate_name: &str, at_prompt: i64) {
-    use crate::state::SkillNudge;
-    let _ = toasty::create!(SkillNudge {
-        session_id: session_id.to_string(),
-        crate_name: crate_name.to_string(),
-        at_prompt: at_prompt,
-    })
-    .exec(db)
-    .await;
-}
 
 /// Extract crate names mentioned in code-like contexts within the prompt.
 ///

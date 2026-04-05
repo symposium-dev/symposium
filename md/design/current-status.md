@@ -28,8 +28,8 @@ Hook invocations share state via a SQLite database at `~/.symposium/state.0.sqli
 - **SkillActivation** — which crate skills have been loaded in each session
 - **SkillNudge** — nudge history to avoid repeating
 - **SessionState** — per-session prompt count
-- **WorkspaceCache** — cached workspace deps keyed by `Cargo.lock` mtime
-- **AvailableSkill** — skills available for the workspace, populated at hook entry
+
+Available skills for the workspace are computed on demand (no caching).
 
 ### Unified dispatch
 
@@ -42,32 +42,7 @@ Both CLI and MCP route through a shared dispatch layer (`src/dispatch.rs`). The 
 
 ### Configuration
 
-`~/.symposium/config.toml` provides user configuration:
-
-```toml
-[logging]
-level = "info"  # trace, debug, info, warn, error
-
-[defaults]
-symposium-recommendations = true  # built-in plugin source (default: true)
-user-plugins = true               # ~/.symposium/plugins/ (default: true)
-
-[hooks]
-nudge-interval = 50  # prompts between re-nudges (0 = disable nudges)
-
-[[plugin-source]]
-name = "my-org"
-git = "https://github.com/my-org/symposium-plugins"
-auto-update = false  # default: true
-
-[[plugin-source]]
-name = "local-dev"
-path = "my-plugins"  # relative to ~/.symposium/
-```
-
-### Logging
-
-All symposium invocations emit structured logs to `~/.symposium/logs/`. The log level is configured via `config.toml`.
+See the [configuration reference](../reference/configuration.md) for full details on `~/.symposium/config.toml`.
 
 ### MCP server
 

@@ -30,6 +30,7 @@ chrono = "0.4"
 crates_io_api = { version = "0.12", default-features = false, features = ["rustls"] }
 dirs = "6"
 flate2 = "1.0"
+indoc = "2.0"
 home = "0.5"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 sacp = "11"
@@ -37,10 +38,11 @@ sacp-tokio = "11"
 schemars = "1"
 semver = "1.0"
 serde = { version = "1", features = ["derive"] }
+symposium-schema = { path = "symposium-schema" }
 serde_json = "1"
 tar = "0.4"
 tempfile = "3.6"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
 tokio-util = { version = "0.7", features = ["compat"] }
 toml = "0.8"
 tracing = "0.1"
@@ -54,4 +56,4 @@ expect-test = "1.5.1"
 indoc = "2.0.7"
 
 [workspace]
-members = [".", "symposium-artifacts"]
+members = [".", "symposium-artifacts", "symposium-schema"]

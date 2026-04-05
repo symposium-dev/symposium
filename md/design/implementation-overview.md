@@ -6,11 +6,12 @@ Symposium is a Rust crate with both a library (`src/lib.rs`) and binary (`src/ma
 |------|---------|
 | `lib.rs` | Library root, re-exports all modules for integration tests. |
 | `main.rs` | CLI entry point using clap. Defines subcommands: `start`, `tutorial`, `mcp`, `hook`, `crate`, `plugin`. Creates `Symposium` context, initializes logging, ensures plugin sources. |
-| `config.rs` | Reads `~/.symposium/config.toml`. Defines the `Symposium` context struct that owns `Config`, `config_dir`, and `cache_dir`. Two constructors: `from_environment()` (production) and `from_dir(path)` (tests). |
+| `config.rs` | Reads `~/.symposium/config.toml`. Defines `Settings` (TOML config), `Config` (settings + resolved paths), and `Symposium` (Config + lazily-opened DB handle via `Deref<Target=Config>`). Two constructors: `from_environment()` (production) and `from_dir(path)` (tests). |
 | `dispatch.rs` | Shared dispatch logic for CLI and MCP. Both route through `dispatch()` which handles `start`, `crate`, and `help` commands. |
-| `hook.rs` | Handles hook events. Built-in handlers for PostToolUse (activation recording) and UserPromptSubmit (nudging). Plugin hook dispatch for PreToolUse. Includes crate mention detection for prompt scanning. |
-| `state.rs` | SQLite state layer via toasty. Models: `SkillActivation`, `SkillNudge`, `SessionState`, `WorkspaceCache`, `AvailableSkill`. DB at `<config_dir>/state.0.sqlite`. |
-| `workspace.rs` | Workspace metadata with mtime-based caching. `ensure_fresh()` checks Cargo.lock mtime, refreshes deps and `AvailableSkill` rows on cache miss. |
+| `hook.rs` | Handles hook events. Built-in handlers for PostToolUse (activation detection) and UserPromptSubmit (crate mention scanning). Plugin hook dispatch for PreToolUse. Delegates all DB operations to `state::session`. |
+| `state/mod.rs` | SQLite state layer via toasty. DB at `<config_dir>/state.0.sqlite`. Shared `open_db()` function. |
+| `state/session.rs` | Per-session state: `SessionState`, `SkillActivation`, `SkillNudge` models + DB helpers (`record_activation`, `increment_prompt_count`, `compute_nudges`). |
+| `workspace.rs` | On-demand computation of available skills for the workspace. `compute_available_skills()` scans workspace deps and resolves matching plugin skill groups (no caching). |
 | `tutorial.rs` | Renders the tutorial template (`md/tutorial.md`). |
 | `mcp.rs` | MCP server over stdio using `sacp`. Exposes a single `rust` tool taking `args: Vec<String>`, dispatched through the shared dispatch layer. |
 | `crate_sources/` | Crate source fetching: version resolution, cache lookup, download+extraction. |

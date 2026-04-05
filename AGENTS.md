@@ -14,6 +14,12 @@ The implementation overview chapter is particularly useful for highlighting the 
 
 @md/design/implementation-overview.md
 
+## Artifact assembly
+
+The Claude Code plugin is assembled from multiple source locations by `symposium-artifacts.toml`.
+The canonical `symposium.sh` lives at `agent-plugins/symposium.sh` and is copied into the
+assembled plugin by the artifact steps. Do NOT duplicate it into `agent-plugins/claude-code/scripts/`.
+
 ## Instructions
 
 Agent MUST follow the following guidance:

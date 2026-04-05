@@ -16,6 +16,9 @@ level = "info"
 symposium-recommendations = true
 user-plugins = true
 
+[hooks]
+nudge-interval = 50  # prompts between re-nudges (0 = disable nudges)
+
 [[plugin-source]]
 name = "my-org"
 git = "https://github.com/my-org/symposium-plugins"
@@ -68,6 +71,14 @@ Controls the two built-in plugin sources. Both are enabled by default.
 |-----|------|---------|-------------|
 | `symposium-recommendations` | bool | `true` | Fetch plugins from the [symposium-dev/recommendations](https://github.com/symposium-dev/recommendations) repository. |
 | `user-plugins` | bool | `true` | Scan `~/.symposium/plugins/` for user-defined plugins. |
+
+### `[hooks]`
+
+Controls hook behavior (nudging, etc.).
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `nudge-interval` | integer | `50` | Number of prompts before re-nudging about an unloaded crate skill. Set to `0` to disable nudges entirely. |
 
 ### `[[plugin-source]]`
 

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use clap::Parser;
 use sacp::mcp_server::{McpConnectionTo, McpServer};
 use sacp::role;
 use sacp::{ByteStreams, ConnectTo, RunWithConnectionTo};
@@ -9,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::config::Symposium;
-use crate::dispatch::{self, DispatchResult};
+use crate::dispatch::{self, DispatchResult, SharedArgs};
 
 pub async fn serve(sym: Arc<Symposium>) -> Result<()> {
     let server = build_server(sym);
@@ -36,7 +37,12 @@ fn build_server(
                 let cwd = std::env::current_dir()
                     .map_err(|e| sacp::util::internal_error(format!("failed to get cwd: {e}")))?;
 
-                let result = dispatch::dispatch(&sym, &input.args, &cwd).await;
+                // Parse args using the shared Clap definitions
+                let parsed = SharedArgs::try_parse_from(&input.args).map_err(|e| {
+                    sacp::util::internal_error(format!("invalid arguments: {e}"))
+                })?;
+
+                let result = dispatch::dispatch(&sym, parsed.command, &cwd).await;
 
                 match result {
                     DispatchResult::Ok(output) => Ok(RustToolOutput { output }),

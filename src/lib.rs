@@ -1,12 +1,13 @@
-pub mod predicate;
 pub mod config;
-pub mod crate_sources;
 pub mod dispatch;
 pub mod git_source;
 pub mod hook;
 pub mod mcp;
 pub mod plugins;
-pub mod skills;
-pub mod state;
 pub mod tutorial;
-pub mod workspace;
+
+pub(crate) mod crate_sources;
+pub(crate) mod predicate;
+pub(crate) mod skills;
+pub(crate) mod state;
+pub(crate) mod workspace;

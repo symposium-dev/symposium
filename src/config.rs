@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use tracing::Level;
 
 #[derive(Debug, Deserialize, Clone)]
-pub struct Config {
+pub struct Settings {
     #[serde(default)]
     pub logging: LoggingConfig,
 
@@ -60,7 +60,7 @@ impl Default for LoggingConfig {
     }
 }
 
-impl Default for Config {
+impl Default for Settings {
     fn default() -> Self {
         Self {
             logging: LoggingConfig::default(),
@@ -114,17 +114,17 @@ pub struct PluginSourceConfig {
 
 const BUILTIN_RECOMMENDATIONS_URL: &str = "https://github.com/symposium-dev/recommendations";
 
-/// Central context for the Symposium application.
+/// Application configuration: parsed settings + resolved directory paths.
 ///
-/// Owns `Config`, resolved directory paths, and (later) the DB handle.
-/// Thread `&Symposium` through all call sites instead of using global state.
-pub struct Symposium {
-    pub config: Config,
+/// Thread `&Config` through all call sites instead of using global state.
+/// For the full application context including DB handle, see `Symposium`.
+pub struct Config {
+    pub settings: Settings,
     config_dir: PathBuf,
     cache_dir: PathBuf,
 }
 
-impl Symposium {
+impl Config {
     /// Production constructor: resolves paths from environment.
     ///
     /// Resolution order for config dir:
@@ -135,13 +135,13 @@ impl Symposium {
         let config_dir = resolve_config_dir_from_env();
         let _ = fs::create_dir_all(&config_dir);
 
-        let config = load_config_from(&config_dir);
+        let settings = load_config_from(&config_dir);
 
-        let cache_dir = resolve_cache_dir(&config, &config_dir);
+        let cache_dir = resolve_cache_dir(&settings, &config_dir);
         let _ = fs::create_dir_all(&cache_dir);
 
         Self {
-            config,
+            settings,
             config_dir,
             cache_dir,
         }
@@ -154,9 +154,9 @@ impl Symposium {
         let config_dir = root.to_path_buf();
         let _ = fs::create_dir_all(&config_dir);
 
-        let config = load_config_from(&config_dir);
+        let settings = load_config_from(&config_dir);
 
-        let cache_dir = if let Some(ref dir) = config.cache_dir {
+        let cache_dir = if let Some(ref dir) = settings.cache_dir {
             dir.clone()
         } else {
             config_dir.join("cache")
@@ -164,7 +164,7 @@ impl Symposium {
         let _ = fs::create_dir_all(&cache_dir);
 
         Self {
-            config,
+            settings,
             config_dir,
             cache_dir,
         }
@@ -207,7 +207,7 @@ impl Symposium {
 
     /// Returns the effective list of plugin sources, including built-in defaults.
     pub fn plugin_sources(&self) -> Vec<PluginSourceConfig> {
-        let c = &self.config;
+        let c = &self.settings;
         let mut sources = Vec::new();
 
         if c.defaults.symposium_recommendations {
@@ -246,7 +246,7 @@ impl Symposium {
     }
 
     fn log_level(&self) -> Level {
-        match self.config.logging.level.to_lowercase().as_str() {
+        match self.settings.logging.level.to_lowercase().as_str() {
             "trace" => Level::TRACE,
             "debug" => Level::DEBUG,
             "info" => Level::INFO,
@@ -272,7 +272,7 @@ fn resolve_config_dir_from_env() -> PathBuf {
 }
 
 /// Resolve cache dir from config and environment.
-fn resolve_cache_dir(config: &Config, config_dir: &Path) -> PathBuf {
+fn resolve_cache_dir(config: &Settings, config_dir: &Path) -> PathBuf {
     if let Some(ref dir) = config.cache_dir {
         return dir.clone();
     }
@@ -286,14 +286,14 @@ fn resolve_cache_dir(config: &Config, config_dir: &Path) -> PathBuf {
 }
 
 /// Load config from a config directory.
-fn load_config_from(config_dir: &Path) -> Config {
+fn load_config_from(config_dir: &Path) -> Settings {
     let path = config_dir.join("config.toml");
     match fs::read_to_string(&path) {
         Ok(contents) => toml::from_str(&contents).unwrap_or_else(|e| {
             eprintln!("warning: failed to parse {}: {e}", path.display());
-            Config::default()
+            Settings::default()
         }),
-        Err(_) => Config::default(),
+        Err(_) => Settings::default(),
     }
 }
 
@@ -312,6 +312,54 @@ fn default_level() -> String {
     "info".to_string()
 }
 
+/// Full application context: `Config` + lazily-opened DB handle.
+///
+/// Use `Symposium` in code paths that may need the database (hooks, workspace ops).
+/// Use `&Config` (via `Deref`) for everything else.
+pub struct Symposium {
+    config: Config,
+    db: tokio::sync::OnceCell<tokio::sync::Mutex<toasty::Db>>,
+}
+
+impl std::ops::Deref for Symposium {
+    type Target = Config;
+    fn deref(&self) -> &Config {
+        &self.config
+    }
+}
+
+impl Symposium {
+    /// Create from a `Config`.
+    pub fn new(config: Config) -> Self {
+        Self {
+            config,
+            db: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// Production constructor: resolves paths from environment.
+    pub fn from_environment() -> Self {
+        Self::new(Config::from_environment())
+    }
+
+    /// Test constructor: everything rooted under a single directory.
+    pub fn from_dir(root: &std::path::Path) -> Self {
+        Self::new(Config::from_dir(root))
+    }
+
+    /// Get a mutable reference to the database, lazily opening it on first access.
+    pub async fn db(&self) -> anyhow::Result<tokio::sync::MutexGuard<'_, toasty::Db>> {
+        let mutex = self
+            .db
+            .get_or_try_init(|| async {
+                let db = crate::state::open_db(self.config_dir()).await?;
+                Ok::<_, anyhow::Error>(tokio::sync::Mutex::new(db))
+            })
+            .await?;
+        Ok(mutex.lock().await)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,7 +367,7 @@ mod tests {
 
     #[test]
     fn parse_empty_config() {
-        let config: Config = toml::from_str("").unwrap();
+        let config: Settings = toml::from_str("").unwrap();
         assert!(config.defaults.symposium_recommendations);
         assert!(config.defaults.user_plugins);
         assert!(config.plugin_source.is_empty());
@@ -327,7 +375,7 @@ mod tests {
 
     #[test]
     fn parse_defaults_disable_recommendations() {
-        let config: Config = toml::from_str(indoc! {"
+        let config: Settings = toml::from_str(indoc! {"
             [defaults]
             symposium-recommendations = false
         "})
@@ -338,7 +386,7 @@ mod tests {
 
     #[test]
     fn parse_defaults_disable_user_plugins() {
-        let config: Config = toml::from_str(indoc! {"
+        let config: Settings = toml::from_str(indoc! {"
             [defaults]
             user-plugins = false
         "})
@@ -349,7 +397,7 @@ mod tests {
 
     #[test]
     fn parse_plugin_source_git() {
-        let config: Config = toml::from_str(indoc! {r#"
+        let config: Settings = toml::from_str(indoc! {r#"
             [[plugin-source]]
             name = "my-org"
             git = "https://github.com/my-org/plugins"
@@ -367,7 +415,7 @@ mod tests {
 
     #[test]
     fn parse_plugin_source_path() {
-        let config: Config = toml::from_str(indoc! {r#"
+        let config: Settings = toml::from_str(indoc! {r#"
             [[plugin-source]]
             name = "local"
             path = "my-plugins"
@@ -380,7 +428,7 @@ mod tests {
 
     #[test]
     fn parse_multiple_plugin_sources() {
-        let config: Config = toml::from_str(indoc! {r#"
+        let config: Settings = toml::from_str(indoc! {r#"
             [defaults]
             symposium-recommendations = false
 
@@ -408,10 +456,10 @@ mod tests {
     #[test]
     fn from_dir_creates_default_config() {
         let tmp = tempfile::tempdir().unwrap();
-        let sym = Symposium::from_dir(tmp.path());
-        assert!(sym.config.defaults.symposium_recommendations);
-        assert_eq!(sym.config_dir(), tmp.path());
-        assert_eq!(sym.cache_dir(), tmp.path().join("cache"));
+        let cfg = Config::from_dir(tmp.path());
+        assert!(cfg.settings.defaults.symposium_recommendations);
+        assert_eq!(cfg.config_dir(), tmp.path());
+        assert_eq!(cfg.cache_dir(), tmp.path().join("cache"));
     }
 
     #[test]
@@ -425,7 +473,7 @@ mod tests {
             "},
         )
         .unwrap();
-        let sym = Symposium::from_dir(tmp.path());
-        assert!(!sym.config.defaults.symposium_recommendations);
+        let cfg = Config::from_dir(tmp.path());
+        assert!(!cfg.settings.defaults.symposium_recommendations);
     }
 }
