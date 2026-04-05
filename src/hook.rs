@@ -1,5 +1,6 @@
-use std::io::{Read, Write};
-use std::process::{Command, ExitCode, Stdio};
+use std::{io::{Read, Write}, process::{ExitCode, Stdio}};
+
+use tokio::{io::AsyncWriteExt, process::Command};
 
 use crate::config::Symposium;
 use crate::plugins::ParsedPlugin;
@@ -37,22 +38,26 @@ pub async fn run(sym: &Symposium, event: HookEvent) -> ExitCode {
     let hook_output = dispatch_builtin(sym, &payload).await;
 
     // Run plugin hooks (for PreToolUse only, for now)
-    dispatch_plugin_hooks(sym, &payload);
+    let plugin_output = dispatch_plugin_hooks(sym, &payload).await;
 
-    // Emit structured output if there's anything to say
-    if hook_output.hook_specific_output.is_some() {
-        if let Ok(json) = serde_json::to_string(&hook_output) {
-            println!("{json}");
+    match plugin_output {
+        PluginHookOutput::Success(plugin_json) => {
+            let mut hook_output_json = serde_json::to_value(&hook_output).unwrap();
+            merge(&mut hook_output_json, plugin_json);
+            std::io::stdout().write_all(&serde_json::to_vec(&hook_output_json).unwrap()).unwrap();
+
+            ExitCode::SUCCESS
+        }
+        PluginHookOutput::Failure(stderr) => {
+            std::io::stderr().write_all(&stderr).unwrap();
+
+            ExitCode::FAILURE
         }
     }
-
-    ExitCode::SUCCESS
 }
 
 /// Built-in hook logic. Returns typed `HookOutput` for the integration test harness.
 pub async fn dispatch_builtin(sym: &Symposium, payload: &HookPayload) -> HookOutput {
-    tracing::info!(?payload, "hook invoked (builtin)");
-
     match &payload.sub_payload {
         HookSubPayload::PreToolUse(_) => {
             // No built-in logic for PreToolUse — plugin hooks only.
@@ -356,10 +361,21 @@ fn is_word_boundary_match(text: &str, name: &str) -> bool {
     false
 }
 
+pub enum PluginHookOutput {
+    // The merged json from all plugin hooks
+    Success(serde_json::Value),
+    // The stderr from the first plugin hook that exited with failure
+    Failure(Vec<u8>),
+}
+
 /// Dispatch plugin hooks (spawn subprocesses).
-fn dispatch_plugin_hooks(sym: &Symposium, payload: &HookPayload) {
+async fn dispatch_plugin_hooks(sym: &Symposium, payload: &HookPayload) -> PluginHookOutput {
+    tracing::info!(?payload, "hook invoked (builtin)");
+
     let plugins = crate::plugins::load_all_plugins(sym);
     let hooks = hooks_for_payload(&plugins, payload);
+
+    let mut output_json = serde_json::Value::Object(serde_json::Map::new());
 
     for (plugin_name, hook) in hooks {
         tracing::info!(?plugin_name, hook = %hook.name, cmd = %hook.command, "running plugin hook");
@@ -367,28 +383,70 @@ fn dispatch_plugin_hooks(sym: &Symposium, payload: &HookPayload) {
             .arg("-c")
             .arg(&hook.command)
             .stdin(Stdio::piped())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn();
 
         match spawn_res {
             Ok(mut child) => {
                 if let Some(mut stdin) = child.stdin.take() {
                     if let Err(e) =
-                        stdin.write_all(serde_json::to_string(&payload).unwrap().as_bytes())
+                        stdin.write_all(serde_json::to_string(&payload).unwrap().as_bytes()).await
                     {
                         tracing::warn!(error = %e, "failed to write hook stdin");
                     }
                 }
 
-                match child.wait() {
-                    Ok(status) => tracing::info!(?status, "hook finished"),
-                    Err(e) => tracing::warn!(error = %e, "failed waiting for hook process"),
+                let output = match child.wait_with_output().await {
+                    Ok(output) => output,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed waiting for hook process");
+                        continue;
+                    }
+                };
+
+                tracing::info!(?output, "hook finished");
+
+                match output.status.code() {
+                    // FIXME: I don't actually know what the semantics of hook exit codes are,
+                    // but this is probably fine for now
+                    None | Some(2) => {
+                        return PluginHookOutput::Failure(output.stderr);
+                    }
+                    Some(0 | _) => {
+                        let stdout = output.stdout;
+                        let json_res = serde_json::from_slice::<serde_json::Value>(&stdout);
+                        match json_res {
+                            Ok(json) => merge(&mut output_json, json),
+                            Err(e) => tracing::warn!(error = %e, "failed to parse hook output as JSON"),
+                        }
+                    }
                 }
             }
             Err(e) => tracing::warn!(error = %e, "failed to spawn hook command"),
         }
     }
+
+    PluginHookOutput::Success(output_json)
+}
+
+fn merge(a: &mut serde_json::Value, b: serde_json::Value) {
+    if let serde_json::Value::Object(a) = a {
+        if let serde_json::Value::Object(b) = b {
+            for (k, v) in b {
+                if v.is_null() {
+                    a.remove(&k);
+                }
+                else {
+                    merge(a.entry(k).or_insert(serde_json::Value::Null), v);
+                }
+            } 
+
+            return;
+        }
+    }
+
+    *a = b;
 }
 
 /// Return all hooks (with their plugin name) that match the event in `payload`.
@@ -515,7 +573,7 @@ mod tests {
             }),
             rest: serde_json::Map::new(),
         };
-        dispatch_plugin_hooks(&sym, &payload);
+        dispatch_plugin_hooks(&sym, &payload).await;
 
         // Verify files were created and contain expected contents.
         let got1 = fs::read_to_string(&out1).expect("read out1");
@@ -765,5 +823,99 @@ mod tests {
             cwd: Some("/tmp".to_string()),
         };
         assert_eq!(detect_crate_activation_mcp(&post), None);
+    }
+    #[tokio::test]
+    async fn hook_stdout_is_merged_on_success() {
+        setup_tracing();
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+
+        let sym = Symposium::from_dir(home);
+
+        let plugins_dir = sym.plugins_dir();
+
+        let p1 = formatdoc! {r#"
+            name = "plugin-json-a"
+
+            [[hooks]]
+            name = "json-a"
+            event = "PreToolUse"
+            command = "sh -c 'echo \"{{\\\"a\\\":1}}\"'"
+        "#};
+
+        let p2 = formatdoc! {r#"
+            name = "plugin-json-b"
+
+            [[hooks]]
+            name = "json-b"
+            event = "PreToolUse"
+            command = "sh -c 'echo \"{{\\\"b\\\":2}}\"'"
+        "#};
+
+        fs::write(plugins_dir.join("plugin-json-a.toml"), p1).expect("write p1");
+        fs::write(plugins_dir.join("plugin-json-b.toml"), p2).expect("write p2");
+
+        let payload = HookPayload {
+            sub_payload: HookSubPayload::PreToolUse(PreToolUsePayload { tool_name: "Bash".to_string() }),
+            rest: serde_json::Map::new(),
+        };
+
+        let out = dispatch_plugin_hooks(&sym, &payload).await;
+
+        // Expect overall success and merged JSON containing both keys
+        let PluginHookOutput::Success(val) = out else {
+            panic!("expected success");
+        };
+        assert_eq!(val.get("a").and_then(|v| v.as_i64()), Some(1));
+        assert_eq!(val.get("b").and_then(|v| v.as_i64()), Some(2));
+    }
+
+    #[tokio::test]
+    async fn hooks_exit_2_fail_fast_and_return_stderr() {
+        setup_tracing();
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path();
+
+        let sym = Symposium::from_dir(home);
+
+        let plugins_dir = sym.plugins_dir();
+
+        let good = formatdoc! {r#"
+            name = "plugin-good"
+
+            [[hooks]]
+            name = "good"
+            event = "PreToolUse"
+            command = "sh -c 'echo \"{{\\\"ok\\\":true}}\"'"
+        "#};
+
+        let bad = formatdoc! {r#"
+            name = "plugin-bad"
+
+            [[hooks]]
+            name = "bad"
+            event = "PreToolUse"
+            command = "sh -c 'echo \\\"bad failure\\\" >&2; exit 2'"
+        "#};
+
+        // Arrange so the failing hook runs (order depends on plugin loading but two files are fine)
+        fs::write(plugins_dir.join("plugin-good.toml"), good).expect("write good");
+        fs::write(plugins_dir.join("plugin-bad.toml"), bad).expect("write bad");
+
+        let payload = HookPayload {
+            sub_payload: HookSubPayload::PreToolUse(PreToolUsePayload { tool_name: "Bash".to_string() }),
+            rest: serde_json::Map::new(),
+        };
+
+        let out = dispatch_plugin_hooks(&sym, &payload).await;
+
+        // Expect failure and stderr containing our message
+        let PluginHookOutput::Failure(stderr) = out else {
+            panic!("expected failure");
+        };
+        let stderr_str = String::from_utf8_lossy(&stderr);
+        assert!(stderr_str.contains("bad failure"));
     }
 }

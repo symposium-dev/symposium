@@ -2,6 +2,13 @@
 
 use serde::{Deserialize, Serialize};
 
+// FIXME: We really need a "core" set of hook events and expected data. But then
+// have "adapters" for each different agent. The interesting bit is connecting
+// builtin hooks (which should handle the core set of events) to the agent-specific
+// formats.
+// 
+/// For now, this is very much designed around Claude Code's expected hook payloads.
+
 /// Hook event types supported by Symposium.
 #[derive(Debug, Clone, clap::ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
 pub enum HookEvent {
@@ -118,7 +125,7 @@ impl From<UserPromptSubmitPayload> for HookPayload {
     }
 }
 
-/// Structured output from hook handlers.
+/// Structured output from builtin hook handlers.
 ///
 /// Serialized to JSON on stdout for Claude Code to consume.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
