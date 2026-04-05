@@ -117,10 +117,17 @@ impl Skill {
     }
 }
 
+/// An always-active skill whose content is inlined in crate output.
+pub struct AlwaysSkill {
+    pub name: String,
+    pub path: PathBuf,
+    pub body: String,
+}
+
 /// Collected advice for a specific crate query.
 pub struct CrateAdvice {
-    /// Content from `activation: always` skills (skill name, path, body text).
-    pub always_skills: Vec<(String, PathBuf, String)>,
+    /// Content from `activation: always` skills, inlined in output.
+    pub always_skills: Vec<AlwaysSkill>,
     /// Optional skills with full metadata for agent decision-making.
     pub optional_skills: Vec<Skill>,
 }
@@ -139,14 +146,14 @@ impl CrateAdvice {
 
         if !self.always_skills.is_empty() {
             out.push_str("\n## Guidance\n");
-            for (name, path, body) in &self.always_skills {
-                let skill_dir = path.parent().unwrap_or(path);
+            for skill in &self.always_skills {
+                let skill_dir = skill.path.parent().unwrap_or(&skill.path);
                 out.push_str(&format!(
-                    "\n<skill_content name=\"{name}\">\n\
-                     \n{body}\n\
+                    "\n<skill_content name=\"{}\">\n\
+                     \n{}\n\
                      \nSkill directory: {}\n\
                      Relative paths in this skill are relative to the skill directory.\n",
-                    skill_dir.display()
+                    skill.name, skill.body, skill_dir.display()
                 ));
 
                 let resources = list_skill_resources(skill_dir);
@@ -251,11 +258,11 @@ async fn crate_guidance(
     for entry in skills_applicable_to(sym, registry, &for_crates).await {
         match entry.skill.activation {
             Activation::Always => {
-                let name = entry.skill.name().to_string();
-                let path = entry.skill.path.clone();
-                advice
-                    .always_skills
-                    .push((name, path, entry.skill.body.clone()));
+                advice.always_skills.push(AlwaysSkill {
+                    name: entry.skill.name().to_string(),
+                    path: entry.skill.path.clone(),
+                    body: entry.skill.body.clone(),
+                });
             }
             Activation::Optional => {
                 advice.optional_skills.push(entry.skill);
@@ -1047,8 +1054,8 @@ mod tests {
         let ver = semver::Version::new(1, 0, 0);
         let advice = crate_guidance(&sym, "serde", &ver, &registry).await;
         assert_eq!(advice.always_skills.len(), 1);
-        assert_eq!(advice.always_skills[0].0, "standalone-serde");
-        assert!(advice.always_skills[0].2.contains("Use serde standalone."));
+        assert_eq!(advice.always_skills[0].name, "standalone-serde");
+        assert!(advice.always_skills[0].body.contains("Use serde standalone."));
     }
 
     #[tokio::test]
@@ -1235,11 +1242,11 @@ mod tests {
     #[test]
     fn crate_advice_format_default_only() {
         let advice = CrateAdvice {
-            always_skills: vec![(
-                "skill1".into(),
-                PathBuf::from("/skills/serde/SKILL.md"),
-                "Use serde this way.".into(),
-            )],
+            always_skills: vec![AlwaysSkill {
+                name: "skill1".into(),
+                path: PathBuf::from("/skills/serde/SKILL.md"),
+                body: "Use serde this way.".into(),
+            }],
             optional_skills: vec![],
         };
         expect_test::expect![[r#"
