@@ -12,6 +12,7 @@ use crate::config::Symposium;
 use crate::crate_sources;
 use crate::plugins;
 use crate::skills;
+pub use crate::tutorial::RenderMode;
 
 /// Commands shared between CLI and MCP.
 #[derive(Debug, Clone, Subcommand)]
@@ -32,13 +33,6 @@ pub enum SharedCommand {
         #[arg(long)]
         list: bool,
     },
-}
-
-/// Whether the caller is the CLI or the MCP server.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenderMode {
-    Cli,
-    Mcp,
 }
 
 /// Result of dispatching a command.
@@ -67,17 +61,13 @@ pub async fn dispatch(
 }
 
 async fn dispatch_start(sym: &Symposium, cwd: &Path, mode: RenderMode) -> DispatchResult {
-    let tutorial = match mode {
-        RenderMode::Cli => crate::tutorial::render_cli(),
-        RenderMode::Mcp => crate::tutorial::render_mcp(),
-    };
+    let mut output = crate::tutorial::render(mode);
 
     let workspace = crate_sources::workspace_semver_pairs(cwd);
     let registry = plugins::load_registry(sym);
     let skill_list = skills::list_output(sym, &registry, &workspace).await;
 
-    let mut output = tutorial;
-    output.push_str("\n\n");
+    output.push('\n');
     output.push_str(&skill_list);
 
     DispatchResult::Ok(output)
