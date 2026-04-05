@@ -312,13 +312,11 @@ fn default_level() -> String {
     "info".to_string()
 }
 
-/// Full application context: `Config` + lazily-opened DB handle.
+/// Full application context: `Config` + convenience accessors.
 ///
-/// Use `Symposium` in code paths that may need the database (hooks, workspace ops).
-/// Use `&Config` (via `Deref`) for everything else.
+/// Wraps `Config` with `Deref` so all config methods are available directly.
 pub struct Symposium {
     config: Config,
-    db: tokio::sync::OnceCell<tokio::sync::Mutex<toasty::Db>>,
 }
 
 impl std::ops::Deref for Symposium {
@@ -331,10 +329,7 @@ impl std::ops::Deref for Symposium {
 impl Symposium {
     /// Create from a `Config`.
     pub fn new(config: Config) -> Self {
-        Self {
-            config,
-            db: tokio::sync::OnceCell::new(),
-        }
+        Self { config }
     }
 
     /// Production constructor: resolves paths from environment.
@@ -345,18 +340,6 @@ impl Symposium {
     /// Test constructor: everything rooted under a single directory.
     pub fn from_dir(root: &std::path::Path) -> Self {
         Self::new(Config::from_dir(root))
-    }
-
-    /// Get a mutable reference to the database, lazily opening it on first access.
-    pub async fn db(&self) -> anyhow::Result<tokio::sync::MutexGuard<'_, toasty::Db>> {
-        let mutex = self
-            .db
-            .get_or_try_init(|| async {
-                let db = crate::state::open_db(self.config_dir()).await?;
-                Ok::<_, anyhow::Error>(tokio::sync::Mutex::new(db))
-            })
-            .await?;
-        Ok(mutex.lock().await)
     }
 }
 

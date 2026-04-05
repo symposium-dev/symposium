@@ -21,13 +21,13 @@ The core workflow is:
 - **PostToolUse** — records skill activations when the agent successfully invokes `symposium crate <name>` (Bash) or the MCP `rust` tool with `["crate", "<name>"]`. Also detects when the agent reads a known skill directory path.
 - **UserPromptSubmit** — scans the prompt for crate names in code-like contexts (backticks, fenced code blocks, Rust paths). Nudges the agent about available skills it hasn't loaded, with configurable re-nudge interval.
 
-### SQLite state tracking
+### Session state
 
-Hook invocations share state via a SQLite database at `~/.symposium/state.0.sqlite` (schema version in filename). Tracks:
+Hook invocations share state via JSON files at `~/.symposium/sessions/<session-id>.json`. Each file tracks:
 
-- **SkillActivation** — which crate skills have been loaded in each session
-- **SkillNudge** — nudge history to avoid repeating
-- **SessionState** — per-session prompt count
+- **activations** — which crate skills have been loaded in this session
+- **nudges** — nudge history (crate → prompt count) to avoid repeating
+- **prompt_count** — running prompt counter for the session
 
 Available skills for the workspace are computed on demand (no caching).
 

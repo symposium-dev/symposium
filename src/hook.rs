@@ -77,24 +77,16 @@ async fn handle_post_tool_use(sym: &Symposium, post: &PostToolUsePayload) -> Hoo
     };
 
     let cwd = std::path::Path::new(cwd_str);
-
-    // Get DB handle
-    let mut db = match sym.db().await {
-        Ok(db) => db,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to open state DB in PostToolUse");
-            return HookOutput::empty();
-        }
-    };
+    let mut session = crate::state::load_session(sym.config_dir(), session_id);
 
     // Detect activation via symposium crate command (Bash tool)
     if let Some(crate_name) = detect_crate_activation_bash(post) {
-        crate::state::session::record_activation(&mut *db, session_id, &crate_name).await;
+        session.record_activation(&crate_name);
     }
 
     // Detect activation via MCP rust tool with ["crate", "<name>"]
     if let Some(crate_name) = detect_crate_activation_mcp(post) {
-        crate::state::session::record_activation(&mut *db, session_id, &crate_name).await;
+        session.record_activation(&crate_name);
     }
 
     // Detect activation via file path matching available skills
@@ -103,10 +95,11 @@ async fn handle_post_tool_use(sym: &Symposium, post: &PostToolUsePayload) -> Hoo
         .unwrap_or_default();
     if let Some(crate_names) = detect_path_activation(&available, post) {
         for crate_name in crate_names {
-            crate::state::session::record_activation(&mut *db, session_id, &crate_name).await;
+            session.record_activation(&crate_name);
         }
     }
 
+    crate::state::save_session(sym.config_dir(), session_id, &session);
     HookOutput::empty()
 }
 
@@ -225,28 +218,11 @@ async fn handle_user_prompt_submit(
         return HookOutput::empty();
     }
 
-    // Get DB handle for session state
-    let mut db = match sym.db().await {
-        Ok(db) => db,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to open state DB in UserPromptSubmit");
-            return HookOutput::empty();
-        }
-    };
-
-    // Increment prompt count
-    let prompt_count =
-        crate::state::session::increment_prompt_count(&mut *db, session_id).await;
-
-    // Determine which crates to nudge about (delegates all DB logic to state::session)
-    let nudge_crates = crate::state::session::compute_nudges(
-        &mut *db,
-        session_id,
-        &mentioned,
-        nudge_interval,
-        prompt_count,
-    )
-    .await;
+    // Load session, increment prompt count, compute nudges
+    let mut session = crate::state::load_session(sym.config_dir(), session_id);
+    session.increment_prompt_count();
+    let nudge_crates = session.compute_nudges(&mentioned, nudge_interval);
+    crate::state::save_session(sym.config_dir(), session_id, &session);
 
     if nudge_crates.is_empty() {
         return HookOutput::empty();

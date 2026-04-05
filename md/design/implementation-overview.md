@@ -6,11 +6,11 @@ Symposium is a Rust crate with both a library (`src/lib.rs`) and binary (`src/ma
 |------|---------|
 | `lib.rs` | Library root, re-exports all modules for integration tests. |
 | `main.rs` | CLI entry point using clap. Defines subcommands: `start`, `tutorial`, `mcp`, `hook`, `crate`, `plugin`. Creates `Symposium` context, initializes logging, ensures plugin sources. |
-| `config.rs` | Reads `~/.symposium/config.toml`. Defines `Settings` (TOML config), `Config` (settings + resolved paths), and `Symposium` (Config + lazily-opened DB handle via `Deref<Target=Config>`). Two constructors: `from_environment()` (production) and `from_dir(path)` (tests). |
+| `config.rs` | Reads `~/.symposium/config.toml`. Defines `Settings` (TOML config), `Config` (settings + resolved paths), and `Symposium` (Config wrapper via `Deref<Target=Config>`). Two constructors: `from_environment()` (production) and `from_dir(path)` (tests). |
 | `dispatch.rs` | Shared dispatch logic for CLI and MCP. Both route through `dispatch()` which handles `start`, `crate`, and `help` commands. |
 | `hook.rs` | Handles hook events. Built-in handlers for PostToolUse (activation detection) and UserPromptSubmit (crate mention scanning). Plugin hook dispatch for PreToolUse. Delegates all DB operations to `state::session`. |
-| `state/mod.rs` | SQLite state layer via toasty. DB at `<config_dir>/state.0.sqlite`. Shared `open_db()` function. |
-| `state/session.rs` | Per-session state: `SessionState`, `SkillActivation`, `SkillNudge` models + DB helpers (`record_activation`, `increment_prompt_count`, `compute_nudges`). |
+| `state/mod.rs` | Per-session state persistence via JSON files at `<config_dir>/sessions/<session-id>.json`. Atomic writes via temp+rename. |
+| `state/session.rs` | `SessionData` struct (prompt count, activations set, nudge map) with methods: `record_activation`, `increment_prompt_count`, `compute_nudges`. |
 | `workspace.rs` | On-demand computation of available skills for the workspace. `compute_available_skills()` scans workspace deps and resolves matching plugin skill groups (no caching). |
 | `tutorial.rs` | Renders the tutorial template (`md/tutorial.md`). |
 | `mcp.rs` | MCP server over stdio using `sacp`. Exposes a single `rust` tool taking `args: Vec<String>`, dispatched through the shared dispatch layer. |
@@ -24,7 +24,7 @@ Symposium is a Rust crate with both a library (`src/lib.rs`) and binary (`src/ma
 
 - **sacp / sacp-tokio** — MCP server implementation
 - **clap** — CLI argument parsing
-- **toasty** (with `sqlite` feature) — ORM for SQLite state tracking
+- **serde / serde_json** — Per-session state persistence as JSON files
 - **tracing / tracing-subscriber** — Structured logging to `~/.symposium/logs/`
 - **toml** — Config file parsing
 - **dirs** — Home directory resolution
