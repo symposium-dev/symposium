@@ -108,7 +108,7 @@ async fn dispatch_and_print(
     cmd: SharedCommand,
     cwd: &Path,
 ) -> ExitCode {
-    match dispatch::dispatch(sym, cmd, cwd).await {
+    match dispatch::dispatch(sym, cmd, cwd, dispatch::RenderMode::Cli).await {
         dispatch::DispatchResult::Ok(output) => {
             print!("{output}");
             ExitCode::SUCCESS

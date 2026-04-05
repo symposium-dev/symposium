@@ -32,7 +32,7 @@ impl TestContext {
             .workspace_root
             .as_deref()
             .unwrap_or_else(|| self.sym.config_dir());
-        match dispatch::dispatch(&self.sym, parsed.command, cwd).await {
+        match dispatch::dispatch(&self.sym, parsed.command, cwd, dispatch::RenderMode::Mcp).await {
             DispatchResult::Ok(output) => Ok(output),
             DispatchResult::Err(e) => Err(e),
         }

@@ -32,10 +32,7 @@ fn build_server(
     sym: Symposium,
 ) -> McpServer<role::mcp::Client, impl RunWithConnectionTo<role::mcp::Client>> {
     McpServer::builder("symposium".to_string())
-        .instructions(
-            "Symposium — AI the Rust Way. \
-             Critical: invoke the `rust` tool with `[\"start\"]` before authoring Rust code.",
-        )
+        .instructions("Symposium — tools for agentic Rust development")
         .tool_fn(
             "rust",
             RUST_TOOL_DESCRIPTION,
@@ -44,11 +41,16 @@ fn build_server(
                     .map_err(|e| sacp::util::internal_error(format!("failed to get cwd: {e}")))?;
 
                 // Parse args using the shared Clap definitions
-                let parsed = McpArgs::try_parse_from(&input.args).map_err(|e| {
-                    sacp::util::internal_error(format!("invalid arguments: {e}"))
-                })?;
+                let parsed = McpArgs::try_parse_from(&input.args)
+                    .map_err(|e| sacp::util::internal_error(format!("invalid arguments: {e}")))?;
 
-                let result = dispatch::dispatch(&sym, parsed.command, &cwd).await;
+                let result = dispatch::dispatch(
+                    &sym,
+                    parsed.command,
+                    &cwd,
+                    dispatch::RenderMode::Mcp,
+                )
+                .await;
 
                 match result {
                     DispatchResult::Ok(output) => Ok(RustToolOutput { output }),

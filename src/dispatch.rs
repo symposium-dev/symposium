@@ -34,6 +34,13 @@ pub enum SharedCommand {
     },
 }
 
+/// Whether the caller is the CLI or the MCP server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RenderMode {
+    Cli,
+    Mcp,
+}
+
 /// Result of dispatching a command.
 pub enum DispatchResult {
     /// Successful output to display.
@@ -43,9 +50,14 @@ pub enum DispatchResult {
 }
 
 /// Dispatch a shared command.
-pub async fn dispatch(sym: &Symposium, cmd: SharedCommand, cwd: &Path) -> DispatchResult {
+pub async fn dispatch(
+    sym: &Symposium,
+    cmd: SharedCommand,
+    cwd: &Path,
+    mode: RenderMode,
+) -> DispatchResult {
     match cmd {
-        SharedCommand::Start => dispatch_start(sym, cwd).await,
+        SharedCommand::Start => dispatch_start(sym, cwd, mode).await,
         SharedCommand::Crate {
             name,
             version,
@@ -54,8 +66,11 @@ pub async fn dispatch(sym: &Symposium, cmd: SharedCommand, cwd: &Path) -> Dispat
     }
 }
 
-async fn dispatch_start(sym: &Symposium, cwd: &Path) -> DispatchResult {
-    let tutorial = crate::tutorial::render_cli();
+async fn dispatch_start(sym: &Symposium, cwd: &Path, mode: RenderMode) -> DispatchResult {
+    let tutorial = match mode {
+        RenderMode::Cli => crate::tutorial::render_cli(),
+        RenderMode::Mcp => crate::tutorial::render_mcp(),
+    };
 
     let workspace = crate_sources::workspace_semver_pairs(cwd);
     let registry = plugins::load_registry(sym);
