@@ -12,7 +12,7 @@ use crate::config::Symposium;
 use crate::crate_sources;
 use crate::plugins;
 use crate::skills;
-pub use crate::tutorial::RenderMode;
+pub use crate::start::RenderMode;
 
 /// Commands shared between CLI and MCP.
 #[derive(Debug, Clone, Subcommand)]
@@ -61,7 +61,7 @@ pub async fn dispatch(
 }
 
 async fn dispatch_start(sym: &Symposium, cwd: &Path, mode: RenderMode) -> DispatchResult {
-    let mut output = crate::tutorial::render(mode);
+    let mut output = crate::start::render(mode);
 
     let workspace = crate_sources::workspace_semver_pairs(cwd);
     let registry = plugins::load_registry(sym);

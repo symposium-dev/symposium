@@ -5,7 +5,7 @@ pub mod hook;
 pub mod hook_schema;
 pub mod mcp;
 pub mod plugins;
-pub mod tutorial;
+pub mod start;
 
 pub(crate) mod crate_sources;
 pub(crate) mod predicate;
