@@ -40,10 +40,17 @@ jobs:
         run: cargo check
 
   test:
-    name: Run tests
+    name: Run tests (${{ matrix.name }})
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - name: ubuntu
+            os: ubuntu-latest
+          - name: macos
+            os: macos-latest
+          - name: musl
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
 
     runs-on: ${{ matrix.os }}
 
@@ -52,6 +59,14 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target || '' }}
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -61,9 +76,9 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ matrix.name }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-
+            ${{ matrix.name }}-cargo-
 
       - name: Test
-        run: cargo test
+        run: cargo test ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
