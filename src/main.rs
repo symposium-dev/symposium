@@ -92,7 +92,7 @@ async fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Some(Commands::Hook { event }) => hook::run(&sym, event).await,
+        Some(Commands::Hook { event }) => hook::run_claude(&sym, event).await,
         Some(Commands::Plugin { command }) => handle_plugin_command(&sym, command).await,
         None => {
             use clap::CommandFactory;
@@ -103,11 +103,7 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn dispatch_and_print(
-    sym: &config::Symposium,
-    cmd: SharedCommand,
-    cwd: &Path,
-) -> ExitCode {
+async fn dispatch_and_print(sym: &config::Symposium, cmd: SharedCommand, cwd: &Path) -> ExitCode {
     match dispatch::dispatch(sym, cmd, cwd, dispatch::RenderMode::Cli).await {
         dispatch::DispatchResult::Ok(output) => {
             print!("{output}");

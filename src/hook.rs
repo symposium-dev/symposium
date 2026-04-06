@@ -1,9 +1,13 @@
-use std::{io::{Read, Write}, process::{ExitCode, Stdio}};
+use std::{
+    io::{Read, Write},
+    process::{Command, ExitCode, Stdio},
+};
 
-use tokio::{io::AsyncWriteExt, process::Command};
-
-use crate::config::Symposium;
 use crate::plugins::ParsedPlugin;
+use crate::{
+    config::Symposium,
+    hook_schema::{Agent, AgentHookEvent, AgentHookOutput, AgentHookPayload, claude::ClaudeCode},
+};
 
 // Re-export hook schema types for convenience.
 pub use crate::hook_schema::{
@@ -12,14 +16,17 @@ pub use crate::hook_schema::{
 };
 
 /// CLI entry point: read payload from stdin, dispatch, print output.
-pub async fn run(sym: &Symposium, event: HookEvent) -> ExitCode {
+pub async fn run_claude(sym: &Symposium, event: HookEvent) -> ExitCode {
+    let agent = ClaudeCode;
+    let event_handler = agent.event(event).unwrap();
+
     let mut input = String::new();
     if let Err(e) = std::io::stdin().read_to_string(&mut input) {
         tracing::warn!(?event, error = %e, "failed to read hook stdin");
         return ExitCode::SUCCESS;
     }
 
-    let payload = serde_json::from_str::<HookPayload>(&input);
+    let payload = event_handler.parse_payload(&input);
     let Ok(payload) = payload else {
         tracing::warn!(
             ?event,
@@ -29,22 +36,28 @@ pub async fn run(sym: &Symposium, event: HookEvent) -> ExitCode {
         return ExitCode::FAILURE;
     };
 
-    if payload.sub_payload.hook_event() != event {
-        tracing::warn!(?event, payload_event = ?payload.sub_payload.hook_event(), "hook event mismatch between CLI arg and payload");
+    let builtin_payload = payload.to_hook_payload();
+
+    if builtin_payload.sub_payload.hook_event() != event {
+        tracing::warn!(?event, payload_event = ?builtin_payload.sub_payload.hook_event(), "hook event mismatch between CLI arg and payload");
         return ExitCode::FAILURE;
     }
 
     // Run built-in hook logic
-    let hook_output = dispatch_builtin(sym, &payload).await;
+    let hook_output = dispatch_builtin(sym, &builtin_payload).await;
+    let hook_output = event_handler.from_hook_output(&hook_output);
+    let Ok(hook_output) = hook_output else {
+        tracing::warn!(?event, error = "invalid hook output",);
+        return ExitCode::FAILURE;
+    };
 
-    // Run plugin hooks (for PreToolUse only, for now)
-    let plugin_output = dispatch_plugin_hooks(sym, &payload).await;
+    let plugin_output = event_handler.dispatch_plugin_hooks(sym, payload, hook_output);
 
     match plugin_output {
         PluginHookOutput::Success(plugin_json) => {
-            let mut hook_output_json = serde_json::to_value(&hook_output).unwrap();
-            merge(&mut hook_output_json, plugin_json);
-            std::io::stdout().write_all(&serde_json::to_vec(&hook_output_json).unwrap()).unwrap();
+            std::io::stdout()
+                .write_all(&serde_json::to_vec(&plugin_json).unwrap())
+                .unwrap();
 
             ExitCode::SUCCESS
         }
@@ -63,12 +76,8 @@ pub async fn dispatch_builtin(sym: &Symposium, payload: &HookPayload) -> HookOut
             // No built-in logic for PreToolUse — plugin hooks only.
             HookOutput::empty()
         }
-        HookSubPayload::PostToolUse(post) => {
-            handle_post_tool_use(sym, post).await
-        }
-        HookSubPayload::UserPromptSubmit(prompt) => {
-            handle_user_prompt_submit(sym, prompt).await
-        }
+        HookSubPayload::PostToolUse(post) => handle_post_tool_use(sym, post).await,
+        HookSubPayload::UserPromptSubmit(prompt) => handle_user_prompt_submit(sym, prompt).await,
     }
 }
 
@@ -204,7 +213,6 @@ fn detect_path_activation(
     }
 }
 
-
 /// Handle UserPromptSubmit: scan for crate mentions and nudge about unloaded skills.
 async fn handle_user_prompt_submit(
     sym: &Symposium,
@@ -267,7 +275,6 @@ async fn handle_user_prompt_submit(
 
     HookOutput::with_context("UserPromptSubmit", context.trim_end().to_string())
 }
-
 
 /// Extract crate names mentioned in code-like contexts within the prompt.
 ///
@@ -369,13 +376,18 @@ pub enum PluginHookOutput {
 }
 
 /// Dispatch plugin hooks (spawn subprocesses).
-async fn dispatch_plugin_hooks(sym: &Symposium, payload: &HookPayload) -> PluginHookOutput {
+pub(crate) fn dispatch_plugin_hooks<E: AgentHookEvent>(
+    sym: &Symposium,
+    event: &E,
+    payload: &E::Payload,
+    prior_output: E::Output,
+) -> PluginHookOutput {
     tracing::info!(?payload, "hook invoked (builtin)");
 
     let plugins = crate::plugins::load_all_plugins(sym);
-    let hooks = hooks_for_payload(&plugins, payload);
+    let hooks = hooks_for_payload(&plugins, &payload.to_hook_payload());
 
-    let mut output_json = serde_json::Value::Object(serde_json::Map::new());
+    let mut output_json = prior_output;
 
     for (plugin_name, hook) in hooks {
         tracing::info!(?plugin_name, hook = %hook.name, cmd = %hook.command, "running plugin hook");
@@ -390,14 +402,12 @@ async fn dispatch_plugin_hooks(sym: &Symposium, payload: &HookPayload) -> Plugin
         match spawn_res {
             Ok(mut child) => {
                 if let Some(mut stdin) = child.stdin.take() {
-                    if let Err(e) =
-                        stdin.write_all(serde_json::to_string(&payload).unwrap().as_bytes()).await
-                    {
+                    if let Err(e) = stdin.write_all(payload.to_string().unwrap().as_bytes()) {
                         tracing::warn!(error = %e, "failed to write hook stdin");
                     }
                 }
 
-                let output = match child.wait_with_output().await {
+                let output = match child.wait_with_output() {
                     Ok(output) => output,
                     Err(e) => {
                         tracing::warn!(error = %e, "failed waiting for hook process");
@@ -415,10 +425,14 @@ async fn dispatch_plugin_hooks(sym: &Symposium, payload: &HookPayload) -> Plugin
                     }
                     Some(0 | _) => {
                         let stdout = output.stdout;
-                        let json_res = serde_json::from_slice::<serde_json::Value>(&stdout);
-                        match json_res {
-                            Ok(json) => merge(&mut output_json, json),
-                            Err(e) => tracing::warn!(error = %e, "failed to parse hook output as JSON"),
+                        let plugin_output = event.parse_output(&stdout);
+                        match plugin_output {
+                            Ok(plugin_output) => {
+                                output_json = E::merge_outputs(output_json, plugin_output);
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "failed to parse hook output as JSON")
+                            }
                         }
                     }
                 }
@@ -427,23 +441,22 @@ async fn dispatch_plugin_hooks(sym: &Symposium, payload: &HookPayload) -> Plugin
         }
     }
 
-    PluginHookOutput::Success(output_json)
+    PluginHookOutput::Success(output_json.to_hook_output())
 }
 
 /// Recursively merge two JSON objects, with `b` taking precedence over `a`.
 /// Fields with null values in `b` will delete the corresponding field in `a`.
 /// Fields not present in `b` will be left unchanged in `a`.
-fn merge(a: &mut serde_json::Value, b: serde_json::Value) {
+pub fn merge(a: &mut serde_json::Value, b: serde_json::Value) {
     if let serde_json::Value::Object(a) = a {
         if let serde_json::Value::Object(b) = b {
             for (k, v) in b {
                 if v.is_null() {
                     a.remove(&k);
-                }
-                else {
+                } else {
                     merge(a.entry(k).or_insert(serde_json::Value::Null), v);
                 }
-            } 
+            }
 
             return;
         }
@@ -487,6 +500,10 @@ fn hooks_for_payload(
 
 #[cfg(test)]
 mod tests {
+    use crate::hook_schema::claude::{
+        ClaudeCodeHookCommonPayload, ClaudeCodePreToolUseOutput, ClaudeCodePreToolUsePayload,
+    };
+
     use super::*;
     use std::fs;
 
@@ -570,14 +587,22 @@ mod tests {
         fs::write(plugins_dir.join("plugin-one.toml"), p1).expect("write plugin1");
         fs::write(plugins_dir.join("plugin-two.toml"), p2).expect("write plugin2");
 
+        let agent = ClaudeCode;
+        let event_handler = agent.event(HookEvent::PreToolUse).unwrap();
+
         // Run the hook event via dispatch_plugin_hooks.
-        let payload = HookPayload {
-            sub_payload: HookSubPayload::PreToolUse(PreToolUsePayload {
-                tool_name: "Bash".to_string(),
-            }),
+        let payload = ClaudeCodePreToolUsePayload {
+            common_payload: ClaudeCodeHookCommonPayload {
+                hook_event_name: "PreToolUse".to_string(),
+            },
+            tool_name: "Bash".to_string(),
             rest: serde_json::Map::new(),
         };
-        dispatch_plugin_hooks(&sym, &payload).await;
+        let _ = event_handler.dispatch_plugin_hooks(
+            &sym,
+            Box::new(payload),
+            Box::new(ClaudeCodePreToolUseOutput::new()),
+        );
 
         // Verify files were created and contain expected contents.
         let got1 = fs::read_to_string(&out1).expect("read out1");
@@ -644,7 +669,8 @@ mod tests {
 
     #[test]
     fn hook_output_serializes_with_additional_context() {
-        let output = HookOutput::with_context("UserPromptSubmit", "Load tokio guidance".to_string());
+        let output =
+            HookOutput::with_context("UserPromptSubmit", "Load tokio guidance".to_string());
         let json = serde_json::to_value(&output).unwrap();
         assert_eq!(
             json["hookSpecificOutput"]["hookEventName"],
@@ -674,7 +700,10 @@ mod tests {
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
         };
-        assert_eq!(detect_crate_activation_bash(&post), Some("tokio".to_string()));
+        assert_eq!(
+            detect_crate_activation_bash(&post),
+            Some("tokio".to_string())
+        );
     }
 
     #[test]
@@ -686,7 +715,10 @@ mod tests {
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
         };
-        assert_eq!(detect_crate_activation_bash(&post), Some("serde".to_string()));
+        assert_eq!(
+            detect_crate_activation_bash(&post),
+            Some("serde".to_string())
+        );
     }
 
     #[test]
@@ -722,7 +754,10 @@ mod tests {
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
         };
-        assert_eq!(detect_crate_activation_bash(&post), Some("tokio".to_string()));
+        assert_eq!(
+            detect_crate_activation_bash(&post),
+            Some("tokio".to_string())
+        );
     }
 
     #[test]
@@ -734,7 +769,10 @@ mod tests {
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
         };
-        assert_eq!(detect_crate_activation_bash(&post), Some("serde".to_string()));
+        assert_eq!(
+            detect_crate_activation_bash(&post),
+            Some("serde".to_string())
+        );
     }
 
     #[test]
@@ -746,7 +784,10 @@ mod tests {
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
         };
-        assert_eq!(detect_crate_activation_mcp(&post), Some("tokio".to_string()));
+        assert_eq!(
+            detect_crate_activation_mcp(&post),
+            Some("tokio".to_string())
+        );
     }
 
     #[test]
@@ -847,7 +888,7 @@ mod tests {
             [[hooks]]
             name = "json-a"
             event = "PreToolUse"
-            command = "sh -c 'echo \"{{\\\"a\\\":1}}\"'"
+            command = "sh -c 'echo \"{{ \\\"hookEventName\\\": \\\"PreToolUse\\\", \\\"a\\\":1}}\"'"
         "#};
 
         let p2 = formatdoc! {r#"
@@ -856,18 +897,28 @@ mod tests {
             [[hooks]]
             name = "json-b"
             event = "PreToolUse"
-            command = "sh -c 'echo \"{{\\\"b\\\":2}}\"'"
+            command = "sh -c 'echo \"{{ \\\"hookEventName\\\": \\\"PreToolUse\\\", \\\"b\\\":2}}\"'"
         "#};
 
         fs::write(plugins_dir.join("plugin-json-a.toml"), p1).expect("write p1");
         fs::write(plugins_dir.join("plugin-json-b.toml"), p2).expect("write p2");
 
-        let payload = HookPayload {
-            sub_payload: HookSubPayload::PreToolUse(PreToolUsePayload { tool_name: "Bash".to_string() }),
+        let agent = ClaudeCode;
+        let event_handler = agent.event(HookEvent::PreToolUse).unwrap();
+
+        // Run the hook event via dispatch_plugin_hooks.
+        let payload = ClaudeCodePreToolUsePayload {
+            common_payload: ClaudeCodeHookCommonPayload {
+                hook_event_name: "PreToolUse".to_string(),
+            },
+            tool_name: "Bash".to_string(),
             rest: serde_json::Map::new(),
         };
-
-        let out = dispatch_plugin_hooks(&sym, &payload).await;
+        let out = event_handler.dispatch_plugin_hooks(
+            &sym,
+            Box::new(payload),
+            Box::new(ClaudeCodePreToolUseOutput::new()),
+        );
 
         // Expect overall success and merged JSON containing both keys
         let PluginHookOutput::Success(val) = out else {
@@ -911,12 +962,22 @@ mod tests {
         fs::write(plugins_dir.join("plugin-good.toml"), good).expect("write good");
         fs::write(plugins_dir.join("plugin-bad.toml"), bad).expect("write bad");
 
-        let payload = HookPayload {
-            sub_payload: HookSubPayload::PreToolUse(PreToolUsePayload { tool_name: "Bash".to_string() }),
+        let agent = ClaudeCode;
+        let event_handler = agent.event(HookEvent::PreToolUse).unwrap();
+
+        // Run the hook event via dispatch_plugin_hooks.
+        let payload = ClaudeCodePreToolUsePayload {
+            common_payload: ClaudeCodeHookCommonPayload {
+                hook_event_name: "PreToolUse".to_string(),
+            },
+            tool_name: "Bash".to_string(),
             rest: serde_json::Map::new(),
         };
-
-        let out = dispatch_plugin_hooks(&sym, &payload).await;
+        let out = event_handler.dispatch_plugin_hooks(
+            &sym,
+            Box::new(payload),
+            Box::new(ClaudeCodePreToolUseOutput::new()),
+        );
 
         // Expect failure and stderr containing our message
         let PluginHookOutput::Failure(stderr) = out else {

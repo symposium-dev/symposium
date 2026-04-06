@@ -327,7 +327,10 @@ fn resolve_plugin_source_dirs(sym: &Symposium) -> Vec<PathBuf> {
     dirs
 }
 
-fn resolve_plugin_source_dir(sym: &Symposium, source: &crate::config::PluginSourceConfig) -> Option<PathBuf> {
+fn resolve_plugin_source_dir(
+    sym: &Symposium,
+    source: &crate::config::PluginSourceConfig,
+) -> Option<PathBuf> {
     let config_dir = sym.config_dir();
     let cache_base = sym.cache_dir().join("plugin-sources");
 
@@ -350,7 +353,11 @@ fn resolve_plugin_source_dir(sym: &Symposium, source: &crate::config::PluginSour
 }
 
 /// Fetch a plugin source repository, returning the cached directory path.
-async fn fetch_plugin_source(sym: &Symposium, git_url: &str, update: UpdateLevel) -> Result<PathBuf> {
+async fn fetch_plugin_source(
+    sym: &Symposium,
+    git_url: &str,
+    update: UpdateLevel,
+) -> Result<PathBuf> {
     use crate::git_source;
 
     let source = git_source::parse_github_url(git_url)?;
