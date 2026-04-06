@@ -15,7 +15,7 @@
 
 # User's guide
 
-- [Getting started](./install.md)
+- [Installing Symposium](./install.md)
 - [Usage patterns](./usage-patterns.md)
 
 # For crate authors
