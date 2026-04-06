@@ -10,9 +10,11 @@ Design documentation is tracked in the mdbook:
 
 @md/SUMMARY.md
 
-The implementation overview chapter is particularly useful for highlighting the major components:
+The module structure and important flows chapters are particularly useful for understanding the codebase:
 
-@md/design/implementation-overview.md
+@md/design/module-structure.md
+
+@md/design/important-flows.md
 
 ## Artifact assembly
 

@@ -32,9 +32,12 @@
 - [Skill definition](./reference/skill-definition.md)
 - [Skill matching](./reference/skill-matching.md)
 
-# Design
+# Contribution guide
 
-- [Current status](./design/current-status.md)
-- [Overview](./design/overview.md)
-- [Implementation overview](./design/implementation-overview.md)
+- [Welcome](./design/welcome.md)
+- [Key repositories](./design/repositories.md)
+- [Key modules](./design/module-structure.md)
+- [Important flows](./design/important-flows.md)
+- [Integration test harness](./design/test-harness.md)
+- [Governance](./design/governance.md)
 - [Common issues](./design/common-issues.md)
