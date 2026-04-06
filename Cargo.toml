@@ -57,4 +57,4 @@ indoc = "2.0.7"
 symposium-testlib = { path = "symposium-testlib" }
 
 [workspace]
-members = [".", "symposium-artifacts", "symposium-testlib"]
+members = [".", "symposium-testlib"]

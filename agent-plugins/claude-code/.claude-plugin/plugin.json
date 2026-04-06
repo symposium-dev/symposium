@@ -1,8 +1,0 @@
-{
-  "name": "symposium",
-  "description": "AI the Rust Way — helps your agent write better, more idiomatic Rust",
-  "version": "0.1.0",
-  "author": {
-    "name": "Symposium"
-  }
-}

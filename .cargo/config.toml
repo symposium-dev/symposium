@@ -1,4 +1,3 @@
 [alias]
-artifacts = "run -p symposium-artifacts --"
 setup = "run -p setup --"
 ci = "run -p ci --"
