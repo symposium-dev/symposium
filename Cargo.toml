@@ -15,6 +15,10 @@ path = "src/lib.rs"
 name = "symposium"
 path = "src/main.rs"
 
+[[bin]]
+name = "write_file"
+path = "tests/helpers/write_file.rs"
+
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-{ target }.tar.gz"
 pkg-fmt = "tgz"

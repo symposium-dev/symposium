@@ -58,12 +58,8 @@ pub async fn dispatch_builtin(sym: &Symposium, payload: &HookPayload) -> HookOut
             // No built-in logic for PreToolUse — plugin hooks only.
             HookOutput::empty()
         }
-        HookSubPayload::PostToolUse(post) => {
-            handle_post_tool_use(sym, post).await
-        }
-        HookSubPayload::UserPromptSubmit(prompt) => {
-            handle_user_prompt_submit(sym, prompt).await
-        }
+        HookSubPayload::PostToolUse(post) => handle_post_tool_use(sym, post).await,
+        HookSubPayload::UserPromptSubmit(prompt) => handle_user_prompt_submit(sym, prompt).await,
     }
 }
 
@@ -199,7 +195,6 @@ fn detect_path_activation(
     }
 }
 
-
 /// Handle UserPromptSubmit: scan for crate mentions and nudge about unloaded skills.
 async fn handle_user_prompt_submit(
     sym: &Symposium,
@@ -262,7 +257,6 @@ async fn handle_user_prompt_submit(
 
     HookOutput::with_context("UserPromptSubmit", context.trim_end().to_string())
 }
-
 
 /// Extract crate names mentioned in code-like contexts within the prompt.
 ///
@@ -355,6 +349,20 @@ fn is_word_boundary_match(text: &str, name: &str) -> bool {
     }
     false
 }
+/// Returns a platform-appropriate shell command (`cmd /C` on Windows, `sh -c` elsewhere).
+fn shell_command(args: &str) -> Command {
+    let mut command = if cfg!(windows) {
+        let mut cmd = Command::new("cmd");
+        cmd.arg("/C");
+        cmd
+    } else {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c");
+        cmd
+    };
+    command.arg(args);
+    command
+}
 
 /// Dispatch plugin hooks (spawn subprocesses).
 fn dispatch_plugin_hooks(sym: &Symposium, payload: &HookPayload) {
@@ -363,9 +371,7 @@ fn dispatch_plugin_hooks(sym: &Symposium, payload: &HookPayload) {
 
     for (plugin_name, hook) in hooks {
         tracing::info!(?plugin_name, hook = %hook.name, cmd = %hook.command, "running plugin hook");
-        let spawn_res = Command::new("sh")
-            .arg("-c")
-            .arg(&hook.command)
+        let spawn_res = shell_command(&hook.command)
             .stdin(Stdio::piped())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -427,7 +433,7 @@ fn hooks_for_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
+    use std::{fs, path::PathBuf};
 
     use indoc::formatdoc;
 
@@ -441,6 +447,28 @@ mod tests {
                     .add_directive(tracing::Level::DEBUG.into()),
             )
             .try_init();
+    }
+
+    fn write_file_binary() -> PathBuf {
+        let mut path = std::env::current_exe().expect("could not get the current executable");
+        // current_exe is something like target/debug/deps/symposium-<hash>
+        path.pop(); // Remove current bin name
+        path.pop(); // Remove the deps/
+        path.push("write_file");
+
+        // On windows append .exe
+        if cfg!(windows) {
+            path.set_extension("exe");
+        }
+
+        path
+    }
+
+    // Helper to build the command string
+    fn write_cmd(binary: &str, path: &std::path::Path, content: &str) -> String {
+        let safe_binary = binary.replace('\\', "\\\\");
+        let safe_path = path.display().to_string().replace('\\', "\\\\");
+        format!("{} {} {}", safe_binary, safe_path, content)
     }
 
     #[tokio::test]
@@ -462,47 +490,45 @@ mod tests {
         let out4 = home.join("out4.txt");
         let out5 = home.join("out5.txt");
 
-        // Create two plugin TOML files that run simple echo commands.
-        let p1 = formatdoc! {r#"
-            name = "plugin-one"
+        // Get the path to our cross-platform helper binary
+        let write_file = write_file_binary();
+        let write_file = write_file.to_str().unwrap();
 
-            [[hooks]]
-            name = "write1"
-            event = "PreToolUse"
-            command = "sh -c 'echo plugin-one-write1 > {out1}'"
-        "#, out1 = out1.display()};
+        let p1 = formatdoc! {r#"
+        name = "plugin-one"
+        [[hooks]]
+        name = "write1"
+        event = "PreToolUse"
+        command = "{cmd1}"
+    "#, cmd1 = write_cmd(write_file, &out1, "plugin-one-write1")};
 
         let p2 = formatdoc! {r#"
-            name = "plugin-two"
-
-            [[hooks]]
-            name = "write2"
-            event = "PreToolUse"
-            matcher = "*"
-            command = "sh -c 'echo plugin-two-write2 > {out2}'"
-
-            [[hooks]]
-            name = "write3"
-            event = "PreToolUse"
-            matcher = "Bash"
-            command = "sh -c 'echo plugin-two-write3 > {out3}'"
-
-            [[hooks]]
-            name = "write4"
-            event = "PreToolUse"
-            matcher = "Bash|Read"
-            command = "sh -c 'echo plugin-two-write4 > {out4}'"
-
-            [[hooks]]
-            name = "write4"
-            event = "PreToolUse"
-            matcher = "Read|Write"
-            command = "sh -c 'echo plugin-two-write5 > {out5}'"
-        "#,
-            out2 = out2.display(),
-            out3 = out3.display(),
-            out4 = out4.display(),
-            out5 = out5.display(),
+        name = "plugin-two"
+        [[hooks]]
+        name = "write2"
+        event = "PreToolUse"
+        matcher = "*"
+        command = "{cmd2}"
+        [[hooks]]
+        name = "write3"
+        event = "PreToolUse"
+        matcher = "Bash"
+        command = "{cmd3}"
+        [[hooks]]
+        name = "write4"
+        event = "PreToolUse"
+        matcher = "Bash|Read"
+        command = "{cmd4}"
+        [[hooks]]
+        name = "write4"
+        event = "PreToolUse"
+        matcher = "Read|Write"
+        command = "{cmd5}"
+    "#,
+            cmd2 = write_cmd(write_file, &out2, "plugin-two-write2"),
+            cmd3 = write_cmd(write_file, &out3, "plugin-two-write3"),
+            cmd4 = write_cmd(write_file, &out4, "plugin-two-write4"),
+            cmd5 = write_cmd(write_file, &out5, "plugin-two-write5"),
         };
 
         fs::write(plugins_dir.join("plugin-one.toml"), p1).expect("write plugin1");
@@ -582,7 +608,8 @@ mod tests {
 
     #[test]
     fn hook_output_serializes_with_additional_context() {
-        let output = HookOutput::with_context("UserPromptSubmit", "Load tokio guidance".to_string());
+        let output =
+            HookOutput::with_context("UserPromptSubmit", "Load tokio guidance".to_string());
         let json = serde_json::to_value(&output).unwrap();
         assert_eq!(
             json["hookSpecificOutput"]["hookEventName"],
@@ -612,7 +639,10 @@ mod tests {
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
         };
-        assert_eq!(detect_crate_activation_bash(&post), Some("tokio".to_string()));
+        assert_eq!(
+            detect_crate_activation_bash(&post),
+            Some("tokio".to_string())
+        );
     }
 
     #[test]
@@ -624,7 +654,10 @@ mod tests {
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
         };
-        assert_eq!(detect_crate_activation_bash(&post), Some("serde".to_string()));
+        assert_eq!(
+            detect_crate_activation_bash(&post),
+            Some("serde".to_string())
+        );
     }
 
     #[test]
@@ -660,7 +693,10 @@ mod tests {
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
         };
-        assert_eq!(detect_crate_activation_bash(&post), Some("tokio".to_string()));
+        assert_eq!(
+            detect_crate_activation_bash(&post),
+            Some("tokio".to_string())
+        );
     }
 
     #[test]
@@ -672,7 +708,10 @@ mod tests {
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
         };
-        assert_eq!(detect_crate_activation_bash(&post), Some("serde".to_string()));
+        assert_eq!(
+            detect_crate_activation_bash(&post),
+            Some("serde".to_string())
+        );
     }
 
     #[test]
@@ -684,7 +723,10 @@ mod tests {
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
         };
-        assert_eq!(detect_crate_activation_mcp(&post), Some("tokio".to_string()));
+        assert_eq!(
+            detect_crate_activation_mcp(&post),
+            Some("tokio".to_string())
+        );
     }
 
     #[test]
