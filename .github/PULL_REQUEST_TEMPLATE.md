@@ -2,9 +2,10 @@
 
 e.g., closes #issue-number
 
-## Questions
+<details>
+<summary>Disclosure questions</summary>
 
-### AI disclosure
+**AI disclosure.**
 
 <!-- Symposium is an AI project. We encourage the use of agentic tooling! We do however require disclosure. The disclosure helps us to calibrate our reviews. See our [PR disclosure policy](https://symposium-dev.github.io/symposium/design/governance.html#pr-disclosure-policy). -->
 
@@ -14,13 +15,15 @@ e.g., closes #issue-number
 * [ ] The AI tool authored and opened this PR autonomously
 * [ ] Other: (explain)
 
-### Confidence level
+**Confidence level.**
 
 * [ ] Early draft, want feedback
 * [ ] It seems reasonable to me, I'd like to know what others think
 * [ ] I am very happy with it
 * [ ] Other: (explain)
 
-### Questions for reviewers
+**Questions for reviewers.**
 
 <!-- Any specific areas of uncertainty or things you'd like reviewers to look at? -->
+
+</details>

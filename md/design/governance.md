@@ -21,7 +21,7 @@ Decisions proceed by consensus at each level; if needed, @nikomatsakis acts as B
 
 ## PR disclosure policy
 
-We encourage the use of agentic development tools but we require PRs to use the disclosure.
+We request PRs answer the questions in our PR template regarding AI use, confidence level, and questions.
 
 ## PR merge policy
 
