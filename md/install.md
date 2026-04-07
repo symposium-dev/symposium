@@ -1,72 +1,75 @@
-# Installing Symposium
+# Getting Started
 
-Symposium is meant to fit into any workflow. It can be installed in multiple ways. 
+## Install
 
-## Capabilities by method
-
-Symposium offers several advantages for Rust development but not all of them are supposed by all installation methods.
-
-| Method | Crate-specific guidance | Rust-language updates | Improved token usage, workflow |
-| --- | --- | --- | --- |
-| Claude Code Plugin | ✅ | ✅ | ✅ Always | 
-| Skill | ✅ | ✅ | 🟡 Best effort | 
-| MCP Server | ✅ | ✅ | 🟡 Best effort | 
-
-* *Crate-specific guidance* -- make your agent aware of skills for the crates you are using, help your agent find the source for a crate
-* *Rust-language updates* -- provide your agent with info on the latest language changes, guidance on how best to use Rust
-* *Improved token usage, workflow* -- filter output of cargo and invoke other tools like rustfmt automatically
-  * When using a plugin, we intercept all calls to bash to do this determinstically
-  * When using a skill or MCP server, we advice your agent to use our tools but can't guarantee it
-
-## Claude Code Plugin
-
-To install as a Claude Code plugin, run these two steps. First add the symposium "marketplace" from github:
+`cargo-agents` requires the [Rust toolchain](https://rustup.rs/). Install it with:
 
 ```bash
-claude plugin marketplace add symposium-dev/symposium-claude-code-plugin
+cargo install cargo-agents
 ```
 
-Then install the symposium plugin from that marketplace:
+Or, for a faster prebuilt binary:
 
 ```bash
-claude plugin install symposium@symposium
+cargo binstall cargo-agents
 ```
 
-This plugin will install hooks and a `/symposium:rust` skill. The skill *should* be automatically invoked when you start with Rust code, but you can always invoke it manually if you like. Both the hooks and the plugin will download the Symposium binary appropriate for your architecture from our Github releases automatically, presuming it's not otherwise found on your system.
+## Step 1: User-wide setup
 
-## Skill
+The preferred setup for `cargo-agents` lets each user pick their own agent. To configure your user-wide agent, run the following from any directory:
 
-If you prefer, you can install the Symposium Skill independently from the plugin. It is found in this directory:
-
-https://github.com/symposium-dev/symposium-claude-code-plugin/tree/main/skills/rust
-
-The skill *should* be automatically invoked when you start with Rust code, but you can always invoke it manually if you like. The skill will download the Symposium binary appropriate for your architecture from our Github releases automatically, presuming it's not otherwise found on your system.
-
-## MCP server
-
-You can also install Symposium as an MCP server. To do that, you'll need to [install the CLI tool](#installing-the-symposium-cli-tool). You can then configure it as follows
-
-```json
-{
-    "symposium": {
-        "command": "symposium",
-        "args": ["mcp"]
-    }
-}
+```bash
+cargo agents init --user
 ```
 
-## Installing the `symposium` CLI tool
+This will ask you which agent you use (e.g., Claude Code, Cursor) and store your preference in `~/.cargo-agents/config.toml`. Where applicable, it also registers a global hook so that your agent automatically picks up project extensions on startup.
 
-Manually installing the symposium CLI tool [requires installing the Rust toolchain](https://rustup.rs/). Given that Symposium targets Rust development, this is hopefully not a problem for you!
+If you're working in a project that already uses `cargo-agents`, this is all you have to do — when you open the project in your agent, everything will be set up automatically.
 
-### Installing from crates.io
+## Step 2: Project setup
 
-You can install the latest release of symposium directly from `crates.io`:
+If you're setting up a project for the first time, navigate to your Rust project and run:
 
-* `cargo binstall symposium` -- download prebuilt binary, faster, requires [cargo binstall](https://github.com/cargo-bins/cargo-binstall)
-* `cargo install symposium` -- build from source
+```bash
+cargo agents init --project
+```
 
-### Installing from the git repository
+This will ask you a few questions to help you get set up. It scans your workspace dependencies, discovers available extensions, and generates a `.cargo-agents/config.toml` for the project. We recommend checking `.cargo-agents/` into version control so your team shares the same configuration.
 
-* Check out the [symposium-dev/symposium](https://github.com/symposium-dev/symposium) repository
-* Run `cargo install --path .` from inside the checkout
+## Contents of `.cargo-agents/config.toml`
+
+The project configuration in `.cargo-agents/config.toml` controls which extensions are active for your project. There are three kinds of extensions:
+
+- **Skills** — crate-specific guidance that helps your agent use your dependencies correctly (see [skill definition](./reference/skill-definition.md))
+- **Workflows** — tools that improve your agent's development workflow, like running cargo commands more efficiently (see [plugin definition](./reference/plugin-definition.md))
+- **MCP servers** — additional capabilities your agent can call on as needed
+
+The config file lists each available extension with a simple on/off toggle:
+
+```toml
+[skills]
+salsa = true
+tokio = true
+
+[workflows]
+rtk = true
+```
+
+When your agent starts, the registered hook runs `cargo agents` in the background. It reads this config and installs the enabled extensions into the locations your agent expects (e.g., `.claude/skills/` for Claude Code). You don't need to do anything, for most agents the hook handles it automatically.
+
+(See the [fine print](./reference/configuration.md) for agent-specific caveats.)
+
+## Synchronizing over time
+
+As your project evolves — dependencies added, removed, or updated — your configuration can get out of date. To bring it back in sync:
+
+```bash
+cargo agents sync
+```
+
+This does two things:
+
+1. **Updates your project config** (`--workspace`) — re-scans your workspace dependencies and updates `.cargo-agents/config.toml`. New extensions are added, removed dependencies are cleaned up, and your existing on/off choices are preserved.
+2. **Updates your agent config** (`--agent-config`) — re-installs the enabled extensions into your agent's directories.
+
+You can run either step individually with `cargo agents sync --workspace` or `cargo agents sync --agent-config`.
