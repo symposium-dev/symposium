@@ -82,10 +82,36 @@ impl AgentHookPayload for ClaudeCodePreToolUsePayload {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaudeCodePreToolUseOutput {
+    #[serde(rename = "continue", skip_serializing_if = "Option::is_none")]
+    pub do_continue: Option<bool>,
+    #[serde(rename = "stopReason", skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    #[serde(rename = "suppressOutput", skip_serializing_if = "Option::is_none")]
+    pub suppress_output: Option<bool>,
+    #[serde(rename = "systemMessage", skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<String>,
+
+    #[serde(rename = "hookSpecificOutput", skip_serializing_if = "Option::is_none")]
+    pub hook_specific_output: Option<ClaudeHookSpecificOutput>,
+
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeHookSpecificOutput {
     #[serde(rename = "hookEventName")]
     pub hook_event_name: String,
+
+    #[serde(rename = "permissionDecision", skip_serializing_if = "Option::is_none")]
+    pub permission_decision: Option<String>,
+    #[serde(rename = "permissionDecisionReason", skip_serializing_if = "Option::is_none")]
+    pub permission_decision_reason: Option<String>,
+    #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
+    pub updated_input: Option<String>,
     #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
     pub additional_context: Option<String>,
+
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
@@ -93,8 +119,18 @@ pub struct ClaudeCodePreToolUseOutput {
 impl ClaudeCodePreToolUseOutput {
     pub fn new() -> Self {
         Self {
-            hook_event_name: "PreToolUse".to_string(),
-            additional_context: None,
+            do_continue: None,
+            stop_reason: None,
+            suppress_output: None,
+            system_message: None,
+            hook_specific_output: Some(ClaudeHookSpecificOutput {
+                hook_event_name: "PreToolUse".to_string(),
+                permission_decision: None,
+                permission_decision_reason: None,
+                updated_input: None,
+                additional_context: None,
+                rest: serde_json::Map::new(),
+            }),
             rest: serde_json::Map::new(),
         }
     }
@@ -109,17 +145,25 @@ impl AgentHookOutput for ClaudeCodePreToolUseOutput {
     }
 
     fn from_hook_output(payload: &HookOutput) -> anyhow::Result<Self> {
-        let Some(hook_specific_output) = &payload.hook_specific_output else {
-            return Err(anyhow!("missing hook specific output"));
-        };
-        if hook_specific_output.hook_event_name != "PreToolUse" {
-            return Err(anyhow!("unexpected hook event name"));
+        let mut out = Self::new();
+        out.rest = payload.rest.clone();
+        if let Some(hook_specific) = &payload.hook_specific_output {
+            if hook_specific.hook_event_name != "PreToolUse" {
+                return Err(anyhow!(
+                    "unexpected hook event name: {}",
+                    hook_specific.hook_event_name
+                ));
+            }
+            out.hook_specific_output = Some(ClaudeHookSpecificOutput {
+                hook_event_name: hook_specific.hook_event_name.clone(),
+                permission_decision: None,
+                permission_decision_reason: None,
+                updated_input: hook_specific.updated_input.clone(),
+                additional_context: hook_specific.additional_context.clone(),
+                rest: hook_specific.rest.clone(),
+            });
         }
-        Ok(Self {
-            hook_event_name: hook_specific_output.hook_event_name.clone(),
-            additional_context: hook_specific_output.additional_context.clone(),
-            rest: hook_specific_output.rest.clone(),
-        })
+        Ok(out)
     }
 
     fn to_hook_output(&self) -> serde_json::Value {

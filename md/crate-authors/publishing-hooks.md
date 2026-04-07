@@ -44,8 +44,10 @@ The script receives the full event JSON on stdin and can:
 
 ## Testing hooks
 
-Use the CLI to test a hook with sample input:
+Use the CLI to test a hook with sample input (specify the agent):
 
 ```bash
-echo '{"tool": "Bash", "input": "cargo test"}' | symposium hook pre-tool-use
+echo '{"tool": "Bash", "input": "cargo test"}' | symposium hook claude pre-tool-use
 ```
+
+You can also use `copilot` or `gemini` as the agent name, e.g. `symposium hook copilot pre-tool-use`.

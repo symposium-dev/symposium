@@ -33,7 +33,13 @@ matcher = "Bash"
 command = "./scripts/check-tool.sh"
 ```
 
-When `symposium hook pre-tool-use` receives a matching payload, the command is started with the payload JSON on stdin.
+When `symposium hook <agent> pre-tool-use` receives a matching payload, the command is started with the payload JSON on stdin.
+
+Supported agent names: `claude`, `copilot`, `gemini`. Invoke the hook runner with the agent and event, for example:
+
+```
+symposium hook claude pre-tool-use
+```
 
 ## Validation
 
