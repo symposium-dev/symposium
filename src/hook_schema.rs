@@ -8,6 +8,7 @@ use std::{any::Any, fmt::Debug};
 use crate::config::Symposium;
 
 pub mod claude;
+pub mod gemini;
 
 /// Hook event types supported by Symposium.
 #[derive(Debug, Copy, Clone, clap::ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
