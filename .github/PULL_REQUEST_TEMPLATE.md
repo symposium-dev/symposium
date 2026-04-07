@@ -11,7 +11,7 @@ e.g., closes #issue-number
 
 <!-- Remove the items that do not apply. -->
 
-* I used an AI tool for research, autocomplete, or in other minimal ways agent
+* I used an AI tool for research, autocomplete, or in other minimal ways
 * The AI tool authored small parts of the code (e.g., autocomplete, comments)
 * The AI tool authored large parts of the code
 * The AI tool authored and opened this PR autonomously
