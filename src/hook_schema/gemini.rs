@@ -8,8 +8,8 @@ use crate::{
     },
 };
 
-pub struct GeminiCode;
-impl Agent for GeminiCode {
+pub struct Gemini;
+impl Agent for Gemini {
     fn event(&self, event: super::HookEvent) -> Option<Box<dyn super::ErasedAgentHookEvent>> {
         match event {
             super::HookEvent::PreToolUse => Some(erase_agent_hook_event(GeminiPreToolUseEvent)),
