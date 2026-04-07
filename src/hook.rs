@@ -6,18 +6,20 @@ use std::{
 use crate::plugins::ParsedPlugin;
 use crate::{
     config::Symposium,
-    hook_schema::{Agent, AgentHookEvent, AgentHookOutput, AgentHookPayload, claude::ClaudeCode},
+    hook_schema::{AgentHookEvent, AgentHookOutput, AgentHookPayload},
 };
 
 // Re-export hook schema types for convenience.
 pub use crate::hook_schema::{
-    HookEvent, HookOutput, HookPayload, HookSpecificOutput, HookSubPayload, PostToolUsePayload,
+    HookAgent, HookEvent, HookOutput, HookPayload, HookSpecificOutput, HookSubPayload, PostToolUsePayload,
     PreToolUsePayload, UserPromptSubmitPayload,
 };
 
 /// CLI entry point: read payload from stdin, dispatch, print output.
-pub async fn run_claude(sym: &Symposium, event: HookEvent) -> ExitCode {
-    let agent = ClaudeCode;
+pub async fn run(sym: &Symposium, agent: HookAgent, event: HookEvent) -> ExitCode {
+    tracing::debug!("Running hook listener for agent {agent:?} and event {event:?}");
+
+    let agent = agent.agent();
     let event_handler = agent.event(event).unwrap();
 
     let mut input = String::new();
@@ -25,15 +27,15 @@ pub async fn run_claude(sym: &Symposium, event: HookEvent) -> ExitCode {
         tracing::warn!(?event, error = %e, "failed to read hook stdin");
         return ExitCode::SUCCESS;
     }
+    tracing::debug!(?input);
 
     let payload = event_handler.parse_payload(&input);
-    let Ok(payload) = payload else {
-        tracing::warn!(
-            ?event,
-            error = "invalid hook payload",
-            "failed to parse hook stdin as JSON"
-        );
-        return ExitCode::FAILURE;
+    let payload = match payload {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(?event, error = %e, "invalid hook payload");
+            return ExitCode::FAILURE;
+        }
     };
 
     let builtin_payload = payload.to_hook_payload();
@@ -46,9 +48,12 @@ pub async fn run_claude(sym: &Symposium, event: HookEvent) -> ExitCode {
     // Run built-in hook logic
     let hook_output = dispatch_builtin(sym, &builtin_payload).await;
     let hook_output = event_handler.from_hook_output(&hook_output);
-    let Ok(hook_output) = hook_output else {
-        tracing::warn!(?event, error = "invalid hook output",);
-        return ExitCode::FAILURE;
+    let hook_output = match hook_output {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::warn!(?event, error = %e, "invalid hook output from builtin dispatch");
+            return ExitCode::FAILURE;
+        }
     };
 
     let plugin_output = event_handler.dispatch_plugin_hooks(sym, payload, hook_output);
@@ -503,6 +508,7 @@ mod tests {
     use crate::hook_schema::claude::{
         ClaudeCodeHookCommonPayload, ClaudeCodePreToolUseOutput, ClaudeCodePreToolUsePayload,
     };
+    use crate::hook_schema::{Agent, claude::ClaudeCode};
 
     use super::*;
     use std::fs;

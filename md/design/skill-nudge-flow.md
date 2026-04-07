@@ -14,21 +14,21 @@ sequenceDiagram
     participant Session as Session State
 
     Note over Agent: Agent runs `symposium crate tokio`
-    Agent->>Symposium: symposium hook post-tool-use (JSON on stdin)
+    Agent->>Symposium: symposium hook <agent> post-tool-use (JSON on stdin)
     Symposium->>Session: load session
     Symposium->>Symposium: detect that this was a skill activation for `tokio`
     Symposium->>Session: record `tokio` activation
     Symposium-->>Agent: (empty response)
 
     Note over Agent: User sends a prompt talking about `tokio::spawn`
-    Agent->>Symposium: symposium hook user-prompt-submit (JSON on stdin)
+    Agent->>Symposium: symposium hook <agent> user-prompt-submit (JSON on stdin)
     Symposium->>Session: load session
     Symposium->>Symposium: scan prompt for crate mentions, find `tokio`
     Symposium->>Symposium: observe that `tokio` was activated recently
     Symposium-->>Agent: (empty response)
   
     Note over Agent: User sends a prompt talking about `serde_json`
-    Agent->>Symposium: symposium hook user-prompt-submit (JSON on stdin)
+    Agent->>Symposium: symposium hook <agent> user-prompt-submit (JSON on stdin)
     Symposium->>Session: load session
     Symposium->>Symposium: scan prompt for crate mentions, find `serde_json`
     Symposium->>Symposium: observe that `serde_json` has not been activated

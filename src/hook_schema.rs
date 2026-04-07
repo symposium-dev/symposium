@@ -11,6 +11,30 @@ pub mod claude;
 pub mod copilot;
 pub mod gemini;
 
+/// Agents supported by Symposium hooks.
+#[derive(Debug, Copy, Clone, clap::ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
+pub enum HookAgent {
+    #[value(name = "claude")]
+    #[serde(rename = "claude")]
+    Claude,
+    #[value(name = "copilot")]
+    #[serde(rename = "copilot")]
+    Copilot,
+    #[value(name = "gemini")]
+    #[serde(rename = "gemini")]
+    Gemini,
+}
+
+impl HookAgent {
+    pub fn agent(&self) -> Box<dyn Agent> {
+        match self {
+            HookAgent::Claude => Box::new(claude::ClaudeCode),
+            HookAgent::Copilot => Box::new(copilot::Copilot),
+            HookAgent::Gemini => Box::new(gemini::Gemini),
+        }
+    }
+}
+
 /// Hook event types supported by Symposium.
 #[derive(Debug, Copy, Clone, clap::ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
 pub enum HookEvent {
@@ -145,6 +169,8 @@ pub struct HookSpecificOutput {
     pub hook_event_name: String,
     #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
     pub additional_context: Option<String>,
+    #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
+    pub updated_input: Option<String>,
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
@@ -156,6 +182,7 @@ impl HookOutput {
             hook_specific_output: Some(HookSpecificOutput {
                 hook_event_name: event_name.to_string(),
                 additional_context: Some(context),
+                updated_input: None,
                 rest: serde_json::Map::new(),
             }),
             rest: serde_json::Map::new(),

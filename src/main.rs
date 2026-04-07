@@ -31,6 +31,7 @@ enum Commands {
 
     /// Handle a hook event (invoked by editor plugins)
     Hook {
+        agent: hook::HookAgent,
         /// The hook event (e.g., claude:pre-tool)
         event: hook::HookEvent,
     },
@@ -92,7 +93,7 @@ async fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        Some(Commands::Hook { event }) => hook::run_claude(&sym, event).await,
+        Some(Commands::Hook { agent, event }) => hook::run(&sym, agent, event).await,
         Some(Commands::Plugin { command }) => handle_plugin_command(&sym, command).await,
         None => {
             use clap::CommandFactory;

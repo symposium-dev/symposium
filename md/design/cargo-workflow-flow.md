@@ -14,7 +14,7 @@ sequenceDiagram
     participant Session as Session State
     
     Note over Agent: Agent is about to use a tool
-    Agent->>Symposium: symposium hook pre-tool-use (JSON on stdin)
+    Agent->>Symposium: symposium hook <agent> pre-tool-use (JSON on stdin)
     Symposium->>Symposium: dispatch to plugin-defined hook commands
     Note over Symposium: plugin hooks can allow (exit 0) or block (exit non-zero)
     Symposium-->>Agent: allow/block + optional guidance
