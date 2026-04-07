@@ -14,7 +14,9 @@ With no flags, `init` does whatever hasn't been done yet:
 
 1. If no user-wide configuration exists (`~/.cargo-agents/config.toml`), runs user setup.
 2. If no project configuration exists (`.cargo-agents/config.toml`), offers to set up the project.
-3. If the project was initialized, runs [`cargo agents sync`](./cargo-agents-sync.md) automatically.
+3. Runs the appropriate syncs: if the project was set up (or already existed), runs `cargo agents sync` (both `--workspace` and `--agent`). If only user setup was performed, runs `cargo agents sync --agent` to register global hooks.
+
+The same applies when both `--user` and `--project` are specified explicitly.
 
 ### `--user`
 

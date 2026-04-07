@@ -10,9 +10,10 @@ cargo agents hook <EVENT> [ARGS...]
 
 ## Behavior
 
-When your agent starts, the registered hook calls `cargo agents hook` with the appropriate event. The hook reads the project configuration and installs enabled extensions into the agent's expected locations.
+When your agent starts, the registered hook calls `cargo agents hook` with the appropriate event. The hook does two things, in order:
 
-This is equivalent to running `cargo agents sync --agent-config`.
+1. **Syncs agent config** — reads the project configuration and installs enabled extensions into the agent's expected locations (equivalent to `cargo agents sync --agent`).
+2. **Dispatches to plugin hooks** — runs any hook handlers defined by enabled plugins for the given event.
 
 ## Events
 

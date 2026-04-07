@@ -42,7 +42,7 @@ The project configuration in `.cargo-agents/config.toml` controls which extensio
 
 - **Skills** — crate-specific guidance that helps your agent use your dependencies correctly (see [skill definition](./reference/skill-definition.md))
 - **Workflows** — tools that improve your agent's development workflow, like running cargo commands more efficiently (see [plugin definition](./reference/plugin-definition.md))
-- **MCP servers** — additional capabilities your agent can call on as needed
+- **MCP servers** — additional capabilities your agent can call on as needed (planned, not yet implemented)
 
 The config file lists each available extension with a simple on/off toggle:
 
@@ -70,6 +70,6 @@ cargo agents sync
 This does two things:
 
 1. **Updates your project config** (`--workspace`) — re-scans your workspace dependencies and updates `.cargo-agents/config.toml`. New extensions are added, removed dependencies are cleaned up, and your existing on/off choices are preserved.
-2. **Updates your agent config** (`--agent-config`) — re-installs the enabled extensions into your agent's directories.
+2. **Updates your agent setup** (`--agent`) — re-installs the enabled extensions into your agent's directories.
 
-You can run either step individually with `cargo agents sync --workspace` or `cargo agents sync --agent-config`.
+You can run either step individually with `cargo agents sync --workspace` or `cargo agents sync --agent`.

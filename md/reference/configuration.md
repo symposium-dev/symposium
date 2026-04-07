@@ -34,7 +34,7 @@ Your agent preference and default behaviors.
 |-----|------|---------|-------------|
 | `name` | string | *(required)* | Which agent you use (e.g., `"claude-code"`, `"cursor"`). |
 | `sync-default` | bool | `true` | Default on/off for newly discovered extensions. |
-| `auto-sync` | bool | `false` | Automatically run `sync --workspace` when workspace dependencies change. |
+| `auto-sync` | bool | `false` | Automatically run `sync --workspace` when workspace dependencies change. Detected by comparing the mtime of `Cargo.lock` against a cached value. |
 
 ### `[logging]`
 

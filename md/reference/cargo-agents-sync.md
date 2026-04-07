@@ -17,12 +17,12 @@ By default, `sync` performs both steps:
    - Entries for removed dependencies are cleaned up.
    - Existing on/off choices are preserved.
 
-2. **Agent config sync** (`--agent-config`) — reads `.cargo-agents/config.toml` and installs the enabled extensions into the locations your agent expects (e.g., `.claude/skills/` for Claude Code).
+2. **Agent sync** (`--agent`) — reads `.cargo-agents/config.toml` and installs the enabled extensions into the locations your agent expects (e.g., `.claude/skills/` for Claude Code).
 
 ## Options
 
 | Flag | Description |
 |------|-------------|
 | `--workspace` | Only update `.cargo-agents/config.toml` from workspace dependencies |
-| `--agent-config` | Only install enabled extensions into the agent's directories |
+| `--agent` | Only install enabled extensions into the agent's directories |
 | `--set-agent <name>` | Set or change the project-level agent override |
