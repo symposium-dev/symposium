@@ -125,14 +125,32 @@ impl AgentHookOutput for CopilotPreToolUseOutput {
         let mut out = CopilotPreToolUseOutput::default();
         if let Some(ref hook_specific) = payload.hook_specific_output {
             out.additional_context = hook_specific.additional_context.clone();
-            // merge any hookSpecific.rest into out.rest
+            out.modified_args = hook_specific.updated_input.clone();
+
+            // Map permission decision from hook-specific rest fields
+            if let Some(decision) = hook_specific.rest.get("permissionDecision") {
+                out.permission_decision = decision.as_str().map(String::from);
+            }
+            if let Some(reason) = hook_specific.rest.get("permissionDecisionReason") {
+                out.permission_decision_reason = reason.as_str().map(String::from);
+            }
+
+            // merge remaining hookSpecific.rest into out.rest
             for (k, v) in hook_specific.rest.iter() {
-                out.rest.insert(k.clone(), v.clone());
+                if k != "permissionDecision" && k != "permissionDecisionReason" {
+                    out.rest.insert(k.clone(), v.clone());
+                }
             }
         }
-        // copy other top-level rest fields
+        // copy other top-level rest fields, extracting known Copilot fields
         for (k, v) in payload.rest.iter() {
-            out.rest.insert(k.clone(), v.clone());
+            if k == "permissionDecision" && out.permission_decision.is_none() {
+                out.permission_decision = v.as_str().map(String::from);
+            } else if k == "permissionDecisionReason" && out.permission_decision_reason.is_none() {
+                out.permission_decision_reason = v.as_str().map(String::from);
+            } else {
+                out.rest.insert(k.clone(), v.clone());
+            }
         }
         Ok(out)
     }
