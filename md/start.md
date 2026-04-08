@@ -1,6 +1,6 @@
-# Symposium — AI the Rust Way
+# cargo-agents — AI the Rust Way
 
-Symposium helps agents write better Rust by providing up-to-date language guidance and integration with the Rust ecosystem.
+cargo-agents helps agents write better Rust by providing up-to-date language guidance and integration with the Rust ecosystem.
 
 ## Guidance on a particular crate
 

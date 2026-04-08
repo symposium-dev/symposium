@@ -13,7 +13,7 @@ use super::extraction::CrateExtractor;
 pub struct CacheManager {
     /// Path to `~/.cargo/registry/`, containing `src/` (extracted) and `cache/` (.crate files).
     cargo_registry_dir: PathBuf,
-    /// Path to `~/.symposium/cache/extractions/`, where we extract crates ourselves.
+    /// Path to `~/.cargo-agents/cache/extractions/`, where we extract crates ourselves.
     extraction_cache_dir: PathBuf,
 }
 

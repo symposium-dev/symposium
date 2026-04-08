@@ -67,7 +67,7 @@ impl<'a> VersionResolver<'a> {
     /// Get the latest version from crates.io
     async fn get_latest_version(&self, crate_name: &str) -> Result<String> {
         let client = crates_io_api::AsyncClient::new(
-            "symposium (https://github.com/symposium-dev/symposium)",
+            "cargo-agents (https://github.com/symposium-dev/symposium)",
             std::time::Duration::from_millis(1000),
         )
         .context("failed to create crates.io client")?;
@@ -83,7 +83,7 @@ impl<'a> VersionResolver<'a> {
     /// Get all available versions from crates.io
     async fn get_available_versions(&self, crate_name: &str) -> Result<Vec<Version>> {
         let client = crates_io_api::AsyncClient::new(
-            "symposium (https://github.com/symposium-dev/symposium)",
+            "cargo-agents (https://github.com/symposium-dev/symposium)",
             std::time::Duration::from_millis(1000),
         )
         .context("failed to create crates.io client")?;

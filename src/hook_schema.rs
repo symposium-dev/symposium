@@ -77,6 +77,21 @@ pub enum HookSubPayload {
     UserPromptSubmit(UserPromptSubmitPayload),
 }
 
+impl HookPayload {
+    /// Extract the working directory from the payload, if available.
+    ///
+    /// Checks the typed sub-payload fields first, then falls back to
+    /// the `rest` map (where agents often include `cwd` as a top-level field).
+    pub fn cwd(&self) -> Option<&str> {
+        match &self.sub_payload {
+            HookSubPayload::PostToolUse(p) => p.cwd.as_deref(),
+            HookSubPayload::UserPromptSubmit(p) => p.cwd.as_deref(),
+            HookSubPayload::PreToolUse(_) => None,
+        }
+        .or_else(|| self.rest.get("cwd").and_then(|v| v.as_str()))
+    }
+}
+
 impl HookSubPayload {
     pub fn hook_event(&self) -> HookEvent {
         match self {

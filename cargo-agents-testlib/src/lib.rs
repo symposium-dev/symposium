@@ -1,4 +1,4 @@
-//! Integration test harness for Symposium.
+//! Integration test harness for cargo-agents.
 //!
 //! Provides `TestContext` (wrapping `Symposium::from_dir()`) and `with_fixture()`
 //! for composable, isolated test environments.
@@ -7,10 +7,12 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
-use symposium::config::Symposium;
-use symposium::dispatch::{self, DispatchResult};
-use symposium::hook::{self, HookOutput, HookPayload};
-use symposium::mcp::McpArgs;
+use cargo_agents::cli::Cli;
+use cargo_agents::config::Symposium;
+use cargo_agents::dispatch::{self, DispatchResult};
+use cargo_agents::hook::{self, HookOutput, HookPayload};
+use cargo_agents::mcp::McpArgs;
+use cargo_agents::output::Output;
 
 /// Test context wrapping an isolated `Symposium` instance.
 pub struct TestContext {
@@ -22,6 +24,38 @@ pub struct TestContext {
 }
 
 impl TestContext {
+    /// Run a `cargo agents` command against this test context.
+    ///
+    /// Args are the same as CLI args after `cargo agents`, e.g.:
+    /// ```ignore
+    /// ctx.cargo_agents(&["init", "--user", "--agent", "claude"]).await.unwrap();
+    /// ctx.cargo_agents(&["sync", "--workspace"]).await.unwrap();
+    /// ```
+    ///
+    /// Uses the fixture's config dir as the user-global config and the
+    /// workspace root (if present) as the working directory. Output is
+    /// suppressed (quiet mode).
+    pub async fn cargo_agents(&mut self, args: &[&str]) -> anyhow::Result<()> {
+        // Build full arg list with program name for clap
+        let mut full_args = vec!["cargo-agents"];
+        full_args.push("-q"); // always quiet in tests
+        full_args.extend_from_slice(args);
+
+        let cli = Cli::try_parse_from(&full_args)
+            .map_err(|e| anyhow::anyhow!("failed to parse args: {e}"))?;
+
+        let out = Output::quiet();
+        let cwd = self
+            .workspace_root
+            .clone()
+            .unwrap_or_else(|| self.sym.config_dir().to_path_buf());
+
+        match cli.command {
+            Some(cmd) => cargo_agents::cli::run(&mut self.sym, cmd, &cwd, &out).await,
+            None => Ok(()),
+        }
+    }
+
     /// Call the shared dispatch function, returning the output string.
     ///
     /// Args are parsed via Clap just as the MCP server would.
@@ -61,7 +95,7 @@ struct FixtureScanResult {
 /// Create a test context by overlaying fixture fragments into a tempdir.
 ///
 /// Each fixture name corresponds to a subdirectory under `tests/fixtures/`
-/// in the symposium workspace. Files are copied in order, so later fixtures
+/// in the cargo-agents workspace. Files are copied in order, so later fixtures
 /// override earlier ones.
 ///
 /// After copying, the function reports which directories contain
@@ -74,7 +108,7 @@ struct FixtureScanResult {
 /// ```text
 /// fixtures/
 ///     plugins0/
-///         dot-symposium/
+///         dot-cargo-agents/
 ///             config.toml
 ///             plugins/my-skill/SKILL.md
 ///     workspace0/
@@ -84,14 +118,14 @@ struct FixtureScanResult {
 /// with_fixture(&["plugins0", "workspace0"])
 ///
 /// $tmpdir/
-///     dot-symposium/                <-- sym.config_dir()
+///     dot-cargo-agents/                <-- sym.config_dir()
 ///         config.toml               <-- from plugins0
 ///         plugins/my-skill/SKILL.md <-- from plugins0
 ///     Cargo.toml                    <-- from workspace0, workspace_root = $tmpdir
 ///     src/lib.rs                    <-- from workspace0
 /// ```
 pub fn with_fixture(fixtures: &[&str]) -> TestContext {
-    let fixtures_base = Path::new(env!("SYMPOSIUM_FIXTURES_DIR"));
+    let fixtures_base = Path::new(env!("CARGO_AGENTS_FIXTURES_DIR"));
     let tempdir = tempfile::tempdir().expect("failed to create tempdir");
     let root = tempdir.path();
 

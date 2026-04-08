@@ -1,10 +1,24 @@
 # Key modules
 
-Symposium is a Rust crate with both a library (`src/lib.rs`) and binary (`src/main.rs`). The library re-exports all modules so that integration tests can access internals.
+Symposium is a Rust crate with both a library (`src/lib.rs`) and two binaries: `cargo-agents` (`src/bin/cargo_agents.rs`, the primary CLI) and `symposium` (`src/main.rs`, the legacy CLI). The library re-exports all modules so that integration tests can access internals.
 
 ### `config.rs` — application context
 
 Everything hangs off the `Symposium` struct, which wraps the parsed `Config` with resolved paths for config, cache, and log directories. Two constructors: `from_environment()` for production and `from_dir()` for tests.
+
+Defines two config types: user-wide `Config` (stored at `~/.cargo-agents/config.toml`) with `AgentConfig`, logging, plugin sources, and hook settings; and `ProjectConfig` (stored at `.cargo-agents/config.toml`) with optional agent override, skills, and workflows. Provides `resolve_agent_name()` and `resolve_sync_default()` for merging project settings over user settings.
+
+### `agents.rs` — agent abstraction
+
+Centralizes agent-specific knowledge: hook registration file paths, skill installation directories, and hook registration logic for each supported agent (Claude Code, GitHub Copilot, Gemini CLI). Handles the differences between agents — e.g., Claude Code uses `.claude/skills/` while Copilot and Gemini use the vendor-neutral `.agents/skills/`.
+
+### `init.rs` — initialization commands
+
+Implements `cargo agents init`. Three entry points: `init_user()` prompts for agent and writes user config; `init_project()` finds the workspace root, creates project config, and runs sync; `init_default()` does both as needed.
+
+### `sync.rs` — synchronization commands
+
+Implements `cargo agents sync`. Two main flows: `sync_workspace()` scans workspace dependencies, matches against plugin skill predicates, and merges into `.cargo-agents/config.toml`; `sync_agent()` reads the project config and installs enabled skills into agent-specific directories while registering hooks.
 
 ### `plugins.rs` — plugin registry
 
@@ -20,4 +34,4 @@ Given a `PluginRegistry` and workspace dependencies, this module does the actual
 
 ### `dispatch.rs` — shared CLI/MCP dispatch
 
-The convergence point for CLI and MCP. Defines `SharedCommand` (clap-derived enum) and routes `start` and `crate` commands to the right handler. Both `main.rs` (CLI) and `mcp.rs` (MCP server) call into this layer.
+The convergence point for the legacy CLI and MCP. Defines `SharedCommand` (clap-derived enum) and routes `start` and `crate` commands to the right handler. Both the legacy CLI (`main.rs`) and `mcp.rs` (MCP server) call into this layer.

@@ -97,7 +97,7 @@ pub struct GitHubClient {
 impl GitHubClient {
     pub fn new() -> Self {
         let client = reqwest::Client::builder()
-            .user_agent("symposium")
+            .user_agent("cargo-agents")
             .build()
             .expect("failed to build HTTP client");
         Self { client }
@@ -178,7 +178,7 @@ pub struct PluginCacheMeta {
     pub source_url: String,
 }
 
-const CACHE_META_FILENAME: &str = ".symposium-cache-meta.json";
+const CACHE_META_FILENAME: &str = ".cargo-agents-cache-meta.json";
 
 /// Manages downloading and caching of git-sourced plugin artifacts.
 pub struct PluginCacheManager {
