@@ -55,7 +55,15 @@ impl AgentHookPayload for CopilotPreToolUsePayload {
         });
 
         let mut rest = self.rest.clone();
-        rest.insert("tool_args".to_string(), self.tool_args.clone());
+        // Copilot sends toolArgs as a JSON string; parse it into a Value
+        // so downstream code can inspect structured fields.
+        let tool_args = match &self.tool_args {
+            serde_json::Value::String(s) => {
+                serde_json::from_str(s).unwrap_or_else(|_| self.tool_args.clone())
+            }
+            other => other.clone(),
+        };
+        rest.insert("tool_args".to_string(), tool_args);
         if let Some(ts) = self.timestamp {
             rest.insert("timestamp".to_string(), serde_json::Value::Number(ts.into()));
         }
