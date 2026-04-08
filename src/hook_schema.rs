@@ -114,11 +114,15 @@ impl HookSubPayload {
         if matcher == "*" {
             return true;
         }
-        match self {
-            HookSubPayload::PreToolUse(payload) => matcher.contains(&payload.tool_name),
-            HookSubPayload::PostToolUse(payload) => matcher.contains(&payload.tool_name),
-            HookSubPayload::UserPromptSubmit(_) => true,
-            HookSubPayload::SessionStart(_) => true,
+        let tool_name = match self {
+            HookSubPayload::PreToolUse(payload) => &payload.tool_name,
+            HookSubPayload::PostToolUse(payload) => &payload.tool_name,
+            HookSubPayload::UserPromptSubmit(_) => return true,
+            HookSubPayload::SessionStart(_) => return true,
+        };
+        match regex::Regex::new(matcher) {
+            Ok(re) => re.is_match(tool_name),
+            Err(_) => false,
         }
     }
 }
