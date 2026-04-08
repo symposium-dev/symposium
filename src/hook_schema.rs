@@ -209,7 +209,7 @@ pub struct HookSpecificOutput {
     #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
     pub additional_context: Option<String>,
     #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
-    pub updated_input: Option<String>,
+    pub updated_input: Option<serde_json::Value>,
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
 }

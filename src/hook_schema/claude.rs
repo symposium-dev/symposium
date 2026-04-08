@@ -96,7 +96,7 @@ pub struct ClaudeHookSpecificOutput {
     #[serde(rename = "permissionDecisionReason", skip_serializing_if = "Option::is_none")]
     pub permission_decision_reason: Option<String>,
     #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
-    pub updated_input: Option<String>,
+    pub updated_input: Option<serde_json::Value>,
     #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
     pub additional_context: Option<String>,
 
