@@ -412,15 +412,20 @@ fn ensure_gemini_hook_entry(
         return false;
     }
 
-    arr.push(json!({
-        "matcher": ".*",
+    // Lifecycle events (like SessionStart) use exact-string matchers per the
+    // Gemini reference; only tool events (BeforeTool, AfterTool) use regex.
+    let mut entry = json!({
         "hooks": [{
             "name": "symposium",
             "type": "command",
             "command": command,
             "timeout": 10000
         }]
-    }));
+    });
+    if event != "SessionStart" {
+        entry.as_object_mut().unwrap().insert("matcher".to_string(), json!(".*"));
+    }
+    arr.push(entry);
     true
 }
 
