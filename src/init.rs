@@ -24,9 +24,9 @@ fn interactive() -> bool {
 
 /// Resolve which agents to configure. Priority:
 /// 1. Explicit `--add-agent` flags
-/// 2. Interactive multi-select (if terminal)
+/// 2. Interactive multi-select (if terminal), pre-selecting existing agents
 /// 3. Default to first agent (Claude) in non-interactive mode
-fn resolve_user_agents(opts: &InitOpts) -> Result<Vec<Agent>> {
+fn resolve_user_agents(opts: &InitOpts, existing: &[AgentEntry]) -> Result<Vec<Agent>> {
     if !opts.agents.is_empty() {
         return opts
             .agents
@@ -35,7 +35,7 @@ fn resolve_user_agents(opts: &InitOpts) -> Result<Vec<Agent>> {
             .collect();
     }
     if interactive() {
-        return prompt_for_agents();
+        return prompt_for_agents(existing);
     }
     Ok(vec![Agent::all()[0]])
 }
@@ -65,7 +65,7 @@ fn resolve_project_agents(opts: &InitOpts) -> Result<Vec<Agent>> {
 pub async fn init_user(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<()> {
     out.println("Setting up symposium for your user account.\n");
 
-    let agents = resolve_user_agents(opts)?;
+    let agents = resolve_user_agents(opts, &sym.config.agents)?;
 
     sym.config.agents = agents
         .iter()
@@ -194,14 +194,20 @@ pub async fn init_default(
 // Interactive prompts
 // ---------------------------------------------------------------------------
 
-fn prompt_for_agents() -> Result<Vec<Agent>> {
+fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {
     let agents = Agent::all();
     let items: Vec<&str> = agents.iter().map(|a| a.display_name()).collect();
+
+    // Pre-select agents that are already configured
+    let defaults: Vec<bool> = agents
+        .iter()
+        .map(|a| existing.iter().any(|e| e.name == a.config_name()))
+        .collect();
 
     let selections = MultiSelect::new()
         .with_prompt("Which agents do you use? (space to select, enter to confirm)")
         .items(&items)
-        .defaults(&[true, false, false])
+        .defaults(&defaults)
         .interact()?;
 
     if selections.is_empty() {
@@ -218,7 +224,7 @@ fn prompt_for_project_agents() -> Result<Vec<Agent>> {
         .interact()?;
 
     if add_agents {
-        prompt_for_agents()
+        prompt_for_agents(&[])
     } else {
         Ok(Vec::new())
     }

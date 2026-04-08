@@ -121,6 +121,39 @@ impl Agent {
         }
     }
 
+    /// Remove hooks from the project-level agent config.
+    pub fn unregister_project_hooks(&self, project_root: &Path, out: &Output) {
+        match self {
+            Agent::Claude => unregister_claude_hooks(
+                &project_root.join(".claude").join("settings.json"),
+                out,
+            ),
+            Agent::Copilot => unregister_copilot_hooks(
+                &project_root.join(".github").join("hooks"),
+                out,
+            ),
+            Agent::Gemini => unregister_gemini_hooks(
+                &project_root.join(".gemini").join("settings.json"),
+                out,
+            ),
+        }
+    }
+
+    /// Remove hooks from the global agent config.
+    pub fn unregister_global_hooks(&self, home: &Path, out: &Output) {
+        match self {
+            Agent::Claude => {
+                unregister_claude_hooks(&home.join(".claude").join("settings.json"), out)
+            }
+            Agent::Copilot => {
+                unregister_copilot_hooks_global(&home.join(".copilot").join("config.json"), out)
+            }
+            Agent::Gemini => {
+                unregister_gemini_hooks(&home.join(".gemini").join("settings.json"), out)
+            }
+        }
+    }
+
     /// Install a single skill file into the agent's expected location.
     pub fn install_skill(
         &self,
@@ -389,6 +422,105 @@ fn ensure_gemini_hook_entry(
         }]
     }));
     true
+}
+
+// ---------------------------------------------------------------------------
+// Hook unregistration
+// ---------------------------------------------------------------------------
+
+/// Remove symposium hooks from a Claude/Gemini settings.json file.
+/// Shared by both Claude and Gemini since they use the same structure.
+fn unregister_settings_hooks(settings_path: &Path, command_prefix: &str, out: &Output) {
+    let display = display_path(settings_path);
+
+    let Ok(mut settings) = load_json_or_empty(settings_path) else {
+        return;
+    };
+
+    let Some(hooks) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) else {
+        return;
+    };
+
+    let mut changed = false;
+    for (_event, arr) in hooks.iter_mut() {
+        if let Some(groups) = arr.as_array_mut() {
+            let before = groups.len();
+            groups.retain(|group| {
+                !group
+                    .get("hooks")
+                    .and_then(|h| h.as_array())
+                    .map_or(false, |hooks| {
+                        hooks.iter().any(|h| {
+                            h.get("command")
+                                .and_then(|c| c.as_str())
+                                .is_some_and(|c| c.starts_with(command_prefix))
+                        })
+                    })
+            });
+            if groups.len() < before {
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        if let Ok(()) = save_json(settings_path, &settings) {
+            out.removed(format!("{display}: removed hooks"));
+        }
+    }
+}
+
+fn unregister_claude_hooks(settings_path: &Path, out: &Output) {
+    unregister_settings_hooks(settings_path, "symposium hook", out);
+}
+
+fn unregister_gemini_hooks(settings_path: &Path, out: &Output) {
+    unregister_settings_hooks(settings_path, "symposium hook", out);
+}
+
+/// Remove symposium hooks from a Copilot project hooks directory.
+fn unregister_copilot_hooks(hooks_dir: &Path, out: &Output) {
+    let hook_file = hooks_dir.join("symposium.json");
+    if hook_file.exists() {
+        let display = display_path(&hook_file);
+        if fs::remove_file(&hook_file).is_ok() {
+            out.removed(format!("{display}: removed hooks"));
+        }
+    }
+}
+
+/// Remove symposium hooks from the global Copilot config.
+fn unregister_copilot_hooks_global(config_path: &Path, out: &Output) {
+    let display = display_path(config_path);
+
+    let Ok(mut config) = load_json_or_empty(config_path) else {
+        return;
+    };
+
+    let Some(hooks) = config.get_mut("hooks").and_then(|h| h.as_object_mut()) else {
+        return;
+    };
+
+    let mut changed = false;
+    for (_event, arr) in hooks.iter_mut() {
+        if let Some(entries) = arr.as_array_mut() {
+            let before = entries.len();
+            entries.retain(|h| {
+                !h.get("bash")
+                    .and_then(|c| c.as_str())
+                    .is_some_and(|c| c.starts_with("symposium hook"))
+            });
+            if entries.len() < before {
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        if let Ok(()) = save_json(config_path, &config) {
+            out.removed(format!("{display}: removed hooks"));
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -148,6 +148,7 @@ pub async fn sync_workspace(
 // ---------------------------------------------------------------------------
 
 /// Install enabled extensions and register hooks for all configured agents.
+/// Also removes hooks for agents that are no longer configured.
 pub async fn sync_agent(
     sym: &Symposium,
     project_root: Option<&Path>,
@@ -156,11 +157,7 @@ pub async fn sync_agent(
     let project_config = project_root.and_then(ProjectConfig::load);
     let agent_names = resolve_agents(&sym.config, project_config.as_ref());
 
-    if agent_names.is_empty() {
-        out.info("no agents configured — run `symposium init --user` to add one");
-        return Ok(());
-    }
-
+    // Register hooks for configured agents
     for agent_name in &agent_names {
         let agent = Agent::from_config_name(agent_name)?;
 
@@ -169,7 +166,6 @@ pub async fn sync_agent(
             let is_project_agent = project_config
                 .is_some_and(|c| c.agents.iter().any(|a| a.name == *agent_name));
 
-            // Register hooks based on where the agent comes from
             if is_project_agent {
                 agent.register_project_hooks(root, out)
                     .context("failed to register project hooks")?;
@@ -178,15 +174,27 @@ pub async fn sync_agent(
                     .context("failed to register global hooks")?;
             }
 
-            // Install enabled skills
             if let Some(ref config) = project_config {
                 install_skills(sym, agent, root, config, out).await?;
             }
         } else {
-            // Outside a project: only register global hooks
             agent.register_global_hooks(sym.home_dir(), out)
                 .context("failed to register global hooks")?;
         }
+    }
+
+    // Remove hooks for agents that are no longer configured
+    for &agent in Agent::all() {
+        if !agent_names.contains(&agent.config_name().to_string()) {
+            if let Some(root) = project_root {
+                agent.unregister_project_hooks(root, out);
+            }
+            agent.unregister_global_hooks(sym.home_dir(), out);
+        }
+    }
+
+    if agent_names.is_empty() {
+        out.info("no agents configured — run `symposium init --user` to add one");
     }
 
     Ok(())
