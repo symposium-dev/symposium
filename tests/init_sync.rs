@@ -267,6 +267,50 @@ async fn init_project_with_agent_sets_override() {
     .assert_eq(&read_project_config(&ctx));
 }
 
+/// Removing an agent removes its hooks.
+///
+/// Init with claude (registers hooks in ~/.claude/settings.json), then
+/// re-init with only copilot. The claude hooks should be removed.
+#[tokio::test]
+async fn removing_agent_removes_hooks() {
+    let mut ctx = symposium_testlib::with_fixture(&["plugins0"]);
+
+    // Init with claude
+    ctx.symposium(&["init", "--user", "--add-agent", "claude"])
+        .await
+        .unwrap();
+
+    // Verify claude hooks were registered
+    let claude_settings = ctx.sym.home_dir().join(".claude").join("settings.json");
+    assert!(claude_settings.exists(), "claude settings should exist after init");
+    let contents = std::fs::read_to_string(&claude_settings).unwrap();
+    assert!(
+        contents.contains("symposium hook"),
+        "claude settings should contain symposium hooks"
+    );
+
+    // Re-init with only copilot (removing claude)
+    ctx.symposium(&["init", "--user", "--add-agent", "copilot"])
+        .await
+        .unwrap();
+
+    // Claude hooks should be removed
+    let contents = std::fs::read_to_string(&claude_settings).unwrap();
+    assert!(
+        !contents.contains("symposium hook"),
+        "claude hooks should be removed after switching to copilot, got: {contents}"
+    );
+
+    // Copilot hooks should be registered
+    let copilot_config = ctx.sym.home_dir().join(".copilot").join("config.json");
+    assert!(copilot_config.exists(), "copilot config should exist");
+    let contents = std::fs::read_to_string(&copilot_config).unwrap();
+    assert!(
+        contents.contains("symposium hook"),
+        "copilot config should contain symposium hooks"
+    );
+}
+
 /// Project-level plugin source with session-start-context is loaded during hooks.
 ///
 /// Uses `project-plugins0` fixture which has:
