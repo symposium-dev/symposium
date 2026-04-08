@@ -591,16 +591,9 @@ fn hooks_for_payload(
 
 #[cfg(test)]
 mod tests {
-    use crate::hook_schema::claude::{
-        ClaudeCodeHookCommonPayload, ClaudeCodePreToolUseOutput, ClaudeCodePreToolUsePayload,
-    };
-    use crate::hook_schema::{Agent, claude::ClaudeCode};
-
     use super::*;
-    use std::fs;
 
-    use indoc::formatdoc;
-
+    #[allow(dead_code)]
     fn setup_tracing() {
         let _ = tracing_subscriber::fmt()
             .with_test_writer()
