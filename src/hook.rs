@@ -24,8 +24,6 @@ pub async fn run(
 ) -> ExitCode {
     tracing::debug!("Running hook listener for agent {agent:?} and event {event:?}");
 
-    let event_handler = agent.event(event).unwrap();
-
     let mut input = String::new();
     if let Err(e) = std::io::stdin().read_to_string(&mut input) {
         tracing::warn!(?event, error = %e, "failed to read hook stdin");
@@ -33,25 +31,83 @@ pub async fn run(
     }
     tracing::debug!(?input);
 
-    let payload = event_handler.parse_payload(&input);
-    let payload = match payload {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(?event, error = %e, "invalid hook payload");
+    // Try to get an agent-specific event handler. If the agent doesn't have
+    // one for this event (e.g., Claude only implements PreToolUse), fall back
+    // to parsing the raw JSON into our internal HookPayload and running only
+    // the builtin dispatch (no plugin hooks or agent-specific output).
+    let event_handler = agent.event(event);
+
+    if let Some(ref handler) = event_handler {
+        // Agent-specific path: parse with the agent's payload type
+        let payload = handler.parse_payload(&input);
+        let payload = match payload {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(?event, error = %e, "invalid hook payload");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        let builtin_payload = payload.to_hook_payload();
+
+        if builtin_payload.sub_payload.hook_event() != event {
+            tracing::warn!(?event, payload_event = ?builtin_payload.sub_payload.hook_event(), "hook event mismatch between CLI arg and payload");
             return ExitCode::FAILURE;
         }
-    };
 
-    let builtin_payload = payload.to_hook_payload();
+        run_sync_agent(sym, &builtin_payload, cwd).await;
 
-    if builtin_payload.sub_payload.hook_event() != event {
-        tracing::warn!(?event, payload_event = ?builtin_payload.sub_payload.hook_event(), "hook event mismatch between CLI arg and payload");
-        return ExitCode::FAILURE;
+        let hook_output = dispatch_builtin(sym, &builtin_payload).await;
+        let hook_output = handler.from_hook_output(&hook_output);
+        let hook_output = match hook_output {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::warn!(?event, error = %e, "invalid hook output from builtin dispatch");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        let plugin_output = handler.dispatch_plugin_hooks(sym, payload, hook_output);
+
+        match plugin_output {
+            PluginHookOutput::Success(plugin_json) => {
+                std::io::stdout()
+                    .write_all(&serde_json::to_vec(&plugin_json).unwrap())
+                    .unwrap();
+                ExitCode::SUCCESS
+            }
+            PluginHookOutput::Failure(stderr) => {
+                std::io::stderr().write_all(&stderr).unwrap();
+                ExitCode::FAILURE
+            }
+        }
+    } else {
+        // Fallback path: parse as generic JSON → internal HookPayload.
+        // This handles events like PostToolUse, UserPromptSubmit, SessionStart
+        // for agents that don't have dedicated payload/output types yet.
+        let builtin_payload: HookPayload = match serde_json::from_str(&input) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(?event, error = %e, "invalid hook payload (fallback)");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        run_sync_agent(sym, &builtin_payload, cwd).await;
+
+        let hook_output = dispatch_builtin(sym, &builtin_payload).await;
+
+        // Emit the hook output as JSON. The agent will interpret what it can.
+        let json = serde_json::to_vec(&hook_output).unwrap();
+        std::io::stdout().write_all(&json).unwrap();
+
+        ExitCode::SUCCESS
     }
+}
 
-    // Run sync --agent to ensure extensions are installed and hooks are current.
-    // Use the payload's cwd if available, otherwise the cwd passed from main.
-    let effective_cwd = builtin_payload
+/// Run sync --agent if we're in a project directory. Non-fatal.
+async fn run_sync_agent(sym: &Symposium, payload: &HookPayload, cwd: &std::path::Path) {
+    let effective_cwd = payload
         .cwd()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| cwd.to_path_buf());
@@ -60,34 +116,6 @@ pub async fn run(
     let out = crate::output::Output::quiet();
     if let Err(e) = crate::sync::sync_agent(sym, project_root, &out).await {
         tracing::warn!(error = %e, "sync --agent during hook failed (continuing)");
-    }
-
-    // Run built-in hook logic
-    let hook_output = dispatch_builtin(sym, &builtin_payload).await;
-    let hook_output = event_handler.from_hook_output(&hook_output);
-    let hook_output = match hook_output {
-        Ok(o) => o,
-        Err(e) => {
-            tracing::warn!(?event, error = %e, "invalid hook output from builtin dispatch");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let plugin_output = event_handler.dispatch_plugin_hooks(sym, payload, hook_output);
-
-    match plugin_output {
-        PluginHookOutput::Success(plugin_json) => {
-            std::io::stdout()
-                .write_all(&serde_json::to_vec(&plugin_json).unwrap())
-                .unwrap();
-
-            ExitCode::SUCCESS
-        }
-        PluginHookOutput::Failure(stderr) => {
-            std::io::stderr().write_all(&stderr).unwrap();
-
-            ExitCode::FAILURE
-        }
     }
 }
 

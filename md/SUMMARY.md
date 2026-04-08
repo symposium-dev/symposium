@@ -54,3 +54,7 @@
 - [Integration test harness](./design/test-harness.md)
 - [Governance](./design/governance.md)
 - [Common issues](./design/common-issues.md)
+- [Reference material](./design/reference/README.md)
+  - [Claude Code hooks](./design/reference/claude-code-hooks.md)
+  - [GitHub Copilot hooks](./design/reference/copilot-hooks.md)
+  - [Gemini CLI hooks](./design/reference/gemini-cli-hooks.md)
