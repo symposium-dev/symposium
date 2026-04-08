@@ -18,12 +18,12 @@ pub fn render(mode: RenderMode) -> String {
         match mode {
             RenderMode::Cli => {
                 let joined = args.join(" ");
-                format!("`cargo agents {joined}`")
+                format!("`symposium {joined}`")
             }
             RenderMode::Mcp => {
                 let json_args: Vec<String> = args.iter().map(|a| format!("\"{a}\"")).collect();
                 let joined = json_args.join(", ");
-                format!("the `cargo_agents::rust` MCP tool with `[{joined}]`")
+                format!("the `symposium::rust` MCP tool with `[{joined}]`")
             }
         }
     })
@@ -38,8 +38,8 @@ mod tests {
     fn render_cli_expands_invoke() {
         let output = render(RenderMode::Cli);
         assert!(
-            output.contains("`cargo agents crate $name`"),
-            "CLI should expand $INVOKE to cargo agents: {output}"
+            output.contains("`symposium crate $name`"),
+            "CLI should expand $INVOKE to symposium: {output}"
         );
         assert!(!output.contains("$INVOKE"));
     }
@@ -48,7 +48,7 @@ mod tests {
     fn render_mcp_expands_invoke() {
         let output = render(RenderMode::Mcp);
         assert!(
-            output.contains("the `cargo_agents::rust` MCP tool with `[\"crate\", \"$name\"]`"),
+            output.contains("the `symposium::rust` MCP tool with `[\"crate\", \"$name\"]`"),
             "MCP should expand $INVOKE to MCP tool: {output}"
         );
         assert!(!output.contains("$INVOKE"));

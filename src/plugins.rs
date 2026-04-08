@@ -304,7 +304,7 @@ pub fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
 /// Resolve the directories for all configured plugin sources.
 ///
 /// For `path` sources: resolves relative to the source's `base_dir`, or uses absolute paths as-is.
-/// For `git` sources: computes the cache path under `~/.cargo-agents/cache/plugin-sources/`.
+/// For `git` sources: computes the cache path under `~/.symposium/cache/plugin-sources/`.
 ///
 /// Does no network I/O — just computes paths.
 fn resolve_plugin_source_dirs(
@@ -569,7 +569,7 @@ pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
 /// Check whether a crate name exists on crates.io.
 pub async fn check_crate_exists(crate_name: &str) -> bool {
     let client = match crates_io_api::AsyncClient::new(
-        "cargo-agents (https://github.com/symposium-dev/symposium)",
+        "symposium (https://github.com/symposium-dev/symposium)",
         std::time::Duration::from_millis(1000),
     ) {
         Ok(c) => c,

@@ -12,7 +12,7 @@ use crate::config::Symposium;
 use crate::dispatch::{self, DispatchResult, SharedCommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "cargo-agents", no_binary_name = true, about = "")]
+#[command(name = "symposium", no_binary_name = true, about = "")]
 pub struct McpArgs {
     #[command(subcommand)]
     pub command: SharedCommand,
@@ -32,8 +32,8 @@ fn build_server(
     sym: Symposium,
     cwd: std::path::PathBuf,
 ) -> McpServer<role::mcp::Client, impl RunWithConnectionTo<role::mcp::Client>> {
-    McpServer::builder("cargo-agents".to_string())
-        .instructions("cargo-agents — tools for agentic Rust development")
+    McpServer::builder("symposium".to_string())
+        .instructions("Symposium — tools for agentic Rust development")
         .tool_fn(
             "rust",
             RUST_TOOL_DESCRIPTION,

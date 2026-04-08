@@ -153,7 +153,7 @@ fn register_claude_hooks(settings_path: &Path, out: &Output) -> Result<()> {
     let mut added = Vec::new();
 
     for event in ["PreToolUse", "PostToolUse", "UserPromptSubmit", "SessionStart"] {
-        let command = format!("cargo agents hook claude {}", event_to_cli_arg(event));
+        let command = format!("symposium hook claude {}", event_to_cli_arg(event));
         if ensure_claude_hook_entry(hooks_obj, event, &command) {
             added.push(event);
         }
@@ -189,7 +189,7 @@ fn ensure_claude_hook_entry(
             hooks.iter().any(|h| {
                 h.get("command")
                     .and_then(|c| c.as_str())
-                    .is_some_and(|c| c.starts_with("cargo agents hook"))
+                    .is_some_and(|c| c.starts_with("symposium hook"))
             })
         })
     });
@@ -214,12 +214,12 @@ fn ensure_claude_hook_entry(
 
 fn register_copilot_hooks(hooks_dir: &Path, out: &Output) -> Result<()> {
     fs::create_dir_all(hooks_dir)?;
-    let hook_file = hooks_dir.join("cargo-agents.json");
+    let hook_file = hooks_dir.join("symposium.json");
     let display = display_path(&hook_file);
 
     if hook_file.exists() {
         let existing = fs::read_to_string(&hook_file)?;
-        if existing.contains("cargo agents hook") {
+        if existing.contains("symposium hook") {
             out.already_ok(format!("{display}: hooks already registered"));
             return Ok(());
         }
@@ -230,22 +230,22 @@ fn register_copilot_hooks(hooks_dir: &Path, out: &Output) -> Result<()> {
         "hooks": {
             "preToolUse": [{
                 "type": "command",
-                "bash": "cargo agents hook copilot pre-tool-use",
+                "bash": "symposium hook copilot pre-tool-use",
                 "timeoutSec": 10
             }],
             "postToolUse": [{
                 "type": "command",
-                "bash": "cargo agents hook copilot post-tool-use",
+                "bash": "symposium hook copilot post-tool-use",
                 "timeoutSec": 10
             }],
             "userPromptSubmitted": [{
                 "type": "command",
-                "bash": "cargo agents hook copilot user-prompt-submit",
+                "bash": "symposium hook copilot user-prompt-submit",
                 "timeoutSec": 10
             }],
             "sessionStart": [{
                 "type": "command",
-                "bash": "cargo agents hook copilot session-start",
+                "bash": "symposium hook copilot session-start",
                 "timeoutSec": 10
             }]
         }
@@ -281,7 +281,7 @@ fn register_gemini_hooks(settings_path: &Path, out: &Output) -> Result<()> {
     ];
 
     for (gemini_event, cli_arg) in events {
-        let command = format!("cargo agents hook gemini {cli_arg}");
+        let command = format!("symposium hook gemini {cli_arg}");
         if ensure_gemini_hook_entry(hooks_obj, gemini_event, &command) {
             added.push(gemini_event);
         }
@@ -317,7 +317,7 @@ fn ensure_gemini_hook_entry(
             hooks.iter().any(|h| {
                 h.get("command")
                     .and_then(|c| c.as_str())
-                    .is_some_and(|c| c.starts_with("cargo agents hook"))
+                    .is_some_and(|c| c.starts_with("symposium hook"))
             })
         })
     });
@@ -329,7 +329,7 @@ fn ensure_gemini_hook_entry(
     arr.push(json!({
         "matcher": ".*",
         "hooks": [{
-            "name": "cargo-agents",
+            "name": "symposium",
             "type": "command",
             "command": command,
             "timeout": 10000
@@ -434,7 +434,7 @@ mod tests {
         let hooks_dir = tmp.path().join("hooks");
         register_copilot_hooks(&hooks_dir, &Output::quiet()).unwrap();
 
-        let hook_file = hooks_dir.join("cargo-agents.json");
+        let hook_file = hooks_dir.join("symposium.json");
         assert!(hook_file.exists());
         let content: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&hook_file).unwrap()).unwrap();

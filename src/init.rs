@@ -54,9 +54,9 @@ fn resolve_project_agent(opts: &InitOpts) -> Result<Option<Agent>> {
 /// Run user-wide initialization.
 ///
 /// Prompts for agent preference (unless provided), writes
-/// `~/.cargo-agents/config.toml`, and registers global hooks.
+/// `~/.symposium/config.toml`, and registers global hooks.
 pub async fn init_user(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<()> {
-    out.println("Setting up cargo-agents for your user account.\n");
+    out.println("Setting up symposium for your user account.\n");
 
     let agent = resolve_agent(opts)?;
 
@@ -86,7 +86,7 @@ pub async fn init_user(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Re
 /// Run project-level initialization.
 ///
 /// Finds workspace root from `cwd`, optionally prompts for agent override,
-/// creates `.cargo-agents/config.toml`, and runs sync.
+/// creates `.symposium/config.toml`, and runs sync.
 pub async fn init_project(
     sym: &Symposium,
     cwd: &Path,
@@ -95,14 +95,14 @@ pub async fn init_project(
 ) -> Result<()> {
     let workspace_root = find_workspace_root(cwd)?;
     out.println(format!(
-        "Setting up cargo-agents for project at {}.\n",
+        "Setting up symposium for project at {}.\n",
         workspace_root.display()
     ));
 
     // Check if already initialized
-    let config_dir = workspace_root.join(".cargo-agents");
+    let config_dir = workspace_root.join(".symposium");
     if config_dir.join("config.toml").exists() {
-        out.already_ok(".cargo-agents/config.toml already exists, syncing");
+        out.already_ok(".symposium/config.toml already exists, syncing");
     } else {
         let agent_override = resolve_project_agent(opts)?;
 
@@ -117,7 +117,7 @@ pub async fn init_project(
         config.save(&workspace_root)
             .context("failed to write project config")?;
 
-        out.done("created .cargo-agents/config.toml");
+        out.done("created .symposium/config.toml");
     }
 
     // Run sync --workspace to discover extensions
@@ -129,7 +129,7 @@ pub async fn init_project(
         .context("sync --agent failed")?;
 
     out.blank();
-    out.println("Project setup complete. Consider checking .cargo-agents/ into version control.");
+    out.println("Project setup complete. Consider checking .symposium/ into version control.");
     Ok(())
 }
 
@@ -151,7 +151,7 @@ pub async fn init_default(
     // Check if we're in a Rust workspace
     if let Ok(workspace_root) = find_workspace_root(cwd) {
         let project_config_exists = workspace_root
-            .join(".cargo-agents")
+            .join(".symposium")
             .join("config.toml")
             .exists();
 

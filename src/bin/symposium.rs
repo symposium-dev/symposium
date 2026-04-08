@@ -1,30 +1,19 @@
 use clap::Parser;
 use std::process::ExitCode;
 
-use cargo_agents::cli::{Cli, Commands, PluginCommand};
-use cargo_agents::config;
-use cargo_agents::hook;
-use cargo_agents::mcp;
-use cargo_agents::output::Output;
-use cargo_agents::plugins::{self, ParsedPlugin};
+use symposium::cli::{Cli, Commands, PluginCommand};
+use symposium::config;
+use symposium::hook;
+use symposium::mcp;
+use symposium::output::Output;
+use symposium::plugins::{self, ParsedPlugin};
 
 #[tokio::main]
 async fn main() -> ExitCode {
-    // When invoked as `cargo agents`, cargo passes "agents" as the first arg.
-    // Strip it so clap sees the right subcommand.
-    let args: Vec<String> = std::env::args().collect();
-    let args = if args.len() > 1 && args[1] == "agents" {
-        let mut filtered = vec![args[0].clone()];
-        filtered.extend_from_slice(&args[2..]);
-        filtered
-    } else {
-        args
-    };
-
     let mut sym = config::Symposium::from_environment();
     sym.init_logging();
 
-    let cli = Cli::parse_from(&args);
+    let cli = Cli::parse();
 
     // Hook commands are quiet by default (they're invoked by the agent, not the user)
     let is_hook = matches!(cli.command, Some(Commands::Hook { .. }));
@@ -62,7 +51,7 @@ async fn main() -> ExitCode {
 
         // Everything else delegates to the library
         Some(cmd) => {
-            match cargo_agents::cli::run(&mut sym, cmd, &cwd, &out).await {
+            match symposium::cli::run(&mut sym, cmd, &cwd, &out).await {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("Error: {e:#}");

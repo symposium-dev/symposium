@@ -1,6 +1,6 @@
-# `cargo agents sync --workspace`
+# `symposium sync --workspace`
 
-Updates `.cargo-agents/config.toml` to reflect the current workspace dependencies.
+Updates `.symposium/config.toml` to reflect the current workspace dependencies.
 
 ## Flow
 
@@ -12,11 +12,11 @@ Updates `.cargo-agents/config.toml` to reflect the current workspace dependencie
 
 4. **Match extensions to dependencies** — for each plugin, evaluate skill group crate predicates and individual skill `crates` frontmatter against the workspace dependencies. Also discover available workflows.
 
-5. **Merge with existing config** — load the current `.cargo-agents/config.toml` and reconcile:
+5. **Merge with existing config** — load the current `.symposium/config.toml` and reconcile:
    - **New extensions**: add entries with the resolved `sync-default` value (from project config if set, else user config).
    - **Removed dependencies**: remove entries for extensions whose crate predicates no longer match.
    - **Existing entries**: preserve the user's on/off choices.
 
-6. **Write config** — write the updated `.cargo-agents/config.toml`.
+6. **Write config** — write the updated `.symposium/config.toml`.
 
 7. **Cache mtime** — store the current `Cargo.lock` mtime so future runs can skip work if nothing changed.

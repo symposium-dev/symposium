@@ -56,7 +56,7 @@ pub async fn run(
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| cwd.to_path_buf());
     let project_root = Some(effective_cwd.as_path())
-        .filter(|p| p.join(".cargo-agents").is_dir());
+        .filter(|p| p.join(".symposium").is_dir());
     let out = crate::output::Output::quiet();
     if let Err(e) = crate::sync::sync_agent(sym, project_root, &out).await {
         tracing::warn!(error = %e, "sync --agent during hook failed (continuing)");
@@ -111,7 +111,7 @@ fn handle_session_start(sym: &Symposium, payload: &SessionStartPayload) -> HookO
         .cwd
         .as_deref()
         .map(std::path::Path::new)
-        .filter(|p| p.join(".cargo-agents").is_dir());
+        .filter(|p| p.join(".symposium").is_dir());
     let project_config = project_root.and_then(crate::config::ProjectConfig::load);
 
     let registry = crate::plugins::load_registry_with(
@@ -147,7 +147,7 @@ async fn handle_post_tool_use(sym: &Symposium, post: &PostToolUsePayload) -> Hoo
     let cwd = std::path::Path::new(cwd_str);
     let mut session = crate::session_state::load_session(sym, session_id);
 
-    // Detect activation via cargo-agents crate command (Bash tool)
+    // Detect activation via symposium crate command (Bash tool)
     if let Some(crate_name) = detect_crate_activation_bash(post) {
         session.record_activation(&crate_name);
     }
@@ -171,8 +171,8 @@ async fn handle_post_tool_use(sym: &Symposium, post: &PostToolUsePayload) -> Hoo
     HookOutput::empty()
 }
 
-/// Detect if a Bash tool successfully ran `cargo agents crate <name>` or
-/// `cargo-agents crate <name>`.
+/// Detect if a Bash tool successfully ran `symposium crate <name>` or
+/// `symposium crate <name>`.
 ///
 /// Also matches the legacy `symposium crate` form for backward compatibility.
 fn detect_crate_activation_bash(post: &PostToolUsePayload) -> Option<String> {
@@ -203,16 +203,16 @@ fn detect_crate_activation_bash(post: &PostToolUsePayload) -> Option<String> {
 /// Find the arguments after a `crate ` subcommand in a command string.
 ///
 /// Recognizes these patterns:
-/// - `cargo agents crate <args>`
-/// - `cargo-agents crate <args>`
+/// - `symposium crate <args>`
+/// - `symposium crate <args>`
 /// - `symposium crate <args>` (legacy)
 /// - `symposium.sh crate <args>` (legacy)
 ///
 /// The command token must be preceded by a path boundary (start, whitespace, `/`, `\`).
 fn find_crate_args(command: &str) -> Option<&str> {
     let needles = [
-        "cargo agents crate ",
-        "cargo-agents crate ",
+        "symposium crate ",
+        "symposium crate ",
         "symposium.sh crate ",
         "symposium crate ",
     ];
@@ -236,7 +236,7 @@ fn find_crate_args(command: &str) -> Option<&str> {
 
 /// Detect if an MCP rust tool was called with ["crate", "<name>"].
 fn detect_crate_activation_mcp(post: &PostToolUsePayload) -> Option<String> {
-    // MCP tool names include the server prefix, e.g., "mcp__cargo_agents__rust"
+    // MCP tool names include the server prefix, e.g., "mcp__symposium__rust"
     if !post.tool_name.contains("rust") {
         return None;
     }
@@ -332,7 +332,7 @@ async fn handle_user_prompt_submit(
     for crate_name in &nudge_crates {
         context.push_str(&format!(
             "The `{crate_name}` crate has specialized guidance available.\n\
-             To load it, run: `cargo agents crate {crate_name}`\n\n"
+             To load it, run: `symposium crate {crate_name}`\n\n"
         ));
     }
 
@@ -759,7 +759,7 @@ mod tests {
     fn detect_bash_crate_activation() {
         let post = PostToolUsePayload {
             tool_name: "Bash".to_string(),
-            tool_input: serde_json::json!({"command": "cargo agents crate tokio"}),
+            tool_input: serde_json::json!({"command": "symposium crate tokio"}),
             tool_response: serde_json::json!({"exit_code": 0, "stdout": "..."}),
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
@@ -771,10 +771,10 @@ mod tests {
     }
 
     #[test]
-    fn detect_bash_crate_activation_cargo_agents_hyphen() {
+    fn detect_bash_crate_activation_symposium_hyphen() {
         let post = PostToolUsePayload {
             tool_name: "Bash".to_string(),
-            tool_input: serde_json::json!({"command": "cargo-agents crate tokio"}),
+            tool_input: serde_json::json!({"command": "symposium crate tokio"}),
             tool_response: serde_json::json!({"exit_code": 0, "stdout": "..."}),
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
@@ -804,7 +804,7 @@ mod tests {
     fn detect_bash_crate_activation_with_version() {
         let post = PostToolUsePayload {
             tool_name: "Bash".to_string(),
-            tool_input: serde_json::json!({"command": "cargo agents crate serde --version 1.0"}),
+            tool_input: serde_json::json!({"command": "symposium crate serde --version 1.0"}),
             tool_response: serde_json::json!({"exit_code": 0}),
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
@@ -819,7 +819,7 @@ mod tests {
     fn detect_bash_crate_list_not_activation() {
         let post = PostToolUsePayload {
             tool_name: "Bash".to_string(),
-            tool_input: serde_json::json!({"command": "cargo agents crate --list"}),
+            tool_input: serde_json::json!({"command": "symposium crate --list"}),
             tool_response: serde_json::json!({"exit_code": 0}),
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
@@ -831,7 +831,7 @@ mod tests {
     fn detect_bash_failed_not_activation() {
         let post = PostToolUsePayload {
             tool_name: "Bash".to_string(),
-            tool_input: serde_json::json!({"command": "cargo agents crate tokio"}),
+            tool_input: serde_json::json!({"command": "symposium crate tokio"}),
             tool_response: serde_json::json!({"exit_code": 1}),
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
@@ -843,7 +843,7 @@ mod tests {
     fn detect_bash_crate_activation_with_path_prefix() {
         let post = PostToolUsePayload {
             tool_name: "Bash".to_string(),
-            tool_input: serde_json::json!({"command": "/home/user/.local/bin/cargo-agents crate serde"}),
+            tool_input: serde_json::json!({"command": "/home/user/.local/bin/symposium crate serde"}),
             tool_response: serde_json::json!({"exit_code": 0}),
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),
@@ -857,7 +857,7 @@ mod tests {
     #[test]
     fn detect_mcp_crate_activation() {
         let post = PostToolUsePayload {
-            tool_name: "mcp__cargo_agents__rust".to_string(),
+            tool_name: "mcp__symposium__rust".to_string(),
             tool_input: serde_json::json!({"args": ["crate", "tokio"]}),
             tool_response: serde_json::json!({"output": "..."}),
             session_id: Some("s1".to_string()),
@@ -872,7 +872,7 @@ mod tests {
     #[test]
     fn detect_mcp_crate_list_not_activation() {
         let post = PostToolUsePayload {
-            tool_name: "mcp__cargo_agents__rust".to_string(),
+            tool_name: "mcp__symposium__rust".to_string(),
             tool_input: serde_json::json!({"args": ["crate", "--list"]}),
             tool_response: serde_json::json!({"output": "..."}),
             session_id: Some("s1".to_string()),
@@ -940,7 +940,7 @@ mod tests {
     #[test]
     fn detect_mcp_start_not_activation() {
         let post = PostToolUsePayload {
-            tool_name: "mcp__cargo_agents__rust".to_string(),
+            tool_name: "mcp__symposium__rust".to_string(),
             tool_input: serde_json::json!({"args": ["start"]}),
             tool_response: serde_json::json!({"output": "..."}),
             session_id: Some("s1".to_string()),

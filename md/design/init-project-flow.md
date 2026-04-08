@@ -1,4 +1,4 @@
-# `cargo agents init --project`
+# `symposium init --project`
 
 Sets up project-level configuration for the current workspace.
 
@@ -8,7 +8,7 @@ Sets up project-level configuration for the current workspace.
 
 2. **Prompt for agent override** — ask whether to set a project-level agent (default: use each developer's own user-wide preference).
 
-3. **Create project config** — create the `.cargo-agents/` directory and an empty `.cargo-agents/config.toml`. If an agent override was selected, write the `[agent]` section.
+3. **Create project config** — create the `.symposium/` directory and an empty `.symposium/config.toml`. If an agent override was selected, write the `[agent]` section.
 
 4. **Run `sync --workspace`** — delegates to the [`sync --workspace` flow](./sync-workspace-flow.md) to scan dependencies, discover available extensions, and populate the config file.
 

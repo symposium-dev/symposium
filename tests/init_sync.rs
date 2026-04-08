@@ -7,7 +7,7 @@ use expect_test::expect;
 /// We read the raw file rather than going through the `Config` struct so that
 /// snapshots catch formatting, field ordering, and comment preservation —
 /// things the deserialized struct would hide.
-fn read_user_config(ctx: &cargo_agents_testlib::TestContext) -> String {
+fn read_user_config(ctx: &symposium_testlib::TestContext) -> String {
     let path = ctx.sym.config_dir().join("config.toml");
     std::fs::read_to_string(&path).unwrap_or_else(|_| "(not found)".to_string())
 }
@@ -16,12 +16,12 @@ fn read_user_config(ctx: &cargo_agents_testlib::TestContext) -> String {
 ///
 /// Same rationale as `read_user_config` — we want to snapshot the actual
 /// file on disk, not the deserialized struct.
-fn read_project_config(ctx: &cargo_agents_testlib::TestContext) -> String {
+fn read_project_config(ctx: &symposium_testlib::TestContext) -> String {
     let path = ctx
         .workspace_root
         .as_ref()
         .unwrap()
-        .join(".cargo-agents")
+        .join(".symposium")
         .join("config.toml");
     std::fs::read_to_string(&path).unwrap_or_else(|_| "(not found)".to_string())
 }
@@ -29,13 +29,13 @@ fn read_project_config(ctx: &cargo_agents_testlib::TestContext) -> String {
 /// `init --user` creates a user config with the specified agent.
 #[tokio::test]
 async fn init_user_creates_config() {
-    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0"]);
+    let mut ctx = symposium_testlib::with_fixture(&["plugins0"]);
 
-    ctx.cargo_agents(&["init", "--user", "--agent", "claude"])
+    ctx.symposium(&["init", "--user", "--agent", "claude"])
         .await
         .unwrap();
 
-    let config = cargo_agents::config::Symposium::from_dir(ctx.sym.config_dir());
+    let config = symposium::config::Symposium::from_dir(ctx.sym.config_dir());
     assert_eq!(config.config.agent.name.as_deref(), Some("claude"));
 
     expect![[r#"
@@ -59,20 +59,20 @@ async fn init_user_creates_config() {
     .assert_eq(&read_user_config(&ctx));
 }
 
-/// `init --project` creates `.cargo-agents/config.toml` and discovers skills.
+/// `init --project` creates `.symposium/config.toml` and discovers skills.
 #[tokio::test]
 async fn init_project_creates_config_and_discovers_skills() {
-    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0", "workspace0"]);
+    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
 
-    ctx.cargo_agents(&["init", "--user", "--agent", "claude"])
+    ctx.symposium(&["init", "--user", "--agent", "claude"])
         .await
         .unwrap();
 
-    ctx.cargo_agents(&["init", "--project"]).await.unwrap();
+    ctx.symposium(&["init", "--project"]).await.unwrap();
 
     let workspace_root = ctx.workspace_root.as_ref().unwrap();
     let project_config =
-        cargo_agents::config::ProjectConfig::load(workspace_root).expect("project config missing");
+        symposium::config::ProjectConfig::load(workspace_root).expect("project config missing");
 
     // workspace0 has serde as a dep, plugins0 has a serde skill
     assert!(
@@ -96,26 +96,26 @@ async fn init_project_creates_config_and_discovers_skills() {
 /// `sync --workspace` adds new skills and preserves existing choices.
 #[tokio::test]
 async fn sync_workspace_preserves_existing_choices() {
-    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0", "workspace0"]);
+    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
 
-    ctx.cargo_agents(&["init", "--user", "--agent", "claude"])
+    ctx.symposium(&["init", "--user", "--agent", "claude"])
         .await
         .unwrap();
-    ctx.cargo_agents(&["init", "--project"]).await.unwrap();
+    ctx.symposium(&["init", "--project"]).await.unwrap();
 
     let workspace_root = ctx.workspace_root.clone().unwrap();
 
     // User disables serde by editing the config file directly
-    let config_path = workspace_root.join(".cargo-agents").join("config.toml");
+    let config_path = workspace_root.join(".symposium").join("config.toml");
     let contents = std::fs::read_to_string(&config_path).unwrap();
     let contents = contents.replace("serde = true", "serde = false");
     std::fs::write(&config_path, contents).unwrap();
 
     // Re-sync should preserve the user's choice
-    ctx.cargo_agents(&["sync", "--workspace"]).await.unwrap();
+    ctx.symposium(&["sync", "--workspace"]).await.unwrap();
 
     let config =
-        cargo_agents::config::ProjectConfig::load(&workspace_root).expect("project config missing");
+        symposium::config::ProjectConfig::load(&workspace_root).expect("project config missing");
     assert_eq!(
         config.skills.get("serde"),
         Some(&false),
@@ -137,12 +137,12 @@ async fn sync_workspace_preserves_existing_choices() {
 /// `sync --agent` installs skill files into the agent's expected location.
 #[tokio::test]
 async fn sync_agent_installs_skills() {
-    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0", "workspace0"]);
+    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
 
-    ctx.cargo_agents(&["init", "--user", "--agent", "claude"])
+    ctx.symposium(&["init", "--user", "--agent", "claude"])
         .await
         .unwrap();
-    ctx.cargo_agents(&["init", "--project"]).await.unwrap();
+    ctx.symposium(&["init", "--project"]).await.unwrap();
 
     let workspace_root = ctx.workspace_root.as_ref().unwrap();
 
@@ -168,7 +168,7 @@ async fn sync_agent_installs_skills() {
 #[test]
 fn copilot_uses_vendor_neutral_skill_path() {
     let root = std::path::Path::new("/project");
-    let agent = cargo_agents::agents::Agent::Copilot;
+    let agent = symposium::agents::Agent::Copilot;
 
     let skill_dir = agent.project_skill_dir(root, "serde-guidance");
     assert_eq!(
@@ -177,7 +177,7 @@ fn copilot_uses_vendor_neutral_skill_path() {
     );
 
     // Claude should use .claude/skills/ instead
-    let claude_dir = cargo_agents::agents::Agent::Claude.project_skill_dir(root, "serde-guidance");
+    let claude_dir = symposium::agents::Agent::Claude.project_skill_dir(root, "serde-guidance");
     assert_eq!(
         claude_dir,
         std::path::PathBuf::from("/project/.claude/skills/serde-guidance")
@@ -187,24 +187,24 @@ fn copilot_uses_vendor_neutral_skill_path() {
 /// `sync --set-agent` changes the project agent (format-preserving).
 #[tokio::test]
 async fn sync_set_agent_changes_project_agent() {
-    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0", "workspace0"]);
+    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
 
-    ctx.cargo_agents(&["init", "--user", "--agent", "claude"])
+    ctx.symposium(&["init", "--user", "--agent", "claude"])
         .await
         .unwrap();
-    ctx.cargo_agents(&["init", "--project", "--agent", "claude"])
+    ctx.symposium(&["init", "--project", "--agent", "claude"])
         .await
         .unwrap();
 
     let workspace_root = ctx.workspace_root.clone().unwrap();
 
     // Change agent to copilot
-    ctx.cargo_agents(&["sync", "--set-agent", "copilot"])
+    ctx.symposium(&["sync", "--set-agent", "copilot"])
         .await
         .unwrap();
 
     let config =
-        cargo_agents::config::ProjectConfig::load(&workspace_root).expect("project config missing");
+        symposium::config::ProjectConfig::load(&workspace_root).expect("project config missing");
     assert_eq!(
         config.agent.as_ref().and_then(|a| a.name.as_deref()),
         Some("copilot")
@@ -230,18 +230,18 @@ async fn sync_set_agent_changes_project_agent() {
 /// `init --project` with `--agent` sets a project-level agent override.
 #[tokio::test]
 async fn init_project_with_agent_sets_override() {
-    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0", "workspace0"]);
+    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
 
-    ctx.cargo_agents(&["init", "--user", "--agent", "claude"])
+    ctx.symposium(&["init", "--user", "--agent", "claude"])
         .await
         .unwrap();
-    ctx.cargo_agents(&["init", "--project", "--agent", "gemini"])
+    ctx.symposium(&["init", "--project", "--agent", "gemini"])
         .await
         .unwrap();
 
     let workspace_root = ctx.workspace_root.as_ref().unwrap();
     let config =
-        cargo_agents::config::ProjectConfig::load(workspace_root).expect("project config missing");
+        symposium::config::ProjectConfig::load(workspace_root).expect("project config missing");
     assert_eq!(
         config.agent.as_ref().and_then(|a| a.name.as_deref()),
         Some("gemini")
@@ -268,16 +268,16 @@ async fn init_project_with_agent_sets_override() {
 ///
 /// Uses `project-plugins0` fixture which has:
 /// - A workspace with serde/tokio deps
-/// - `.cargo-agents/config.toml` with a `[[plugin-source]]` pointing to `project-plugins/`
+/// - `.symposium/config.toml` with a `[[plugin-source]]` pointing to `project-plugins/`
 /// - `project-plugins/project-guidance.toml` with session-start-context
 #[tokio::test]
 async fn project_plugin_source_loaded_in_hooks() {
     // plugins0 provides user-level config + plugins; project-plugins0 provides
     // a workspace with its own project-level plugin source
-    let ctx = cargo_agents_testlib::with_fixture(&["plugins0", "project-plugins0"]);
+    let ctx = symposium_testlib::with_fixture(&["plugins0", "project-plugins0"]);
     let workspace_root = ctx.workspace_root.as_ref().unwrap();
 
-    use cargo_agents::hook::SessionStartPayload;
+    use symposium::hook::SessionStartPayload;
     let output = ctx
         .invoke_hook(SessionStartPayload {
             session_id: Some("s1".to_string()),
@@ -299,7 +299,7 @@ async fn project_plugin_source_loaded_in_hooks() {
 
     // Should also include the user-level plugin's context (plugins0 has session-start.toml)
     assert!(
-        context.contains("cargo agents start"),
+        context.contains("symposium start"),
         "should also include user plugin context, got: {context}"
     );
 }
@@ -308,16 +308,16 @@ async fn project_plugin_source_loaded_in_hooks() {
 ///
 /// Uses `project-self-contained0` fixture which has:
 /// - A workspace with serde/tokio deps
-/// - `.cargo-agents/config.toml` with `self-contained = true` and its own plugin source
+/// - `.symposium/config.toml` with `self-contained = true` and its own plugin source
 /// - `project-plugins/only-this.toml` with session-start-context
 #[tokio::test]
 async fn self_contained_excludes_user_plugins() {
     // plugins0 provides user-level config + plugins; project-self-contained0 provides
     // a workspace that declares self-contained = true
-    let ctx = cargo_agents_testlib::with_fixture(&["plugins0", "project-self-contained0"]);
+    let ctx = symposium_testlib::with_fixture(&["plugins0", "project-self-contained0"]);
     let workspace_root = ctx.workspace_root.as_ref().unwrap();
 
-    use cargo_agents::hook::SessionStartPayload;
+    use symposium::hook::SessionStartPayload;
     let output = ctx
         .invoke_hook(SessionStartPayload {
             session_id: Some("s1".to_string()),
@@ -339,7 +339,7 @@ async fn self_contained_excludes_user_plugins() {
 
     // Should NOT contain user-level plugin context (self-contained excludes it)
     assert!(
-        !context.contains("cargo agents start"),
+        !context.contains("symposium start"),
         "self-contained should exclude user plugins, got: {context}"
     );
 }
@@ -350,16 +350,16 @@ async fn self_contained_excludes_user_plugins() {
 /// with no skill plugins of its own, so sync should discover no skills.
 #[tokio::test]
 async fn self_contained_excludes_user_skills_from_sync() {
-    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0", "project-self-contained0"]);
+    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "project-self-contained0"]);
 
-    ctx.cargo_agents(&["init", "--user", "--agent", "claude"])
+    ctx.symposium(&["init", "--user", "--agent", "claude"])
         .await
         .unwrap();
 
     // Run sync --workspace on the self-contained project
-    ctx.cargo_agents(&["sync", "--workspace"]).await.unwrap();
+    ctx.symposium(&["sync", "--workspace"]).await.unwrap();
 
-    let project_config = cargo_agents::config::ProjectConfig::load(
+    let project_config = symposium::config::ProjectConfig::load(
         ctx.workspace_root.as_ref().unwrap(),
     );
 

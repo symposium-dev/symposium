@@ -18,8 +18,8 @@ use crate::sync;
 /// Parsed CLI arguments.
 #[derive(Debug, Parser)]
 #[command(
-    name = "cargo-agents",
-    bin_name = "cargo agents",
+    name = "symposium",
+    bin_name = "symposium",
     version,
     about = "AI the Rust Way"
 )]
@@ -55,7 +55,7 @@ pub enum Commands {
 
     /// Synchronize configuration with workspace dependencies and agent
     Sync {
-        /// Only update .cargo-agents/config.toml from workspace dependencies
+        /// Only update .symposium/config.toml from workspace dependencies
         #[arg(long)]
         workspace: bool,
 

@@ -11,7 +11,7 @@
 # Summary
 
 - [Introduction](./introduction.md)
-- [About cargo-agents](./about.md)
+- [About symposium](./about.md)
 
 # User's guide
 
@@ -27,10 +27,10 @@
 
 # Reference
 
-- [The `cargo agents` command](./reference/cargo-agents.md)
-  - [`cargo agents init`](./reference/cargo-agents-init.md)
-  - [`cargo agents sync`](./reference/cargo-agents-sync.md)
-  - [`cargo agents hook`](./reference/cargo-agents-hook.md)
+- [The `symposium` command](./reference/symposium.md)
+  - [`symposium init`](./reference/symposium-init.md)
+  - [`symposium sync`](./reference/symposium-sync.md)
+  - [`symposium hook`](./reference/symposium-hook.md)
 - [Configuration](./reference/configuration.md)
 - [Plugin definition](./reference/plugin-definition.md)
 - [Skill definition](./reference/skill-definition.md)

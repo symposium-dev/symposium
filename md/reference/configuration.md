@@ -1,10 +1,10 @@
 # Configuration
 
-`cargo-agents` uses two configuration files: a **user-wide** config and an optional **per-project** config. When both exist, project settings override user settings.
+`symposium` uses two configuration files: a **user-wide** config and an optional **per-project** config. When both exist, project settings override user settings.
 
 ## User configuration
 
-Stored at `~/.cargo-agents/config.toml`. Created by `cargo agents init --user`.
+Stored at `~/.symposium/config.toml`. Created by `symposium init --user`.
 
 ### Full example
 
@@ -19,7 +19,7 @@ level = "info"
 
 [[plugin-source]]
 name = "my-org"
-git = "https://github.com/my-org/cargo-agents-plugins"
+git = "https://github.com/my-org/symposium-plugins"
 
 [[plugin-source]]
 name = "local-dev"
@@ -44,18 +44,18 @@ Your agent preference and default behaviors.
 
 ### `[[plugin-source]]`
 
-Defines where `cargo-agents` looks for skills, workflows, and MCP server definitions. Each entry must have exactly one of `git` or `path`.
+Defines where `symposium` looks for skills, workflows, and MCP server definitions. Each entry must have exactly one of `git` or `path`.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `name` | string | *(required)* | A name for this source (used in logs and cache paths). |
-| `git` | string | — | Repository URL. Fetched and cached under `~/.cargo-agents/cache/plugin-sources/`. |
+| `git` | string | — | Repository URL. Fetched and cached under `~/.symposium/cache/plugin-sources/`. |
 | `path` | string | — | Local directory containing plugins. |
 | `auto-update` | bool | `true` | Check for updates on startup. Only applies to `git` sources. |
 
 ## Project configuration
 
-Stored at `.cargo-agents/config.toml` in your project root. Created by `cargo agents init --project` and updated by `cargo agents sync`.
+Stored at `.symposium/config.toml` in your project root. Created by `symposium init --project` and updated by `symposium sync`.
 
 ### Full example
 
@@ -72,7 +72,7 @@ user-plugins = true
 
 [[plugin-source]]
 name = "our-team"
-git = "https://github.com/our-org/cargo-agents-plugins"
+git = "https://github.com/our-org/symposium-plugins"
 
 [[plugin-source]]
 name = "local"
@@ -116,7 +116,7 @@ When `self-contained = false`, these are unioned with user-level sources. When `
 
 Lists available crate skills discovered from your workspace dependencies. Each key is a crate name, each value is a bool toggling the skill on or off.
 
-Managed by `cargo agents sync --workspace` — new entries are added with the resolved `sync-default`, removed dependencies are cleaned up, and your existing choices are preserved.
+Managed by `symposium sync --workspace` — new entries are added with the resolved `sync-default`, removed dependencies are cleaned up, and your existing choices are preserved.
 
 ### `[workflows]`
 
@@ -137,12 +137,12 @@ When both user and project configs exist, project settings take precedence:
 
 ## Directory resolution
 
-User-wide data lives under `~/.cargo-agents/` by default. If [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/latest/) environment variables are set, `cargo-agents` respects them:
+User-wide data lives under `~/.symposium/` by default. If [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/latest/) environment variables are set, `symposium` respects them:
 
 | | Config | Cache | Logs |
 |---|---|---|---|
-| XDG set | `$XDG_CONFIG_HOME/cargo-agents/` | `$XDG_CACHE_HOME/cargo-agents/` | `$XDG_DATA_HOME/cargo-agents/logs/` |
-| Default | `~/.cargo-agents/` | `~/.cargo-agents/cache/` | `~/.cargo-agents/logs/` |
+| XDG set | `$XDG_CONFIG_HOME/symposium/` | `$XDG_CACHE_HOME/symposium/` | `$XDG_DATA_HOME/symposium/logs/` |
+| Default | `~/.symposium/` | `~/.symposium/cache/` | `~/.symposium/logs/` |
 
 ## File locations
 
@@ -151,4 +151,4 @@ User-wide data lives under `~/.cargo-agents/` by default. If [XDG Base Directory
 | `<config-dir>/config.toml` | User configuration |
 | `<cache-dir>/` | Cache directory (crate sources, plugin sources) |
 | `<data-dir>/logs/` | Log files |
-| `.cargo-agents/config.toml` | Project configuration |
+| `.symposium/config.toml` | Project configuration |

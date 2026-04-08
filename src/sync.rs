@@ -1,6 +1,6 @@
 //! Sync commands: `sync --workspace` and `sync --agent`.
 //!
-//! - `sync --workspace` updates `.cargo-agents/config.toml` to reflect workspace deps.
+//! - `sync --workspace` updates `.symposium/config.toml` to reflect workspace deps.
 //! - `sync --agent` installs enabled extensions into the agent's expected locations.
 
 use std::collections::BTreeMap;
@@ -19,7 +19,7 @@ use crate::skills;
 // sync --workspace
 // ---------------------------------------------------------------------------
 
-/// Update `.cargo-agents/config.toml` to match current workspace dependencies.
+/// Update `.symposium/config.toml` to match current workspace dependencies.
 ///
 /// Returns the updated project config.
 pub async fn sync_workspace(
@@ -155,7 +155,7 @@ pub async fn sync_agent(
     let project_config = project_root.and_then(ProjectConfig::load);
     let agent_name = resolve_agent_name(&sym.config, project_config.as_ref())
         .ok_or_else(|| anyhow::anyhow!(
-            "no agent configured — run `cargo agents init --user` first"
+            "no agent configured — run `symposium init --user` first"
         ))?;
     let agent = Agent::from_config_name(&agent_name)?;
 

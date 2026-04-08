@@ -1,2 +1,0 @@
-name = "session-start"
-session-start-context = "**Critical:** Before authoring Rust code, run `cargo agents start` for instructions."

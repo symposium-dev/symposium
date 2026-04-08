@@ -1,11 +1,11 @@
 use expect_test::expect;
-use cargo_agents::hook::{PostToolUsePayload, UserPromptSubmitPayload};
+use symposium::hook::{PostToolUsePayload, UserPromptSubmitPayload};
 
 #[tokio::test]
 async fn nudges_about_available_skill() {
     // plugins0 has a standalone serde skill; workspace0 has serde as a dep.
     // The nudge fires because serde is both in the workspace and has a matching skill.
-    let ctx = cargo_agents_testlib::with_fixture(&["plugins0", "workspace0"]);
+    let ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
     let cwd = ctx
         .workspace_root
         .as_ref()
@@ -30,7 +30,7 @@ async fn nudges_about_available_skill() {
     );
     expect![[r#"
         The `serde` crate has specialized guidance available.
-        To load it, run: `cargo agents crate serde`
+        To load it, run: `symposium crate serde`
     "#]]
     .assert_eq(&format!("{ctx_text}\n"));
 }
@@ -39,7 +39,7 @@ async fn nudges_about_available_skill() {
 async fn activation_suppresses_nudge() {
     // After activating a crate via post-tool-use, a subsequent prompt mention
     // should NOT nudge about that crate.
-    let ctx = cargo_agents_testlib::with_fixture(&["plugins0", "workspace0"]);
+    let ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
     let cwd = ctx
         .workspace_root
         .as_ref()
@@ -50,7 +50,7 @@ async fn activation_suppresses_nudge() {
     // First: record activation via PostToolUse
     ctx.invoke_hook(PostToolUsePayload {
         tool_name: "Bash".to_string(),
-        tool_input: serde_json::json!({"command": "cargo agents crate serde"}),
+        tool_input: serde_json::json!({"command": "symposium crate serde"}),
         tool_response: serde_json::json!({"exit_code": 0}),
         session_id: Some("s1".to_string()),
         cwd: Some(cwd.clone()),

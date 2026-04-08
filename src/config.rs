@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use tracing::Level;
 
 // ---------------------------------------------------------------------------
-// User configuration (~/.cargo-agents/config.toml)
+// User configuration (~/.symposium/config.toml)
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -114,7 +114,7 @@ pub struct DefaultsConfig {
     #[serde(default = "default_true", rename = "symposium-recommendations")]
     pub symposium_recommendations: bool,
 
-    /// Include `~/.cargo-agents/plugins/` as a local source (default: true).
+    /// Include `~/.symposium/plugins/` as a local source (default: true).
     #[serde(default = "default_true", rename = "user-plugins")]
     pub user_plugins: bool,
 }
@@ -148,10 +148,10 @@ pub struct PluginSourceConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Project configuration (.cargo-agents/config.toml)
+// Project configuration (.symposium/config.toml)
 // ---------------------------------------------------------------------------
 
-/// Project-level configuration stored at `.cargo-agents/config.toml`.
+/// Project-level configuration stored at `.symposium/config.toml`.
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct ProjectConfig {
     /// Optional project-level agent override.
@@ -187,10 +187,10 @@ pub struct ProjectConfig {
 impl ProjectConfig {
     /// Path to the project config file.
     pub fn path(project_root: &Path) -> PathBuf {
-        project_root.join(".cargo-agents").join("config.toml")
+        project_root.join(".symposium").join("config.toml")
     }
 
-    /// Load from a `.cargo-agents/config.toml` file, or return None if not found.
+    /// Load from a `.symposium/config.toml` file, or return None if not found.
     pub fn load(project_root: &Path) -> Option<Self> {
         let path = Self::path(project_root);
         let contents = fs::read_to_string(&path).ok()?;
@@ -206,12 +206,12 @@ impl ProjectConfig {
         }
     }
 
-    /// Write this config from scratch to `.cargo-agents/config.toml`.
+    /// Write this config from scratch to `.symposium/config.toml`.
     ///
     /// Use this only for initial creation. For updates, prefer the
     /// format-preserving `update_*` functions below.
     pub fn save(&self, project_root: &Path) -> anyhow::Result<()> {
-        let dir = project_root.join(".cargo-agents");
+        let dir = project_root.join(".symposium");
         fs::create_dir_all(&dir)?;
         let path = dir.join("config.toml");
         let contents = toml::to_string_pretty(self)?;
@@ -256,7 +256,7 @@ impl ProjectConfig {
             }
         }
 
-        let dir = project_root.join(".cargo-agents");
+        let dir = project_root.join(".symposium");
         fs::create_dir_all(&dir)?;
         fs::write(&path, doc.to_string())?;
         Ok(())
@@ -275,7 +275,7 @@ impl ProjectConfig {
         }
         doc["agent"]["name"] = toml_edit::value(agent_name);
 
-        let dir = project_root.join(".cargo-agents");
+        let dir = project_root.join(".symposium");
         fs::create_dir_all(&dir)?;
         fs::write(&path, doc.to_string())?;
         Ok(())
@@ -335,9 +335,9 @@ impl Symposium {
     /// Production constructor: resolves paths from environment.
     ///
     /// Resolution order for config dir:
-    /// 1. `CARGO_AGENTS_HOME` env var
-    /// 2. `XDG_CONFIG_HOME/cargo-agents`
-    /// 3. `~/.cargo-agents`
+    /// 1. `SYMPOSIUM_HOME` env var
+    /// 2. `XDG_CONFIG_HOME/symposium`
+    /// 3. `~/.symposium`
     pub fn from_environment() -> Self {
         let home_dir = dirs::home_dir().expect("could not determine home directory");
         let config_dir = resolve_config_dir_from_env();
@@ -392,7 +392,7 @@ impl Symposium {
 
         let logs = self.logs_dir();
         let now = chrono::Local::now();
-        let filename = now.format("cargo-agents-%Y%m%d-%H%M%S.log").to_string();
+        let filename = now.format("symposium-%Y%m%d-%H%M%S.log").to_string();
         let log_path = logs.join(&filename);
 
         let file = OpenOptions::new()
@@ -545,10 +545,10 @@ impl Symposium {
 
 /// Resolve config dir from environment variables.
 fn resolve_config_dir_from_env() -> PathBuf {
-    if let Ok(home) = env::var("CARGO_AGENTS_HOME") {
+    if let Ok(home) = env::var("SYMPOSIUM_HOME") {
         PathBuf::from(home)
     } else if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
-        PathBuf::from(xdg).join("cargo-agents")
+        PathBuf::from(xdg).join("symposium")
     } else {
         default_home()
     }
@@ -559,11 +559,11 @@ fn resolve_cache_dir(config: &Config, config_dir: &Path) -> PathBuf {
     if let Some(ref dir) = config.cache_dir {
         return dir.clone();
     }
-    if let Ok(home) = env::var("CARGO_AGENTS_HOME") {
+    if let Ok(home) = env::var("SYMPOSIUM_HOME") {
         return PathBuf::from(home).join("cache");
     }
     if let Ok(xdg) = env::var("XDG_CACHE_HOME") {
-        return PathBuf::from(xdg).join("cargo-agents");
+        return PathBuf::from(xdg).join("symposium");
     }
     config_dir.join("cache")
 }
@@ -580,11 +580,11 @@ fn load_config_from(config_dir: &Path) -> Config {
     }
 }
 
-/// Returns the default cargo-agents home directory (~/.cargo-agents).
+/// Returns the default symposium home directory (~/.symposium).
 fn default_home() -> PathBuf {
     dirs::home_dir()
         .expect("could not determine home directory")
-        .join(".cargo-agents")
+        .join(".symposium")
 }
 
 fn default_true() -> bool {
@@ -822,7 +822,7 @@ mod tests {
     #[test]
     fn update_skills_preserves_comments() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join(".cargo-agents");
+        let dir = tmp.path().join(".symposium");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("config.toml"),
@@ -857,7 +857,7 @@ mod tests {
     #[test]
     fn update_skills_removes_stale() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join(".cargo-agents");
+        let dir = tmp.path().join(".symposium");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("config.toml"),
@@ -881,7 +881,7 @@ mod tests {
     #[test]
     fn set_agent_name_preserves_existing_content() {
         let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path().join(".cargo-agents");
+        let dir = tmp.path().join(".symposium");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(
             dir.join("config.toml"),
