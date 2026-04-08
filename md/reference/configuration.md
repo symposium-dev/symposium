@@ -1,59 +1,40 @@
 # Configuration
 
-Symposium works out of the box with no configuration. This page covers the things you might want to customize.
+`symposium` uses two configuration files: a **user-wide** config and an optional **per-project** config. When both exist, project settings override user settings.
 
-Symposium reads its configuration from `~/.symposium/config.toml`. The file is optional — all fields have defaults.
+## User configuration
 
-## Full example
+Stored at `~/.symposium/config.toml`. Created by `symposium init --user`.
+
+### Full example
 
 ```toml
-cache_dir = "/custom/cache/path"
+[agent]
+name = "claude-code"
+sync-default = true
+auto-sync = true
 
 [logging]
 level = "info"
 
-[defaults]
-symposium-recommendations = true
-user-plugins = true
-
-[hooks]
-nudge-interval = 50  # prompts between re-nudges (0 = disable nudges)
-
 [[plugin-source]]
 name = "my-org"
 git = "https://github.com/my-org/symposium-plugins"
-auto-update = false
 
 [[plugin-source]]
 name = "local-dev"
-path = "my-plugins"
+path = "~/my-plugins"
 ```
 
-## Plugin sources
+### `[agent]`
 
-Symposium discovers skills and hooks from **plugin sources**. Two built-in sources are enabled by default:
-
-1. **`symposium-recommendations`** — curated plugins from the [symposium-dev/recommendations](https://github.com/symposium-dev/recommendations) repository.
-2. **`user-plugins`** — your own plugins in `~/.symposium/plugins/`.
-
-You can add more with `[[plugin-source]]` entries and disable either built-in with `[defaults]`.
-
-### Managing plugins
-
-```bash
-symposium plugin list              # list all sources and their plugins
-symposium plugin show my-plugin    # show a plugin's details
-symposium plugin sync              # update all git-based sources
-symposium plugin sync my-org       # update a specific source
-```
-
-## Config file reference
-
-### Top-level keys
+Your agent preference and default behaviors.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `cache_dir` | string | (see directory resolution) | Directory for cached data. Overrides environment-based resolution. |
+| `name` | string | *(required)* | Which agent you use (e.g., `"claude-code"`, `"cursor"`). |
+| `sync-default` | bool | `true` | Default on/off for newly discovered extensions. |
+| `auto-sync` | bool | `false` | Automatically run `sync --workspace` when workspace dependencies change. Detected by comparing the mtime of `Cargo.lock` against a cached value. |
 
 ### `[logging]`
 
@@ -61,53 +42,113 @@ symposium plugin sync my-org       # update a specific source
 |-----|------|---------|-------------|
 | `level` | string | `"info"` | Minimum log level. One of: `trace`, `debug`, `info`, `warn`, `error`. |
 
-Each invocation writes a log file to `~/.symposium/logs/`.
-
-### `[defaults]`
-
-Controls the two built-in plugin sources. Both are enabled by default.
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `symposium-recommendations` | bool | `true` | Fetch plugins from the [symposium-dev/recommendations](https://github.com/symposium-dev/recommendations) repository. |
-| `user-plugins` | bool | `true` | Scan `~/.symposium/plugins/` for user-defined plugins. |
-
-### `[hooks]`
-
-Controls hook behavior (nudging, etc.).
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `nudge-interval` | integer | `50` | Number of prompts before re-nudging about an unloaded crate skill. Set to `0` to disable nudges entirely. |
-
 ### `[[plugin-source]]`
 
-Defines additional plugin sources. Each entry must have exactly one of `git` or `path`.
+Defines where `symposium` looks for skills, workflows, and MCP server definitions. Each entry must have exactly one of `git` or `path`.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `name` | string | *(required)* | A name for this source (used in logs and cache paths). |
-| `git` | string | — | GitHub repository URL. Fetched as a tarball and cached under `~/.symposium/cache/plugin-sources/`. |
-| `path` | string | — | Local directory containing plugins. Relative paths are resolved from `~/.symposium/`. |
-| `auto-update` | bool | `true` | Whether to check for updates on startup. Only applies to `git` sources. When `false`, the source is only fetched by `symposium plugin sync`. |
+| `git` | string | — | Repository URL. Fetched and cached under `~/.symposium/cache/plugin-sources/`. |
+| `path` | string | — | Local directory containing plugins. |
+| `auto-update` | bool | `true` | Check for updates on startup. Only applies to `git` sources. |
+
+## Project configuration
+
+Stored at `.symposium/config.toml` in your project root. Created by `symposium init --project` and updated by `symposium sync`.
+
+### Full example
+
+```toml
+[agent]
+name = "claude"
+sync-default = false
+
+self-contained = false
+
+[defaults]
+symposium-recommendations = true
+user-plugins = true
+
+[[plugin-source]]
+name = "our-team"
+git = "https://github.com/our-org/symposium-plugins"
+
+[[plugin-source]]
+name = "local"
+path = "plugins"
+
+[skills]
+salsa = true
+tokio = true
+serde = false
+
+[workflows]
+rtk = true
+autofmt = true
+```
+
+### `[agent]`
+
+Optional. If present, overrides the user's agent settings for this project. Supports the same keys as the user-level `[agent]` section.
+
+If omitted, each developer uses their own user-wide agent preference.
+
+### `self-contained`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `self-contained` | bool | `false` | If `true`, ignore user-level plugin sources entirely. Only project sources (including its own `[defaults]` and `[[plugin-source]]` entries) are used. |
+
+### `[defaults]`
+
+Optional. Controls built-in plugin sources at the project level. Same keys as the user-level `[defaults]` section.
+
+When `self-contained = false` (the default), project defaults are merged with user defaults — a project `false` overrides a user `true`. When `self-contained = true`, only the project defaults apply.
+
+### `[[plugin-source]]`
+
+Project-level plugin sources. Same format as user-level `[[plugin-source]]` entries. Paths are resolved relative to the project root.
+
+When `self-contained = false`, these are unioned with user-level sources. When `self-contained = true`, these are the only sources used (along with any enabled defaults).
+
+### `[skills]`
+
+Lists available crate skills discovered from your workspace dependencies. Each key is a crate name, each value is a bool toggling the skill on or off.
+
+Managed by `symposium sync --workspace` — new entries are added with the resolved `sync-default`, removed dependencies are cleaned up, and your existing choices are preserved.
+
+### `[workflows]`
+
+Lists available workflow extensions. Same format as `[skills]`: each key is a workflow name, each value is a bool.
+
+## Setting resolution
+
+When both user and project configs exist, project settings take precedence:
+
+| Setting | Resolution |
+|---------|------------|
+| `agent.name` | Project if set, else user |
+| `agent.sync-default` | Project if set, else user |
+| `agent.auto-sync` | Project if set, else user |
+| Plugin sources | Union of user + project (or project only if `self-contained`) |
+| Defaults | Merged (project `false` overrides user `true`; project only if `self-contained`) |
+| Skills, workflows | Project config only |
 
 ## Directory resolution
 
-By default, all Symposium data lives under `~/.symposium/`. This can be overridden via environment variables:
+User-wide data lives under `~/.symposium/` by default. If [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/latest/) environment variables are set, `symposium` respects them:
 
-| Priority | Config | Cache | Logs |
-|----------|--------|-------|------|
-| `SYMPOSIUM_HOME` | `$SYMPOSIUM_HOME/` | `$SYMPOSIUM_HOME/cache/` | `$SYMPOSIUM_HOME/logs/` |
-| XDG | `$XDG_CONFIG_HOME/symposium/` | `$XDG_CACHE_HOME/symposium/` | `$XDG_DATA_HOME/symposium/logs/` |
+| | Config | Cache | Logs |
+|---|---|---|---|
+| XDG set | `$XDG_CONFIG_HOME/symposium/` | `$XDG_CACHE_HOME/symposium/` | `$XDG_DATA_HOME/symposium/logs/` |
 | Default | `~/.symposium/` | `~/.symposium/cache/` | `~/.symposium/logs/` |
 
-`SYMPOSIUM_HOME` takes precedence over XDG variables.
-
-## Default file locations
+## File locations
 
 | Path | Purpose |
 |------|---------|
-| `~/.symposium/config.toml` | User configuration |
-| `~/.symposium/plugins/` | User-defined plugins |
-| `~/.symposium/cache/` | Cache directory (crate sources, plugin sources, etc.) |
-| `~/.symposium/logs/` | Log files |
+| `<config-dir>/config.toml` | User configuration |
+| `<cache-dir>/` | Cache directory (crate sources, plugin sources) |
+| `<data-dir>/logs/` | Log files |
+| `.symposium/config.toml` | Project configuration |

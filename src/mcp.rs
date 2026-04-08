@@ -18,8 +18,8 @@ pub struct McpArgs {
     pub command: SharedCommand,
 }
 
-pub async fn serve(sym: &Symposium) -> Result<()> {
-    let server = build_server(sym.clone());
+pub async fn serve(sym: &Symposium, cwd: &std::path::Path) -> Result<()> {
+    let server = build_server(sym.clone(), cwd.to_path_buf());
     let stdio = ByteStreams::new(
         tokio::io::stdout().compat_write(),
         tokio::io::stdin().compat(),
@@ -30,6 +30,7 @@ pub async fn serve(sym: &Symposium) -> Result<()> {
 
 fn build_server(
     sym: Symposium,
+    cwd: std::path::PathBuf,
 ) -> McpServer<role::mcp::Client, impl RunWithConnectionTo<role::mcp::Client>> {
     McpServer::builder("symposium".to_string())
         .instructions("Symposium — tools for agentic Rust development")
@@ -37,9 +38,6 @@ fn build_server(
             "rust",
             RUST_TOOL_DESCRIPTION,
             async move |input: RustToolInput, _cx: McpConnectionTo<role::mcp::Client>| {
-                let cwd = std::env::current_dir()
-                    .map_err(|e| sacp::util::internal_error(format!("failed to get cwd: {e}")))?;
-
                 // Parse args using the shared Clap definitions
                 let parsed = McpArgs::try_parse_from(&input.args)
                     .map_err(|e| sacp::util::internal_error(format!("invalid arguments: {e}")))?;

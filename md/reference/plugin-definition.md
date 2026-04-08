@@ -17,6 +17,7 @@ source.path = "skills"
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Plugin name. Used in logs and CLI output. |
+| `session-start-context` | string | no | Text injected into the agent's context at session start. See [Session start context](#session-start-context). |
 
 ## `[[skills]]` groups
 
@@ -40,6 +41,19 @@ Each `[[hooks]]` entry declares a hook.
 | `event` | string | Event type to match (e.g., `PreToolUse`). |
 | `matcher` | string | Which tool invocations to match (e.g., `Bash`). Omit to match all. |
 | `command` | string | Command to run when the hook fires. Resolved relative to the plugin directory. |
+
+## Session start context
+
+The `session-start-context` field lets a plugin inject text into the agent's conversation context when a session begins. This is useful for critical guidance that the agent should see before doing any work.
+
+```toml
+name = "rust-guidance"
+session-start-context = "**Critical:** Before authoring Rust code, run `symposium start` for instructions."
+```
+
+When multiple plugins provide `session-start-context`, all of their texts are combined (separated by blank lines) and returned to the agent as additional context.
+
+This works via the `SessionStart` hook event. When the agent starts a session, symposium collects `session-start-context` from all loaded plugins — including both user-level and project-level plugin sources — and returns the combined text.
 
 ## Example: full manifest
 

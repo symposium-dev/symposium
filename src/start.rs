@@ -18,7 +18,7 @@ pub fn render(mode: RenderMode) -> String {
         match mode {
             RenderMode::Cli => {
                 let joined = args.join(" ");
-                format!("`scripts/symposium.sh {joined}`")
+                format!("`symposium {joined}`")
             }
             RenderMode::Mcp => {
                 let json_args: Vec<String> = args.iter().map(|a| format!("\"{a}\"")).collect();
@@ -38,8 +38,8 @@ mod tests {
     fn render_cli_expands_invoke() {
         let output = render(RenderMode::Cli);
         assert!(
-            output.contains("`scripts/symposium.sh crate $name`"),
-            "CLI should expand $INVOKE to symposium.sh: {output}"
+            output.contains("`symposium crate $name`"),
+            "CLI should expand $INVOKE to symposium: {output}"
         );
         assert!(!output.contains("$INVOKE"));
     }

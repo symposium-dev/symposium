@@ -11,7 +11,7 @@
 # Summary
 
 - [Introduction](./introduction.md)
-- [What is Symposium?](./about.md)
+- [About symposium](./about.md)
 
 # User's guide
 
@@ -27,6 +27,10 @@
 
 # Reference
 
+- [The `symposium` command](./reference/symposium.md)
+  - [`symposium init`](./reference/symposium-init.md)
+  - [`symposium sync`](./reference/symposium-sync.md)
+  - [`symposium hook`](./reference/symposium-hook.md)
 - [Configuration](./reference/configuration.md)
 - [Plugin definition](./reference/plugin-definition.md)
 - [Skill definition](./reference/skill-definition.md)
@@ -37,12 +41,20 @@
 - [Welcome](./design/welcome.md)
 - [Key repositories](./design/repositories.md)
 - [Key modules](./design/module-structure.md)
+- [Configuration loading](./design/configuration-loading.md)
+- [Agents](./design/agents.md)
 - [State](./design/state.md)
   - [Session state](./design/session-state.md)
 - [Important flows](./design/important-flows.md)
-  - [Symposium start](./design/symposium-start-flow.md)
-  - [Skill nudges](./design/skill-nudge-flow.md)
-  - [Cargo workflow](./design/cargo-workflow-flow.md)
+  - [`init --user`](./design/init-user-flow.md)
+  - [`init --project`](./design/init-project-flow.md)
+  - [`sync --workspace`](./design/sync-workspace-flow.md)
+  - [`sync --agent`](./design/sync-agent-flow.md)
+  - [`hook`](./design/hook-flow.md)
 - [Integration test harness](./design/test-harness.md)
 - [Governance](./design/governance.md)
 - [Common issues](./design/common-issues.md)
+- [Reference material](./design/reference/README.md)
+  - [Claude Code hooks](./design/reference/claude-code-hooks.md)
+  - [GitHub Copilot hooks](./design/reference/copilot-hooks.md)
+  - [Gemini CLI hooks](./design/reference/gemini-cli-hooks.md)

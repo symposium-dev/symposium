@@ -1,0 +1,2 @@
+name = "session-start"
+session-start-context = "**Critical:** Before authoring Rust code, run `symposium start` for instructions."

@@ -1,4 +1,4 @@
-//! Integration test harness for Symposium.
+//! Integration test harness for symposium.
 //!
 //! Provides `TestContext` (wrapping `Symposium::from_dir()`) and `with_fixture()`
 //! for composable, isolated test environments.
@@ -7,10 +7,12 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
+use symposium::cli::Cli;
 use symposium::config::Symposium;
 use symposium::dispatch::{self, DispatchResult};
 use symposium::hook::{self, HookOutput, HookPayload};
 use symposium::mcp::McpArgs;
+use symposium::output::Output;
 
 /// Test context wrapping an isolated `Symposium` instance.
 pub struct TestContext {
@@ -22,6 +24,38 @@ pub struct TestContext {
 }
 
 impl TestContext {
+    /// Run a `symposium` command against this test context.
+    ///
+    /// Args are the same as CLI args after `symposium`, e.g.:
+    /// ```ignore
+    /// ctx.symposium(&["init", "--user", "--agent", "claude"]).await.unwrap();
+    /// ctx.symposium(&["sync", "--workspace"]).await.unwrap();
+    /// ```
+    ///
+    /// Uses the fixture's config dir as the user-global config and the
+    /// workspace root (if present) as the working directory. Output is
+    /// suppressed (quiet mode).
+    pub async fn symposium(&mut self, args: &[&str]) -> anyhow::Result<()> {
+        // Build full arg list with program name for clap
+        let mut full_args = vec!["symposium"];
+        full_args.push("-q"); // always quiet in tests
+        full_args.extend_from_slice(args);
+
+        let cli = Cli::try_parse_from(&full_args)
+            .map_err(|e| anyhow::anyhow!("failed to parse args: {e}"))?;
+
+        let out = Output::quiet();
+        let cwd = self
+            .workspace_root
+            .clone()
+            .unwrap_or_else(|| self.sym.config_dir().to_path_buf());
+
+        match cli.command {
+            Some(cmd) => symposium::cli::run(&mut self.sym, cmd, &cwd, &out).await,
+            None => Ok(()),
+        }
+    }
+
     /// Call the shared dispatch function, returning the output string.
     ///
     /// Args are parsed via Clap just as the MCP server would.
@@ -139,8 +173,13 @@ pub fn with_fixture(fixtures: &[&str]) -> TestContext {
     }
 }
 
-/// Recursively copy a directory tree, tracking directories containing
-/// `config.toml` and `Cargo.toml`.
+/// Recursively copy a directory tree, tracking special directories.
+///
+/// - A `config.toml` inside a `dot-symposium/` directory marks the
+///   user config dir (the Symposium config root).
+/// - A `Cargo.toml` marks the workspace root.
+/// - Other `config.toml` files (e.g., `.symposium/config.toml` inside
+///   the workspace) are copied but not treated as user config.
 fn copy_dir_recursive(src: &Path, dst: &Path, scan: &mut FixtureScanResult) {
     std::fs::create_dir_all(dst).unwrap();
     for entry in std::fs::read_dir(src).unwrap() {
@@ -154,7 +193,13 @@ fn copy_dir_recursive(src: &Path, dst: &Path, scan: &mut FixtureScanResult) {
 
             let filename = entry.file_name();
             if filename == "config.toml" {
-                scan.config_dirs.push(dst.to_path_buf());
+                // Only treat as user config dir if parent is dot-symposium
+                let is_user_config = dst
+                    .file_name()
+                    .is_some_and(|n| n == "dot-symposium");
+                if is_user_config {
+                    scan.config_dirs.push(dst.to_path_buf());
+                }
             } else if filename == "Cargo.toml" {
                 scan.workspace_dirs.push(dst.to_path_buf());
             }

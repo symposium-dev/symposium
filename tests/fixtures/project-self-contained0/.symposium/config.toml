@@ -1,0 +1,9 @@
+self-contained = true
+
+[defaults]
+symposium-recommendations = false
+user-plugins = false
+
+[[plugin-source]]
+name = "project-only"
+path = "project-plugins"

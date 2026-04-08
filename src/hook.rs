@@ -11,15 +11,18 @@ use crate::{
 
 // Re-export hook schema types for convenience.
 pub use crate::hook_schema::{
-    HookAgent, HookEvent, HookOutput, HookPayload, HookSpecificOutput, HookSubPayload, PostToolUsePayload,
-    PreToolUsePayload, UserPromptSubmitPayload,
+    HookAgent, HookEvent, HookOutput, HookPayload, HookSpecificOutput, HookSubPayload,
+    PostToolUsePayload, PreToolUsePayload, SessionStartPayload, UserPromptSubmitPayload,
 };
 
 /// CLI entry point: read payload from stdin, dispatch, print output.
-pub async fn run(sym: &Symposium, agent: HookAgent, event: HookEvent) -> ExitCode {
+pub async fn run(
+    sym: &Symposium,
+    agent: HookAgent,
+    event: HookEvent,
+    cwd: &std::path::Path,
+) -> ExitCode {
     tracing::debug!("Running hook listener for agent {agent:?} and event {event:?}");
-
-    let event_handler = agent.event(event).unwrap();
 
     let mut input = String::new();
     if let Err(e) = std::io::stdin().read_to_string(&mut input) {
@@ -28,48 +31,91 @@ pub async fn run(sym: &Symposium, agent: HookAgent, event: HookEvent) -> ExitCod
     }
     tracing::debug!(?input);
 
-    let payload = event_handler.parse_payload(&input);
-    let payload = match payload {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(?event, error = %e, "invalid hook payload");
+    // Try to get an agent-specific event handler. If the agent doesn't have
+    // one for this event (e.g., Claude only implements PreToolUse), fall back
+    // to parsing the raw JSON into our internal HookPayload and running only
+    // the builtin dispatch (no plugin hooks or agent-specific output).
+    let event_handler = agent.event(event);
+
+    if let Some(ref handler) = event_handler {
+        // Agent-specific path: parse with the agent's payload type
+        let payload = handler.parse_payload(&input);
+        let payload = match payload {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(?event, error = %e, "invalid hook payload");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        let builtin_payload = payload.to_hook_payload();
+
+        if builtin_payload.sub_payload.hook_event() != event {
+            tracing::warn!(?event, payload_event = ?builtin_payload.sub_payload.hook_event(), "hook event mismatch between CLI arg and payload");
             return ExitCode::FAILURE;
         }
-    };
 
-    let builtin_payload = payload.to_hook_payload();
+        run_sync_agent(sym, &builtin_payload, cwd).await;
 
-    if builtin_payload.sub_payload.hook_event() != event {
-        tracing::warn!(?event, payload_event = ?builtin_payload.sub_payload.hook_event(), "hook event mismatch between CLI arg and payload");
-        return ExitCode::FAILURE;
+        let hook_output = dispatch_builtin(sym, &builtin_payload).await;
+        let hook_output = handler.from_hook_output(&hook_output);
+        let hook_output = match hook_output {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::warn!(?event, error = %e, "invalid hook output from builtin dispatch");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        let plugin_output = handler.dispatch_plugin_hooks(sym, payload, hook_output);
+
+        match plugin_output {
+            PluginHookOutput::Success(plugin_json) => {
+                std::io::stdout()
+                    .write_all(&serde_json::to_vec(&plugin_json).unwrap())
+                    .unwrap();
+                ExitCode::SUCCESS
+            }
+            PluginHookOutput::Failure(stderr) => {
+                std::io::stderr().write_all(&stderr).unwrap();
+                ExitCode::FAILURE
+            }
+        }
+    } else {
+        // Fallback path: parse as generic JSON → internal HookPayload.
+        // This handles events like PostToolUse, UserPromptSubmit, SessionStart
+        // for agents that don't have dedicated payload/output types yet.
+        let builtin_payload: HookPayload = match serde_json::from_str(&input) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(?event, error = %e, "invalid hook payload (fallback)");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        run_sync_agent(sym, &builtin_payload, cwd).await;
+
+        let hook_output = dispatch_builtin(sym, &builtin_payload).await;
+
+        // Emit the hook output as JSON. The agent will interpret what it can.
+        let json = serde_json::to_vec(&hook_output).unwrap();
+        std::io::stdout().write_all(&json).unwrap();
+
+        ExitCode::SUCCESS
     }
+}
 
-    // Run built-in hook logic
-    let hook_output = dispatch_builtin(sym, &builtin_payload).await;
-    let hook_output = event_handler.from_hook_output(&hook_output);
-    let hook_output = match hook_output {
-        Ok(o) => o,
-        Err(e) => {
-            tracing::warn!(?event, error = %e, "invalid hook output from builtin dispatch");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let plugin_output = event_handler.dispatch_plugin_hooks(sym, payload, hook_output);
-
-    match plugin_output {
-        PluginHookOutput::Success(plugin_json) => {
-            std::io::stdout()
-                .write_all(&serde_json::to_vec(&plugin_json).unwrap())
-                .unwrap();
-
-            ExitCode::SUCCESS
-        }
-        PluginHookOutput::Failure(stderr) => {
-            std::io::stderr().write_all(&stderr).unwrap();
-
-            ExitCode::FAILURE
-        }
+/// Run sync --agent if we're in a project directory. Non-fatal.
+async fn run_sync_agent(sym: &Symposium, payload: &HookPayload, cwd: &std::path::Path) {
+    let effective_cwd = payload
+        .cwd()
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| cwd.to_path_buf());
+    let project_root = Some(effective_cwd.as_path())
+        .filter(|p| p.join(".symposium").is_dir());
+    let out = crate::output::Output::quiet();
+    if let Err(e) = crate::sync::sync_agent(sym, project_root, &out).await {
+        tracing::warn!(error = %e, "sync --agent during hook failed (continuing)");
     }
 }
 
@@ -82,6 +128,38 @@ pub async fn dispatch_builtin(sym: &Symposium, payload: &HookPayload) -> HookOut
         }
         HookSubPayload::PostToolUse(post) => handle_post_tool_use(sym, post).await,
         HookSubPayload::UserPromptSubmit(prompt) => handle_user_prompt_submit(sym, prompt).await,
+        HookSubPayload::SessionStart(session) => handle_session_start(sym, session),
+    }
+}
+
+/// Handle SessionStart: collect `session-start-context` from all plugins and return as context.
+fn handle_session_start(sym: &Symposium, payload: &SessionStartPayload) -> HookOutput {
+    // Load project config if we have a cwd, so project-level plugins are included
+    let project_root = payload
+        .cwd
+        .as_deref()
+        .map(std::path::Path::new)
+        .filter(|p| p.join(".symposium").is_dir());
+    let project_config = project_root.and_then(crate::config::ProjectConfig::load);
+
+    let registry = crate::plugins::load_registry_with(
+        sym,
+        project_config.as_ref(),
+        project_root,
+    );
+
+    let mut context_parts: Vec<String> = Vec::new();
+    for crate::plugins::ParsedPlugin { path: _, plugin } in &registry.plugins {
+        if let Some(ref ctx) = plugin.session_start_context {
+            context_parts.push(ctx.clone());
+        }
+    }
+
+    if context_parts.is_empty() {
+        HookOutput::empty()
+    } else {
+        let context = context_parts.join("\n\n");
+        HookOutput::with_context("SessionStart", context)
     }
 }
 
@@ -121,10 +199,10 @@ async fn handle_post_tool_use(sym: &Symposium, post: &PostToolUsePayload) -> Hoo
     HookOutput::empty()
 }
 
-/// Detect if a Bash tool successfully ran `symposium crate <name>`.
+/// Detect if a Bash tool successfully ran `symposium crate <name>` or
+/// `symposium crate <name>`.
 ///
-/// Matches `symposium crate` or `symposium.sh crate` anywhere in the command,
-/// allowing for path prefixes like `/path/to/symposium.sh crate tokio`.
+/// Also matches the legacy `symposium crate` form for backward compatibility.
 fn detect_crate_activation_bash(post: &PostToolUsePayload) -> Option<String> {
     if post.tool_name != "Bash" {
         return None;
@@ -138,9 +216,7 @@ fn detect_crate_activation_bash(post: &PostToolUsePayload) -> Option<String> {
 
     let command = post.tool_input.get("command")?.as_str()?;
 
-    // Find "symposium crate" or "symposium.sh crate" in the command,
-    // preceded by a path boundary (whitespace, /, \, or start-of-string).
-    let rest = find_symposium_crate_args(command)?;
+    let rest = find_crate_args(command)?;
 
     // First word after "crate " is the crate name (skip flags)
     let crate_name = rest.split_whitespace().find(|w| !w.starts_with('-'))?;
@@ -152,12 +228,23 @@ fn detect_crate_activation_bash(post: &PostToolUsePayload) -> Option<String> {
     Some(crate_name.to_string())
 }
 
-/// Find the arguments after `symposium[.sh] crate` in a command string.
+/// Find the arguments after a `crate ` subcommand in a command string.
 ///
-/// Returns the substring after "crate " if found, with the `symposium` or
-/// `symposium.sh` token preceded by a path boundary (start, whitespace, `/`, `\`).
-fn find_symposium_crate_args(command: &str) -> Option<&str> {
-    for needle in ["symposium.sh crate ", "symposium crate "] {
+/// Recognizes these patterns:
+/// - `symposium crate <args>`
+/// - `symposium crate <args>`
+/// - `symposium crate <args>` (legacy)
+/// - `symposium.sh crate <args>` (legacy)
+///
+/// The command token must be preceded by a path boundary (start, whitespace, `/`, `\`).
+fn find_crate_args(command: &str) -> Option<&str> {
+    let needles = [
+        "symposium crate ",
+        "symposium crate ",
+        "symposium.sh crate ",
+        "symposium crate ",
+    ];
+    for needle in needles {
         let mut search_from = 0;
         while let Some(pos) = command[search_from..].find(needle) {
             let abs_pos = search_from + pos;
@@ -712,6 +799,36 @@ mod tests {
     }
 
     #[test]
+    fn detect_bash_crate_activation_symposium_hyphen() {
+        let post = PostToolUsePayload {
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({"command": "symposium crate tokio"}),
+            tool_response: serde_json::json!({"exit_code": 0, "stdout": "..."}),
+            session_id: Some("s1".to_string()),
+            cwd: Some("/tmp".to_string()),
+        };
+        assert_eq!(
+            detect_crate_activation_bash(&post),
+            Some("tokio".to_string())
+        );
+    }
+
+    #[test]
+    fn detect_bash_crate_activation_legacy_symposium() {
+        let post = PostToolUsePayload {
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({"command": "symposium crate tokio"}),
+            tool_response: serde_json::json!({"exit_code": 0, "stdout": "..."}),
+            session_id: Some("s1".to_string()),
+            cwd: Some("/tmp".to_string()),
+        };
+        assert_eq!(
+            detect_crate_activation_bash(&post),
+            Some("tokio".to_string())
+        );
+    }
+
+    #[test]
     fn detect_bash_crate_activation_with_version() {
         let post = PostToolUsePayload {
             tool_name: "Bash".to_string(),
@@ -751,25 +868,10 @@ mod tests {
     }
 
     #[test]
-    fn detect_bash_crate_activation_with_script_name() {
-        let post = PostToolUsePayload {
-            tool_name: "Bash".to_string(),
-            tool_input: serde_json::json!({"command": "symposium.sh crate tokio"}),
-            tool_response: serde_json::json!({"exit_code": 0}),
-            session_id: Some("s1".to_string()),
-            cwd: Some("/tmp".to_string()),
-        };
-        assert_eq!(
-            detect_crate_activation_bash(&post),
-            Some("tokio".to_string())
-        );
-    }
-
-    #[test]
     fn detect_bash_crate_activation_with_path_prefix() {
         let post = PostToolUsePayload {
             tool_name: "Bash".to_string(),
-            tool_input: serde_json::json!({"command": "/home/user/.local/bin/symposium.sh crate serde"}),
+            tool_input: serde_json::json!({"command": "/home/user/.local/bin/symposium crate serde"}),
             tool_response: serde_json::json!({"exit_code": 0}),
             session_id: Some("s1".to_string()),
             cwd: Some("/tmp".to_string()),

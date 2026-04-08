@@ -100,6 +100,9 @@ pub struct Plugin {
     pub installation: Option<Installation>,
     pub hooks: Vec<Hook>,
     pub skills: Vec<SkillGroup>,
+    /// Text to inject as additional context at session start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_start_context: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -159,6 +162,8 @@ struct PluginManifest {
     hooks: Vec<Hook>,
     #[serde(default)]
     skills: Vec<SkillGroup>,
+    #[serde(default, rename = "session-start-context")]
+    session_start_context: Option<String>,
 }
 
 /// Fetch/update git-based plugin sources.
@@ -169,9 +174,10 @@ struct PluginManifest {
 /// Only refreshes sources with `auto-update = true` (unless `update` is `Fetch`).
 /// Path-based sources are skipped (no fetching needed).
 pub async fn ensure_plugin_sources(sym: &Symposium, update: UpdateLevel) {
-    let sources = sym.plugin_sources();
+    let sources = sym.plugin_sources(None, None);
 
-    for source in &sources {
+    for resolved in &sources {
+        let source = &resolved.source;
         if !matches!(update, UpdateLevel::Fetch) && !source.auto_update {
             tracing::debug!(source = %source.name, "skipping (auto-update disabled)");
             continue;
@@ -208,10 +214,11 @@ pub fn load_all_plugins(sym: &Symposium) -> Vec<ParsedPlugin> {
 /// If `provider` is Some, sync only that provider (ignores auto-update).
 /// If `provider` is None, sync all sources with auto-update = true.
 pub async fn sync_plugin_source(sym: &Symposium, provider: Option<&str>) -> Result<Vec<String>> {
-    let sources = sym.plugin_sources();
+    let sources = sym.plugin_sources(None, None);
     let mut synced = Vec::new();
 
-    for source in &sources {
+    for resolved in &sources {
+        let source = &resolved.source;
         if let Some(name) = provider {
             if source.name != name {
                 continue;
@@ -242,11 +249,12 @@ pub async fn sync_plugin_source(sym: &Symposium, provider: Option<&str>) -> Resu
 
 /// List all providers and their plugins.
 pub fn list_plugins(sym: &Symposium) -> Vec<ProviderInfo> {
-    let sources = sym.plugin_sources();
+    let sources = sym.plugin_sources(None, None);
     let mut providers = Vec::new();
 
-    for source in &sources {
-        let source_path = resolve_plugin_source_dir(sym, source);
+    for resolved in &sources {
+        let source = &resolved.source;
+        let source_path = resolve_plugin_source_dir(sym, resolved);
         let plugins: Vec<PluginInfo> = source_path
             .and_then(|p| scan_source_dir(&p).ok())
             .map(|c| c.plugins)
@@ -274,10 +282,10 @@ pub fn list_plugins(sym: &Symposium) -> Vec<ProviderInfo> {
 
 /// Find a plugin by name across all sources.
 pub fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
-    let sources = sym.plugin_sources();
+    let sources = sym.plugin_sources(None, None);
 
-    for source in &sources {
-        let source_path = resolve_plugin_source_dir(sym, source);
+    for resolved in &sources {
+        let source_path = resolve_plugin_source_dir(sym, resolved);
         if let Some(ref path) = source_path {
             if let Ok(contents) = scan_source_dir(path) {
                 for result in contents.plugins {
@@ -295,33 +303,20 @@ pub fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
 
 /// Resolve the directories for all configured plugin sources.
 ///
-/// For `path` sources: resolves relative to `config_dir()`, or uses absolute paths as-is.
+/// For `path` sources: resolves relative to the source's `base_dir`, or uses absolute paths as-is.
 /// For `git` sources: computes the cache path under `~/.symposium/cache/plugin-sources/`.
 ///
 /// Does no network I/O — just computes paths.
-fn resolve_plugin_source_dirs(sym: &Symposium) -> Vec<PathBuf> {
-    let sources = sym.plugin_sources();
-    let config_dir = sym.config_dir();
+fn resolve_plugin_source_dirs(
+    sym: &Symposium,
+    sources: &[crate::config::ResolvedPluginSource],
+) -> Vec<PathBuf> {
     let cache_base = sym.cache_dir().join("plugin-sources");
 
     let mut dirs = Vec::new();
-    for source in &sources {
-        if let Some(path) = &source.path {
-            let p = PathBuf::from(path);
-            if p.is_absolute() {
-                dirs.push(p);
-            } else {
-                dirs.push(config_dir.join(p));
-            }
-        } else if let Some(git_url) = &source.git {
-            match crate::git_source::parse_github_url(git_url) {
-                Ok(gh) => dirs.push(cache_base.join(gh.cache_key())),
-                Err(e) => {
-                    tracing::warn!(source = %source.name, error = %e, "bad plugin source URL");
-                }
-            }
-        } else {
-            tracing::warn!(source = %source.name, "plugin source has neither git nor path");
+    for resolved in sources {
+        if let Some(dir) = resolve_one_source(&resolved.source, &resolved.base_dir, &cache_base) {
+            dirs.push(dir);
         }
     }
     dirs
@@ -329,17 +324,23 @@ fn resolve_plugin_source_dirs(sym: &Symposium) -> Vec<PathBuf> {
 
 fn resolve_plugin_source_dir(
     sym: &Symposium,
-    source: &crate::config::PluginSourceConfig,
+    resolved: &crate::config::ResolvedPluginSource,
 ) -> Option<PathBuf> {
-    let config_dir = sym.config_dir();
     let cache_base = sym.cache_dir().join("plugin-sources");
+    resolve_one_source(&resolved.source, &resolved.base_dir, &cache_base)
+}
 
+fn resolve_one_source(
+    source: &crate::config::PluginSourceConfig,
+    base_dir: &Path,
+    cache_base: &Path,
+) -> Option<PathBuf> {
     if let Some(ref path) = source.path {
         let p = PathBuf::from(path);
         if p.is_absolute() {
             return Some(p);
         } else {
-            return Some(config_dir.join(p));
+            return Some(base_dir.join(p));
         }
     } else if let Some(ref git_url) = source.git {
         match crate::git_source::parse_github_url(git_url) {
@@ -370,10 +371,20 @@ async fn fetch_plugin_source(
 /// Discovers TOML plugin manifests and standalone skill directories,
 /// then loads both into a `PluginRegistry`.
 pub fn load_registry(sym: &Symposium) -> PluginRegistry {
+    load_registry_with(sym, None, None)
+}
+
+/// Load the plugin registry with project context for source resolution.
+pub fn load_registry_with(
+    sym: &Symposium,
+    project: Option<&crate::config::ProjectConfig>,
+    project_root: Option<&Path>,
+) -> PluginRegistry {
+    let sources = sym.plugin_sources(project, project_root);
     let mut plugins = Vec::new();
     let mut standalone_skills = Vec::new();
 
-    for dir in resolve_plugin_source_dirs(sym) {
+    for dir in resolve_plugin_source_dirs(sym, &sources) {
         match scan_source_dir(&dir) {
             Ok(contents) => {
                 for result in contents.plugins {
@@ -558,7 +569,7 @@ pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
 /// Check whether a crate name exists on crates.io.
 pub async fn check_crate_exists(crate_name: &str) -> bool {
     let client = match crates_io_api::AsyncClient::new(
-        "symposium (https://github.com/nikomatsakis/symposium)",
+        "symposium (https://github.com/symposium-dev/symposium)",
         std::time::Duration::from_millis(1000),
     ) {
         Ok(c) => c,
@@ -582,6 +593,7 @@ pub fn load_plugin(manifest_path: &Path) -> Result<ParsedPlugin> {
             installation: manifest.installation,
             hooks: manifest.hooks,
             skills: manifest.skills,
+            session_start_context: manifest.session_start_context,
         },
     })
 }
@@ -598,6 +610,7 @@ mod tests {
             installation: manifest.installation,
             hooks: manifest.hooks,
             skills: manifest.skills,
+            session_start_context: manifest.session_start_context,
         })
     }
 

@@ -1,72 +1,49 @@
-# Installing Symposium
+# Getting Started
 
-Symposium is meant to fit into any workflow. It can be installed in multiple ways. 
-
-## Capabilities by method
-
-Symposium offers several advantages for Rust development but not all of them are supposed by all installation methods.
-
-| Method | Crate-specific guidance | Rust-language updates | Improved token usage, workflow |
-| --- | --- | --- | --- |
-| Claude Code Plugin | ✅ | ✅ | ✅ Always | 
-| Skill | ✅ | ✅ | 🟡 Best effort | 
-| MCP Server | ✅ | ✅ | 🟡 Best effort | 
-
-* *Crate-specific guidance* -- make your agent aware of skills for the crates you are using, help your agent find the source for a crate
-* *Rust-language updates* -- provide your agent with info on the latest language changes, guidance on how best to use Rust
-* *Improved token usage, workflow* -- filter output of cargo and invoke other tools like rustfmt automatically
-  * When using a plugin, we intercept all calls to bash to do this determinstically
-  * When using a skill or MCP server, we advice your agent to use our tools but can't guarantee it
-
-## Claude Code Plugin
-
-To install as a Claude Code plugin, run these two steps. First add the symposium "marketplace" from github:
+## Install
 
 ```bash
-claude plugin marketplace add symposium-dev/symposium-claude-code-plugin
+cargo binstall symposium       # or `cargo install` if you prefer
 ```
 
-Then install the symposium plugin from that marketplace:
+## Set up your user and project
+
+From your project directory, run:
 
 ```bash
-claude plugin install symposium@symposium
+symposium init
 ```
 
-This plugin will install hooks and a `/symposium:rust` skill. The skill *should* be automatically invoked when you start with Rust code, but you can always invoke it manually if you like. Both the hooks and the plugin will download the Symposium binary appropriate for your architecture from our Github releases automatically, presuming it's not otherwise found on your system.
+This walks you through two things:
 
-## Skill
+1. **User-wide setup** — picks your agent (Claude Code, Copilot, Gemini) and stores it in `~/.symposium/config.toml`. Registers a global hook so your agent picks up project extensions automatically.
+2. **Project setup** — scans your workspace dependencies, discovers available extensions, and generates `.symposium/config.toml`.
 
-If you prefer, you can install the Symposium Skill independently from the plugin. It is found in this directory:
+Check `.symposium/` into version control so your team shares the same configuration. Each developer picks their own agent via `symposium init --user`.
 
-https://github.com/symposium-dev/symposium-claude-code-plugin/tree/main/skills/rust
+You can also run the two steps separately with `symposium init --user` and `symposium init --project`.
 
-The skill *should* be automatically invoked when you start with Rust code, but you can always invoke it manually if you like. The skill will download the Symposium binary appropriate for your architecture from our Github releases automatically, presuming it's not otherwise found on your system.
+## What's in `.symposium/config.toml`
 
-## MCP server
+The project config lists each available extension with a simple on/off toggle:
 
-You can also install Symposium as an MCP server. To do that, you'll need to [install the CLI tool](#installing-the-symposium-cli-tool). You can then configure it as follows
+```toml
+[skills]
+salsa = true
+tokio = true
 
-```json
-{
-    "symposium": {
-        "command": "symposium",
-        "args": ["mcp"]
-    }
-}
+[workflows]
+rtk = true
 ```
 
-## Installing the `symposium` CLI tool
+When your agent starts, the registered hook installs the enabled extensions into the locations your agent expects (e.g., `.claude/skills/` for Claude Code). You don't need to do anything — the hook handles it.
 
-Manually installing the symposium CLI tool [requires installing the Rust toolchain](https://rustup.rs/). Given that Symposium targets Rust development, this is hopefully not a problem for you!
+## Keeping in sync
 
-### Installing from crates.io
+As dependencies change, run:
 
-You can install the latest release of symposium directly from `crates.io`:
+```bash
+symposium sync
+```
 
-* `cargo binstall symposium` -- download prebuilt binary, faster, requires [cargo binstall](https://github.com/cargo-bins/cargo-binstall)
-* `cargo install symposium` -- build from source
-
-### Installing from the git repository
-
-* Check out the [symposium-dev/symposium](https://github.com/symposium-dev/symposium) repository
-* Run `cargo install --path .` from inside the checkout
+This re-scans your dependencies, updates the config, and re-installs extensions. Your existing on/off choices are preserved. See [`symposium sync`](./reference/symposium-sync.md) for options.

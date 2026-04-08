@@ -1,0 +1,2 @@
+name = "project-guidance"
+session-start-context = "Always run `cargo test` before committing."

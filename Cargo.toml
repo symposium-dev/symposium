@@ -13,7 +13,7 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "symposium"
-path = "src/main.rs"
+path = "src/bin/symposium.rs"
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-{ target }.tar.gz"
@@ -48,6 +48,8 @@ toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 bytes = "1.11.1"
+dialoguer = "0.12.0"
+toml_edit = "0.25.11"
 
 
 [dev-dependencies]
