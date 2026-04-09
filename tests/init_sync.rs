@@ -7,7 +7,7 @@ use expect_test::expect;
 /// We read the raw file rather than going through the `Config` struct so that
 /// snapshots catch formatting, field ordering, and comment preservation —
 /// things the deserialized struct would hide.
-fn read_user_config(ctx: &symposium_testlib::TestContext) -> String {
+fn read_user_config(ctx: &cargo_agents_testlib::TestContext) -> String {
     let path = ctx.sym.config_dir().join("config.toml");
     std::fs::read_to_string(&path).unwrap_or_else(|_| "(not found)".to_string())
 }
@@ -16,7 +16,7 @@ fn read_user_config(ctx: &symposium_testlib::TestContext) -> String {
 ///
 /// Same rationale as `read_user_config` — we want to snapshot the actual
 /// file on disk, not the deserialized struct.
-fn read_project_config(ctx: &symposium_testlib::TestContext) -> String {
+fn read_project_config(ctx: &cargo_agents_testlib::TestContext) -> String {
     let path = ctx
         .workspace_root
         .as_ref()
@@ -29,7 +29,7 @@ fn read_project_config(ctx: &symposium_testlib::TestContext) -> String {
 /// `init --user` creates a user config with the specified agent.
 #[tokio::test]
 async fn init_user_creates_config() {
-    let mut ctx = symposium_testlib::with_fixture(&["plugins0"]);
+    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0"]);
 
     ctx.symposium(&["init", "--user", "--add-agent", "claude"])
         .await
@@ -62,7 +62,7 @@ async fn init_user_creates_config() {
 /// `init --project` creates `.symposium/config.toml` and discovers skills.
 #[tokio::test]
 async fn init_project_creates_config_and_discovers_skills() {
-    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
+    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0", "workspace0"]);
 
     ctx.symposium(&["init", "--user", "--add-agent", "claude"])
         .await
@@ -98,7 +98,7 @@ async fn init_project_creates_config_and_discovers_skills() {
 /// `sync --workspace` adds new skills and preserves existing choices.
 #[tokio::test]
 async fn sync_workspace_preserves_existing_choices() {
-    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
+    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0", "workspace0"]);
 
     ctx.symposium(&["init", "--user", "--add-agent", "claude"])
         .await
@@ -141,7 +141,7 @@ async fn sync_workspace_preserves_existing_choices() {
 /// `sync --agent` installs skill files into the agent's expected location.
 #[tokio::test]
 async fn sync_agent_installs_skills() {
-    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
+    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0", "workspace0"]);
 
     ctx.symposium(&["init", "--user", "--add-agent", "claude"])
         .await
@@ -191,7 +191,7 @@ fn copilot_uses_vendor_neutral_skill_path() {
 /// `sync --add-agent` adds an agent to the project config.
 #[tokio::test]
 async fn sync_add_agent_to_project() {
-    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
+    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0", "workspace0"]);
 
     ctx.symposium(&["init", "--user", "--add-agent", "claude"])
         .await
@@ -234,7 +234,7 @@ async fn sync_add_agent_to_project() {
 /// `init --project` with `--agent` sets a project-level agent override.
 #[tokio::test]
 async fn init_project_with_agent_sets_override() {
-    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
+    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0", "workspace0"]);
 
     ctx.symposium(&["init", "--user", "--add-agent", "claude"])
         .await
@@ -273,7 +273,7 @@ async fn init_project_with_agent_sets_override() {
 /// claude hooks should remain.
 #[tokio::test]
 async fn removing_agent_removes_hooks() {
-    let mut ctx = symposium_testlib::with_fixture(&["plugins0"]);
+    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0"]);
 
     // Init with claude + gemini
     ctx.symposium(&["init", "--user", "--add-agent", "claude", "--add-agent", "gemini"])
@@ -317,7 +317,7 @@ async fn removing_agent_removes_hooks() {
 /// Init with claude, then add gemini. Both should be configured.
 #[tokio::test]
 async fn add_agent_is_additive() {
-    let mut ctx = symposium_testlib::with_fixture(&["plugins0"]);
+    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0"]);
 
     // Init with claude
     ctx.symposium(&["init", "--user", "--add-agent", "claude"])
@@ -361,10 +361,10 @@ async fn add_agent_is_additive() {
 async fn project_plugin_source_loaded_in_hooks() {
     // plugins0 provides user-level config + plugins; project-plugins0 provides
     // a workspace with its own project-level plugin source
-    let ctx = symposium_testlib::with_fixture(&["plugins0", "project-plugins0"]);
+    let ctx = cargo_agents_testlib::with_fixture(&["plugins0", "project-plugins0"]);
     let workspace_root = ctx.workspace_root.as_ref().unwrap();
 
-    use symposium::hook::SessionStartPayload;
+    use cargo_agents::hook::SessionStartPayload;
     let output = ctx
         .invoke_hook(SessionStartPayload {
             session_id: Some("s1".to_string()),
@@ -401,10 +401,10 @@ async fn project_plugin_source_loaded_in_hooks() {
 async fn self_contained_excludes_user_plugins() {
     // plugins0 provides user-level config + plugins; project-self-contained0 provides
     // a workspace that declares self-contained = true
-    let ctx = symposium_testlib::with_fixture(&["plugins0", "project-self-contained0"]);
+    let ctx = cargo_agents_testlib::with_fixture(&["plugins0", "project-self-contained0"]);
     let workspace_root = ctx.workspace_root.as_ref().unwrap();
 
-    use symposium::hook::SessionStartPayload;
+    use cargo_agents::hook::SessionStartPayload;
     let output = ctx
         .invoke_hook(SessionStartPayload {
             session_id: Some("s1".to_string()),
@@ -437,7 +437,7 @@ async fn self_contained_excludes_user_plugins() {
 /// with no skill plugins of its own, so sync should discover no skills.
 #[tokio::test]
 async fn self_contained_excludes_user_skills_from_sync() {
-    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "project-self-contained0"]);
+    let mut ctx = cargo_agents_testlib::with_fixture(&["plugins0", "project-self-contained0"]);
 
     ctx.symposium(&["init", "--user", "--add-agent", "claude"])
         .await

@@ -1,9 +1,9 @@
-use symposium::hook::{PostToolUsePayload, PreToolUsePayload, SessionStartPayload};
+use cargo_agents::hook::{PostToolUsePayload, PreToolUsePayload, SessionStartPayload};
 use expect_test::expect;
 
 #[tokio::test]
 async fn pre_tool_use_builtin_empty() {
-    let ctx = symposium_testlib::with_fixture(&["plugins0"]);
+    let ctx = cargo_agents_testlib::with_fixture(&["plugins0"]);
     let output = ctx
         .invoke_hook(PreToolUsePayload {
             tool_name: "Bash".to_string(),
@@ -14,7 +14,7 @@ async fn pre_tool_use_builtin_empty() {
 
 #[tokio::test]
 async fn post_tool_use_records_bash_activation() {
-    let ctx = symposium_testlib::with_fixture(&["plugins0"]);
+    let ctx = cargo_agents_testlib::with_fixture(&["plugins0"]);
     let cwd = ctx.sym.config_dir().to_string_lossy().to_string();
     let output = ctx
         .invoke_hook(PostToolUsePayload {
@@ -30,7 +30,7 @@ async fn post_tool_use_records_bash_activation() {
 
 #[tokio::test]
 async fn post_tool_use_records_mcp_activation() {
-    let ctx = symposium_testlib::with_fixture(&["plugins0"]);
+    let ctx = cargo_agents_testlib::with_fixture(&["plugins0"]);
     let cwd = ctx.sym.config_dir().to_string_lossy().to_string();
     let output = ctx
         .invoke_hook(PostToolUsePayload {
@@ -46,7 +46,7 @@ async fn post_tool_use_records_mcp_activation() {
 
 #[tokio::test]
 async fn post_tool_use_no_session_returns_empty() {
-    let ctx = symposium_testlib::with_fixture(&["plugins0"]);
+    let ctx = cargo_agents_testlib::with_fixture(&["plugins0"]);
     let output = ctx
         .invoke_hook(PostToolUsePayload {
             tool_name: "Bash".to_string(),
@@ -62,7 +62,7 @@ async fn post_tool_use_no_session_returns_empty() {
 #[tokio::test]
 async fn session_start_returns_plugin_context() {
     // plugins0 has a session-start.toml with session-start-context
-    let ctx = symposium_testlib::with_fixture(&["plugins0"]);
+    let ctx = cargo_agents_testlib::with_fixture(&["plugins0"]);
     let output = ctx
         .invoke_hook(SessionStartPayload {
             session_id: Some("s1".to_string()),

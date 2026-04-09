@@ -1,11 +1,11 @@
-# `symposium sync`
+# `cargo agents sync`
 
 Synchronize the project configuration and agent setup.
 
 ## Usage
 
 ```bash
-symposium sync [OPTIONS]
+cargo agents sync [OPTIONS]
 ```
 
 ## Behavior

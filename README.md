@@ -1,7 +1,9 @@
-# Symposium
+# cargo-agents
+
+Part of the [Symposium project](https://github.com/symposium-dev). Symposium's mission is to make agentic development with Rust interoperable, extensible, and efficient.
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/symposium-dev/symposium/refs/heads/main/md/artwork/symposium5_vase-ferris.png" alt="Symposium logo" width="300"/>
+  <img src="https://raw.githubusercontent.com/symposium-dev/cargo-agents/refs/heads/main/md/artwork/symposium5_vase-ferris.png" alt="Symposium logo" width="300"/>
 </p>
 
 <p align="center"><em>Collaborative AI built collaboratively</em></p>

@@ -11,11 +11,11 @@
 # Summary
 
 - [Introduction](./introduction.md)
-- [About symposium](./about.md)
+- [About cargo agents](./about.md)
 
 # User's guide
 
-- [Installing Symposium](./install.md)
+- [Installing cargo agents](./install.md)
 - [Usage patterns](./usage-patterns.md)
 
 # For crate authors
@@ -27,10 +27,10 @@
 
 # Reference
 
-- [The `symposium` command](./reference/symposium.md)
-  - [`symposium init`](./reference/symposium-init.md)
-  - [`symposium sync`](./reference/symposium-sync.md)
-  - [`symposium hook`](./reference/symposium-hook.md)
+- [The `cargo agents` command](./reference/cargo-agents.md)
+  - [`cargo agents init`](./reference/cargo-agents-init.md)
+  - [`cargo agents sync`](./reference/cargo-agents-sync.md)
+  - [`cargo agents hook`](./reference/cargo-agents-hook.md)
 - [Configuration](./reference/configuration.md)
 - [Plugin definition](./reference/plugin-definition.md)
 - [Skill definition](./reference/skill-definition.md)

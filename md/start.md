@@ -1,6 +1,8 @@
-# symposium — AI the Rust Way
+# cargo agents — Part of the Symposium Project
 
-symposium helps agents write better Rust by providing up-to-date language guidance and integration with the Rust ecosystem.
+Symposium's mission is to make agentic development with Rust interoperable, extensible, and efficient.
+
+cargo agents helps agents write better Rust by providing up-to-date language guidance and integration with the Rust ecosystem.
 
 ## Guidance on a particular crate
 

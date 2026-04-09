@@ -7,11 +7,11 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
-use symposium::cli::Cli;
-use symposium::config::Symposium;
-use symposium::dispatch::{self, DispatchResult};
-use symposium::hook::{self, HookOutput, HookPayload};
-use symposium::mcp::McpArgs;
+use cargo_agents::cli::Cli;
+use cargo_agents::config::Symposium;
+use cargo_agents::dispatch::{self, DispatchResult};
+use cargo_agents::hook::{self, HookOutput, HookPayload};
+use cargo_agents::mcp::McpArgs;
 use symposium::output::Output;
 
 /// Test context wrapping an isolated `Symposium` instance.

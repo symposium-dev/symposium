@@ -1,11 +1,11 @@
-# `symposium init`
+# `cargo agents init`
 
-Initialize `symposium` for the current user, the current project, or both.
+Initialize `cargo agents` for the current user, the current project, or both.
 
 ## Usage
 
 ```bash
-symposium init [OPTIONS]
+cargo agents init [OPTIONS]
 ```
 
 ## Behavior
@@ -14,7 +14,7 @@ With no flags, `init` does whatever hasn't been done yet:
 
 1. If no user-wide configuration exists (`~/.symposium/config.toml`), runs user setup.
 2. If no project configuration exists (`.symposium/config.toml`), offers to set up the project.
-3. Runs the appropriate syncs: if the project was set up (or already existed), runs `symposium sync` (both `--workspace` and `--agent`). If only user setup was performed, runs `symposium sync --agent` to register global hooks.
+3. Runs the appropriate syncs: if the project was set up (or already existed), runs `cargo agents sync` (both `--workspace` and `--agent`). If only user setup was performed, runs `cargo agents sync --agent` to register global hooks.
 
 The same applies when both `--user` and `--project` are specified explicitly.
 
@@ -36,7 +36,7 @@ Prompts for:
 
 - Whether to set a project-level agent override (default: use each developer's own preference)
 
-Scans workspace dependencies, discovers available extensions, and generates `.symposium/config.toml`. Runs `symposium sync` afterward.
+Scans workspace dependencies, discovers available extensions, and generates `.symposium/config.toml`. Runs `cargo agents sync` afterward.
 
 ## Options
 

@@ -2,9 +2,9 @@
 
 All repositories live under the [symposium-dev](https://github.com/symposium-dev) GitHub organization.
 
-### [symposium](https://github.com/symposium-dev/symposium)
+### [cargo-agents](https://github.com/symposium-dev/cargo-agents)
 
-The main repository. Contains the Symposium CLI/library (Rust), the mdbook documentation, and integration tests.
+The main repository. Contains the cargo-agents CLI/library (Rust), the mdbook documentation, and integration tests.
 
 ### [symposium-claude-code-plugin](https://github.com/symposium-dev/symposium-claude-code-plugin)
 

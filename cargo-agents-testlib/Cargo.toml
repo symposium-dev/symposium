@@ -1,14 +1,14 @@
 [package]
-name = "symposium-testlib"
+name = "cargo-agents-testlib"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "Integration test harness for symposium"
-repository = "https://github.com/symposium-dev/symposium"
+description = "Integration test harness for cargo-agents"
+repository = "https://github.com/symposium-dev/cargo-agents"
 publish = false
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-symposium = { path = ".." }
+cargo-agents = { path = ".." }
 tempfile = "3.6"
 anyhow = "1.0.102"

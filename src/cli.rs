@@ -18,8 +18,8 @@ use crate::sync;
 /// Parsed CLI arguments.
 #[derive(Debug, Parser)]
 #[command(
-    name = "symposium",
-    bin_name = "symposium",
+    name = "cargo-agents",
+    bin_name = "cargo-agents",
     version,
     about = "AI the Rust Way"
 )]
@@ -140,7 +140,10 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
             agents,
             remove_agents,
         } => {
-            let opts = InitOpts { agents, remove_agents };
+            let opts = InitOpts {
+                agents,
+                remove_agents,
+            };
             if user && !project {
                 init::init_user(sym, out, &opts).await
             } else if project && !user {

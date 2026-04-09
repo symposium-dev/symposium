@@ -1,12 +1,12 @@
 use clap::Parser;
 use std::process::ExitCode;
 
-use symposium::cli::{Cli, Commands, PluginCommand};
-use symposium::config;
-use symposium::hook;
-use symposium::mcp;
-use symposium::output::Output;
-use symposium::plugins::{self, ParsedPlugin};
+use cargo_agents::cli::{Cli, Commands, PluginCommand};
+use cargo_agents::config;
+use cargo_agents::hook;
+use cargo_agents::mcp;
+use cargo_agents::output::Output;
+use cargo_agents::plugins::{self, ParsedPlugin};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -51,7 +51,7 @@ async fn main() -> ExitCode {
 
         // Everything else delegates to the library
         Some(cmd) => {
-            match symposium::cli::run(&mut sym, cmd, &cwd, &out).await {
+            match cargo_agents::cli::run(&mut sym, cmd, &cwd, &out).await {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
                     eprintln!("Error: {e:#}");
