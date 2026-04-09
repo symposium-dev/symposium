@@ -8,8 +8,12 @@ use std::{any::Any, fmt::Debug};
 use crate::config::Symposium;
 
 pub mod claude;
+pub mod codex;
 pub mod copilot;
 pub mod gemini;
+pub mod kiro;
+pub mod goose;
+pub mod opencode;
 
 /// Agents supported by Symposium hooks.
 #[derive(Debug, Copy, Clone, clap::ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
@@ -17,20 +21,36 @@ pub enum HookAgent {
     #[value(name = "claude")]
     #[serde(rename = "claude")]
     Claude,
+    #[value(name = "codex")]
+    #[serde(rename = "codex")]
+    Codex,
     #[value(name = "copilot")]
     #[serde(rename = "copilot")]
     Copilot,
     #[value(name = "gemini")]
     #[serde(rename = "gemini")]
     Gemini,
+    #[value(name = "goose")]
+    #[serde(rename = "goose")]
+    Goose,
+    #[value(name = "kiro")]
+    #[serde(rename = "kiro")]
+    Kiro,
+    #[value(name = "opencode")]
+    #[serde(rename = "opencode")]
+    OpenCode,
 }
 
 impl HookAgent {
     pub fn event(&self, event: HookEvent) -> Option<Box<dyn ErasedAgentHookEvent>> {
         match self {
             HookAgent::Claude => claude::ClaudeCode.event(event),
+            HookAgent::Codex => codex::Codex.event(event),
             HookAgent::Copilot => copilot::Copilot.event(event),
             HookAgent::Gemini => gemini::Gemini.event(event),
+            HookAgent::Goose => goose::Goose.event(event),
+            HookAgent::Kiro => kiro::Kiro.event(event),
+            HookAgent::OpenCode => opencode::OpenCode.event(event),
         }
     }
 }

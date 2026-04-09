@@ -9,6 +9,10 @@
 | `claude` | Claude Code |
 | `copilot` | GitHub Copilot |
 | `gemini` | Gemini CLI |
+| `codex` | Codex CLI |
+| `kiro` | Kiro |
+| `opencode` | OpenCode |
+| `goose` | Goose |
 
 The agent name is stored in `[agent] name` in either the user or project config.
 
@@ -27,10 +31,11 @@ When installing skills, `symposium` prefers vendor-neutral paths where possible:
 
 | Scope | Path | Supported by |
 |-------|------|-------------|
-| Project skills | `.agents/skills/<skill-name>/SKILL.md` | Copilot, Gemini (preferred over `.gemini/skills/`) |
+| Project skills | `.agents/skills/<skill-name>/SKILL.md` | Copilot, Gemini, Codex, OpenCode, Goose |
 | Project skills | `.claude/skills/<skill-name>/SKILL.md` | Claude Code (does not support `.agents/skills/`) |
+| Project skills | `.kiro/skills/<skill-name>/SKILL.md` | Kiro (uses its own path) |
 
-At the project level, Claude Code requires `.claude/skills/`, while Copilot and Gemini both support `.agents/skills/`. `symposium` uses the vendor-neutral `.agents/skills/` path whenever the agent supports it.
+At the project level, Claude Code requires `.claude/skills/`, Kiro requires `.kiro/skills/`, while Copilot, Gemini, Codex, OpenCode, and Goose all support `.agents/skills/`. `symposium` uses the vendor-neutral `.agents/skills/` path whenever the agent supports it.
 
 At the global level, each agent has its own path:
 
@@ -39,6 +44,10 @@ At the global level, each agent has its own path:
 | Claude Code | `~/.claude/skills/<skill-name>/SKILL.md` |
 | Copilot | *(no global skills path)* |
 | Gemini | `~/.gemini/skills/<skill-name>/SKILL.md` |
+| Codex | `~/.agents/skills/<skill-name>/SKILL.md` |
+| Kiro | `~/.kiro/skills/<skill-name>/SKILL.md` |
+| OpenCode | `~/.agents/skills/<skill-name>/SKILL.md` |
+| Goose | `~/.agents/skills/<skill-name>/SKILL.md` |
 
 ---
 
@@ -236,6 +245,146 @@ Gemini uses a structure similar to Claude Code, with a nested `hookSpecificOutpu
 ```
 
 The input payload includes `tool_name`, `tool_input`, `mcp_context`, `session_id`, and `transcript_path`.
+
+---
+
+## Kiro
+
+[Hooks reference](./agent-details/kiro-hooks.md)
+
+### Hook registration
+
+Kiro hooks live in agent JSON files under `.kiro/agents/`. Symposium creates a `symposium.json` agent file with its hooks. Kiro uses camelCase event names.
+
+| Scope | File |
+|-------|------|
+| Global | `~/.kiro/agents/symposium.json` |
+| Project | `.kiro/agents/symposium.json` |
+
+Example hook registration:
+
+```json
+{
+  "hooks": {
+    "preToolUse": [
+      {
+        "matcher": "*",
+        "command": "symposium hook kiro pre-tool-use"
+      }
+    ],
+    "agentSpawn": [
+      {
+        "command": "symposium hook kiro session-start"
+      }
+    ]
+  }
+}
+```
+
+Kiro uses a flat entry format: each entry has `command` directly (and optional `matcher`), with no nested `hooks` array or `type` field.
+
+### Supported events
+
+| Event | Description |
+|-------|-------------|
+| `preToolUse` | Before a tool is invoked. Can block (exit code 2). |
+| `postToolUse` | After a tool completes. |
+| `userPromptSubmit` | When the user submits a prompt. |
+| `agentSpawn` | Session starts (maps to `session-start` internally). |
+| `stop` | Agent finishes. |
+
+### Hook payload/output
+
+Kiro uses exit-code-based control flow:
+- Exit 0: stdout captured as additional context
+- Exit 2: block (`preToolUse` only), stderr as reason
+- Other: warning, stderr shown
+
+Input includes `hook_event_name`, `cwd`, `tool_name`, and `tool_input` on stdin as JSON.
+
+### Unregistration
+
+Unregistration deletes the `symposium.json` file.
+
+---
+
+## Codex CLI
+
+[Hooks reference](./agent-details/codex-cli-hooks.md)
+
+### Hook registration
+
+Codex CLI hooks live in `hooks.json` files. The structure is similar to Claude Code — nested matcher groups with hook command arrays. Codex uses PascalCase event names and `timeout` in seconds.
+
+| Scope | File |
+|-------|------|
+| Global | `~/.codex/hooks.json` |
+| Project | `.codex/hooks.json` |
+
+Example hook registration:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "",
+        "hooks": [{
+          "type": "command",
+          "command": "symposium hook codex pre-tool-use",
+          "timeout": 10
+        }]
+      }
+    ]
+  }
+}
+```
+
+Note: An empty `matcher` string matches everything in Codex (equivalent to `"*"` in other agents).
+
+### Supported events
+
+| Event | Description |
+|-------|-------------|
+| `PreToolUse` | Before a tool is invoked. Can block. |
+| `PostToolUse` | After a tool completes. Can stop session (`continue: false`). |
+| `UserPromptSubmit` | When the user submits a prompt. |
+| `SessionStart` | Session starts or resumes. |
+| `Stop` | Agent turn completes. |
+
+### Hook payload/output
+
+Codex uses a protocol similar to Claude Code, with two methods to block:
+1. JSON output: `{ "decision": "block", "reason": "..." }`
+2. Exit code 2 with reason on stderr
+
+Also supports `hookSpecificOutput` with `additionalContext`, and `{ "continue": false }` to stop the session.
+
+Input includes `session_id`, `cwd`, `hook_event_name`, `model`, `turn_id`, `tool_name`, `tool_use_id`, and `tool_input`.
+
+---
+
+## OpenCode
+
+[Hooks reference](./agent-details/opencode-hooks.md)
+
+### Hook registration
+
+**OpenCode does not support shell-command hooks.** Its extensibility is based on TypeScript/JavaScript plugins. `symposium` cannot register hooks for OpenCode.
+
+OpenCode is supported as a **skills-only** agent — `symposium sync` will install skill files in the vendor-neutral `.agents/skills/` path that OpenCode reads.
+
+---
+
+## Goose
+
+[Hooks reference](./agent-details/goose-hooks.md)
+
+### Hook registration
+
+**Goose does not implement lifecycle hooks.** It uses MCP extensions for extensibility. `symposium` cannot register hooks for Goose.
+
+Goose is supported as a **skills-only** agent — `symposium sync` will install skill files in the vendor-neutral `.agents/skills/` path.
 
 ---
 

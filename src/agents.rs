@@ -16,8 +16,12 @@ use crate::output::{Output, display_path};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Agent {
     Claude,
+    Codex,
     Copilot,
     Gemini,
+    Goose,
+    Kiro,
+    OpenCode,
 }
 
 impl Agent {
@@ -25,9 +29,13 @@ impl Agent {
     pub fn from_config_name(name: &str) -> Result<Self> {
         match name {
             "claude" => Ok(Agent::Claude),
+            "codex" => Ok(Agent::Codex),
             "copilot" => Ok(Agent::Copilot),
             "gemini" => Ok(Agent::Gemini),
-            other => bail!("unknown agent: {other} (expected claude, copilot, or gemini)"),
+            "goose" => Ok(Agent::Goose),
+            "kiro" => Ok(Agent::Kiro),
+            "opencode" => Ok(Agent::OpenCode),
+            other => bail!("unknown agent: {other} (expected claude, codex, copilot, gemini, goose, kiro, or opencode)"),
         }
     }
 
@@ -35,8 +43,12 @@ impl Agent {
     pub fn config_name(&self) -> &'static str {
         match self {
             Agent::Claude => "claude",
+            Agent::Codex => "codex",
             Agent::Copilot => "copilot",
             Agent::Gemini => "gemini",
+            Agent::Goose => "goose",
+            Agent::Kiro => "kiro",
+            Agent::OpenCode => "opencode",
         }
     }
 
@@ -44,14 +56,18 @@ impl Agent {
     pub fn display_name(&self) -> &'static str {
         match self {
             Agent::Claude => "Claude Code",
+            Agent::Codex => "Codex CLI",
             Agent::Copilot => "GitHub Copilot",
             Agent::Gemini => "Gemini CLI",
+            Agent::Goose => "Goose",
+            Agent::Kiro => "Kiro",
+            Agent::OpenCode => "OpenCode",
         }
     }
 
     /// All supported agents for interactive prompts.
     pub fn all() -> &'static [Agent] {
-        &[Agent::Claude, Agent::Copilot, Agent::Gemini]
+        &[Agent::Claude, Agent::Codex, Agent::Copilot, Agent::Gemini, Agent::Goose, Agent::Kiro, Agent::OpenCode]
     }
 
     // -----------------------------------------------------------------------
@@ -68,7 +84,19 @@ impl Agent {
                 .join(".claude")
                 .join("skills")
                 .join(skill_name),
-            Agent::Copilot | Agent::Gemini => project_root
+            Agent::Codex | Agent::Copilot | Agent::Gemini => project_root
+                .join(".agents")
+                .join("skills")
+                .join(skill_name),
+            Agent::Goose => project_root
+                .join(".agents")
+                .join("skills")
+                .join(skill_name),
+            Agent::Kiro => project_root
+                .join(".kiro")
+                .join("skills")
+                .join(skill_name),
+            Agent::OpenCode => project_root
                 .join(".agents")
                 .join("skills")
                 .join(skill_name),
@@ -79,8 +107,12 @@ impl Agent {
     pub fn global_skill_dir(&self, home: &Path, skill_name: &str) -> Option<PathBuf> {
         match self {
             Agent::Claude => Some(home.join(".claude").join("skills").join(skill_name)),
+            Agent::Codex => Some(home.join(".agents").join("skills").join(skill_name)),
             Agent::Copilot => None, // no global skills path
             Agent::Gemini => Some(home.join(".gemini").join("skills").join(skill_name)),
+            Agent::Goose => Some(home.join(".agents").join("skills").join(skill_name)),
+            Agent::Kiro => Some(home.join(".kiro").join("skills").join(skill_name)),
+            Agent::OpenCode => Some(home.join(".agents").join("skills").join(skill_name)),
         }
     }
 
@@ -95,6 +127,10 @@ impl Agent {
                 &project_root.join(".claude").join("settings.json"),
                 out,
             ),
+            Agent::Codex => register_codex_hooks(
+                &project_root.join(".codex").join("hooks.json"),
+                out,
+            ),
             Agent::Copilot => register_copilot_hooks(
                 &project_root.join(".github").join("hooks"),
                 out,
@@ -103,6 +139,18 @@ impl Agent {
                 &project_root.join(".gemini").join("settings.json"),
                 out,
             ),
+            Agent::Kiro => register_kiro_hooks(
+                &project_root.join(".kiro").join("agents"),
+                out,
+            ),
+            Agent::Goose => {
+                out.info("Goose uses MCP extensions for hooks; skipping hook registration (skills only)");
+                Ok(())
+            }
+            Agent::OpenCode => {
+                out.info("OpenCode uses JS/TS plugins for hooks; skipping hook registration (skills only)");
+                Ok(())
+            }
         }
     }
 
@@ -112,11 +160,25 @@ impl Agent {
             Agent::Claude => {
                 register_claude_hooks(&home.join(".claude").join("settings.json"), out)
             }
+            Agent::Codex => {
+                register_codex_hooks(&home.join(".codex").join("hooks.json"), out)
+            }
             Agent::Copilot => {
                 register_copilot_hooks_global(&home.join(".copilot").join("config.json"), out)
             }
             Agent::Gemini => {
                 register_gemini_hooks(&home.join(".gemini").join("settings.json"), out)
+            }
+            Agent::Kiro => {
+                register_kiro_hooks(&home.join(".kiro").join("agents"), out)
+            }
+            Agent::Goose => {
+                out.info("Goose uses MCP extensions for hooks; skipping hook registration (skills only)");
+                Ok(())
+            }
+            Agent::OpenCode => {
+                out.info("OpenCode uses JS/TS plugins for hooks; skipping hook registration (skills only)");
+                Ok(())
             }
         }
     }
@@ -128,6 +190,10 @@ impl Agent {
                 &project_root.join(".claude").join("settings.json"),
                 out,
             ),
+            Agent::Codex => unregister_codex_hooks(
+                &project_root.join(".codex").join("hooks.json"),
+                out,
+            ),
             Agent::Copilot => unregister_copilot_hooks(
                 &project_root.join(".github").join("hooks"),
                 out,
@@ -136,6 +202,12 @@ impl Agent {
                 &project_root.join(".gemini").join("settings.json"),
                 out,
             ),
+            Agent::Kiro => unregister_kiro_hooks(
+                &project_root.join(".kiro").join("agents"),
+                out,
+            ),
+            Agent::Goose => {} // no hooks to unregister
+            Agent::OpenCode => {} // no hooks to unregister
         }
     }
 
@@ -145,12 +217,20 @@ impl Agent {
             Agent::Claude => {
                 unregister_claude_hooks(&home.join(".claude").join("settings.json"), out)
             }
+            Agent::Codex => {
+                unregister_codex_hooks(&home.join(".codex").join("hooks.json"), out)
+            }
             Agent::Copilot => {
                 unregister_copilot_hooks_global(&home.join(".copilot").join("config.json"), out)
             }
             Agent::Gemini => {
                 unregister_gemini_hooks(&home.join(".gemini").join("settings.json"), out)
             }
+            Agent::Kiro => {
+                unregister_kiro_hooks(&home.join(".kiro").join("agents"), out)
+            }
+            Agent::Goose => {} // no hooks to unregister
+            Agent::OpenCode => {} // no hooks to unregister
         }
     }
 
@@ -239,6 +319,85 @@ fn ensure_claude_hook_entry(
         }]
     }));
     true
+}
+
+// ---------------------------------------------------------------------------
+// Codex CLI hook registration
+// ---------------------------------------------------------------------------
+
+fn register_codex_hooks(hooks_path: &Path, out: &Output) -> Result<()> {
+    let mut settings = load_json_or_empty(hooks_path)?;
+    let display = display_path(hooks_path);
+
+    let hooks = settings
+        .as_object_mut()
+        .unwrap()
+        .entry("hooks")
+        .or_insert_with(|| json!({}));
+
+    let hooks_obj = hooks.as_object_mut().unwrap();
+
+    let mut added = Vec::new();
+
+    for event in ["PreToolUse", "PostToolUse", "UserPromptSubmit", "SessionStart"] {
+        let command = format!("symposium hook codex {}", event_to_cli_arg(event));
+        if ensure_codex_hook_entry(hooks_obj, event, &command) {
+            added.push(event);
+        }
+    }
+
+    if added.is_empty() {
+        out.already_ok(format!("{display}: hooks already registered"));
+    } else {
+        save_json(hooks_path, &settings)?;
+        out.done(format!("{display}: added hooks ({})", added.join(", ")));
+    }
+
+    Ok(())
+}
+
+/// Returns `true` if a new entry was added, `false` if already registered.
+fn ensure_codex_hook_entry(
+    hooks: &mut serde_json::Map<String, serde_json::Value>,
+    event: &str,
+    command: &str,
+) -> bool {
+    let event_hooks = hooks
+        .entry(event)
+        .or_insert_with(|| json!([]));
+
+    let arr = match event_hooks.as_array_mut() {
+        Some(a) => a,
+        None => return false,
+    };
+
+    let already_registered = arr.iter().any(|group| {
+        group.get("hooks").and_then(|h| h.as_array()).map_or(false, |hooks| {
+            hooks.iter().any(|h| {
+                h.get("command")
+                    .and_then(|c| c.as_str())
+                    .is_some_and(|c| c.starts_with("symposium hook"))
+            })
+        })
+    });
+
+    if already_registered {
+        return false;
+    }
+
+    arr.push(json!({
+        "matcher": "",
+        "hooks": [{
+            "type": "command",
+            "command": command,
+            "timeout": 10
+        }]
+    }));
+    true
+}
+
+fn unregister_codex_hooks(hooks_path: &Path, out: &Output) {
+    unregister_settings_hooks(hooks_path, "symposium hook", out);
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +584,113 @@ fn ensure_gemini_hook_entry(
 }
 
 // ---------------------------------------------------------------------------
+// Kiro hook registration
+// ---------------------------------------------------------------------------
+
+/// Merge Kiro hook entries into a JSON config, returning the list of newly added events.
+///
+/// Also ensures the required `name` field is present (Kiro validates it on load).
+fn merge_kiro_hooks(config: &mut serde_json::Value, default_name: &str) -> Vec<&'static str> {
+    let obj = config.as_object_mut().unwrap();
+    obj.entry("name")
+        .or_insert_with(|| json!(default_name));
+
+    let hooks = obj
+        .entry("hooks")
+        .or_insert_with(|| json!({}));
+
+    let hooks_obj = hooks.as_object_mut().unwrap();
+
+    let mut added = Vec::new();
+    for (event, entry) in kiro_hook_entries() {
+        if ensure_kiro_hook_entry(hooks_obj, event, &entry) {
+            added.push(event);
+        }
+    }
+    added
+}
+
+/// Register hooks by creating a Kiro agent file (`.kiro/agents/symposium.json`).
+fn register_kiro_hooks(agents_dir: &Path, out: &Output) -> Result<()> {
+    fs::create_dir_all(agents_dir)?;
+    let hook_file = agents_dir.join("symposium.json");
+    let display = display_path(&hook_file);
+
+    let mut config = load_json_or_empty(&hook_file)?;
+    let added = merge_kiro_hooks(&mut config, "symposium");
+
+    if added.is_empty() {
+        out.already_ok(format!("{display}: hooks already registered"));
+    } else {
+        save_json(&hook_file, &config)?;
+        out.done(format!("{display}: added hooks ({})", added.join(", ")));
+    }
+
+    Ok(())
+}
+
+/// Returns `true` if a new entry was added, `false` if already registered.
+fn ensure_kiro_hook_entry(
+    hooks: &mut serde_json::Map<String, serde_json::Value>,
+    event: &str,
+    entry: &serde_json::Value,
+) -> bool {
+    let event_hooks = hooks
+        .entry(event)
+        .or_insert_with(|| json!([]));
+
+    let arr = match event_hooks.as_array_mut() {
+        Some(a) => a,
+        None => return false,
+    };
+
+    // Kiro uses a flat structure: each entry has `command` directly (no nested `hooks` array)
+    let already_registered = arr.iter().any(|e| {
+        e.get("command")
+            .and_then(|c| c.as_str())
+            .is_some_and(|c| c.starts_with("symposium hook"))
+    });
+
+    if already_registered {
+        return false;
+    }
+
+    arr.push(entry.clone());
+    true
+}
+
+/// Kiro hook entries for all supported events.
+fn kiro_hook_entries() -> Vec<(&'static str, serde_json::Value)> {
+    vec![
+        ("preToolUse", json!({
+            "matcher": "*",
+            "command": "symposium hook kiro pre-tool-use"
+        })),
+        ("postToolUse", json!({
+            "matcher": "*",
+            "command": "symposium hook kiro post-tool-use"
+        })),
+        ("userPromptSubmit", json!({
+            "command": "symposium hook kiro user-prompt-submit"
+        })),
+        ("agentSpawn", json!({
+            "command": "symposium hook kiro session-start"
+        })),
+    ]
+}
+
+/// Remove the symposium agent file from a Kiro agents directory.
+fn unregister_kiro_hooks(agents_dir: &Path, out: &Output) {
+    let hook_file = agents_dir.join("symposium.json");
+    if hook_file.exists() {
+        let display = display_path(&hook_file);
+        if fs::remove_file(&hook_file).is_ok() {
+            out.removed(format!("{display}: removed hooks"));
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Hook unregistration
 // ---------------------------------------------------------------------------
 
@@ -491,6 +757,15 @@ fn unregister_copilot_hooks(hooks_dir: &Path, out: &Output) {
 
 /// Remove symposium hooks from the global Copilot config.
 fn unregister_copilot_hooks_global(config_path: &Path, out: &Output) {
+    unregister_flat_hooks(config_path, "bash", out);
+}
+
+/// Remove symposium hooks from a JSON config where entries are flat objects
+/// with the command in `command_key` (e.g., `"command"` for Kiro, `"bash"` for Copilot).
+///
+/// Contrasts with `unregister_settings_hooks` which handles the nested
+/// `{ "hooks": [{ "command": "..." }] }` structure used by Claude/Gemini/Codex.
+fn unregister_flat_hooks(config_path: &Path, command_key: &str, out: &Output) {
     let display = display_path(config_path);
 
     let Ok(mut config) = load_json_or_empty(config_path) else {
@@ -505,8 +780,9 @@ fn unregister_copilot_hooks_global(config_path: &Path, out: &Output) {
     for (_event, arr) in hooks.iter_mut() {
         if let Some(entries) = arr.as_array_mut() {
             let before = entries.len();
-            entries.retain(|h| {
-                !h.get("bash")
+            entries.retain(|entry| {
+                !entry
+                    .get(command_key)
                     .and_then(|c| c.as_str())
                     .is_some_and(|c| c.starts_with("symposium hook"))
             });
@@ -529,10 +805,10 @@ fn unregister_copilot_hooks_global(config_path: &Path, out: &Output) {
 
 fn event_to_cli_arg(event: &str) -> &str {
     match event {
-        "PreToolUse" => "pre-tool-use",
-        "PostToolUse" => "post-tool-use",
-        "UserPromptSubmit" => "user-prompt-submit",
-        "SessionStart" | "sessionStart" => "session-start",
+        "PreToolUse" | "preToolUse" => "pre-tool-use",
+        "PostToolUse" | "postToolUse" => "post-tool-use",
+        "UserPromptSubmit" | "userPromptSubmit" => "user-prompt-submit",
+        "SessionStart" | "sessionStart" | "agentSpawn" => "session-start",
         other => other,
     }
 }
@@ -540,6 +816,9 @@ fn event_to_cli_arg(event: &str) -> &str {
 fn load_json_or_empty(path: &Path) -> Result<serde_json::Value> {
     if path.exists() {
         let contents = fs::read_to_string(path)?;
+        if contents.trim().is_empty() {
+            return Ok(json!({}));
+        }
         Ok(serde_json::from_str(&contents)?)
     } else {
         Ok(json!({}))
@@ -562,6 +841,7 @@ mod tests {
     #[test]
     fn agent_from_config_name() {
         assert_eq!(Agent::from_config_name("claude").unwrap(), Agent::Claude);
+        assert_eq!(Agent::from_config_name("codex").unwrap(), Agent::Codex);
         assert_eq!(Agent::from_config_name("copilot").unwrap(), Agent::Copilot);
         assert_eq!(Agent::from_config_name("gemini").unwrap(), Agent::Gemini);
         assert!(Agent::from_config_name("unknown").is_err());
@@ -614,6 +894,48 @@ mod tests {
     }
 
     #[test]
+    fn codex_project_skill_dir_uses_vendor_neutral() {
+        let root = Path::new("/project");
+        assert_eq!(
+            Agent::Codex.project_skill_dir(root, "tokio"),
+            PathBuf::from("/project/.agents/skills/tokio")
+        );
+    }
+
+    #[test]
+    fn register_codex_hooks_creates_settings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hooks_path = tmp.path().join("hooks.json");
+        register_codex_hooks(&hooks_path, &Output::quiet()).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&hooks_path).unwrap()).unwrap();
+        let hooks = settings.get("hooks").unwrap();
+
+        assert!(hooks.get("PreToolUse").is_some());
+        assert!(hooks.get("PostToolUse").is_some());
+        assert!(hooks.get("UserPromptSubmit").is_some());
+        assert!(hooks.get("SessionStart").is_some());
+
+        // Verify the structure uses empty matcher
+        let pre_tool = hooks["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre_tool[0]["matcher"], "");
+    }
+
+    #[test]
+    fn register_codex_hooks_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let hooks_path = tmp.path().join("hooks.json");
+        register_codex_hooks(&hooks_path, &Output::quiet()).unwrap();
+        register_codex_hooks(&hooks_path, &Output::quiet()).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&hooks_path).unwrap()).unwrap();
+        let pre_tool = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre_tool.len(), 1);
+    }
+
+    #[test]
     fn register_copilot_hooks_creates_file() {
         let tmp = tempfile::tempdir().unwrap();
         let hooks_dir = tmp.path().join("hooks");
@@ -625,6 +947,125 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&hook_file).unwrap()).unwrap();
         assert_eq!(content["version"], 1);
         assert!(content["hooks"]["preToolUse"].is_array());
+    }
+
+    #[test]
+    fn agent_from_config_name_kiro() {
+        assert_eq!(Agent::from_config_name("kiro").unwrap(), Agent::Kiro);
+    }
+
+    #[test]
+    fn kiro_project_skill_dir() {
+        let root = Path::new("/project");
+        assert_eq!(
+            Agent::Kiro.project_skill_dir(root, "tokio"),
+            PathBuf::from("/project/.kiro/skills/tokio")
+        );
+    }
+
+    #[test]
+    fn kiro_global_skill_dir() {
+        let home = Path::new("/home/user");
+        assert_eq!(
+            Agent::Kiro.global_skill_dir(home, "tokio"),
+            Some(PathBuf::from("/home/user/.kiro/skills/tokio"))
+        );
+    }
+
+    #[test]
+    fn register_kiro_hooks_creates_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agents_dir = tmp.path().join("agents");
+        register_kiro_hooks(&agents_dir, &Output::quiet()).unwrap();
+
+        let hook_file = agents_dir.join("symposium.json");
+        assert!(hook_file.exists());
+        let content: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&hook_file).unwrap()).unwrap();
+        assert_eq!(content["name"], "symposium");
+        assert!(content["hooks"]["preToolUse"].is_array());
+        assert!(content["hooks"]["postToolUse"].is_array());
+        assert!(content["hooks"]["userPromptSubmit"].is_array());
+        assert!(content["hooks"]["agentSpawn"].is_array());
+
+        // Verify flat format (command directly on entry, no nested hooks array)
+        let pre_tool = &content["hooks"]["preToolUse"][0];
+        assert_eq!(pre_tool["command"], "symposium hook kiro pre-tool-use");
+        assert_eq!(pre_tool["matcher"], "*");
+        assert!(pre_tool.get("hooks").is_none());
+    }
+
+    #[test]
+    fn register_kiro_hooks_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agents_dir = tmp.path().join("agents");
+        register_kiro_hooks(&agents_dir, &Output::quiet()).unwrap();
+        register_kiro_hooks(&agents_dir, &Output::quiet()).unwrap();
+
+        let hook_file = agents_dir.join("symposium.json");
+        let content: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&hook_file).unwrap()).unwrap();
+        let pre_tool = content["hooks"]["preToolUse"].as_array().unwrap();
+        assert_eq!(pre_tool.len(), 1);
+    }
+
+    #[test]
+    fn unregister_kiro_hooks_removes_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let agents_dir = tmp.path().join("agents");
+        register_kiro_hooks(&agents_dir, &Output::quiet()).unwrap();
+
+        let hook_file = agents_dir.join("symposium.json");
+        assert!(hook_file.exists());
+
+        unregister_kiro_hooks(&agents_dir, &Output::quiet());
+        assert!(!hook_file.exists());
+    }
+
+    #[test]
+    fn agent_from_config_name_opencode() {
+        assert_eq!(Agent::from_config_name("opencode").unwrap(), Agent::OpenCode);
+    }
+
+    #[test]
+    fn opencode_project_skill_dir_uses_vendor_neutral() {
+        let root = Path::new("/project");
+        assert_eq!(
+            Agent::OpenCode.project_skill_dir(root, "tokio"),
+            PathBuf::from("/project/.agents/skills/tokio")
+        );
+    }
+
+    #[test]
+    fn opencode_global_skill_dir() {
+        let home = Path::new("/home/user");
+        assert_eq!(
+            Agent::OpenCode.global_skill_dir(home, "tokio"),
+            Some(PathBuf::from("/home/user/.agents/skills/tokio"))
+        );
+    }
+
+    #[test]
+    fn agent_from_config_name_goose() {
+        assert_eq!(Agent::from_config_name("goose").unwrap(), Agent::Goose);
+    }
+
+    #[test]
+    fn goose_project_skill_dir_uses_vendor_neutral() {
+        let root = Path::new("/project");
+        assert_eq!(
+            Agent::Goose.project_skill_dir(root, "tokio"),
+            PathBuf::from("/project/.agents/skills/tokio")
+        );
+    }
+
+    #[test]
+    fn goose_global_skill_dir() {
+        let home = Path::new("/home/user");
+        assert_eq!(
+            Agent::Goose.global_skill_dir(home, "tokio"),
+            Some(PathBuf::from("/home/user/.agents/skills/tokio"))
+        );
     }
 
     #[test]

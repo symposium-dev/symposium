@@ -71,17 +71,26 @@ MCP tools use `@server/tool` naming (e.g., `@postgres/query`).
   "hooks": {
     "preToolUse": [
       {
-        "matcher": "shell",
-        "hooks": [{
-          "type": "command",
-          "command": "./scripts/validate.sh",
-          "timeout_ms": 15000
-        }]
+        "matcher": "execute_bash",
+        "command": "./scripts/validate.sh"
+      }
+    ],
+    "postToolUse": [
+      {
+        "matcher": "fs_write",
+        "command": "cargo fmt --all"
+      }
+    ],
+    "agentSpawn": [
+      {
+        "command": "git status"
       }
     ]
   }
 }
 ```
+
+Each entry is a flat object with `command` (required) and optional `matcher`. There is no nested `hooks` array or `type` field.
 
 ## Kiro IDE Hooks
 
