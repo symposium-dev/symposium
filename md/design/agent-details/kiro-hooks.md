@@ -2,16 +2,58 @@
 
 Kiro is Amazon's AI coding agent available as an IDE (VS Code fork) and CLI. Both have hook systems but they differ in configuration format, trigger types, and capabilities.
 
-## Kiro CLI Hooks
+## Kiro CLI Agent Definition
 
-Configured inside agent configuration JSON files. Shell commands receive JSON on stdin and use exit codes for control flow.
-
-### Configuration Locations
+Each `.kiro/agents/*.json` file defines a complete agent. All fields are optional; omitting a field has specific defaults.
 
 | File | Scope |
 |---|---|
 | `.kiro/agents/*.json` | Project |
 | `~/.kiro/agents/*.json` | Global |
+
+### Agent Definition Fields
+
+| Field | Type | Default if omitted |
+|---|---|---|
+| `name` | string | Derived from filename |
+| `description` | string | *(none)* |
+| `prompt` | string or `file://` URI | No custom system context |
+| `tools` | array of strings | **No tools available** |
+| `allowedTools` | array of strings/globs | All tools require confirmation |
+| `toolAliases` | object | *(none)* |
+| `resources` | array of URIs/objects | *(none)* |
+| `hooks` | object | *(none)* |
+| `mcpServers` | object | *(none)* |
+| `toolsSettings` | object | *(none)* |
+| `includeMcpJson` | boolean | *(none)* |
+| `model` | string | System default |
+| `keyboardShortcut` | string | *(none)* |
+| `welcomeMessage` | string | *(none)* |
+
+**Critical:** Omitting `tools` means the agent has **zero tools**. Use `"tools": ["*"]` for all tools, `"@builtin"` for built-ins only, or list specific tools.
+
+### Tools Field Values
+
+- `"*"` — all available tools
+- `"@builtin"` — all built-in tools
+- `"read"`, `"write"`, `"shell"` — specific built-in tools
+- `"@server_name"` — all tools from an MCP server
+- `"@server_name/tool_name"` — specific MCP tool
+
+### AllowedTools Field
+
+Specifies tools that execute without user confirmation. Supports exact matches and glob patterns (`"@server/read_*"`, `"@git-*/status"`). Does **not** support `"*"` wildcard for all tools.
+
+### Resources Field
+
+- `"file://README.md"` — load file into context at startup
+- `"skill://.kiro/skills/**/SKILL.md"` — skill metadata loaded at startup, full content on-demand
+
+Custom agents do **not** auto-discover skills. They require explicit `skill://` URIs in `resources`.
+
+## Kiro CLI Hooks
+
+Configured inside agent configuration JSON files. Shell commands receive JSON on stdin and use exit codes for control flow.
 
 ### Events
 

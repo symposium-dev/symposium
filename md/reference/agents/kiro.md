@@ -24,4 +24,6 @@ Events registered: `preToolUse`, `postToolUse`, `userPromptSubmit`, `agentSpawn`
 
 Output format: plain text on stdout (not JSON). Exit code 2 blocks `preToolUse` only.
 
+The generated agent file includes `"tools": ["*"]` (all tools available) and `"resources": ["skill://.kiro/skills/**/SKILL.md"]` (auto-discover skills). Without `tools`, a Kiro custom agent has zero tools.
+
 **Caveat:** Kiro uses a flat hook entry format (`{ "command": "..." }`) unlike the nested format used by Claude/Gemini/Codex. Unregistration deletes the `symposium.json` file entirely.

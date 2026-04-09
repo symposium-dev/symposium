@@ -590,14 +590,33 @@ fn ensure_gemini_hook_entry(
 /// Merge Kiro hook entries into a JSON config, returning the list of newly added events.
 ///
 /// Also ensures the required `name` field is present (Kiro validates it on load).
-fn merge_kiro_hooks(config: &mut serde_json::Value, default_name: &str) -> Vec<&'static str> {
+/// Returns `(changed, added_events)` — `changed` is true if any field was
+/// inserted (not just hooks), so the caller knows to save the file.
+fn merge_kiro_hooks(config: &mut serde_json::Value, default_name: &str) -> (bool, Vec<&'static str>) {
     let obj = config.as_object_mut().unwrap();
-    obj.entry("name")
-        .or_insert_with(|| json!(default_name));
+    let mut changed = false;
+
+    // Use a helper to track insertions.
+    let mut ensure = |key: &str, value: serde_json::Value| {
+        if !obj.contains_key(key) {
+            obj.insert(key.to_string(), value);
+            changed = true;
+        }
+    };
+
+    ensure("name", json!(default_name));
+
+    // Without `tools`, the agent has zero tools available.
+    ensure("tools", json!(["*"]));
+
+    // Auto-discover skills from the standard locations.
+    ensure("resources", json!([
+        "skill://.kiro/skills/**/SKILL.md",
+    ]));
 
     let hooks = obj
         .entry("hooks")
-        .or_insert_with(|| json!({}));
+        .or_insert_with(|| { changed = true; json!({}) });
 
     let hooks_obj = hooks.as_object_mut().unwrap();
 
@@ -605,9 +624,10 @@ fn merge_kiro_hooks(config: &mut serde_json::Value, default_name: &str) -> Vec<&
     for (event, entry) in kiro_hook_entries() {
         if ensure_kiro_hook_entry(hooks_obj, event, &entry) {
             added.push(event);
+            changed = true;
         }
     }
-    added
+    (changed, added)
 }
 
 /// Register hooks by creating a Kiro agent file (`.kiro/agents/symposium.json`).
@@ -617,13 +637,17 @@ fn register_kiro_hooks(agents_dir: &Path, out: &Output) -> Result<()> {
     let display = display_path(&hook_file);
 
     let mut config = load_json_or_empty(&hook_file)?;
-    let added = merge_kiro_hooks(&mut config, "symposium");
+    let (changed, added) = merge_kiro_hooks(&mut config, "symposium");
 
-    if added.is_empty() {
+    if !changed {
         out.already_ok(format!("{display}: hooks already registered"));
     } else {
         save_json(&hook_file, &config)?;
-        out.done(format!("{display}: added hooks ({})", added.join(", ")));
+        if added.is_empty() {
+            out.done(format!("{display}: updated agent config"));
+        } else {
+            out.done(format!("{display}: added hooks ({})", added.join(", ")));
+        }
     }
 
     Ok(())
