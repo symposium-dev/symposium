@@ -1590,4 +1590,193 @@ mod tests {
         assert!(settings["hooks"]["BeforeTool"].is_array());
         assert!(settings["hooks"]["AfterTool"].is_array());
     }
+
+    const TEST_BIN: &str = "/usr/local/bin/symposium";
+
+    // -- Claude MCP (also covers Gemini and Kiro via delegation) --
+
+    #[test]
+    fn register_claude_mcp_server_creates_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("settings.json");
+        register_claude_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(settings["mcpServers"]["symposium"]["command"], TEST_BIN);
+        assert_eq!(settings["mcpServers"]["symposium"]["args"][0], "mcp");
+    }
+
+    #[test]
+    fn register_claude_mcp_server_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("settings.json");
+        register_claude_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+        register_claude_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let servers = settings["mcpServers"].as_object().unwrap();
+        assert_eq!(servers.len(), 1);
+    }
+
+    #[test]
+    fn unregister_claude_mcp_server_removes_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("settings.json");
+        register_claude_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+        unregister_claude_mcp_server(&path, &Output::quiet()).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(settings["mcpServers"].get("symposium").is_none());
+    }
+
+    // -- Codex MCP (TOML) --
+
+    #[test]
+    fn register_codex_mcp_server_creates_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        register_codex_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("[mcp_servers.symposium]"));
+        assert!(content.contains(TEST_BIN));
+    }
+
+    #[test]
+    fn register_codex_mcp_server_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        register_codex_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+        register_codex_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content.matches("[mcp_servers.symposium]").count(), 1);
+    }
+
+    #[test]
+    fn unregister_codex_mcp_server_removes_section() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        register_codex_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+        unregister_codex_mcp_server(&path, &Output::quiet()).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(!content.contains("[mcp_servers.symposium]"));
+    }
+
+    // -- Copilot MCP --
+
+    #[test]
+    fn register_copilot_mcp_server_creates_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mcp.json");
+        register_copilot_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(config["symposium"]["command"], TEST_BIN);
+        assert_eq!(config["symposium"]["args"][0], "mcp");
+    }
+
+    #[test]
+    fn register_copilot_mcp_server_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mcp.json");
+        register_copilot_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+        register_copilot_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let obj = config.as_object().unwrap();
+        assert_eq!(obj.len(), 1);
+    }
+
+    #[test]
+    fn unregister_copilot_mcp_server_removes_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mcp.json");
+        register_copilot_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+        unregister_copilot_mcp_server(&path, &Output::quiet()).unwrap();
+
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(config.get("symposium").is_none());
+    }
+
+    // -- Goose MCP (YAML) --
+
+    #[test]
+    fn register_goose_mcp_server_creates_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        register_goose_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("symposium:"));
+        assert!(content.contains(TEST_BIN));
+    }
+
+    #[test]
+    fn register_goose_mcp_server_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        register_goose_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+        register_goose_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert_eq!(content.matches("symposium:").count(), 1);
+    }
+
+    #[test]
+    fn unregister_goose_mcp_server_removes_section() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        register_goose_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+        unregister_goose_mcp_server(&path, &Output::quiet()).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(!content.contains("symposium:"));
+    }
+
+    // -- OpenCode MCP --
+
+    #[test]
+    fn register_opencode_mcp_server_creates_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("opencode.json");
+        register_opencode_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(config["mcp"]["symposium"]["command"], TEST_BIN);
+        assert_eq!(config["mcp"]["symposium"]["args"][0], "mcp");
+    }
+
+    #[test]
+    fn register_opencode_mcp_server_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("opencode.json");
+        register_opencode_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+        register_opencode_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let mcp = config["mcp"].as_object().unwrap();
+        assert_eq!(mcp.len(), 1);
+    }
+
+    #[test]
+    fn unregister_opencode_mcp_server_removes_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("opencode.json");
+        register_opencode_mcp_server(&path, TEST_BIN, &Output::quiet()).unwrap();
+        unregister_opencode_mcp_server(&path, &Output::quiet()).unwrap();
+
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(config["mcp"].get("symposium").is_none());
+    }
 }
