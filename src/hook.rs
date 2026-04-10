@@ -85,7 +85,13 @@ pub async fn run(
         // Fallback path: parse as generic JSON → internal HookPayload.
         // This handles events like PostToolUse, UserPromptSubmit, SessionStart
         // for agents that don't have dedicated payload/output types yet.
-        let builtin_payload: HookPayload = match serde_json::from_str(&input) {
+        //
+        // Normalize the `hook_event_name` field to the canonical name that
+        // `HookSubPayload` expects, since different agents use different names
+        // for the same event (e.g., Kiro sends "agentSpawn" for SessionStart,
+        // Copilot sends "sessionStart").
+        let normalized = normalize_hook_event_name(&input, event);
+        let builtin_payload: HookPayload = match serde_json::from_str(&normalized) {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(?event, error = %e, "invalid hook payload (fallback)");
@@ -97,12 +103,58 @@ pub async fn run(
 
         let hook_output = dispatch_builtin(sym, &builtin_payload).await;
 
-        // Emit the hook output as JSON. The agent will interpret what it can.
-        let json = serde_json::to_vec(&hook_output).unwrap();
-        std::io::stdout().write_all(&json).unwrap();
+        // The fallback path doesn't have an agent-specific output converter.
+        // Agents differ in what they expect on stdout:
+        //   - Claude/Gemini/Copilot/Codex: JSON (the HookOutput structure)
+        //   - Kiro: plain text (stdout captured as context)
+        // Emit the appropriate format based on the agent.
+        match agent {
+            HookAgent::Kiro => {
+                if let Some(ref hso) = hook_output.hook_specific_output {
+                    if let Some(ref ctx) = hso.additional_context {
+                        std::io::stdout().write_all(ctx.as_bytes()).unwrap();
+                    }
+                }
+            }
+            _ => {
+                let json = serde_json::to_vec(&hook_output).unwrap();
+                std::io::stdout().write_all(&json).unwrap();
+            }
+        }
 
         ExitCode::SUCCESS
     }
+}
+
+/// Normalize the `hook_event_name` field in the raw JSON input to the
+/// canonical PascalCase name that `HookSubPayload` expects.
+///
+/// Different agents use different event names for the same hook event
+/// (e.g., Kiro sends `"agentSpawn"`, Copilot sends `"sessionStart"`,
+/// Claude sends `"SessionStart"`). Since we already know the canonical
+/// event from the CLI arg, we can rewrite the field before deserializing.
+fn normalize_hook_event_name(input: &str, event: HookEvent) -> String {
+    let canonical = match event {
+        HookEvent::PreToolUse => "PreToolUse",
+        HookEvent::PostToolUse => "PostToolUse",
+        HookEvent::UserPromptSubmit => "UserPromptSubmit",
+        HookEvent::SessionStart => "SessionStart",
+    };
+
+    // Parse, replace, re-serialize. If parsing fails, return the original
+    // string and let the caller produce the error.
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(input) else {
+        return input.to_string();
+    };
+
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "hook_event_name".to_string(),
+            serde_json::Value::String(canonical.to_string()),
+        );
+    }
+
+    serde_json::to_string(&value).unwrap_or_else(|_| input.to_string())
 }
 
 /// Run sync --agent if we're in a project directory. Non-fatal.

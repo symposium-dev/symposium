@@ -1,0 +1,45 @@
+# Goose Hooks Reference
+
+**Goose does not implement lifecycle hooks.** There are no shell-command or programmatic interception points for tool execution, session start/stop, or prompt submission. No hooks.json equivalent. No JSON stdin/stdout protocol.
+
+## What Goose Offers Instead
+
+### MCP Extensions
+
+The primary extensibility mechanism. Extensions are MCP servers (stdio or HTTP) that expose new tools, resources, and prompts. Configured in `~/.config/goose/config.yaml` under `extensions:`. Built-in extensions include Developer (shell, file editing), Computer Controller, Memory, and Todo. Custom extensions are standard MCP servers built in Python, TypeScript, or Kotlin. Extensions **add capabilities** but cannot intercept or modify existing tool behavior.
+
+### Permission Modes
+
+The closest analog to hook-based control flow. Static configuration, not programmable logic.
+
+| Mode | Behavior |
+|---|---|
+| `auto` | Tools execute without approval (default) |
+| `approve` | Every tool call requires manual confirmation |
+| `smart_approve` | AI risk assessment auto-approves low-risk, prompts for high-risk |
+| `chat` | No tool use |
+
+Per-tool permissions can be set to Always Allow, Ask Before, or Never Allow.
+
+### Goosehints / AGENTS.md
+
+Instruction files injected into the system prompt. Influence LLM behavior through prompting, not deterministic interception.
+
+| File | Scope |
+|---|---|
+| `~/.config/goose/.goosehints` | Global |
+| `.goosehints` (project root) | Project |
+| `AGENTS.md` | Project |
+
+### GOOSE_TERMINAL Environment Variable
+
+Shell scripts can detect whether they're running under Goose and alter behavior (e.g., wrapping `git` to block `git commit`). This is a shell-level workaround, not a Goose-native mechanism.
+
+### Other Mechanisms
+
+- `.gooseignore` — gitignore-style file access restriction
+- Recipes — YAML workflow packages
+- Custom slash commands
+- Subagents
+- ACP integration
+- Tool Router — internal optimization for tool selection

@@ -2,7 +2,7 @@
 
 ## Known hook implementation gaps
 
-The following issues were identified by auditing our hook implementations against the agent reference docs (`md/design/reference/`). They don't cause crashes (the fallback path handles events without agent-specific handlers) but mean some features are incomplete.
+The following issues were identified by auditing our hook implementations against the agent reference docs (`md/design/agent-details/`). They don't cause crashes (the fallback path handles events without agent-specific handlers) but mean some features are incomplete.
 
 ### `updatedInput` type mismatch (Claude Code)
 
