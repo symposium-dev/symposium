@@ -122,7 +122,8 @@ impl Agent {
 
     /// Register hooks in the project-level agent config.
     pub fn register_project_hooks(&self, project_root: &Path, out: &Output) -> Result<()> {
-        match self {
+        // Register hooks
+        let hook_result = match self {
             Agent::Claude => register_claude_hooks(
                 &project_root.join(".claude").join("settings.json"),
                 out,
@@ -151,12 +152,18 @@ impl Agent {
                 out.info("OpenCode uses JS/TS plugins for hooks; skipping hook registration (skills only)");
                 Ok(())
             }
-        }
+        };
+
+        // Register MCP server
+        self.register_project_mcp_server(project_root, out)?;
+        
+        hook_result
     }
 
     /// Register hooks in the global agent config.
     pub fn register_global_hooks(&self, home: &Path, out: &Output) -> Result<()> {
-        match self {
+        // Register hooks
+        let hook_result = match self {
             Agent::Claude => {
                 register_claude_hooks(&home.join(".claude").join("settings.json"), out)
             }
@@ -180,11 +187,157 @@ impl Agent {
                 out.info("OpenCode uses JS/TS plugins for hooks; skipping hook registration (skills only)");
                 Ok(())
             }
+        };
+
+        // Register MCP server
+        self.register_global_mcp_server(home, out)?;
+        
+        hook_result
+    }
+
+    // -----------------------------------------------------------------------
+    // MCP server registration
+    // -----------------------------------------------------------------------
+
+    /// Register symposium as an MCP server in the project-level agent config.
+    pub fn register_project_mcp_server(&self, project_root: &Path, out: &Output) -> Result<()> {
+        match self {
+            Agent::Claude => register_claude_mcp_server(
+                &project_root.join(".claude").join("settings.json"),
+                out,
+            ),
+            Agent::Codex => register_codex_mcp_server(
+                &project_root.join(".codex").join("config.toml"),
+                out,
+            ),
+            Agent::Copilot => register_copilot_mcp_server(
+                &project_root.join(".vscode").join("mcp.json"),
+                out,
+            ),
+            Agent::Gemini => register_gemini_mcp_server(
+                &project_root.join(".gemini").join("settings.json"),
+                out,
+            ),
+            Agent::Kiro => register_kiro_mcp_server(
+                &project_root.join(".kiro").join("settings").join("mcp.json"),
+                out,
+            ),
+            Agent::Goose => register_goose_mcp_server(
+                &project_root.join(".goose").join("config.yaml"),
+                out,
+            ),
+            Agent::OpenCode => register_opencode_mcp_server(
+                &project_root.join("opencode.json"),
+                out,
+            ),
+        }
+    }
+
+    /// Register symposium as an MCP server in the global agent config.
+    pub fn register_global_mcp_server(&self, home: &Path, out: &Output) -> Result<()> {
+        match self {
+            Agent::Claude => register_claude_mcp_server(
+                &home.join(".claude").join("settings.json"),
+                out,
+            ),
+            Agent::Codex => register_codex_mcp_server(
+                &home.join(".codex").join("config.toml"),
+                out,
+            ),
+            Agent::Copilot => register_copilot_mcp_server(
+                &home.join(".copilot").join("mcp-config.json"),
+                out,
+            ),
+            Agent::Gemini => register_gemini_mcp_server(
+                &home.join(".gemini").join("settings.json"),
+                out,
+            ),
+            Agent::Kiro => register_kiro_mcp_server(
+                &home.join(".kiro").join("settings").join("mcp.json"),
+                out,
+            ),
+            Agent::Goose => register_goose_mcp_server(
+                &home.join(".config").join("goose").join("config.yaml"),
+                out,
+            ),
+            Agent::OpenCode => register_opencode_mcp_server(
+                &home.join(".config").join("opencode").join("opencode.json"),
+                out,
+            ),
+        }
+    }
+
+    /// Remove symposium MCP server from the project-level agent config.
+    pub fn unregister_project_mcp_server(&self, project_root: &Path, out: &Output) -> Result<()> {
+        match self {
+            Agent::Claude => unregister_claude_mcp_server(
+                &project_root.join(".claude").join("settings.json"),
+                out,
+            ),
+            Agent::Codex => unregister_codex_mcp_server(
+                &project_root.join(".codex").join("config.toml"),
+                out,
+            ),
+            Agent::Copilot => unregister_copilot_mcp_server(
+                &project_root.join(".vscode").join("mcp.json"),
+                out,
+            ),
+            Agent::Gemini => unregister_gemini_mcp_server(
+                &project_root.join(".gemini").join("settings.json"),
+                out,
+            ),
+            Agent::Kiro => unregister_kiro_mcp_server(
+                &project_root.join(".kiro").join("settings").join("mcp.json"),
+                out,
+            ),
+            Agent::Goose => unregister_goose_mcp_server(
+                &project_root.join(".goose").join("config.yaml"),
+                out,
+            ),
+            Agent::OpenCode => unregister_opencode_mcp_server(
+                &project_root.join("opencode.json"),
+                out,
+            ),
+        }
+    }
+
+    /// Remove symposium MCP server from the global agent config.
+    pub fn unregister_global_mcp_server(&self, home: &Path, out: &Output) -> Result<()> {
+        match self {
+            Agent::Claude => unregister_claude_mcp_server(
+                &home.join(".claude").join("settings.json"),
+                out,
+            ),
+            Agent::Codex => unregister_codex_mcp_server(
+                &home.join(".codex").join("config.toml"),
+                out,
+            ),
+            Agent::Copilot => unregister_copilot_mcp_server(
+                &home.join(".copilot").join("mcp-config.json"),
+                out,
+            ),
+            Agent::Gemini => unregister_gemini_mcp_server(
+                &home.join(".gemini").join("settings.json"),
+                out,
+            ),
+            Agent::Kiro => unregister_kiro_mcp_server(
+                &home.join(".kiro").join("settings").join("mcp.json"),
+                out,
+            ),
+            Agent::Goose => unregister_goose_mcp_server(
+                &home.join(".config").join("goose").join("config.yaml"),
+                out,
+            ),
+            Agent::OpenCode => unregister_opencode_mcp_server(
+                &home.join(".config").join("opencode").join("opencode.json"),
+                out,
+            ),
         }
     }
 
     /// Remove hooks from the project-level agent config.
     pub fn unregister_project_hooks(&self, project_root: &Path, out: &Output) {
+        // Remove hooks
         match self {
             Agent::Claude => unregister_claude_hooks(
                 &project_root.join(".claude").join("settings.json"),
@@ -209,10 +362,14 @@ impl Agent {
             Agent::Goose => {} // no hooks to unregister
             Agent::OpenCode => {} // no hooks to unregister
         }
+
+        // Remove MCP server
+        let _ = self.unregister_project_mcp_server(project_root, out);
     }
 
     /// Remove hooks from the global agent config.
     pub fn unregister_global_hooks(&self, home: &Path, out: &Output) {
+        // Remove hooks
         match self {
             Agent::Claude => {
                 unregister_claude_hooks(&home.join(".claude").join("settings.json"), out)
@@ -232,6 +389,9 @@ impl Agent {
             Agent::Goose => {} // no hooks to unregister
             Agent::OpenCode => {} // no hooks to unregister
         }
+
+        // Remove MCP server
+        let _ = self.unregister_global_mcp_server(home, out);
     }
 
     /// Install a single skill file into the agent's expected location.
@@ -821,6 +981,363 @@ fn unregister_flat_hooks(config_path: &Path, command_key: &str, out: &Output) {
             out.removed(format!("{display}: removed hooks"));
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// MCP server registration functions
+// ---------------------------------------------------------------------------
+
+/// Find the path to the symposium binary.
+fn find_symposium_binary() -> Result<String> {
+    // Try current executable first
+    if let Ok(current_exe) = std::env::current_exe() {
+        if current_exe.file_name().and_then(|n| n.to_str()) == Some("symposium") {
+            return Ok(current_exe.to_string_lossy().to_string());
+        }
+    }
+    
+    // Try which command
+    let output = std::process::Command::new("which")
+        .arg("symposium")
+        .output();
+    
+    if let Ok(output) = output {
+        if output.status.success() {
+            let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path.is_empty() {
+                return Ok(path);
+            }
+        }
+    }
+    
+    // Fallback to just "symposium" and hope it's in PATH
+    Ok("symposium".to_string())
+}
+
+fn register_claude_mcp_server(settings_path: &Path, out: &Output) -> Result<()> {
+    let display = display_path(settings_path);
+    let mut settings = load_json_or_empty(settings_path)?;
+    
+    if !settings.is_object() {
+        settings = json!({});
+    }
+    
+    if !settings.get("mcpServers").is_some() {
+        settings["mcpServers"] = json!({});
+    }
+
+    let symposium_path = find_symposium_binary()?;
+    let server_config = json!({
+        "command": symposium_path,
+        "args": ["mcp"]
+    });
+
+    if settings["mcpServers"].get("symposium").is_some() {
+        out.already_ok(format!("{display}: symposium MCP server already configured"));
+    } else {
+        settings["mcpServers"]["symposium"] = server_config;
+        save_json(settings_path, &settings)?;
+        out.done(format!("{display}: added symposium MCP server"));
+    }
+    
+    Ok(())
+}
+
+fn register_codex_mcp_server(config_path: &Path, out: &Output) -> Result<()> {
+    let display = display_path(config_path);
+    
+    // For TOML files, we need to handle them differently
+    let content = if config_path.exists() {
+        fs::read_to_string(config_path)?
+    } else {
+        String::new()
+    };
+    
+    let symposium_path = find_symposium_binary()?;
+    let mcp_config = format!(
+        r#"
+[mcp_servers.symposium]
+command = "{}"
+args = ["mcp"]
+"#,
+        symposium_path
+    );
+    
+    if content.contains("[mcp_servers.symposium]") {
+        out.already_ok(format!("{display}: symposium MCP server already configured"));
+    } else {
+        let new_content = if content.trim().is_empty() {
+            mcp_config.trim().to_string()
+        } else {
+            format!("{}\n{}", content.trim(), mcp_config.trim())
+        };
+        
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(config_path, new_content)?;
+        out.done(format!("{display}: added symposium MCP server"));
+    }
+    
+    Ok(())
+}
+
+fn register_copilot_mcp_server(config_path: &Path, out: &Output) -> Result<()> {
+    let display = display_path(config_path);
+    let mut config = load_json_or_empty(config_path)?;
+    
+    let symposium_path = find_symposium_binary()?;
+    let server_config = json!({
+        "command": symposium_path,
+        "args": ["mcp"]
+    });
+
+    if config.get("symposium").is_some() {
+        out.already_ok(format!("{display}: symposium MCP server already configured"));
+    } else {
+        config["symposium"] = server_config;
+        save_json(config_path, &config)?;
+        out.done(format!("{display}: added symposium MCP server"));
+    }
+    
+    Ok(())
+}
+
+fn register_gemini_mcp_server(settings_path: &Path, out: &Output) -> Result<()> {
+    register_claude_mcp_server(settings_path, out) // Same format as Claude
+}
+
+fn register_kiro_mcp_server(config_path: &Path, out: &Output) -> Result<()> {
+    let display = display_path(config_path);
+    let mut config = load_json_or_empty(config_path)?;
+    
+    if !config.is_object() {
+        config = json!({});
+    }
+    
+    if !config.get("mcpServers").is_some() {
+        config["mcpServers"] = json!({});
+    }
+
+    let symposium_path = find_symposium_binary()?;
+    let server_config = json!({
+        "command": symposium_path,
+        "args": ["mcp"]
+    });
+
+    if config["mcpServers"].get("symposium").is_some() {
+        out.already_ok(format!("{display}: symposium MCP server already configured"));
+    } else {
+        config["mcpServers"]["symposium"] = server_config;
+        save_json(config_path, &config)?;
+        out.done(format!("{display}: added symposium MCP server"));
+    }
+    
+    Ok(())
+}
+
+fn register_goose_mcp_server(config_path: &Path, out: &Output) -> Result<()> {
+    let display = display_path(config_path);
+    
+    let content = if config_path.exists() {
+        fs::read_to_string(config_path)?
+    } else {
+        String::new()
+    };
+    
+    let symposium_path = find_symposium_binary()?;
+    let mcp_config = format!(
+        r#"
+extensions:
+  symposium:
+    provider: mcp
+    config:
+      command: {}
+      args: [mcp]
+"#,
+        symposium_path
+    );
+    
+    if content.contains("symposium:") {
+        out.already_ok(format!("{display}: symposium MCP server already configured"));
+    } else {
+        let new_content = if content.trim().is_empty() {
+            mcp_config.trim().to_string()
+        } else if content.contains("extensions:") {
+            // Insert under existing extensions section
+            content.replace(
+                "extensions:",
+                &format!("extensions:\n  symposium:\n    provider: mcp\n    config:\n      command: {}\n      args: [mcp]", symposium_path)
+            )
+        } else {
+            format!("{}\n{}", content.trim(), mcp_config.trim())
+        };
+        
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(config_path, new_content)?;
+        out.done(format!("{display}: added symposium MCP server"));
+    }
+    
+    Ok(())
+}
+
+fn register_opencode_mcp_server(config_path: &Path, out: &Output) -> Result<()> {
+    let display = display_path(config_path);
+    let mut config = load_json_or_empty(config_path)?;
+    
+    if !config.is_object() {
+        config = json!({});
+    }
+    
+    if !config.get("mcp").is_some() {
+        config["mcp"] = json!({});
+    }
+
+    let symposium_path = find_symposium_binary()?;
+    let server_config = json!({
+        "command": symposium_path,
+        "args": ["mcp"]
+    });
+
+    if config["mcp"].get("symposium").is_some() {
+        out.already_ok(format!("{display}: symposium MCP server already configured"));
+    } else {
+        config["mcp"]["symposium"] = server_config;
+        save_json(config_path, &config)?;
+        out.done(format!("{display}: added symposium MCP server"));
+    }
+    
+    Ok(())
+}
+
+fn unregister_claude_mcp_server(settings_path: &Path, out: &Output) -> Result<()> {
+    let display = display_path(settings_path);
+    if !settings_path.exists() {
+        return Ok(());
+    }
+    
+    let mut settings = load_json_or_empty(settings_path)?;
+    
+    if let Some(mcp_servers) = settings.get_mut("mcpServers").and_then(|v| v.as_object_mut()) {
+        if mcp_servers.remove("symposium").is_some() {
+            save_json(settings_path, &settings)?;
+            out.removed(format!("{display}: removed symposium MCP server"));
+        }
+    }
+    
+    Ok(())
+}
+
+fn unregister_codex_mcp_server(config_path: &Path, out: &Output) -> Result<()> {
+    let display = display_path(config_path);
+    if !config_path.exists() {
+        return Ok(());
+    }
+    
+    let content = fs::read_to_string(config_path)?;
+    let lines: Vec<&str> = content.lines().collect();
+    let mut new_lines = Vec::new();
+    let mut in_symposium_section = false;
+    let mut removed = false;
+    
+    for line in lines {
+        if line.trim() == "[mcp_servers.symposium]" {
+            in_symposium_section = true;
+            removed = true;
+            continue;
+        }
+        if in_symposium_section && (line.starts_with('[') || line.trim().is_empty()) {
+            in_symposium_section = false;
+        }
+        if !in_symposium_section {
+            new_lines.push(line);
+        }
+    }
+    
+    if removed {
+        fs::write(config_path, new_lines.join("\n"))?;
+        out.removed(format!("{display}: removed symposium MCP server"));
+    }
+    
+    Ok(())
+}
+
+fn unregister_copilot_mcp_server(config_path: &Path, out: &Output) -> Result<()> {
+    let display = display_path(config_path);
+    if !config_path.exists() {
+        return Ok(());
+    }
+    
+    let mut config = load_json_or_empty(config_path)?;
+    
+    if config.as_object_mut().and_then(|obj| obj.remove("symposium")).is_some() {
+        save_json(config_path, &config)?;
+        out.removed(format!("{display}: removed symposium MCP server"));
+    }
+    
+    Ok(())
+}
+
+fn unregister_gemini_mcp_server(settings_path: &Path, out: &Output) -> Result<()> {
+    unregister_claude_mcp_server(settings_path, out) // Same format as Claude
+}
+
+fn unregister_kiro_mcp_server(config_path: &Path, out: &Output) -> Result<()> {
+    unregister_claude_mcp_server(config_path, out) // Same format as Claude
+}
+
+fn unregister_goose_mcp_server(config_path: &Path, out: &Output) -> Result<()> {
+    let display = display_path(config_path);
+    if !config_path.exists() {
+        return Ok(());
+    }
+    
+    let content = fs::read_to_string(config_path)?;
+    let lines: Vec<&str> = content.lines().collect();
+    let mut new_lines = Vec::new();
+    let mut in_symposium_section = false;
+    let mut removed = false;
+    
+    for line in lines {
+        if line.trim().starts_with("symposium:") {
+            in_symposium_section = true;
+            removed = true;
+            continue;
+        }
+        if in_symposium_section && !line.starts_with("  ") && !line.trim().is_empty() {
+            in_symposium_section = false;
+        }
+        if !in_symposium_section {
+            new_lines.push(line);
+        }
+    }
+    
+    if removed {
+        fs::write(config_path, new_lines.join("\n"))?;
+        out.removed(format!("{display}: removed symposium MCP server"));
+    }
+    
+    Ok(())
+}
+
+fn unregister_opencode_mcp_server(config_path: &Path, out: &Output) -> Result<()> {
+    let display = display_path(config_path);
+    if !config_path.exists() {
+        return Ok(());
+    }
+    
+    let mut config = load_json_or_empty(config_path)?;
+    
+    if let Some(mcp_obj) = config.get_mut("mcp").and_then(|v| v.as_object_mut()) {
+        if mcp_obj.remove("symposium").is_some() {
+            save_json(config_path, &config)?;
+            out.removed(format!("{display}: removed symposium MCP server"));
+        }
+    }
+    
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
