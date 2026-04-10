@@ -167,10 +167,10 @@ pub async fn sync_agent(
                 .is_some_and(|c| c.agents.iter().any(|a| a.name == *agent_name));
 
             if is_project_agent {
-                agent.register_project_hooks(root, out)
+                agent.register_project_hooks(root, sym, out)
                     .context("failed to register project hooks")?;
             } else {
-                agent.register_global_hooks(sym.home_dir(), out)
+                agent.register_global_hooks(sym.home_dir(), sym, out)
                     .context("failed to register global hooks")?;
             }
 
@@ -178,7 +178,7 @@ pub async fn sync_agent(
                 install_skills(sym, agent, root, config, out).await?;
             }
         } else {
-            agent.register_global_hooks(sym.home_dir(), out)
+            agent.register_global_hooks(sym.home_dir(), sym, out)
                 .context("failed to register global hooks")?;
         }
     }
@@ -187,9 +187,9 @@ pub async fn sync_agent(
     for &agent in Agent::all() {
         if !agent_names.contains(&agent.config_name().to_string()) {
             if let Some(root) = project_root {
-                agent.unregister_project_hooks(root, out);
+                agent.unregister_project_hooks(root, sym, out);
             }
-            agent.unregister_global_hooks(sym.home_dir(), out);
+            agent.unregister_global_hooks(sym.home_dir(), sym, out);
         }
     }
 
