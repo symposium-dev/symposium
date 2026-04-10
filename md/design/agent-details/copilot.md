@@ -1,5 +1,14 @@
 # GitHub Copilot Hooks Reference
 
+> **Disclaimer:** This document reflects our current understanding of GitHub Copilot's hook system.
+> It is a working reference for symposium development, not a substitute for the official docs.
+> Details may be outdated or incomplete — always consult the primary sources.
+>
+> **Primary sources:**
+> [About hooks](https://docs.github.com/en/copilot/concepts/agents/coding-agent/about-hooks)
+> · [Using hooks](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/coding-agent/use-hooks)
+> · [Hooks configuration](https://docs.github.com/en/copilot/reference/hooks-configuration)
+
 GitHub Copilot hooks are available for the Cloud Agent (coding agent), Copilot CLI (GA February 2026), and VS Code (8-event preview). The system is command-only and repository-native.
 
 ## Hook Types

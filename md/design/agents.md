@@ -250,7 +250,7 @@ The input payload includes `tool_name`, `tool_input`, `mcp_context`, `session_id
 
 ## Kiro
 
-[Hooks reference](./agent-details/kiro-hooks.md)
+[Hooks reference](./agent-details/kiro.md)
 
 ### Hook registration
 
@@ -310,7 +310,7 @@ Unregistration deletes the `symposium.json` file.
 
 ## Codex CLI
 
-[Hooks reference](./agent-details/codex-cli-hooks.md)
+[Hooks reference](./agent-details/codex-cli.md)
 
 ### Hook registration
 
@@ -366,19 +366,28 @@ Input includes `session_id`, `cwd`, `hook_event_name`, `model`, `turn_id`, `tool
 
 ## OpenCode
 
-[Hooks reference](./agent-details/opencode-hooks.md)
+[Hooks reference](./agent-details/opencode.md)
 
 ### Hook registration
 
 **OpenCode does not support shell-command hooks.** Its extensibility is based on TypeScript/JavaScript plugins. `symposium` cannot register hooks for OpenCode.
 
-OpenCode is supported as a **skills-only** agent — `symposium sync` will install skill files in the vendor-neutral `.agents/skills/` path that OpenCode reads.
+### Supported events
+
+OpenCode's plugin system supports these events, but symposium does not currently bridge them:
+
+| OpenCode event | Symposium event | Description |
+|---|---|---|
+| `tool.execute.before` | pre-tool-use | Before a built-in tool runs. Can block by throwing Error, or mutate `output.args`. |
+| `tool.execute.after` | post-tool-use | After a built-in tool completes. |
+| `message.updated` | user-prompt-submit | Filtered to `role === "user"` messages. |
+| `session.created` | session-start | When a new session begins. |
 
 ---
 
 ## Goose
 
-[Hooks reference](./agent-details/goose-hooks.md)
+[Hooks reference](./agent-details/goose.md)
 
 ### Hook registration
 

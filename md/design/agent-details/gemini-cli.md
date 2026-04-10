@@ -1,5 +1,14 @@
 # Gemini CLI Hooks Reference
 
+> **Disclaimer:** This document reflects our current understanding of Gemini CLI's hook system.
+> It is a working reference for symposium development, not a substitute for the official docs.
+> Details may be outdated or incomplete — always consult the primary sources.
+>
+> **Primary sources:**
+> [Hooks reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/hooks/reference.md)
+> · [Extensions reference](https://github.com/google-gemini/gemini-cli/blob/main/docs/extensions/reference.md)
+> · [GitHub repo](https://github.com/google-gemini/gemini-cli)
+
 Gemini CLI's hook system (v0.26.0, January 2026) mirrors Claude Code's JSON-over-stdin contract and exit-code semantics. It adds model-level and tool-selection interception events unique to Gemini.
 
 ## Hook Types
