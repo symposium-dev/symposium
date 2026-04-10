@@ -62,7 +62,7 @@ pub struct HooksConfig {
     pub remind_format_policy: FormatReminderPolicy,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 pub enum FormatReminderPolicy {
     /// Reminder only sent once per session
     /// Todo: Make this configurable like once after N tool use.
