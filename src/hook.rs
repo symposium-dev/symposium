@@ -160,7 +160,7 @@ fn handle_session_start(sym: &Symposium, payload: &SessionStartPayload) -> HookO
 }
 
 /// Handle PostToolUse: detect and record skill activations.
-async fn handle_post_tool_use(sym: &Symposium, post: &PostToolUsePayload) -> HookOutput {
+pub async fn handle_post_tool_use(sym: &Symposium, post: &PostToolUsePayload) -> HookOutput {
     let Some(ref session_id) = post.session_id else {
         return HookOutput::empty();
     };
@@ -608,7 +608,6 @@ fn hooks_for_payload(
 
 #[cfg(test)]
 mod tests {
-    use crate::cargo_fmt::snapshot_rust_files;
     use crate::hook_schema::claude::{
         ClaudeCodeHookCommonPayload, ClaudeCodePreToolUseOutput, ClaudeCodePreToolUsePayload,
     };
@@ -617,7 +616,6 @@ mod tests {
 
     use super::*;
     use std::fs;
-    use std::time::Duration;
 
     use indoc::formatdoc;
 
@@ -746,24 +744,24 @@ mod tests {
     }
 
     #[tokio::test]
-   async fn builtin_post_tool_use_returns_empty_for_now() {
-     let tmp = tempfile::tempdir().unwrap();
-     let mut sym = Symposium::from_dir(tmp.path());
-     sym.config.hooks.remind_format_policy = crate::config::FormatReminderPolicy::Never;
-     let payload = HookPayload {
-         sub_payload: HookSubPayload::PostToolUse(PostToolUsePayload {
-             tool_name: "Bash".to_string(),
-             tool_input: serde_json::json!({"command": "ls"}),
-             tool_response: serde_json::json!({"stdout": "file.rs"}),
-             session_id: Some("test-session".to_string()),
-             cwd: Some("/tmp".to_string()),
-         }),
-         rest: serde_json::Map::new(),
-     };
-     let output = dispatch_builtin(&sym, &payload).await;
-     assert!(output.hook_specific_output.is_none());
-   }
-    
+    async fn builtin_post_tool_use_returns_empty_for_now() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut sym = Symposium::from_dir(tmp.path());
+        sym.config.hooks.remind_format_policy = crate::config::FormatReminderPolicy::Never;
+        let payload = HookPayload {
+            sub_payload: HookSubPayload::PostToolUse(PostToolUsePayload {
+                tool_name: "Bash".to_string(),
+                tool_input: serde_json::json!({"command": "ls"}),
+                tool_response: serde_json::json!({"stdout": "file.rs"}),
+                session_id: Some("test-session".to_string()),
+                cwd: Some("/tmp".to_string()),
+            }),
+            rest: serde_json::Map::new(),
+        };
+        let output = dispatch_builtin(&sym, &payload).await;
+        assert!(output.hook_specific_output.is_none());
+    }
+
     #[test]
     fn hook_output_serializes_with_additional_context() {
         let output =
@@ -1097,51 +1095,5 @@ mod tests {
         };
         let stderr_str = String::from_utf8_lossy(&stderr);
         assert!(stderr_str.contains("bad failure"));
-    }
-
-    #[tokio::test]
-    async fn handle_post_tool_use_sends_format_reminder() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-
-        // 1. Setup config with Always policy
-        let mut sym = Symposium::from_dir(root);
-        sym.config.hooks.remind_format_policy = crate::config::FormatReminderPolicy::Always;
-
-        // 2. Create an initial rust file and snapshot it
-        let rs_path = root.join("main.rs");
-        fs::write(
-            &rs_path,
-            b"fn main() -> Result<()> { println!(\"Rust is the best\"); Ok(()) }",
-        )
-        .unwrap();
-
-        let session_id = "test-session-fmt";
-        let mut session = SessionData::default();
-        session.rust_file_snapshot = snapshot_rust_files(root);
-        session_state::save_session(&sym, session_id, &session);
-
-        // 3. Modify the file to trigger a change
-        // Sleep briefly to ensure mtime changes.
-        std::thread::sleep(Duration::from_millis(15));
-        fs::write(&rs_path, b"// modified code").unwrap();
-
-        // 4. Simulate PostToolUse event (e.g., after a Bash command)
-        let payload = PostToolUsePayload {
-            tool_name: "Bash".to_string(),
-            tool_input: serde_json::json!({"command": "echo done"}),
-            tool_response: serde_json::json!({"exit_code": 0}),
-            session_id: Some(session_id.to_string()),
-            cwd: Some(root.to_str().unwrap().to_string()),
-        };
-
-        let output = handle_post_tool_use(&sym, &payload).await;
-
-        // 5. Verify the reminder is sent in the HookOutput
-        let specific = output.hook_specific_output.unwrap();
-        assert_eq!(specific.hook_event_name, "PostToolUse");
-        let context = specific.additional_context.unwrap();
-        assert!(context.contains("cargo fmt"));
-        assert!(context.contains("modified"));
     }
 }

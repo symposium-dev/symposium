@@ -8,7 +8,7 @@
 //! for loading before and saving after mutations.
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -35,12 +35,10 @@ pub struct SessionData {
 
     /// Snapshot of `.rs` file modification time taken at PreToolUse.
     /// Used to detect whether any Rust files changed during a tool use.
-    #[serde(default)]
-    pub rust_file_snapshot: HashMap<PathBuf, SystemTime>,
+    pub rust_file_snapshot: BTreeMap<PathBuf, SystemTime>,
 
     /// Whether the agent has already been reminded to run `cargo fmt`
     /// this session. The number or reminders sent depends on the configuration.
-    #[serde(default)]
     pub rust_fmt_reminder_sent: bool,
 }
 
