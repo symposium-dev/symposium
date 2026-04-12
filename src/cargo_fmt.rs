@@ -40,28 +40,6 @@ pub fn collect_rust_file_mtimes(dir: &Path, mtimes: &mut BTreeMap<PathBuf, Syste
     }
 }
 
-/// Check whether any `*.rs` files under `cwd` have changed compared to
-/// the snapshot stored in session state. Returns `true` if any file was
-/// added, removed, or modified.
-pub fn rust_files_changed_since(cwd: &Path, previous: &BTreeMap<PathBuf, SystemTime>) -> bool {
-    let current = snapshot_rust_files(cwd);
-
-    if current.len() != previous.len() {
-        return true;
-    }
-
-    // Any new or modified files?
-    for (path, mtime) in &current {
-        match previous.get(path) {
-            Some(prev) if prev != mtime => return true, // modified
-            None => return true,                        // new file
-            _ => {}
-        }
-    }
-
-    false
-}
-
 /// Called at `PostToolUse`. Returns a suggestion string if the agent should
 /// be reminded to run `cargo fmt`, or `None` if no reminder is needed.
 ///
