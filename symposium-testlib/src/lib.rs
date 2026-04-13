@@ -18,7 +18,7 @@ use symposium::output::Output;
 pub struct TestContext {
     pub sym: Symposium,
     /// The temporary directory (kept alive for the test's duration).
-    pub _tempdir: tempfile::TempDir,
+    pub tempdir: tempfile::TempDir,
     /// Root of the overlaid workspace (if a workspace fixture was included).
     pub workspace_root: Option<PathBuf>,
 }
@@ -168,7 +168,7 @@ pub fn with_fixture(fixtures: &[&str]) -> TestContext {
 
     TestContext {
         sym,
-        _tempdir: tempdir,
+        tempdir,
         workspace_root,
     }
 }

@@ -1,0 +1,85 @@
+//! Hook logic for reminding the agent to run `cargo fmt` after Rust files change.
+//!
+//! Rather than running the formatter directly, we inject a suggestion into the agent's context
+//! via `HookOutput`. The reminder is sent according to the configured `fmt-reminder` policy.
+
+use crate::{config::FormatReminderPolicy, session_state::SessionData};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    time::UNIX_EPOCH,
+};
+use walkdir::WalkDir;
+
+/// Snapshot the modification times of all `*.rs` files found recursively
+/// under `cwd`. Stored in session state at the end of each `PostToolUse`
+/// and compared at the start of the next one.
+pub fn snapshot_rust_files(cwd: &Path) -> BTreeMap<PathBuf, u128> {
+    let mut mtimes = BTreeMap::new();
+    collect_rust_file_mtimes(cwd, &mut mtimes);
+    mtimes
+}
+
+/// Walk `dir` recursively, collecting mtimes(modification times) of all `*.rs` files.
+pub fn collect_rust_file_mtimes(dir: &Path, mtimes: &mut BTreeMap<PathBuf, u128>) {
+    for entry in WalkDir::new(dir).into_iter().flat_map(|dir| dir.ok()) {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+            if let Ok(metadata) = path.metadata() {
+                if let Ok(modified) = metadata.modified() {
+                    let nanos = modified.duration_since(UNIX_EPOCH).unwrap().as_nanos();
+                    mtimes.insert(path.to_path_buf(), nanos);
+                }
+            }
+        }
+    }
+}
+
+/// Called at `PostToolUse`. Returns a suggestion string if the agent should
+/// be reminded to run `cargo fmt`, or `None` if no reminder is needed.
+///
+/// A reminder is sent when:
+///   - At least one `*.rs` file changed since the last `PostToolUse`, AND
+///   - The configured `fmt-reminder` policy allows it.
+///
+/// The session state is updated regardless — the snapshot is refreshed so
+/// subsequent tool uses compare against the latest state (unless the policy is Never).
+pub fn maybe_suggest_rust_fmt(
+    session: &mut SessionData,
+    cwd: &Path,
+    policy: &FormatReminderPolicy,
+) -> Option<String> {
+    if matches!(policy, FormatReminderPolicy::Once) && session.rust_fmt_reminder_sent {
+        return None;
+    }
+    if matches!(policy, FormatReminderPolicy::Never) {
+        return None;
+    }
+
+    let current = snapshot_rust_files(cwd);
+    if session.rust_file_snapshot == current {
+        return None;
+    }
+
+    session.rust_file_snapshot = current;
+
+    match policy {
+        // Reminder is sent at most once per session.
+        // TODO: make the threshold configurable (e.g. every N tool uses)
+        FormatReminderPolicy::Once => {
+            if session.rust_fmt_reminder_sent {
+                return None;
+            }
+            session.rust_fmt_reminder_sent = true;
+            Some(rust_fmt_suggestion_text())
+        }
+        FormatReminderPolicy::Always => Some(rust_fmt_suggestion_text()),
+        FormatReminderPolicy::Never => None,
+    }
+}
+
+pub fn rust_fmt_suggestion_text() -> String {
+    "One or more Rust source files were modified.\n\
+     Please run `cargo fmt` to keep the code consistently formatted."
+        .to_string()
+}

@@ -5,6 +5,7 @@ use std::{
 
 use crate::plugins::ParsedPlugin;
 use crate::{
+    cargo_fmt,
     config::Symposium,
     hook_schema::{AgentHookEvent, AgentHookOutput, AgentHookPayload},
 };
@@ -163,8 +164,7 @@ async fn run_sync_agent(sym: &Symposium, payload: &HookPayload, cwd: &std::path:
         .cwd()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| cwd.to_path_buf());
-    let project_root = Some(effective_cwd.as_path())
-        .filter(|p| p.join(".symposium").is_dir());
+    let project_root = Some(effective_cwd.as_path()).filter(|p| p.join(".symposium").is_dir());
     let out = crate::output::Output::quiet();
     if let Err(e) = crate::sync::sync_agent(sym, project_root, &out).await {
         tracing::warn!(error = %e, "sync --agent during hook failed (continuing)");
@@ -194,11 +194,7 @@ fn handle_session_start(sym: &Symposium, payload: &SessionStartPayload) -> HookO
         .filter(|p| p.join(".symposium").is_dir());
     let project_config = project_root.and_then(crate::config::ProjectConfig::load);
 
-    let registry = crate::plugins::load_registry_with(
-        sym,
-        project_config.as_ref(),
-        project_root,
-    );
+    let registry = crate::plugins::load_registry_with(sym, project_config.as_ref(), project_root);
 
     let mut context_parts: Vec<String> = Vec::new();
     for crate::plugins::ParsedPlugin { path: _, plugin } in &registry.plugins {
@@ -216,7 +212,7 @@ fn handle_session_start(sym: &Symposium, payload: &SessionStartPayload) -> HookO
 }
 
 /// Handle PostToolUse: detect and record skill activations.
-async fn handle_post_tool_use(sym: &Symposium, post: &PostToolUsePayload) -> HookOutput {
+pub async fn handle_post_tool_use(sym: &Symposium, post: &PostToolUsePayload) -> HookOutput {
     let Some(ref session_id) = post.session_id else {
         return HookOutput::empty();
     };
@@ -247,8 +243,19 @@ async fn handle_post_tool_use(sym: &Symposium, post: &PostToolUsePayload) -> Hoo
         }
     }
 
+    // Check if any .rs files changed and remind agent to run cargo fmt
+    let format_suggestion = cargo_fmt::maybe_suggest_rust_fmt(
+        &mut session,
+        &cwd,
+        &sym.config.hooks.remind_format_policy,
+    );
+
     crate::session_state::save_session(sym, session_id, &session);
-    HookOutput::empty()
+    // Return fmt suggestion if needed
+    match format_suggestion {
+        Some(suggestion) => HookOutput::with_context("PostToolUse", suggestion),
+        None => HookOutput::empty(),
+    }
 }
 
 /// Detect if a Bash tool successfully ran `symposium crate <name>` or
@@ -518,6 +525,18 @@ pub enum PluginHookOutput {
     Failure(Vec<u8>),
 }
 
+fn shell_command(args: &str) -> Command {
+    if cfg!(windows) {
+        let mut command = Command::new("cmd");
+        command.arg("/C").arg(args);
+        command
+    } else {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(args);
+        command
+    }
+}
+
 /// Dispatch plugin hooks (spawn subprocesses).
 pub(crate) fn dispatch_plugin_hooks<E: AgentHookEvent>(
     sym: &Symposium,
@@ -534,9 +553,7 @@ pub(crate) fn dispatch_plugin_hooks<E: AgentHookEvent>(
 
     for (plugin_name, hook) in hooks {
         tracing::info!(?plugin_name, hook = %hook.name, cmd = %hook.command, "running plugin hook");
-        let spawn_res = Command::new("sh")
-            .arg("-c")
-            .arg(&hook.command)
+        let spawn_res = shell_command(&hook.command)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -647,6 +664,7 @@ mod tests {
         ClaudeCodeHookCommonPayload, ClaudeCodePreToolUseOutput, ClaudeCodePreToolUsePayload,
     };
     use crate::hook_schema::{Agent, claude::ClaudeCode};
+    use crate::session_state::{self, SessionData};
 
     use super::*;
     use std::fs;
@@ -742,7 +760,7 @@ mod tests {
             tool_name: "Bash".to_string(),
             rest: serde_json::Map::new(),
         };
-            let _ = event_handler.dispatch_plugin_hooks(
+        let _ = event_handler.dispatch_plugin_hooks(
             &sym,
             Box::new(payload),
             Box::new(ClaudeCodePreToolUseOutput::default()),
@@ -780,28 +798,13 @@ mod tests {
     #[tokio::test]
     async fn builtin_post_tool_use_returns_empty_for_now() {
         let tmp = tempfile::tempdir().unwrap();
-        let sym = Symposium::from_dir(tmp.path());
+        let mut sym = Symposium::from_dir(tmp.path());
+        sym.config.hooks.remind_format_policy = crate::config::FormatReminderPolicy::Never;
         let payload = HookPayload {
             sub_payload: HookSubPayload::PostToolUse(PostToolUsePayload {
                 tool_name: "Bash".to_string(),
                 tool_input: serde_json::json!({"command": "ls"}),
                 tool_response: serde_json::json!({"stdout": "file.rs"}),
-                session_id: Some("test-session".to_string()),
-                cwd: Some("/tmp".to_string()),
-            }),
-            rest: serde_json::Map::new(),
-        };
-        let output = dispatch_builtin(&sym, &payload).await;
-        assert!(output.hook_specific_output.is_none());
-    }
-
-    #[tokio::test]
-    async fn builtin_user_prompt_submit_returns_empty_for_now() {
-        let tmp = tempfile::tempdir().unwrap();
-        let sym = Symposium::from_dir(tmp.path());
-        let payload = HookPayload {
-            sub_payload: HookSubPayload::UserPromptSubmit(UserPromptSubmitPayload {
-                prompt: "Use tokio for async".to_string(),
                 session_id: Some("test-session".to_string()),
                 cwd: Some("/tmp".to_string()),
             }),

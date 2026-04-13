@@ -12,6 +12,7 @@ pub mod plugins;
 pub mod start;
 pub mod sync;
 
+pub(crate) mod cargo_fmt;
 pub(crate) mod crate_sources;
 pub(crate) mod predicate;
 pub(crate) mod session_state;

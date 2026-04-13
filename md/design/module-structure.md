@@ -30,7 +30,11 @@ Given a `PluginRegistry` and workspace dependencies, this module does the actual
 
 ### `hook.rs` and `session_state.rs` — hook handling
 
-`hook.rs` handles the three hook events: `PostToolUse` (tracks which skills the agent has loaded), `UserPromptSubmit` (scans prompts for crate mentions and nudges about unloaded skills), and `PreToolUse` (dispatches to plugin-defined hook commands). `session_state.rs` persists per-session data (activations, nudge history, prompt count) as JSON files.
+`hook.rs` handles the three hook events: `PostToolUse` (tracks which skills the agent has loaded and reminds the agent to run `cargo fmt` when Rust files change), `UserPromptSubmit` (scans prompts for crate mentions and nudges about unloaded skills), and `PreToolUse` (dispatches to plugin-defined hook commands). `session_state.rs` persists per-session data (activations, nudge history, prompt count, Rust file snapshots) as JSON files.
+
+### `cargo_fmt.rs` — cargo fmt reminder
+
+Detects changes to `*.rs` files by comparing modification times against a snapshot stored in session state. When a change is detected, injects a suggestion into the agent's context to run `cargo fmt`. The reminder frequency is configurable via `fmt-reminder` under `[hooks]` in `config.toml`.
 
 ### `dispatch.rs` — shared CLI/MCP dispatch
 

@@ -7,8 +7,10 @@
 //! All operations are in-memory on `SessionData`; the caller is responsible
 //! for loading before and saving after mutations.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +31,14 @@ pub struct SessionData {
 
     /// Nudge history: crate name → prompt count at which the last nudge was sent.
     pub nudges: BTreeMap<String, i64>,
+
+    /// Snapshot of `.rs` file modification time taken at PreToolUse.
+    /// Used to detect whether any Rust files changed during a tool use.
+    pub rust_file_snapshot: BTreeMap<PathBuf, u128>,
+
+    /// Whether the agent has already been reminded to run `cargo fmt`
+    /// this session. The number or reminders sent depends on the configuration.
+    pub rust_fmt_reminder_sent: bool,
 }
 
 impl SessionData {
