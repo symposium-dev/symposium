@@ -1,5 +1,14 @@
 # Goose Hooks Reference
 
+> **Disclaimer:** This document reflects our current understanding of Goose's extensibility surface.
+> It is a working reference for symposium development, not a substitute for the official docs.
+> Details may be outdated or incomplete — always consult the primary sources.
+>
+> **Primary sources:**
+> [Extensions](https://block.github.io/goose/docs/guides/using-extensions)
+> · [Configuration](https://block.github.io/goose/docs/guides/config-files)
+> · [GitHub repo](https://github.com/block/goose)
+
 **Goose does not implement lifecycle hooks.** There are no shell-command or programmatic interception points for tool execution, session start/stop, or prompt submission. No hooks.json equivalent. No JSON stdin/stdout protocol.
 
 ## What Goose Offers Instead

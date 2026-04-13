@@ -1,5 +1,13 @@
 # Codex CLI Hooks Reference
 
+> **Disclaimer:** This document reflects our current understanding of Codex CLI's hook system.
+> It is a working reference for symposium development, not a substitute for the official docs.
+> Details may be outdated or incomplete — always consult the primary sources.
+>
+> **Primary sources:**
+> [Hooks](https://developers.openai.com/codex/hooks)
+> · [GitHub repo](https://github.com/openai/codex)
+
 OpenAI's Codex CLI implements a shell-command hook system configured in `hooks.json`. It is **experimental** (disabled by default, not available on Windows) and first shipped in v0.114 (March 2026).
 
 ## Enabling

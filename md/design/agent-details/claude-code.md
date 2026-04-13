@@ -1,5 +1,14 @@
 # Claude Code Hooks Reference
 
+> **Disclaimer:** This document reflects our current understanding of Claude Code's hook system.
+> It is a working reference for symposium development, not a substitute for the official docs.
+> Details may be outdated or incomplete — always consult the primary sources.
+>
+> **Primary sources:**
+> [Hooks reference](https://docs.anthropic.com/en/docs/claude-code/hooks)
+> · [Hooks guide](https://docs.anthropic.com/en/docs/claude-code/hooks-guide)
+> · [Extending Claude Code](https://docs.anthropic.com/en/docs/claude-code/features-overview)
+
 Hooks are user-defined shell commands, HTTP endpoints, or LLM prompts that execute at specific points in the agent lifecycle. They provide deterministic control — actions always happen rather than relying on the model.
 
 ## Hook Types

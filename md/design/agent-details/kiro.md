@@ -1,5 +1,14 @@
 # Kiro Hooks Reference
 
+> **Disclaimer:** This document reflects our current understanding of Kiro's hook system.
+> It is a working reference for symposium development, not a substitute for the official docs.
+> Details may be outdated or incomplete — always consult the primary sources.
+>
+> **Primary sources:**
+> [CLI hooks](https://kiro.dev/docs/cli/hooks/)
+> · [Agent configuration reference](https://kiro.dev/docs/cli/custom-agents/configuration-reference)
+> · [IDE hooks](https://kiro.dev/docs/hooks/)
+
 Kiro is Amazon's AI coding agent available as an IDE (VS Code fork) and CLI. Both have hook systems but they differ in configuration format, trigger types, and capabilities.
 
 ## Kiro CLI Agent Definition

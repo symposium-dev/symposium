@@ -1,5 +1,10 @@
 # Agent details
 
+> **Disclaimer:** These documents reflect our current understanding of each agent's hook system
+> and extensibility surface. They are maintained as working references for symposium development,
+> not as a substitute for each project's official documentation. Details may be outdated or
+> incomplete — always consult the primary sources linked in each agent's page.
+
 For each agent it supports, symposium needs to know:
 
 1. **Hook registration** — where and how to write config so the agent calls `symposium hook`
@@ -13,13 +18,13 @@ The tables below summarize the answers for each agent. Individual agent pages co
 
 | Agent | Project config path | Global config path | Format |
 |---|---|---|---|
-| [Claude Code](./claude-code-hooks.md) | `.claude/settings.json` | `~/.claude/settings.json` | JSON, `hooks` key with matcher groups |
-| [GitHub Copilot](./copilot-hooks.md) | `.github/hooks/*.json` | `~/.copilot/config.json` | JSON, `version: 1` with `hooks` key |
-| [Gemini CLI](./gemini-cli-hooks.md) | `.gemini/settings.json` | `~/.gemini/settings.json` | JSON, `hooks` key with matcher groups |
-| [Codex CLI](./codex-cli-hooks.md) | `.codex/hooks.json` | `~/.codex/hooks.json` | JSON, `hooks` key with matcher groups |
-| [Kiro](./kiro-hooks.md) | `.kiro/agents/*.json` | `~/.kiro/agents/*.json` | JSON, `hooks` key in agent config |
-| [OpenCode](./opencode-hooks.md) | `.opencode/plugins/` | `~/.config/opencode/plugins/` | JS/TS plugins (not shell hooks) |
-| [Goose](./goose-hooks.md) | *(no hooks)* | *(no hooks)* | N/A |
+| [Claude Code](./claude-code.md) | `.claude/settings.json` | `~/.claude/settings.json` | JSON, `hooks` key with matcher groups |
+| [GitHub Copilot](./copilot.md) | `.github/hooks/*.json` | `~/.copilot/config.json` | JSON, `version: 1` with `hooks` key |
+| [Gemini CLI](./gemini-cli.md) | `.gemini/settings.json` | `~/.gemini/settings.json` | JSON, `hooks` key with matcher groups |
+| [Codex CLI](./codex-cli.md) | `.codex/hooks.json` | `~/.codex/hooks.json` | JSON, `hooks` key with matcher groups |
+| [Kiro](./kiro.md) | `.kiro/agents/*.json` | `~/.kiro/agents/*.json` | JSON, `hooks` key in agent config |
+| [OpenCode](./opencode.md) | `.opencode/plugins/` | `~/.config/opencode/plugins/` | JS/TS plugins (not shell hooks) |
+| [Goose](./goose.md) | *(no hooks)* | *(no hooks)* | N/A |
 
 ### Command field
 

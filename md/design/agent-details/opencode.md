@@ -1,6 +1,16 @@
-# OpenCode Hooks Reference
+# OpenCode Plugin System Reference
+
+> **Disclaimer:** This document reflects our current understanding of OpenCode's plugin/hook system.
+> It is a working reference for symposium development, not a substitute for the official docs.
+> Details may be outdated or incomplete — always consult the primary sources.
+>
+> **Primary sources:**
+> [Plugins](https://opencode.ai/docs/plugins/)
+> · [GitHub repo](https://github.com/anomalyco/opencode)
 
 OpenCode's extensibility centers on TypeScript/JavaScript plugins, not shell commands. Plugins are async functions that receive a context object and return a hooks object. A secondary experimental system supports shell-command hooks in `opencode.json`.
+
+Symposium does not currently integrate with OpenCode's hook system. OpenCode is supported as a skills-only agent.
 
 ## Plugin Locations and Load Order
 
@@ -87,7 +97,7 @@ Mutate `output.args` to change tool arguments before execution.
 
 ## Limitations
 
-- **MCP tool calls do NOT trigger `tool.execute.before` or `tool.execute.after`** (issue #2319).
+- **MCP tool calls do NOT trigger `tool.execute.before` or `tool.execute.after`**.
 - Plugin-level syntax errors prevent loading entirely.
 - `tool.execute.before` errors block the tool.
 - No explicit timeout documentation for plugin hooks.
