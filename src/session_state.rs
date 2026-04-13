@@ -10,7 +10,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
-    time::SystemTime,
 };
 
 use serde::{Deserialize, Serialize};
@@ -35,7 +34,7 @@ pub struct SessionData {
 
     /// Snapshot of `.rs` file modification time taken at PreToolUse.
     /// Used to detect whether any Rust files changed during a tool use.
-    pub rust_file_snapshot: BTreeMap<PathBuf, SystemTime>,
+    pub rust_file_snapshot: BTreeMap<PathBuf, u128>,
 
     /// Whether the agent has already been reminded to run `cargo fmt`
     /// this session. The number or reminders sent depends on the configuration.

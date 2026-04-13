@@ -58,7 +58,11 @@ pub struct HooksConfig {
     pub nudge_interval: i64,
 
     /// Remind an agent to format the code after a tool use
-    #[serde(default = "default_reminder_policy", rename = "fmt-reminder", skip_serializing_if = "FormatReminderPolicy::is_default")]
+    #[serde(
+        default = "default_reminder_policy",
+        rename = "fmt-reminder",
+        skip_serializing_if = "FormatReminderPolicy::is_default"
+    )]
     pub remind_format_policy: FormatReminderPolicy,
 }
 
@@ -66,10 +70,13 @@ pub struct HooksConfig {
 pub enum FormatReminderPolicy {
     /// Reminder only sent once per session
     /// Todo: Make this configurable like once after N tool use.
+    #[serde(rename = "once")]
     Once,
     /// Reminder sent after every tool use
+    #[serde(rename = "always")]
     Always,
     /// Reminder never sent at all
+    #[serde(rename = "never")]
     Never,
 }
 

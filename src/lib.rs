@@ -1,5 +1,4 @@
 pub mod agents;
-pub mod cargo_fmt;
 pub mod cli;
 pub mod config;
 pub mod dispatch;
@@ -10,11 +9,12 @@ pub mod init;
 pub mod mcp;
 pub mod output;
 pub mod plugins;
-pub mod session_state;
 pub mod start;
 pub mod sync;
 
+pub(crate) mod cargo_fmt;
 pub(crate) mod crate_sources;
 pub(crate) mod predicate;
+pub(crate) mod session_state;
 pub(crate) mod skills;
 pub(crate) mod workspace;
