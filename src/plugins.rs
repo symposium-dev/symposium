@@ -5,8 +5,19 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Symposium;
-use crate::git_source::UpdateLevel;
+use crate::distribution::Distribution;
 use crate::hook::HookEvent;
+
+/// Controls how aggressively plugin sources are updated.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum UpdateLevel {
+    /// Debounced: skip the API check if fetched recently.
+    None,
+    /// Always check freshness via API, but only download if stale.
+    Check,
+    /// Always re-download regardless of staleness.
+    Fetch,
+}
 
 /// Source declaration for remote plugin artifacts.
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
@@ -115,7 +126,8 @@ pub struct Hook {
     pub name: String,
     pub event: HookEvent,
     pub matcher: Option<String>,
-    pub command: String,
+    pub distribution: Option<Distribution>,
+    pub command: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -343,7 +355,7 @@ fn resolve_one_source(
             return Some(base_dir.join(p));
         }
     } else if let Some(ref git_url) = source.git {
-        match crate::git_source::parse_github_url(git_url) {
+        match crate::distribution::git::parse_github_url(git_url) {
             Ok(gh) => return Some(cache_base.join(gh.cache_key())),
             Err(e) => {
                 tracing::warn!(source = %source.name, error = %e, "bad plugin source URL");
@@ -359,10 +371,10 @@ async fn fetch_plugin_source(
     git_url: &str,
     update: UpdateLevel,
 ) -> Result<PathBuf> {
-    use crate::git_source;
+    use crate::distribution::git;
 
-    let source = git_source::parse_github_url(git_url)?;
-    let cache_mgr = git_source::PluginCacheManager::new(sym, "plugin-sources");
+    let source = git::parse_github_url(git_url)?;
+    let cache_mgr = git::GitCacheManager::new(sym, "plugin-sources");
     cache_mgr.get_or_fetch(&source, git_url, update).await
 }
 

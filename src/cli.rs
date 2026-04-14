@@ -26,7 +26,7 @@ use crate::sync;
 pub struct Cli {
     /// Control plugin source update behavior (none, check, fetch)
     #[arg(long, global = true, default_value = "none")]
-    pub update: crate::git_source::UpdateLevel,
+    pub update: crate::plugins::UpdateLevel,
 
     /// Suppress status output
     #[arg(short, long, global = true)]

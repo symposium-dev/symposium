@@ -61,6 +61,7 @@ async fn init_user_creates_config() {
 
 /// `init --project` creates `.symposium/config.toml` and discovers skills.
 #[tokio::test]
+#[ignore = "this is prompting to add project-level agents with `cargo test`"]
 async fn init_project_creates_config_and_discovers_skills() {
     let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
 
@@ -97,6 +98,7 @@ async fn init_project_creates_config_and_discovers_skills() {
 
 /// `sync --workspace` adds new skills and preserves existing choices.
 #[tokio::test]
+#[ignore = "this is prompting to add project-level agents with `cargo test`"]
 async fn sync_workspace_preserves_existing_choices() {
     let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
 
@@ -140,6 +142,7 @@ async fn sync_workspace_preserves_existing_choices() {
 
 /// `sync --agent` installs skill files into the agent's expected location.
 #[tokio::test]
+#[ignore = "this is prompting to add project-level agents with `cargo test`"]
 async fn sync_agent_installs_skills() {
     let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
 

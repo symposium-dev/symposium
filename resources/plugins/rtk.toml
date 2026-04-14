@@ -1,0 +1,15 @@
+name = "rtk"
+
+[installation]
+
+
+[[hooks]]
+name = "rewrite"
+event = "PreToolUse"
+matcher = "Bash"
+
+[hooks.distribution]
+source = "git"
+repo = "https://github.com/rtk-ai/rtk.git"
+commit = "master"
+path = "hooks/claude/rtk-rewrite.sh"
