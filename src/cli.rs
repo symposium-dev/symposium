@@ -56,6 +56,10 @@ pub enum Commands {
         /// Remove an agent. Repeatable.
         #[arg(long = "remove-agent")]
         remove_agents: Vec<String>,
+
+        /// Disable default plugins
+        #[arg(long = "no-default-plugins", default_value_t = false)]
+        no_default_plugins: bool,
     },
 
     /// Synchronize configuration with workspace dependencies and agent
@@ -139,10 +143,12 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
             project,
             agents,
             remove_agents,
+            no_default_plugins,
         } => {
             let opts = InitOpts {
                 agents,
                 remove_agents,
+                no_default_plugins,
             };
             if user && !project {
                 init::init_user(sym, out, &opts).await

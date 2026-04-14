@@ -129,6 +129,7 @@ pub struct Hook {
     pub agent: Option<HookAgent>,
     pub matcher: Option<String>,
     pub distribution: Option<Distribution>,
+    #[serde(default)]
     pub requirements: Vec<InstallationSource>,
     pub command: Option<String>,
 }

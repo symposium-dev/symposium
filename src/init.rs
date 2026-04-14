@@ -10,6 +10,8 @@ use crate::agents::Agent;
 use crate::config::{AgentEntry, ProjectConfig, Symposium};
 use crate::output::{Output, display_path};
 
+const RTK_PLUGIN: &str = include_str!("../resources/plugins/rtk.toml");
+
 /// Options that can be provided on the command line to skip interactive prompts.
 #[derive(Debug, Default)]
 pub struct InitOpts {
@@ -17,6 +19,8 @@ pub struct InitOpts {
     pub agents: Vec<String>,
     /// Agent names to remove via `--remove-agent`.
     pub remove_agents: Vec<String>,
+    /// Whether to add default plugins.
+    pub no_default_plugins: bool,
 }
 
 /// Whether we can prompt the user interactively.
@@ -89,6 +93,10 @@ fn resolve_project_agents(opts: &InitOpts, existing: &[AgentEntry]) -> Result<Ve
 /// `~/.symposium/config.toml`, and registers global hooks.
 pub async fn init_user(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<()> {
     out.println("Setting up symposium for your user account.\n");
+
+    if !opts.no_default_plugins {
+        tokio::fs::write(sym.config_dir().join("plugins").join("rtk.toml"), RTK_PLUGIN).await?;
+    }
 
     let agents = resolve_user_agents(opts, &sym.config.agents)?;
 
