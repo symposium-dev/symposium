@@ -135,6 +135,7 @@ pub struct Installation {
 pub struct Hook {
     pub name: String,
     pub event: HookEvent,
+    pub agent: Option<HookAgent>,
     pub matcher: Option<String>,
     pub distribution: Option<Distribution>,
     pub command: Option<String>,

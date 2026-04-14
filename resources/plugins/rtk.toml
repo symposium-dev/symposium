@@ -1,8 +1,5 @@
 name = "rtk"
 
-[installation]
-
-
 [[hooks]]
 name = "rewrite"
 event = "PreToolUse"
