@@ -334,13 +334,7 @@ async fn resolve_cargo(sym: &Symposium, cargo: &CargoDistribution) -> Result<Res
 
     // Check if we need to install
     if !binary_path.exists() {
-        install_cargo_crate(
-            &cargo.crate_name,
-            &version,
-            &binary_name,
-            cache_dir,
-        )
-        .await?;
+        install_cargo_crate(&cargo.crate_name, &version, &binary_name, cache_dir).await?;
     }
 
     Ok(ResolvedPath {

@@ -67,7 +67,7 @@ pub async fn run(
             }
         };
 
-        let plugin_output = handler.dispatch_plugin_hooks(sym, payload, hook_output);
+        let plugin_output = handler.dispatch_plugin_hooks(sym, agent, payload, hook_output);
 
         match plugin_output {
             PluginHookOutput::Success(plugin_json) => {
@@ -516,6 +516,7 @@ pub enum PluginHookOutput {
 /// Dispatch plugin hooks (spawn subprocesses).
 pub(crate) fn dispatch_plugin_hooks<E: AgentHookEvent>(
     sym: &Symposium,
+    agent: HookAgent,
     event: &E,
     payload: &E::Payload,
     prior_output: E::Output,
@@ -523,7 +524,7 @@ pub(crate) fn dispatch_plugin_hooks<E: AgentHookEvent>(
     tracing::info!(?payload, "hook invoked (builtin)");
 
     let plugins = crate::plugins::load_all_plugins(sym);
-    let hooks = hooks_for_payload(&plugins, &payload.to_hook_payload());
+    let hooks = hooks_for_payload(&plugins, agent, &payload.to_hook_payload());
 
     let mut output_json = prior_output;
 
@@ -638,6 +639,7 @@ pub fn merge(a: &mut serde_json::Value, b: serde_json::Value) {
 /// Return all hooks (with their plugin name) that match the event in `payload`.
 fn hooks_for_payload(
     plugins: &[crate::plugins::ParsedPlugin],
+    agent: HookAgent,
     payload: &HookPayload,
 ) -> Vec<(String, crate::plugins::Hook)> {
     tracing::debug!(?payload);
@@ -648,6 +650,9 @@ fn hooks_for_payload(
         let name = plugin.name.clone();
         for hook in &plugin.hooks {
             tracing::debug!(?hook);
+            if hook.agent.map_or(false, |only_agent| only_agent != agent) {
+                continue;
+            }
             if hook.event != payload.sub_payload.hook_event() {
                 continue;
             }
@@ -758,8 +763,7 @@ mod tests {
         fs::write(plugins_dir.join("plugin-one.toml"), p1).expect("write plugin1");
         fs::write(plugins_dir.join("plugin-two.toml"), p2).expect("write plugin2");
 
-        let agent = ClaudeCode;
-        let event_handler = agent.event(HookEvent::PreToolUse).unwrap();
+        let event_handler = ClaudeCode.event(HookEvent::PreToolUse).unwrap();
 
         // Run the hook event via dispatch_plugin_hooks.
         let payload = ClaudeCodePreToolUsePayload {
@@ -771,6 +775,7 @@ mod tests {
         };
         let _ = event_handler.dispatch_plugin_hooks(
             &sym,
+            HookAgent::Claude,
             Box::new(payload),
             Box::new(ClaudeCodePreToolUseOutput::default()),
         );
@@ -1089,8 +1094,7 @@ mod tests {
         fs::write(plugins_dir.join("plugin-json-a.toml"), p1).expect("write p1");
         fs::write(plugins_dir.join("plugin-json-b.toml"), p2).expect("write p2");
 
-        let agent = ClaudeCode;
-        let event_handler = agent.event(HookEvent::PreToolUse).unwrap();
+        let event_handler = ClaudeCode.event(HookEvent::PreToolUse).unwrap();
 
         // Run the hook event via dispatch_plugin_hooks.
         let payload = ClaudeCodePreToolUsePayload {
@@ -1102,6 +1106,7 @@ mod tests {
         };
         let out = event_handler.dispatch_plugin_hooks(
             &sym,
+            HookAgent::Claude,
             Box::new(payload),
             Box::new(ClaudeCodePreToolUseOutput::default()),
         );
@@ -1148,8 +1153,7 @@ mod tests {
         fs::write(plugins_dir.join("plugin-good.toml"), good).expect("write good");
         fs::write(plugins_dir.join("plugin-bad.toml"), bad).expect("write bad");
 
-        let agent = ClaudeCode;
-        let event_handler = agent.event(HookEvent::PreToolUse).unwrap();
+        let event_handler = ClaudeCode.event(HookEvent::PreToolUse).unwrap();
 
         // Run the hook event via dispatch_plugin_hooks.
         let payload = ClaudeCodePreToolUsePayload {
@@ -1161,6 +1165,7 @@ mod tests {
         };
         let out = event_handler.dispatch_plugin_hooks(
             &sym,
+            HookAgent::Claude,
             Box::new(payload),
             Box::new(ClaudeCodePreToolUseOutput::default()),
         );
