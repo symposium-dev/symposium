@@ -1,5 +1,3 @@
-//! Component source types - how to obtain and run a component
-
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -66,7 +64,7 @@ pub struct ResolvedPath {
     pub args: Vec<String>,
 }
 
-fn platform_binary_exe(binary_name: &str) -> String {
+pub(crate) fn platform_binary_exe(binary_name: &str) -> String {
     if cfg!(windows) {
         format!("{}.exe", binary_name)
     } else {
@@ -160,18 +158,19 @@ pub async fn query_crate_binaries(
 }
 
 /// Install a crate using cargo binstall (fast) or cargo install (fallback)
-async fn install_cargo_crate(
+pub(crate) async fn install_cargo_crate(
     crate_name: &str,
     version: &str,
-    binary_name: &str,
+    binary_name: Option<String>,
     cache_dir: PathBuf,
-) -> Result<PathBuf> {
+    path: Option<String>,
+    git: Option<String>,
+) -> Result<()> {
     let crate_name = crate_name.to_string();
     let version = version.to_string();
-    let binary_name = binary_name.to_string();
 
     tokio::task::spawn_blocking(move || {
-        install_cargo_crate_sync(&crate_name, &version, &binary_name, &cache_dir)
+        install_cargo_crate_sync(&crate_name, &version, binary_name, &cache_dir, path, git)
     })
     .await
     .context("Cargo install task panicked")?
@@ -181,9 +180,11 @@ async fn install_cargo_crate(
 fn install_cargo_crate_sync(
     crate_name: &str,
     version: &str,
-    binary_name: &str,
+    binary_name: Option<String>,
     cache_dir: &Path,
-) -> Result<PathBuf> {
+    path: Option<String>,
+    git: Option<String>,
+) -> Result<()> {
     use std::fs;
     use std::process::Command;
 
@@ -205,49 +206,60 @@ fn install_cargo_crate_sync(
 
     let crate_spec = format!("{}@{}", crate_name, version);
 
-    // Try cargo binstall first (faster, uses prebuilt binaries)
-    tracing::info!("Attempting cargo binstall for {}", crate_spec);
-    let binstall_result = Command::new("cargo")
-        .args([
-            "binstall",
-            "--no-confirm",
-            "--root",
-            cache_dir.to_str().unwrap(),
-            &crate_spec,
-        ])
-        .output();
+    // `cargo binstall` does not support `--path` (technically, there is manifest-path, but that's a bit different)
+    if path.is_none() {
+        // Try cargo binstall first (faster, uses prebuilt binaries)
+        tracing::info!("Attempting cargo binstall for {}", crate_spec);
+        let mut args = vec!["binstall", "--no-confirm", "--root"];
+        if let Some(git) = &git {
+            args.push("--git");
+            args.push(git);
+        }
+        args.extend([cache_dir.to_str().unwrap(), &crate_spec]);
+        let binstall_result = Command::new("cargo").args(args).output();
 
-    let binary_path = cache_dir
-        .join("bin")
-        .join(platform_binary_exe(&binary_name));
+        let binary_path = binary_name
+            .as_ref()
+            .map(|bin| cache_dir.join("bin").join(platform_binary_exe(bin)));
 
-    match binstall_result {
-        Ok(output) if output.status.success() => {
-            tracing::info!("Successfully installed {} via cargo binstall", crate_spec);
-            if binary_path.exists() {
-                return Ok(binary_path);
+        match binstall_result {
+            Ok(output) if output.status.success() => {
+                tracing::info!("Successfully installed {} via cargo binstall", crate_spec);
+                if binary_path.is_none() {
+                    return Ok(());
+                }
+                if let Some(bin) = binary_path.as_ref()
+                    && bin.exists()
+                {
+                    return Ok(());
+                }
             }
-        }
-        Ok(output) => {
-            tracing::debug!(
-                "cargo binstall failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        Err(e) => {
-            tracing::debug!("cargo binstall not available: {}", e);
+            Ok(output) => {
+                tracing::debug!(
+                    "cargo binstall failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            Err(e) => {
+                tracing::debug!("cargo binstall not available: {}", e);
+            }
         }
     }
 
     // Fall back to cargo install
     tracing::info!("Falling back to cargo install for {}", crate_spec);
+    let mut args = vec!["install", "--root"];
+    if let Some(path) = &path {
+        args.push("--path");
+        args.push(path);
+    }
+    if let Some(git) = &git {
+        args.push("--git");
+        args.push(git);
+    }
+    args.extend([cache_dir.to_str().unwrap(), &crate_spec]);
     let install_result = Command::new("cargo")
-        .args([
-            "install",
-            "--root",
-            cache_dir.to_str().unwrap(),
-            &crate_spec,
-        ])
+        .args(args)
         .output()
         .context("Failed to run cargo install")?;
 
@@ -260,16 +272,7 @@ fn install_cargo_crate_sync(
     }
 
     tracing::info!("Successfully installed {} via cargo install", crate_spec);
-
-    if binary_path.exists() {
-        Ok(binary_path)
-    } else {
-        bail!(
-            "Binary '{}' not found after installing {}",
-            binary_name,
-            crate_spec
-        )
-    }
+    Ok(())
 }
 
 /// Get the current platform key for binary distribution lookup
@@ -334,7 +337,15 @@ async fn resolve_cargo(sym: &Symposium, cargo: &CargoDistribution) -> Result<Res
 
     // Check if we need to install
     if !binary_path.exists() {
-        install_cargo_crate(&cargo.crate_name, &version, &binary_name, cache_dir).await?;
+        install_cargo_crate(
+            &cargo.crate_name,
+            &version,
+            Some(binary_name),
+            cache_dir,
+            None,
+            None,
+        )
+        .await?;
     }
 
     Ok(ResolvedPath {

@@ -3,12 +3,12 @@ use std::{
     process::{Command, ExitCode, Stdio},
 };
 
-use crate::distribution::resolve_distribution;
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
     plugins::ParsedPlugin,
 };
+use crate::{distribution::resolve_distribution, installation::install_from_source};
 
 // Re-export hook schema types for convenience.
 pub use crate::hook_schema::{HookAgent, HookEvent};
@@ -206,6 +206,12 @@ pub fn dispatch_plugin_hooks(
 
     for (plugin_name, hook) in hooks {
         tracing::info!(?plugin_name, hook = %hook.name, cmd = ?hook.command, format = ?hook.format, "running plugin hook");
+
+        for requirement in &hook.requirements {
+            if let Err(e) = runtime.block_on(install_from_source(sym, requirement)) {
+                tracing::error!(?requirement, error = %e, "failed to install hook requirement");
+            }
+        }
 
         // Determine stdin for the plugin based on its declared format
         let hook_agent = hook.format.as_agent();

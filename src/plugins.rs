@@ -8,6 +8,7 @@ use crate::config::Symposium;
 use crate::distribution::Distribution;
 use crate::hook::HookEvent;
 use crate::hook_schema::HookAgent;
+use crate::installation::InstallationSource;
 
 use sacp::schema::McpServer;
 
@@ -138,6 +139,8 @@ pub struct Hook {
     pub agent: Option<HookAgent>,
     pub matcher: Option<String>,
     pub distribution: Option<Distribution>,
+    #[serde(default)]
+    pub requirements: Vec<InstallationSource>,
     pub command: Option<String>,
     #[serde(default)]
     pub format: HookFormat,
