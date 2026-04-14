@@ -52,6 +52,10 @@ pub enum Commands {
         /// Where to install agent hooks: global (~/) or project (./).
         #[arg(long = "hook-scope")]
         hook_scope: Option<crate::config::HookScope>,
+
+        /// Disable default plugins
+        #[arg(long = "no-default-plugins", default_value_t = false)]
+        no_default_plugins: bool,
     },
 
     /// Synchronize skills with workspace dependencies
@@ -123,11 +127,13 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
             agents,
             remove_agents,
             hook_scope,
+            no_default_plugins,
         } => {
             let opts = InitOpts {
                 agents,
                 remove_agents,
                 hook_scope,
+                no_default_plugins,
             };
             init::init(sym, out, &opts).await
         }
