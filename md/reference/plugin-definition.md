@@ -72,8 +72,113 @@ Each `[[hooks]]` entry declares a hook that responds to agent events.
 | `name` | string | Descriptive name for the hook (used in logs). |
 | `event` | string | Event type to match (e.g., `PreToolUse`). |
 | `matcher` | string | Which tool invocations to match (e.g., `Bash`). Omit to match all. |
-| `command` | string | Command to run when the hook fires. Resolved relative to the plugin directory. |
+| `command` | string (optional) | Command to run when the hook fires. Resolved relative to the plugin directory. If `distribution` is provided, `command` should not be specified and is ignored. |
+| `distribution` | object (optional) | Describe how to obtain and run the hook as a distributable artifact. |
+| `requirements` | array of objects (optional) | A list of installation sources that must be present before running the hook. |
+| `agent` | string (optional) | Restrict the hook to a specific agent (e.g., `claude`, `copilot`, `gemini`, `kiro`). |
 | `format` | string | Wire format for hook input/output. One of: `symposium` (default), `claude`, `codex`, `copilot`, `gemini`, `kiro`. Controls how the hook receives input and returns output. |
+
+### Hook distributions
+
+Hooks may be provided as a local `command` (the historical behavior) or as a `distribution` object. The `distribution` object must include a `source` discriminator and the fields listed for that source below.
+
+#### `cargo`
+
+- TOML example:
+
+```toml
+distribution = { source = "cargo", crate = "ripgrep", version = "13.0.0", binary = "rg", args = ["--version"] }
+```
+
+- Fields:
+  - `source` (string, required) — must be `"cargo"`.
+  - `crate` (string, required) — crate name on crates.io.
+  - `version` (string, optional) — semver or exact version; if omitted the latest stable is used.
+  - `binary` (string, optional) — explicit binary name to run; if omitted the crate must expose a single binary.
+  - `args` (array of strings, optional) — args passed to the binary.
+  - `path` (string, optional) — use `cargo install --path <path>` when present.
+  - `git` (string, optional) — use `cargo install --git <git>` when present.
+
+- Semantics: when `path` or `git` is present Symposium installs from source using cargo. Otherwise it resolves the version (querying crates.io when needed), attempts to install a prebuilt binary (via `cargo binstall` if available) and falls back to `cargo install`. Installed binaries are cached under Symposium's binary cache (e.g., `binaries/<crate>/<version>/bin/`). The hook executes the installed binary with any configured `args`.
+
+#### `local`
+
+- TOML example:
+
+```toml
+distribution = { source = "local", command = "./scripts/check-widget.sh", args = ["--flag"] }
+```
+
+- Fields:
+  - `source` (string, required) — must be `"local"`.
+  - `command` (string, required) — path to executable (resolved relative to the plugin directory, or absolute).
+  - `args` (array of strings, optional)
+
+- Semantics: the command is executed directly from the resolved path with the specified `args`.
+
+#### `github`
+
+- TOML example:
+
+```toml
+distribution = { source = "github", url = "https://github.com/org/repo", path = "bin/agent-hook", args = ["--help"] }
+```
+
+- Fields:
+  - `source` (string, required) — must be `"github"`.
+  - `url` (string, required) — GitHub repository or tree URL identifying the source repo.
+  - `path` (string, required) — path inside the repo to the executable file.
+  - `args` (array of strings, optional)
+
+- Semantics: Symposium fetches and caches the repository (or the referenced subtree), verifies the `path` exists in the cache, and runs the file at the cached path with any `args`.
+
+#### `binary`
+
+- TOML example (per-platform inline tables; keys that include `-` may be quoted):
+
+```toml
+distribution = {
+  source = "binary",
+  ["linux-x86_64"] = { archive = "https://example.com/linux.tar.gz", cmd = "./hook", args = ["--serve"] },
+  ["darwin-aarch64"] = { archive = "https://example.com/macos.tar.gz", cmd = "./hook" }
+}
+```
+
+- Fields (per-platform table):
+  - key: platform string (e.g., `linux-x86_64`, `darwin-aarch64`, `windows-x86_64`).
+  - `archive` (string, required) — URL to an archive containing the binary (tar.gz, zip).
+  - `cmd` (string, required) — path within the archive to the executable to run (may include `./`).
+  - `args` (array of strings, optional)
+
+- Semantics: Symposium selects the entry matching the current platform (see platform key mapping), downloads and caches the archive, extracts it into the cache, ensures executable permissions, and runs `cmd` with `args`.
+
+Note: if both a top-level `command` and a `distribution` are present on a hook, Symposium prefers `distribution` and ignores `command` (a warning is logged).
+
+### Requirements (installation sources)
+
+Hooks may declare a `requirements` array. Each entry describes an installation source Symposium will attempt to satisfy before executing the hook. Install attempts are best-effort: Symposium logs installation errors and continues with hook dispatch rather than failing the entire event.
+
+#### `cargo`
+
+- TOML example:
+
+```toml
+requirements = [
+  { type = "cargo", crate = "my-tool", version = "0.2.1", binary = "mytool" },
+  { type = "cargo", crate = "other", git = "https://github.com/org/other" }
+]
+```
+
+- Fields:
+  - `type` (string, required) — must be `"cargo"`.
+  - `crate` (string, required) — crate name on crates.io.
+  - `version` (string, optional) — version to install; if omitted the latest stable is used.
+  - `binary` (string, optional) — expected binary name (used for cache lookup / verification).
+  - `path` (string, optional) — if present, install using `cargo install --path <path>`.
+  - `git` (string, optional) — if present, install using `cargo install --git <git>`.
+
+- Semantics: for registry installs (no `git`/`path`) Symposium resolves the version (when needed), tries to obtain a prebuilt binary (via `cargo binstall` if available) and falls back to `cargo install`. For `git` or `path` installs it uses `cargo install` with the matching flag. Installed artifacts are cached under Symposium's binary cache. Installation failures are logged and do not abort hook dispatch.
+
 
 ### Supported hook events
 

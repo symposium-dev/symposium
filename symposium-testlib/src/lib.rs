@@ -535,6 +535,10 @@ fn configured_test_agents() -> Vec<TestAgent> {
         test_agents: Vec<String>,
     }
 
+    if std::env::var("SYMPOSIUM_ENABLE_AGENT_TESTING").is_err() {
+        return vec![];
+    }
+
     // If env var is set, use only that agent.
     if let Some(agent) = test_agent() {
         return vec![agent];

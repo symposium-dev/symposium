@@ -4,16 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 
-/// Controls how aggressively plugin sources are updated.
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-pub enum UpdateLevel {
-    /// Debounced: skip the API check if fetched recently.
-    None,
-    /// Always check freshness via API, but only download if stale.
-    Check,
-    /// Always re-download regardless of staleness.
-    Fetch,
-}
+use crate::plugins::UpdateLevel;
 
 /// Minimum interval between freshness checks for cached sources.
 const DEBOUNCE_DURATION: std::time::Duration = std::time::Duration::from_secs(60);
@@ -186,12 +177,12 @@ pub struct PluginCacheMeta {
 const CACHE_META_FILENAME: &str = ".symposium-cache-meta.json";
 
 /// Manages downloading and caching of git-sourced plugin artifacts.
-pub struct PluginCacheManager {
+pub struct GitCacheManager {
     cache_dir: PathBuf,
     client: GitHubClient,
 }
 
-impl PluginCacheManager {
+impl GitCacheManager {
     /// Create a cache manager for the given subdirectory under the cache root.
     ///
     /// Use `"plugins"` for individual skill git sources,

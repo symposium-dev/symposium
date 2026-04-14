@@ -199,10 +199,10 @@ pub(crate) fn prune_nested_skills(paths: &mut Vec<PathBuf>) {
 
 /// Fetch a skill group's git source, returning the cached directory path.
 async fn fetch_skill_source(sym: &Symposium, git_url: &str) -> Result<PathBuf> {
-    let source = crate::git_source::parse_github_url(git_url)?;
-    let cache_mgr = crate::git_source::PluginCacheManager::new(sym, "plugins");
+    let source = crate::distribution::git::parse_github_url(git_url)?;
+    let cache_mgr = crate::distribution::git::GitCacheManager::new(sym, "plugins");
     cache_mgr
-        .get_or_fetch(&source, git_url, crate::git_source::UpdateLevel::None)
+        .get_or_fetch(&source, git_url, crate::plugins::UpdateLevel::None)
         .await
 }
 

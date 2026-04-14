@@ -36,7 +36,16 @@ source.path = "skills/v1"
 [[hooks]]
 name = "validate-usage"
 event = "PreToolUse"
+# simple local script
 command = "./scripts/validate.sh"
+
+[[hooks]]
+name = "cargo-installer-hook"
+event = "PreToolUse"
+# use a cargo-distributed binary (example)
+distribution = { source = "cargo", crate = "ripgrep", version = "13.0.0", binary = "rg" }
+# install a helper tool before running the hook
+requirements = [ { type = "cargo", crate = "my-tool", version = "0.2.1" } ]
 
 # MCP servers for tool integration
 [[mcp-servers]]
