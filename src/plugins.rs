@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Symposium;
 use crate::distribution::Distribution;
 use crate::hook::{HookAgent, HookEvent};
+use crate::installation::InstallationSource;
 
 /// Controls how aggressively plugin sources are updated.
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -128,6 +129,7 @@ pub struct Hook {
     pub agent: Option<HookAgent>,
     pub matcher: Option<String>,
     pub distribution: Option<Distribution>,
+    pub requirements: Vec<InstallationSource>,
     pub command: Option<String>,
 }
 

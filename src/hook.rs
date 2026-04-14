@@ -6,6 +6,7 @@ use std::{
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookEvent, AgentHookOutput, AgentHookPayload},
+    installation::install_from_source,
 };
 use crate::{distribution::resolve_distribution, plugins::ParsedPlugin};
 
@@ -532,6 +533,12 @@ pub(crate) fn dispatch_plugin_hooks<E: AgentHookEvent>(
 
     for (plugin_name, hook) in hooks {
         tracing::info!(?plugin_name, hook = %hook.name, "running plugin hook");
+
+        for requirement in &hook.requirements {
+            if let Err(e) = runtime.block_on(install_from_source(sym, requirement)) {
+                tracing::error!(?requirement, error = %e, "failed to install hook requirement");
+            }
+        }
         let spawn_res = match (&hook.distribution, &hook.command) {
             (Some(distribution), command @ _) => {
                 if command.is_some() {

@@ -13,6 +13,7 @@ pub mod sync;
 
 pub(crate) mod crate_sources;
 pub(crate) mod distribution;
+pub(crate) mod installation;
 pub(crate) mod predicate;
 pub(crate) mod session_state;
 pub(crate) mod skills;
