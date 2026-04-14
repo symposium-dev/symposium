@@ -3,6 +3,7 @@ use std::{
     process::{Command, ExitCode, Stdio},
 };
 
+use crate::distribution::resolve_distribution;
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
@@ -201,8 +202,10 @@ pub fn dispatch_plugin_hooks(
 
     let mut output = prior_output;
 
+    let runtime = tokio::runtime::Handle::current();
+
     for (plugin_name, hook) in hooks {
-        tracing::info!(?plugin_name, hook = %hook.name, cmd = %hook.command, format = ?hook.format, "running plugin hook");
+        tracing::info!(?plugin_name, hook = %hook.name, cmd = ?hook.command, format = ?hook.format, "running plugin hook");
 
         // Determine stdin for the plugin based on its declared format
         let hook_agent = hook.format.as_agent();
@@ -232,13 +235,43 @@ pub fn dispatch_plugin_hooks(
             }
         };
 
-        let spawn_res = Command::new("sh")
-            .arg("-c")
-            .arg(&hook.command)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
+        let spawn_res = match (&hook.distribution, &hook.command) {
+            (Some(distribution), command @ _) => {
+                if command.is_some() {
+                    tracing::warn!(
+                        "Both distribution and command are specified. Ignoring command."
+                    );
+                    continue;
+                }
+                let resolved = runtime.block_on(resolve_distribution(sym, distribution));
+                let resolved_path = match resolved {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::error!(error = %e, "failed to resolve hook distribution");
+                        continue;
+                    }
+                };
+
+                Command::new("sh")
+                    .arg(&resolved_path.path)
+                    .args(&resolved_path.args)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+            }
+            (None, Some(command)) => Command::new("sh")
+                .arg("-c")
+                .arg(command)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn(),
+            (None, None) => {
+                tracing::error!("No distribution or command specified for hook. Skipping.");
+                continue;
+            }
+        };
 
         match spawn_res {
             Ok(mut child) => {

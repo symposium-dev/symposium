@@ -386,6 +386,7 @@ impl TestContext {
             .expect("fixtures dir has parent")
             .join("agent_harness/run_scenario.py");
 
+        dbg!(std::env::vars().collect::<Vec<_>>());
         // Build CARGO_BIN_DIR from the binary path cargo gives us.
         let bin_exe = std::env::var("CARGO_BIN_EXE_cargo-agents")
             .expect("CARGO_BIN_EXE_cargo-agents must be set (run via cargo test)");
@@ -533,6 +534,10 @@ fn configured_test_agents() -> Vec<TestAgent> {
     struct TestAgentsConfig {
         #[serde(rename = "test-agents")]
         test_agents: Vec<String>,
+    }
+
+    if std::env::var("SYMPOSIUM_ENABLE_AGENT_TESTING").is_err() {
+        return vec![];
     }
 
     // If env var is set, use only that agent.
