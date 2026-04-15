@@ -2,53 +2,95 @@
 
 Integration tests live in `tests/` and use the `symposium-testlib` crate for composable, isolated test environments.
 
-## Fixtures
+## Writing a test
 
-Test fixtures are directories under `tests/fixtures/` that provide fragments of a Symposium environment:
+### 1. Pick your fixtures
 
-- **`plugins0/`** — a `dot-symposium/` directory containing a `config.toml` and a local plugin with a serde skill. No network access needed.
-- **`workspace0/`** — a minimal `Cargo.toml` workspace with tokio and serde dependencies.
-
-Fixtures are designed to compose. `with_fixture(&["plugins0", "workspace0"])` copies both into a single temp directory, giving you a complete environment with config, plugins, and a workspace.
-
-## `TestContext`
-
-`with_fixture()` returns a `TestContext` wrapping an isolated `Symposium` instance:
+Look at `tests/fixtures/` and see if an existing fixture covers your scenario. Fixtures are composable — you can layer multiple together:
 
 ```rust
+// Just config + plugins
+let ctx = with_fixture(&["plugins0"]);
+
+// Config + plugins + a Cargo workspace with serde/tokio deps
 let ctx = with_fixture(&["plugins0", "workspace0"]);
+
+// A plugin that captures stdin to $TEST_DIR/captured.json in claude format
+let ctx = with_fixture(&["capture-claude0"]);
 ```
 
-The harness scans the copied files for `config.toml` (becomes the Symposium config directory) and `Cargo.toml` (becomes the workspace root). It panics if multiple of either are found.
+If nothing fits, create a new directory under `tests/fixtures/`. Use `dot-symposium/` for config and plugin files. The harness discovers `config.toml` and `Cargo.toml` by filename.
 
-`TestContext` provides three methods:
+### 2. Write the test
 
-- **`invoke(&["start"])`** — parses args via clap (same as the MCP server would) and routes through the shared dispatch layer. Returns the output string.
-- **`invoke_hook(payload)`** — calls the built-in hook logic directly with a typed payload (e.g., `PostToolUsePayload`, `PreToolUsePayload`). Returns a `HookOutput`.
-- **`normalize_paths(&output)`** — replaces temp directory paths with `$CONFIG_DIR` so snapshots are stable across runs.
-
-## Snapshot testing
-
-Tests use the `expect-test` crate for inline snapshot assertions:
+A minimal test that sends a hook event and checks the output:
 
 ```rust
+use symposium::hook::HookEvent;
+use symposium::hook_schema::HookAgent;
+use symposium_testlib::with_fixture;
+
 #[tokio::test]
-async fn start() {
+async fn my_test() {
     let ctx = with_fixture(&["plugins0"]);
-    let output = ctx.invoke(&["start"]).await.unwrap();
-    let output = ctx.normalize_paths(&output);
-    expect![[r#"
-        ...expected output...
-    "#]].assert_eq(&output);
+
+    let output = ctx
+        .invoke_hook(
+            HookAgent::Claude,
+            HookEvent::PreToolUse,
+            &serde_json::json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": "Bash",
+                "tool_input": {"command": "ls"},
+                "cwd": "/tmp",
+            }),
+        )
+        .await
+        .unwrap();
+
+    let v: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    // assert on v...
 }
 ```
 
-When output changes, run with `UPDATE_EXPECT=1` to update the inline snapshots in place:
+### 3. Available operations
 
-```bash
-UPDATE_EXPECT=1 cargo test
+`TestContext` provides:
+
+- **`invoke_hook(agent, event, &payload)`** — the full hook pipeline (`parse → builtin → plugins → serialize`). Same code path as `symposium hook <agent> <event>`. The payload is any `impl Serialize` matching the agent's wire format. Returns agent wire-format output bytes.
+
+- **`invoke(&["start"])`** — runs an MCP dispatch command (same as the MCP server). Returns the output string.
+
+- **`symposium(&["sync", "--agent"])`** — runs a CLI command against the test context.
+
+- **`normalize_paths(&output)`** — replaces temp directory paths with `$CONFIG_DIR` for stable snapshots.
+
+### 4. Snapshot testing
+
+Use `expect-test` for inline snapshots:
+
+```rust
+use expect_test::expect;
+
+expect![[r#"
+    ...expected output...
+"#]].assert_eq(&serde_json::to_string_pretty(&v).unwrap());
 ```
 
-## Adding a new fixture
+Run `UPDATE_EXPECT=1 cargo test` to auto-fill or update snapshots.
 
-Create a directory under `tests/fixtures/` with whatever files your test needs. Convention: use `dot-symposium/` for config/plugin files (the harness discovers `config.toml` by filename, not by directory name). Compose it with existing fixtures via `with_fixture(&["your-fixture", "workspace0"])`.
+## Fixtures
+
+Browse the full set at [`tests/fixtures/`](https://github.com/symposium-dev/symposium/tree/main/tests/fixtures). A few examples:
+
+- **`plugins0/`** — config + a local plugin with a serde skill and session-start context. The baseline for most tests.
+- **`capture-claude0/`** — a plugin that captures stdin to `$TEST_DIR/captured.json` in Claude wire format. There's one per agent, plus `capture-symposium0/` for canonical format.
+
+Fixtures compose: `with_fixture(&["plugins0", "workspace0"])` layers both into one tempdir.
+
+### Variable expansion
+
+Text files (`.toml`, `.md`, `.json`, `.txt`, `.ts`, `.js`) have variables expanded when copied:
+
+- **`$TEST_DIR`** — the tempdir root. Use for paths that resolve at test time (e.g., `command = "cat > $TEST_DIR/captured.json"`).
+- **`$BINARY`** — path to the `symposium` binary (`CARGO_BIN_EXE_symposium`).
