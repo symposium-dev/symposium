@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::hook_schema::{
-    Agent, AgentHookEvent, AgentHookOutput, AgentHookInput, erase_agent_hook_event, symposium,
+    Agent, AgentHookEvent, AgentHookInput, AgentHookOutput, erase_agent_hook_event, symposium,
 };
 
 pub struct Codex;
