@@ -1,123 +1,96 @@
-use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    hook::{HookOutput, HookPayload, HookSubPayload, PreToolUsePayload, merge},
-    hook_schema::{
-        Agent, AgentHookEvent, AgentHookOutput, AgentHookPayload, erase_agent_hook_event,
-    },
+use crate::hook_schema::{
+    Agent, AgentHookEvent, AgentHookOutput, AgentHookInput, erase_agent_hook_event, symposium,
 };
 
 pub struct Gemini;
 impl Agent for Gemini {
     fn event(&self, event: super::HookEvent) -> Option<Box<dyn super::ErasedAgentHookEvent>> {
-        match event {
-            super::HookEvent::PreToolUse => Some(erase_agent_hook_event(GeminiPreToolUseEvent)),
-            _ => None,
+        Some(match event {
+            super::HookEvent::PreToolUse => erase_agent_hook_event(GeminiPreToolUseEvent),
+            super::HookEvent::PostToolUse => erase_agent_hook_event(GeminiPostToolUseEvent),
+            super::HookEvent::UserPromptSubmit => {
+                erase_agent_hook_event(GeminiUserPromptSubmitEvent)
+            }
+            super::HookEvent::SessionStart => erase_agent_hook_event(GeminiSessionStartEvent),
+        })
+    }
+}
+
+macro_rules! gemini_event {
+    ($event:ident, $input:ident, $output:ident) => {
+        pub struct $event;
+        impl AgentHookEvent for $event {
+            type Input = $input;
+            type Output = $output;
         }
-    }
+    };
 }
-pub struct GeminiPreToolUseEvent;
-impl AgentHookEvent for GeminiPreToolUseEvent {
-    type Payload = GeminiBeforeToolPayload;
-    type Output = GeminiBeforeToolUseOutput;
 
-    fn merge_outputs(first: Self::Output, second: Self::Output) -> Self::Output {
-        let mut first = serde_json::to_value(first).unwrap();
-        let second = serde_json::to_value(second).unwrap();
-        merge(&mut first, second);
-        serde_json::from_value(first).unwrap()
-    }
+gemini_event!(
+    GeminiPreToolUseEvent,
+    GeminiPreToolUseInput,
+    GeminiPreToolUseOutput
+);
+gemini_event!(
+    GeminiPostToolUseEvent,
+    GeminiPostToolUseInput,
+    GeminiPostToolUseOutput
+);
+gemini_event!(
+    GeminiUserPromptSubmitEvent,
+    GeminiUserPromptSubmitInput,
+    GeminiUserPromptSubmitOutput
+);
+gemini_event!(
+    GeminiSessionStartEvent,
+    GeminiSessionStartInput,
+    GeminiSessionStartOutput
+);
+
+fn gemini_hook_output_from_symposium(
+    event_name: &str,
+    event: &symposium::OutputEvent,
+) -> Option<serde_json::Value> {
+    let ctx = event.additional_context()?;
+    Some(serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": event_name,
+            "additionalContext": ctx,
+        }
+    }))
 }
+
+// ── PreToolUse (BeforeTool) ───────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GeminiHookCommonPayload {
-    pub(crate) hook_event_name: String,
+pub struct GeminiPreToolUseInput {
+    pub hook_event_name: String,
+    pub tool_name: String,
     #[serde(default)]
-    pub(crate) session_id: Option<String>,
-    #[serde(default)]
-    pub(crate) cwd: Option<String>,
-    #[serde(default)]
-    pub(crate) transcript_path: Option<String>,
-    #[serde(default)]
-    pub(crate) timestamp: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GeminiBeforeToolPayload {
-    #[serde(flatten)]
-    pub common_payload: GeminiHookCommonPayload,
-    pub(crate) tool_name: String,
-    pub(crate) tool_input: serde_json::Value,
+    pub tool_input: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) mcp_context: Option<serde_json::Value>,
+    pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) original_request_name: Option<String>,
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_context: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_request_name: Option<String>,
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
 
-impl AgentHookPayload for GeminiBeforeToolPayload {
-    fn parse_payload(payload: &str) -> anyhow::Result<Self> {
-        Ok(serde_json::from_str(payload)?)
-    }
-
-    fn to_hook_payload(&self) -> HookPayload {
-        let sub_payload = HookSubPayload::PreToolUse(PreToolUsePayload {
-            tool_name: self.tool_name.clone(),
-        });
-        // Forward Gemini fields to the internal HookPayload.rest so plugin
-        // hooks can access `tool_input`, `mcp_context`, and other metadata.
-        let mut rest = self.rest.clone();
-        rest.insert("tool_input".to_string(), self.tool_input.clone());
-        if let Some(ref mcp) = self.mcp_context {
-            rest.insert("mcp_context".to_string(), mcp.clone());
-        }
-        if let Some(ref name) = self.original_request_name {
-            rest.insert(
-                "original_request_name".to_string(),
-                serde_json::Value::String(name.clone()),
-            );
-        }
-        if let Some(ref s) = self.common_payload.session_id {
-            rest.insert(
-                "session_id".to_string(),
-                serde_json::Value::String(s.clone()),
-            );
-        }
-        if let Some(ref c) = self.common_payload.cwd {
-            rest.insert("cwd".to_string(), serde_json::Value::String(c.clone()));
-        }
-        if let Some(ref t) = self.common_payload.transcript_path {
-            rest.insert(
-                "transcript_path".to_string(),
-                serde_json::Value::String(t.clone()),
-            );
-        }
-        if let Some(ref ts) = self.common_payload.timestamp {
-            rest.insert(
-                "timestamp".to_string(),
-                serde_json::Value::String(ts.clone()),
-            );
-        }
-
-        HookPayload { sub_payload, rest }
-    }
-
-    fn to_string(&self) -> anyhow::Result<String> {
-        serde_json::to_string(self).map_err(Into::into)
-    }
-
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
-        self
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GeminiBeforeToolUseOutput {
-    #[serde(rename = "decision", skip_serializing_if = "Option::is_none")]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiPreToolUseOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub decision: Option<String>,
-    #[serde(rename = "reason", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(rename = "systemMessage", skip_serializing_if = "Option::is_none")]
     pub system_message: Option<String>,
@@ -128,68 +101,375 @@ pub struct GeminiBeforeToolUseOutput {
     #[serde(rename = "stopReason", skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
     #[serde(rename = "hookSpecificOutput", skip_serializing_if = "Option::is_none")]
-    pub hook_specific_output: Option<InnerHookSpecificOutput>,
+    pub hook_specific_output: Option<GeminiPreToolUseHookOutput>,
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InnerHookSpecificOutput {
+pub struct GeminiPreToolUseHookOutput {
     #[serde(rename = "hookEventName")]
     pub hook_event_name: String,
     #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
     pub additional_context: Option<String>,
-    #[serde(rename = "tool_input", skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_input: Option<serde_json::Value>,
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
 
-impl Default for GeminiBeforeToolUseOutput {
-    fn default() -> Self {
+impl AgentHookInput for GeminiPreToolUseInput {
+    fn parse_input(payload: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(payload)?)
+    }
+    fn to_symposium(&self) -> symposium::InputEvent {
+        symposium::InputEvent::PreToolUse(symposium::PreToolUseInput {
+            tool_name: self.tool_name.clone(),
+            tool_input: self.tool_input.clone(),
+            session_id: self.session_id.clone(),
+            cwd: self.cwd.clone(),
+        })
+    }
+    fn from_symposium(event: &symposium::InputEvent) -> Self {
+        let symposium::InputEvent::PreToolUse(p) = event else {
+            panic!("wrong event type")
+        };
         Self {
-            decision: None,
-            reason: None,
-            system_message: None,
-            suppress_output: None,
-            continue_: None,
-            stop_reason: None,
-            hook_specific_output: Some(InnerHookSpecificOutput {
-                hook_event_name: "BeforeTool".to_string(),
-                additional_context: None,
-                tool_input: None,
-                rest: serde_json::Map::new(),
-            }),
+            hook_event_name: "BeforeTool".into(),
+            tool_name: p.tool_name.clone(),
+            tool_input: p.tool_input.clone(),
+            session_id: p.session_id.clone(),
+            cwd: p.cwd.clone(),
+            transcript_path: None,
+            timestamp: None,
+            mcp_context: None,
+            original_request_name: None,
             rest: serde_json::Map::new(),
         }
     }
+    fn to_string(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self).map_err(Into::into)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
 }
 
-impl AgentHookOutput for GeminiBeforeToolUseOutput {
-    fn parse_output(output: &[u8]) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
+impl AgentHookOutput for GeminiPreToolUseOutput {
+    fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
+        if output.is_empty() {
+            return Ok(Self::default());
+        }
         Ok(serde_json::from_slice(output)?)
     }
-
-    fn from_hook_output(payload: &HookOutput) -> anyhow::Result<Self> {
-        let Some(hook_specific_output) = &payload.hook_specific_output else {
-            return Err(anyhow!("missing hook specific output"));
-        };
-        if hook_specific_output.hook_event_name != "BeforeTool" {
-            return Err(anyhow!("unexpected hook event name"));
+    fn from_symposium(event: &symposium::OutputEvent) -> Self {
+        match gemini_hook_output_from_symposium("BeforeTool", event) {
+            Some(v) => serde_json::from_value(v).unwrap_or_default(),
+            None => Self::default(),
         }
-
-        // Convert the entire HookOutput to JSON and deserialize into the Gemini output
-        let value = serde_json::to_value(payload).unwrap();
-        Ok(serde_json::from_value(value).unwrap())
     }
-
+    fn to_symposium(&self) -> symposium::OutputEvent {
+        let h = self.hook_specific_output.as_ref();
+        symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput {
+            additional_context: h.and_then(|h| h.additional_context.clone()),
+            updated_input: h.and_then(|h| h.tool_input.clone()),
+        })
+    }
     fn to_hook_output(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap()
     }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
 
+// ── PostToolUse (AfterTool) ───────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiPostToolUseInput {
+    pub hook_event_name: String,
+    pub tool_name: String,
+    #[serde(default)]
+    pub tool_input: serde_json::Value,
+    #[serde(default)]
+    pub tool_response: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiPostToolUseOutput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(rename = "hookSpecificOutput", skip_serializing_if = "Option::is_none")]
+    pub hook_specific_output: Option<GeminiPostToolUseHookOutput>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiPostToolUseHookOutput {
+    #[serde(rename = "hookEventName")]
+    pub hook_event_name: String,
+    #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+impl AgentHookInput for GeminiPostToolUseInput {
+    fn parse_input(payload: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(payload)?)
+    }
+    fn to_symposium(&self) -> symposium::InputEvent {
+        symposium::InputEvent::PostToolUse(symposium::PostToolUseInput {
+            tool_name: self.tool_name.clone(),
+            tool_input: self.tool_input.clone(),
+            tool_response: self.tool_response.clone(),
+            session_id: self.session_id.clone(),
+            cwd: self.cwd.clone(),
+        })
+    }
+    fn from_symposium(event: &symposium::InputEvent) -> Self {
+        let symposium::InputEvent::PostToolUse(p) = event else {
+            panic!("wrong event type")
+        };
+        Self {
+            hook_event_name: "AfterTool".into(),
+            tool_name: p.tool_name.clone(),
+            tool_input: p.tool_input.clone(),
+            tool_response: p.tool_response.clone(),
+            session_id: p.session_id.clone(),
+            cwd: p.cwd.clone(),
+            transcript_path: None,
+            timestamp: None,
+            rest: serde_json::Map::new(),
+        }
+    }
+    fn to_string(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self).map_err(Into::into)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+impl AgentHookOutput for GeminiPostToolUseOutput {
+    fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
+        if output.is_empty() {
+            return Ok(Self::default());
+        }
+        Ok(serde_json::from_slice(output)?)
+    }
+    fn from_symposium(event: &symposium::OutputEvent) -> Self {
+        match gemini_hook_output_from_symposium("AfterTool", event) {
+            Some(v) => serde_json::from_value(v).unwrap_or_default(),
+            None => Self::default(),
+        }
+    }
+    fn to_symposium(&self) -> symposium::OutputEvent {
+        symposium::OutputEvent::PostToolUse(symposium::PostToolUseOutput {
+            additional_context: self
+                .hook_specific_output
+                .as_ref()
+                .and_then(|h| h.additional_context.clone()),
+        })
+    }
+    fn to_hook_output(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+// ── UserPromptSubmit ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiUserPromptSubmitInput {
+    pub hook_event_name: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiUserPromptSubmitOutput {
+    #[serde(rename = "hookSpecificOutput", skip_serializing_if = "Option::is_none")]
+    pub hook_specific_output: Option<GeminiUserPromptSubmitHookOutput>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiUserPromptSubmitHookOutput {
+    #[serde(rename = "hookEventName")]
+    pub hook_event_name: String,
+    #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+impl AgentHookInput for GeminiUserPromptSubmitInput {
+    fn parse_input(payload: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(payload)?)
+    }
+    fn to_symposium(&self) -> symposium::InputEvent {
+        symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput {
+            prompt: self.prompt.clone(),
+            session_id: self.session_id.clone(),
+            cwd: self.cwd.clone(),
+        })
+    }
+    fn from_symposium(event: &symposium::InputEvent) -> Self {
+        let symposium::InputEvent::UserPromptSubmit(p) = event else {
+            panic!("wrong event type")
+        };
+        Self {
+            hook_event_name: "UserPromptSubmit".into(),
+            prompt: p.prompt.clone(),
+            session_id: p.session_id.clone(),
+            cwd: p.cwd.clone(),
+            rest: serde_json::Map::new(),
+        }
+    }
+    fn to_string(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self).map_err(Into::into)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+impl AgentHookOutput for GeminiUserPromptSubmitOutput {
+    fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
+        if output.is_empty() {
+            return Ok(Self::default());
+        }
+        Ok(serde_json::from_slice(output)?)
+    }
+    fn from_symposium(event: &symposium::OutputEvent) -> Self {
+        match gemini_hook_output_from_symposium("UserPromptSubmit", event) {
+            Some(v) => serde_json::from_value(v).unwrap_or_default(),
+            None => Self::default(),
+        }
+    }
+    fn to_symposium(&self) -> symposium::OutputEvent {
+        symposium::OutputEvent::UserPromptSubmit(symposium::UserPromptSubmitOutput {
+            additional_context: self
+                .hook_specific_output
+                .as_ref()
+                .and_then(|h| h.additional_context.clone()),
+        })
+    }
+    fn to_hook_output(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+// ── SessionStart ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiSessionStartInput {
+    pub hook_event_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GeminiSessionStartOutput {
+    #[serde(rename = "hookSpecificOutput", skip_serializing_if = "Option::is_none")]
+    pub hook_specific_output: Option<GeminiSessionStartHookOutput>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GeminiSessionStartHookOutput {
+    #[serde(rename = "hookEventName")]
+    pub hook_event_name: String,
+    #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+impl AgentHookInput for GeminiSessionStartInput {
+    fn parse_input(payload: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(payload)?)
+    }
+    fn to_symposium(&self) -> symposium::InputEvent {
+        symposium::InputEvent::SessionStart(symposium::SessionStartInput {
+            session_id: self.session_id.clone(),
+            cwd: self.cwd.clone(),
+        })
+    }
+    fn from_symposium(event: &symposium::InputEvent) -> Self {
+        let symposium::InputEvent::SessionStart(p) = event else {
+            panic!("wrong event type")
+        };
+        Self {
+            hook_event_name: "SessionStart".into(),
+            session_id: p.session_id.clone(),
+            cwd: p.cwd.clone(),
+            rest: serde_json::Map::new(),
+        }
+    }
+    fn to_string(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self).map_err(Into::into)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+impl AgentHookOutput for GeminiSessionStartOutput {
+    fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
+        if output.is_empty() {
+            return Ok(Self::default());
+        }
+        Ok(serde_json::from_slice(output)?)
+    }
+    fn from_symposium(event: &symposium::OutputEvent) -> Self {
+        match gemini_hook_output_from_symposium("SessionStart", event) {
+            Some(v) => serde_json::from_value(v).unwrap_or_default(),
+            None => Self::default(),
+        }
+    }
+    fn to_symposium(&self) -> symposium::OutputEvent {
+        symposium::OutputEvent::SessionStart(symposium::SessionStartOutput {
+            additional_context: self
+                .hook_specific_output
+                .as_ref()
+                .and_then(|h| h.additional_context.clone()),
+        })
+    }
+    fn to_hook_output(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
     }

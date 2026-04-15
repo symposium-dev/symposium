@@ -199,3 +199,24 @@ impl OutputEvent {
         }
     }
 }
+
+// ── AgentHookInput for InputEvent ────────────────────────────────────
+// Allows symposium-format plugins to receive canonical InputEvent JSON.
+
+impl super::AgentHookInput for InputEvent {
+    fn parse_input(payload: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(payload)?)
+    }
+    fn to_symposium(&self) -> InputEvent {
+        self.clone()
+    }
+    fn from_symposium(event: &InputEvent) -> Self {
+        event.clone()
+    }
+    fn to_string(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self).map_err(Into::into)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}

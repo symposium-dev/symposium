@@ -1,10 +1,9 @@
 use expect_test::expect;
-use symposium::hook::{PostToolUsePayload, UserPromptSubmitPayload};
+use symposium::hook::HookEvent;
+use symposium::hook_schema::HookAgent;
 
 #[tokio::test]
 async fn nudges_about_available_skill() {
-    // plugins0 has a standalone serde skill; workspace0 has serde as a dep.
-    // The nudge fires because serde is both in the workspace and has a matching skill.
     let ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
     let cwd = ctx
         .workspace_root
@@ -13,16 +12,21 @@ async fn nudges_about_available_skill() {
         .to_string_lossy()
         .to_string();
     let output = ctx
-        .invoke_hook(UserPromptSubmitPayload {
-            prompt: "I need to use `serde`".to_string(),
-            session_id: Some("s1".to_string()),
-            cwd: Some(cwd),
-        })
-        .await;
-    let ctx_text = output
-        .hook_specific_output
-        .as_ref()
-        .and_then(|h| h.additional_context.as_deref())
+        .invoke_hook(
+            HookAgent::Claude,
+            HookEvent::UserPromptSubmit,
+            &serde_json::json!({
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "I need to use `serde`",
+                "session_id": "s1",
+                "cwd": cwd,
+            }),
+        )
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let ctx_text = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
         .unwrap_or("");
     assert!(
         ctx_text.contains("serde"),
@@ -37,8 +41,6 @@ async fn nudges_about_available_skill() {
 
 #[tokio::test]
 async fn activation_suppresses_nudge() {
-    // After activating a crate via post-tool-use, a subsequent prompt mention
-    // should NOT nudge about that crate.
     let ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
     let cwd = ctx
         .workspace_root
@@ -48,22 +50,35 @@ async fn activation_suppresses_nudge() {
         .to_string();
 
     // First: record activation via PostToolUse
-    ctx.invoke_hook(PostToolUsePayload {
-        tool_name: "Bash".to_string(),
-        tool_input: serde_json::json!({"command": "symposium crate serde"}),
-        tool_response: serde_json::json!({"exit_code": 0}),
-        session_id: Some("s1".to_string()),
-        cwd: Some(cwd.clone()),
-    })
-    .await;
+    ctx.invoke_hook(
+        HookAgent::Claude,
+        HookEvent::PostToolUse,
+        &serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Bash",
+            "tool_input": {"command": "symposium crate serde"},
+            "tool_response": {"exit_code": 0},
+            "session_id": "s1",
+            "cwd": cwd,
+        }),
+    )
+    .await
+    .unwrap();
 
     // Second: mention serde in a prompt — should not nudge since already activated
     let output = ctx
-        .invoke_hook(UserPromptSubmitPayload {
-            prompt: "I need to use `serde` for serialization".to_string(),
-            session_id: Some("s1".to_string()),
-            cwd: Some(cwd),
-        })
-        .await;
-    assert!(output.hook_specific_output.is_none());
+        .invoke_hook(
+            HookAgent::Claude,
+            HookEvent::UserPromptSubmit,
+            &serde_json::json!({
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "I need to use `serde` for serialization",
+                "session_id": "s1",
+                "cwd": cwd,
+            }),
+        )
+        .await
+        .unwrap();
+    let v: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    assert!(v.get("hookSpecificOutput").is_none());
 }
