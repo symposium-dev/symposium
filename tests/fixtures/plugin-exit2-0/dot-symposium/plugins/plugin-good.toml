@@ -1,6 +1,0 @@
-name = "plugin-good"
-
-[[hooks]]
-name = "good"
-event = "PreToolUse"
-command = "echo '{\"ok\":true}'"

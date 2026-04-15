@@ -1,7 +1,0 @@
-name = "capture"
-
-[[hooks]]
-name = "capture-stdin"
-event = "PreToolUse"
-format = "kiro"
-command = "cat > $TEST_DIR/captured.json"

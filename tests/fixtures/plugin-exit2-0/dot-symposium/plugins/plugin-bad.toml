@@ -1,6 +1,0 @@
-name = "plugin-bad"
-
-[[hooks]]
-name = "bad"
-event = "PreToolUse"
-command = "sh -c 'echo \"bad failure\" >&2; exit 2'"

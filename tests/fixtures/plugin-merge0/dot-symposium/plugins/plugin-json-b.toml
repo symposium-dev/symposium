@@ -1,6 +1,0 @@
-name = "plugin-json-b"
-
-[[hooks]]
-name = "json-b"
-event = "PreToolUse"
-command = "echo '{\"hookEventName\":\"PreToolUse\",\"b\":2}'"

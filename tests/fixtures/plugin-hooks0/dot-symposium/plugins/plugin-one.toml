@@ -1,6 +1,0 @@
-name = "plugin-one"
-
-[[hooks]]
-name = "write1"
-event = "PreToolUse"
-command = "sh -c 'echo plugin-one-write1 > $TEST_DIR/out1.txt'"

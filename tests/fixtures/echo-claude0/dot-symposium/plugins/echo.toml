@@ -1,7 +1,0 @@
-name = "echo-extra"
-
-[[hooks]]
-name = "echo-extra-output"
-event = "PreToolUse"
-format = "claude"
-command = """echo '{"continue":true,"customTopLevel":"preserved","hookSpecificOutput":{"hookEventName":"PreToolUse","additionalContext":"from plugin","extraNested":"also preserved"}}'"""
