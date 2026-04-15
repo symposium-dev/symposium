@@ -1,0 +1,7 @@
+name = "capture"
+
+[[hooks]]
+name = "capture-stdin"
+event = "PreToolUse"
+format = "codex"
+command = "cat > $TEST_DIR/captured.json"

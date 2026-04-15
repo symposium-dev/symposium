@@ -20,6 +20,10 @@ impl Output {
         Self { quiet: true }
     }
 
+    pub fn is_quiet(&self) -> bool {
+        self.quiet
+    }
+
     /// Something was already in place, no action needed.
     pub fn already_ok(&self, msg: impl std::fmt::Display) {
         if !self.quiet {

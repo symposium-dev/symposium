@@ -14,6 +14,7 @@ pub mod gemini;
 pub mod goose;
 pub mod kiro;
 pub mod opencode;
+pub mod symposium;
 
 /// Agents supported by Symposium hooks.
 #[derive(Debug, Copy, Clone, clap::ValueEnum, Serialize, Deserialize, PartialEq, Eq)]

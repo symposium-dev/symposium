@@ -1,0 +1,7 @@
+name = "capture"
+
+[[hooks]]
+name = "capture-stdin"
+event = "PreToolUse"
+format = "gemini"
+command = "cat > $TEST_DIR/captured.json"

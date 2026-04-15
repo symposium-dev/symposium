@@ -1,0 +1,25 @@
+name = "plugin-two"
+
+[[hooks]]
+name = "write2"
+event = "PreToolUse"
+matcher = "*"
+command = "sh -c 'echo plugin-two-write2 > $TEST_DIR/out2.txt'"
+
+[[hooks]]
+name = "write3"
+event = "PreToolUse"
+matcher = "Bash"
+command = "sh -c 'echo plugin-two-write3 > $TEST_DIR/out3.txt'"
+
+[[hooks]]
+name = "write4"
+event = "PreToolUse"
+matcher = "Bash|Read"
+command = "sh -c 'echo plugin-two-write4 > $TEST_DIR/out4.txt'"
+
+[[hooks]]
+name = "write5"
+event = "PreToolUse"
+matcher = "Read|Write"
+command = "sh -c 'echo plugin-two-write5 > $TEST_DIR/out5.txt'"

@@ -20,15 +20,20 @@ pub struct InitOpts {
 }
 
 /// Whether we can prompt the user interactively.
-fn interactive() -> bool {
-    std::io::stdin().is_terminal()
+/// Returns false in quiet mode (e.g., tests) even if stdin is a terminal.
+fn interactive(out: &Output) -> bool {
+    !out.is_quiet() && std::io::stdin().is_terminal()
 }
 
 /// Resolve which agents to configure. Priority:
 /// 1. Explicit `--add-agent` / `--remove-agent` flags (applied to existing set)
 /// 2. Interactive multi-select (if terminal), pre-selecting existing agents
 /// 3. Default to first agent (Claude) in non-interactive mode
-fn resolve_user_agents(opts: &InitOpts, existing: &[AgentEntry]) -> Result<Vec<Agent>> {
+fn resolve_user_agents(
+    opts: &InitOpts,
+    existing: &[AgentEntry],
+    out: &Output,
+) -> Result<Vec<Agent>> {
     if !opts.agents.is_empty() || !opts.remove_agents.is_empty() {
         // Start from existing agents
         let mut names: Vec<String> = existing.iter().map(|e| e.name.clone()).collect();
@@ -46,7 +51,7 @@ fn resolve_user_agents(opts: &InitOpts, existing: &[AgentEntry]) -> Result<Vec<A
         }
         return names.iter().map(|n| Agent::from_config_name(n)).collect();
     }
-    if interactive() {
+    if interactive(out) {
         return prompt_for_agents(existing);
     }
     if !existing.is_empty() {
@@ -62,7 +67,11 @@ fn resolve_user_agents(opts: &InitOpts, existing: &[AgentEntry]) -> Result<Vec<A
 /// 1. Explicit `--add-agent` / `--remove-agent` flags (applied to existing set)
 /// 2. Interactive prompt (if terminal)
 /// 3. No project agents in non-interactive mode
-fn resolve_project_agents(opts: &InitOpts, existing: &[AgentEntry]) -> Result<Vec<Agent>> {
+fn resolve_project_agents(
+    opts: &InitOpts,
+    existing: &[AgentEntry],
+    out: &Output,
+) -> Result<Vec<Agent>> {
     if !opts.agents.is_empty() || !opts.remove_agents.is_empty() {
         let mut names: Vec<String> = existing.iter().map(|e| e.name.clone()).collect();
         for name in &opts.agents {
@@ -77,7 +86,7 @@ fn resolve_project_agents(opts: &InitOpts, existing: &[AgentEntry]) -> Result<Ve
         }
         return names.iter().map(|n| Agent::from_config_name(n)).collect();
     }
-    if interactive() {
+    if interactive(out) {
         return prompt_for_project_agents();
     }
     Ok(Vec::new())
@@ -90,7 +99,7 @@ fn resolve_project_agents(opts: &InitOpts, existing: &[AgentEntry]) -> Result<Ve
 pub async fn init_user(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<()> {
     out.println("Setting up symposium for your user account.\n");
 
-    let agents = resolve_user_agents(opts, &sym.config.agents)?;
+    let agents = resolve_user_agents(opts, &sym.config.agents, out)?;
 
     sym.config.agents = agents
         .iter()
@@ -137,7 +146,7 @@ pub async fn init_project(
     if config_dir.join("config.toml").exists() {
         out.already_ok(".symposium/config.toml already exists, syncing");
     } else {
-        let project_agents = resolve_project_agents(opts, &[])?;
+        let project_agents = resolve_project_agents(opts, &[], out)?;
 
         let config = ProjectConfig {
             agents: project_agents
@@ -193,7 +202,7 @@ pub async fn init_default(
             .exists();
 
         if !project_config_exists {
-            let setup = if interactive() {
+            let setup = if interactive(out) {
                 Confirm::new()
                     .with_prompt("Set up this project?")
                     .default(true)
