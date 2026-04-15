@@ -57,7 +57,10 @@ impl AgentHookPayload for CopilotPreToolUsePayload {
         let mut rest = self.rest.clone();
         rest.insert("tool_args".to_string(), self.tool_args.clone());
         if let Some(ts) = self.timestamp {
-            rest.insert("timestamp".to_string(), serde_json::Value::Number(ts.into()));
+            rest.insert(
+                "timestamp".to_string(),
+                serde_json::Value::Number(ts.into()),
+            );
         }
         if let Some(ref c) = self.cwd {
             rest.insert("cwd".to_string(), serde_json::Value::String(c.clone()));
@@ -79,7 +82,10 @@ impl AgentHookPayload for CopilotPreToolUsePayload {
 pub struct CopilotPreToolUseOutput {
     #[serde(rename = "permissionDecision", skip_serializing_if = "Option::is_none")]
     pub permission_decision: Option<String>,
-    #[serde(rename = "permissionDecisionReason", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "permissionDecisionReason",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub permission_decision_reason: Option<String>,
     #[serde(rename = "modifiedArgs", skip_serializing_if = "Option::is_none")]
     pub modified_args: Option<serde_json::Value>,

@@ -11,8 +11,8 @@ pub mod claude;
 pub mod codex;
 pub mod copilot;
 pub mod gemini;
-pub mod kiro;
 pub mod goose;
+pub mod kiro;
 pub mod opencode;
 
 /// Agents supported by Symposium hooks.

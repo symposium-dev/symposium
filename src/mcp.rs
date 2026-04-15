@@ -42,13 +42,8 @@ fn build_server(
                 let parsed = McpArgs::try_parse_from(&input.args)
                     .map_err(|e| sacp::util::internal_error(format!("invalid arguments: {e}")))?;
 
-                let result = dispatch::dispatch(
-                    &sym,
-                    parsed.command,
-                    &cwd,
-                    dispatch::RenderMode::Mcp,
-                )
-                .await;
+                let result =
+                    dispatch::dispatch(&sym, parsed.command, &cwd, dispatch::RenderMode::Mcp).await;
 
                 match result {
                     DispatchResult::Ok(output) => Ok(RustToolOutput { output }),

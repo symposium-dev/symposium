@@ -276,9 +276,16 @@ async fn removing_agent_removes_hooks() {
     let mut ctx = symposium_testlib::with_fixture(&["plugins0"]);
 
     // Init with claude + gemini
-    ctx.symposium(&["init", "--user", "--add-agent", "claude", "--add-agent", "gemini"])
-        .await
-        .unwrap();
+    ctx.symposium(&[
+        "init",
+        "--user",
+        "--add-agent",
+        "claude",
+        "--add-agent",
+        "gemini",
+    ])
+    .await
+    .unwrap();
 
     // Verify both have hooks
     let claude_settings = ctx.sym.home_dir().join(".claude").join("settings.json");
@@ -331,7 +338,12 @@ async fn add_agent_is_additive() {
 
     // Both should be configured
     let config = symposium::config::Symposium::from_dir(ctx.sym.config_dir());
-    let agent_names: Vec<_> = config.config.agents.iter().map(|a| a.name.as_str()).collect();
+    let agent_names: Vec<_> = config
+        .config
+        .agents
+        .iter()
+        .map(|a| a.name.as_str())
+        .collect();
     assert_eq!(agent_names, vec!["claude", "gemini"]);
 
     // Both should have hooks
@@ -446,9 +458,8 @@ async fn self_contained_excludes_user_skills_from_sync() {
     // Run sync --workspace on the self-contained project
     ctx.symposium(&["sync", "--workspace"]).await.unwrap();
 
-    let project_config = symposium::config::ProjectConfig::load(
-        ctx.workspace_root.as_ref().unwrap(),
-    );
+    let project_config =
+        symposium::config::ProjectConfig::load(ctx.workspace_root.as_ref().unwrap());
 
     // The serde skill from plugins0 should NOT appear — self-contained excludes user sources
     let skills = project_config.map(|c| c.skills).unwrap_or_default();

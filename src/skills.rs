@@ -153,7 +153,9 @@ impl CrateAdvice {
                      \n{}\n\
                      \nSkill directory: {}\n\
                      Relative paths in this skill are relative to the skill directory.\n",
-                    skill.name, skill.body, skill_dir.display()
+                    skill.name,
+                    skill.body,
+                    skill_dir.display()
                 ));
 
                 let resources = list_skill_resources(skill_dir);
@@ -1055,7 +1057,11 @@ mod tests {
         let advice = crate_guidance(&sym, "serde", &ver, &registry).await;
         assert_eq!(advice.always_skills.len(), 1);
         assert_eq!(advice.always_skills[0].name, "standalone-serde");
-        assert!(advice.always_skills[0].body.contains("Use serde standalone."));
+        assert!(
+            advice.always_skills[0]
+                .body
+                .contains("Use serde standalone.")
+        );
     }
 
     #[tokio::test]

@@ -163,8 +163,7 @@ async fn run_sync_agent(sym: &Symposium, payload: &HookPayload, cwd: &std::path:
         .cwd()
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| cwd.to_path_buf());
-    let project_root = Some(effective_cwd.as_path())
-        .filter(|p| p.join(".symposium").is_dir());
+    let project_root = Some(effective_cwd.as_path()).filter(|p| p.join(".symposium").is_dir());
     let out = crate::output::Output::quiet();
     if let Err(e) = crate::sync::sync_agent(sym, project_root, &out).await {
         tracing::warn!(error = %e, "sync --agent during hook failed (continuing)");
@@ -194,11 +193,7 @@ fn handle_session_start(sym: &Symposium, payload: &SessionStartPayload) -> HookO
         .filter(|p| p.join(".symposium").is_dir());
     let project_config = project_root.and_then(crate::config::ProjectConfig::load);
 
-    let registry = crate::plugins::load_registry_with(
-        sym,
-        project_config.as_ref(),
-        project_root,
-    );
+    let registry = crate::plugins::load_registry_with(sym, project_config.as_ref(), project_root);
 
     let mut context_parts: Vec<String> = Vec::new();
     for crate::plugins::ParsedPlugin { path: _, plugin } in &registry.plugins {
@@ -742,7 +737,7 @@ mod tests {
             tool_name: "Bash".to_string(),
             rest: serde_json::Map::new(),
         };
-            let _ = event_handler.dispatch_plugin_hooks(
+        let _ = event_handler.dispatch_plugin_hooks(
             &sym,
             Box::new(payload),
             Box::new(ClaudeCodePreToolUseOutput::default()),
