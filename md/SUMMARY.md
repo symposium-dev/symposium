@@ -53,6 +53,7 @@
 - [Agents](./design/agents.md)
 - [State](./design/state.md)
   - [Session state](./design/session-state.md)
+- [Hooks](./design/hooks.md)
 - [Important flows](./design/important-flows.md)
   - [`init --user`](./design/init-user-flow.md)
   - [`init --project`](./design/init-project-flow.md)

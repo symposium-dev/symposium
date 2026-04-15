@@ -376,18 +376,24 @@ async fn project_plugin_source_loaded_in_hooks() {
     let ctx = symposium_testlib::with_fixture(&["plugins0", "project-plugins0"]);
     let workspace_root = ctx.workspace_root.as_ref().unwrap();
 
-    use symposium::hook::SessionStartPayload;
+    use symposium::hook::HookEvent;
+    use symposium::hook_schema::HookAgent;
     let output = ctx
-        .invoke_hook(SessionStartPayload {
-            session_id: Some("s1".to_string()),
-            cwd: Some(workspace_root.to_string_lossy().to_string()),
-        })
-        .await;
+        .invoke_hook(
+            HookAgent::Claude,
+            HookEvent::SessionStart,
+            &serde_json::json!({
+                "hook_event_name": "SessionStart",
+                "session_id": "s1",
+                "cwd": workspace_root.to_string_lossy().to_string(),
+            }),
+        )
+        .await
+        .unwrap();
 
-    let context = output
-        .hook_specific_output
-        .as_ref()
-        .and_then(|h| h.additional_context.as_deref())
+    let v: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let context = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
         .unwrap_or("");
 
     // Should include the project plugin's context
@@ -416,18 +422,24 @@ async fn self_contained_excludes_user_plugins() {
     let ctx = symposium_testlib::with_fixture(&["plugins0", "project-self-contained0"]);
     let workspace_root = ctx.workspace_root.as_ref().unwrap();
 
-    use symposium::hook::SessionStartPayload;
+    use symposium::hook::HookEvent;
+    use symposium::hook_schema::HookAgent;
     let output = ctx
-        .invoke_hook(SessionStartPayload {
-            session_id: Some("s1".to_string()),
-            cwd: Some(workspace_root.to_string_lossy().to_string()),
-        })
-        .await;
+        .invoke_hook(
+            HookAgent::Claude,
+            HookEvent::SessionStart,
+            &serde_json::json!({
+                "hook_event_name": "SessionStart",
+                "session_id": "s1",
+                "cwd": workspace_root.to_string_lossy().to_string(),
+            }),
+        )
+        .await
+        .unwrap();
 
-    let context = output
-        .hook_specific_output
-        .as_ref()
-        .and_then(|h| h.additional_context.as_deref())
+    let v: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let context = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
         .unwrap_or("");
 
     // Should contain the project plugin context

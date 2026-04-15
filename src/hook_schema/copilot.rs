@@ -1,84 +1,97 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    hook::{HookOutput, HookPayload, HookSubPayload, PreToolUsePayload, merge},
-    hook_schema::{
-        Agent, AgentHookEvent, AgentHookOutput, AgentHookPayload, erase_agent_hook_event,
-    },
+use crate::hook_schema::{
+    Agent, AgentHookEvent, AgentHookInput, AgentHookOutput, erase_agent_hook_event, symposium,
 };
 
 pub struct Copilot;
 impl Agent for Copilot {
     fn event(&self, event: super::HookEvent) -> Option<Box<dyn super::ErasedAgentHookEvent>> {
-        match event {
-            super::HookEvent::PreToolUse => Some(erase_agent_hook_event(CopilotPreToolUseEvent)),
-            _ => None,
+        Some(match event {
+            super::HookEvent::PreToolUse => erase_agent_hook_event(CopilotPreToolUseEvent),
+            super::HookEvent::PostToolUse => erase_agent_hook_event(CopilotPostToolUseEvent),
+            super::HookEvent::UserPromptSubmit => {
+                erase_agent_hook_event(CopilotUserPromptSubmitEvent)
+            }
+            super::HookEvent::SessionStart => erase_agent_hook_event(CopilotSessionStartEvent),
+        })
+    }
+}
+
+macro_rules! copilot_event {
+    ($event:ident, $input:ident, $output:ident) => {
+        pub struct $event;
+        impl AgentHookEvent for $event {
+            type Input = $input;
+            type Output = $output;
         }
-    }
+    };
 }
 
-pub struct CopilotPreToolUseEvent;
-impl AgentHookEvent for CopilotPreToolUseEvent {
-    type Payload = CopilotPreToolUsePayload;
-    type Output = CopilotPreToolUseOutput;
+copilot_event!(
+    CopilotPreToolUseEvent,
+    CopilotPreToolUseInput,
+    CopilotPreToolUseOutput
+);
+copilot_event!(
+    CopilotPostToolUseEvent,
+    CopilotPostToolUseInput,
+    CopilotPostToolUseOutput
+);
+copilot_event!(
+    CopilotUserPromptSubmitEvent,
+    CopilotUserPromptSubmitInput,
+    CopilotUserPromptSubmitOutput
+);
+copilot_event!(
+    CopilotSessionStartEvent,
+    CopilotSessionStartInput,
+    CopilotSessionStartOutput
+);
 
-    fn merge_outputs(first: Self::Output, second: Self::Output) -> Self::Output {
-        let mut first = serde_json::to_value(first).unwrap();
-        let second = serde_json::to_value(second).unwrap();
-        merge(&mut first, second);
-        serde_json::from_value(first).unwrap()
-    }
+// Copilot output is flat (additionalContext at top level, no hookSpecificOutput).
+
+macro_rules! copilot_output_impl {
+    ($ty:ident, $variant:ident, $struct:ident { $($extra:tt)* }) => {
+        impl AgentHookOutput for $ty {
+            fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
+                if output.is_empty() { return Ok(Self::default()); }
+                Ok(serde_json::from_slice(output)?)
+            }
+            fn from_symposium(event: &symposium::OutputEvent) -> Self {
+                let mut out = Self::default();
+                out.additional_context = event.additional_context().map(String::from);
+                out
+            }
+            fn to_symposium(&self) -> symposium::OutputEvent {
+                symposium::OutputEvent::$variant(symposium::$struct {
+                    additional_context: self.additional_context.clone(),
+                    $($extra)*
+                })
+            }
+            fn to_hook_output(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
+            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> { self }
+        }
+    };
 }
+
+// ── PreToolUse ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CopilotPreToolUsePayload {
-    #[serde(rename = "timestamp")]
+pub struct CopilotPreToolUseInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<i64>,
-    #[serde(rename = "cwd")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
     #[serde(rename = "toolName")]
     pub tool_name: String,
-    #[serde(rename = "toolArgs")]
+    #[serde(rename = "toolArgs", default)]
     pub tool_args: serde_json::Value,
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
 
-impl AgentHookPayload for CopilotPreToolUsePayload {
-    fn parse_payload(payload: &str) -> anyhow::Result<Self> {
-        Ok(serde_json::from_str(payload)?)
-    }
-
-    fn to_hook_payload(&self) -> HookPayload {
-        let sub_payload = HookSubPayload::PreToolUse(PreToolUsePayload {
-            tool_name: self.tool_name.clone(),
-        });
-
-        let mut rest = self.rest.clone();
-        rest.insert("tool_args".to_string(), self.tool_args.clone());
-        if let Some(ts) = self.timestamp {
-            rest.insert(
-                "timestamp".to_string(),
-                serde_json::Value::Number(ts.into()),
-            );
-        }
-        if let Some(ref c) = self.cwd {
-            rest.insert("cwd".to_string(), serde_json::Value::String(c.clone()));
-        }
-
-        HookPayload { sub_payload, rest }
-    }
-
-    fn to_string(&self) -> anyhow::Result<String> {
-        serde_json::to_string(self).map_err(Into::into)
-    }
-
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
-        self
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CopilotPreToolUseOutput {
     #[serde(rename = "permissionDecision", skip_serializing_if = "Option::is_none")]
     pub permission_decision: Option<String>,
@@ -97,49 +110,216 @@ pub struct CopilotPreToolUseOutput {
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
 
-impl Default for CopilotPreToolUseOutput {
-    fn default() -> Self {
+impl AgentHookInput for CopilotPreToolUseInput {
+    fn parse_input(payload: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(payload)?)
+    }
+    fn to_symposium(&self) -> symposium::InputEvent {
+        symposium::InputEvent::PreToolUse(symposium::PreToolUseInput {
+            tool_name: self.tool_name.clone(),
+            tool_input: self.tool_args.clone(),
+            session_id: None,
+            cwd: self.cwd.clone(),
+        })
+    }
+    fn from_symposium(event: &symposium::InputEvent) -> Self {
+        let symposium::InputEvent::PreToolUse(p) = event else {
+            panic!("wrong event type")
+        };
         Self {
-            permission_decision: None,
-            permission_decision_reason: None,
-            modified_args: None,
-            additional_context: None,
-            suppress_output: None,
+            timestamp: None,
+            cwd: p.cwd.clone(),
+            tool_name: p.tool_name.clone(),
+            tool_args: p.tool_input.clone(),
             rest: serde_json::Map::new(),
         }
     }
-}
-
-impl AgentHookOutput for CopilotPreToolUseOutput {
-    fn parse_output(output: &[u8]) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        Ok(serde_json::from_slice(output)?)
+    fn to_string(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self).map_err(Into::into)
     }
-
-    fn from_hook_output(payload: &HookOutput) -> anyhow::Result<Self> {
-        // Map our internal HookOutput to the Copilot output shape.
-        let mut out = CopilotPreToolUseOutput::default();
-        if let Some(ref hook_specific) = payload.hook_specific_output {
-            out.additional_context = hook_specific.additional_context.clone();
-            // merge any hookSpecific.rest into out.rest
-            for (k, v) in hook_specific.rest.iter() {
-                out.rest.insert(k.clone(), v.clone());
-            }
-        }
-        // copy other top-level rest fields
-        for (k, v) in payload.rest.iter() {
-            out.rest.insert(k.clone(), v.clone());
-        }
-        Ok(out)
-    }
-
-    fn to_hook_output(&self) -> serde_json::Value {
-        serde_json::to_value(self).unwrap()
-    }
-
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
     }
 }
+
+copilot_output_impl!(
+    CopilotPreToolUseOutput,
+    PreToolUse,
+    PreToolUseOutput {
+        updated_input: None
+    }
+);
+
+// ── PostToolUse ───────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CopilotPostToolUseInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(rename = "toolName")]
+    pub tool_name: String,
+    #[serde(rename = "toolArgs", default)]
+    pub tool_args: serde_json::Value,
+    #[serde(rename = "toolResponse", default)]
+    pub tool_response: serde_json::Value,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CopilotPostToolUseOutput {
+    #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+impl AgentHookInput for CopilotPostToolUseInput {
+    fn parse_input(payload: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(payload)?)
+    }
+    fn to_symposium(&self) -> symposium::InputEvent {
+        symposium::InputEvent::PostToolUse(symposium::PostToolUseInput {
+            tool_name: self.tool_name.clone(),
+            tool_input: self.tool_args.clone(),
+            tool_response: self.tool_response.clone(),
+            session_id: None,
+            cwd: self.cwd.clone(),
+        })
+    }
+    fn from_symposium(event: &symposium::InputEvent) -> Self {
+        let symposium::InputEvent::PostToolUse(p) = event else {
+            panic!("wrong event type")
+        };
+        Self {
+            timestamp: None,
+            cwd: p.cwd.clone(),
+            tool_name: p.tool_name.clone(),
+            tool_args: p.tool_input.clone(),
+            tool_response: p.tool_response.clone(),
+            rest: serde_json::Map::new(),
+        }
+    }
+    fn to_string(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self).map_err(Into::into)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+copilot_output_impl!(CopilotPostToolUseOutput, PostToolUse, PostToolUseOutput {});
+
+// ── UserPromptSubmit ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CopilotUserPromptSubmitInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CopilotUserPromptSubmitOutput {
+    #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+impl AgentHookInput for CopilotUserPromptSubmitInput {
+    fn parse_input(payload: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(payload)?)
+    }
+    fn to_symposium(&self) -> symposium::InputEvent {
+        symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput {
+            prompt: self.prompt.clone(),
+            session_id: None,
+            cwd: self.cwd.clone(),
+        })
+    }
+    fn from_symposium(event: &symposium::InputEvent) -> Self {
+        let symposium::InputEvent::UserPromptSubmit(p) = event else {
+            panic!("wrong event type")
+        };
+        Self {
+            timestamp: None,
+            cwd: p.cwd.clone(),
+            prompt: p.prompt.clone(),
+            rest: serde_json::Map::new(),
+        }
+    }
+    fn to_string(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self).map_err(Into::into)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+copilot_output_impl!(
+    CopilotUserPromptSubmitOutput,
+    UserPromptSubmit,
+    UserPromptSubmitOutput {}
+);
+
+// ── SessionStart ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CopilotSessionStartInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct CopilotSessionStartOutput {
+    #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+impl AgentHookInput for CopilotSessionStartInput {
+    fn parse_input(payload: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(payload)?)
+    }
+    fn to_symposium(&self) -> symposium::InputEvent {
+        symposium::InputEvent::SessionStart(symposium::SessionStartInput {
+            session_id: None,
+            cwd: self.cwd.clone(),
+        })
+    }
+    fn from_symposium(event: &symposium::InputEvent) -> Self {
+        let symposium::InputEvent::SessionStart(p) = event else {
+            panic!("wrong event type")
+        };
+        Self {
+            timestamp: None,
+            cwd: p.cwd.clone(),
+            rest: serde_json::Map::new(),
+        }
+    }
+    fn to_string(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self).map_err(Into::into)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+copilot_output_impl!(
+    CopilotSessionStartOutput,
+    SessionStart,
+    SessionStartOutput {}
+);

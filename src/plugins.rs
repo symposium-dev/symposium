@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Symposium;
 use crate::git_source::UpdateLevel;
 use crate::hook::HookEvent;
+use crate::hook_schema::HookAgent;
 
 /// Source declaration for remote plugin artifacts.
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
@@ -116,6 +117,49 @@ pub struct Hook {
     pub event: HookEvent,
     pub matcher: Option<String>,
     pub command: String,
+    #[serde(default)]
+    pub format: HookFormat,
+}
+
+/// The wire format a plugin hook expects for input/output.
+///
+/// This is distinct from `HookAgent` because:
+/// - `Symposium` is a wire format but not an agent (no CLI invokes hooks
+///   in symposium format natively).
+/// - Not all agents have hook wire formats (e.g., Goose uses MCP extensions,
+///   OpenCode uses JS plugins), so only agents with shell-hook JSON formats
+///   appear here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookFormat {
+    /// Symposium canonical format (default).
+    Symposium,
+    /// A specific agent's wire format.
+    Claude,
+    Codex,
+    Copilot,
+    Gemini,
+    Kiro,
+}
+
+impl Default for HookFormat {
+    fn default() -> Self {
+        HookFormat::Symposium
+    }
+}
+
+impl HookFormat {
+    /// Convert to the corresponding HookAgent, if this is an agent format.
+    pub fn as_agent(&self) -> Option<HookAgent> {
+        match self {
+            HookFormat::Symposium => None,
+            HookFormat::Claude => Some(HookAgent::Claude),
+            HookFormat::Codex => Some(HookAgent::Codex),
+            HookFormat::Copilot => Some(HookAgent::Copilot),
+            HookFormat::Gemini => Some(HookAgent::Gemini),
+            HookFormat::Kiro => Some(HookAgent::Kiro),
+        }
+    }
 }
 
 #[derive(Debug, serde::Serialize)]

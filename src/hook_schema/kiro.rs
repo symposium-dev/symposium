@@ -1,78 +1,101 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    hook::{HookOutput, HookPayload, HookSubPayload, PreToolUsePayload, merge},
-    hook_schema::{
-        Agent, AgentHookEvent, AgentHookOutput, AgentHookPayload, erase_agent_hook_event,
-    },
+use crate::hook_schema::{
+    Agent, AgentHookEvent, AgentHookInput, AgentHookOutput, erase_agent_hook_event, symposium,
 };
 
 pub struct Kiro;
 impl Agent for Kiro {
     fn event(&self, event: super::HookEvent) -> Option<Box<dyn super::ErasedAgentHookEvent>> {
-        match event {
-            super::HookEvent::PreToolUse => Some(erase_agent_hook_event(KiroPreToolUseEvent)),
-            _ => None,
+        Some(match event {
+            super::HookEvent::PreToolUse => erase_agent_hook_event(KiroPreToolUseEvent),
+            super::HookEvent::PostToolUse => erase_agent_hook_event(KiroPostToolUseEvent),
+            super::HookEvent::UserPromptSubmit => erase_agent_hook_event(KiroUserPromptSubmitEvent),
+            super::HookEvent::SessionStart => erase_agent_hook_event(KiroSessionStartEvent),
+        })
+    }
+}
+
+macro_rules! kiro_event {
+    ($event:ident, $input:ident, $output:ident) => {
+        pub struct $event;
+        impl AgentHookEvent for $event {
+            type Input = $input;
+            type Output = $output;
+            fn serialize_output(&self, output: &serde_json::Value) -> Vec<u8> {
+                // Kiro emits plain text (stdout captured as context), not JSON.
+                output
+                    .get("additionalContext")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.as_bytes().to_vec())
+                    .unwrap_or_default()
+            }
         }
-    }
+    };
 }
 
-pub struct KiroPreToolUseEvent;
-impl AgentHookEvent for KiroPreToolUseEvent {
-    type Payload = KiroPreToolUsePayload;
-    type Output = KiroPreToolUseOutput;
+kiro_event!(
+    KiroPreToolUseEvent,
+    KiroPreToolUseInput,
+    KiroPreToolUseOutput
+);
+kiro_event!(
+    KiroPostToolUseEvent,
+    KiroPostToolUseInput,
+    KiroPostToolUseOutput
+);
+kiro_event!(
+    KiroUserPromptSubmitEvent,
+    KiroUserPromptSubmitInput,
+    KiroUserPromptSubmitOutput
+);
+kiro_event!(
+    KiroSessionStartEvent,
+    KiroSessionStartInput,
+    KiroSessionStartOutput
+);
 
-    fn merge_outputs(first: Self::Output, second: Self::Output) -> Self::Output {
-        let mut first = serde_json::to_value(first).unwrap();
-        let second = serde_json::to_value(second).unwrap();
-        merge(&mut first, second);
-        serde_json::from_value(first).unwrap()
-    }
+// Kiro output: plain text stdout → additionalContext
+macro_rules! kiro_output_impl {
+    ($ty:ident, $variant:ident, $struct:ident { $($extra:tt)* }) => {
+        impl AgentHookOutput for $ty {
+            fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
+                if output.is_empty() { return Ok(Self::default()); }
+                let text = String::from_utf8_lossy(output);
+                Ok(Self { additional_context: Some(text.into_owned()), rest: serde_json::Map::new() })
+            }
+            fn from_symposium(event: &symposium::OutputEvent) -> Self {
+                Self { additional_context: event.additional_context().map(String::from), rest: serde_json::Map::new() }
+            }
+            fn to_symposium(&self) -> symposium::OutputEvent {
+                symposium::OutputEvent::$variant(symposium::$struct {
+                    additional_context: self.additional_context.clone(),
+                    $($extra)*
+                })
+            }
+            fn to_hook_output(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
+            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> { self }
+        }
+    };
 }
+
+// ── PreToolUse ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KiroPreToolUsePayload {
-    pub(crate) hook_event_name: String,
-    pub(crate) tool_name: String,
+pub struct KiroPreToolUseInput {
+    pub hook_event_name: String,
+    pub tool_name: String,
     #[serde(default)]
-    pub(crate) cwd: Option<String>,
-    #[serde(default)]
-    pub(crate) tool_input: Option<serde_json::Value>,
+    pub tool_input: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
 
-impl AgentHookPayload for KiroPreToolUsePayload {
-    fn parse_payload(payload: &str) -> anyhow::Result<Self> {
-        Ok(serde_json::from_str(payload)?)
-    }
-
-    fn to_hook_payload(&self) -> HookPayload {
-        let sub_payload = HookSubPayload::PreToolUse(PreToolUsePayload {
-            tool_name: self.tool_name.clone(),
-        });
-
-        let mut rest = self.rest.clone();
-        if let Some(ref c) = self.cwd {
-            rest.insert("cwd".to_string(), serde_json::Value::String(c.clone()));
-        }
-        if let Some(ref ti) = self.tool_input {
-            rest.insert("tool_input".to_string(), ti.clone());
-        }
-
-        HookPayload { sub_payload, rest }
-    }
-
-    fn to_string(&self) -> anyhow::Result<String> {
-        serde_json::to_string(self).map_err(Into::into)
-    }
-
-    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
-        self
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct KiroPreToolUseOutput {
     #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
     pub additional_context: Option<String>,
@@ -80,45 +103,218 @@ pub struct KiroPreToolUseOutput {
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
 
-impl Default for KiroPreToolUseOutput {
-    fn default() -> Self {
+impl AgentHookInput for KiroPreToolUseInput {
+    fn parse_input(payload: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(payload)?)
+    }
+    fn to_symposium(&self) -> symposium::InputEvent {
+        symposium::InputEvent::PreToolUse(symposium::PreToolUseInput {
+            tool_name: self.tool_name.clone(),
+            tool_input: self.tool_input.clone(),
+            session_id: self.session_id.clone(),
+            cwd: self.cwd.clone(),
+        })
+    }
+    fn from_symposium(event: &symposium::InputEvent) -> Self {
+        let symposium::InputEvent::PreToolUse(p) = event else {
+            panic!("wrong event type")
+        };
         Self {
-            additional_context: None,
+            hook_event_name: "preToolUse".into(),
+            tool_name: p.tool_name.clone(),
+            tool_input: p.tool_input.clone(),
+            cwd: p.cwd.clone(),
+            session_id: p.session_id.clone(),
             rest: serde_json::Map::new(),
         }
     }
-}
-
-impl AgentHookOutput for KiroPreToolUseOutput {
-    fn parse_output(output: &[u8]) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        if output.is_empty() {
-            return Ok(Self::default());
-        }
-        Ok(serde_json::from_slice(output)?)
+    fn to_string(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self).map_err(Into::into)
     }
-
-    fn from_hook_output(payload: &HookOutput) -> anyhow::Result<Self> {
-        let mut out = KiroPreToolUseOutput::default();
-        if let Some(ref hook_specific) = payload.hook_specific_output {
-            out.additional_context = hook_specific.additional_context.clone();
-            for (k, v) in hook_specific.rest.iter() {
-                out.rest.insert(k.clone(), v.clone());
-            }
-        }
-        for (k, v) in payload.rest.iter() {
-            out.rest.insert(k.clone(), v.clone());
-        }
-        Ok(out)
-    }
-
-    fn to_hook_output(&self) -> serde_json::Value {
-        serde_json::to_value(self).unwrap()
-    }
-
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
     }
 }
+
+kiro_output_impl!(
+    KiroPreToolUseOutput,
+    PreToolUse,
+    PreToolUseOutput {
+        updated_input: None
+    }
+);
+
+// ── PostToolUse ───────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KiroPostToolUseInput {
+    pub hook_event_name: String,
+    pub tool_name: String,
+    #[serde(default)]
+    pub tool_input: serde_json::Value,
+    #[serde(default)]
+    pub tool_response: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KiroPostToolUseOutput {
+    #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+impl AgentHookInput for KiroPostToolUseInput {
+    fn parse_input(payload: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(payload)?)
+    }
+    fn to_symposium(&self) -> symposium::InputEvent {
+        symposium::InputEvent::PostToolUse(symposium::PostToolUseInput {
+            tool_name: self.tool_name.clone(),
+            tool_input: self.tool_input.clone(),
+            tool_response: self.tool_response.clone(),
+            session_id: self.session_id.clone(),
+            cwd: self.cwd.clone(),
+        })
+    }
+    fn from_symposium(event: &symposium::InputEvent) -> Self {
+        let symposium::InputEvent::PostToolUse(p) = event else {
+            panic!("wrong event type")
+        };
+        Self {
+            hook_event_name: "postToolUse".into(),
+            tool_name: p.tool_name.clone(),
+            tool_input: p.tool_input.clone(),
+            tool_response: p.tool_response.clone(),
+            cwd: p.cwd.clone(),
+            session_id: p.session_id.clone(),
+            rest: serde_json::Map::new(),
+        }
+    }
+    fn to_string(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self).map_err(Into::into)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+kiro_output_impl!(KiroPostToolUseOutput, PostToolUse, PostToolUseOutput {});
+
+// ── UserPromptSubmit ──────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KiroUserPromptSubmitInput {
+    pub hook_event_name: String,
+    #[serde(default)]
+    pub prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KiroUserPromptSubmitOutput {
+    #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+impl AgentHookInput for KiroUserPromptSubmitInput {
+    fn parse_input(payload: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(payload)?)
+    }
+    fn to_symposium(&self) -> symposium::InputEvent {
+        symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput {
+            prompt: self.prompt.clone(),
+            session_id: self.session_id.clone(),
+            cwd: self.cwd.clone(),
+        })
+    }
+    fn from_symposium(event: &symposium::InputEvent) -> Self {
+        let symposium::InputEvent::UserPromptSubmit(p) = event else {
+            panic!("wrong event type")
+        };
+        Self {
+            hook_event_name: "userPromptSubmit".into(),
+            prompt: p.prompt.clone(),
+            cwd: p.cwd.clone(),
+            session_id: p.session_id.clone(),
+            rest: serde_json::Map::new(),
+        }
+    }
+    fn to_string(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self).map_err(Into::into)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+kiro_output_impl!(
+    KiroUserPromptSubmitOutput,
+    UserPromptSubmit,
+    UserPromptSubmitOutput {}
+);
+
+// ── SessionStart (agentSpawn) ─────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KiroSessionStartInput {
+    pub hook_event_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KiroSessionStartOutput {
+    #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+impl AgentHookInput for KiroSessionStartInput {
+    fn parse_input(payload: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(payload)?)
+    }
+    fn to_symposium(&self) -> symposium::InputEvent {
+        symposium::InputEvent::SessionStart(symposium::SessionStartInput {
+            session_id: self.session_id.clone(),
+            cwd: self.cwd.clone(),
+        })
+    }
+    fn from_symposium(event: &symposium::InputEvent) -> Self {
+        let symposium::InputEvent::SessionStart(p) = event else {
+            panic!("wrong event type")
+        };
+        Self {
+            hook_event_name: "agentSpawn".into(),
+            cwd: p.cwd.clone(),
+            session_id: p.session_id.clone(),
+            rest: serde_json::Map::new(),
+        }
+    }
+    fn to_string(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self).map_err(Into::into)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+kiro_output_impl!(KiroSessionStartOutput, SessionStart, SessionStartOutput {});
