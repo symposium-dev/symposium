@@ -95,4 +95,3 @@ async fn dispatch_crate(
         DispatchResult::Err("Provide a crate name or use --list".to_string())
     }
 }
-

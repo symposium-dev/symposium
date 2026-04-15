@@ -32,7 +32,11 @@ pub struct RustCrateFetch<'a> {
 
 impl<'a> RustCrateFetch<'a> {
     /// Create a new fetch request for the given crate name
-    pub fn new(name: &str, workspace: &'a [(String, semver::Version)], cache_dir: &'a Path) -> Self {
+    pub fn new(
+        name: &str,
+        workspace: &'a [(String, semver::Version)],
+        cache_dir: &'a Path,
+    ) -> Self {
         Self {
             crate_name: name.to_string(),
             version_spec: None,

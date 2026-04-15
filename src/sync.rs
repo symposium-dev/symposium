@@ -47,7 +47,10 @@ pub async fn sync_workspace(
     let dep_names: std::collections::BTreeSet<String> =
         workspace.iter().map(|(name, _)| name.clone()).collect();
 
-    out.info(format!("scanning {} workspace dependencies", dep_names.len()));
+    out.info(format!(
+        "scanning {} workspace dependencies",
+        dep_names.len()
+    ));
 
     // Step 3: Load plugin sources and discover skills (project-aware)
     let registry = plugins::load_registry_with(sym, Some(&existing), Some(project_root));
@@ -149,11 +152,7 @@ pub async fn sync_workspace(
 
 /// Install enabled extensions and register hooks for all configured agents.
 /// Also removes hooks for agents that are no longer configured.
-pub async fn sync_agent(
-    sym: &Symposium,
-    project_root: Option<&Path>,
-    out: &Output,
-) -> Result<()> {
+pub async fn sync_agent(sym: &Symposium, project_root: Option<&Path>, out: &Output) -> Result<()> {
     let project_config = project_root.and_then(ProjectConfig::load);
     let agent_names = resolve_agents(&sym.config, project_config.as_ref());
 
@@ -163,14 +162,16 @@ pub async fn sync_agent(
 
         if let Some(root) = project_root {
             let project_config = project_config.as_ref();
-            let is_project_agent = project_config
-                .is_some_and(|c| c.agents.iter().any(|a| a.name == *agent_name));
+            let is_project_agent =
+                project_config.is_some_and(|c| c.agents.iter().any(|a| a.name == *agent_name));
 
             if is_project_agent {
-                agent.register_project_hooks(root, out)
+                agent
+                    .register_project_hooks(root, out)
                     .context("failed to register project hooks")?;
             } else {
-                agent.register_global_hooks(sym.home_dir(), out)
+                agent
+                    .register_global_hooks(sym.home_dir(), out)
                     .context("failed to register global hooks")?;
             }
 
@@ -178,7 +179,8 @@ pub async fn sync_agent(
                 install_skills(sym, agent, root, config, out).await?;
             }
         } else {
-            agent.register_global_hooks(sym.home_dir(), out)
+            agent
+                .register_global_hooks(sym.home_dir(), out)
                 .context("failed to register global hooks")?;
         }
     }
@@ -204,7 +206,11 @@ pub async fn sync_agent(
 pub fn add_agent(project_root: &Path, agent_name: &str, out: &Output) -> Result<()> {
     let agent = Agent::from_config_name(agent_name)?;
     ProjectConfig::add_agent(project_root, agent_name)?;
-    out.done(format!("added agent {} ({})", agent_name, agent.display_name()));
+    out.done(format!(
+        "added agent {} ({})",
+        agent_name,
+        agent.display_name()
+    ));
     Ok(())
 }
 
@@ -212,7 +218,11 @@ pub fn add_agent(project_root: &Path, agent_name: &str, out: &Output) -> Result<
 pub fn remove_agent(project_root: &Path, agent_name: &str, out: &Output) -> Result<()> {
     let agent = Agent::from_config_name(agent_name)?;
     ProjectConfig::remove_agent(project_root, agent_name)?;
-    out.removed(format!("removed agent {} ({})", agent_name, agent.display_name()));
+    out.removed(format!(
+        "removed agent {} ({})",
+        agent_name,
+        agent.display_name()
+    ));
     Ok(())
 }
 

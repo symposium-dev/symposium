@@ -74,19 +74,31 @@ impl AgentHookPayload for GeminiBeforeToolPayload {
             rest.insert("mcp_context".to_string(), mcp.clone());
         }
         if let Some(ref name) = self.original_request_name {
-            rest.insert("original_request_name".to_string(), serde_json::Value::String(name.clone()));
+            rest.insert(
+                "original_request_name".to_string(),
+                serde_json::Value::String(name.clone()),
+            );
         }
         if let Some(ref s) = self.common_payload.session_id {
-            rest.insert("session_id".to_string(), serde_json::Value::String(s.clone()));
+            rest.insert(
+                "session_id".to_string(),
+                serde_json::Value::String(s.clone()),
+            );
         }
         if let Some(ref c) = self.common_payload.cwd {
             rest.insert("cwd".to_string(), serde_json::Value::String(c.clone()));
         }
         if let Some(ref t) = self.common_payload.transcript_path {
-            rest.insert("transcript_path".to_string(), serde_json::Value::String(t.clone()));
+            rest.insert(
+                "transcript_path".to_string(),
+                serde_json::Value::String(t.clone()),
+            );
         }
         if let Some(ref ts) = self.common_payload.timestamp {
-            rest.insert("timestamp".to_string(), serde_json::Value::String(ts.clone()));
+            rest.insert(
+                "timestamp".to_string(),
+                serde_json::Value::String(ts.clone()),
+            );
         }
 
         HookPayload { sub_payload, rest }

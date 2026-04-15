@@ -1,5 +1,5 @@
-use symposium::hook::{PostToolUsePayload, PreToolUsePayload, SessionStartPayload};
 use expect_test::expect;
+use symposium::hook::{PostToolUsePayload, PreToolUsePayload, SessionStartPayload};
 
 #[tokio::test]
 async fn pre_tool_use_builtin_empty() {
@@ -76,6 +76,8 @@ async fn session_start_returns_plugin_context() {
         .and_then(|h| h.additional_context.as_deref())
         .expect("session start should return additional context");
 
-    expect![[r#"**Critical:** Before authoring Rust code, run `symposium start` for instructions."#]]
-        .assert_eq(context);
+    expect![[
+        r#"**Critical:** Before authoring Rust code, run `symposium start` for instructions."#
+    ]]
+    .assert_eq(context);
 }

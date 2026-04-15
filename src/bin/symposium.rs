@@ -50,15 +50,13 @@ async fn main() -> ExitCode {
         }
 
         // Everything else delegates to the library
-        Some(cmd) => {
-            match symposium::cli::run(&mut sym, cmd, &cwd, &out).await {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(e) => {
-                    eprintln!("Error: {e:#}");
-                    ExitCode::FAILURE
-                }
+        Some(cmd) => match symposium::cli::run(&mut sym, cmd, &cwd, &out).await {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("Error: {e:#}");
+                ExitCode::FAILURE
             }
-        }
+        },
     }
 }
 

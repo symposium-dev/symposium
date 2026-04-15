@@ -23,7 +23,6 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-
       - name: Cache Rust dependencies
         uses: actions/cache@v4
         with:
@@ -38,6 +37,23 @@ jobs:
 
       - name: Check
         run: cargo check
+
+  fmt:
+    name: Check formatting
+    needs: check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+
+      - name: Check formatting
+        run: cargo fmt -- --check
 
   test:
     name: Run tests (${{ matrix.name }})

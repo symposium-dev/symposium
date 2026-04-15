@@ -63,7 +63,10 @@ impl AgentHookPayload for CodexPreToolUsePayload {
 
         let mut rest = self.rest.clone();
         if let Some(ref sid) = self.session_id {
-            rest.insert("session_id".to_string(), serde_json::Value::String(sid.clone()));
+            rest.insert(
+                "session_id".to_string(),
+                serde_json::Value::String(sid.clone()),
+            );
         }
         if let Some(ref c) = self.cwd {
             rest.insert("cwd".to_string(), serde_json::Value::String(c.clone()));
@@ -72,10 +75,16 @@ impl AgentHookPayload for CodexPreToolUsePayload {
             rest.insert("model".to_string(), serde_json::Value::String(m.clone()));
         }
         if let Some(ref tid) = self.turn_id {
-            rest.insert("turn_id".to_string(), serde_json::Value::String(tid.clone()));
+            rest.insert(
+                "turn_id".to_string(),
+                serde_json::Value::String(tid.clone()),
+            );
         }
         if let Some(ref tuid) = self.tool_use_id {
-            rest.insert("tool_use_id".to_string(), serde_json::Value::String(tuid.clone()));
+            rest.insert(
+                "tool_use_id".to_string(),
+                serde_json::Value::String(tuid.clone()),
+            );
         }
         if let Some(ref ti) = self.tool_input {
             rest.insert("tool_input".to_string(), ti.clone());
@@ -102,7 +111,10 @@ pub struct CodexHookSpecificOutput {
     pub additional_context: Option<String>,
     #[serde(rename = "permissionDecision", skip_serializing_if = "Option::is_none")]
     pub permission_decision: Option<String>,
-    #[serde(rename = "permissionDecisionReason", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "permissionDecisionReason",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub permission_decision_reason: Option<String>,
 
     #[serde(flatten)]

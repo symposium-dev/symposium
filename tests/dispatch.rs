@@ -8,7 +8,10 @@ async fn help() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     // Just verify it contains the right binary name
-    assert!(err.contains("symposium"), "help should mention symposium: {err}");
+    assert!(
+        err.contains("symposium"),
+        "help should mention symposium: {err}"
+    );
 }
 
 #[tokio::test]

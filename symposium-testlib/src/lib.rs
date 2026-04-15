@@ -194,9 +194,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path, scan: &mut FixtureScanResult) {
             let filename = entry.file_name();
             if filename == "config.toml" {
                 // Only treat as user config dir if parent is dot-symposium
-                let is_user_config = dst
-                    .file_name()
-                    .is_some_and(|n| n == "dot-symposium");
+                let is_user_config = dst.file_name().is_some_and(|n| n == "dot-symposium");
                 if is_user_config {
                     scan.config_dirs.push(dst.to_path_buf());
                 }

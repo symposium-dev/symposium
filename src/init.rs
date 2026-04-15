@@ -98,8 +98,7 @@ pub async fn init_user(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Re
             name: a.config_name().to_string(),
         })
         .collect();
-    sym.save_config()
-        .context("failed to write user config")?;
+    sym.save_config().context("failed to write user config")?;
 
     let config_path = sym.config_dir().join("config.toml");
     let agent_names: Vec<_> = agents.iter().map(|a| a.display_name()).collect();
@@ -110,7 +109,8 @@ pub async fn init_user(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Re
     ));
 
     // Register global hooks
-    crate::sync::sync_agent(sym, None, out).await
+    crate::sync::sync_agent(sym, None, out)
+        .await
         .context("failed to register global hooks")?;
 
     Ok(())
@@ -148,18 +148,21 @@ pub async fn init_project(
                 .collect(),
             ..Default::default()
         };
-        config.save(&workspace_root)
+        config
+            .save(&workspace_root)
             .context("failed to write project config")?;
 
         out.done("created .symposium/config.toml");
     }
 
     // Run sync --workspace to discover extensions
-    crate::sync::sync_workspace(sym, &workspace_root, out).await
+    crate::sync::sync_workspace(sym, &workspace_root, out)
+        .await
         .context("sync --workspace failed")?;
 
     // Run sync --agent to install extensions
-    crate::sync::sync_agent(sym, Some(&workspace_root), out).await
+    crate::sync::sync_agent(sym, Some(&workspace_root), out)
+        .await
         .context("sync --agent failed")?;
 
     out.blank();
@@ -174,8 +177,8 @@ pub async fn init_default(
     out: &Output,
     opts: &InitOpts,
 ) -> Result<()> {
-    let user_config_exists = sym.config_dir().join("config.toml").exists()
-        && !sym.config.agents.is_empty();
+    let user_config_exists =
+        sym.config_dir().join("config.toml").exists() && !sym.config.agents.is_empty();
 
     if !user_config_exists {
         init_user(sym, out, opts).await?;
@@ -271,8 +274,8 @@ pub fn find_workspace_root(cwd: &Path) -> Result<PathBuf> {
         bail!("not in a Rust workspace (cargo metadata failed)");
     }
 
-    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .context("failed to parse cargo metadata output")?;
+    let metadata: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("failed to parse cargo metadata output")?;
 
     let workspace_root = metadata
         .get("workspace_root")
