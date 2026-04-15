@@ -305,13 +305,14 @@ pub trait AgentHookEvent {
     fn dispatch_plugin_hooks(
         &self,
         sym: &Symposium,
+        agent: HookAgent,
         payload: &Self::Payload,
         prior_output: Self::Output,
     ) -> crate::hook::PluginHookOutput
     where
         Self: Sized,
     {
-        crate::hook::dispatch_plugin_hooks::<Self>(sym, self, payload, prior_output)
+        crate::hook::dispatch_plugin_hooks::<Self>(sym, agent, self, payload, prior_output)
     }
 }
 
@@ -333,6 +334,7 @@ pub trait ErasedAgentHookEvent {
     fn dispatch_plugin_hooks(
         &self,
         _sym: &Symposium,
+        agent: HookAgent,
         payload: Box<dyn AgentHookPayload>,
         prior_output: Box<dyn AgentHookOutput>,
     ) -> crate::hook::PluginHookOutput;
@@ -362,7 +364,8 @@ where
 
     fn dispatch_plugin_hooks(
         &self,
-        _sym: &Symposium,
+        sym: &Symposium,
+        agent: HookAgent,
         payload: Box<dyn AgentHookPayload>,
         prior_output: Box<dyn AgentHookOutput>,
     ) -> crate::hook::PluginHookOutput {
@@ -378,7 +381,7 @@ where
             .unwrap();
         let output = self
             .0
-            .dispatch_plugin_hooks(_sym, &payload_concrete, *output_concrete);
+            .dispatch_plugin_hooks(sym, agent, &payload_concrete, *output_concrete);
         output
     }
 }

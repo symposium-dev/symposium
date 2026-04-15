@@ -1,0 +1,18 @@
+name = "rtk"
+
+[[hooks]]
+name = "rewrite"
+event = "PreToolUse"
+matcher = "Bash"
+
+[hooks.distribution]
+source = "git"
+repo = "https://github.com/rtk-ai/rtk.git"
+commit = "master"
+path = "hooks/claude/rtk-rewrite.sh"
+
+[[hooks.requirements]]
+type = "cargo"
+crate_name = "rtk"
+version = "latest"
+git = "https://github.com/rtk-ai/rtk"
