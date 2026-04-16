@@ -358,6 +358,7 @@ pub struct Symposium {
     config_dir: PathBuf,
     cache_dir: PathBuf,
     home_dir: PathBuf,
+    symposium_binary: String,
 }
 
 impl Symposium {
@@ -382,6 +383,7 @@ impl Symposium {
             config_dir,
             cache_dir,
             home_dir,
+            symposium_binary: resolve_symposium_binary(),
         }
     }
 
@@ -410,6 +412,7 @@ impl Symposium {
             config_dir,
             cache_dir,
             home_dir,
+            symposium_binary: resolve_test_binary(),
         }
     }
 
@@ -450,6 +453,10 @@ impl Symposium {
 
     pub fn home_dir(&self) -> &Path {
         &self.home_dir
+    }
+
+    pub fn symposium_binary(&self) -> &str {
+        &self.symposium_binary
     }
 
     /// Returns the effective list of plugin sources, including built-in defaults.
@@ -567,6 +574,43 @@ impl Symposium {
             }
         }
     }
+}
+
+/// Resolve the path to the symposium binary.
+///
+/// Tries `current_exe()` first, then `which symposium`, falling back to `"symposium"`.
+fn resolve_symposium_binary() -> String {
+    if let Ok(exe) = std::env::current_exe() {
+        if exe.file_name().and_then(|n| n.to_str()) == Some("symposium") {
+            return exe.to_string_lossy().into_owned();
+        }
+    }
+    if let Ok(out) = std::process::Command::new("which").arg("symposium").output() {
+        if out.status.success() {
+            let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !path.is_empty() {
+                return path;
+            }
+        }
+    }
+    "symposium".to_string()
+}
+
+/// Resolve the symposium binary for test contexts.
+///
+/// Looks for the binary in the same directory as the test executable
+/// (i.e. the cargo build output directory), which is where `cargo test`
+/// places compiled binaries.
+fn resolve_test_binary() -> String {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("symposium");
+            if candidate.exists() {
+                return candidate.to_string_lossy().into_owned();
+            }
+        }
+    }
+    resolve_symposium_binary()
 }
 
 /// Resolve config dir from environment variables.
