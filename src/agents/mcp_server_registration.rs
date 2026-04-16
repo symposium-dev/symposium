@@ -531,13 +531,17 @@ mod tests {
     fn register_codex_updates_stale() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("config.toml");
-        fs::write(&path, "[mcp_servers.symposium]\ncommand = \"/old/path\"\nargs = [\"mcp\"]\n").unwrap();
+        fs::write(&path, "[mcp_servers.symposium]\ncommand = \"/old/path\"\nargs = [\"old-arg\"]\n").unwrap();
 
         register_codex_mcp_servers(&path, &test_servers(), &Output::quiet()).unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         let doc: toml::Value = content.parse().unwrap();
-        assert_eq!(doc["mcp_servers"]["symposium"]["command"].as_str().unwrap(), "/usr/local/bin/symposium");
+        let entry = &doc["mcp_servers"]["symposium"];
+        assert_eq!(entry["command"].as_str().unwrap(), "/usr/local/bin/symposium");
+        assert_eq!(entry["args"].as_array().unwrap()[0].as_str().unwrap(), "mcp");
+        // Ensure no duplicate — still exactly one server entry
+        assert_eq!(doc["mcp_servers"].as_table().unwrap().len(), 1);
     }
 
     #[test]
