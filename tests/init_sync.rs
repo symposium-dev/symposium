@@ -79,13 +79,13 @@ async fn init_project_creates_config_and_discovers_skills() {
     );
 
     expect![[r#"
-        sync-default = false
+        sync-default = true
         agent = []
         self-contained = false
         plugin-source = []
 
         [skills]
-        serde = false
+        serde = true
 
         [workflows]
     "#]]
@@ -122,7 +122,7 @@ async fn sync_workspace_preserves_existing_choices() {
     );
 
     expect![[r#"
-        sync-default = false
+        sync-default = true
         agent = []
         self-contained = false
         plugin-source = []
@@ -210,7 +210,7 @@ async fn sync_add_agent_to_project() {
     assert_eq!(agent_names, vec!["claude", "copilot"]);
 
     expect![[r#"
-        sync-default = false
+        sync-default = true
         self-contained = false
         plugin-source = []
 
@@ -221,7 +221,7 @@ async fn sync_add_agent_to_project() {
         name = "copilot"
 
         [skills]
-        serde = false
+        serde = true
 
         [workflows]
     "#]]
@@ -249,7 +249,7 @@ async fn init_project_with_agent_sets_override() {
     );
 
     expect![[r#"
-        sync-default = false
+        sync-default = true
         self-contained = false
         plugin-source = []
 
@@ -257,7 +257,7 @@ async fn init_project_with_agent_sets_override() {
         name = "gemini"
 
         [skills]
-        serde = false
+        serde = true
 
         [workflows]
     "#]]
