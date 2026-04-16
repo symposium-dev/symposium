@@ -345,12 +345,6 @@ pub(super) fn register_goose_mcp_servers(config_path: &Path, servers: &[McpServe
             continue;
         };
 
-        let needle = format!("{name}:");
-        if content.contains(&needle) {
-            out.already_ok(format!("{display}: {name} MCP server already configured"));
-            continue;
-        }
-
         let cmd = stdio.command.to_string_lossy();
         let quoted_args: Vec<_> = stdio.args.iter().map(|a| format!("\"{}\"", a.replace('"', "\\\""))).collect();
         let args_yaml = format!("[{}]", quoted_args.join(", "));
@@ -363,6 +357,53 @@ pub(super) fn register_goose_mcp_servers(config_path: &Path, servers: &[McpServe
                   args: {args_yaml}
         "};
 
+        let needle = format!("{name}:");
+        let already_exists = content.contains(&needle);
+
+        if already_exists {
+            // Check if the existing entry matches — parse out the section
+            // and compare command/args. If it matches, skip; otherwise
+            // remove the old section so we can re-insert below.
+            let lines: Vec<&str> = content.lines().collect();
+            let mut new_lines = Vec::new();
+            let mut in_section = false;
+            let mut section_indent = 0;
+            let mut old_section = String::new();
+
+            for line in &lines {
+                let trimmed = line.trim();
+                if !in_section && !trimmed.is_empty() && trimmed.starts_with(&needle) {
+                    section_indent = line.len() - trimmed.len();
+                    in_section = true;
+                    old_section.push_str(trimmed);
+                    old_section.push('\n');
+                    continue;
+                }
+                if in_section && !trimmed.is_empty() {
+                    let line_indent = line.len() - trimmed.len();
+                    if line_indent <= section_indent {
+                        in_section = false;
+                    }
+                }
+                if in_section {
+                    old_section.push_str(trimmed);
+                    old_section.push('\n');
+                } else {
+                    new_lines.push(*line);
+                }
+            }
+
+            // Rebuild expected snippet for comparison (trimmed, no leading indent)
+            let expected_trimmed = snippet.trim();
+            if old_section.trim() == expected_trimmed {
+                out.already_ok(format!("{display}: {name} MCP server already configured"));
+                continue;
+            }
+
+            // Stale — remove old section, fall through to insert
+            content = new_lines.join("\n");
+        }
+
         content = if content.trim().is_empty() {
             format!("extensions:\n  {}", snippet.trim())
         } else if content.contains("extensions:") {
@@ -371,7 +412,8 @@ pub(super) fn register_goose_mcp_servers(config_path: &Path, servers: &[McpServe
             format!("{}\nextensions:\n  {}", content.trim(), snippet.trim())
         };
 
-        out.done(format!("{display}: added {name} MCP server"));
+        let verb = if already_exists { "updated" } else { "added" };
+        out.done(format!("{display}: {verb} {name} MCP server"));
         changed = true;
     }
 
@@ -647,6 +689,44 @@ mod tests {
             let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
             assert!(doc.get("extensions").and_then(|e| e.get("symposium")).is_none());
         }
+    }
+
+    #[test]
+    fn register_goose_updates_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        // Write a config with an old binary path
+        fs::write(&path, "extensions:\n  symposium:\n    provider: mcp\n    config:\n      command: \"/old/path\"\n      args: [\"mcp\"]\n").unwrap();
+
+        register_goose_mcp_servers(&path, &test_servers(), &Output::quiet()).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
+        assert_eq!(
+            doc["extensions"]["symposium"]["config"]["command"].as_str().unwrap(),
+            "/usr/local/bin/symposium",
+        );
+        // Still exactly one extension
+        assert_eq!(doc["extensions"].as_mapping().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn register_goose_quotes_special_chars() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.yaml");
+        let servers = vec![McpServer::Stdio(
+            McpServerStdio::new("test-server", "/path with spaces/symposium")
+                .args(vec!["--flag:value".into()]),
+        )];
+        register_goose_mcp_servers(&path, &servers, &Output::quiet()).unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        // Must be valid YAML
+        let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
+        assert_eq!(
+            doc["extensions"]["test-server"]["config"]["command"].as_str().unwrap(),
+            "/path with spaces/symposium",
+        );
     }
 
     // -- OpenCode MCP --

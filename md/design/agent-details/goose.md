@@ -75,6 +75,5 @@ extensions:
 - **Project-level**: `.goose/config.yaml`
 - **User-level**: `~/.config/goose/config.yaml`
 
-Registration is idempotent — if the entry already exists, no changes
-are made. Unlike JSON/TOML-based agents, stale entries are not updated
-in place due to the string-based YAML manipulation approach.
+Registration is idempotent — if the entry already exists with the correct
+values, no changes are made. Stale entries are updated in place.

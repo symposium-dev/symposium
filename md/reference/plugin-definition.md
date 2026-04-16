@@ -118,8 +118,6 @@ headers = []
 
 During `symposium sync --agent`, each MCP server entry is written into the agent's config file in the format that agent expects. Registration is idempotent — existing entries with correct values are left untouched, stale entries are updated in place.
 
-**Caveat:** Goose uses string-based YAML manipulation to preserve comments. Existing entries are detected but not updated — if the server command or args change, remove the old entry manually.
-
 | Agent | Config location | Key |
 |-------|----------------|-----|
 | Claude Code | `.claude/settings.json` | `mcpServers.<name>` |
