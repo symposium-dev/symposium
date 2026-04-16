@@ -177,3 +177,32 @@ Decision precedence across parallel hooks: **deny > defer > ask > allow**. The `
 - **`allowedHttpHookUrls`** — restricts HTTP hook destinations.
 - **`disableAllHooks: true`** — disables everything.
 - PreToolUse deny blocks even in `bypassPermissions` mode.
+
+## MCP Server Registration
+
+In addition to hooks, symposium registers itself as an MCP server in the
+agent's settings file. This provides an alternative integration path
+alongside the hook-based approach.
+
+### Configuration structure
+
+The MCP server entry is added under `mcpServers` in the same settings
+file used for hooks:
+
+```json
+{
+  "mcpServers": {
+    "symposium": {
+      "command": "/path/to/symposium",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+- **Project-level**: `.claude/settings.json`
+- **User-level**: `~/.claude/settings.json`
+
+Registration is idempotent — if the entry already exists with the
+correct values, no changes are made. If the entry exists but has stale
+values (e.g. the binary moved), it is updated in place.

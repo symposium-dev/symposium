@@ -156,7 +156,15 @@ pub async fn sync_agent(sym: &Symposium, project_root: Option<&Path>, out: &Outp
     let project_config = project_root.and_then(ProjectConfig::load);
     let agent_names = resolve_agents(&sym.config, project_config.as_ref());
 
-    // Register hooks for configured agents
+    // Collect MCP servers from all plugins
+    let registry = plugins::load_registry_with(sym, project_config.as_ref(), project_root);
+    let mcp_servers: Vec<sacp::schema::McpServer> = registry
+        .plugins
+        .iter()
+        .flat_map(|p| p.plugin.mcp_servers.iter().cloned())
+        .collect();
+
+    // Register hooks and MCP servers for configured agents
     for agent_name in &agent_names {
         let agent = Agent::from_config_name(agent_name)?;
 
@@ -167,12 +175,18 @@ pub async fn sync_agent(sym: &Symposium, project_root: Option<&Path>, out: &Outp
 
             if is_project_agent {
                 agent
-                    .register_project_hooks(root, out)
+                    .register_project_hooks(root, sym, out)
                     .context("failed to register project hooks")?;
+                agent
+                    .register_project_mcp_servers(root, &mcp_servers, out)
+                    .context("failed to register project MCP servers")?;
             } else {
                 agent
-                    .register_global_hooks(sym.home_dir(), out)
+                    .register_global_hooks(sym.home_dir(), sym, out)
                     .context("failed to register global hooks")?;
+                agent
+                    .register_global_mcp_servers(sym.home_dir(), &mcp_servers, out)
+                    .context("failed to register global MCP servers")?;
             }
 
             if let Some(ref config) = project_config {
@@ -180,18 +194,34 @@ pub async fn sync_agent(sym: &Symposium, project_root: Option<&Path>, out: &Outp
             }
         } else {
             agent
-                .register_global_hooks(sym.home_dir(), out)
+                .register_global_hooks(sym.home_dir(), sym, out)
                 .context("failed to register global hooks")?;
+            agent
+                .register_global_mcp_servers(sym.home_dir(), &mcp_servers, out)
+                .context("failed to register global MCP servers")?;
         }
     }
+
+    // Collect server names for unregistration
+    let server_names: Vec<&str> = mcp_servers
+        .iter()
+        .map(|s| match s {
+            sacp::schema::McpServer::Stdio(s) => s.name.as_str(),
+            sacp::schema::McpServer::Http(s) => s.name.as_str(),
+            sacp::schema::McpServer::Sse(s) => s.name.as_str(),
+            _ => panic!("unsupported McpServer variant"),
+        })
+        .collect();
 
     // Remove hooks for agents that are no longer configured
     for &agent in Agent::all() {
         if !agent_names.contains(&agent.config_name().to_string()) {
             if let Some(root) = project_root {
-                agent.unregister_project_hooks(root, out);
+                agent.unregister_project_hooks(root, sym, out);
+                let _ = agent.unregister_project_mcp_servers(root, &server_names, out);
             }
-            agent.unregister_global_hooks(sym.home_dir(), out);
+            agent.unregister_global_hooks(sym.home_dir(), sym, out);
+            let _ = agent.unregister_global_mcp_servers(sym.home_dir(), &server_names, out);
         }
     }
 

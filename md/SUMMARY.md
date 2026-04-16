@@ -24,6 +24,7 @@
 - [Publishing skills](./crate-authors/publishing-skills.md)
 - [Creating a plugin](./crate-authors/creating-a-plugin.md)
 - [Publishing hooks](./crate-authors/publishing-hooks.md)
+- [Publishing MCP servers](./crate-authors/publishing-mcp-servers.md)
 
 # Reference
 

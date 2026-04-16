@@ -56,6 +56,7 @@ toml_edit = "0.25.11"
 assert_matches = "1.5"
 expect-test = "1.5.1"
 indoc = "2.0.7"
+serde_yaml_ng = "0.10"
 symposium-testlib = { path = "symposium-testlib" }
 
 [workspace]

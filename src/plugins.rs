@@ -9,6 +9,11 @@ use crate::git_source::UpdateLevel;
 use crate::hook::HookEvent;
 use crate::hook_schema::HookAgent;
 
+use sacp::schema::McpServer;
+
+/// An MCP server entry in a plugin manifest.
+pub type McpServerEntry = McpServer;
+
 /// Source declaration for remote plugin artifacts.
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct PluginSource {
@@ -101,6 +106,9 @@ pub struct Plugin {
     pub installation: Option<Installation>,
     pub hooks: Vec<Hook>,
     pub skills: Vec<SkillGroup>,
+    /// MCP servers to register for this plugin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<McpServerEntry>,
     /// Text to inject as additional context at session start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_start_context: Option<String>,
@@ -206,6 +214,8 @@ struct PluginManifest {
     hooks: Vec<Hook>,
     #[serde(default)]
     skills: Vec<SkillGroup>,
+    #[serde(default)]
+    mcp_servers: Vec<McpServerEntry>,
     #[serde(default, rename = "session-start-context")]
     session_start_context: Option<String>,
 }
@@ -637,6 +647,7 @@ pub fn load_plugin(manifest_path: &Path) -> Result<ParsedPlugin> {
             installation: manifest.installation,
             hooks: manifest.hooks,
             skills: manifest.skills,
+            mcp_servers: manifest.mcp_servers,
             session_start_context: manifest.session_start_context,
         },
     })
@@ -654,6 +665,7 @@ mod tests {
             installation: manifest.installation,
             hooks: manifest.hooks,
             skills: manifest.skills,
+            mcp_servers: manifest.mcp_servers,
             session_start_context: manifest.session_start_context,
         })
     }
@@ -967,5 +979,77 @@ mod tests {
         assert_eq!(plugin.skills.len(), 2);
         assert!(plugin.skills[0].crates.as_ref().unwrap()[0].references_crate("serde"));
         assert!(plugin.skills[1].crates.as_ref().unwrap()[0].references_crate("tokio"));
+    }
+
+    #[test]
+    fn parse_manifest_with_no_mcp_servers() {
+        let plugin = from_str(SAMPLE).expect("parse");
+        assert!(plugin.mcp_servers.is_empty());
+    }
+
+    #[test]
+    fn mcp_entry_stdio() {
+        let entry: McpServerEntry = toml::from_str(indoc! {r#"
+            name = "my-server"
+            command = "/usr/local/bin/my-server"
+            args = ["--stdio"]
+            env = []
+        "#})
+        .expect("parse");
+        expect_test::expect![[r#"
+            Stdio(
+                McpServerStdio {
+                    name: "my-server",
+                    command: "/usr/local/bin/my-server",
+                    args: [
+                        "--stdio",
+                    ],
+                    env: [],
+                    meta: None,
+                },
+            )"#]]
+        .assert_eq(&format!("{entry:#?}"));
+    }
+
+    #[test]
+    fn mcp_entry_http() {
+        let entry: McpServerEntry = toml::from_str(indoc! {r#"
+            type = "http"
+            name = "my-server"
+            url = "http://localhost:8080/mcp"
+            headers = []
+        "#})
+        .expect("parse");
+        expect_test::expect![[r#"
+            Http(
+                McpServerHttp {
+                    name: "my-server",
+                    url: "http://localhost:8080/mcp",
+                    headers: [],
+                    meta: None,
+                },
+            )"#]]
+        .assert_eq(&format!("{entry:#?}"));
+    }
+
+    #[test]
+    fn mcp_entry_sse() {
+        let entry: McpServerEntry = toml::from_str(indoc! {r#"
+            type = "sse"
+            name = "my-server"
+            url = "http://localhost:8080/sse"
+            headers = []
+        "#})
+        .expect("parse");
+        expect_test::expect![[r#"
+            Sse(
+                McpServerSse {
+                    name: "my-server",
+                    url: "http://localhost:8080/sse",
+                    headers: [],
+                    meta: None,
+                },
+            )"#]]
+        .assert_eq(&format!("{entry:#?}"));
     }
 }

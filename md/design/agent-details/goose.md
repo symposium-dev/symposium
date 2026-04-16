@@ -52,3 +52,28 @@ Shell scripts can detect whether they're running under Goose and alter behavior 
 - Subagents
 - ACP integration
 - Tool Router — internal optimization for tool selection
+
+## MCP Server Registration
+
+Since Goose has no lifecycle hooks, symposium integrates exclusively via
+MCP server registration. Symposium registers itself as an extension in
+the Goose config file.
+
+### Configuration structure
+
+The MCP server entry is added under `extensions` in the YAML config:
+
+```yaml
+extensions:
+  symposium:
+    provider: mcp
+    config:
+      command: /path/to/symposium
+      args: [mcp]
+```
+
+- **Project-level**: `.goose/config.yaml`
+- **User-level**: `~/.config/goose/config.yaml`
+
+Registration is idempotent — if the entry already exists with the correct
+values, no changes are made. Stale entries are updated in place.

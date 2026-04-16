@@ -227,3 +227,31 @@ Workspace skills take precedence over global skills with the same name. The defa
 | Agent-level | `mcpServers` field in `.kiro/agents/*.json` |
 
 Priority: Agent config > Workspace > Global. Format is JSON with `mcpServers` key, supporting `command`/`args`/`env` for stdio and `url`/`headers` for remote servers.
+
+## MCP Server Registration
+
+In addition to hooks, symposium registers itself as an MCP server in the
+agent's MCP config file. This provides an alternative integration path
+alongside the hook-based approach.
+
+### Configuration structure
+
+The MCP server entry is added under `mcpServers`:
+
+```json
+{
+  "mcpServers": {
+    "symposium": {
+      "command": "/path/to/symposium",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+- **Project-level**: `.kiro/settings/mcp.json`
+- **User-level**: `~/.kiro/settings/mcp.json`
+
+Registration is idempotent — if the entry already exists with the
+correct values, no changes are made. If the entry exists but has stale
+values (e.g. the binary moved), it is updated in place.

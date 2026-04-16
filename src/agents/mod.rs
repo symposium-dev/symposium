@@ -4,12 +4,15 @@
 //! configured and where skill files are placed. This module centralizes
 //! that knowledge.
 
+mod mcp_server_registration;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, bail};
 use serde_json::json;
 
+use crate::config::Symposium;
 use crate::output::{Output, display_path};
 
 /// Supported AI agents.
@@ -118,7 +121,12 @@ impl Agent {
     // -----------------------------------------------------------------------
 
     /// Register hooks in the project-level agent config.
-    pub fn register_project_hooks(&self, project_root: &Path, out: &Output) -> Result<()> {
+    pub fn register_project_hooks(
+        &self,
+        project_root: &Path,
+        _sym: &Symposium,
+        out: &Output,
+    ) -> Result<()> {
         match self {
             Agent::Claude => {
                 register_claude_hooks(&project_root.join(".claude").join("settings.json"), out)
@@ -143,11 +151,14 @@ impl Agent {
                 out.info("OpenCode uses JS/TS plugins for hooks; skipping hook registration (skills only)");
                 Ok(())
             }
-        }
+        }?;
+
+        Ok(())
     }
 
     /// Register hooks in the global agent config.
-    pub fn register_global_hooks(&self, home: &Path, out: &Output) -> Result<()> {
+    pub fn register_global_hooks(&self, home: &Path, _sym: &Symposium, out: &Output) -> Result<()> {
+        // Register hooks
         match self {
             Agent::Claude => {
                 register_claude_hooks(&home.join(".claude").join("settings.json"), out)
@@ -170,11 +181,201 @@ impl Agent {
                 out.info("OpenCode uses JS/TS plugins for hooks; skipping hook registration (skills only)");
                 Ok(())
             }
+        }?;
+
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // MCP server registration
+    // -----------------------------------------------------------------------
+
+    /// Register MCP servers in the project-level agent config.
+    pub fn register_project_mcp_servers(
+        &self,
+        project_root: &Path,
+        servers: &[sacp::schema::McpServer],
+        out: &Output,
+    ) -> Result<()> {
+        match self {
+            Agent::Claude => mcp_server_registration::register_claude_mcp_servers(
+                &project_root.join(".claude").join("settings.json"),
+                servers,
+                out,
+            ),
+            Agent::Codex => mcp_server_registration::register_codex_mcp_servers(
+                &project_root.join(".codex").join("config.toml"),
+                servers,
+                out,
+            ),
+            Agent::Copilot => mcp_server_registration::register_copilot_mcp_servers(
+                &project_root.join(".vscode").join("mcp.json"),
+                servers,
+                out,
+            ),
+            Agent::Gemini => mcp_server_registration::register_gemini_mcp_servers(
+                &project_root.join(".gemini").join("settings.json"),
+                servers,
+                out,
+            ),
+            Agent::Kiro => mcp_server_registration::register_kiro_mcp_servers(
+                &project_root.join(".kiro").join("settings").join("mcp.json"),
+                servers,
+                out,
+            ),
+            Agent::Goose => mcp_server_registration::register_goose_mcp_servers(
+                &project_root.join(".goose").join("config.yaml"),
+                servers,
+                out,
+            ),
+            Agent::OpenCode => mcp_server_registration::register_opencode_mcp_servers(
+                &project_root.join("opencode.json"),
+                servers,
+                out,
+            ),
+        }
+    }
+
+    /// Register MCP servers in the global agent config.
+    pub fn register_global_mcp_servers(
+        &self,
+        home: &Path,
+        servers: &[sacp::schema::McpServer],
+        out: &Output,
+    ) -> Result<()> {
+        match self {
+            Agent::Claude => mcp_server_registration::register_claude_mcp_servers(
+                &home.join(".claude").join("settings.json"),
+                servers,
+                out,
+            ),
+            Agent::Codex => mcp_server_registration::register_codex_mcp_servers(
+                &home.join(".codex").join("config.toml"),
+                servers,
+                out,
+            ),
+            Agent::Copilot => mcp_server_registration::register_copilot_mcp_servers(
+                &home.join(".copilot").join("mcp-config.json"),
+                servers,
+                out,
+            ),
+            Agent::Gemini => mcp_server_registration::register_gemini_mcp_servers(
+                &home.join(".gemini").join("settings.json"),
+                servers,
+                out,
+            ),
+            Agent::Kiro => mcp_server_registration::register_kiro_mcp_servers(
+                &home.join(".kiro").join("settings").join("mcp.json"),
+                servers,
+                out,
+            ),
+            Agent::Goose => mcp_server_registration::register_goose_mcp_servers(
+                &home.join(".config").join("goose").join("config.yaml"),
+                servers,
+                out,
+            ),
+            Agent::OpenCode => mcp_server_registration::register_opencode_mcp_servers(
+                &home.join(".config").join("opencode").join("opencode.json"),
+                servers,
+                out,
+            ),
+        }
+    }
+
+    /// Remove MCP servers from the project-level agent config.
+    pub fn unregister_project_mcp_servers(
+        &self,
+        project_root: &Path,
+        names: &[&str],
+        out: &Output,
+    ) -> Result<()> {
+        match self {
+            Agent::Claude => mcp_server_registration::unregister_claude_mcp_servers(
+                &project_root.join(".claude").join("settings.json"),
+                names,
+                out,
+            ),
+            Agent::Codex => mcp_server_registration::unregister_codex_mcp_servers(
+                &project_root.join(".codex").join("config.toml"),
+                names,
+                out,
+            ),
+            Agent::Copilot => mcp_server_registration::unregister_copilot_mcp_servers(
+                &project_root.join(".vscode").join("mcp.json"),
+                names,
+                out,
+            ),
+            Agent::Gemini => mcp_server_registration::unregister_gemini_mcp_servers(
+                &project_root.join(".gemini").join("settings.json"),
+                names,
+                out,
+            ),
+            Agent::Kiro => mcp_server_registration::unregister_kiro_mcp_servers(
+                &project_root.join(".kiro").join("settings").join("mcp.json"),
+                names,
+                out,
+            ),
+            Agent::Goose => mcp_server_registration::unregister_goose_mcp_servers(
+                &project_root.join(".goose").join("config.yaml"),
+                names,
+                out,
+            ),
+            Agent::OpenCode => mcp_server_registration::unregister_opencode_mcp_servers(
+                &project_root.join("opencode.json"),
+                names,
+                out,
+            ),
+        }
+    }
+
+    /// Remove MCP servers from the global agent config.
+    pub fn unregister_global_mcp_servers(
+        &self,
+        home: &Path,
+        names: &[&str],
+        out: &Output,
+    ) -> Result<()> {
+        match self {
+            Agent::Claude => mcp_server_registration::unregister_claude_mcp_servers(
+                &home.join(".claude").join("settings.json"),
+                names,
+                out,
+            ),
+            Agent::Codex => mcp_server_registration::unregister_codex_mcp_servers(
+                &home.join(".codex").join("config.toml"),
+                names,
+                out,
+            ),
+            Agent::Copilot => mcp_server_registration::unregister_copilot_mcp_servers(
+                &home.join(".copilot").join("mcp-config.json"),
+                names,
+                out,
+            ),
+            Agent::Gemini => mcp_server_registration::unregister_gemini_mcp_servers(
+                &home.join(".gemini").join("settings.json"),
+                names,
+                out,
+            ),
+            Agent::Kiro => mcp_server_registration::unregister_kiro_mcp_servers(
+                &home.join(".kiro").join("settings").join("mcp.json"),
+                names,
+                out,
+            ),
+            Agent::Goose => mcp_server_registration::unregister_goose_mcp_servers(
+                &home.join(".config").join("goose").join("config.yaml"),
+                names,
+                out,
+            ),
+            Agent::OpenCode => mcp_server_registration::unregister_opencode_mcp_servers(
+                &home.join(".config").join("opencode").join("opencode.json"),
+                names,
+                out,
+            ),
         }
     }
 
     /// Remove hooks from the project-level agent config.
-    pub fn unregister_project_hooks(&self, project_root: &Path, out: &Output) {
+    pub fn unregister_project_hooks(&self, project_root: &Path, _sym: &Symposium, out: &Output) {
         match self {
             Agent::Claude => {
                 unregister_claude_hooks(&project_root.join(".claude").join("settings.json"), out)
@@ -195,7 +396,7 @@ impl Agent {
     }
 
     /// Remove hooks from the global agent config.
-    pub fn unregister_global_hooks(&self, home: &Path, out: &Output) {
+    pub fn unregister_global_hooks(&self, home: &Path, _sym: &Symposium, out: &Output) {
         match self {
             Agent::Claude => {
                 unregister_claude_hooks(&home.join(".claude").join("settings.json"), out)
