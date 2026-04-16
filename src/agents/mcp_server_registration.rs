@@ -98,7 +98,7 @@ fn register_json_mcp_servers(
     }
 
     let container = if let Some(key) = container_key {
-        if config.get(key).is_none() {
+        if !config.get(key).is_some_and(|v| v.is_object()) {
             config[key] = json!({});
         }
         &mut config[key]
