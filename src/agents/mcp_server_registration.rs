@@ -29,7 +29,7 @@ fn server_name(server: &McpServer) -> &str {
         McpServer::Stdio(s) => &s.name,
         McpServer::Http(s) => &s.name,
         McpServer::Sse(s) => &s.name,
-        _ => "unknown",
+        _ => panic!("unsupported McpServer variant"),
     }
 }
 
@@ -47,7 +47,7 @@ fn server_to_json(server: &McpServer) -> serde_json::Value {
         }
         McpServer::Http(s) => json!({ "url": s.url }),
         McpServer::Sse(s) => json!({ "url": s.url }),
-        _ => json!({}),
+        _ => panic!("unsupported McpServer variant"),
     }
 }
 

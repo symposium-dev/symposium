@@ -209,7 +209,7 @@ pub async fn sync_agent(sym: &Symposium, project_root: Option<&Path>, out: &Outp
             sacp::schema::McpServer::Stdio(s) => s.name.as_str(),
             sacp::schema::McpServer::Http(s) => s.name.as_str(),
             sacp::schema::McpServer::Sse(s) => s.name.as_str(),
-            _ => "unknown",
+            _ => panic!("unsupported McpServer variant"),
         })
         .collect();
 
