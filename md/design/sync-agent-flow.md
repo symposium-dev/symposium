@@ -1,4 +1,4 @@
-# `symposium sync --agent`
+# `cargo agents sync --agent`
 
 Installs enabled extensions into the agent's expected locations and ensures hooks are registered.
 

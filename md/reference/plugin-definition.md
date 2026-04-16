@@ -48,12 +48,12 @@ The `session-start-context` field lets a plugin inject text into the agent's con
 
 ```toml
 name = "rust-guidance"
-session-start-context = "**Critical:** Before authoring Rust code, run `symposium start` for instructions."
+session-start-context = "**Critical:** Before authoring Rust code, run `cargo agents start` for instructions."
 ```
 
 When multiple plugins provide `session-start-context`, all of their texts are combined (separated by blank lines) and returned to the agent as additional context.
 
-This works via the `SessionStart` hook event. When the agent starts a session, symposium collects `session-start-context` from all loaded plugins — including both user-level and project-level plugin sources — and returns the combined text.
+This works via the `SessionStart` hook event. When the agent starts a session, Symposium collects `session-start-context` from all loaded plugins — including both user-level and project-level plugin sources — and returns the combined text.
 
 ## `[[mcp_servers]]`
 
@@ -157,7 +157,7 @@ env = []
 ## Validation
 
 ```bash
-symposium plugin validate path/to/symposium.toml
+cargo agents plugin validate path/to/symposium.toml
 ```
 
 This parses the manifest and reports any errors. Use `--check-crates` to also verify that crate names exist on crates.io.

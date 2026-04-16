@@ -52,7 +52,7 @@ See [Skill matching](./skill-matching.md) for the full syntax.
 
 | Mode | Behavior |
 |------|----------|
-| `always` | Skill body is inlined in `symposium crate` output. Use for guidance that's broadly relevant whenever the crate is in use. |
+| `always` | Skill body is inlined in `cargo agents crate` output. Use for guidance that's broadly relevant whenever the crate is in use. |
 | `optional` (default) | Skill is listed with metadata and path but body is not inlined. Use for targeted workflows, migration guides, or debugging aids. |
 
 ## Scope composition

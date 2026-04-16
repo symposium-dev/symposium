@@ -11,7 +11,7 @@ cargo binstall symposium       # or `cargo install` if you prefer
 From your project directory, run:
 
 ```bash
-symposium init
+cargo agents init
 ```
 
 This walks you through two things:
@@ -19,9 +19,9 @@ This walks you through two things:
 1. **User-wide setup** — picks your agent (Claude Code, Copilot, Gemini) and stores it in `~/.symposium/config.toml`. Registers a global hook so your agent picks up project extensions automatically.
 2. **Project setup** — scans your workspace dependencies, discovers available extensions, and generates `.symposium/config.toml`.
 
-Check `.symposium/` into version control so your team shares the same configuration. Each developer picks their own agent via `symposium init --user`.
+Check `.symposium/` into version control so your team shares the same configuration. Each developer picks their own agent via `cargo agents init --user`.
 
-You can also run the two steps separately with `symposium init --user` and `symposium init --project`.
+You can also run the two steps separately with `cargo agents init --user` and `cargo agents init --project`.
 
 ## What's in `.symposium/config.toml`
 
@@ -43,7 +43,7 @@ When your agent starts, the registered hook installs the enabled extensions into
 As dependencies change, run:
 
 ```bash
-symposium sync
+cargo agents sync
 ```
 
-This re-scans your dependencies, updates the config, and re-installs extensions. Your existing on/off choices are preserved. See [`symposium sync`](./reference/symposium-sync.md) for options.
+This re-scans your dependencies, updates the config, and re-installs extensions. Your existing on/off choices are preserved. See [`cargo agents sync`](./reference/cargo-agents-sync.md) for options.

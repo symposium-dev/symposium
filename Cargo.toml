@@ -12,12 +12,13 @@ name = "symposium"
 path = "src/lib.rs"
 
 [[bin]]
-name = "symposium"
-path = "src/bin/symposium.rs"
+name = "cargo-agents"
+path = "src/bin/cargo-agents.rs"
 
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-{ target }.tar.gz"
 pkg-fmt = "tgz"
+bin-dir = "{ bin }{ binary-ext }"
 [package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
 pkg-url = "{ repo }/releases/download/{ name }-v{ version }/{ name }-{ target }.zip"
 pkg-fmt = "zip"

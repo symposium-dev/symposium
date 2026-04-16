@@ -1,4 +1,4 @@
-# `symposium init --project`
+# `cargo agents init --project`
 
 Sets up project-level configuration for the current workspace.
 

@@ -1,13 +1,13 @@
 # Agent details
 
 > **Disclaimer:** These documents reflect our current understanding of each agent's hook system
-> and extensibility surface. They are maintained as working references for symposium development,
+> and extensibility surface. They are maintained as working references for Symposium development,
 > not as a substitute for each project's official documentation. Details may be outdated or
 > incomplete — always consult the primary sources linked in each agent's page.
 
-For each agent it supports, symposium needs to know:
+For each agent it supports, Symposium needs to know:
 
-1. **Hook registration** — where and how to write config so the agent calls `symposium hook`
+1. **Hook registration** — where and how to write config so the agent calls `cargo agents hook`
 2. **Hook I/O protocol** — event names, input/output field names, exit code semantics
 3. **Extension installation** — where skill files go (project and global)
 4. **Custom instructions** — where the agent reads project-level instructions

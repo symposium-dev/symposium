@@ -77,7 +77,7 @@ Defines additional plugin sources. Each entry must have exactly one of `git` or 
 | `name` | string | *(required)* | A name for this source (used in logs and cache paths). |
 | `git` | string | — | GitHub repository URL. The repo is fetched as a tarball and cached under `~/.symposium/cache/plugin-sources/`. |
 | `path` | string | — | Local directory containing plugins. Relative paths are resolved from `~/.symposium/`. |
-| `auto-update` | bool | `true` | Whether to check for updates on startup. Only applies to `git` sources. When `false`, the source is only fetched by `symposium update`. |
+| `auto-update` | bool | `true` | Whether to check for updates on startup. Only applies to `git` sources. When `false`, the source is only fetched by `cargo agents plugin sync`. |
 
 ## Plugin sources
 
@@ -96,25 +96,25 @@ Git-based sources with `auto-update = true` (the default) are checked for freshn
 
 ### Plugin CLI commands
 
-The `symposium plugin` subcommand provides plugin management:
+The `cargo agents plugin` subcommand provides plugin management:
 
 ```bash
 # Sync all git-based plugin sources (respects auto-update)
-symposium plugin sync
+cargo agents plugin sync
 
 # Sync a specific provider (ignores auto-update)
-symposium plugin sync my-org
+cargo agents plugin sync my-org
 
 # List all providers and their plugins
-symposium plugin list
+cargo agents plugin list
 
 # Show a plugin's TOML configuration and source file path
-symposium plugin show my-plugin
+cargo agents plugin show my-plugin
 ```
 
 ## Logging
 
-Each invocation of `symposium` writes a log file to the logs directory with a timestamped filename (e.g., `symposium-20260325-154226.log`).
+Each invocation of `cargo agents` writes a log file to the logs directory with a timestamped filename (e.g., `cargo-agents-20260325-154226.log`).
 
 To see hook payloads and other verbose output, set the log level to `debug`:
 

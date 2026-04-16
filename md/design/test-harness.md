@@ -57,7 +57,7 @@ async fn my_test() {
 
 `TestContext` provides:
 
-- **`invoke_hook(agent, event, &payload)`** — the full hook pipeline (`parse → builtin → plugins → serialize`). Same code path as `symposium hook <agent> <event>`. The payload is any `impl Serialize` matching the agent's wire format. Returns agent wire-format output bytes.
+- **`invoke_hook(agent, event, &payload)`** — the full hook pipeline (`parse → builtin → plugins → serialize`). Same code path as `cargo agents hook <agent> <event>`. The payload is any `impl Serialize` matching the agent's wire format. Returns agent wire-format output bytes.
 
 - **`invoke(&["start"])`** — runs an MCP dispatch command (same as the MCP server). Returns the output string.
 
@@ -93,4 +93,4 @@ Fixtures compose: `with_fixture(&["plugins0", "workspace0"])` layers both into o
 Text files (`.toml`, `.md`, `.json`, `.txt`, `.ts`, `.js`) have variables expanded when copied:
 
 - **`$TEST_DIR`** — the tempdir root. Use for paths that resolve at test time (e.g., `command = "cat > $TEST_DIR/captured.json"`).
-- **`$BINARY`** — path to the `symposium` binary (`CARGO_BIN_EXE_symposium`).
+- **`$BINARY`** — path to the `cargo-agents` binary (`CARGO_BIN_EXE_cargo-agents`).

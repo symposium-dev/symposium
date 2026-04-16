@@ -435,7 +435,7 @@ impl Symposium {
 
         let logs = self.logs_dir();
         let now = chrono::Local::now();
-        let filename = now.format("symposium-%Y%m%d-%H%M%S.log").to_string();
+        let filename = now.format("cargo-agents-%Y%m%d-%H%M%S.log").to_string();
         let log_path = logs.join(&filename);
 
         let file = OpenOptions::new()

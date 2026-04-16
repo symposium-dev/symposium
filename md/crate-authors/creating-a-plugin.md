@@ -74,7 +74,7 @@ You have two options:
 ## Validation
 
 ```bash
-symposium plugin validate path/to/symposium.toml
+cargo agents plugin validate path/to/symposium.toml
 ```
 
 This parses the manifest and reports any errors. Use `--check-crates` to also verify that crate names exist on crates.io.
