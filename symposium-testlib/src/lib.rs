@@ -115,12 +115,15 @@ impl SubmitResult {
     }
 
     /// Check if any hook output contains the given substring in additionalContext.
+    /// Handles both top-level and hookSpecificOutput-nested additionalContext.
     pub fn has_context_containing(&self, needle: &str) -> bool {
         self.hooks.iter().any(|h| {
-            h.output
-                .get("additionalContext")
-                .and_then(|v| v.as_str())
-                .is_some_and(|s| s.contains(needle))
+            let top = h.output.get("additionalContext").and_then(|v| v.as_str());
+            let nested = h.output
+                .get("hookSpecificOutput")
+                .and_then(|o| o.get("additionalContext"))
+                .and_then(|v| v.as_str());
+            top.into_iter().chain(nested).any(|s| s.contains(needle))
         })
     }
 }
