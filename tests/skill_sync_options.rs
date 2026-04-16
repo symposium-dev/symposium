@@ -1,11 +1,10 @@
 //! Integration tests for skill syncing with different sync-default configurations.
 //!
 //! Covers:
-//! - Initial sync with no applicable skills → add dep → re-sync → skill appears
-//! - sync-default = true (project-level) → skills enabled by default
-//! - sync-default = false (project-level) → skills disabled by default
-//! - Toggling a skill from false→true populates the skill dir on next sync
-//! - Toggling from true→false documents that cleanup is not yet implemented
+//! - Initial sync with no applicable skills → add dep → re-sync → skill appears enabled
+//! - sync-default = false (opt-out) → skills disabled by default
+//! - Toggling a skill true→false removes the skill dir, false→true reinstalls
+//! - Hook invocation triggers skill installation via sync side-effect
 
 use expect_test::expect;
 
@@ -21,18 +20,22 @@ fn read_project_config(ctx: &symposium_testlib::TestContext) -> String {
 
 fn skill_dir_populated(ctx: &symposium_testlib::TestContext, skill_name: &str) -> bool {
     let root = ctx.workspace_root.as_ref().unwrap();
-    root.join(".claude").join("skills").join(skill_name).join("SKILL.md").exists()
+    root.join(".claude")
+        .join("skills")
+        .join(skill_name)
+        .join("SKILL.md")
+        .exists()
 }
 
 // -----------------------------------------------------------------------
-// Scenario 1: Initial sync with no applicable skills, then add a dep
+// Scenario 1: Add a dep and see the skill enabled by default
 // -----------------------------------------------------------------------
 
 /// Start with a workspace that has no deps matching any skill plugin.
 /// Add serde to Cargo.toml, re-sync, and observe the skill appears
-/// with the default value (false, since ProjectConfig defaults sync-default=false).
+/// enabled by default (sync-default = true).
 #[tokio::test]
-async fn no_skills_then_add_dep_discovers_skill_default_off() {
+async fn no_skills_then_add_dep_discovers_skill_default_on() {
     let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace-noserde0"]);
 
     ctx.symposium(&["init", "--user", "--add-agent", "claude"])
@@ -51,7 +54,7 @@ async fn no_skills_then_add_dep_discovers_skill_default_off() {
     );
 
     expect![[r#"
-        sync-default = false
+        sync-default = true
         agent = []
         self-contained = false
         plugin-source = []
@@ -62,68 +65,21 @@ async fn no_skills_then_add_dep_discovers_skill_default_off() {
     "#]]
     .assert_eq(&read_project_config(&ctx));
 
-    // Add serde dependency to Cargo.toml
-    let cargo_path = workspace_root.join("Cargo.toml");
-    let mut cargo = std::fs::read_to_string(&cargo_path).unwrap();
-    cargo.push_str("serde = \"1.0\"\n");
-    std::fs::write(&cargo_path, &cargo).unwrap();
-
-    // Simulate what the hook does: run sync --workspace
-    ctx.symposium(&["sync", "--workspace"]).await.unwrap();
-
-    // Now serde skill should appear, defaulting to false (project sync-default = false)
-    let config = symposium::config::ProjectConfig::load(&workspace_root).unwrap();
-    assert_eq!(
-        config.skills.get("serde"),
-        Some(&false),
-        "newly discovered skill should default to false"
-    );
-
-    // Sync agent — disabled skill should NOT be installed
-    ctx.symposium(&["sync", "--agent"]).await.unwrap();
-    assert!(
-        !skill_dir_populated(&ctx, "serde-guidance"),
-        "disabled skill should not be installed"
-    );
-}
-
-// -----------------------------------------------------------------------
-// Scenario 2: sync-default = true at project level
-// -----------------------------------------------------------------------
-
-/// When the project config has sync-default = true, newly discovered skills
-/// should be enabled by default and installed on sync --agent.
-#[tokio::test]
-async fn sync_default_true_enables_and_installs_skill() {
-    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace-noserde0"]);
-
-    ctx.symposium(&["init", "--user", "--add-agent", "claude"])
-        .await
-        .unwrap();
-    ctx.symposium(&["init", "--project"]).await.unwrap();
-
-    let workspace_root = ctx.workspace_root.clone().unwrap();
-
-    // Set sync-default = true in project config
-    let config_path = workspace_root.join(".symposium").join("config.toml");
-    let content = std::fs::read_to_string(&config_path).unwrap();
-    let content = content.replace("sync-default = false", "sync-default = true");
-    std::fs::write(&config_path, &content).unwrap();
-
     // Add serde dependency
     let cargo_path = workspace_root.join("Cargo.toml");
     let mut cargo = std::fs::read_to_string(&cargo_path).unwrap();
     cargo.push_str("serde = \"1.0\"\n");
     std::fs::write(&cargo_path, &cargo).unwrap();
 
-    // Sync workspace — skill should appear as enabled
+    // Sync workspace
     ctx.symposium(&["sync", "--workspace"]).await.unwrap();
 
+    // Skill should appear enabled by default
     let config = symposium::config::ProjectConfig::load(&workspace_root).unwrap();
     assert_eq!(
         config.skills.get("serde"),
         Some(&true),
-        "newly discovered skill should default to true when sync-default = true"
+        "newly discovered skill should default to true"
     );
 
     // Sync agent — enabled skill should be installed
@@ -135,13 +91,60 @@ async fn sync_default_true_enables_and_installs_skill() {
 }
 
 // -----------------------------------------------------------------------
-// Scenario 3: Toggle skill false → true → false
+// Scenario 2: sync-default = false (opt-out)
 // -----------------------------------------------------------------------
 
-/// Start with skill disabled, enable it and sync (skill installed),
-/// then disable it and sync again (skill removed).
+/// When the project config has sync-default = false, newly discovered skills
+/// should be disabled by default and not installed.
 #[tokio::test]
-async fn toggle_skill_false_to_true_installs() {
+async fn sync_default_false_disables_skill() {
+    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace-noserde0"]);
+
+    ctx.symposium(&["init", "--user", "--add-agent", "claude"])
+        .await
+        .unwrap();
+    ctx.symposium(&["init", "--project"]).await.unwrap();
+
+    let workspace_root = ctx.workspace_root.clone().unwrap();
+
+    // Opt out: set sync-default = false
+    let config_path = workspace_root.join(".symposium").join("config.toml");
+    let content = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(&config_path, content.replace("sync-default = true", "sync-default = false"))
+        .unwrap();
+
+    // Add serde dependency
+    let cargo_path = workspace_root.join("Cargo.toml");
+    let mut cargo = std::fs::read_to_string(&cargo_path).unwrap();
+    cargo.push_str("serde = \"1.0\"\n");
+    std::fs::write(&cargo_path, &cargo).unwrap();
+
+    // Sync workspace — skill should appear as disabled
+    ctx.symposium(&["sync", "--workspace"]).await.unwrap();
+
+    let config = symposium::config::ProjectConfig::load(&workspace_root).unwrap();
+    assert_eq!(
+        config.skills.get("serde"),
+        Some(&false),
+        "newly discovered skill should default to false when sync-default = false"
+    );
+
+    // Sync agent — disabled skill should NOT be installed
+    ctx.symposium(&["sync", "--agent"]).await.unwrap();
+    assert!(
+        !skill_dir_populated(&ctx, "serde-guidance"),
+        "disabled skill should not be installed"
+    );
+}
+
+// -----------------------------------------------------------------------
+// Scenario 3: Toggle skill true → false → true
+// -----------------------------------------------------------------------
+
+/// Skill starts enabled (default). Disable it → skill dir removed.
+/// Re-enable it → skill dir reinstalled.
+#[tokio::test]
+async fn toggle_skill_true_to_false_removes_then_reinstalls() {
     let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
 
     ctx.symposium(&["init", "--user", "--add-agent", "claude"])
@@ -152,40 +155,36 @@ async fn toggle_skill_false_to_true_installs() {
     let workspace_root = ctx.workspace_root.clone().unwrap();
     let config_path = workspace_root.join(".symposium").join("config.toml");
 
-    // Verify skill starts disabled
+    // Skill starts enabled
     let config = symposium::config::ProjectConfig::load(&workspace_root).unwrap();
-    assert_eq!(config.skills.get("serde"), Some(&false));
+    assert_eq!(config.skills.get("serde"), Some(&true));
 
-    // Skill should not be installed yet
+    // Skill should be installed
+    assert!(
+        skill_dir_populated(&ctx, "serde-guidance"),
+        "enabled skill should be installed after init"
+    );
+
+    // Disable the skill
+    let content = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(&config_path, content.replace("serde = true", "serde = false")).unwrap();
+
+    // Sync agent — should remove the skill directory
     ctx.symposium(&["sync", "--agent"]).await.unwrap();
     assert!(
         !skill_dir_populated(&ctx, "serde-guidance"),
-        "disabled skill should not be installed"
+        "disabled skill directory should be removed"
     );
 
-    // Enable the skill
+    // Re-enable the skill
     let content = std::fs::read_to_string(&config_path).unwrap();
-    let content = content.replace("serde = false", "serde = true");
-    std::fs::write(&config_path, &content).unwrap();
+    std::fs::write(&config_path, content.replace("serde = false", "serde = true")).unwrap();
 
-    // Sync agent — should install the skill
+    // Sync agent — should reinstall
     ctx.symposium(&["sync", "--agent"]).await.unwrap();
     assert!(
         skill_dir_populated(&ctx, "serde-guidance"),
-        "enabled skill should be installed after sync"
-    );
-
-    // Disable the skill again
-    let content = std::fs::read_to_string(&config_path).unwrap();
-    let content = content.replace("serde = true", "serde = false");
-    std::fs::write(&config_path, &content).unwrap();
-
-    // Sync agent — should remove the disabled skill directory
-    ctx.symposium(&["sync", "--agent"]).await.unwrap();
-
-    assert!(
-        !skill_dir_populated(&ctx, "serde-guidance"),
-        "disabled skill directory should be removed after sync"
+        "re-enabled skill should be reinstalled"
     );
 }
 
@@ -193,7 +192,7 @@ async fn toggle_skill_false_to_true_installs() {
 // Scenario 4: Hook invocation triggers skill installation via sync
 // -----------------------------------------------------------------------
 
-/// Enable a skill, then invoke a PostToolUse hook (simulating a file write).
+/// Disable a skill, then re-enable it and invoke a PostToolUse hook.
 /// The sync side-effect inside execute_hook should install the skill.
 #[tokio::test]
 async fn toggle_skill_then_hook_installs() {
@@ -207,10 +206,15 @@ async fn toggle_skill_then_hook_installs() {
     let workspace_root = ctx.workspace_root.clone().unwrap();
     let config_path = workspace_root.join(".symposium").join("config.toml");
 
-    // Skill starts disabled, not installed
+    // Disable the skill (it starts enabled)
+    let content = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(&config_path, content.replace("serde = true", "serde = false")).unwrap();
+
+    // Sync to remove it
+    ctx.symposium(&["sync", "--agent"]).await.unwrap();
     assert!(!skill_dir_populated(&ctx, "serde-guidance"));
 
-    // Enable the skill in config
+    // Re-enable the skill
     let content = std::fs::read_to_string(&config_path).unwrap();
     std::fs::write(&config_path, content.replace("serde = false", "serde = true")).unwrap();
 
@@ -237,4 +241,3 @@ async fn toggle_skill_then_hook_installs() {
         "hook's sync side-effect should install the enabled skill"
     );
 }
-

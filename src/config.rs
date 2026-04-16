@@ -118,7 +118,7 @@ pub struct PluginSourceConfig {
 // ---------------------------------------------------------------------------
 
 /// Project-level configuration stored at `.symposium/config.toml`.
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ProjectConfig {
     /// Default on/off for newly discovered extensions (overrides user setting).
     #[serde(default = "default_true", rename = "sync-default")]
@@ -153,6 +153,20 @@ pub struct ProjectConfig {
     /// Workflow extensions. Key = workflow name, value = enabled.
     #[serde(default)]
     pub workflows: BTreeMap<String, bool>,
+}
+
+impl Default for ProjectConfig {
+    fn default() -> Self {
+        Self {
+            sync_default: true,
+            agents: Vec::new(),
+            self_contained: false,
+            defaults: None,
+            plugin_source: Vec::new(),
+            skills: BTreeMap::new(),
+            workflows: BTreeMap::new(),
+        }
+    }
 }
 
 impl ProjectConfig {
