@@ -210,6 +210,29 @@ tool_timeout_sec = 60
 
 Supports stdio (`command`/`args`) and streamable HTTP (`url`/`bearer_token_env_var`). CLI management: `codex mcp add <name> ...`.
 
+## MCP Server Registration
+
+In addition to hooks, symposium registers itself as an MCP server in the
+agent's config file. This provides an alternative integration path
+alongside the hook-based approach.
+
+### Configuration structure
+
+The MCP server entry is added under `[mcp_servers]` in the TOML config:
+
+```toml
+[mcp_servers.symposium]
+command = "/path/to/symposium"
+args = ["mcp"]
+```
+
+- **Project-level**: `.codex/config.toml`
+- **User-level**: `~/.codex/config.toml`
+
+Registration is idempotent — if the entry already exists with the
+correct values, no changes are made. If the entry exists but has stale
+values (e.g. the binary moved), it is updated in place.
+
 ## Other Extensibility
 
 - `notify` in config.toml (fire-and-forget on agent-turn-complete)

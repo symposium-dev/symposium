@@ -155,3 +155,31 @@ OpenCode walks up from CWD to the git worktree root, loading matching skill defi
 ## Additional Events (Plugin System)
 
 The full event list includes: `session.created`, `session.idle`, `session.compacted`, `message.updated`, `file.edited`, `file.watcher.updated`, `permission.asked`, `permission.replied`, `tool.execute.before`, `tool.execute.after`, `shell.env`, `tui.prompt.append`, `tui.command.execute`, and others (~30 total). The `message.updated` event (filtered by `role === "user"`) is the closest equivalent to a user-prompt-submit hook. The `session.created` event is the session-start equivalent.
+
+## MCP Server Registration
+
+In addition to hooks, symposium registers itself as an MCP server in the
+agent's config file. This provides an alternative integration path
+alongside the hook-based approach.
+
+### Configuration structure
+
+The MCP server entry is added under `mcp` in the JSON config:
+
+```json
+{
+  "mcp": {
+    "symposium": {
+      "command": "/path/to/symposium",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+- **Project-level**: `opencode.json`
+- **User-level**: `~/.config/opencode/opencode.json`
+
+Registration is idempotent — if the entry already exists with the
+correct values, no changes are made. If the entry exists but has stale
+values (e.g. the binary moved), it is updated in place.

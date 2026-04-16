@@ -222,3 +222,32 @@ Configured under `mcpServers` in `.gemini/settings.json` or `~/.gemini/settings.
 ```
 
 Transport is auto-selected by key: `command`+`args` (stdio), `url` (SSE), `httpUrl` (streamable HTTP).
+
+## MCP Server Registration
+
+In addition to hooks, symposium registers itself as an MCP server in the
+agent's settings file. This provides an alternative integration path
+alongside the hook-based approach.
+
+### Configuration structure
+
+The MCP server entry is added under `mcpServers` in the same settings
+file used for hooks:
+
+```json
+{
+  "mcpServers": {
+    "symposium": {
+      "command": "/path/to/symposium",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+- **Project-level**: `.gemini/settings.json`
+- **User-level**: `~/.gemini/settings.json`
+
+Registration is idempotent — if the entry already exists with the
+correct values, no changes are made. If the entry exists but has stale
+values (e.g. the binary moved), it is updated in place.

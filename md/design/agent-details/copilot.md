@@ -165,6 +165,30 @@ Priority: Personal (user) > Repository (workspace) > Organization.
 
 Note: VS Code uses `"servers"` as root key while the CLI uses `"mcpServers"`. MCP tools only work in Copilot's Agent mode. Supported transports: `local`/`stdio`, `http`/`sse`.
 
+### MCP Server Registration
+
+In addition to hooks, symposium registers itself as an MCP server in the
+agent's config file. This provides an alternative integration path
+alongside the hook-based approach.
+
+The MCP server entry is added as a top-level key:
+
+```json
+{
+  "symposium": {
+    "command": "/path/to/symposium",
+    "args": ["mcp"]
+  }
+}
+```
+
+- **Project-level**: `.vscode/mcp.json`
+- **User-level**: `~/.copilot/mcp-config.json`
+
+Registration is idempotent — if the entry already exists with the
+correct values, no changes are made. If the entry exists but has stale
+values (e.g. the binary moved), it is updated in place.
+
 ### Copilot SDK (programmatic hooks)
 
 The `@github/copilot-sdk` (Node.js, Python, Go, .NET, Java) provides callback-style hooks for applications embedding the Copilot runtime:
