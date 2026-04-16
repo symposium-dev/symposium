@@ -11,7 +11,7 @@ cargo binstall symposium       # or `cargo install` if you prefer
 symposium init
 ```
 
-The [`init` command](./references/symposium-init.md) will guide you through picking your personal agent. It will then configure the agent to use `symposium` (e.g., by installing hooks). This will immediately give you some benefits, such as introducing Rust guidance and reducing token usage with the [`rtk`](https://www.rtk-ai.app/) project.
+The [`init` command](./reference/cargo-agents-init.md) will guide you through picking your personal agent. It will then configure the agent to use `symposium` (e.g., by installing hooks). This will immediately give you some benefits, such as introducing Rust guidance and reducing token usage with the [`rtk`](https://www.rtk-ai.app/) project.
 
 ## Leveraging the wisdom of crates.io
 

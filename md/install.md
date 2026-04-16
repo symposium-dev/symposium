@@ -46,4 +46,4 @@ As dependencies change, run:
 symposium sync
 ```
 
-This re-scans your dependencies, updates the config, and re-installs extensions. Your existing on/off choices are preserved. See [`symposium sync`](./reference/symposium-sync.md) for options.
+This re-scans your dependencies, updates the config, and re-installs extensions. Your existing on/off choices are preserved. See [`cargo agents sync`](./reference/cargo-agents-sync.md) for options.
