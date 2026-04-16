@@ -12,8 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, bail};
 use serde_json::json;
 
-use sacp::schema::McpServer;
-
+use crate::config::Symposium;
 use crate::output::{Output, display_path};
 
 /// Supported AI agents.
@@ -122,7 +121,7 @@ impl Agent {
     // -----------------------------------------------------------------------
 
     /// Register hooks in the project-level agent config.
-    pub fn register_project_hooks(&self, project_root: &Path, out: &Output) -> Result<()> {
+    pub fn register_project_hooks(&self, project_root: &Path, _sym: &Symposium, out: &Output) -> Result<()> {
         match self {
             Agent::Claude => {
                 register_claude_hooks(&project_root.join(".claude").join("settings.json"), out)
@@ -147,11 +146,14 @@ impl Agent {
                 out.info("OpenCode uses JS/TS plugins for hooks; skipping hook registration (skills only)");
                 Ok(())
             }
-        }
+        }?;
+
+        Ok(())
     }
 
     /// Register hooks in the global agent config.
-    pub fn register_global_hooks(&self, home: &Path, out: &Output) -> Result<()> {
+    pub fn register_global_hooks(&self, home: &Path, _sym: &Symposium, out: &Output) -> Result<()> {
+        // Register hooks
         match self {
             Agent::Claude => {
                 register_claude_hooks(&home.join(".claude").join("settings.json"), out)
@@ -174,7 +176,9 @@ impl Agent {
                 out.info("OpenCode uses JS/TS plugins for hooks; skipping hook registration (skills only)");
                 Ok(())
             }
-        }
+        }?;
+
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -182,7 +186,7 @@ impl Agent {
     // -----------------------------------------------------------------------
 
     /// Register MCP servers in the project-level agent config.
-    pub fn register_project_mcp_servers(&self, project_root: &Path, servers: &[McpServer], out: &Output) -> Result<()> {
+    pub fn register_project_mcp_servers(&self, project_root: &Path, servers: &[sacp::schema::McpServer], out: &Output) -> Result<()> {
         match self {
             Agent::Claude => mcp_server_registration::register_claude_mcp_servers(
                 &project_root.join(".claude").join("settings.json"),
@@ -216,7 +220,7 @@ impl Agent {
     }
 
     /// Register MCP servers in the global agent config.
-    pub fn register_global_mcp_servers(&self, home: &Path, servers: &[McpServer], out: &Output) -> Result<()> {
+    pub fn register_global_mcp_servers(&self, home: &Path, servers: &[sacp::schema::McpServer], out: &Output) -> Result<()> {
         match self {
             Agent::Claude => mcp_server_registration::register_claude_mcp_servers(
                 &home.join(".claude").join("settings.json"),
@@ -318,7 +322,7 @@ impl Agent {
     }
 
     /// Remove hooks from the project-level agent config.
-    pub fn unregister_project_hooks(&self, project_root: &Path, out: &Output) {
+    pub fn unregister_project_hooks(&self, project_root: &Path, _sym: &Symposium, out: &Output) {
         match self {
             Agent::Claude => {
                 unregister_claude_hooks(&project_root.join(".claude").join("settings.json"), out)
@@ -339,7 +343,7 @@ impl Agent {
     }
 
     /// Remove hooks from the global agent config.
-    pub fn unregister_global_hooks(&self, home: &Path, out: &Output) {
+    pub fn unregister_global_hooks(&self, home: &Path, _sym: &Symposium, out: &Output) {
         match self {
             Agent::Claude => {
                 unregister_claude_hooks(&home.join(".claude").join("settings.json"), out)
