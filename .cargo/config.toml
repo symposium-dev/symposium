@@ -1,3 +1,4 @@
 [alias]
 setup = "run -p setup --"
 ci = "run -p ci --"
+test-agent = "test --test hook_agent --"
