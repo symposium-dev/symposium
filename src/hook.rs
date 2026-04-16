@@ -56,11 +56,7 @@ pub async fn execute_hook(
 }
 
 /// CLI entry point: read payload from stdin, dispatch, print output.
-pub async fn run(
-    sym: &Symposium,
-    agent: HookAgent,
-    event: HookEvent,
-) -> ExitCode {
+pub async fn run(sym: &Symposium, agent: HookAgent, event: HookEvent) -> ExitCode {
     tracing::debug!("Running hook listener for agent {agent:?} and event {event:?}");
 
     let mut input = String::new();

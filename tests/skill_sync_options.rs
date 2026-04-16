@@ -110,8 +110,11 @@ async fn sync_default_false_disables_skill() {
     // Opt out: set sync-default = false
     let config_path = workspace_root.join(".symposium").join("config.toml");
     let content = std::fs::read_to_string(&config_path).unwrap();
-    std::fs::write(&config_path, content.replace("sync-default = true", "sync-default = false"))
-        .unwrap();
+    std::fs::write(
+        &config_path,
+        content.replace("sync-default = true", "sync-default = false"),
+    )
+    .unwrap();
 
     // Add serde dependency
     let cargo_path = workspace_root.join("Cargo.toml");
@@ -167,7 +170,11 @@ async fn toggle_skill_true_to_false_removes_then_reinstalls() {
 
     // Disable the skill
     let content = std::fs::read_to_string(&config_path).unwrap();
-    std::fs::write(&config_path, content.replace("serde = true", "serde = false")).unwrap();
+    std::fs::write(
+        &config_path,
+        content.replace("serde = true", "serde = false"),
+    )
+    .unwrap();
 
     // Sync agent — should remove the skill directory
     ctx.symposium(&["sync", "--agent"]).await.unwrap();
@@ -178,7 +185,11 @@ async fn toggle_skill_true_to_false_removes_then_reinstalls() {
 
     // Re-enable the skill
     let content = std::fs::read_to_string(&config_path).unwrap();
-    std::fs::write(&config_path, content.replace("serde = false", "serde = true")).unwrap();
+    std::fs::write(
+        &config_path,
+        content.replace("serde = false", "serde = true"),
+    )
+    .unwrap();
 
     // Sync agent — should reinstall
     ctx.symposium(&["sync", "--agent"]).await.unwrap();
@@ -208,7 +219,11 @@ async fn toggle_skill_then_hook_installs() {
 
     // Disable the skill (it starts enabled)
     let content = std::fs::read_to_string(&config_path).unwrap();
-    std::fs::write(&config_path, content.replace("serde = true", "serde = false")).unwrap();
+    std::fs::write(
+        &config_path,
+        content.replace("serde = true", "serde = false"),
+    )
+    .unwrap();
 
     // Sync to remove it
     ctx.symposium(&["sync", "--agent"]).await.unwrap();
@@ -216,7 +231,11 @@ async fn toggle_skill_then_hook_installs() {
 
     // Re-enable the skill
     let content = std::fs::read_to_string(&config_path).unwrap();
-    std::fs::write(&config_path, content.replace("serde = false", "serde = true")).unwrap();
+    std::fs::write(
+        &config_path,
+        content.replace("serde = false", "serde = true"),
+    )
+    .unwrap();
 
     // Invoke a hook — the sync side-effect should install the skill
     use symposium::hook::HookEvent;
