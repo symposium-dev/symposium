@@ -114,23 +114,6 @@ headers = []
 | `url` | string | SSE endpoint URL. |
 | `headers` | array of objects | HTTP headers to set when making requests. |
 
-### Builtin
-
-The `builtin` type invokes the `symposium` binary itself as an MCP server. Symposium resolves the binary path at sync time.
-
-```toml
-[[mcp_servers]]
-name = "symposium"
-type = "builtin"
-args = ["mcp"]
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | string | Must be `"builtin"`. |
-| `name` | string | Server name as it appears in the agent's MCP config. |
-| `args` | array of strings | Arguments passed to the `symposium` binary. |
-
 ### How registration works
 
 During `symposium sync --agent`, each MCP server entry is written into the agent's config file in the format that agent expects. Registration is idempotent — existing entries with correct values are left untouched, stale entries are updated in place.
@@ -165,9 +148,10 @@ matcher = "Bash"
 command = "./scripts/check-widget.sh"
 
 [[mcp_servers]]
-name = "symposium"
-type = "builtin"
-args = ["mcp"]
+name = "widgetlib-mcp"
+command = "/usr/local/bin/widgetlib-mcp"
+args = ["--stdio"]
+env = []
 ```
 
 ## Validation

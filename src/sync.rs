@@ -161,7 +161,7 @@ pub async fn sync_agent(sym: &Symposium, project_root: Option<&Path>, out: &Outp
     let mcp_servers: Vec<sacp::schema::McpServer> = registry
         .plugins
         .iter()
-        .flat_map(|p| p.plugin.mcp_servers.iter().map(|e| e.resolve(sym)))
+        .flat_map(|p| p.plugin.mcp_servers.iter().cloned())
         .collect();
 
     // Register hooks and MCP servers for configured agents

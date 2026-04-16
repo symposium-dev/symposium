@@ -9,67 +9,10 @@ use crate::git_source::UpdateLevel;
 use crate::hook::HookEvent;
 use crate::hook_schema::HookAgent;
 
-use sacp::schema::{McpServer, McpServerStdio};
+use sacp::schema::McpServer;
 
 /// An MCP server entry in a plugin manifest.
-///
-/// Either a builtin reference (resolved to the symposium binary at sync time)
-/// or a concrete MCP server definition.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum McpServerEntry {
-    /// A builtin MCP server: `{ name = "symposium", type = "builtin", args = ["mcp"] }`.
-    /// Resolved to `McpServerStdio { command: <symposium binary>, args }`.
-    Builtin {
-        name: String,
-        r#type: BuiltinTag,
-        #[serde(default)]
-        args: Vec<String>,
-    },
-    /// A concrete MCP server definition from the ACP schema.
-    Custom(McpServer),
-}
-
-/// Tag value that must be the string `"builtin"`.
-#[derive(Debug, Clone)]
-pub struct BuiltinTag;
-
-impl Serialize for BuiltinTag {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str("builtin")
-    }
-}
-
-impl<'de> Deserialize<'de> for BuiltinTag {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
-        if s == "builtin" {
-            Ok(BuiltinTag)
-        } else {
-            Err(serde::de::Error::invalid_value(
-                serde::de::Unexpected::Str(&s),
-                &"\"builtin\"",
-            ))
-        }
-    }
-}
-
-impl McpServerEntry {
-    /// Resolve this entry into a concrete `McpServer`.
-    ///
-    /// Builtin entries are expanded using the symposium binary path.
-    pub fn resolve(&self, sym: &Symposium) -> McpServer {
-        match self {
-            McpServerEntry::Builtin { name, args, .. } => {
-                McpServer::Stdio(
-                    McpServerStdio::new(name.clone(), sym.symposium_binary())
-                        .args(args.clone()),
-                )
-            }
-            McpServerEntry::Custom(server) => server.clone(),
-        }
-    }
-}
+pub type McpServerEntry = McpServer;
 
 /// Source declaration for remote plugin artifacts.
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
@@ -1039,42 +982,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_manifest_with_builtin_mcp_server() {
-        let toml = indoc! {r#"
-            name = "symposium"
-
-            [[mcp_servers]]
-            name = "symposium"
-            type = "builtin"
-            args = ["mcp"]
-        "#};
-        let plugin = from_str(toml).expect("parse");
-        assert_eq!(plugin.mcp_servers.len(), 1);
-        assert!(matches!(&plugin.mcp_servers[0], McpServerEntry::Builtin { name, args, .. }
-            if name == "symposium" && args == &["mcp"]));
-    }
-
-    #[test]
     fn parse_manifest_with_no_mcp_servers() {
         let plugin = from_str(SAMPLE).expect("parse");
         assert!(plugin.mcp_servers.is_empty());
-    }
-
-    #[test]
-    fn mcp_entry_builtin() {
-        let entry: McpServerEntry = toml::from_str(indoc! {r#"
-            name = "symposium"
-            type = "builtin"
-            args = ["mcp"]
-        "#}).expect("parse");
-        expect_test::expect![[r#"
-            Builtin {
-                name: "symposium",
-                type: BuiltinTag,
-                args: [
-                    "mcp",
-                ],
-            }"#]].assert_eq(&format!("{entry:#?}"));
     }
 
     #[test]
@@ -1086,18 +996,16 @@ mod tests {
             env = []
         "#}).expect("parse");
         expect_test::expect![[r#"
-            Custom(
-                Stdio(
-                    McpServerStdio {
-                        name: "my-server",
-                        command: "/usr/local/bin/my-server",
-                        args: [
-                            "--stdio",
-                        ],
-                        env: [],
-                        meta: None,
-                    },
-                ),
+            Stdio(
+                McpServerStdio {
+                    name: "my-server",
+                    command: "/usr/local/bin/my-server",
+                    args: [
+                        "--stdio",
+                    ],
+                    env: [],
+                    meta: None,
+                },
             )"#]].assert_eq(&format!("{entry:#?}"));
     }
 
@@ -1110,15 +1018,13 @@ mod tests {
             headers = []
         "#}).expect("parse");
         expect_test::expect![[r#"
-            Custom(
-                Http(
-                    McpServerHttp {
-                        name: "my-server",
-                        url: "http://localhost:8080/mcp",
-                        headers: [],
-                        meta: None,
-                    },
-                ),
+            Http(
+                McpServerHttp {
+                    name: "my-server",
+                    url: "http://localhost:8080/mcp",
+                    headers: [],
+                    meta: None,
+                },
             )"#]].assert_eq(&format!("{entry:#?}"));
     }
 
@@ -1131,15 +1037,13 @@ mod tests {
             headers = []
         "#}).expect("parse");
         expect_test::expect![[r#"
-            Custom(
-                Sse(
-                    McpServerSse {
-                        name: "my-server",
-                        url: "http://localhost:8080/sse",
-                        headers: [],
-                        meta: None,
-                    },
-                ),
+            Sse(
+                McpServerSse {
+                    name: "my-server",
+                    url: "http://localhost:8080/sse",
+                    headers: [],
+                    meta: None,
+                },
             )"#]].assert_eq(&format!("{entry:#?}"));
     }
 }
