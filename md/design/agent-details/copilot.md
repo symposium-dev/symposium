@@ -167,11 +167,8 @@ Note: VS Code uses `"servers"` as root key while the CLI uses `"mcpServers"`. MC
 
 ### MCP Server Registration
 
-In addition to hooks, symposium registers itself as an MCP server in the
-agent's config file. This provides an alternative integration path
-alongside the hook-based approach.
-
-The MCP server entry is added as a top-level key:
+Symposium registers MCP servers in the Copilot config as top-level keys
+(matching the CLI's `mcpServers` format, not VS Code's `servers` format):
 
 ```json
 {
