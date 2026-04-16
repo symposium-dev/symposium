@@ -194,3 +194,55 @@ async fn toggle_skill_false_to_true_installs() {
     );
 }
 
+
+// -----------------------------------------------------------------------
+// Scenario 4: Hook invocation should trigger skill installation via sync
+// -----------------------------------------------------------------------
+
+/// Enable a skill, then invoke a PostToolUse hook (simulating a file write).
+/// BUG: execute_hook does not run sync --agent, so the skill is NOT installed.
+/// The sync side-effect only lives in the CLI run() path.
+#[tokio::test]
+async fn hook_does_not_trigger_sync_bug() {
+    let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
+
+    ctx.symposium(&["init", "--user", "--add-agent", "claude"])
+        .await
+        .unwrap();
+    ctx.symposium(&["init", "--project"]).await.unwrap();
+
+    let workspace_root = ctx.workspace_root.clone().unwrap();
+    let config_path = workspace_root.join(".symposium").join("config.toml");
+
+    // Skill starts disabled, not installed
+    assert!(!skill_dir_populated(&ctx, "serde-guidance"));
+
+    // Enable the skill in config
+    let content = std::fs::read_to_string(&config_path).unwrap();
+    std::fs::write(&config_path, content.replace("serde = false", "serde = true")).unwrap();
+
+    // Invoke a hook — this SHOULD install the skill, but doesn't because
+    // execute_hook() doesn't run the sync side-effect.
+    use symposium::hook::HookEvent;
+    use symposium::hook_schema::HookAgent;
+    ctx.invoke_hook(
+        HookAgent::Claude,
+        HookEvent::PostToolUse,
+        &serde_json::json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "src/main.rs", "content": "fn main() {}"},
+            "tool_response": {"success": true},
+            "session_id": "s1",
+            "cwd": workspace_root.to_string_lossy().to_string(),
+        }),
+    )
+    .await
+    .unwrap();
+
+    // BUG: skill is NOT installed because sync only runs in CLI run() path
+    assert!(
+        !skill_dir_populated(&ctx, "serde-guidance"),
+        "BUG: execute_hook does not run sync, so skill is not installed"
+    );
+}
