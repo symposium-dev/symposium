@@ -180,17 +180,12 @@ async fn toggle_skill_false_to_true_installs() {
     let content = content.replace("serde = true", "serde = false");
     std::fs::write(&config_path, &content).unwrap();
 
-    // Sync agent — currently install_skills only installs enabled skills,
-    // it does NOT remove previously-installed disabled ones.
+    // Sync agent — should remove the disabled skill directory
     ctx.symposium(&["sync", "--agent"]).await.unwrap();
 
-    // BUG/GAP: the skill directory is still present after disabling.
-    // sync --agent should clean up skill dirs for disabled skills.
-    let still_present = skill_dir_populated(&ctx, "serde-guidance");
     assert!(
-        still_present,
-        "skill directory is NOT cleaned up when disabled (known gap — \
-         sync --agent only installs, doesn't remove)"
+        !skill_dir_populated(&ctx, "serde-guidance"),
+        "disabled skill directory should be removed after sync"
     );
 }
 

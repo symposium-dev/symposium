@@ -246,13 +246,21 @@ async fn install_skills(
     for entry in &applicable {
         for crate_name in entry.effective_crate_names() {
             let enabled = config.skills.get(&crate_name).copied().unwrap_or(false);
+            let skill_name = entry.skill.name();
+            let dest_dir = agent.project_skill_dir(project_root, skill_name);
+
             if !enabled {
+                if dest_dir.exists() {
+                    let _ = std::fs::remove_dir_all(&dest_dir);
+                    out.removed(format!(
+                        "removed skill {skill_name} from {}",
+                        display_path(&dest_dir)
+                    ));
+                }
                 continue;
             }
 
             let skill_path = &entry.skill.path;
-            let skill_name = entry.skill.name();
-            let dest_dir = agent.project_skill_dir(project_root, skill_name);
 
             match agent.install_skill(skill_path, &dest_dir) {
                 Ok(()) => {
