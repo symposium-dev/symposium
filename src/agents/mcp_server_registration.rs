@@ -532,6 +532,20 @@ mod tests {
     }
 
     #[test]
+    fn register_claude_recovers_non_object_container() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("settings.json");
+        // mcpServers is a string instead of an object
+        save_json(&path, &json!({"mcpServers": "corrupted"})).unwrap();
+
+        register_claude_mcp_servers(&path, &test_servers(), &Output::quiet()).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(settings["mcpServers"]["symposium"]["command"], "/usr/local/bin/symposium");
+    }
+
+    #[test]
     fn unregister_claude_removes_entry() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("settings.json");
