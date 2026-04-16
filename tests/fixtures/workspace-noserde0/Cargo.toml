@@ -1,0 +1,7 @@
+[package]
+name = "test-workspace-noserde"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = "1.0"
