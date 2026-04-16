@@ -613,7 +613,7 @@ mod tests {
         register_goose_mcp_servers(&path, &test_servers(), &Output::quiet()).unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
-        let doc: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
+        let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
         let ext = &doc["extensions"]["symposium"];
         assert_eq!(ext["provider"].as_str().unwrap(), "mcp");
         assert_eq!(ext["config"]["command"].as_str().unwrap(), "/usr/local/bin/symposium");
@@ -627,7 +627,7 @@ mod tests {
         register_goose_mcp_servers(&path, &test_servers(), &Output::quiet()).unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
-        let doc: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
+        let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
         assert_eq!(doc["extensions"].as_mapping().unwrap().len(), 1);
     }
 
@@ -640,7 +640,7 @@ mod tests {
 
         let content = fs::read_to_string(&path).unwrap();
         if !content.trim().is_empty() {
-            let doc: serde_yaml::Value = serde_yaml::from_str(&content).unwrap();
+            let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
             assert!(doc.get("extensions").and_then(|e| e.get("symposium")).is_none());
         }
     }
