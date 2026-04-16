@@ -11,7 +11,7 @@ use crate::{
 
 // Re-export hook schema types for convenience.
 pub use crate::hook_schema::{HookAgent, HookEvent};
-/// Core hook pipeline: parse → builtin → plugins → serialize.
+/// Core hook pipeline: sync → parse → builtin → plugins → serialize.
 ///
 /// Takes the raw agent wire-format input, returns agent wire-format output bytes.
 /// Called by both `run()` (CLI) and the test harness.
@@ -26,6 +26,9 @@ pub async fn execute_hook(
     if let Some(handler) = event_handler {
         let payload = handler.parse_input(input)?;
         let sym_input = payload.to_symposium();
+
+        // Run sync --agent as a side effect (non-fatal).
+        run_sync_agent(sym, &sym_input).await;
 
         // Builtin dispatch → symposium output → host agent output as Value
         let builtin_sym_output = dispatch_builtin(sym, &sym_input).await;
@@ -57,7 +60,6 @@ pub async fn run(
     sym: &Symposium,
     agent: HookAgent,
     event: HookEvent,
-    cwd: &std::path::Path,
 ) -> ExitCode {
     tracing::debug!("Running hook listener for agent {agent:?} and event {event:?}");
 
@@ -67,14 +69,6 @@ pub async fn run(
         return ExitCode::SUCCESS;
     }
     tracing::debug!(?input);
-
-    // Run sync --agent as a side effect (non-fatal, CLI-only).
-    if let Some(handler) = agent.event(event) {
-        if let Ok(payload) = handler.parse_input(&input) {
-            let sym_input = payload.to_symposium();
-            run_sync_agent_sym(sym, &sym_input, cwd).await;
-        }
-    }
 
     match execute_hook(sym, agent, event, &input).await {
         Ok(bytes) => {
@@ -91,12 +85,10 @@ pub async fn run(
 }
 
 /// Run sync --agent if we're in a project directory. Non-fatal.
-async fn run_sync_agent_sym(sym: &Symposium, input: &symposium::InputEvent, cwd: &std::path::Path) {
-    let effective_cwd = input
-        .cwd()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| cwd.to_path_buf());
-    let project_root = Some(effective_cwd.as_path()).filter(|p| p.join(".symposium").is_dir());
+async fn run_sync_agent(sym: &Symposium, input: &symposium::InputEvent) {
+    let Some(cwd_str) = input.cwd() else { return };
+    let cwd = std::path::Path::new(cwd_str);
+    let project_root = Some(cwd).filter(|p| p.join(".symposium").is_dir());
     let out = crate::output::Output::quiet();
     if let Err(e) = crate::sync::sync_agent(sym, project_root, &out).await {
         tracing::warn!(error = %e, "sync --agent during hook failed (continuing)");

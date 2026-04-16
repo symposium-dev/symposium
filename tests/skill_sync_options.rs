@@ -194,16 +194,14 @@ async fn toggle_skill_false_to_true_installs() {
     );
 }
 
-
 // -----------------------------------------------------------------------
-// Scenario 4: Hook invocation should trigger skill installation via sync
+// Scenario 4: Hook invocation triggers skill installation via sync
 // -----------------------------------------------------------------------
 
 /// Enable a skill, then invoke a PostToolUse hook (simulating a file write).
-/// BUG: execute_hook does not run sync --agent, so the skill is NOT installed.
-/// The sync side-effect only lives in the CLI run() path.
+/// The sync side-effect inside execute_hook should install the skill.
 #[tokio::test]
-async fn hook_does_not_trigger_sync_bug() {
+async fn toggle_skill_then_hook_installs() {
     let mut ctx = symposium_testlib::with_fixture(&["plugins0", "workspace0"]);
 
     ctx.symposium(&["init", "--user", "--add-agent", "claude"])
@@ -221,8 +219,7 @@ async fn hook_does_not_trigger_sync_bug() {
     let content = std::fs::read_to_string(&config_path).unwrap();
     std::fs::write(&config_path, content.replace("serde = false", "serde = true")).unwrap();
 
-    // Invoke a hook — this SHOULD install the skill, but doesn't because
-    // execute_hook() doesn't run the sync side-effect.
+    // Invoke a hook — the sync side-effect should install the skill
     use symposium::hook::HookEvent;
     use symposium::hook_schema::HookAgent;
     ctx.invoke_hook(
@@ -240,9 +237,9 @@ async fn hook_does_not_trigger_sync_bug() {
     .await
     .unwrap();
 
-    // BUG: skill is NOT installed because sync only runs in CLI run() path
     assert!(
-        !skill_dir_populated(&ctx, "serde-guidance"),
-        "BUG: execute_hook does not run sync, so skill is not installed"
+        skill_dir_populated(&ctx, "serde-guidance"),
+        "hook's sync side-effect should install the enabled skill"
     );
 }
+

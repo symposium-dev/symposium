@@ -30,7 +30,7 @@ async fn main() -> ExitCode {
 
     match cli.command {
         // Commands that need direct I/O (stdin/stdout) stay in the binary
-        Some(Commands::Hook { agent, event }) => hook::run(&sym, agent, event, &cwd).await,
+        Some(Commands::Hook { agent, event }) => hook::run(&sym, agent, event).await,
 
         Some(Commands::Mcp) => match mcp::serve(&sym, &cwd).await {
             Ok(()) => ExitCode::SUCCESS,
