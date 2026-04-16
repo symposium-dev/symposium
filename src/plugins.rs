@@ -9,6 +9,39 @@ use crate::git_source::UpdateLevel;
 use crate::hook::HookEvent;
 use crate::hook_schema::HookAgent;
 
+use sacp::schema::{McpServer, McpServerStdio};
+
+/// An MCP server entry in a plugin manifest.
+///
+/// Either a builtin reference (resolved to the symposium binary at sync time)
+/// or a concrete MCP server definition.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum McpServerEntry {
+    /// A builtin MCP server: `{ name = "symposium", builtin = ["mcp"] }`.
+    /// Resolved to `McpServerStdio { command: <symposium binary>, args: builtin }`.
+    Builtin { name: String, builtin: Vec<String> },
+    /// A concrete MCP server definition from the ACP schema.
+    Custom(McpServer),
+}
+
+impl McpServerEntry {
+    /// Resolve this entry into a concrete `McpServer`.
+    ///
+    /// Builtin entries are expanded using the symposium binary path.
+    pub fn resolve(&self, sym: &Symposium) -> McpServer {
+        match self {
+            McpServerEntry::Builtin { name, builtin } => {
+                McpServer::Stdio(
+                    McpServerStdio::new(name.clone(), sym.symposium_binary())
+                        .args(builtin.clone()),
+                )
+            }
+            McpServerEntry::Custom(server) => server.clone(),
+        }
+    }
+}
+
 /// Source declaration for remote plugin artifacts.
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct PluginSource {
@@ -101,6 +134,9 @@ pub struct Plugin {
     pub installation: Option<Installation>,
     pub hooks: Vec<Hook>,
     pub skills: Vec<SkillGroup>,
+    /// MCP servers to register for this plugin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<McpServerEntry>,
     /// Text to inject as additional context at session start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_start_context: Option<String>,
@@ -206,6 +242,8 @@ struct PluginManifest {
     hooks: Vec<Hook>,
     #[serde(default)]
     skills: Vec<SkillGroup>,
+    #[serde(default)]
+    mcp_servers: Vec<McpServerEntry>,
     #[serde(default, rename = "session-start-context")]
     session_start_context: Option<String>,
 }
@@ -637,6 +675,7 @@ pub fn load_plugin(manifest_path: &Path) -> Result<ParsedPlugin> {
             installation: manifest.installation,
             hooks: manifest.hooks,
             skills: manifest.skills,
+            mcp_servers: manifest.mcp_servers,
             session_start_context: manifest.session_start_context,
         },
     })
@@ -654,6 +693,7 @@ mod tests {
             installation: manifest.installation,
             hooks: manifest.hooks,
             skills: manifest.skills,
+            mcp_servers: manifest.mcp_servers,
             session_start_context: manifest.session_start_context,
         })
     }
@@ -967,5 +1007,26 @@ mod tests {
         assert_eq!(plugin.skills.len(), 2);
         assert!(plugin.skills[0].crates.as_ref().unwrap()[0].references_crate("serde"));
         assert!(plugin.skills[1].crates.as_ref().unwrap()[0].references_crate("tokio"));
+    }
+
+    #[test]
+    fn parse_manifest_with_builtin_mcp_server() {
+        let toml = indoc! {r#"
+            name = "symposium"
+
+            [[mcp_servers]]
+            name = "symposium"
+            builtin = ["mcp"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.mcp_servers.len(), 1);
+        assert!(matches!(&plugin.mcp_servers[0], McpServerEntry::Builtin { name, builtin }
+            if name == "symposium" && builtin == &["mcp"]));
+    }
+
+    #[test]
+    fn parse_manifest_with_no_mcp_servers() {
+        let plugin = from_str(SAMPLE).expect("parse");
+        assert!(plugin.mcp_servers.is_empty());
     }
 }
