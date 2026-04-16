@@ -192,16 +192,28 @@ fn unregister_json_mcp_servers(
 // ---------------------------------------------------------------------------
 
 /// Claude Code: `mcpServers.<name>` in settings.json
-pub(super) fn register_claude_mcp_servers(path: &Path, servers: &[McpServer], out: &Output) -> Result<()> {
+pub(super) fn register_claude_mcp_servers(
+    path: &Path,
+    servers: &[McpServer],
+    out: &Output,
+) -> Result<()> {
     register_json_mcp_servers(path, servers, Some("mcpServers"), out)
 }
 
-pub(super) fn unregister_claude_mcp_servers(path: &Path, names: &[&str], out: &Output) -> Result<()> {
+pub(super) fn unregister_claude_mcp_servers(
+    path: &Path,
+    names: &[&str],
+    out: &Output,
+) -> Result<()> {
     unregister_json_mcp_servers(path, names, Some("mcpServers"), out)
 }
 
 /// Codex CLI: `[mcp_servers.<name>]` in config.toml
-pub(super) fn register_codex_mcp_servers(config_path: &Path, servers: &[McpServer], out: &Output) -> Result<()> {
+pub(super) fn register_codex_mcp_servers(
+    config_path: &Path,
+    servers: &[McpServer],
+    out: &Output,
+) -> Result<()> {
     let display = display_path(config_path);
 
     let content = if config_path.exists() {
@@ -222,7 +234,9 @@ pub(super) fn register_codex_mcp_servers(config_path: &Path, servers: &[McpServe
     for server in servers {
         let name = server_name(server);
         let McpServer::Stdio(stdio) = server else {
-            out.info(format!("{display}: skipping non-stdio MCP server {name} (Codex only supports stdio)"));
+            out.info(format!(
+                "{display}: skipping non-stdio MCP server {name} (Codex only supports stdio)"
+            ));
             continue;
         };
 
@@ -273,7 +287,11 @@ pub(super) fn register_codex_mcp_servers(config_path: &Path, servers: &[McpServe
     Ok(())
 }
 
-pub(super) fn unregister_codex_mcp_servers(config_path: &Path, names: &[&str], out: &Output) -> Result<()> {
+pub(super) fn unregister_codex_mcp_servers(
+    config_path: &Path,
+    names: &[&str],
+    out: &Output,
+) -> Result<()> {
     let display = display_path(config_path);
     if !config_path.exists() {
         return Ok(());
@@ -301,25 +319,45 @@ pub(super) fn unregister_codex_mcp_servers(config_path: &Path, names: &[&str], o
 }
 
 /// Copilot: top-level `<name>` in mcp.json
-pub(super) fn register_copilot_mcp_servers(path: &Path, servers: &[McpServer], out: &Output) -> Result<()> {
+pub(super) fn register_copilot_mcp_servers(
+    path: &Path,
+    servers: &[McpServer],
+    out: &Output,
+) -> Result<()> {
     register_json_mcp_servers(path, servers, None, out)
 }
 
-pub(super) fn unregister_copilot_mcp_servers(path: &Path, names: &[&str], out: &Output) -> Result<()> {
+pub(super) fn unregister_copilot_mcp_servers(
+    path: &Path,
+    names: &[&str],
+    out: &Output,
+) -> Result<()> {
     unregister_json_mcp_servers(path, names, None, out)
 }
 
 /// Gemini CLI: same format as Claude (`mcpServers.<name>`)
-pub(super) fn register_gemini_mcp_servers(path: &Path, servers: &[McpServer], out: &Output) -> Result<()> {
+pub(super) fn register_gemini_mcp_servers(
+    path: &Path,
+    servers: &[McpServer],
+    out: &Output,
+) -> Result<()> {
     register_claude_mcp_servers(path, servers, out)
 }
 
-pub(super) fn unregister_gemini_mcp_servers(path: &Path, names: &[&str], out: &Output) -> Result<()> {
+pub(super) fn unregister_gemini_mcp_servers(
+    path: &Path,
+    names: &[&str],
+    out: &Output,
+) -> Result<()> {
     unregister_claude_mcp_servers(path, names, out)
 }
 
 /// Kiro: `mcpServers.<name>` in mcp.json
-pub(super) fn register_kiro_mcp_servers(path: &Path, servers: &[McpServer], out: &Output) -> Result<()> {
+pub(super) fn register_kiro_mcp_servers(
+    path: &Path,
+    servers: &[McpServer],
+    out: &Output,
+) -> Result<()> {
     register_claude_mcp_servers(path, servers, out)
 }
 
@@ -328,7 +366,11 @@ pub(super) fn unregister_kiro_mcp_servers(path: &Path, names: &[&str], out: &Out
 }
 
 /// Goose: `extensions.<name>` in config.yaml (string manipulation to preserve comments)
-pub(super) fn register_goose_mcp_servers(config_path: &Path, servers: &[McpServer], out: &Output) -> Result<()> {
+pub(super) fn register_goose_mcp_servers(
+    config_path: &Path,
+    servers: &[McpServer],
+    out: &Output,
+) -> Result<()> {
     let display = display_path(config_path);
 
     let mut content = if config_path.exists() {
@@ -341,12 +383,18 @@ pub(super) fn register_goose_mcp_servers(config_path: &Path, servers: &[McpServe
     for server in servers {
         let name = server_name(server);
         let McpServer::Stdio(stdio) = server else {
-            out.info(format!("{display}: skipping non-stdio MCP server {name} (Goose extensions use stdio)"));
+            out.info(format!(
+                "{display}: skipping non-stdio MCP server {name} (Goose extensions use stdio)"
+            ));
             continue;
         };
 
         let cmd = stdio.command.to_string_lossy();
-        let quoted_args: Vec<_> = stdio.args.iter().map(|a| format!("\"{}\"", a.replace('"', "\\\""))).collect();
+        let quoted_args: Vec<_> = stdio
+            .args
+            .iter()
+            .map(|a| format!("\"{}\"", a.replace('"', "\\\"")))
+            .collect();
         let args_yaml = format!("[{}]", quoted_args.join(", "));
 
         let snippet = formatdoc! {"
@@ -426,7 +474,11 @@ pub(super) fn register_goose_mcp_servers(config_path: &Path, servers: &[McpServe
     Ok(())
 }
 
-pub(super) fn unregister_goose_mcp_servers(config_path: &Path, names: &[&str], out: &Output) -> Result<()> {
+pub(super) fn unregister_goose_mcp_servers(
+    config_path: &Path,
+    names: &[&str],
+    out: &Output,
+) -> Result<()> {
     let display = display_path(config_path);
     if !config_path.exists() {
         return Ok(());
@@ -467,11 +519,19 @@ pub(super) fn unregister_goose_mcp_servers(config_path: &Path, names: &[&str], o
 }
 
 /// OpenCode: `mcp.<name>` in opencode.json
-pub(super) fn register_opencode_mcp_servers(path: &Path, servers: &[McpServer], out: &Output) -> Result<()> {
+pub(super) fn register_opencode_mcp_servers(
+    path: &Path,
+    servers: &[McpServer],
+    out: &Output,
+) -> Result<()> {
     register_json_mcp_servers(path, servers, Some("mcp"), out)
 }
 
-pub(super) fn unregister_opencode_mcp_servers(path: &Path, names: &[&str], out: &Output) -> Result<()> {
+pub(super) fn unregister_opencode_mcp_servers(
+    path: &Path,
+    names: &[&str],
+    out: &Output,
+) -> Result<()> {
     unregister_json_mcp_servers(path, names, Some("mcp"), out)
 }
 
@@ -482,8 +542,7 @@ mod tests {
 
     fn test_servers() -> Vec<McpServer> {
         vec![McpServer::Stdio(
-            McpServerStdio::new("symposium", "/usr/local/bin/symposium")
-                .args(vec!["mcp".into()]),
+            McpServerStdio::new("symposium", "/usr/local/bin/symposium").args(vec!["mcp".into()]),
         )]
     }
 
@@ -501,7 +560,10 @@ mod tests {
 
         let settings: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(settings["mcpServers"]["symposium"]["command"], "/usr/local/bin/symposium");
+        assert_eq!(
+            settings["mcpServers"]["symposium"]["command"],
+            "/usr/local/bin/symposium"
+        );
         assert_eq!(settings["mcpServers"]["symposium"]["args"][0], "mcp");
     }
 
@@ -528,7 +590,10 @@ mod tests {
 
         let settings: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(settings["mcpServers"]["symposium"]["command"], "/usr/local/bin/symposium");
+        assert_eq!(
+            settings["mcpServers"]["symposium"]["command"],
+            "/usr/local/bin/symposium"
+        );
     }
 
     #[test]
@@ -542,7 +607,10 @@ mod tests {
 
         let settings: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(settings["mcpServers"]["symposium"]["command"], "/usr/local/bin/symposium");
+        assert_eq!(
+            settings["mcpServers"]["symposium"]["command"],
+            "/usr/local/bin/symposium"
+        );
     }
 
     #[test]
@@ -567,8 +635,16 @@ mod tests {
 
         let content = fs::read_to_string(&path).unwrap();
         let doc: toml::Value = content.parse().unwrap();
-        assert_eq!(doc["mcp_servers"]["symposium"]["command"].as_str().unwrap(), "/usr/local/bin/symposium");
-        assert_eq!(doc["mcp_servers"]["symposium"]["args"].as_array().unwrap()[0].as_str().unwrap(), "mcp");
+        assert_eq!(
+            doc["mcp_servers"]["symposium"]["command"].as_str().unwrap(),
+            "/usr/local/bin/symposium"
+        );
+        assert_eq!(
+            doc["mcp_servers"]["symposium"]["args"].as_array().unwrap()[0]
+                .as_str()
+                .unwrap(),
+            "mcp"
+        );
     }
 
     #[test]
@@ -587,15 +663,25 @@ mod tests {
     fn register_codex_updates_stale() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("config.toml");
-        fs::write(&path, "[mcp_servers.symposium]\ncommand = \"/old/path\"\nargs = [\"old-arg\"]\n").unwrap();
+        fs::write(
+            &path,
+            "[mcp_servers.symposium]\ncommand = \"/old/path\"\nargs = [\"old-arg\"]\n",
+        )
+        .unwrap();
 
         register_codex_mcp_servers(&path, &test_servers(), &Output::quiet()).unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         let doc: toml::Value = content.parse().unwrap();
         let entry = &doc["mcp_servers"]["symposium"];
-        assert_eq!(entry["command"].as_str().unwrap(), "/usr/local/bin/symposium");
-        assert_eq!(entry["args"].as_array().unwrap()[0].as_str().unwrap(), "mcp");
+        assert_eq!(
+            entry["command"].as_str().unwrap(),
+            "/usr/local/bin/symposium"
+        );
+        assert_eq!(
+            entry["args"].as_array().unwrap()[0].as_str().unwrap(),
+            "mcp"
+        );
         // Ensure no duplicate — still exactly one server entry
         assert_eq!(doc["mcp_servers"].as_table().unwrap().len(), 1);
     }
@@ -609,7 +695,11 @@ mod tests {
 
         let content = fs::read_to_string(&path).unwrap();
         let doc: toml::Value = content.parse().unwrap();
-        assert!(doc.get("mcp_servers").and_then(|s| s.get("symposium")).is_none());
+        assert!(
+            doc.get("mcp_servers")
+                .and_then(|s| s.get("symposium"))
+                .is_none()
+        );
     }
 
     // -- Copilot MCP --
@@ -676,7 +766,10 @@ mod tests {
         let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
         let ext = &doc["extensions"]["symposium"];
         assert_eq!(ext["provider"].as_str().unwrap(), "mcp");
-        assert_eq!(ext["config"]["command"].as_str().unwrap(), "/usr/local/bin/symposium");
+        assert_eq!(
+            ext["config"]["command"].as_str().unwrap(),
+            "/usr/local/bin/symposium"
+        );
     }
 
     #[test]
@@ -701,7 +794,11 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         if !content.trim().is_empty() {
             let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
-            assert!(doc.get("extensions").and_then(|e| e.get("symposium")).is_none());
+            assert!(
+                doc.get("extensions")
+                    .and_then(|e| e.get("symposium"))
+                    .is_none()
+            );
         }
     }
 
@@ -717,7 +814,9 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
         assert_eq!(
-            doc["extensions"]["symposium"]["config"]["command"].as_str().unwrap(),
+            doc["extensions"]["symposium"]["config"]["command"]
+                .as_str()
+                .unwrap(),
             "/usr/local/bin/symposium",
         );
         // Still exactly one extension
@@ -738,7 +837,9 @@ mod tests {
         // Must be valid YAML
         let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
         assert_eq!(
-            doc["extensions"]["test-server"]["config"]["command"].as_str().unwrap(),
+            doc["extensions"]["test-server"]["config"]["command"]
+                .as_str()
+                .unwrap(),
             "/path with spaces/symposium",
         );
     }
@@ -753,7 +854,10 @@ mod tests {
 
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(config["mcp"]["symposium"]["command"], "/usr/local/bin/symposium");
+        assert_eq!(
+            config["mcp"]["symposium"]["command"],
+            "/usr/local/bin/symposium"
+        );
         assert_eq!(config["mcp"]["symposium"]["args"][0], "mcp");
     }
 
@@ -780,7 +884,10 @@ mod tests {
 
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(config["mcp"]["symposium"]["command"], "/usr/local/bin/symposium");
+        assert_eq!(
+            config["mcp"]["symposium"]["command"],
+            "/usr/local/bin/symposium"
+        );
     }
 
     #[test]

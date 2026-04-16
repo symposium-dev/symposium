@@ -994,7 +994,8 @@ mod tests {
             command = "/usr/local/bin/my-server"
             args = ["--stdio"]
             env = []
-        "#}).expect("parse");
+        "#})
+        .expect("parse");
         expect_test::expect![[r#"
             Stdio(
                 McpServerStdio {
@@ -1006,7 +1007,8 @@ mod tests {
                     env: [],
                     meta: None,
                 },
-            )"#]].assert_eq(&format!("{entry:#?}"));
+            )"#]]
+        .assert_eq(&format!("{entry:#?}"));
     }
 
     #[test]
@@ -1016,7 +1018,8 @@ mod tests {
             name = "my-server"
             url = "http://localhost:8080/mcp"
             headers = []
-        "#}).expect("parse");
+        "#})
+        .expect("parse");
         expect_test::expect![[r#"
             Http(
                 McpServerHttp {
@@ -1025,7 +1028,8 @@ mod tests {
                     headers: [],
                     meta: None,
                 },
-            )"#]].assert_eq(&format!("{entry:#?}"));
+            )"#]]
+        .assert_eq(&format!("{entry:#?}"));
     }
 
     #[test]
@@ -1035,7 +1039,8 @@ mod tests {
             name = "my-server"
             url = "http://localhost:8080/sse"
             headers = []
-        "#}).expect("parse");
+        "#})
+        .expect("parse");
         expect_test::expect![[r#"
             Sse(
                 McpServerSse {
@@ -1044,6 +1049,7 @@ mod tests {
                     headers: [],
                     meta: None,
                 },
-            )"#]].assert_eq(&format!("{entry:#?}"));
+            )"#]]
+        .assert_eq(&format!("{entry:#?}"));
     }
 }
