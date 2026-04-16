@@ -4,6 +4,8 @@
 //! configured and where skill files are placed. This module centralizes
 //! that knowledge.
 
+mod mcp_server_registration;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -835,6 +837,7 @@ fn unregister_flat_hooks(config_path: &Path, command_key: &str, out: &Output) {
     }
 }
 
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1118,4 +1121,5 @@ mod tests {
         assert!(settings["hooks"]["BeforeTool"].is_array());
         assert!(settings["hooks"]["AfterTool"].is_array());
     }
+
 }
