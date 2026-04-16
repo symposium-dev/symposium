@@ -24,7 +24,9 @@ use symposium::output::Output;
 /// `execute_hook`; ignored in agent mode (the real agent produces its own hooks).
 pub enum HookStep {
     SessionStart,
-    UserPromptSubmit { prompt: String },
+    UserPromptSubmit {
+        prompt: String,
+    },
     PreToolUse {
         tool_name: String,
         tool_input: serde_json::Value,
@@ -61,10 +63,12 @@ impl HookStep {
         let session_id = Some("test-session-id".to_string());
         let cwd = Some(cwd.to_string());
         match self {
-            Self::SessionStart => sym_types::InputEvent::SessionStart(sym_types::SessionStartInput {
-                session_id,
-                cwd,
-            }),
+            Self::SessionStart => {
+                sym_types::InputEvent::SessionStart(sym_types::SessionStartInput {
+                    session_id,
+                    cwd,
+                })
+            }
             Self::UserPromptSubmit { prompt } => {
                 sym_types::InputEvent::UserPromptSubmit(sym_types::UserPromptSubmitInput {
                     prompt: prompt.clone(),
@@ -72,23 +76,26 @@ impl HookStep {
                     cwd,
                 })
             }
-            Self::PreToolUse { tool_name, tool_input } => {
-                sym_types::InputEvent::PreToolUse(sym_types::PreToolUseInput {
-                    tool_name: tool_name.clone(),
-                    tool_input: tool_input.clone(),
-                    session_id,
-                    cwd,
-                })
-            }
-            Self::PostToolUse { tool_name, tool_input, tool_response } => {
-                sym_types::InputEvent::PostToolUse(sym_types::PostToolUseInput {
-                    tool_name: tool_name.clone(),
-                    tool_input: tool_input.clone(),
-                    tool_response: tool_response.clone(),
-                    session_id,
-                    cwd,
-                })
-            }
+            Self::PreToolUse {
+                tool_name,
+                tool_input,
+            } => sym_types::InputEvent::PreToolUse(sym_types::PreToolUseInput {
+                tool_name: tool_name.clone(),
+                tool_input: tool_input.clone(),
+                session_id,
+                cwd,
+            }),
+            Self::PostToolUse {
+                tool_name,
+                tool_input,
+                tool_response,
+            } => sym_types::InputEvent::PostToolUse(sym_types::PostToolUseInput {
+                tool_name: tool_name.clone(),
+                tool_input: tool_input.clone(),
+                tool_response: tool_response.clone(),
+                session_id,
+                cwd,
+            }),
         }
     }
 }
@@ -119,7 +126,8 @@ impl SubmitResult {
     pub fn has_context_containing(&self, needle: &str) -> bool {
         self.hooks.iter().any(|h| {
             let top = h.output.get("additionalContext").and_then(|v| v.as_str());
-            let nested = h.output
+            let nested = h
+                .output
                 .get("hookSpecificOutput")
                 .and_then(|o| o.get("additionalContext"))
                 .and_then(|v| v.as_str());
@@ -208,7 +216,10 @@ impl TestContext {
 
         match std::env::var("SYMPOSIUM_TEST_AGENT").ok().as_deref() {
             Some("claude") => self.submit_agent(prompt, cwd).await,
-            _ => self.submit_simulation(steps, agent, &cwd.to_string_lossy()).await,
+            _ => {
+                self.submit_simulation(steps, agent, &cwd.to_string_lossy())
+                    .await
+            }
         }
     }
 
@@ -248,11 +259,7 @@ impl TestContext {
         Ok(SubmitResult { hooks })
     }
 
-    async fn submit_agent(
-        &self,
-        prompt: &str,
-        cwd: &Path,
-    ) -> anyhow::Result<SubmitResult> {
+    async fn submit_agent(&self, prompt: &str, cwd: &Path) -> anyhow::Result<SubmitResult> {
         let trace_path = cwd.join("hook-trace.jsonl");
 
         // Locate the harness script relative to the project source.
@@ -272,9 +279,12 @@ impl TestContext {
         let output = std::process::Command::new("uv")
             .args(["run", "--with", "claude-agent-sdk"])
             .arg(&harness)
-            .arg("--prompt").arg(prompt)
-            .arg("--cwd").arg(cwd)
-            .arg("--trace").arg(&trace_path)
+            .arg("--prompt")
+            .arg(prompt)
+            .arg("--cwd")
+            .arg(cwd)
+            .arg("--trace")
+            .arg(&trace_path)
             .env("CARGO_BIN_DIR", bin_dir.as_ref())
             .output()?;
 
@@ -284,8 +294,7 @@ impl TestContext {
         }
 
         // Parse the JSONL trace file.
-        let trace_content = std::fs::read_to_string(&trace_path)
-            .unwrap_or_default();
+        let trace_content = std::fs::read_to_string(&trace_path).unwrap_or_default();
         let hooks: Vec<HookTrace> = trace_content
             .lines()
             .filter(|l| !l.is_empty())

@@ -14,7 +14,7 @@
 //! ```
 
 use symposium::hook_schema::HookAgent;
-use symposium_testlib::{with_fixture, HookStep};
+use symposium_testlib::{HookStep, with_fixture};
 
 /// SessionStart should return plugin-provided context.
 #[tokio::test]
@@ -22,11 +22,7 @@ async fn session_start_returns_plugin_context() {
     let ctx = with_fixture(&["plugins0"]);
 
     let result = ctx
-        .submit(
-            "Say hello",
-            &[HookStep::session_start()],
-            HookAgent::Claude,
-        )
+        .submit("Say hello", &[HookStep::session_start()], HookAgent::Claude)
         .await
         .unwrap();
 
