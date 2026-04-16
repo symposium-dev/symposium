@@ -2,6 +2,16 @@
 //!
 //! Runs in simulation mode by default (CI). Set `SYMPOSIUM_TEST_AGENT=claude`
 //! to run against a real agent via the Claude Agent SDK.
+//!
+//! # Running
+//!
+//! ```bash
+//! # Simulation mode (default — no agent needed)
+//! cargo test --test hook_agent
+//!
+//! # Agent mode (requires uv + ANTHROPIC_API_KEY)
+//! SYMPOSIUM_TEST_AGENT=claude cargo test --test hook_agent
+//! ```
 
 use symposium::hook_schema::HookAgent;
 use symposium_testlib::{with_fixture, HookStep};
