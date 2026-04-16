@@ -352,14 +352,14 @@ pub(super) fn register_goose_mcp_servers(config_path: &Path, servers: &[McpServe
         }
 
         let cmd = stdio.command.to_string_lossy();
-        let args: Vec<_> = stdio.args.iter().map(|a| a.as_str()).collect();
-        let args_yaml = format!("[{}]", args.join(", "));
+        let quoted_args: Vec<_> = stdio.args.iter().map(|a| format!("\"{}\"", a.replace('"', "\\\""))).collect();
+        let args_yaml = format!("[{}]", quoted_args.join(", "));
 
         let snippet = formatdoc! {"
             {name}:
                 provider: mcp
                 config:
-                  command: {cmd}
+                  command: \"{cmd}\"
                   args: {args_yaml}
         "};
 
