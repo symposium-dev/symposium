@@ -35,18 +35,36 @@ fn server_name(server: &McpServer) -> &str {
 
 /// Convert an McpServer to the JSON value agents expect in their config.
 ///
-/// Stdio: `{"command": "...", "args": [...]}`
-/// Http/Sse: `{"url": "..."}`
+/// Stdio: `{"command": "...", "args": [...], "env": [...]}`
+/// Http/Sse: `{"url": "...", "headers": [...]}`
+///
+/// `env` and `headers` are omitted when empty.
 fn server_to_json(server: &McpServer) -> serde_json::Value {
     match server {
         McpServer::Stdio(s) => {
-            json!({
+            let mut v = json!({
                 "command": s.command.to_string_lossy(),
                 "args": s.args,
-            })
+            });
+            if !s.env.is_empty() {
+                v["env"] = serde_json::to_value(&s.env).unwrap();
+            }
+            v
         }
-        McpServer::Http(s) => json!({ "url": s.url }),
-        McpServer::Sse(s) => json!({ "url": s.url }),
+        McpServer::Http(s) => {
+            let mut v = json!({ "url": s.url });
+            if !s.headers.is_empty() {
+                v["headers"] = serde_json::to_value(&s.headers).unwrap();
+            }
+            v
+        }
+        McpServer::Sse(s) => {
+            let mut v = json!({ "url": s.url });
+            if !s.headers.is_empty() {
+                v["headers"] = serde_json::to_value(&s.headers).unwrap();
+            }
+            v
+        }
         _ => panic!("unsupported McpServer variant"),
     }
 }
