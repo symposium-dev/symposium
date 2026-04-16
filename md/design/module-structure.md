@@ -1,6 +1,6 @@
 # Key modules
 
-Symposium is a Rust crate with both a library (`src/lib.rs`) and a binary (`src/bin/symposium.rs`). The library re-exports all modules so that integration tests can access internals.
+Symposium is a Rust crate with both a library (`src/lib.rs`) and a binary (`src/bin/cargo-agents.rs`). The library re-exports all modules so that integration tests can access internals.
 
 ### `config.rs` — application context
 
@@ -14,11 +14,11 @@ Centralizes agent-specific knowledge: hook registration file paths, skill instal
 
 ### `init.rs` — initialization commands
 
-Implements `symposium init`. Three entry points: `init_user()` prompts for agent and writes user config; `init_project()` finds the workspace root, creates project config, and runs sync; `init_default()` does both as needed.
+Implements `cargo agents init`. Three entry points: `init_user()` prompts for agent and writes user config; `init_project()` finds the workspace root, creates project config, and runs sync; `init_default()` does both as needed.
 
 ### `sync.rs` — synchronization commands
 
-Implements `symposium sync`. Two main flows: `sync_workspace()` scans workspace dependencies, matches against plugin skill predicates, and merges into `.symposium/config.toml`; `sync_agent()` reads the project config and installs enabled skills into agent-specific directories while registering hooks.
+Implements `cargo agents sync`. Two main flows: `sync_workspace()` scans workspace dependencies, matches against plugin skill predicates, and merges into `.symposium/config.toml`; `sync_agent()` reads the project config and installs enabled skills into agent-specific directories while registering hooks.
 
 ### `plugins.rs` — plugin registry
 

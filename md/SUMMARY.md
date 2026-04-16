@@ -11,7 +11,7 @@
 # Summary
 
 - [Introduction](./introduction.md)
-- [About symposium](./about.md)
+- [About Symposium](./about.md)
 
 # User's guide
 

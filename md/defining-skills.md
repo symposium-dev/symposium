@@ -60,7 +60,7 @@ Keep serialized regex patterns in a stable string form.
 
 Activation controls how the skill is presented when Symposium finds a match.
 
-- `always`: inline the skill body in `symposium crate` output
+- `always`: inline the skill body in `cargo agents crate` output
 - `optional`: list the skill and its path without inlining the body
 
 Use `always` for broad usage guidance that is usually relevant whenever the crate is in use.

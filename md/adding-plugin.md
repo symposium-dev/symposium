@@ -33,12 +33,12 @@ matcher = "Bash"
 command = "./scripts/check-tool.sh"
 ```
 
-When `symposium hook <agent> pre-tool-use` receives a matching payload, the command is started with the payload JSON on stdin.
+When `cargo agents hook <agent> pre-tool-use` receives a matching payload, the command is started with the payload JSON on stdin.
 
 Supported agent names: `claude`, `copilot`, `gemini`. Invoke the hook runner with the agent and event, for example:
 
 ```
-symposium hook claude pre-tool-use
+cargo agents hook claude pre-tool-use
 ```
 
 ## Validation
@@ -46,7 +46,7 @@ symposium hook claude pre-tool-use
 Use:
 
 ```bash
-symposium plugin validate path/to/plugin.toml
+cargo agents plugin validate path/to/plugin.toml
 ```
 
 This parses the manifest and prints the normalized TOML.

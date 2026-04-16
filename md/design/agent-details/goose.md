@@ -1,7 +1,7 @@
 # Goose Hooks Reference
 
 > **Disclaimer:** This document reflects our current understanding of Goose's extensibility surface.
-> It is a working reference for symposium development, not a substitute for the official docs.
+> It is a working reference for Symposium development, not a substitute for the official docs.
 > Details may be outdated or incomplete — always consult the primary sources.
 >
 > **Primary sources:**

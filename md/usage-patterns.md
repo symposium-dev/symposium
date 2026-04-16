@@ -13,13 +13,13 @@ For example, if your project depends on `tokio` and a skill exists for it, your 
 To see which skills are available for crates in your current project:
 
 ```bash
-symposium crate --list
+cargo agents crate --list
 ```
 
 To get guidance for a specific crate:
 
 ```bash
-symposium crate tokio
+cargo agents crate tokio
 ```
 
 ## Hooks run in the background
@@ -31,7 +31,7 @@ If your agent supports hooks (e.g., Claude Code), Symposium can intercept events
 Plugin sources are checked for updates on startup. You can also update manually:
 
 ```bash
-symposium plugin sync
+cargo agents plugin sync
 ```
 
 This fetches the latest skills and hooks from all configured git-based plugin sources.

@@ -1,4 +1,4 @@
-# `symposium sync --workspace`
+# `cargo agents sync --workspace`
 
 Updates `.symposium/config.toml` to reflect the current workspace dependencies.
 

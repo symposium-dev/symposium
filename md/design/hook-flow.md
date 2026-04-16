@@ -1,4 +1,4 @@
-# `symposium hook`
+# `cargo agents hook`
 
 Entry point invoked by the agent's hook system on session events.
 

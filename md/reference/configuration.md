@@ -1,10 +1,10 @@
 # Configuration
 
-`symposium` uses two configuration files: a **user-wide** config and an optional **per-project** config. When both exist, project settings override user settings.
+Symposium uses two configuration files: a **user-wide** config and an optional **per-project** config. When both exist, project settings override user settings.
 
 ## User configuration
 
-Stored at `~/.symposium/config.toml`. Created by `symposium init --user`.
+Stored at `~/.symposium/config.toml`. Created by `cargo agents init --user`.
 
 ### Full example
 
@@ -44,7 +44,7 @@ Your agent preference and default behaviors.
 
 ### `[[plugin-source]]`
 
-Defines where `symposium` looks for skills, workflows, and MCP server definitions. Each entry must have exactly one of `git` or `path`.
+Defines where Symposium looks for skills, workflows, and MCP server definitions. Each entry must have exactly one of `git` or `path`.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -55,7 +55,7 @@ Defines where `symposium` looks for skills, workflows, and MCP server definition
 
 ## Project configuration
 
-Stored at `.symposium/config.toml` in your project root. Created by `symposium init --project` and updated by `symposium sync`.
+Stored at `.symposium/config.toml` in your project root. Created by `cargo agents init --project` and updated by `cargo agents sync`.
 
 ### Full example
 
@@ -116,7 +116,7 @@ When `self-contained = false`, these are unioned with user-level sources. When `
 
 Lists available crate skills discovered from your workspace dependencies. Each key is a crate name, each value is a bool toggling the skill on or off.
 
-Managed by `symposium sync --workspace` — new entries are added with the resolved `sync-default`, removed dependencies are cleaned up, and your existing choices are preserved.
+Managed by `cargo agents sync --workspace` — new entries are added with the resolved `sync-default`, removed dependencies are cleaned up, and your existing choices are preserved.
 
 ### `[workflows]`
 
@@ -137,7 +137,7 @@ When both user and project configs exist, project settings take precedence:
 
 ## Directory resolution
 
-User-wide data lives under `~/.symposium/` by default. If [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/latest/) environment variables are set, `symposium` respects them:
+User-wide data lives under `~/.symposium/` by default. If [XDG Base Directory](https://specifications.freedesktop.org/basedir-spec/latest/) environment variables are set, Symposium respects them:
 
 | | Config | Cache | Logs |
 |---|---|---|---|

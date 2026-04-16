@@ -30,7 +30,7 @@ The default log level is `info`. To get more detail, set the level in `~/.sympos
 level = "debug"   # or "trace" for maximum detail
 ```
 
-Log files are named `symposium-YYYYMMDD-HHMMSS.log`. When debugging an issue, the log file from the relevant invocation is usually the best place to start.
+Log files are named `cargo-agents-YYYYMMDD-HHMMSS.log`. When debugging an issue, the log file from the relevant invocation is usually the best place to start.
 
 ## What to read next
 

@@ -1,6 +1,6 @@
-# symposium — AI the Rust Way
+# Symposium — AI the Rust Way
 
-symposium helps agents write better Rust by providing up-to-date language guidance and integration with the Rust ecosystem.
+Symposium helps agents write better Rust by providing up-to-date language guidance and integration with the Rust ecosystem.
 
 ## Guidance on a particular crate
 
