@@ -6,15 +6,87 @@
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use symposium::cli::Cli;
 use symposium::config::Symposium;
 use symposium::dispatch::{self, DispatchResult};
 use symposium::hook;
 use symposium::hook_schema::HookAgent;
+use symposium::hook_schema::HookEvent;
 use symposium::mcp::McpArgs;
 use symposium::output::Output;
+
+// ── Agent-neutral test types ──────────────────────────────────────────
+
+/// A single step in a hook scenario. Used by simulation mode to drive
+/// `execute_hook`; ignored in agent mode (the real agent produces its own hooks).
+pub enum HookStep {
+    SessionStart,
+    UserPromptSubmit { prompt: String },
+    PreToolUse {
+        tool_name: String,
+        tool_input: serde_json::Value,
+    },
+    PostToolUse {
+        tool_name: String,
+        tool_input: serde_json::Value,
+        tool_response: serde_json::Value,
+    },
+}
+
+impl HookStep {
+    pub fn session_start() -> Self {
+        Self::SessionStart
+    }
+
+    pub fn user_prompt(prompt: &str) -> Self {
+        Self::UserPromptSubmit {
+            prompt: prompt.to_string(),
+        }
+    }
+
+    pub fn event(&self) -> HookEvent {
+        match self {
+            Self::SessionStart => HookEvent::SessionStart,
+            Self::UserPromptSubmit { .. } => HookEvent::UserPromptSubmit,
+            Self::PreToolUse { .. } => HookEvent::PreToolUse,
+            Self::PostToolUse { .. } => HookEvent::PostToolUse,
+        }
+    }
+}
+
+/// One hook invocation's input and output, in canonical form.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookTrace {
+    pub event: HookEvent,
+    pub agent: HookAgent,
+    pub input: serde_json::Value,
+    pub output: serde_json::Value,
+}
+
+/// Collected results from a `submit` call.
+#[derive(Debug, Clone)]
+pub struct SubmitResult {
+    pub hooks: Vec<HookTrace>,
+}
+
+impl SubmitResult {
+    /// Filter traces by event type.
+    pub fn outputs_for(&self, event: HookEvent) -> Vec<&HookTrace> {
+        self.hooks.iter().filter(|h| h.event == event).collect()
+    }
+
+    /// Check if any hook output contains the given substring in additionalContext.
+    pub fn has_context_containing(&self, needle: &str) -> bool {
+        self.hooks.iter().any(|h| {
+            h.output
+                .get("additionalContext")
+                .and_then(|v| v.as_str())
+                .is_some_and(|s| s.contains(needle))
+        })
+    }
+}
 
 /// Test context wrapping an isolated `Symposium` instance.
 pub struct TestContext {
