@@ -190,26 +190,36 @@ impl TestContext {
     /// In simulation mode (default): converts each step to the agent wire format,
     /// calls `execute_hook`, and collects results.
     ///
-    /// In agent mode (`SYMPOSIUM_TEST_AGENT` set): sends the prompt to a real
-    /// agent and reads the hook trace file. (Not yet implemented.)
+    /// In agent mode (`SYMPOSIUM_TEST_AGENT=claude`): sends the prompt to a real
+    /// agent via the Python harness and reads the JSONL hook trace file.
     pub async fn submit(
         &self,
-        _prompt: &str,
+        prompt: &str,
         steps: &[HookStep],
         agent: HookAgent,
     ) -> anyhow::Result<SubmitResult> {
         let cwd = self
             .workspace_root
             .as_deref()
-            .unwrap_or_else(|| self.sym.config_dir())
-            .to_string_lossy();
+            .unwrap_or_else(|| self.sym.config_dir());
 
+        match std::env::var("SYMPOSIUM_TEST_AGENT").ok().as_deref() {
+            Some("claude") => self.submit_agent(prompt, cwd).await,
+            _ => self.submit_simulation(steps, agent, &cwd.to_string_lossy()).await,
+        }
+    }
+
+    async fn submit_simulation(
+        &self,
+        steps: &[HookStep],
+        agent: HookAgent,
+        cwd: &str,
+    ) -> anyhow::Result<SubmitResult> {
         let mut hooks = Vec::new();
         for step in steps {
             let event = step.event();
-            let sym_input = step.to_input_event(&cwd);
+            let sym_input = step.to_input_event(cwd);
 
-            // Convert symposium canonical → agent wire format → JSON string
             let handler = agent
                 .event(event)
                 .ok_or_else(|| anyhow::anyhow!("agent {agent:?} does not support {event:?}"))?;
@@ -232,6 +242,52 @@ impl TestContext {
                 output: output_val,
             });
         }
+        Ok(SubmitResult { hooks })
+    }
+
+    async fn submit_agent(
+        &self,
+        prompt: &str,
+        cwd: &Path,
+    ) -> anyhow::Result<SubmitResult> {
+        let trace_path = cwd.join("hook-trace.jsonl");
+
+        // Locate the harness script relative to the project source.
+        let harness = Path::new(env!("SYMPOSIUM_FIXTURES_DIR"))
+            .parent()
+            .expect("fixtures dir has parent")
+            .join("agent_harness/run_scenario.py");
+
+        // Build CARGO_BIN_DIR from the binary path cargo gives us.
+        let bin_exe = std::env::var("CARGO_BIN_EXE_symposium")
+            .expect("CARGO_BIN_EXE_symposium must be set (run via cargo test)");
+        let bin_dir = Path::new(&bin_exe)
+            .parent()
+            .expect("binary has parent dir")
+            .to_string_lossy();
+
+        let output = std::process::Command::new("uv")
+            .args(["run", "--with", "claude-agent-sdk"])
+            .arg(&harness)
+            .arg("--prompt").arg(prompt)
+            .arg("--cwd").arg(cwd)
+            .arg("--trace").arg(&trace_path)
+            .env("CARGO_BIN_DIR", bin_dir.as_ref())
+            .output()?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("agent harness failed ({}): {stderr}", output.status);
+        }
+
+        // Parse the JSONL trace file.
+        let trace_content = std::fs::read_to_string(&trace_path)
+            .unwrap_or_default();
+        let hooks: Vec<HookTrace> = trace_content
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| serde_json::from_str(l))
+            .collect::<Result<_, _>>()?;
 
         Ok(SubmitResult { hooks })
     }
