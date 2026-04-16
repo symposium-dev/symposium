@@ -14,6 +14,7 @@ use symposium::dispatch::{self, DispatchResult};
 use symposium::hook;
 use symposium::hook_schema::HookAgent;
 use symposium::hook_schema::HookEvent;
+use symposium::hook_schema::symposium as sym_types;
 use symposium::mcp::McpArgs;
 use symposium::output::Output;
 
@@ -52,6 +53,42 @@ impl HookStep {
             Self::UserPromptSubmit { .. } => HookEvent::UserPromptSubmit,
             Self::PreToolUse { .. } => HookEvent::PreToolUse,
             Self::PostToolUse { .. } => HookEvent::PostToolUse,
+        }
+    }
+
+    /// Convert to a canonical symposium InputEvent, injecting cwd and session_id.
+    pub fn to_input_event(&self, cwd: &str) -> sym_types::InputEvent {
+        let session_id = Some("test-session-id".to_string());
+        let cwd = Some(cwd.to_string());
+        match self {
+            Self::SessionStart => sym_types::InputEvent::SessionStart(sym_types::SessionStartInput {
+                session_id,
+                cwd,
+            }),
+            Self::UserPromptSubmit { prompt } => {
+                sym_types::InputEvent::UserPromptSubmit(sym_types::UserPromptSubmitInput {
+                    prompt: prompt.clone(),
+                    session_id,
+                    cwd,
+                })
+            }
+            Self::PreToolUse { tool_name, tool_input } => {
+                sym_types::InputEvent::PreToolUse(sym_types::PreToolUseInput {
+                    tool_name: tool_name.clone(),
+                    tool_input: tool_input.clone(),
+                    session_id,
+                    cwd,
+                })
+            }
+            Self::PostToolUse { tool_name, tool_input, tool_response } => {
+                sym_types::InputEvent::PostToolUse(sym_types::PostToolUseInput {
+                    tool_name: tool_name.clone(),
+                    tool_input: tool_input.clone(),
+                    tool_response: tool_response.clone(),
+                    session_id,
+                    cwd,
+                })
+            }
         }
     }
 }
@@ -146,6 +183,57 @@ impl TestContext {
     ) -> anyhow::Result<Vec<u8>> {
         let input = serde_json::to_string(payload)?;
         hook::execute_hook(&self.sym, agent, event, &input).await
+    }
+
+    /// Submit a scenario as a sequence of hook steps.
+    ///
+    /// In simulation mode (default): converts each step to the agent wire format,
+    /// calls `execute_hook`, and collects results.
+    ///
+    /// In agent mode (`SYMPOSIUM_TEST_AGENT` set): sends the prompt to a real
+    /// agent and reads the hook trace file. (Not yet implemented.)
+    pub async fn submit(
+        &self,
+        _prompt: &str,
+        steps: &[HookStep],
+        agent: HookAgent,
+    ) -> anyhow::Result<SubmitResult> {
+        let cwd = self
+            .workspace_root
+            .as_deref()
+            .unwrap_or_else(|| self.sym.config_dir())
+            .to_string_lossy();
+
+        let mut hooks = Vec::new();
+        for step in steps {
+            let event = step.event();
+            let sym_input = step.to_input_event(&cwd);
+
+            // Convert symposium canonical → agent wire format → JSON string
+            let handler = agent
+                .event(event)
+                .ok_or_else(|| anyhow::anyhow!("agent {agent:?} does not support {event:?}"))?;
+            let agent_input = handler.from_symposium_input(&sym_input);
+            let input_str = agent_input.to_string()?;
+
+            let output_bytes = hook::execute_hook(&self.sym, agent, event, &input_str).await?;
+
+            let input_val: serde_json::Value = serde_json::from_str(&input_str)?;
+            let output_val: serde_json::Value = if output_bytes.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::from_slice(&output_bytes)?
+            };
+
+            hooks.push(HookTrace {
+                event,
+                agent,
+                input: input_val,
+                output: output_val,
+            });
+        }
+
+        Ok(SubmitResult { hooks })
     }
 
     /// Replace temp directory paths with a stable placeholder for snapshot tests.
