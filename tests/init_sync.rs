@@ -52,9 +52,6 @@ async fn init_user_creates_config() {
         [defaults]
         symposium-recommendations = false
         user-plugins = true
-
-        [hooks]
-        nudge-interval = 50
     "#]]
     .assert_eq(&read_user_config(&ctx));
 }
