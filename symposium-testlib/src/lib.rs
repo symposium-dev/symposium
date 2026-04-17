@@ -13,7 +13,7 @@ use symposium::config::Symposium;
 use symposium::dispatch::{self, DispatchResult};
 use symposium::hook;
 use symposium::hook_schema::HookAgent;
-use symposium::mcp::McpArgs;
+use symposium::mcp::{McpArgs, McpCommand};
 use symposium::output::Output;
 
 /// Test context wrapping an isolated `Symposium` instance.
@@ -47,7 +47,7 @@ impl TestContext {
         }
     }
 
-    /// Call the shared dispatch function, returning the output string.
+    /// Call the MCP dispatch function, returning the output string.
     pub async fn invoke(&self, args: &[&str]) -> Result<String, String> {
         let parsed =
             McpArgs::try_parse_from(args).map_err(|e| format!("failed to parse args: {e}"))?;
@@ -55,7 +55,16 @@ impl TestContext {
             .workspace_root
             .as_deref()
             .unwrap_or_else(|| self.sym.config_dir());
-        match dispatch::dispatch(&self.sym, parsed.command, cwd, dispatch::RenderMode::Mcp).await {
+
+        let McpCommand::Crate {
+            name,
+            version,
+            list,
+        } = parsed.command;
+
+        match dispatch::dispatch_crate(&self.sym, name.as_deref(), version.as_deref(), list, cwd)
+            .await
+        {
             DispatchResult::Ok(output) => Ok(output),
             DispatchResult::Err(e) => Err(e),
         }

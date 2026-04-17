@@ -9,11 +9,12 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use crate::config::Symposium;
-use crate::dispatch::{self, SharedCommand};
+use crate::dispatch::{self, DispatchResult};
 use crate::hook;
 use crate::init::{self, InitOpts};
 use crate::output::Output;
 use crate::sync;
+use crate::{crate_sources, plugins, skills, start};
 
 /// Parsed CLI arguments.
 #[derive(Debug, Parser)]
@@ -95,9 +96,22 @@ pub enum Commands {
         command: PluginCommand,
     },
 
-    /// Commands shared with MCP (start, crate)
-    #[command(flatten)]
-    Shared(SharedCommand),
+    /// Get Rust guidance and list available crate skills for the workspace
+    Start,
+
+    /// Find crate sources and guidance
+    Crate {
+        /// Crate name (omit to use --list)
+        name: Option<String>,
+
+        /// Version constraint (e.g., "1.0.3", "^1.0"); defaults to workspace version or latest
+        #[arg(long)]
+        version: Option<String>,
+
+        /// List all workspace dependency crates
+        #[arg(long)]
+        list: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -180,13 +194,33 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
             Ok(())
         }
 
-        Commands::Shared(cmd) => {
-            match dispatch::dispatch(sym, cmd, cwd, dispatch::RenderMode::Cli).await {
-                dispatch::DispatchResult::Ok(output) => {
+        Commands::Start => {
+            let mut output = start::render();
+
+            let workspace = crate_sources::workspace_semver_pairs(cwd);
+            let registry = plugins::load_registry(sym);
+            let skill_list = skills::list_output(sym, &registry, &workspace).await;
+
+            output.push('\n');
+            output.push_str(&skill_list);
+
+            print!("{output}");
+            Ok(())
+        }
+
+        Commands::Crate {
+            name,
+            version,
+            list,
+        } => {
+            match dispatch::dispatch_crate(sym, name.as_deref(), version.as_deref(), list, cwd)
+                .await
+            {
+                DispatchResult::Ok(output) => {
                     print!("{output}");
                     Ok(())
                 }
-                dispatch::DispatchResult::Err(e) => {
+                DispatchResult::Err(e) => {
                     anyhow::bail!("{e}");
                 }
             }

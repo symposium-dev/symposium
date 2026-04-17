@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use indoc::indoc;
 use sacp::mcp_server::{McpConnectionTo, McpServer};
 use sacp::role;
@@ -9,13 +9,30 @@ use serde::{Deserialize, Serialize};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::config::Symposium;
-use crate::dispatch::{self, DispatchResult, SharedCommand};
+use crate::dispatch::{self, DispatchResult};
 
 #[derive(Debug, Parser)]
 #[command(name = "symposium", no_binary_name = true, about = "")]
 pub struct McpArgs {
     #[command(subcommand)]
-    pub command: SharedCommand,
+    pub command: McpCommand,
+}
+
+#[derive(Debug, Clone, Subcommand)]
+pub enum McpCommand {
+    /// Find crate sources and guidance
+    Crate {
+        /// Crate name (omit to use --list)
+        name: Option<String>,
+
+        /// Version constraint (e.g., "1.0.3", "^1.0"); defaults to workspace version or latest
+        #[arg(long)]
+        version: Option<String>,
+
+        /// List all workspace dependency crates
+        #[arg(long)]
+        list: bool,
+    },
 }
 
 pub async fn serve(sym: &Symposium, cwd: &std::path::Path) -> Result<()> {
@@ -38,12 +55,23 @@ fn build_server(
             "rust",
             RUST_TOOL_DESCRIPTION,
             async move |input: RustToolInput, _cx: McpConnectionTo<role::mcp::Client>| {
-                // Parse args using the shared Clap definitions
                 let parsed = McpArgs::try_parse_from(&input.args)
                     .map_err(|e| sacp::util::internal_error(format!("invalid arguments: {e}")))?;
 
-                let result =
-                    dispatch::dispatch(&sym, parsed.command, &cwd, dispatch::RenderMode::Mcp).await;
+                let McpCommand::Crate {
+                    name,
+                    version,
+                    list,
+                } = parsed.command;
+
+                let result = dispatch::dispatch_crate(
+                    &sym,
+                    name.as_deref(),
+                    version.as_deref(),
+                    list,
+                    &cwd,
+                )
+                .await;
 
                 match result {
                     DispatchResult::Ok(output) => Ok(RustToolOutput { output }),
@@ -56,10 +84,9 @@ fn build_server(
 }
 
 const RUST_TOOL_DESCRIPTION: &str = indoc! {"
-    Critical. Invoke this tool with [\"start\"] before authoring Rust code.
+    Critical. Invoke this tool with [\"crate\", \"--list\"] before authoring Rust code.
 
     Commands:
-      [\"start\"]          — Rust guidance + applicable crate skills
       [\"crate\", \"--list\"] — list workspace crates with skills
       [\"crate\", \"<name>\"] — get crate guidance
       [\"help\"]           — show help
@@ -67,7 +94,7 @@ const RUST_TOOL_DESCRIPTION: &str = indoc! {"
 
 #[derive(Deserialize, JsonSchema)]
 struct RustToolInput {
-    /// Command arguments (e.g., ["start"], ["crate", "tokio"])
+    /// Command arguments (e.g., ["crate", "--list"], ["crate", "tokio"])
     args: Vec<String>,
 }
 
