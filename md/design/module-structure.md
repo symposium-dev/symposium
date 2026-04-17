@@ -32,6 +32,6 @@ Given a `PluginRegistry` and workspace dependencies, this module does the actual
 
 `hook.rs` handles the three hook events: `PostToolUse` (tracks which skills the agent has loaded), `UserPromptSubmit` (scans prompts for crate mentions and nudges about unloaded skills), and `PreToolUse` (dispatches to plugin-defined hook commands). `session_state.rs` persists per-session data (activations, nudge history, prompt count) as JSON files.
 
-### `dispatch.rs` — shared CLI/MCP dispatch
+### `dispatch.rs` — shared dispatch logic
 
-The convergence point for the legacy CLI and MCP. Defines `SharedCommand` (clap-derived enum) and routes `start` and `crate` commands to the right handler. Both the legacy CLI (`main.rs`) and `mcp.rs` (MCP server) call into this layer.
+Contains `dispatch_crate()`, which resolves crate skills and formats output. Called by the CLI's `crate` command and the test harness's `invoke()` helper.

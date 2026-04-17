@@ -1,4 +1,4 @@
-//! Shared dispatch logic for CLI and MCP.
+//! Shared dispatch logic for CLI and tests.
 
 use std::path::Path;
 

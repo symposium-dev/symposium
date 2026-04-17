@@ -87,9 +87,6 @@ pub enum Commands {
         event: hook::HookEvent,
     },
 
-    /// Run as an MCP server (stdio transport)
-    Mcp,
-
     /// Manage plugins
     Plugin {
         #[command(subcommand)]
@@ -227,9 +224,8 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
         }
 
         // These commands can't easily be extracted since they do I/O
-        // (stdin/stdout for hooks, stdio transport for MCP). The binary
-        // handles them directly.
-        Commands::Hook { .. } | Commands::Mcp | Commands::Plugin { .. } => {
+        // (stdin/stdout for hooks). The binary handles them directly.
+        Commands::Hook { .. } | Commands::Plugin { .. } => {
             anyhow::bail!("command not supported in library dispatch (use binary)")
         }
     }
