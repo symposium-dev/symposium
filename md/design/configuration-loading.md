@@ -6,6 +6,6 @@ User-wide paths are resolved using the [`directories`](https://crates.io/crates/
 
 See the [configuration reference](../reference/configuration.md#directory-resolution) for the full resolution table.
 
-## Config merging
+## Config loading
 
-Both user (`~/.symposium/config.toml`) and project (`.symposium/config.toml`) configs are loaded and merged. Project settings override user settings field-by-field within the `[agent]` section. Plugin sources come from the user config only. Skills and workflows come from the project config only.
+The user config (`~/.symposium/config.toml`) is loaded once at startup into the `Symposium` struct. If the file is missing or empty, defaults are used. If parsing fails, a warning is printed and defaults are used.

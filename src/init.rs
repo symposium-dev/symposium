@@ -1,13 +1,13 @@
-//! Init commands: `init --user` and `init --project`.
+//! Init command: `symposium init`.
 
 use std::io::IsTerminal;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use dialoguer::{Confirm, MultiSelect};
+use dialoguer::MultiSelect;
 
 use crate::agents::Agent;
-use crate::config::{AgentEntry, ProjectConfig, Symposium};
+use crate::config::{AgentEntry, Symposium};
 use crate::output::{Output, display_path};
 
 /// Options that can be provided on the command line to skip interactive prompts.
@@ -20,7 +20,6 @@ pub struct InitOpts {
 }
 
 /// Whether we can prompt the user interactively.
-/// Returns false in quiet mode (e.g., tests) even if stdin is a terminal.
 fn interactive(out: &Output) -> bool {
     !out.is_quiet() && std::io::stdin().is_terminal()
 }
@@ -29,24 +28,17 @@ fn interactive(out: &Output) -> bool {
 /// 1. Explicit `--add-agent` / `--remove-agent` flags (applied to existing set)
 /// 2. Interactive multi-select (if terminal), pre-selecting existing agents
 /// 3. Default to first agent (Claude) in non-interactive mode
-fn resolve_user_agents(
-    opts: &InitOpts,
-    existing: &[AgentEntry],
-    out: &Output,
-) -> Result<Vec<Agent>> {
+fn resolve_agents(opts: &InitOpts, existing: &[AgentEntry], out: &Output) -> Result<Vec<Agent>> {
     if !opts.agents.is_empty() || !opts.remove_agents.is_empty() {
-        // Start from existing agents
         let mut names: Vec<String> = existing.iter().map(|e| e.name.clone()).collect();
-        // Add new ones
         for name in &opts.agents {
-            Agent::from_config_name(name)?; // validate
+            Agent::from_config_name(name)?;
             if !names.contains(name) {
                 names.push(name.clone());
             }
         }
-        // Remove specified ones
         for name in &opts.remove_agents {
-            Agent::from_config_name(name)?; // validate
+            Agent::from_config_name(name)?;
             names.retain(|n| n != name);
         }
         return names.iter().map(|n| Agent::from_config_name(n)).collect();
@@ -63,43 +55,14 @@ fn resolve_user_agents(
     Ok(vec![Agent::all()[0]])
 }
 
-/// Resolve which agents to add at the project level. Priority:
-/// 1. Explicit `--add-agent` / `--remove-agent` flags (applied to existing set)
-/// 2. Interactive prompt (if terminal)
-/// 3. No project agents in non-interactive mode
-fn resolve_project_agents(
-    opts: &InitOpts,
-    existing: &[AgentEntry],
-    out: &Output,
-) -> Result<Vec<Agent>> {
-    if !opts.agents.is_empty() || !opts.remove_agents.is_empty() {
-        let mut names: Vec<String> = existing.iter().map(|e| e.name.clone()).collect();
-        for name in &opts.agents {
-            Agent::from_config_name(name)?;
-            if !names.contains(name) {
-                names.push(name.clone());
-            }
-        }
-        for name in &opts.remove_agents {
-            Agent::from_config_name(name)?;
-            names.retain(|n| n != name);
-        }
-        return names.iter().map(|n| Agent::from_config_name(n)).collect();
-    }
-    if interactive(out) {
-        return prompt_for_project_agents();
-    }
-    Ok(Vec::new())
-}
-
 /// Run user-wide initialization.
 ///
 /// Prompts for agents (unless provided), writes
 /// `~/.symposium/config.toml`, and registers global hooks.
-pub async fn init_user(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<()> {
+pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<()> {
     out.println("Setting up symposium for your user account.\n");
 
-    let agents = resolve_user_agents(opts, &sym.config.agents, out)?;
+    let agents = resolve_agents(opts, &sym.config.agents, out)?;
 
     sym.config.agents = agents
         .iter()
@@ -118,111 +81,8 @@ pub async fn init_user(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Re
     ));
 
     // Register global hooks
-    crate::sync::sync_agent(sym, None, out)
-        .await
+    crate::sync::register_hooks(sym, out)
         .context("failed to register global hooks")?;
-
-    Ok(())
-}
-
-/// Run project-level initialization.
-///
-/// Finds workspace root from `cwd`, optionally prompts for project agents,
-/// creates `.symposium/config.toml`, and runs sync.
-pub async fn init_project(
-    sym: &Symposium,
-    cwd: &Path,
-    out: &Output,
-    opts: &InitOpts,
-) -> Result<()> {
-    let workspace_root = find_workspace_root(cwd)?;
-    out.println(format!(
-        "Setting up symposium for project at {}.\n",
-        workspace_root.display()
-    ));
-
-    // Check if already initialized
-    let config_dir = workspace_root.join(".symposium");
-    if config_dir.join("config.toml").exists() {
-        out.already_ok(".symposium/config.toml already exists, syncing");
-    } else {
-        let project_agents = resolve_project_agents(opts, &[], out)?;
-
-        let config = ProjectConfig {
-            agents: project_agents
-                .iter()
-                .map(|a| AgentEntry {
-                    name: a.config_name().to_string(),
-                })
-                .collect(),
-            ..Default::default()
-        };
-        config
-            .save(&workspace_root)
-            .context("failed to write project config")?;
-
-        out.done("created .symposium/config.toml");
-    }
-
-    // Run sync --workspace to discover extensions
-    crate::sync::sync_workspace(sym, &workspace_root, out)
-        .await
-        .context("sync --workspace failed")?;
-
-    // Run sync --agent to install extensions
-    crate::sync::sync_agent(sym, Some(&workspace_root), out)
-        .await
-        .context("sync --agent failed")?;
-
-    out.blank();
-    out.println("Project setup complete. Consider checking .symposium/ into version control.");
-    Ok(())
-}
-
-/// Run the default init (both user and project as needed).
-pub async fn init_default(
-    sym: &mut Symposium,
-    cwd: &Path,
-    out: &Output,
-    opts: &InitOpts,
-) -> Result<()> {
-    let user_config_exists =
-        sym.config_dir().join("config.toml").exists() && !sym.config.agents.is_empty();
-
-    if !user_config_exists {
-        init_user(sym, out, opts).await?;
-        out.blank();
-    }
-
-    // Check if we're in a Rust workspace
-    if let Ok(workspace_root) = find_workspace_root(cwd) {
-        let project_config_exists = workspace_root
-            .join(".symposium")
-            .join("config.toml")
-            .exists();
-
-        if !project_config_exists {
-            let setup = if interactive(out) {
-                Confirm::new()
-                    .with_prompt("Set up this project?")
-                    .default(true)
-                    .interact()?
-            } else {
-                true
-            };
-
-            if setup {
-                init_project(sym, cwd, out, opts).await?;
-            }
-        } else {
-            out.info("user and project already configured, syncing");
-            out.blank();
-            crate::sync::sync_workspace(sym, &workspace_root, out).await?;
-            crate::sync::sync_agent(sym, Some(&workspace_root), out).await?;
-        }
-    } else if user_config_exists {
-        out.info("user already configured — run from a Rust workspace to set up a project");
-    }
 
     Ok(())
 }
@@ -235,7 +95,6 @@ fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {
     let agents = Agent::all();
     let items: Vec<&str> = agents.iter().map(|a| a.display_name()).collect();
 
-    // Pre-select agents that are already configured
     let defaults: Vec<bool> = agents
         .iter()
         .map(|a| existing.iter().any(|e| e.name == a.config_name()))
@@ -254,25 +113,12 @@ fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {
     Ok(selections.into_iter().map(|i| agents[i]).collect())
 }
 
-fn prompt_for_project_agents() -> Result<Vec<Agent>> {
-    let add_agents = Confirm::new()
-        .with_prompt("Add project-level agents? (default: each developer uses their own)")
-        .default(false)
-        .interact()?;
-
-    if add_agents {
-        prompt_for_agents(&[])
-    } else {
-        Ok(Vec::new())
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Workspace detection
 // ---------------------------------------------------------------------------
 
 /// Find the workspace root using `cargo metadata`, run from the given directory.
-pub fn find_workspace_root(cwd: &Path) -> Result<PathBuf> {
+pub fn find_workspace_root(cwd: &std::path::Path) -> Result<PathBuf> {
     let output = std::process::Command::new("cargo")
         .args(["metadata", "--no-deps", "--format-version=1"])
         .current_dir(cwd)

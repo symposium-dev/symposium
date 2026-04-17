@@ -38,16 +38,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
-    /// Set up user-wide or project-level configuration
+    /// Set up user-wide configuration
     Init {
-        /// Set up user-wide configuration only
-        #[arg(long)]
-        user: bool,
-
-        /// Set up project configuration only
-        #[arg(long)]
-        project: bool,
-
         /// Agent to configure (e.g., claude, copilot, gemini). Repeatable.
         /// Skips the interactive prompt.
         #[arg(long = "add-agent")]
@@ -58,24 +50,8 @@ pub enum Commands {
         remove_agents: Vec<String>,
     },
 
-    /// Synchronize configuration with workspace dependencies and agent
-    Sync {
-        /// Only update .symposium/config.toml from workspace dependencies
-        #[arg(long)]
-        workspace: bool,
-
-        /// Only install enabled extensions into the agent's directories
-        #[arg(long)]
-        agent: bool,
-
-        /// Add an agent to the project config. Repeatable.
-        #[arg(long = "add-agent", value_name = "NAME")]
-        add_agents: Vec<String>,
-
-        /// Remove an agent from the project config. Repeatable.
-        #[arg(long = "remove-agent", value_name = "NAME")]
-        remove_agents: Vec<String>,
-    },
+    /// Synchronize skills with workspace dependencies
+    Sync,
 
     /// Hook entry point invoked by your agent (internal)
     Hook {
@@ -138,8 +114,6 @@ pub enum PluginCommand {
 pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -> Result<()> {
     match cmd {
         Commands::Init {
-            user,
-            project,
             agents,
             remove_agents,
         } => {
@@ -147,41 +121,10 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
                 agents,
                 remove_agents,
             };
-            if user && !project {
-                init::init_user(sym, out, &opts).await
-            } else if project && !user {
-                init::init_project(sym, cwd, out, &opts).await
-            } else {
-                init::init_default(sym, cwd, out, &opts).await
-            }
+            init::init(sym, out, &opts).await
         }
 
-        Commands::Sync {
-            workspace,
-            agent,
-            add_agents,
-            remove_agents,
-        } => {
-            for name in &add_agents {
-                sync::add_agent(cwd, name, out)?;
-            }
-            for name in &remove_agents {
-                sync::remove_agent(cwd, name, out)?;
-            }
-
-            let do_workspace = workspace || (!workspace && !agent);
-            let do_agent = agent || (!workspace && !agent);
-
-            if do_workspace {
-                sync::sync_workspace(sym, cwd, out).await?;
-            }
-
-            if do_agent {
-                sync::sync_agent(sym, Some(cwd), out).await?;
-            }
-
-            Ok(())
-        }
+        Commands::Sync => sync::sync(sym, cwd, out).await,
 
         Commands::Crate { name, version } => {
             match crate_command::dispatch_crate(sym, &name, version.as_deref(), cwd).await {

@@ -27,8 +27,8 @@ pub async fn execute_hook(
         let payload = handler.parse_input(input)?;
         let sym_input = payload.to_symposium();
 
-        // Run sync --agent as a side effect (non-fatal).
-        run_sync_agent(sym, &sym_input).await;
+        // Auto-sync: install applicable skills into agent dirs (non-fatal).
+        run_auto_sync(sym, &sym_input).await;
 
         // Builtin dispatch → symposium output → host agent output as Value
         let builtin_sym_output = dispatch_builtin(sym, &sym_input).await;
@@ -80,14 +80,16 @@ pub async fn run(sym: &Symposium, agent: HookAgent, event: HookEvent) -> ExitCod
     }
 }
 
-/// Run sync --agent if we're in a project directory. Non-fatal.
-async fn run_sync_agent(sym: &Symposium, input: &symposium::InputEvent) {
+/// Run sync if we're in a workspace directory and auto-sync is enabled. Non-fatal.
+async fn run_auto_sync(sym: &Symposium, input: &symposium::InputEvent) {
+    if !sym.config.auto_sync {
+        return;
+    }
     let Some(cwd_str) = input.cwd() else { return };
     let cwd = std::path::Path::new(cwd_str);
-    let project_root = Some(cwd).filter(|p| p.join(".symposium").is_dir());
     let out = crate::output::Output::quiet();
-    if let Err(e) = crate::sync::sync_agent(sym, project_root, &out).await {
-        tracing::warn!(error = %e, "sync --agent during hook failed (continuing)");
+    if let Err(e) = crate::sync::sync(sym, cwd, &out).await {
+        tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
     }
 }
 
@@ -111,16 +113,9 @@ pub async fn dispatch_builtin(
 /// Handle SessionStart: collect `session-start-context` from all plugins and return as context.
 fn handle_session_start(
     sym: &Symposium,
-    payload: &symposium::SessionStartInput,
+    _payload: &symposium::SessionStartInput,
 ) -> symposium::OutputEvent {
-    let project_root = payload
-        .cwd
-        .as_deref()
-        .map(std::path::Path::new)
-        .filter(|p| p.join(".symposium").is_dir());
-    let project_config = project_root.and_then(crate::config::ProjectConfig::load);
-
-    let registry = crate::plugins::load_registry_with(sym, project_config.as_ref(), project_root);
+    let registry = crate::plugins::load_registry(sym);
 
     let mut context_parts: Vec<String> = Vec::new();
     for crate::plugins::ParsedPlugin { path: _, plugin } in &registry.plugins {

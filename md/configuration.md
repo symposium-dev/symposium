@@ -28,6 +28,14 @@ Directories are created automatically on first use.
 ## Reference
 
 ```toml
+auto-sync = true
+
+[[agent]]
+name = "claude"
+
+[[agent]]
+name = "gemini"
+
 cache_dir = "/custom/cache/path"  # optional, overrides cache location
 
 [logging]
@@ -51,7 +59,16 @@ path = "my-plugins"  # relative to ~/.symposium/
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
+| `auto-sync` | bool | `true` | Automatically run `symposium sync` during hook invocations to keep skills in sync with workspace dependencies. |
 | `cache_dir` | string | (see directory resolution) | Directory for cached data (extracted crate sources, etc.). Overrides the environment-based resolution. |
+
+### `[[agent]]`
+
+Each `[[agent]]` entry identifies an agent you use. You can configure multiple agents.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `name` | string | *(required)* | Agent name: `claude`, `codex`, `copilot`, `gemini`, `goose`, `kiro`, or `opencode`. |
 
 ### `[logging]`
 
@@ -77,7 +94,7 @@ Defines additional plugin sources. Each entry must have exactly one of `git` or 
 | `name` | string | *(required)* | A name for this source (used in logs and cache paths). |
 | `git` | string | — | GitHub repository URL. The repo is fetched as a tarball and cached under `~/.symposium/cache/plugin-sources/`. |
 | `path` | string | — | Local directory containing plugins. Relative paths are resolved from `~/.symposium/`. |
-| `auto-update` | bool | `true` | Whether to check for updates on startup. Only applies to `git` sources. When `false`, the source is only fetched by `symposium update`. |
+| `auto-update` | bool | `true` | Whether to check for updates on startup. Only applies to `git` sources. When `false`, the source is only fetched by `symposium plugin sync`. |
 
 ## Plugin sources
 
