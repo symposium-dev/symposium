@@ -10,7 +10,7 @@ use serde::Serialize;
 
 use symposium::cli::Cli;
 use symposium::config::Symposium;
-use symposium::dispatch::{self, DispatchResult};
+use symposium::crate_command::{self, DispatchResult};
 use symposium::hook;
 use symposium::hook_schema::HookAgent;
 use symposium::output::Output;
@@ -26,11 +26,9 @@ struct InvokeArgs {
 #[derive(Debug, Subcommand)]
 enum InvokeCommand {
     Crate {
-        name: Option<String>,
+        name: String,
         #[arg(long)]
         version: Option<String>,
-        #[arg(long)]
-        list: bool,
     },
 }
 
@@ -74,15 +72,9 @@ impl TestContext {
             .as_deref()
             .unwrap_or_else(|| self.sym.config_dir());
 
-        let InvokeCommand::Crate {
-            name,
-            version,
-            list,
-        } = parsed.command;
+        let InvokeCommand::Crate { name, version } = parsed.command;
 
-        match dispatch::dispatch_crate(&self.sym, name.as_deref(), version.as_deref(), list, cwd)
-            .await
-        {
+        match crate_command::dispatch_crate(&self.sym, &name, version.as_deref(), cwd).await {
             DispatchResult::Ok(output) => Ok(output),
             DispatchResult::Err(e) => Err(e),
         }
