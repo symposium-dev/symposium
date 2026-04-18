@@ -1,28 +1,39 @@
 # `symposium sync`
 
-Synchronize the project configuration and agent setup.
+Synchronize skills with workspace dependencies.
 
 ## Usage
 
 ```bash
-symposium sync [OPTIONS]
+symposium sync
 ```
 
 ## Behavior
 
-By default, `sync` performs both steps:
+Must be run from within a Rust workspace. Performs the following steps:
 
-1. **Workspace sync** (`--workspace`) — scans the current workspace dependencies and updates `.symposium/config.toml`:
-   - Extensions for new dependencies are added, defaulting to the resolved `sync-default` value.
-   - Entries for removed dependencies are cleaned up.
-   - Existing on/off choices are preserved.
+1. **Find workspace root** — runs `cargo metadata` to locate the workspace.
 
-2. **Agent sync** (`--agent`) — reads `.symposium/config.toml` and installs the enabled extensions into the locations your agent expects (e.g., `.claude/skills/` for Claude Code).
+2. **Scan dependencies** — reads the full dependency graph from the workspace.
 
-## Options
+3. **Discover applicable skills** — loads plugin sources (from user config) and matches skill predicates against workspace dependencies.
 
-| Flag | Description |
-|------|-------------|
-| `--workspace` | Only update `.symposium/config.toml` from workspace dependencies |
-| `--agent` | Only install enabled extensions into the agent's directories |
-| `--set-agent <name>` | Set or change the project-level agent override |
+4. **Install skills** — for each configured agent, copies applicable `SKILL.md` files into the agent's expected skill directory (e.g., `.claude/skills/` for Claude Code, `.agents/skills/` for Copilot/Gemini/Codex).
+
+5. **Clean up stale skills** — removes skills that were previously installed by symposium but are no longer applicable (e.g., because a dependency was removed). Tracks installed skills in a per-agent manifest (`.symposium.toml` in the agent's skill directory). Skills not in the manifest (user-managed) are left untouched.
+
+6. **Register hooks** — ensures global hooks and MCP servers are registered for all configured agents. Unregisters hooks for agents no longer in the config.
+
+## Automatic sync
+
+By default (`auto-sync = true`), `symposium sync` runs automatically during hook invocations. This keeps skills in sync with workspace dependencies without manual intervention. Set `auto-sync = false` in the user config to disable this and sync manually.
+
+## Example
+
+```bash
+# One-time setup
+symposium init --add-agent claude
+
+# Sync skills for the current workspace
+symposium sync
+```

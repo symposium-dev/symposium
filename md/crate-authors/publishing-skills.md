@@ -93,6 +93,5 @@ See the [Skill definition reference](../reference/skill-definition.md) for the f
 From a project that depends on your crate:
 
 ```bash
-symposium crate --list
 symposium crate widgetlib
 ```

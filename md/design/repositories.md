@@ -8,7 +8,7 @@ The main repository. Contains the Symposium CLI/library (Rust), the mdbook docum
 
 ### [symposium-claude-code-plugin](https://github.com/symposium-dev/symposium-claude-code-plugin)
 
-The Claude Code plugin that connects Symposium to Claude Code. Contains a static skill (tells the agent to run `symposium start`), hook registrations (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`), and a bootstrap script that finds or downloads the Symposium binary.
+The Claude Code plugin that connects Symposium to Claude Code. Contains a static skill, hook registrations (`PreToolUse`, `PostToolUse`, `UserPromptSubmit`), and a bootstrap script that finds or downloads the Symposium binary.
 
 ### [recommendations](https://github.com/symposium-dev/recommendations)
 

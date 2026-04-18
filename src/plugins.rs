@@ -228,7 +228,7 @@ struct PluginManifest {
 /// Only refreshes sources with `auto-update = true` (unless `update` is `Fetch`).
 /// Path-based sources are skipped (no fetching needed).
 pub async fn ensure_plugin_sources(sym: &Symposium, update: UpdateLevel) {
-    let sources = sym.plugin_sources(None, None);
+    let sources = sym.plugin_sources();
 
     for resolved in &sources {
         let source = &resolved.source;
@@ -268,7 +268,7 @@ pub fn load_all_plugins(sym: &Symposium) -> Vec<ParsedPlugin> {
 /// If `provider` is Some, sync only that provider (ignores auto-update).
 /// If `provider` is None, sync all sources with auto-update = true.
 pub async fn sync_plugin_source(sym: &Symposium, provider: Option<&str>) -> Result<Vec<String>> {
-    let sources = sym.plugin_sources(None, None);
+    let sources = sym.plugin_sources();
     let mut synced = Vec::new();
 
     for resolved in &sources {
@@ -303,7 +303,7 @@ pub async fn sync_plugin_source(sym: &Symposium, provider: Option<&str>) -> Resu
 
 /// List all providers and their plugins.
 pub fn list_plugins(sym: &Symposium) -> Vec<ProviderInfo> {
-    let sources = sym.plugin_sources(None, None);
+    let sources = sym.plugin_sources();
     let mut providers = Vec::new();
 
     for resolved in &sources {
@@ -336,7 +336,7 @@ pub fn list_plugins(sym: &Symposium) -> Vec<ProviderInfo> {
 
 /// Find a plugin by name across all sources.
 pub fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
-    let sources = sym.plugin_sources(None, None);
+    let sources = sym.plugin_sources();
 
     for resolved in &sources {
         let source_path = resolve_plugin_source_dir(sym, resolved);
@@ -425,16 +425,7 @@ async fn fetch_plugin_source(
 /// Discovers TOML plugin manifests and standalone skill directories,
 /// then loads both into a `PluginRegistry`.
 pub fn load_registry(sym: &Symposium) -> PluginRegistry {
-    load_registry_with(sym, None, None)
-}
-
-/// Load the plugin registry with project context for source resolution.
-pub fn load_registry_with(
-    sym: &Symposium,
-    project: Option<&crate::config::ProjectConfig>,
-    project_root: Option<&Path>,
-) -> PluginRegistry {
-    let sources = sym.plugin_sources(project, project_root);
+    let sources = sym.plugin_sources();
     let mut plugins = Vec::new();
     let mut standalone_skills = Vec::new();
 
