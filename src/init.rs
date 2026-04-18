@@ -81,8 +81,7 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
     ));
 
     // Register global hooks
-    crate::sync::register_hooks(sym, out)
-        .context("failed to register global hooks")?;
+    crate::sync::register_hooks(sym, out).context("failed to register global hooks")?;
 
     Ok(())
 }
