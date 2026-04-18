@@ -6,7 +6,6 @@ pub mod git_source;
 pub mod hook;
 pub mod hook_schema;
 pub mod init;
-pub mod mcp;
 pub mod output;
 pub mod plugins;
 pub mod start;

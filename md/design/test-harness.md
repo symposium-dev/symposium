@@ -59,7 +59,7 @@ async fn my_test() {
 
 - **`invoke_hook(agent, event, &payload)`** — the full hook pipeline (`parse → builtin → plugins → serialize`). Same code path as `symposium hook <agent> <event>`. The payload is any `impl Serialize` matching the agent's wire format. Returns agent wire-format output bytes.
 
-- **`invoke(&["start"])`** — runs an MCP dispatch command (same as the MCP server). Returns the output string.
+- **`invoke(&["crate", "--list"])`** — runs a dispatch command and returns the output string.
 
 - **`symposium(&["sync", "--agent"])`** — runs a CLI command against the test context.
 

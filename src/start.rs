@@ -2,30 +2,14 @@ use regex::Regex;
 
 const TEMPLATE: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/md/start.md"));
 
-/// Whether the output is for the CLI or the MCP server.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RenderMode {
-    Cli,
-    Mcp,
-}
-
 /// Render the start template, expanding `$INVOKE(arg1,arg2,...)` placeholders
-/// according to the render mode.
-pub fn render(mode: RenderMode) -> String {
+/// into CLI-style invocations.
+pub fn render() -> String {
     let re = Regex::new(r"\$INVOKE\(([^)]+)\)").unwrap();
     re.replace_all(TEMPLATE, |caps: &regex::Captures| {
         let args: Vec<&str> = caps[1].split(',').map(|s| s.trim()).collect();
-        match mode {
-            RenderMode::Cli => {
-                let joined = args.join(" ");
-                format!("`symposium {joined}`")
-            }
-            RenderMode::Mcp => {
-                let json_args: Vec<String> = args.iter().map(|a| format!("\"{a}\"")).collect();
-                let joined = json_args.join(", ");
-                format!("the `symposium::rust` MCP tool with `[{joined}]`")
-            }
-        }
+        let joined = args.join(" ");
+        format!("`symposium {joined}`")
     })
     .into_owned()
 }
@@ -35,21 +19,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn render_cli_expands_invoke() {
-        let output = render(RenderMode::Cli);
+    fn render_expands_invoke() {
+        let output = render();
         assert!(
             output.contains("`symposium crate $name`"),
-            "CLI should expand $INVOKE to symposium: {output}"
-        );
-        assert!(!output.contains("$INVOKE"));
-    }
-
-    #[test]
-    fn render_mcp_expands_invoke() {
-        let output = render(RenderMode::Mcp);
-        assert!(
-            output.contains("the `symposium::rust` MCP tool with `[\"crate\", \"$name\"]`"),
-            "MCP should expand $INVOKE to MCP tool: {output}"
+            "should expand $INVOKE to symposium: {output}"
         );
         assert!(!output.contains("$INVOKE"));
     }

@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use serde::Serialize;
 
 use symposium::cli::Cli;
@@ -13,8 +13,26 @@ use symposium::config::Symposium;
 use symposium::dispatch::{self, DispatchResult};
 use symposium::hook;
 use symposium::hook_schema::HookAgent;
-use symposium::mcp::McpArgs;
 use symposium::output::Output;
+
+/// Minimal arg parser for `invoke()` — mirrors the crate subcommand.
+#[derive(Debug, Parser)]
+#[command(name = "symposium", no_binary_name = true)]
+struct InvokeArgs {
+    #[command(subcommand)]
+    command: InvokeCommand,
+}
+
+#[derive(Debug, Subcommand)]
+enum InvokeCommand {
+    Crate {
+        name: Option<String>,
+        #[arg(long)]
+        version: Option<String>,
+        #[arg(long)]
+        list: bool,
+    },
+}
 
 /// Test context wrapping an isolated `Symposium` instance.
 pub struct TestContext {
@@ -47,15 +65,24 @@ impl TestContext {
         }
     }
 
-    /// Call the shared dispatch function, returning the output string.
+    /// Call the crate dispatch function, returning the output string.
     pub async fn invoke(&self, args: &[&str]) -> Result<String, String> {
         let parsed =
-            McpArgs::try_parse_from(args).map_err(|e| format!("failed to parse args: {e}"))?;
+            InvokeArgs::try_parse_from(args).map_err(|e| format!("failed to parse args: {e}"))?;
         let cwd = self
             .workspace_root
             .as_deref()
             .unwrap_or_else(|| self.sym.config_dir());
-        match dispatch::dispatch(&self.sym, parsed.command, cwd, dispatch::RenderMode::Mcp).await {
+
+        let InvokeCommand::Crate {
+            name,
+            version,
+            list,
+        } = parsed.command;
+
+        match dispatch::dispatch_crate(&self.sym, name.as_deref(), version.as_deref(), list, cwd)
+            .await
+        {
             DispatchResult::Ok(output) => Ok(output),
             DispatchResult::Err(e) => Err(e),
         }

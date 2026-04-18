@@ -4,7 +4,6 @@ use std::process::ExitCode;
 use symposium::cli::{Cli, Commands, PluginCommand};
 use symposium::config;
 use symposium::hook;
-use symposium::mcp;
 use symposium::output::Output;
 use symposium::plugins::{self, ParsedPlugin};
 
@@ -31,14 +30,6 @@ async fn main() -> ExitCode {
     match cli.command {
         // Commands that need direct I/O (stdin/stdout) stay in the binary
         Some(Commands::Hook { agent, event }) => hook::run(&sym, agent, event).await,
-
-        Some(Commands::Mcp) => match mcp::serve(&sym, &cwd).await {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(e) => {
-                eprintln!("MCP server error: {e}");
-                ExitCode::FAILURE
-            }
-        },
 
         Some(Commands::Plugin { command }) => handle_plugin_command(&sym, command).await,
 
