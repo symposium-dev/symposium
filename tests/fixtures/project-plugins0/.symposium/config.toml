@@ -1,3 +1,5 @@
+hook-scope = "project"
+
 [[plugin-source]]
 name = "project-local"
 path = "project-plugins"

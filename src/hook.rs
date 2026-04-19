@@ -68,6 +68,7 @@ pub async fn run(sym: &Symposium, agent: HookAgent, event: HookEvent) -> ExitCod
 
     match execute_hook(sym, agent, event, &input).await {
         Ok(bytes) => {
+            write_hook_trace(agent, event, &input, &bytes);
             if !bytes.is_empty() {
                 std::io::stdout().write_all(&bytes).unwrap();
             }
@@ -77,6 +78,38 @@ pub async fn run(sym: &Symposium, agent: HookAgent, event: HookEvent) -> ExitCod
             tracing::warn!(?event, error = %e, "hook failed");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// If `SYMPOSIUM_HOOK_TRACE` is set to a file path, append a JSONL entry.
+/// Used for integration testing to check what hooks occur when we invoke the agent.
+fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, output: &[u8]) {
+    let Some(path) = std::env::var_os("SYMPOSIUM_HOOK_TRACE") else {
+        return;
+    };
+
+    let input_val: serde_json::Value =
+        serde_json::from_str(input).unwrap_or(serde_json::Value::Null);
+    let output_val: serde_json::Value =
+        serde_json::from_slice(output).unwrap_or(serde_json::Value::Null);
+
+    let entry = serde_json::json!({
+        "event": event,
+        "agent": agent,
+        "input": input_val,
+        "output": output_val,
+    });
+
+    use std::fs::OpenOptions;
+    match OpenOptions::new().create(true).append(true).open(&path) {
+        Ok(mut f) => {
+            let mut line = serde_json::to_string(&entry).unwrap();
+            line.push('\n');
+            if let Err(e) = f.write_all(line.as_bytes()) {
+                tracing::warn!(error = %e, "failed to write hook trace");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, "failed to open hook trace file"),
     }
 }
 

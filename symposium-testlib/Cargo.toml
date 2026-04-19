@@ -13,4 +13,9 @@ serde = "1"
 serde_json = "1"
 symposium = { path = ".." }
 tempfile = "3.6"
+acpr = "0.2"
 anyhow = "1.0.102"
+sacp = "11"
+sacp-tokio = "11"
+tokio = { version = "1", features = ["macros"] }
+toml = "0.8"

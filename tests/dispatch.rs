@@ -1,20 +1,28 @@
+use symposium_testlib::TestMode;
+
 #[tokio::test]
 async fn help() {
-    let ctx = symposium_testlib::with_fixture(&["plugins0"]);
-    // Clap handles "help" as a built-in, returning a parse error with help text.
-    let result = ctx.invoke(&["help"]).await;
-    assert!(result.is_err());
-    let err = result.unwrap_err();
-    // Just verify it contains the right binary name
-    assert!(
-        err.contains("symposium"),
-        "help should mention symposium: {err}"
-    );
+    symposium_testlib::with_fixture(TestMode::SimulationOnly, &["plugins0"], async |mut ctx| {
+        let result = ctx.symposium(&["help"]).await;
+        assert!(result.is_err());
+        let err = format!("{}", result.unwrap_err());
+        assert!(
+            err.contains("symposium"),
+            "help should mention symposium: {err}"
+        );
+        Ok(())
+    })
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
 async fn unknown_command() {
-    let ctx = symposium_testlib::with_fixture(&["plugins0"]);
-    let result = ctx.invoke(&["nonsense"]).await;
-    assert!(result.is_err());
+    symposium_testlib::with_fixture(TestMode::SimulationOnly, &["plugins0"], async |mut ctx| {
+        let result = ctx.symposium(&["nonsense"]).await;
+        assert!(result.is_err());
+        Ok(())
+    })
+    .await
+    .unwrap();
 }
