@@ -5,20 +5,21 @@ Entry point invoked by your agent's hook system. This is an internal command —
 ## Usage
 
 ```bash
-symposium hook <EVENT> [ARGS...]
+symposium hook <AGENT> <EVENT>
 ```
 
 ## Behavior
 
-When your agent starts, the registered hook calls `symposium hook` with the appropriate event. The hook does two things, in order:
+When your agent triggers a hook event, it calls `symposium hook` with the agent name and event type. The hook does two things:
 
-1. **Syncs agent config** — reads the project configuration and installs enabled extensions into the agent's expected locations (equivalent to `symposium sync --agent`).
-2. **Dispatches to plugin hooks** — runs any hook handlers defined by enabled plugins for the given event.
+1. **Auto-sync** (if enabled) — when `auto-sync = true` in the user config, runs `symposium sync` to ensure skills are current for the workspace. Failures are logged but don't block hook dispatch.
+
+2. **Dispatches to plugin hooks** — runs any hook handlers defined by plugins for the given event.
 
 ## Events
 
-The specific events and arguments depend on which agent you are using. `symposium init --user` configures the hook registration appropriate for your agent.
+The specific events depend on which agent you are using. `symposium init` configures the hook registration appropriate for your agents.
 
 ## When is the hook invoked?
 
-The hook is registered globally during `symposium init --user`. It runs automatically when your agent starts a session in a project that has a `.symposium/` directory.
+The hook is registered globally during `symposium init`. It runs automatically when your agent triggers supported events (e.g., session start, tool use).

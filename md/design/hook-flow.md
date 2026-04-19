@@ -4,7 +4,7 @@ Entry point invoked by the agent's hook system on session events.
 
 ## Flow
 
-1. **Run `sync --agent`** — delegates to the [`sync --agent` flow](./sync-agent-flow.md) to ensure extensions are installed and hooks are current. The project root is resolved from the payload's `cwd` field (checking for a `.symposium/` directory); if no project is detected, this step is a no-op. Runs quietly and non-fatally — failures are logged but don't block hook dispatch.
+1. **Auto-sync** (if enabled) — when `auto-sync = true` in the user config, runs [`symposium sync`](./sync-agent-flow.md) to ensure skills are current. The workspace root is resolved from the payload's `cwd` field. Runs quietly and non-fatally — failures are logged but don't block hook dispatch.
 
 2. **Dispatch to plugin hooks** — for each enabled plugin that defines a hook handler for the incoming event:
    - Pass the event JSON on stdin to the plugin's hook command.

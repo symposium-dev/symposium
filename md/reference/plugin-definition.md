@@ -48,7 +48,7 @@ The `session-start-context` field lets a plugin inject text into the agent's con
 
 ```toml
 name = "rust-guidance"
-session-start-context = "**Critical:** Before authoring Rust code, run `symposium start` for instructions."
+session-start-context = "**Critical:** Before authoring Rust code, run `symposium crate $name` for instructions."
 ```
 
 When multiple plugins provide `session-start-context`, all of their texts are combined (separated by blank lines) and returned to the agent as additional context.

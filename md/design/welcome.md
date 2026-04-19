@@ -9,7 +9,6 @@ Symposium is a standard Cargo project with both a library and a binary:
 ```bash
 cargo check              # type-check
 cargo test               # run the test suite
-cargo run -- start       # run locally: Rust guidance + crate skill list
 cargo run -- crate tokio # run locally: crate-specific guidance
 ```
 

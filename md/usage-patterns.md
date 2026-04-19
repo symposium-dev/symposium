@@ -8,13 +8,7 @@ When you ask your AI assistant about a crate in your project, Symposium checks y
 
 For example, if your project depends on `tokio` and a skill exists for it, your assistant will receive that guidance whenever it's relevant.
 
-## Browsing available skills
-
-To see which skills are available for crates in your current project:
-
-```bash
-symposium crate --list
-```
+## Getting guidance for a crate
 
 To get guidance for a specific crate:
 
