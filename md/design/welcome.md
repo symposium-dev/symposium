@@ -36,5 +36,5 @@ Log files are named `symposium-YYYYMMDD-HHMMSS.log`. When debugging an issue, th
 - [Key repositories](./repositories.md) — the repos that make up Symposium
 - [Key modules](./module-structure.md) — the main pieces of the codebase
 - [Important flows](./important-flows.md) — key paths through the code
-- [Integration test harness](./test-harness.md) — how to write and run tests
+- [Testing guidelines](./testing-guidelines.md) — how to write and run tests
 - [Governance](./governance.md) — how we work together

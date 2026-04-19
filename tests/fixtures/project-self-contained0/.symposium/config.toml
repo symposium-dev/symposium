@@ -1,3 +1,4 @@
+hook-scope = "project"
 self-contained = true
 
 [defaults]

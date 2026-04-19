@@ -8,11 +8,36 @@ use tracing::Level;
 // User configuration (~/.symposium/config.toml)
 // ---------------------------------------------------------------------------
 
+/// Where agent hooks are installed.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum HookScope {
+    /// Install hooks in the user's home directory (e.g., `~/.claude/settings.json`).
+    #[default]
+    Global,
+    /// Install hooks in the project directory (e.g., `<project>/.claude/settings.json`).
+    Project,
+}
+
+impl HookScope {
+    fn is_default(&self) -> bool {
+        matches!(self, HookScope::Global)
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
     /// Automatically run `sync` when hooks are invoked.
     #[serde(default = "default_true", rename = "auto-sync")]
     pub auto_sync: bool,
+
+    /// Where to install agent hooks.
+    #[serde(
+        default,
+        rename = "hook-scope",
+        skip_serializing_if = "HookScope::is_default"
+    )]
+    pub hook_scope: HookScope,
 
     /// Agents configured for this user.
     #[serde(default, rename = "agent")]
@@ -58,6 +83,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             auto_sync: true,
+            hook_scope: HookScope::default(),
             agents: Vec::new(),
             logging: LoggingConfig::default(),
             cache_dir: None,

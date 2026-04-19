@@ -157,7 +157,7 @@ impl Agent {
     }
 
     /// Register hooks in the global agent config.
-    pub fn register_global_hooks(&self, home: &Path, _sym: &Symposium, out: &Output) -> Result<()> {
+    pub fn register_hooks(&self, home: &Path, _sym: &Symposium, out: &Output) -> Result<()> {
         // Register hooks
         match self {
             Agent::Claude => {
@@ -396,7 +396,7 @@ impl Agent {
     }
 
     /// Remove hooks from the global agent config.
-    pub fn unregister_global_hooks(&self, home: &Path, _sym: &Symposium, out: &Output) {
+    pub fn unregister_hooks(&self, home: &Path, _sym: &Symposium, out: &Output) {
         match self {
             Agent::Claude => {
                 unregister_claude_hooks(&home.join(".claude").join("settings.json"), out)

@@ -96,5 +96,8 @@ jobs:
           restore-keys: |
             ${{ matrix.name }}-cargo-
 
+      - name: Disable agent tests
+        run: echo 'test-agents = []' > test-agents.toml
+
       - name: Test
         run: cargo test ${{ matrix.target && format('--target {0}', matrix.target) || '' }}

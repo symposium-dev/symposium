@@ -48,6 +48,10 @@ pub enum Commands {
         /// Remove an agent. Repeatable.
         #[arg(long = "remove-agent")]
         remove_agents: Vec<String>,
+
+        /// Where to install agent hooks: global (~/) or project (./).
+        #[arg(long = "hook-scope")]
+        hook_scope: Option<crate::config::HookScope>,
     },
 
     /// Synchronize skills with workspace dependencies
@@ -116,10 +120,12 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
         Commands::Init {
             agents,
             remove_agents,
+            hook_scope,
         } => {
             let opts = InitOpts {
                 agents,
                 remove_agents,
+                hook_scope,
             };
             init::init(sym, out, &opts).await
         }

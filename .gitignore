@@ -57,3 +57,4 @@ dist/
 # Used for planning that shouldn't be committed
 WIP.md
 retcon-spec.toml
+test-agents.toml
