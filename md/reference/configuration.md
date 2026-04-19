@@ -6,6 +6,7 @@
 
 ```toml
 auto-sync = true
+hook-scope = "global"
 
 [[agent]]
 name = "claude"
@@ -34,6 +35,7 @@ path = "my-plugins"
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `auto-sync` | bool | `true` | Automatically run `symposium sync` during hook invocations. When enabled, skills are kept in sync with workspace dependencies without manual intervention. |
+| `hook-scope` | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace. |
 
 ## `[[agent]]`
 

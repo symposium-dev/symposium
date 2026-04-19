@@ -17,6 +17,8 @@ pub struct InitOpts {
     pub agents: Vec<String>,
     /// Agent names to remove via `--remove-agent`.
     pub remove_agents: Vec<String>,
+    /// Explicit hook scope override.
+    pub hook_scope: Option<crate::config::HookScope>,
 }
 
 /// Whether we can prompt the user interactively.
@@ -70,6 +72,13 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
             name: a.config_name().to_string(),
         })
         .collect();
+
+    if let Some(scope) = opts.hook_scope {
+        sym.config.hook_scope = scope;
+    } else if interactive(out) {
+        sym.config.hook_scope = prompt_for_hook_scope(sym.config.hook_scope)?;
+    }
+
     sym.save_config().context("failed to write user config")?;
 
     let config_path = sym.config_dir().join("config.toml");
@@ -80,8 +89,10 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
         agent_names.join(", ")
     ));
 
-    // Register global hooks
-    crate::sync::register_hooks(sym, out).context("failed to register global hooks")?;
+    // Register global hooks (project-scope hooks are installed by `sync`).
+    if sym.config.hook_scope == crate::config::HookScope::Global {
+        crate::sync::register_hooks(sym, out).context("failed to register global hooks")?;
+    }
 
     Ok(())
 }
@@ -89,6 +100,27 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
 // ---------------------------------------------------------------------------
 // Interactive prompts
 // ---------------------------------------------------------------------------
+
+fn prompt_for_hook_scope(current: crate::config::HookScope) -> Result<crate::config::HookScope> {
+    use crate::config::HookScope;
+
+    let items = ["Globally (recommended)", "Per project"];
+    let default = match current {
+        HookScope::Global => 0,
+        HookScope::Project => 1,
+    };
+
+    let selection = dialoguer::Select::new()
+        .with_prompt("Install hooks and agent configuration")
+        .items(&items)
+        .default(default)
+        .interact()?;
+
+    Ok(match selection {
+        0 => HookScope::Global,
+        _ => HookScope::Project,
+    })
+}
 
 fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {
     let agents = Agent::all();

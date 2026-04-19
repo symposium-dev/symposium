@@ -125,13 +125,18 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     for agent_name in &agent_names {
         let agent = Agent::from_config_name(agent_name)?;
 
-        // Register global hooks and MCP servers
+        let hook_root = match sym.config.hook_scope {
+            crate::config::HookScope::Global => sym.home_dir().to_path_buf(),
+            crate::config::HookScope::Project => project_root.clone(),
+        };
+
+        // Register hooks and MCP servers
         agent
-            .register_global_hooks(sym.home_dir(), sym, out)
-            .context("failed to register global hooks")?;
+            .register_hooks(&hook_root, sym, out)
+            .context("failed to register hooks")?;
         agent
-            .register_global_mcp_servers(sym.home_dir(), &mcp_servers, out)
-            .context("failed to register global MCP servers")?;
+            .register_global_mcp_servers(&hook_root, &mcp_servers, out)
+            .context("failed to register MCP servers")?;
 
         // Install skills and manage manifest
         let manifest_file = manifest_path(agent, &project_root);
@@ -176,7 +181,7 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     // Unregister hooks/MCP for agents no longer configured
     for &agent in Agent::all() {
         if !agent_names.contains(&agent.config_name().to_string()) {
-            agent.unregister_global_hooks(sym.home_dir(), sym, out);
+            agent.unregister_hooks(sym.home_dir(), sym, out);
             let _ = agent.unregister_global_mcp_servers(sym.home_dir(), &server_names, out);
         }
     }
@@ -189,6 +194,7 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
 }
 
 /// Register global hooks for all configured agents.
+/// Register hooks for all configured agents. Uses `home_dir` (global scope).
 /// Called from `init` after writing the user config.
 pub fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
     let registry = plugins::load_registry(sym);
@@ -212,14 +218,14 @@ pub fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
 
     for agent_name in &agent_names {
         let agent = Agent::from_config_name(agent_name)?;
-        agent.register_global_hooks(sym.home_dir(), sym, out)?;
+        agent.register_hooks(sym.home_dir(), sym, out)?;
         agent.register_global_mcp_servers(sym.home_dir(), &mcp_servers, out)?;
     }
 
     // Unregister hooks for agents no longer configured
     for &agent in Agent::all() {
         if !agent_names.contains(&agent.config_name().to_string()) {
-            agent.unregister_global_hooks(sym.home_dir(), sym, out);
+            agent.unregister_hooks(sym.home_dir(), sym, out);
             let _ = agent.unregister_global_mcp_servers(sym.home_dir(), &server_names, out);
         }
     }
