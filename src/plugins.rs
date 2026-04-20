@@ -894,11 +894,9 @@ mod tests {
 
         let contents = scan_source_dir(tmp.path()).unwrap();
         assert_eq!(contents.plugins.len(), 1);
-        assert_eq!(
-            contents.plugins[0].as_ref().unwrap().plugin.name,
-            "mixed-plugin"
-        );
-        assert!(contents.skill_files.is_empty(), "Skill should be ignored due to SYMPOSIUM.toml precedence");
+        assert_eq!(contents.skill_files.len(), 0);
+        expect_test::expect![[r#"mixed-plugin"#]]
+            .assert_eq(&contents.plugins[0].as_ref().unwrap().plugin.name);
     }
 
     #[test]
@@ -916,11 +914,9 @@ mod tests {
 
         let contents = scan_source_dir(tmp.path()).unwrap();
         assert_eq!(contents.plugins.len(), 1);
-        assert_eq!(
-            contents.plugins[0].as_ref().unwrap().plugin.name,
-            "preferred-plugin"
-        );
-        assert!(contents.skill_files.is_empty());
+        assert_eq!(contents.skill_files.len(), 0);
+        expect_test::expect![[r#"preferred-plugin"#]]
+            .assert_eq(&contents.plugins[0].as_ref().unwrap().plugin.name);
     }
 
     #[test]
@@ -962,16 +958,10 @@ mod tests {
         ]);
 
         let contents = scan_source_dir(tmp.path()).unwrap();
-        
-        // Should find foo/PLUGIN.toml as a plugin
         assert_eq!(contents.plugins.len(), 1);
-        assert_eq!(
-            contents.plugins[0].as_ref().unwrap().plugin.name,
-            "foo-plugin"
-        );
-        
-        // Should find only baz/SKILL.md (foo/bar/SKILL.md and baz/qux/* are pruned)
         assert_eq!(contents.skill_files.len(), 1);
+        expect_test::expect![[r#"foo-plugin"#]]
+            .assert_eq(&contents.plugins[0].as_ref().unwrap().plugin.name);
         assert!(contents.skill_files[0].ends_with("baz/SKILL.md"));
     }
 
