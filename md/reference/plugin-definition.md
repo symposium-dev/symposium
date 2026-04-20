@@ -81,6 +81,12 @@ Each `[[hooks]]` entry declares a hook that responds to agent events.
 |------------|-------------|-----------|
 | `PreToolUse` | Triggered before a tool (for example, `Bash`) is invoked by the agent. | `pre-tool-use` |
 
+### Agent → hook name mapping
+
+| Tool / Event | Claude (`claude`) | Copilot (`copilot`) | Gemini (`gemini`) |
+|--------------|------------------------------------:|-------------------:|------------------:|
+| `PreToolUse` | `PreToolUse` | `PreToolUse` | `BeforeTool` |
+
 ### Hook semantics
 
 - **Exit codes**:

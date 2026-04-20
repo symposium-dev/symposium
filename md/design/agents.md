@@ -397,6 +397,19 @@ Goose is supported as a **skills-only** agent — `symposium sync` will install 
 
 ---
 
+## Cross-agent event mapping
+
+The following table maps symposium's internal event names to each agent's wire-format event name. `—` means the agent does not support shell-command hooks.
+
+| Symposium event | Claude | Copilot | Gemini | Codex | Kiro | OpenCode | Goose |
+|---|---|---|---|---|---|---|---|
+| `pre-tool-use` | `PreToolUse` | `preToolUse` | `BeforeTool` | `PreToolUse` | `preToolUse` | — | — |
+| `post-tool-use` | `PostToolUse` | `postToolUse` | `AfterTool` | `PostToolUse` | `postToolUse` | — | — |
+| `user-prompt-submit` | `UserPromptSubmit` | `userPromptSubmitted` | `BeforeAgent` | `UserPromptSubmit` | `userPromptSubmit` | — | — |
+| `session-start` | `SessionStart` | `sessionStart` | `SessionStart` | `SessionStart` | `agentSpawn` | — | — |
+
+---
+
 ## Adding a new agent
 
 To add support for a new agent:
