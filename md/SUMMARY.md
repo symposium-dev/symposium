@@ -45,6 +45,7 @@
   - [Plugin sources](./reference/plugin-source.md)
   - [Plugin definition](./reference/plugin-definition.md)
   - [Skill definition](./reference/skill-definition.md)
+  - [Crate predicates](./reference/crate-predicates.md)
 - [Contribution guide](./design/welcome.md)
   - [Key repositories](./design/repositories.md)
   - [Key modules](./design/module-structure.md)

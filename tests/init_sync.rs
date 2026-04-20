@@ -287,3 +287,45 @@ async fn add_agent_is_additive() {
     .await
     .unwrap();
 }
+
+/// `sync` filters MCP servers by their `crates` predicates.
+#[tokio::test]
+async fn sync_filters_mcp_servers_by_crates() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["mcp-filtering0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let settings_path = workspace_root.join(".claude/settings.json");
+            let settings = std::fs::read_to_string(&settings_path)?;
+
+            // always-server (crates = ["*"]) → registered
+            assert!(
+                settings.contains("always-server"),
+                "wildcard MCP server should be registered"
+            );
+            // serde-server (crates = ["serde"]) → registered (serde is in workspace0)
+            assert!(
+                settings.contains("serde-server"),
+                "serde MCP server should be registered"
+            );
+            // inherited-server (no crates, inherits from plugin) → registered
+            assert!(
+                settings.contains("inherited-server"),
+                "inherited MCP server should be registered"
+            );
+            // missing-crate-server (crates = ["reqwest"]) → NOT registered
+            assert!(
+                !settings.contains("missing-crate-server"),
+                "reqwest MCP server should NOT be registered"
+            );
+
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}

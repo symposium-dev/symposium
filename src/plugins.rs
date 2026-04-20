@@ -14,6 +14,18 @@ use sacp::schema::McpServer;
 /// An MCP server entry in a plugin manifest.
 pub type McpServerEntry = McpServer;
 
+/// An MCP server entry with optional crate filtering.
+///
+/// When `crates` is present, the server is only registered if the workspace
+/// matches those predicates (ANDed with plugin-level `crates`).
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PluginMcpServer {
+    #[serde(default, deserialize_with = "deserialize_string_or_vec_opt")]
+    pub crates: Option<Vec<crate::predicate::Predicate>>,
+    #[serde(flatten)]
+    pub server: McpServerEntry,
+}
+
 /// Source declaration for remote plugin artifacts.
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
 pub struct PluginSource {
@@ -100,12 +112,46 @@ pub struct ParsedPlugin {
 #[derive(Debug, Clone, Serialize)]
 pub struct Plugin {
     pub name: String,
+    /// Crate predicates this plugin applies to. `["*"]` for all crates.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_string_or_vec_opt")]
+    pub crates: Option<Vec<crate::predicate::Predicate>>,
     pub installation: Option<Installation>,
     pub hooks: Vec<Hook>,
     pub skills: Vec<SkillGroup>,
     /// MCP servers to register for this plugin.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mcp_servers: Vec<McpServerEntry>,
+    pub mcp_servers: Vec<PluginMcpServer>,
+}
+
+impl Plugin {
+    /// Check if this plugin applies to the given workspace crates.
+    /// Returns true if plugin has no crates filter, or any predicate matches.
+    pub fn applies_to_crates(&self, workspace_crates: &[(String, semver::Version)]) -> bool {
+        let Some(ref preds) = self.crates else {
+            return true;
+        };
+        preds.iter().any(|p| p.matches(workspace_crates))
+    }
+
+    /// Return MCP servers applicable to the given workspace crates.
+    ///
+    /// A server matches if its own `crates` predicates match (or are absent,
+    /// meaning it inherits from the plugin level which is already checked).
+    pub fn applicable_mcp_servers(
+        &self,
+        workspace_crates: &[(String, semver::Version)],
+    ) -> Vec<McpServerEntry> {
+        self.mcp_servers
+            .iter()
+            .filter(|s| {
+                let Some(ref preds) = s.crates else {
+                    return true;
+                };
+                preds.iter().any(|p| p.matches(workspace_crates))
+            })
+            .map(|s| s.server.clone())
+            .collect()
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -203,6 +249,8 @@ struct SourceDirContents {
 #[derive(Debug, Deserialize)]
 struct PluginManifest {
     name: String,
+    #[serde(default, deserialize_with = "deserialize_string_or_vec_opt")]
+    crates: Option<Vec<crate::predicate::Predicate>>,
     #[serde(default)]
     installation: Option<Installation>,
     #[serde(default)]
@@ -210,7 +258,7 @@ struct PluginManifest {
     #[serde(default)]
     skills: Vec<SkillGroup>,
     #[serde(default)]
-    mcp_servers: Vec<McpServerEntry>,
+    mcp_servers: Vec<PluginMcpServer>,
 }
 
 /// Fetch/update git-based plugin sources.
@@ -601,7 +649,10 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
 
     for plugin_result in contents.plugins {
         let (path, result) = match plugin_result {
-            Ok(parsed) => (parsed.path, Ok(())),
+            Ok(parsed) => {
+                let validation_result = validate_plugin_has_crates(&parsed.plugin);
+                (parsed.path, validation_result)
+            },
             Err(e) => {
                 // Extract the path from the error context if possible,
                 // otherwise use a placeholder.
@@ -628,6 +679,36 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
     Ok(results)
 }
 
+/// Validate that a plugin has crates specified somewhere.
+///
+/// Checks that the plugin has `crates` at the plugin level, in skill groups,
+/// or in MCP servers. Returns an error if no crate targeting is found anywhere.
+fn validate_plugin_has_crates(plugin: &Plugin) -> Result<()> {
+    // Check plugin-level crates
+    if plugin.crates.is_some() {
+        return Ok(());
+    }
+
+    // Check skill groups for crates
+    for skill_group in &plugin.skills {
+        if skill_group.crates.is_some() {
+            return Ok(());
+        }
+    }
+
+    // Check MCP servers for crates
+    for mcp_server in &plugin.mcp_servers {
+        if mcp_server.crates.is_some() {
+            return Ok(());
+        }
+    }
+
+    anyhow::bail!(
+        "Plugin '{}' must specify 'crates' at the plugin level, in [[skills]] groups, or in [[mcp_servers]] entries",
+        plugin.name
+    );
+}
+
 /// Collect all crate names referenced in predicates across a plugin source directory.
 ///
 /// Scans TOML plugin manifests (skill group `crates`) and
@@ -638,8 +719,20 @@ pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
     let mut names = std::collections::BTreeSet::new();
 
     for plugin_result in contents.plugins.into_iter().flatten() {
+        if let Some(preds) = &plugin_result.plugin.crates {
+            for pred in preds {
+                pred.collect_crate_names(&mut names);
+            }
+        }
         for group in &plugin_result.plugin.skills {
             if let Some(preds) = &group.crates {
+                for pred in preds {
+                    pred.collect_crate_names(&mut names);
+                }
+            }
+        }
+        for mcp in &plugin_result.plugin.mcp_servers {
+            if let Some(preds) = &mcp.crates {
                 for pred in preds {
                     pred.collect_crate_names(&mut names);
                 }
@@ -682,6 +775,7 @@ pub fn load_plugin(manifest_path: &Path) -> Result<ParsedPlugin> {
         path: manifest_path.to_path_buf(),
         plugin: Plugin {
             name: manifest.name,
+            crates: manifest.crates,
             installation: manifest.installation,
             hooks: manifest.hooks,
             skills: manifest.skills,
@@ -695,10 +789,15 @@ mod tests {
     use super::*;
     use indoc::indoc;
 
+    fn pred(s: &str) -> crate::predicate::Predicate {
+        crate::predicate::parse(s).unwrap()
+    }
+
     fn from_str(s: &str) -> Result<Plugin> {
         let manifest: PluginManifest = toml::from_str(s)?;
         Ok(Plugin {
             name: manifest.name,
+            crates: manifest.crates,
             installation: manifest.installation,
             hooks: manifest.hooks,
             skills: manifest.skills,
@@ -864,6 +963,7 @@ mod tests {
             dir.join("SYMPOSIUM.toml"),
             indoc! {r#"
                 name = "root-plugin"
+                crates = ["*"]
             "#},
         )
         .unwrap();
@@ -1056,6 +1156,7 @@ mod tests {
             good_dir.join("SYMPOSIUM.toml"),
             indoc! {r#"
                 name = "good-plugin"
+                crates = ["serde"]
             "#},
         )
         .unwrap();
@@ -1288,5 +1389,205 @@ mod tests {
                 },
             )"#]]
         .assert_eq(&format!("{entry:#?}"));
+    }
+
+    #[test]
+    fn plugin_crate_filtering() {
+        let workspace_crates = vec![
+            ("serde".to_string(), semver::Version::new(1, 0, 0)),
+            ("tokio".to_string(), semver::Version::new(1, 0, 0)),
+        ];
+
+        // Plugin with no crates filter - should apply to all
+        let plugin_no_filter = Plugin {
+            name: "no-filter".to_string(),
+            crates: None,
+            installation: None,
+            hooks: vec![],
+            skills: vec![],
+            mcp_servers: vec![],
+        };
+        assert!(plugin_no_filter.applies_to_crates(&workspace_crates));
+
+        // Plugin with wildcard - should apply to all
+        let plugin_wildcard = Plugin {
+            name: "wildcard".to_string(),
+            crates: Some(vec![pred("*")]),
+            installation: None,
+            hooks: vec![],
+            skills: vec![],
+            mcp_servers: vec![],
+        };
+        assert!(plugin_wildcard.applies_to_crates(&workspace_crates));
+
+        // Plugin targeting serde - should apply
+        let plugin_serde = Plugin {
+            name: "serde-plugin".to_string(),
+            crates: Some(vec![pred("serde")]),
+            installation: None,
+            hooks: vec![],
+            skills: vec![],
+            mcp_servers: vec![],
+        };
+        assert!(plugin_serde.applies_to_crates(&workspace_crates));
+
+        // Plugin targeting non-existent crate - should not apply
+        let plugin_other = Plugin {
+            name: "other-plugin".to_string(),
+            crates: Some(vec![pred("other-crate")]),
+            installation: None,
+            hooks: vec![],
+            skills: vec![],
+            mcp_servers: vec![],
+        };
+        assert!(!plugin_other.applies_to_crates(&workspace_crates));
+
+        // Plugin with version predicate - should reject wrong version
+        let plugin_version = Plugin {
+            name: "version-plugin".to_string(),
+            crates: Some(vec![pred("tokio>=2.0")]),
+            installation: None,
+            hooks: vec![],
+            skills: vec![],
+            mcp_servers: vec![],
+        };
+        assert!(!plugin_version.applies_to_crates(&workspace_crates));
+    }
+
+    #[test]
+    fn validate_plugin_requires_crates_somewhere() {
+        // Plugin with no crates anywhere - should fail
+        let plugin_no_crates = Plugin {
+            name: "no-crates".to_string(),
+            crates: None,
+            installation: None,
+            hooks: vec![],
+            skills: vec![],
+            mcp_servers: vec![],
+        };
+        assert!(validate_plugin_has_crates(&plugin_no_crates).is_err());
+
+        // Plugin with top-level crates - should pass
+        let plugin_top_level = Plugin {
+            name: "top-level".to_string(),
+            crates: Some(vec![pred("serde")]),
+            installation: None,
+            hooks: vec![],
+            skills: vec![],
+            mcp_servers: vec![],
+        };
+        assert!(validate_plugin_has_crates(&plugin_top_level).is_ok());
+
+        // Plugin with skill group crates - should pass
+        let plugin_skill_crates = Plugin {
+            name: "skill-crates".to_string(),
+            crates: None,
+            installation: None,
+            hooks: vec![],
+            skills: vec![SkillGroup {
+                crates: Some(vec![crate::predicate::parse("serde").unwrap()]),
+                source: PluginSource::default(),
+            }],
+            mcp_servers: vec![],
+        };
+        assert!(validate_plugin_has_crates(&plugin_skill_crates).is_ok());
+    }
+
+    #[test]
+    fn validate_source_dir_enforces_crates_requirement() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // Create plugin with no crates anywhere
+        let plugin_dir = dir.join("no-crates-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(
+            plugin_dir.join("SYMPOSIUM.toml"),
+            indoc! {r#"
+                name = "no-crates-plugin"
+
+                [[hooks]]
+                name = "some-hook"
+                event = "PreToolUse"
+                command = "echo test"
+            "#},
+        )
+        .unwrap();
+
+        // Create plugin with top-level crates
+        let good_plugin_dir = dir.join("good-plugin");
+        std::fs::create_dir_all(&good_plugin_dir).unwrap();
+        std::fs::write(
+            good_plugin_dir.join("SYMPOSIUM.toml"),
+            indoc! {r#"
+                name = "good-plugin"
+                crates = ["serde"]
+
+                [[hooks]]
+                name = "some-hook"
+                event = "PreToolUse"
+                command = "echo test"
+            "#},
+        )
+        .unwrap();
+
+        // Create plugin with skill-level crates
+        let skill_plugin_dir = dir.join("skill-plugin");
+        std::fs::create_dir_all(&skill_plugin_dir).unwrap();
+        std::fs::write(
+            skill_plugin_dir.join("SYMPOSIUM.toml"),
+            indoc! {r#"
+                name = "skill-plugin"
+
+                [[skills]]
+                crates = ["tokio"]
+                source.path = "skills"
+            "#},
+        )
+        .unwrap();
+
+        let results = validate_source_dir(dir).unwrap();
+
+        // Should have 3 validation results
+        assert_eq!(results.len(), 3);
+
+        // Find results by plugin name
+        let no_crates_result = results.iter()
+            .find(|r| r.path.to_string_lossy().contains("no-crates-plugin"))
+            .unwrap();
+        let good_result = results.iter()
+            .find(|r| r.path.to_string_lossy().contains("good-plugin"))
+            .unwrap();
+        let skill_result = results.iter()
+            .find(|r| r.path.to_string_lossy().contains("skill-plugin"))
+            .unwrap();
+
+        // Check validation results
+        assert!(no_crates_result.result.is_err(), "Plugin without crates should fail validation");
+        assert!(no_crates_result.result.as_ref().unwrap_err().to_string().contains("must specify 'crates'"));
+
+        assert!(good_result.result.is_ok(), "Plugin with top-level crates should pass");
+        assert!(skill_result.result.is_ok(), "Plugin with skill-level crates should pass");
+    }
+
+    #[test]
+    fn validate_plugin_crates_error_message() {
+        let plugin = Plugin {
+            name: "test-plugin".to_string(),
+            crates: None,
+            installation: None,
+            hooks: vec![],
+            skills: vec![],
+            mcp_servers: vec![],
+        };
+
+        let err = validate_plugin_has_crates(&plugin).unwrap_err();
+        let error_msg = err.to_string();
+
+        assert!(error_msg.contains("test-plugin"));
+        assert!(error_msg.contains("must specify 'crates'"));
+        assert!(error_msg.contains("plugin level"));
+        assert!(error_msg.contains("[[skills]] groups"));
+        assert!(error_msg.contains("[[mcp_servers]] entries"));
     }
 }
