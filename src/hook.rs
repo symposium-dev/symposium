@@ -28,7 +28,8 @@ pub async fn execute_hook(
         let sym_input = payload.to_symposium();
 
         // Auto-sync: install applicable skills into agent dirs (non-fatal).
-        run_auto_sync(sym, &sym_input).await;
+        let fallback_cwd = std::env::current_dir().unwrap_or_default();
+        run_auto_sync(sym, &sym_input, &fallback_cwd).await;
 
         // Builtin dispatch → symposium output → host agent output as Value
         let builtin_sym_output = dispatch_builtin(sym, &sym_input).await;
@@ -114,14 +115,16 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, output: &[u
 }
 
 /// Run sync if we're in a workspace directory and auto-sync is enabled. Non-fatal.
-async fn run_auto_sync(sym: &Symposium, input: &symposium::InputEvent) {
+async fn run_auto_sync(sym: &Symposium, input: &symposium::InputEvent, fallback_cwd: &std::path::Path) {
     if !sym.config.auto_sync {
         return;
     }
-    let Some(cwd_str) = input.cwd() else { return };
-    let cwd = std::path::Path::new(cwd_str);
+    let cwd = match input.cwd() {
+        Some(s) => std::path::PathBuf::from(s),
+        None => fallback_cwd.to_path_buf(),
+    };
     let out = crate::output::Output::quiet();
-    if let Err(e) = crate::sync::sync(sym, cwd, &out).await {
+    if let Err(e) = crate::sync::sync(sym, &cwd, &out).await {
         tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
     }
 }
