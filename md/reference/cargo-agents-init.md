@@ -1,11 +1,11 @@
-# `symposium init`
+# `cargo agents init`
 
-Set up `symposium` for the current user.
+Set up Symposium for the current user.
 
 ## Usage
 
 ```bash
-symposium init [OPTIONS]
+cargo agents init [OPTIONS]
 ```
 
 ## Behavior
@@ -27,23 +27,23 @@ If a user config already exists, `init` updates it (preserving existing settings
 Interactive setup:
 
 ```bash
-symposium init
+cargo agents init
 ```
 
 Non-interactive, specifying agents directly:
 
 ```bash
-symposium init --add-agent claude --add-agent gemini
+cargo agents init --add-agent claude --add-agent gemini
 ```
 
 Adding an agent to an existing config:
 
 ```bash
-symposium init --add-agent copilot
+cargo agents init --add-agent copilot
 ```
 
 Removing an agent:
 
 ```bash
-symposium init --remove-agent gemini
+cargo agents init --remove-agent gemini
 ```

@@ -19,7 +19,7 @@ cargo install symposium
 Once you have installed Symposium, you need to run the [`init` command](./references/cargo-agents-init.md):
 
 ```bash
-symposium init
+cargo agents init
 ```
 
 ### Select your agents
@@ -42,7 +42,7 @@ Which agents do you use? (space to select, enter to confirm):
 Next, Symposium will ask you whether you want to register hooks **globally** or **per-project**:
 
 * **global** registration means Symposium will activate automatically for all Rust projects.
-* **project** registration means Symposium only activates in projects once you run [`symposium sync`](./reference/cargo-agents-sync.md) to add hooks to that project.
+* **project** registration means Symposium only activates in projects once you run [`cargo agents sync`](./reference/cargo-agents-sync.md) to add hooks to that project.
 
 We recommend **global** registration for maximum convenience.
 

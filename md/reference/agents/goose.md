@@ -13,7 +13,7 @@ Config name: `goose`
 
 **Not supported.** Goose has no hook system. It uses MCP extensions for extensibility.
 
-Skill files are installed but `symposium hook` will never be called by this agent.
+Skill files are installed but `cargo agents hook` will never be called by this agent.
 
 ## MCP servers
 

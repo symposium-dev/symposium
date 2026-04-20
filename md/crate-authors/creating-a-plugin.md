@@ -104,12 +104,12 @@ See the reference for [the precise specification of what is allowed in a plugin 
 
 ## Validation and testing
 
-You can test that a plugin directory has the correct structure using the `symposium` CLI:
+You can test that a plugin directory has the correct structure using the `cargo agents` CLI:
 
 ```bash
 # Validate your plugin manifest
-symposium plugin validate path/to/SYMPOSIUM.toml
+cargo agents plugin validate path/to/SYMPOSIUM.toml
 
 # Check that crate names exist on crates.io
-symposium plugin validate path/to/SYMPOSIUM.toml --check-crates
+cargo agents plugin validate path/to/SYMPOSIUM.toml --check-crates
 ```

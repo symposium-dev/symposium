@@ -41,10 +41,10 @@ You can validate a plugin source directory:
 
 ```bash
 # Validate all plugins and skills in a directory
-symposium plugin validate path/to/plugin-source/
+cargo agents plugin validate path/to/plugin-source/
 
 # Also verify that crate names exist on crates.io (on by default; use --no-check-crates to skip)
-symposium plugin validate path/to/plugin-source/ --no-check-crates
+cargo agents plugin validate path/to/plugin-source/ --no-check-crates
 ```
 
 This scans the directory, attempts to load all plugins and skills, and reports any errors found.

@@ -228,7 +228,7 @@ async fn removing_agent_removes_hooks() {
         assert!(
             std::fs::read_to_string(&gemini_settings)
                 .unwrap()
-                .contains("symposium hook"),
+                .contains("cargo-agents hook"),
             "gemini should have symposium hooks"
         );
 
@@ -237,13 +237,13 @@ async fn removing_agent_removes_hooks() {
 
         let contents = std::fs::read_to_string(&claude_settings).unwrap();
         assert!(
-            contents.contains("symposium hook"),
+            contents.contains("cargo-agents hook"),
             "claude hooks should remain"
         );
 
         let contents = std::fs::read_to_string(&gemini_settings).unwrap();
         assert!(
-            !contents.contains("symposium hook"),
+            !contents.contains("cargo-agents hook"),
             "gemini hooks should be removed"
         );
         Ok(())
@@ -275,12 +275,12 @@ async fn add_agent_is_additive() {
         assert!(
             std::fs::read_to_string(&claude_settings)
                 .unwrap()
-                .contains("symposium hook")
+                .contains("cargo-agents hook")
         );
         assert!(
             std::fs::read_to_string(&gemini_settings)
                 .unwrap()
-                .contains("symposium hook")
+                .contains("cargo-agents hook")
         );
         Ok(())
     })

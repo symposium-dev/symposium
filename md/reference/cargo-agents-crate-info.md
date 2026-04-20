@@ -1,11 +1,11 @@
-# `symposium crate-info`
+# `cargo agents crate-info`
 
 Find crate sources and guidance.
 
 ## Usage
 
 ```bash
-symposium crate-info <NAME> [--version <VERSION>]
+cargo agents crate-info <NAME> [--version <VERSION>]
 ```
 
 ## Behavior

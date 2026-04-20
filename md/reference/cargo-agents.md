@@ -1,14 +1,14 @@
-# The `symposium` command
+# The `cargo agents` command
 
-`symposium` manages agent extensions for Rust projects. It discovers skills based on your project's dependencies and configures your AI agent to use them.
+`cargo agents` manages agent extensions for Rust projects. It discovers skills based on your project's dependencies and configures your AI agent to use them.
 
 ## Subcommands
 
 | Command | Description |
 |---------|-------------|
-| [`symposium init`](./cargo-agents-init.md) | Set up user-wide configuration |
-| [`symposium sync`](./cargo-agents-sync.md) | Synchronize skills with workspace dependencies |
-| [`symposium plugin`](./cargo-agents-plugin.md) | Manage plugin sources |
+| [`cargo agents init`](./cargo-agents-init.md) | Set up user-wide configuration |
+| [`cargo agents sync`](./cargo-agents-sync.md) | Synchronize skills with workspace dependencies |
+| [`cargo agents plugin`](./cargo-agents-plugin.md) | Manage plugin sources |
 
 ## Global options
 

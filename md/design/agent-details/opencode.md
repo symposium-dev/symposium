@@ -169,8 +169,8 @@ The MCP server entry is added under `mcp` in the JSON config:
 ```json
 {
   "mcp": {
-    "symposium": {
-      "command": "/path/to/symposium",
+    "cargo-agents": {
+      "command": "/path/to/cargo-agents",
       "args": ["mcp"]
     }
   }
