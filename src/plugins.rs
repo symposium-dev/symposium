@@ -470,17 +470,17 @@ fn scan_source_dir<P: AsRef<Path>>(dir: P) -> Result<SourceDirContents> {
     let dir = dir.as_ref();
 
     // A plugin source should *contain* plugins/skills, not *be* one.
-    if dir.join("SYMPOSIUM.toml").is_file() {
-        anyhow::bail!(
-            "plugin source root contains SYMPOSIUM.toml — it should contain subdirectories with plugins, not be a plugin itself: {}",
-            dir.display()
-        );
-    }
-    if dir.join("SKILL.md").is_file() {
-        anyhow::bail!(
-            "plugin source root contains SKILL.md — it should contain subdirectories with skills, not be a skill itself: {}",
-            dir.display()
-        );
+    if let Some(dir_type) = discover_directory_type(dir)? {
+        match dir_type {
+            DirectoryType::Plugin(_) => anyhow::bail!(
+                "plugin source root contains SYMPOSIUM.toml — it should contain subdirectories with plugins, not be a plugin itself: {}",
+                dir.display()
+            ),
+            DirectoryType::Skill(_) => anyhow::bail!(
+                "plugin source root contains SKILL.md — it should contain subdirectories with skills, not be a skill itself: {}",
+                dir.display()
+            ),
+        }
     }
 
     discover_in_directory(dir, &mut plugins, &mut skill_files)?;
