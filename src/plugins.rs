@@ -20,7 +20,7 @@ pub type McpServerEntry = McpServer;
 /// matches those predicates (ANDed with plugin-level `crates`).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PluginMcpServer {
-    #[serde(default, deserialize_with = "deserialize_string_or_vec_opt")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crates: Option<Vec<crate::predicate::Predicate>>,
     #[serde(flatten)]
     pub server: McpServerEntry,
@@ -42,57 +42,16 @@ pub struct PluginSource {
 /// optionally a remote source for the skill files.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SkillGroup {
-    /// Crate predicates this group advises on (e.g., `"serde"` or `["serde", "serde_json>=1.0"]`).
-    #[serde(default, deserialize_with = "deserialize_string_or_vec_opt")]
+    /// Crate predicates this group advises on (e.g., `["serde", "serde_json>=1.0"]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crates: Option<Vec<crate::predicate::Predicate>>,
     /// Remote source for skills.
     #[serde(default)]
     pub source: PluginSource,
 }
 
-/// Deserialize a field that accepts either a single string or a vec of strings,
-/// and parse each as a `Predicate`. Returns `None` if absent, `Some(vec)` otherwise.
-fn deserialize_string_or_vec_opt<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Option<Vec<crate::predicate::Predicate>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de;
-
-    struct StringOrVec;
-
-    impl<'de> de::Visitor<'de> for StringOrVec {
-        type Value = Option<Vec<crate::predicate::Predicate>>;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("a string or array of predicate strings")
-        }
-
-        fn visit_none<E: de::Error>(self) -> std::result::Result<Self::Value, E> {
-            Ok(None)
-        }
-
-        fn visit_str<E: de::Error>(self, v: &str) -> std::result::Result<Self::Value, E> {
-            let pred = crate::predicate::parse(v).map_err(de::Error::custom)?;
-            Ok(Some(vec![pred]))
-        }
-
-        fn visit_seq<A: de::SeqAccess<'de>>(
-            self,
-            mut seq: A,
-        ) -> std::result::Result<Self::Value, A::Error> {
-            let mut preds = Vec::new();
-            while let Some(s) = seq.next_element::<String>()? {
-                let pred = crate::predicate::parse(&s).map_err(de::Error::custom)?;
-                preds.push(pred);
-            }
-            Ok(Some(preds))
-        }
-    }
-
-    deserializer.deserialize_any(StringOrVec)
-}
+/// Deserialize is handled by Predicate's own Deserialize impl (parses each string element).
+/// No custom deserializer needed — `crates` is always `Option<Vec<Predicate>>`.
 
 /// A parsed plugin with its path and manifest.
 #[derive(Debug, Clone)]
@@ -113,7 +72,7 @@ pub struct ParsedPlugin {
 pub struct Plugin {
     pub name: String,
     /// Crate predicates this plugin applies to. `["*"]` for all crates.
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_string_or_vec_opt")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crates: Option<Vec<crate::predicate::Predicate>>,
     pub installation: Option<Installation>,
     pub hooks: Vec<Hook>,
@@ -249,7 +208,7 @@ struct SourceDirContents {
 #[derive(Debug, Deserialize)]
 struct PluginManifest {
     name: String,
-    #[serde(default, deserialize_with = "deserialize_string_or_vec_opt")]
+    #[serde(default)]
     crates: Option<Vec<crate::predicate::Predicate>>,
     #[serde(default)]
     installation: Option<Installation>,
@@ -849,12 +808,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_manifest_crates_as_string() {
+    fn parse_manifest_crates_as_array() {
         let toml = indoc! {r#"
-            name = "string-crates"
+            name = "array-crates"
 
             [[skills]]
-            crates = "serde"
+            crates = ["serde"]
         "#};
         let plugin = from_str(toml).expect("parse");
         let group = &plugin.skills[0];
