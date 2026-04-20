@@ -26,16 +26,13 @@ pub struct PluginSource {
 
 /// A `[[skills]]` entry from a plugin manifest.
 ///
-/// Each group declares which crates it advises on (`crates`), workspace
-/// an activation mode, and optionally a remote
-/// source for the skill files.
+/// Each group declares which crates it advises on (`crates`) and
+/// optionally a remote source for the skill files.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SkillGroup {
     /// Crate predicates this group advises on (e.g., `"serde"` or `["serde", "serde_json>=1.0"]`).
     #[serde(default, deserialize_with = "deserialize_string_or_vec_opt")]
     pub crates: Option<Vec<crate::predicate::Predicate>>,
-    /// Activation mode for skills in this group.
-    pub activation: Option<crate::skills::Activation>,
     /// Remote source for skills.
     #[serde(default)]
     pub source: PluginSource,
@@ -748,7 +745,6 @@ mod tests {
                 name: assert-struct
                 description: Check struct layout
                 crates: serde
-                activation: always
                 ---
 
                 Use this skill.

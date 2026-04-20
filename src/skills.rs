@@ -12,17 +12,6 @@ use crate::config::Symposium;
 use crate::plugins::{ParsedPlugin, PluginRegistry, SkillGroup};
 use crate::predicate::{self, Predicate};
 
-/// Activation mode for a skill.
-#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Activation {
-    /// Skill content is printed inline with crate output.
-    Always,
-    /// Skill is listed with its path for on-demand loading.
-    #[default]
-    Optional,
-}
-
 /// A parsed skill from a SKILL.md file.
 #[derive(Debug, Clone)]
 pub struct Skill {
@@ -30,8 +19,6 @@ pub struct Skill {
     pub frontmatter: BTreeMap<String, String>,
     /// Crate predicates this skill advises on (skill-level; ANDed with group-level).
     pub crates: Vec<Predicate>,
-    /// Activation mode.
-    pub activation: Activation,
     /// The body content (everything after frontmatter).
     pub body: String,
     /// Path to the SKILL.md file on disk.
@@ -245,8 +232,8 @@ async fn resolve_skill_dir(
 
 /// Load a standalone skill from a SKILL.md file (no plugin group context).
 ///
-/// Standalone skills must be self-contained: all metadata (crates,
-/// activation) comes from the SKILL.md frontmatter.
+/// Standalone skills must be self-contained: all metadata (crates)
+/// comes from the SKILL.md frontmatter.
 /// Returns an error if `crates` is missing (standalone skills have
 /// no group to inherit from).
 pub fn load_standalone_skill(skill_md_path: &Path) -> Result<Skill> {
@@ -303,17 +290,9 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
         );
     }
 
-    // Resolve activation: frontmatter overrides group-level
-    let activation = if let Some(act) = frontmatter.get("activation") {
-        parse_activation(act)?
-    } else {
-        group.activation.clone().unwrap_or_default()
-    };
-
     Ok(Skill {
         frontmatter,
         crates,
-        activation,
         body: fm.body,
         path: skill_md_path.to_path_buf(),
     })
@@ -418,14 +397,6 @@ fn parse_frontmatter(content: &str) -> Result<RawFrontmatter> {
     })
 }
 
-fn parse_activation(s: &str) -> Result<Activation> {
-    match s.trim().to_lowercase().as_str() {
-        "always" => Ok(Activation::Always),
-        "optional" => Ok(Activation::Optional),
-        other => bail!("unknown activation mode: {other:?} (expected \"always\" or \"optional\")"),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -499,7 +470,6 @@ mod tests {
                 name: test-skill
                 description: Test
                 crates: serde
-                activation: always
                 ---
 
                 Use serde like this.
@@ -513,7 +483,6 @@ mod tests {
         assert_eq!(skill.frontmatter.get("name").unwrap(), "test-skill");
         assert_eq!(skill.crates.len(), 1);
         assert!(skill.crates[0].references_crate("serde"));
-        assert_eq!(skill.activation, Activation::Always);
         assert!(skill.body.contains("Use serde like this."));
     }
 
@@ -560,7 +529,6 @@ mod tests {
 
         let defaults = SkillGroup {
             crates: Some(vec![pred("tokio")]),
-            activation: Some(Activation::Always),
             ..Default::default()
         };
         let skill = load_skill(&skill_md, &defaults).unwrap();
@@ -568,7 +536,6 @@ mod tests {
         // Skill has no crates in frontmatter, so it's empty at skill level.
         // The plugin default provides the crates scope.
         assert!(skill.crates.is_empty());
-        assert_eq!(skill.activation, Activation::Always);
     }
 
     #[test]
@@ -580,8 +547,8 @@ mod tests {
             indoc! {"
                 ---
                 name: override
+                description: Override skill
                 crates: serde
-                activation: optional
                 ---
 
                 Body.
@@ -591,7 +558,6 @@ mod tests {
 
         let defaults = SkillGroup {
             crates: Some(vec![pred("tokio")]),
-            activation: Some(Activation::Always),
             ..Default::default()
         };
         let skill = load_skill(&skill_md, &defaults).unwrap();
@@ -600,7 +566,6 @@ mod tests {
         assert_eq!(skill.crates.len(), 1);
         assert!(skill.crates[0].references_crate("serde"));
         assert!(!skill.crates[0].references_crate("tokio"));
-        assert_eq!(skill.activation, Activation::Optional);
     }
 
     #[test]
@@ -667,7 +632,6 @@ mod tests {
                 name: my-standalone
                 description: A standalone skill
                 crates: serde
-                activation: always
                 ---
 
                 Standalone body.
@@ -678,7 +642,6 @@ mod tests {
         let skill = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap();
         assert_eq!(skill.name(), "my-standalone");
         assert!(skill.crates[0].references_crate("serde"));
-        assert_eq!(skill.activation, Activation::Always);
         assert!(skill.body.contains("Standalone body."));
     }
 
@@ -704,32 +667,6 @@ mod tests {
         assert!(
             err.to_string().contains("failed to parse predicate"),
             "expected parse error, got: {err}"
-        );
-    }
-
-    #[test]
-    fn validate_standalone_skill_bad_activation() {
-        let tmp = tempfile::tempdir().unwrap();
-        let skill_dir = tmp.path().join("bad-skill");
-        fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(
-            skill_dir.join("SKILL.md"),
-            indoc! {"
-                ---
-                name: bad
-                crates: serde
-                activation: bogus
-                ---
-
-                Body.
-            "},
-        )
-        .unwrap();
-
-        let err = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap_err();
-        assert!(
-            err.to_string().contains("unknown activation mode"),
-            "expected activation error, got: {err}"
         );
     }
 
@@ -796,7 +733,6 @@ mod tests {
                 name: standalone-serde
                 description: Standalone serde skill
                 crates: serde
-                activation: always
                 ---
 
                 Body.
