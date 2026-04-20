@@ -1,8 +1,24 @@
-# Plugin definition reference
+# Plugin definitions
 
-A plugin is a TOML manifest loaded from a configured plugin source. It can be a standalone `.toml` file or a `symposium.toml` inside a directory.
+A **symposium plugin** collects together all the extensions offered for a particular crate. Plugins are directories containing a `SYMPOSIUM.toml` manifest file that references skills, hooks, MCP servers, and other resources relevant to your crate. These extensions can be packaged within the plugin directory or the plugin can contain pointers to external repositories.
 
-## Minimal manifest
+Plugins enable capabilities beyond standalone skills — they're needed when you want to add hooks or MCP servers. For simple skill publishing, see [standalone skills](../crate-authors/publishing-skills.md) instead.
+
+## Example: a plugin definition with inline skills
+
+You could define a plugin definition with inline skills by having a directory struct like this:
+
+```
+myplugin/
+  SYMPOSIUM.toml
+  skills/
+    skill-a/
+      SKILL.md
+    skill-b/
+      SKILL.md
+```
+
+where `myplugin/SYMPOSIUM.toml` is as follows:
 
 ```toml
 name = "example"
@@ -32,7 +48,7 @@ A skill group must have exactly one of `source.path` or `source.git`.
 
 ## `[[hooks]]`
 
-Each `[[hooks]]` entry declares a hook.
+Each `[[hooks]]` entry declares a hook that responds to agent events.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -143,7 +159,7 @@ env = []
 ## Validation
 
 ```bash
-symposium plugin validate path/to/symposium.toml
+symposium plugin validate path/to/SYMPOSIUM.toml
 ```
 
-This parses the manifest and reports any errors. Use `--check-crates` to also verify that crate names exist on crates.io.
+This parses the manifest and reports any errors. Crate name checking against crates.io is on by default; use `--no-check-crates` to skip it.

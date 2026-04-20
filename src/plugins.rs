@@ -192,6 +192,7 @@ pub struct PluginRegistry {
 }
 
 /// Raw scan results from a plugin source directory.
+#[derive(Debug)]
 struct SourceDirContents {
     plugins: Vec<Result<ParsedPlugin>>,
     /// Paths to discovered `SKILL.md` files (after recursive search and pruning).
@@ -455,58 +456,112 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
 
 /// Scan a plugin source directory for TOML plugin manifests and standalone skills.
 ///
-/// Plugins are `.toml` files at the top level. Standalone skills are discovered
-/// by recursively searching for `SKILL.md` files, then pruning nested candidates
-/// (if `A/SKILL.md` exists, `A/B/SKILL.md` is excluded).
+/// Discovery rules:
+/// 1. Plugin = directory with `SYMPOSIUM.toml` file
+/// 2. Skill = directory with `SKILL.md` file
+/// 3. Plugin takes precedence over skill in the same directory
+/// 4. Once a directory is claimed as plugin/skill, don't recurse into it
 fn scan_source_dir<P: AsRef<Path>>(dir: P) -> Result<SourceDirContents> {
     let mut plugins = Vec::new();
+    let mut skill_files = Vec::new();
+
     let dir = dir.as_ref();
 
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(SourceDirContents {
-                plugins,
-                skill_files: Vec::new(),
-            });
-        }
-        Err(e) => return Err(e.into()),
-    };
-
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-
-        if path.extension().is_some_and(|ext| ext == "toml") {
-            let plugin = load_plugin(&path)
-                .with_context(|| format!("loading plugin from `{}`", path.display()));
-
-            tracing::debug!(
-                path = %path.display(),
-                plugin = ?plugin,
-                "loaded plugin entry",
-            );
-
-            plugins.push(plugin);
-        }
-    }
-
-    // Recursively find all SKILL.md files, then prune nested ones.
-    let mut skill_files = Vec::new();
-    crate::skills::find_skill_files_recursive(dir, &mut skill_files);
-    crate::skills::prune_nested_skills(&mut skill_files);
-
-    for path in &skill_files {
-        tracing::debug!(
-            path = %path.display(),
-            "found standalone skill",
+    // A plugin source should *contain* plugins/skills, not *be* one.
+    if dir.join("SYMPOSIUM.toml").is_file() {
+        anyhow::bail!(
+            "plugin source root contains SYMPOSIUM.toml — it should contain subdirectories with plugins, not be a plugin itself: {}",
+            dir.display()
         );
     }
+    if dir.join("SKILL.md").is_file() {
+        anyhow::bail!(
+            "plugin source root contains SKILL.md — it should contain subdirectories with skills, not be a skill itself: {}",
+            dir.display()
+        );
+    }
+
+    discover_in_directory(dir, &mut plugins, &mut skill_files)?;
 
     Ok(SourceDirContents {
         plugins,
         skill_files,
     })
+}
+
+/// Recursively discover plugins and skills with precedence and pruning.
+fn discover_in_directory(
+    dir: &Path,
+    plugins: &mut Vec<Result<ParsedPlugin>>,
+    skill_files: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        // Check what this directory contains (plugin takes precedence)
+        if let Some(discovered) = discover_directory_type(&path)? {
+            match discovered {
+                DirectoryType::Plugin(toml_path) => {
+                    let plugin = load_plugin(&toml_path)
+                        .with_context(|| format!("loading plugin from `{}`", toml_path.display()));
+
+                    tracing::debug!(
+                        path = %toml_path.display(),
+                        plugin = ?plugin,
+                        "loaded plugin",
+                    );
+
+                    plugins.push(plugin);
+                }
+                DirectoryType::Skill(skill_md_path) => {
+                    tracing::debug!(
+                        path = %skill_md_path.display(),
+                        "found standalone skill",
+                    );
+                    skill_files.push(skill_md_path);
+                }
+            }
+            // Don't recurse - directory is claimed
+        } else {
+            // Directory doesn't contain plugin/skill, recurse into it
+            discover_in_directory(&path, plugins, skill_files)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// What type of directory this is (plugin or skill).
+enum DirectoryType {
+    Plugin(PathBuf), // Path to SYMPOSIUM.toml
+    Skill(PathBuf),  // Path to SKILL.md file
+}
+
+/// Determine if a directory contains a plugin or skill.
+/// Returns None if it contains neither.
+/// SYMPOSIUM.toml takes precedence over SKILL.md.
+fn discover_directory_type(dir: &Path) -> Result<Option<DirectoryType>> {
+    // Check for SYMPOSIUM.toml (the only valid plugin manifest)
+    let symposium_toml = dir.join("SYMPOSIUM.toml");
+    if symposium_toml.is_file() {
+        return Ok(Some(DirectoryType::Plugin(symposium_toml)));
+    }
+
+    // Check for SKILL.md
+    let skill_md = dir.join("SKILL.md");
+    if skill_md.is_file() {
+        return Ok(Some(DirectoryType::Skill(skill_md)));
+    }
+
+    Ok(None)
 }
 
 /// Result of validating a single item in a plugin source directory.
@@ -710,13 +765,15 @@ mod tests {
     }
 
     #[test]
-    fn scan_source_dir_finds_toml_and_standalone_skills() {
+    fn scan_source_dir_finds_plugins_and_standalone_skills() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
 
-        // Create a TOML plugin
+        // Create a plugin directory
+        let plugin_dir = dir.join("my-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
         std::fs::write(
-            dir.join("my-plugin.toml"),
+            plugin_dir.join("SYMPOSIUM.toml"),
             indoc! {r#"
                 name = "my-plugin"
 
@@ -745,8 +802,8 @@ mod tests {
         )
         .unwrap();
 
-        // Create a random directory without SKILL.md (should be ignored)
-        std::fs::create_dir_all(dir.join("not-a-skill")).unwrap();
+        // Create a random directory without SYMPOSIUM.toml or SKILL.md (should be ignored)
+        std::fs::create_dir_all(dir.join("not-a-plugin-or-skill")).unwrap();
 
         let contents = scan_source_dir(dir).unwrap();
         assert_eq!(contents.plugins.len(), 1);
@@ -774,12 +831,10 @@ mod tests {
     }
 
     #[test]
-    fn scan_source_dir_finds_root_level_skill() {
+    fn scan_source_dir_rejects_root_level_skill() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
 
-        // A single skill directory used as a plugin source:
-        // the SKILL.md is at the root level.
         std::fs::write(
             dir.join("SKILL.md"),
             indoc! {"
@@ -793,10 +848,200 @@ mod tests {
         )
         .unwrap();
 
+        let err = scan_source_dir(dir).unwrap_err();
+        assert!(
+            err.to_string().contains("plugin source root contains SKILL.md"),
+            "expected root SKILL.md error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn scan_source_dir_rejects_root_level_plugin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        std::fs::write(
+            dir.join("SYMPOSIUM.toml"),
+            indoc! {r#"
+                name = "root-plugin"
+            "#},
+        )
+        .unwrap();
+
+        let err = scan_source_dir(dir).unwrap_err();
+        assert!(
+            err.to_string().contains("plugin source root contains SYMPOSIUM.toml"),
+            "expected root SYMPOSIUM.toml error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn scan_source_dir_plugin_takes_precedence_over_skill() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // Create a directory with both SYMPOSIUM.toml and SKILL.md
+        let mixed_dir = dir.join("mixed");
+        std::fs::create_dir_all(&mixed_dir).unwrap();
+
+        // SYMPOSIUM.toml should take precedence
+        std::fs::write(
+            mixed_dir.join("SYMPOSIUM.toml"),
+            indoc! {r#"
+                name = "mixed-plugin"
+            "#},
+        )
+        .unwrap();
+
+        // This SKILL.md should be ignored due to SYMPOSIUM.toml precedence
+        std::fs::write(
+            mixed_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: ignored-skill
+                crates: serde
+                ---
+
+                This should be ignored.
+            "},
+        )
+        .unwrap();
+
         let contents = scan_source_dir(dir).unwrap();
-        assert!(contents.plugins.is_empty());
+        assert_eq!(contents.plugins.len(), 1);
+        assert_eq!(
+            contents.plugins[0].as_ref().unwrap().plugin.name,
+            "mixed-plugin"
+        );
+        assert!(contents.skill_files.is_empty(), "Skill should be ignored due to SYMPOSIUM.toml precedence");
+    }
+
+    #[test]
+    fn scan_source_dir_symposium_toml_precedence() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // Create a directory with both SYMPOSIUM.toml and other .toml files
+        let plugin_dir = dir.join("precedence-test");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+
+        // SYMPOSIUM.toml should take precedence
+        std::fs::write(
+            plugin_dir.join("SYMPOSIUM.toml"),
+            indoc! {r#"
+                name = "preferred-plugin"
+            "#},
+        )
+        .unwrap();
+
+        // This other .toml should be ignored due to SYMPOSIUM.toml precedence
+        std::fs::write(
+            plugin_dir.join("other.toml"),
+            indoc! {r#"
+                name = "ignored-plugin"
+            "#},
+        )
+        .unwrap();
+
+        let contents = scan_source_dir(dir).unwrap();
+        assert_eq!(contents.plugins.len(), 1);
+        assert_eq!(
+            contents.plugins[0].as_ref().unwrap().plugin.name,
+            "preferred-plugin"
+        );
+        assert!(contents.skill_files.is_empty());
+    }
+
+    #[test]
+    fn scan_source_dir_pruning_behavior() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // Create the example structure:
+        // foo/
+        //     SYMPOSIUM.toml
+        //     bar/
+        //         SKILL.md
+        // baz/
+        //     SKILL.md
+        //     qux/
+        //         SYMPOSIUM.toml
+        //         SKILL.md
+
+        let foo_dir = dir.join("foo");
+        std::fs::create_dir_all(&foo_dir).unwrap();
+        std::fs::write(
+            foo_dir.join("SYMPOSIUM.toml"),
+            indoc! {r#"
+                name = "foo-plugin"
+            "#},
+        )
+        .unwrap();
+
+        let foo_bar_dir = foo_dir.join("bar");
+        std::fs::create_dir_all(&foo_bar_dir).unwrap();
+        std::fs::write(
+            foo_bar_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: foo-bar-skill
+                crates: serde
+                ---
+
+                Should be pruned.
+            "},
+        )
+        .unwrap();
+
+        let baz_dir = dir.join("baz");
+        std::fs::create_dir_all(&baz_dir).unwrap();
+        std::fs::write(
+            baz_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: baz-skill
+                crates: tokio
+                ---
+
+                Should be found.
+            "},
+        )
+        .unwrap();
+
+        let baz_qux_dir = baz_dir.join("qux");
+        std::fs::create_dir_all(&baz_qux_dir).unwrap();
+        std::fs::write(
+            baz_qux_dir.join("SYMPOSIUM.toml"),
+            indoc! {r#"
+                name = "qux-plugin"
+            "#},
+        )
+        .unwrap();
+        std::fs::write(
+            baz_qux_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: qux-skill
+                crates: anyhow
+                ---
+
+                Should be pruned.
+            "},
+        )
+        .unwrap();
+
+        let contents = scan_source_dir(dir).unwrap();
+
+        // Should find foo/SYMPOSIUM.toml as a plugin
+        assert_eq!(contents.plugins.len(), 1);
+        assert_eq!(
+            contents.plugins[0].as_ref().unwrap().plugin.name,
+            "foo-plugin"
+        );
+
+        // Should find only baz/SKILL.md (foo/bar/SKILL.md and baz/qux/* are pruned)
         assert_eq!(contents.skill_files.len(), 1);
-        assert!(contents.skill_files[0].ends_with("SKILL.md"));
+        assert!(contents.skill_files[0].ends_with("baz/SKILL.md"));
     }
 
     #[test]
@@ -804,17 +1049,21 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
 
-        // Valid TOML plugin
+        // Valid TOML plugin in subdirectory
+        let good_dir = dir.join("good-plugin");
+        std::fs::create_dir_all(&good_dir).unwrap();
         std::fs::write(
-            dir.join("good.toml"),
+            good_dir.join("SYMPOSIUM.toml"),
             indoc! {r#"
                 name = "good-plugin"
             "#},
         )
         .unwrap();
 
-        // Invalid TOML plugin
-        std::fs::write(dir.join("bad.toml"), "not valid toml {{{").unwrap();
+        // Invalid TOML plugin in subdirectory
+        let bad_dir = dir.join("bad-plugin");
+        std::fs::create_dir_all(&bad_dir).unwrap();
+        std::fs::write(bad_dir.join("SYMPOSIUM.toml"), "not valid toml {{{").unwrap();
 
         // Valid standalone skill
         let skill_dir = dir.join("my-skill");
@@ -824,6 +1073,7 @@ mod tests {
             indoc! {"
                 ---
                 name: my-skill
+                description: A skill
                 crates: serde
                 ---
 
@@ -839,6 +1089,7 @@ mod tests {
             bad_skill.join("SKILL.md"),
             indoc! {"
                 ---
+                description: No name
                 crates: serde
                 ---
 
@@ -860,9 +1111,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
 
-        // TOML plugin with skill groups referencing crates
+        // TOML plugin with skill groups referencing crates (in subdirectory)
+        let plugin_dir = dir.join("my-plugin");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
         std::fs::write(
-            dir.join("my-plugin.toml"),
+            plugin_dir.join("SYMPOSIUM.toml"),
             indoc! {r#"
                 name = "my-plugin"
 
@@ -880,6 +1133,7 @@ mod tests {
             indoc! {"
                 ---
                 name: my-skill
+                description: A skill
                 crates: anyhow
                 ---
 
@@ -898,8 +1152,10 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
 
-        // Invalid TOML (skipped)
-        std::fs::write(dir.join("bad.toml"), "not valid {{{").unwrap();
+        // Invalid TOML in subdirectory (skipped)
+        let bad_dir = dir.join("bad-plugin");
+        std::fs::create_dir_all(&bad_dir).unwrap();
+        std::fs::write(bad_dir.join("SYMPOSIUM.toml"), "not valid {{{").unwrap();
 
         // Valid standalone skill
         let skill_dir = dir.join("good-skill");
@@ -909,6 +1165,7 @@ mod tests {
             indoc! {"
                 ---
                 name: good
+                description: Good skill
                 crates: serde
                 ---
 

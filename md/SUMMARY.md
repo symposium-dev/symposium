@@ -16,6 +16,7 @@
 # User's guide
 
 - [Installing Symposium](./install.md)
+- [Custom plugin sources](./custom-plugin-source.md)
 
 # For crate authors
 
@@ -41,6 +42,7 @@
     - [OpenCode](./reference/agents/opencode.md)
     - [Goose](./reference/agents/goose.md)
   - [Configuration](./reference/configuration.md)
+  - [Plugin sources](./reference/plugin-source.md)
   - [Plugin definition](./reference/plugin-definition.md)
   - [Skill definition](./reference/skill-definition.md)
 - [Contribution guide](./design/welcome.md)
