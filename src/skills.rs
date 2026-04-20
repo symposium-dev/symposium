@@ -705,7 +705,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_plugin_level_filtering_blocks_skills() {
-        use crate::plugins::{Plugin, SkillGroup, PluginSource, ParsedPlugin, PluginRegistry};
+        use crate::plugins::{ParsedPlugin, Plugin, PluginRegistry, PluginSource, SkillGroup};
         use tempfile::TempDir;
 
         let tmp = TempDir::new().unwrap();
@@ -736,12 +736,15 @@ mod tests {
         let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
         let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
 
-        assert!(skills.is_empty(), "Plugin should be filtered out at plugin level");
+        assert!(
+            skills.is_empty(),
+            "Plugin should be filtered out at plugin level"
+        );
     }
 
     #[tokio::test]
     async fn test_group_level_filtering_blocks_skills() {
-        use crate::plugins::{Plugin, SkillGroup, PluginSource, ParsedPlugin, PluginRegistry};
+        use crate::plugins::{ParsedPlugin, Plugin, PluginRegistry, PluginSource, SkillGroup};
         use tempfile::TempDir;
 
         let tmp = TempDir::new().unwrap();
@@ -772,14 +775,17 @@ mod tests {
         let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
         let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
 
-        assert!(skills.is_empty(), "Skills should be filtered out at group level");
+        assert!(
+            skills.is_empty(),
+            "Skills should be filtered out at group level"
+        );
     }
 
     #[tokio::test]
     async fn test_all_levels_match_allows_skills() {
-        use crate::plugins::{Plugin, SkillGroup, PluginSource, ParsedPlugin, PluginRegistry};
-        use tempfile::TempDir;
+        use crate::plugins::{ParsedPlugin, Plugin, PluginRegistry, PluginSource, SkillGroup};
         use std::fs;
+        use tempfile::TempDir;
 
         let tmp = TempDir::new().unwrap();
         let sym = crate::config::Symposium::from_dir(tmp.path());
@@ -798,7 +804,8 @@ mod tests {
 
                 Use derive macros.
             "},
-        ).unwrap();
+        )
+        .unwrap();
 
         // Create a plugin where all levels match serde
         let plugin = Plugin {
@@ -828,7 +835,11 @@ mod tests {
         let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
         let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
 
-        assert_eq!(skills.len(), 1, "Should find one skill when all levels match");
+        assert_eq!(
+            skills.len(),
+            1,
+            "Should find one skill when all levels match"
+        );
         assert_eq!(skills[0].skill.name(), "serde-basics");
     }
 
@@ -1073,10 +1084,7 @@ mod tests {
             path: PathBuf::new(),
         };
         let group = vec![pred("serde")];
-        let ws = vec![
-            ("serde".into(), v("1.0.0")),
-            ("tokio".into(), v("1.0.0")),
-        ];
+        let ws = vec![("serde".into(), v("1.0.0")), ("tokio".into(), v("1.0.0"))];
         assert!(skill_matches(&skill, &group, &ws));
     }
 

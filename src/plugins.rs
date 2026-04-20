@@ -789,7 +789,9 @@ mod tests {
     fn scan_source_dir_finds_plugins_and_standalone_skills() {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
-            File("my-plugin/SYMPOSIUM.toml", indoc! {r#"
+            File(
+                "my-plugin/SYMPOSIUM.toml",
+                indoc! {r#"
                 name = "my-plugin"
                 crates = ["*"]
 
@@ -797,8 +799,11 @@ mod tests {
                 name = "test"
                 event = "PreToolUse"
                 command = "echo hi"
-            "#}),
-            File("assert-struct/SKILL.md", indoc! {"
+            "#},
+            ),
+            File(
+                "assert-struct/SKILL.md",
+                indoc! {"
                 ---
                 name: assert-struct
                 description: Check struct layout
@@ -806,7 +811,8 @@ mod tests {
                 ---
 
                 Use this skill.
-            "}),
+            "},
+            ),
         ]);
         // Also create a random directory (should be ignored)
         std::fs::create_dir_all(tmp.path().join("not-a-plugin-or-skill")).unwrap();
@@ -839,20 +845,22 @@ mod tests {
     #[test]
     fn scan_source_dir_rejects_root_level_skill() {
         use crate::test_utils::{File, instantiate_fixture};
-        let tmp = instantiate_fixture(&[
-            File("SKILL.md", indoc! {"
+        let tmp = instantiate_fixture(&[File(
+            "SKILL.md",
+            indoc! {"
                 ---
                 name: root-skill
                 crates: serde
                 ---
 
                 Root level skill.
-            "}),
-        ]);
+            "},
+        )]);
 
         let err = scan_source_dir(tmp.path()).unwrap_err();
         assert!(
-            err.to_string().contains("plugin source root contains SKILL.md"),
+            err.to_string()
+                .contains("plugin source root contains SKILL.md"),
             "expected root SKILL.md error, got: {err}"
         );
     }
@@ -860,16 +868,18 @@ mod tests {
     #[test]
     fn scan_source_dir_rejects_root_level_plugin() {
         use crate::test_utils::{File, instantiate_fixture};
-        let tmp = instantiate_fixture(&[
-            File("SYMPOSIUM.toml", indoc! {r#"
+        let tmp = instantiate_fixture(&[File(
+            "SYMPOSIUM.toml",
+            indoc! {r#"
                 name = "root-plugin"
                 crates = ["*"]
-            "#}),
-        ]);
+            "#},
+        )]);
 
         let err = scan_source_dir(tmp.path()).unwrap_err();
         assert!(
-            err.to_string().contains("plugin source root contains SYMPOSIUM.toml"),
+            err.to_string()
+                .contains("plugin source root contains SYMPOSIUM.toml"),
             "expected root SYMPOSIUM.toml error, got: {err}"
         );
     }
@@ -878,18 +888,24 @@ mod tests {
     fn scan_source_dir_plugin_takes_precedence_over_skill() {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
-            File("mixed/SYMPOSIUM.toml", indoc! {r#"
+            File(
+                "mixed/SYMPOSIUM.toml",
+                indoc! {r#"
                 name = "mixed-plugin"
                 crates = ["*"]
-            "#}),
-            File("mixed/SKILL.md", indoc! {"
+            "#},
+            ),
+            File(
+                "mixed/SKILL.md",
+                indoc! {"
                 ---
                 name: ignored-skill
                 crates: serde
                 ---
 
                 This should be ignored.
-            "}),
+            "},
+            ),
         ]);
 
         let contents = scan_source_dir(tmp.path()).unwrap();
@@ -903,13 +919,19 @@ mod tests {
     fn scan_source_dir_symposium_toml_precedence() {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
-            File("precedence-test/SYMPOSIUM.toml", indoc! {r#"
+            File(
+                "precedence-test/SYMPOSIUM.toml",
+                indoc! {r#"
                 name = "preferred-plugin"
                 crates = ["*"]
-            "#}),
-            File("precedence-test/other.toml", indoc! {r#"
+            "#},
+            ),
+            File(
+                "precedence-test/other.toml",
+                indoc! {r#"
                 name = "ignored-plugin"
-            "#}),
+            "#},
+            ),
         ]);
 
         let contents = scan_source_dir(tmp.path()).unwrap();
@@ -923,38 +945,53 @@ mod tests {
     fn scan_source_dir_pruning_behavior() {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
-            File("foo/SYMPOSIUM.toml", indoc! {r#"
+            File(
+                "foo/SYMPOSIUM.toml",
+                indoc! {r#"
                 name = "foo-plugin"
                 crates = ["*"]
-            "#}),
-            File("foo/bar/SKILL.md", indoc! {"
+            "#},
+            ),
+            File(
+                "foo/bar/SKILL.md",
+                indoc! {"
                 ---
                 name: foo-bar-skill
                 crates: serde
                 ---
 
                 Should be pruned.
-            "}),
-            File("baz/SKILL.md", indoc! {"
+            "},
+            ),
+            File(
+                "baz/SKILL.md",
+                indoc! {"
                 ---
                 name: baz-skill
                 crates: tokio
                 ---
 
                 Should be found.
-            "}),
-            File("baz/qux/SYMPOSIUM.toml", indoc! {r#"
+            "},
+            ),
+            File(
+                "baz/qux/SYMPOSIUM.toml",
+                indoc! {r#"
                 name = "qux-plugin"
                 crates = ["*"]
-            "#}),
-            File("baz/qux/SKILL.md", indoc! {"
+            "#},
+            ),
+            File(
+                "baz/qux/SKILL.md",
+                indoc! {"
                 ---
                 name: qux-skill
                 crates: anyhow
                 ---
 
                 Should be pruned.
-            "}),
+            "},
+            ),
         ]);
 
         let contents = scan_source_dir(tmp.path()).unwrap();
@@ -969,12 +1006,17 @@ mod tests {
     fn validate_source_dir_mixed() {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
-            File("good-plugin/SYMPOSIUM.toml", indoc! {r#"
+            File(
+                "good-plugin/SYMPOSIUM.toml",
+                indoc! {r#"
                 name = "good-plugin"
                 crates = ["serde"]
-            "#}),
+            "#},
+            ),
             File("bad-plugin/SYMPOSIUM.toml", "not valid toml {{{"),
-            File("my-skill/SKILL.md", indoc! {"
+            File(
+                "my-skill/SKILL.md",
+                indoc! {"
                 ---
                 name: my-skill
                 description: A skill
@@ -982,15 +1024,19 @@ mod tests {
                 ---
 
                 Body.
-            "}),
-            File("bad-skill/SKILL.md", indoc! {"
+            "},
+            ),
+            File(
+                "bad-skill/SKILL.md",
+                indoc! {"
                 ---
                 description: No name
                 crates: serde
                 ---
 
                 Body.
-            "}),
+            "},
+            ),
         ]);
 
         let results = validate_source_dir(tmp.path()).unwrap();
@@ -1005,14 +1051,19 @@ mod tests {
     fn collect_crate_names_from_source_dir() {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
-            File("my-plugin/SYMPOSIUM.toml", indoc! {r#"
+            File(
+                "my-plugin/SYMPOSIUM.toml",
+                indoc! {r#"
                 name = "my-plugin"
                 crates = ["*"]
 
                 [[skills]]
                 crates = ["serde", "serde_json>=1.0"]
-            "#}),
-            File("my-skill/SKILL.md", indoc! {"
+            "#},
+            ),
+            File(
+                "my-skill/SKILL.md",
+                indoc! {"
                 ---
                 name: my-skill
                 description: A skill
@@ -1020,7 +1071,8 @@ mod tests {
                 ---
 
                 Body.
-            "}),
+            "},
+            ),
         ]);
 
         let names = collect_crate_names_in_source_dir(tmp.path()).unwrap();
@@ -1033,7 +1085,9 @@ mod tests {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
             File("bad-plugin/SYMPOSIUM.toml", "not valid {{{"),
-            File("good-skill/SKILL.md", indoc! {"
+            File(
+                "good-skill/SKILL.md",
+                indoc! {"
                 ---
                 name: good
                 description: Good skill
@@ -1041,14 +1095,18 @@ mod tests {
                 ---
 
                 Body.
-            "}),
-            File("bad-skill/SKILL.md", indoc! {"
+            "},
+            ),
+            File(
+                "bad-skill/SKILL.md",
+                indoc! {"
                 ---
                 name: bad
                 ---
 
                 Body.
-            "}),
+            "},
+            ),
         ]);
 
         let names = collect_crate_names_in_source_dir(tmp.path()).unwrap();
@@ -1133,20 +1191,24 @@ mod tests {
         assert!(!plugin_version.applies_to_crates(&workspace_crates));
     }
 
-
     #[test]
     fn validate_source_dir_enforces_crates_requirement() {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
-            File("no-crates-plugin/SYMPOSIUM.toml", indoc! {r#"
+            File(
+                "no-crates-plugin/SYMPOSIUM.toml",
+                indoc! {r#"
                 name = "no-crates-plugin"
 
                 [[hooks]]
                 name = "some-hook"
                 event = "PreToolUse"
                 command = "echo test"
-            "#}),
-            File("good-plugin/SYMPOSIUM.toml", indoc! {r#"
+            "#},
+            ),
+            File(
+                "good-plugin/SYMPOSIUM.toml",
+                indoc! {r#"
                 name = "good-plugin"
                 crates = ["serde"]
 
@@ -1154,7 +1216,8 @@ mod tests {
                 name = "some-hook"
                 event = "PreToolUse"
                 command = "echo test"
-            "#}),
+            "#},
+            ),
         ]);
 
         let results = validate_source_dir(tmp.path()).unwrap();
@@ -1163,9 +1226,11 @@ mod tests {
         let ok_count = results.iter().filter(|r| r.result.is_ok()).count();
         let err_count = results.iter().filter(|r| r.result.is_err()).count();
         assert_eq!(ok_count, 1, "Plugin with crates should pass");
-        assert_eq!(err_count, 1, "Plugin without crates should fail TOML parsing");
+        assert_eq!(
+            err_count, 1,
+            "Plugin without crates should fail TOML parsing"
+        );
     }
-
 
     #[test]
     fn parse_manifest_with_no_mcp_servers() {

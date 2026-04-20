@@ -27,7 +27,10 @@ impl Predicate {
         match self {
             Predicate::Wildcard => true,
             Predicate::Crate(name, version_req) => deps.iter().any(|(dep_name, dep_ver)| {
-                dep_name == name && version_req.as_ref().map_or(true, |req| req.matches(dep_ver))
+                dep_name == name
+                    && version_req
+                        .as_ref()
+                        .map_or(true, |req| req.matches(dep_ver))
             }),
         }
     }
@@ -235,7 +238,10 @@ mod tests {
         let p = parse("serde>=1.0").unwrap();
         assert_eq!(
             p,
-            Predicate::Crate("serde".into(), Some(semver::VersionReq::parse(">=1.0").unwrap()))
+            Predicate::Crate(
+                "serde".into(),
+                Some(semver::VersionReq::parse(">=1.0").unwrap())
+            )
         );
     }
 

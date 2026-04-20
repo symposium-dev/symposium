@@ -115,7 +115,11 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, output: &[u
 }
 
 /// Run sync if we're in a workspace directory and auto-sync is enabled. Non-fatal.
-async fn run_auto_sync(sym: &Symposium, input: &symposium::InputEvent, fallback_cwd: &std::path::Path) {
+async fn run_auto_sync(
+    sym: &Symposium,
+    input: &symposium::InputEvent,
+    fallback_cwd: &std::path::Path,
+) {
     if !sym.config.auto_sync {
         return;
     }
