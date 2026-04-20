@@ -143,26 +143,12 @@ pub async fn dispatch_builtin(
     }
 }
 
-/// Handle SessionStart: collect `session-start-context` from all plugins and return as context.
+/// Handle SessionStart: return empty (no session-start-context support).
 fn handle_session_start(
-    sym: &Symposium,
+    _sym: &Symposium,
     _payload: &symposium::SessionStartInput,
 ) -> symposium::OutputEvent {
-    let registry = crate::plugins::load_registry(sym);
-
-    let mut context_parts: Vec<String> = Vec::new();
-    for crate::plugins::ParsedPlugin { path: _, plugin } in &registry.plugins {
-        if let Some(ref ctx) = plugin.session_start_context {
-            context_parts.push(ctx.clone());
-        }
-    }
-
-    if context_parts.is_empty() {
-        symposium::OutputEvent::empty_for(HookEvent::SessionStart)
-    } else {
-        let context = context_parts.join("\n\n");
-        symposium::OutputEvent::with_context(HookEvent::SessionStart, context)
-    }
+    symposium::OutputEvent::empty_for(HookEvent::SessionStart)
 }
 
 /// Handle PostToolUse: no-op for now.

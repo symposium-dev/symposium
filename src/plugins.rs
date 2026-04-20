@@ -106,9 +106,6 @@ pub struct Plugin {
     /// MCP servers to register for this plugin.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<McpServerEntry>,
-    /// Text to inject as additional context at session start.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_start_context: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -213,8 +210,6 @@ struct PluginManifest {
     skills: Vec<SkillGroup>,
     #[serde(default)]
     mcp_servers: Vec<McpServerEntry>,
-    #[serde(default, rename = "session-start-context")]
-    session_start_context: Option<String>,
 }
 
 /// Fetch/update git-based plugin sources.
@@ -636,7 +631,6 @@ pub fn load_plugin(manifest_path: &Path) -> Result<ParsedPlugin> {
             hooks: manifest.hooks,
             skills: manifest.skills,
             mcp_servers: manifest.mcp_servers,
-            session_start_context: manifest.session_start_context,
         },
     })
 }
@@ -654,7 +648,6 @@ mod tests {
             hooks: manifest.hooks,
             skills: manifest.skills,
             mcp_servers: manifest.mcp_servers,
-            session_start_context: manifest.session_start_context,
         })
     }
 
