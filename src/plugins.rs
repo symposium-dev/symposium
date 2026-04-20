@@ -1059,13 +1059,13 @@ mod tests {
 
         // Create the example structure:
         // foo/
-        //     SYMPOSIUM.toml
+        //     PLUGIN.toml
         //     bar/
         //         SKILL.md
         // baz/
         //     SKILL.md
         //     qux/
-        //         SYMPOSIUM.toml
+        //         PLUGIN.toml
         //         SKILL.md
 
         let foo_dir = dir.join("foo");
@@ -1132,7 +1132,7 @@ mod tests {
 
         let contents = scan_source_dir(dir).unwrap();
 
-        // Should find foo/SYMPOSIUM.toml as a plugin
+        // Should find foo/PLUGIN.toml as a plugin
         assert_eq!(contents.plugins.len(), 1);
         assert_eq!(
             contents.plugins[0].as_ref().unwrap().plugin.name,
@@ -1317,78 +1317,6 @@ mod tests {
         assert_eq!(plugin.skills.len(), 2);
         assert!(plugin.skills[0].crates.as_ref().unwrap()[0].references_crate("serde"));
         assert!(plugin.skills[1].crates.as_ref().unwrap()[0].references_crate("tokio"));
-    }
-
-    #[test]
-    fn parse_manifest_with_no_mcp_servers() {
-        let plugin = from_str(SAMPLE).expect("parse");
-        assert!(plugin.mcp_servers.is_empty());
-    }
-
-    #[test]
-    fn mcp_entry_stdio() {
-        let entry: McpServerEntry = toml::from_str(indoc! {r#"
-            name = "my-server"
-            command = "/usr/local/bin/my-server"
-            args = ["--stdio"]
-            env = []
-        "#})
-        .expect("parse");
-        expect_test::expect![[r#"
-            Stdio(
-                McpServerStdio {
-                    name: "my-server",
-                    command: "/usr/local/bin/my-server",
-                    args: [
-                        "--stdio",
-                    ],
-                    env: [],
-                    meta: None,
-                },
-            )"#]]
-        .assert_eq(&format!("{entry:#?}"));
-    }
-
-    #[test]
-    fn mcp_entry_http() {
-        let entry: McpServerEntry = toml::from_str(indoc! {r#"
-            type = "http"
-            name = "my-server"
-            url = "http://localhost:8080/mcp"
-            headers = []
-        "#})
-        .expect("parse");
-        expect_test::expect![[r#"
-            Http(
-                McpServerHttp {
-                    name: "my-server",
-                    url: "http://localhost:8080/mcp",
-                    headers: [],
-                    meta: None,
-                },
-            )"#]]
-        .assert_eq(&format!("{entry:#?}"));
-    }
-
-    #[test]
-    fn mcp_entry_sse() {
-        let entry: McpServerEntry = toml::from_str(indoc! {r#"
-            type = "sse"
-            name = "my-server"
-            url = "http://localhost:8080/sse"
-            headers = []
-        "#})
-        .expect("parse");
-        expect_test::expect![[r#"
-            Sse(
-                McpServerSse {
-                    name: "my-server",
-                    url: "http://localhost:8080/sse",
-                    headers: [],
-                    meta: None,
-                },
-            )"#]]
-        .assert_eq(&format!("{entry:#?}"));
     }
 
     #[test]
@@ -1589,5 +1517,77 @@ mod tests {
         assert!(error_msg.contains("plugin level"));
         assert!(error_msg.contains("[[skills]] groups"));
         assert!(error_msg.contains("[[mcp_servers]] entries"));
+    }
+
+    #[test]
+    fn parse_manifest_with_no_mcp_servers() {
+        let plugin = from_str(SAMPLE).expect("parse");
+        assert!(plugin.mcp_servers.is_empty());
+    }
+
+    #[test]
+    fn mcp_entry_stdio() {
+        let entry: McpServerEntry = toml::from_str(indoc! {r#"
+            name = "my-server"
+            command = "/usr/local/bin/my-server"
+            args = ["--stdio"]
+            env = []
+        "#})
+        .expect("parse");
+        expect_test::expect![[r#"
+            Stdio(
+                McpServerStdio {
+                    name: "my-server",
+                    command: "/usr/local/bin/my-server",
+                    args: [
+                        "--stdio",
+                    ],
+                    env: [],
+                    meta: None,
+                },
+            )"#]]
+        .assert_eq(&format!("{entry:#?}"));
+    }
+
+    #[test]
+    fn mcp_entry_http() {
+        let entry: McpServerEntry = toml::from_str(indoc! {r#"
+            type = "http"
+            name = "my-server"
+            url = "http://localhost:8080/mcp"
+            headers = []
+        "#})
+        .expect("parse");
+        expect_test::expect![[r#"
+            Http(
+                McpServerHttp {
+                    name: "my-server",
+                    url: "http://localhost:8080/mcp",
+                    headers: [],
+                    meta: None,
+                },
+            )"#]]
+        .assert_eq(&format!("{entry:#?}"));
+    }
+
+    #[test]
+    fn mcp_entry_sse() {
+        let entry: McpServerEntry = toml::from_str(indoc! {r#"
+            type = "sse"
+            name = "my-server"
+            url = "http://localhost:8080/sse"
+            headers = []
+        "#})
+        .expect("parse");
+        expect_test::expect![[r#"
+            Sse(
+                McpServerSse {
+                    name: "my-server",
+                    url: "http://localhost:8080/sse",
+                    headers: [],
+                    meta: None,
+                },
+            )"#]]
+        .assert_eq(&format!("{entry:#?}"));
     }
 }
