@@ -1,0 +1,6 @@
+name = "transitive-plugin"
+crates = ["*"]
+
+[[skills]]
+crates = ["mio"]
+source.path = "skills"

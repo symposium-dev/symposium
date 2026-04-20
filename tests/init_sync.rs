@@ -329,3 +329,30 @@ async fn sync_filters_mcp_servers_by_crates() {
     .await
     .unwrap();
 }
+
+/// `sync` does not install skills targeting transitive dependencies.
+/// workspace0 has tokio as a direct dep; mio is a transitive dep of tokio.
+#[tokio::test]
+async fn sync_excludes_transitive_deps() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["transitive-dep0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+
+            // mio-guidance should NOT be installed (mio is transitive, not direct)
+            let mio_skill = workspace_root.join(".claude/skills/mio-guidance/SKILL.md");
+            assert!(
+                !mio_skill.exists(),
+                "skill targeting transitive dep (mio) should NOT be installed"
+            );
+
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
