@@ -1,6 +1,6 @@
 //! Shared test utilities for creating temporary fixture directories.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// A file entry for [`instantiate_fixture`].
 pub struct File<'a>(pub &'a str, pub &'a str);
