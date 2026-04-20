@@ -680,8 +680,8 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
 }
 
 /// Validate that a plugin has crates specified somewhere.
-///
-/// Checks that the plugin has `crates` at the plugin level, in skill groups,
+/// 
+/// Checks that the plugin has `crates` at the plugin level, in skill groups, 
 /// or in MCP servers. Returns an error if no crate targeting is found anywhere.
 fn validate_plugin_has_crates(plugin: &Plugin) -> Result<()> {
     // Check plugin-level crates
@@ -983,7 +983,7 @@ mod tests {
         // Create a directory with both SYMPOSIUM.toml and SKILL.md
         let mixed_dir = dir.join("mixed");
         std::fs::create_dir_all(&mixed_dir).unwrap();
-
+        
         // SYMPOSIUM.toml should take precedence
         std::fs::write(
             mixed_dir.join("SYMPOSIUM.toml"),
@@ -1024,7 +1024,7 @@ mod tests {
         // Create a directory with both SYMPOSIUM.toml and other .toml files
         let plugin_dir = dir.join("precedence-test");
         std::fs::create_dir_all(&plugin_dir).unwrap();
-
+        
         // SYMPOSIUM.toml should take precedence
         std::fs::write(
             plugin_dir.join("SYMPOSIUM.toml"),
@@ -1131,14 +1131,14 @@ mod tests {
         .unwrap();
 
         let contents = scan_source_dir(dir).unwrap();
-
+        
         // Should find foo/PLUGIN.toml as a plugin
         assert_eq!(contents.plugins.len(), 1);
         assert_eq!(
             contents.plugins[0].as_ref().unwrap().plugin.name,
             "foo-plugin"
         );
-
+        
         // Should find only baz/SKILL.md (foo/bar/SKILL.md and baz/qux/* are pruned)
         assert_eq!(contents.skill_files.len(), 1);
         assert!(contents.skill_files[0].ends_with("baz/SKILL.md"));
@@ -1433,7 +1433,7 @@ mod tests {
             plugin_dir.join("SYMPOSIUM.toml"),
             indoc! {r#"
                 name = "no-crates-plugin"
-
+                
                 [[hooks]]
                 name = "some-hook"
                 event = "PreToolUse"
@@ -1450,7 +1450,7 @@ mod tests {
             indoc! {r#"
                 name = "good-plugin"
                 crates = ["serde"]
-
+                
                 [[hooks]]
                 name = "some-hook"
                 event = "PreToolUse"
@@ -1466,7 +1466,7 @@ mod tests {
             skill_plugin_dir.join("SYMPOSIUM.toml"),
             indoc! {r#"
                 name = "skill-plugin"
-
+                
                 [[skills]]
                 crates = ["tokio"]
                 source.path = "skills"
@@ -1475,10 +1475,10 @@ mod tests {
         .unwrap();
 
         let results = validate_source_dir(dir).unwrap();
-
+        
         // Should have 3 validation results
         assert_eq!(results.len(), 3);
-
+        
         // Find results by plugin name
         let no_crates_result = results.iter()
             .find(|r| r.path.to_string_lossy().contains("no-crates-plugin"))
@@ -1493,7 +1493,7 @@ mod tests {
         // Check validation results
         assert!(no_crates_result.result.is_err(), "Plugin without crates should fail validation");
         assert!(no_crates_result.result.as_ref().unwrap_err().to_string().contains("must specify 'crates'"));
-
+        
         assert!(good_result.result.is_ok(), "Plugin with top-level crates should pass");
         assert!(skill_result.result.is_ok(), "Plugin with skill-level crates should pass");
     }
@@ -1508,10 +1508,10 @@ mod tests {
             skills: vec![],
             mcp_servers: vec![],
         };
-
+        
         let err = validate_plugin_has_crates(&plugin).unwrap_err();
         let error_msg = err.to_string();
-
+        
         assert!(error_msg.contains("test-plugin"));
         assert!(error_msg.contains("must specify 'crates'"));
         assert!(error_msg.contains("plugin level"));

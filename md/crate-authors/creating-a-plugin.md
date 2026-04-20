@@ -23,7 +23,7 @@ name = "my-crate-plugin"
 crates = ["my-crate"]
 
 # Skills grouped by crate and version.  Skills can be located as a reference to another git repository.
-[[skills]]
+[[skills]]  
 crates = ["my-crate=2.0"]
 source.git = "https://github.com/org/my-crate/tree/main/skills/v2"
 
@@ -77,7 +77,7 @@ crates = ["widgetlib=1.0"]
 source.git = "https://github.com/widgetlib/skills/tree/main/symposium/skills/v1"
 
 [[skills]]
-crates = ["widgetlib=2.0"]
+crates = ["widgetlib=2.0"] 
 source.git = "https://github.com/widgetlib/skills/tree/main/symposium/skills/v2"
 ```
 

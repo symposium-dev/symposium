@@ -1,6 +1,6 @@
 # Supporting your crate
 
-If you maintain a Rust crate, you can extend Symposium with skills, MCP servers, or other extensions that will teach agents the best way to use your crate.
+If you maintain a Rust crate, you can extend Symposium with skills, MCP servers, or other extensions that will teach agents the best way to use your crate.
 
 ## Just want to add a skill?
 

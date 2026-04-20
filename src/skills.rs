@@ -734,7 +734,7 @@ mod tests {
         // Query for serde - should find no skills because plugin doesn't apply
         let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
         let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
-
+        
         assert!(skills.is_empty(), "Plugin should be filtered out at plugin level");
     }
 
@@ -770,7 +770,7 @@ mod tests {
         // Query for serde - should find no skills because group doesn't match
         let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
         let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
-
+        
         assert!(skills.is_empty(), "Skills should be filtered out at group level");
     }
 
@@ -826,7 +826,7 @@ mod tests {
         // Query for serde - should find the skill because all levels match
         let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
         let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
-
+        
         assert_eq!(skills.len(), 1, "Should find one skill when all levels match");
         assert_eq!(skills[0].skill.name(), "serde-basics");
     }
