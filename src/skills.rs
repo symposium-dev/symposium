@@ -278,7 +278,8 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
         .get("name")
         .context("SKILL.md frontmatter missing required `name` field")?;
 
-    // Validate description: required, non-empty, max 1024 chars.
+    // Validate description per agentskills.io spec
+    // (https://agentskills.io/specification.md): required, non-empty, max 1024 chars.
     let desc = frontmatter
         .get("description")
         .context("SKILL.md frontmatter missing required `description` field")?;
