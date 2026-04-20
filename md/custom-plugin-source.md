@@ -11,7 +11,7 @@ Custom plugin sources are useful for:
 
 ## Custom plugins in your home directory
 
-[plugin definitions](./reference/plugin-definition.md) or [standalone skills](./reference/skill-definition.md) added to the `~/.symposium/plugins` directory will be registered by default and propagated appropriately to your other projects.
+[plugin definitions](./reference/plugin-definitions.md) or [standalone skills](./reference/skill-definitions.md) added to the `~/.symposium/plugins` directory will be registered by default and propagated appropriately to your other projects.
 
 ## Adding your own custom sources
 
