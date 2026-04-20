@@ -21,3 +21,10 @@ Symposium merges hook entries into Gemini's `settings.json`.
 Events registered: `BeforeTool`, `AfterTool`, `SessionStart` (Gemini's own naming).
 
 Output format: JSON with nested matcher groups. Timeouts in milliseconds.
+
+## MCP servers
+
+| Scope | File | Key |
+|-------|------|-----|
+| Project | `.gemini/settings.json` | `mcpServers.<name>` |
+| Global | `~/.gemini/settings.json` | `mcpServers.<name>` |

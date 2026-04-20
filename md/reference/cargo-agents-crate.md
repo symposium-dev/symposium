@@ -10,11 +10,10 @@ symposium crate <NAME> [--version <VERSION>]
 
 ## Behavior
 
-Fetches the crate's source code and returns guidance including:
+Fetches the crate's source code and returns:
 
 - Path to the extracted crate source
-- Custom instructions from matching skill plugins
-- Available skills that can be loaded
+- Available skills for the crate
 
 ## Options
 

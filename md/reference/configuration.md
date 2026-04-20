@@ -37,6 +37,12 @@ path = "my-plugins"
 | `auto-sync` | bool | `true` | Automatically run `symposium sync` during hook invocations. When enabled, skills are kept in sync with workspace dependencies without manual intervention. |
 | `hook-scope` | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace. |
 
+### Hook scope: control whether Symposium actives in all projects or only those you select
+
+Registering hooks globally ensures that Symposium actives whenever you use the selected agent, which means that it will work in any Rust project automatically.
+
+Registering hooks at the project level requires you to run `symposium sync` within each project at least once to create the hooks. After that, the `auto-sync` feature will keep you up-to-date.
+
 ## `[[agent]]`
 
 Each `[[agent]]` entry identifies an agent you use. You can configure multiple agents.
@@ -78,7 +84,7 @@ User-wide data lives under `~/.symposium/` by default. Override with environment
 | | Config | Cache | Logs |
 |---|---|---|---|
 | `SYMPOSIUM_HOME` | `$SYMPOSIUM_HOME/` | `$SYMPOSIUM_HOME/cache/` | `$SYMPOSIUM_HOME/logs/` |
-| XDG | `$XDG_CONFIG_HOME/symposium/` | `$XDG_CACHE_HOME/symposium/` | `$XDG_DATA_HOME/symposium/logs/` |
+| XDG | `$XDG_CONFIG_HOME/symposium/` | `$XDG_CACHE_HOME/symposium/` | `$XDG_STATE_HOME/symposium/logs/` |
 | Default | `~/.symposium/` | `~/.symposium/cache/` | `~/.symposium/logs/` |
 
 `SYMPOSIUM_HOME` takes precedence over XDG variables.
