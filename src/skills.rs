@@ -12,17 +12,6 @@ use crate::config::Symposium;
 use crate::plugins::{ParsedPlugin, PluginRegistry, SkillGroup};
 use crate::predicate::{self, Predicate};
 
-/// Activation mode for a skill.
-#[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Activation {
-    /// Skill content is printed inline with crate output.
-    Always,
-    /// Skill is listed with its path for on-demand loading.
-    #[default]
-    Optional,
-}
-
 /// A parsed skill from a SKILL.md file.
 #[derive(Debug, Clone)]
 pub struct Skill {
@@ -30,8 +19,6 @@ pub struct Skill {
     pub frontmatter: BTreeMap<String, String>,
     /// Crate predicates this skill advises on (skill-level; ANDed with group-level).
     pub crates: Vec<Predicate>,
-    /// Activation mode.
-    pub activation: Activation,
     /// The body content (everything after frontmatter).
     pub body: String,
     /// Path to the SKILL.md file on disk.
@@ -107,6 +94,11 @@ pub async fn skills_applicable_to(
     // because we lazily load skill groups, so there
     // is extra logic.
     for ParsedPlugin { path, plugin } in &registry.plugins {
+        // First check if plugin applies to these crates
+        if !plugin.applies_to_crates(for_crates) {
+            continue;
+        }
+
         for group in &plugin.skills {
             let (group_crates, skills) = load_skills_for_group(sym, path, group, for_crates).await;
 
@@ -245,8 +237,8 @@ async fn resolve_skill_dir(
 
 /// Load a standalone skill from a SKILL.md file (no plugin group context).
 ///
-/// Standalone skills must be self-contained: all metadata (crates,
-/// activation) comes from the SKILL.md frontmatter.
+/// Standalone skills must be self-contained: all metadata (crates)
+/// comes from the SKILL.md frontmatter.
 /// Returns an error if `crates` is missing (standalone skills have
 /// no group to inherit from).
 pub fn load_standalone_skill(skill_md_path: &Path) -> Result<Skill> {
@@ -286,6 +278,22 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
         .get("name")
         .context("SKILL.md frontmatter missing required `name` field")?;
 
+    // Validate description per agentskills.io spec
+    // (https://agentskills.io/specification.md): required, non-empty, max 1024 chars.
+    let desc = frontmatter
+        .get("description")
+        .context("SKILL.md frontmatter missing required `description` field")?;
+    let trimmed_desc = desc.trim();
+    if trimmed_desc.is_empty() {
+        bail!("SKILL.md `description` must not be empty");
+    }
+    if trimmed_desc.len() > 1024 {
+        bail!(
+            "SKILL.md `description` exceeds 1024 characters ({} chars)",
+            trimmed_desc.len()
+        );
+    }
+
     // Parse skill-level crates predicates (comma-separated).
     // This is independent of group-level — both layers are ANDed at match time.
     let crates = if let Some(ref crates_str) = fm.crates {
@@ -303,17 +311,9 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
         );
     }
 
-    // Resolve activation: frontmatter overrides group-level
-    let activation = if let Some(act) = frontmatter.get("activation") {
-        parse_activation(act)?
-    } else {
-        group.activation.clone().unwrap_or_default()
-    };
-
     Ok(Skill {
         frontmatter,
         crates,
-        activation,
         body: fm.body,
         path: skill_md_path.to_path_buf(),
     })
@@ -337,24 +337,32 @@ fn collect_skills_applicable_to(
     }
 }
 
-/// Check whether a skill matches any of the target crates.
+/// Check whether a skill matches the target crates.
 ///
-/// Uses skill-level `crates` if present, otherwise falls back to group-level.
-/// Returns false if neither level has any crate predicates (nothing to match).
+/// If both skill-level and group-level `crates` are present, BOTH must match
+/// (AND composition). If only one level has `crates`, that level alone decides.
+/// Returns false if neither level has any crate predicates.
 fn skill_matches(
     skill: &Skill,
     group_crates: &[Predicate],
     for_crates: &[(String, semver::Version)],
 ) -> bool {
-    let effective_preds = if !skill.crates.is_empty() {
-        &skill.crates
+    let skill_ok = if skill.crates.is_empty() {
+        None
     } else {
-        group_crates
+        Some(skill.crates.iter().any(|p| p.matches(for_crates)))
     };
-    if effective_preds.is_empty() {
-        return false;
+    let group_ok = if group_crates.is_empty() {
+        None
+    } else {
+        Some(group_crates.iter().any(|p| p.matches(for_crates)))
+    };
+    match (skill_ok, group_ok) {
+        (Some(s), Some(g)) => s && g, // AND: both must match
+        (Some(s), None) => s,
+        (None, Some(g)) => g,
+        (None, None) => false,
     }
-    effective_preds.iter().any(|p| p.matches(for_crates))
 }
 
 /// Raw frontmatter fields extracted from a SKILL.md file.
@@ -416,14 +424,6 @@ fn parse_frontmatter(content: &str) -> Result<RawFrontmatter> {
         crates,
         body: body.to_string(),
     })
-}
-
-fn parse_activation(s: &str) -> Result<Activation> {
-    match s.trim().to_lowercase().as_str() {
-        "always" => Ok(Activation::Always),
-        "optional" => Ok(Activation::Optional),
-        other => bail!("unknown activation mode: {other:?} (expected \"always\" or \"optional\")"),
-    }
 }
 
 #[cfg(test)]
@@ -499,7 +499,6 @@ mod tests {
                 name: test-skill
                 description: Test
                 crates: serde
-                activation: always
                 ---
 
                 Use serde like this.
@@ -513,7 +512,6 @@ mod tests {
         assert_eq!(skill.frontmatter.get("name").unwrap(), "test-skill");
         assert_eq!(skill.crates.len(), 1);
         assert!(skill.crates[0].references_crate("serde"));
-        assert_eq!(skill.activation, Activation::Always);
         assert!(skill.body.contains("Use serde like this."));
     }
 
@@ -526,6 +524,7 @@ mod tests {
             indoc! {"
                 ---
                 name: multi-crate
+                description: Multi-crate skill
                 crates: serde, tokio>=1.0
                 ---
 
@@ -560,7 +559,6 @@ mod tests {
 
         let defaults = SkillGroup {
             crates: Some(vec![pred("tokio")]),
-            activation: Some(Activation::Always),
             ..Default::default()
         };
         let skill = load_skill(&skill_md, &defaults).unwrap();
@@ -568,7 +566,6 @@ mod tests {
         // Skill has no crates in frontmatter, so it's empty at skill level.
         // The plugin default provides the crates scope.
         assert!(skill.crates.is_empty());
-        assert_eq!(skill.activation, Activation::Always);
     }
 
     #[test]
@@ -580,8 +577,8 @@ mod tests {
             indoc! {"
                 ---
                 name: override
+                description: Override skill
                 crates: serde
-                activation: optional
                 ---
 
                 Body.
@@ -591,7 +588,6 @@ mod tests {
 
         let defaults = SkillGroup {
             crates: Some(vec![pred("tokio")]),
-            activation: Some(Activation::Always),
             ..Default::default()
         };
         let skill = load_skill(&skill_md, &defaults).unwrap();
@@ -600,7 +596,6 @@ mod tests {
         assert_eq!(skill.crates.len(), 1);
         assert!(skill.crates[0].references_crate("serde"));
         assert!(!skill.crates[0].references_crate("tokio"));
-        assert_eq!(skill.activation, Activation::Optional);
     }
 
     #[test]
@@ -667,7 +662,6 @@ mod tests {
                 name: my-standalone
                 description: A standalone skill
                 crates: serde
-                activation: always
                 ---
 
                 Standalone body.
@@ -678,7 +672,6 @@ mod tests {
         let skill = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap();
         assert_eq!(skill.name(), "my-standalone");
         assert!(skill.crates[0].references_crate("serde"));
-        assert_eq!(skill.activation, Activation::Always);
         assert!(skill.body.contains("Standalone body."));
     }
 
@@ -692,6 +685,7 @@ mod tests {
             indoc! {"
                 ---
                 name: bad
+                description: Bad crates skill
                 crates: >=not_valid!!
                 ---
 
@@ -707,30 +701,146 @@ mod tests {
         );
     }
 
-    #[test]
-    fn validate_standalone_skill_bad_activation() {
-        let tmp = tempfile::tempdir().unwrap();
-        let skill_dir = tmp.path().join("bad-skill");
+    // --- Multi-level crate filtering tests ---
+
+    #[tokio::test]
+    async fn test_plugin_level_filtering_blocks_skills() {
+        use crate::plugins::{ParsedPlugin, Plugin, PluginRegistry, PluginSource, SkillGroup};
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let sym = crate::config::Symposium::from_dir(tmp.path());
+
+        // Create a plugin that only applies to "other-crate"
+        let plugin = Plugin {
+            name: "other-crate-plugin".to_string(),
+            crates: vec![pred("other-crate")],
+            installation: None,
+            hooks: vec![],
+            skills: vec![SkillGroup {
+                crates: Some(vec![pred("serde")]), // Group targets serde
+                source: PluginSource::default(),
+            }],
+            mcp_servers: vec![],
+        };
+
+        let registry = PluginRegistry {
+            plugins: vec![ParsedPlugin {
+                path: tmp.path().join("plugin.toml"),
+                plugin,
+            }],
+            standalone_skills: vec![],
+        };
+
+        // Query for serde - should find no skills because plugin doesn't apply
+        let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
+
+        assert!(
+            skills.is_empty(),
+            "Plugin should be filtered out at plugin level"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_group_level_filtering_blocks_skills() {
+        use crate::plugins::{ParsedPlugin, Plugin, PluginRegistry, PluginSource, SkillGroup};
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let sym = crate::config::Symposium::from_dir(tmp.path());
+
+        // Create a plugin with wildcard that has a group targeting different crate
+        let plugin = Plugin {
+            name: "wildcard-plugin".to_string(),
+            crates: vec![pred("*")], // Plugin applies to all
+            installation: None,
+            hooks: vec![],
+            skills: vec![SkillGroup {
+                crates: Some(vec![pred("other-crate")]), // But group targets other-crate
+                source: PluginSource::default(),
+            }],
+            mcp_servers: vec![],
+        };
+
+        let registry = PluginRegistry {
+            plugins: vec![ParsedPlugin {
+                path: tmp.path().join("plugin.toml"),
+                plugin,
+            }],
+            standalone_skills: vec![],
+        };
+
+        // Query for serde - should find no skills because group doesn't match
+        let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
+
+        assert!(
+            skills.is_empty(),
+            "Skills should be filtered out at group level"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_all_levels_match_allows_skills() {
+        use crate::plugins::{ParsedPlugin, Plugin, PluginRegistry, PluginSource, SkillGroup};
+        use std::fs;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let sym = crate::config::Symposium::from_dir(tmp.path());
+
+        // Create skill directory and file
+        let skill_dir = tmp.path().join("serde-skill");
         fs::create_dir_all(&skill_dir).unwrap();
         fs::write(
             skill_dir.join("SKILL.md"),
             indoc! {"
                 ---
-                name: bad
+                name: serde-basics
+                description: Basic serde usage
                 crates: serde
-                activation: bogus
                 ---
 
-                Body.
+                Use derive macros.
             "},
         )
         .unwrap();
 
-        let err = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap_err();
-        assert!(
-            err.to_string().contains("unknown activation mode"),
-            "expected activation error, got: {err}"
+        // Create a plugin where all levels match serde
+        let plugin = Plugin {
+            name: "serde-plugin".to_string(),
+            crates: vec![pred("serde")], // Plugin targets serde
+            installation: None,
+            hooks: vec![],
+            skills: vec![SkillGroup {
+                crates: Some(vec![pred("serde")]), // Group also targets serde
+                source: PluginSource {
+                    path: Some(skill_dir.to_path_buf()),
+                    git: None,
+                },
+            }],
+            mcp_servers: vec![],
+        };
+
+        let registry = PluginRegistry {
+            plugins: vec![ParsedPlugin {
+                path: tmp.path().join("plugin.toml"),
+                plugin,
+            }],
+            standalone_skills: vec![],
+        };
+
+        // Query for serde - should find the skill because all levels match
+        let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
+
+        assert_eq!(
+            skills.len(),
+            1,
+            "Should find one skill when all levels match"
         );
+        assert_eq!(skills[0].skill.name(), "serde-basics");
     }
 
     #[test]
@@ -796,7 +906,6 @@ mod tests {
                 name: standalone-serde
                 description: Standalone serde skill
                 crates: serde
-                activation: always
                 ---
 
                 Body.
@@ -864,6 +973,7 @@ mod tests {
             indoc! {"
                 ---
                 name: nested-skill
+                description: Nested skill
                 crates: tokio
                 ---
 
@@ -893,6 +1003,7 @@ mod tests {
             indoc! {"
                 ---
                 name: shallow
+                description: Shallow skill
                 crates: serde
                 ---
 
@@ -909,6 +1020,7 @@ mod tests {
             indoc! {"
                 ---
                 name: nested
+                description: Nested skill
                 crates: serde
                 ---
 
@@ -925,6 +1037,7 @@ mod tests {
             indoc! {"
                 ---
                 name: sibling
+                description: Sibling skill
                 crates: tokio
                 ---
 
@@ -953,5 +1066,78 @@ mod tests {
         let defaults = SkillGroup::default();
         let skills = discover_skills(tmp.path(), &defaults);
         assert!(skills.is_empty());
+    }
+
+    // --- AND composition tests for skill_matches ---
+
+    fn v(s: &str) -> semver::Version {
+        semver::Version::parse(s).unwrap()
+    }
+
+    #[test]
+    fn skill_matches_and_both_present_both_satisfied() {
+        // Skill crates: tokio, Group crates: serde → requires BOTH
+        let skill = Skill {
+            frontmatter: BTreeMap::new(),
+            crates: vec![pred("tokio")],
+            body: String::new(),
+            path: PathBuf::new(),
+        };
+        let group = vec![pred("serde")];
+        let ws = vec![("serde".into(), v("1.0.0")), ("tokio".into(), v("1.0.0"))];
+        assert!(skill_matches(&skill, &group, &ws));
+    }
+
+    #[test]
+    fn skill_matches_and_skill_missing_from_workspace() {
+        // Skill crates: tokio, Group crates: serde, workspace has only serde → AND fails
+        let skill = Skill {
+            frontmatter: BTreeMap::new(),
+            crates: vec![pred("tokio")],
+            body: String::new(),
+            path: PathBuf::new(),
+        };
+        let group = vec![pred("serde")];
+        let ws = vec![("serde".into(), v("1.0.0"))];
+        assert!(!skill_matches(&skill, &group, &ws));
+    }
+
+    #[test]
+    fn skill_matches_no_skill_crates_uses_group() {
+        // Skill has no crates, group has serde → only serde required
+        let skill = Skill {
+            frontmatter: BTreeMap::new(),
+            crates: vec![],
+            body: String::new(),
+            path: PathBuf::new(),
+        };
+        let group = vec![pred("serde")];
+        let ws = vec![("serde".into(), v("1.0.0"))];
+        assert!(skill_matches(&skill, &group, &ws));
+    }
+
+    #[test]
+    fn skill_matches_skill_crates_no_group() {
+        // Skill has serde, group has nothing → only serde required
+        let skill = Skill {
+            frontmatter: BTreeMap::new(),
+            crates: vec![pred("serde")],
+            body: String::new(),
+            path: PathBuf::new(),
+        };
+        let ws = vec![("serde".into(), v("1.0.0"))];
+        assert!(skill_matches(&skill, &[], &ws));
+    }
+
+    #[test]
+    fn skill_matches_neither_level_returns_false() {
+        let skill = Skill {
+            frontmatter: BTreeMap::new(),
+            crates: vec![],
+            body: String::new(),
+            path: PathBuf::new(),
+        };
+        let ws = vec![("serde".into(), v("1.0.0"))];
+        assert!(!skill_matches(&skill, &[], &ws));
     }
 }

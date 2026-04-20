@@ -28,3 +28,10 @@ Output format: JSON. Exit code 2 blocks tool use.
 [features]
 codex_hooks = true
 ```
+
+## MCP servers
+
+| Scope | File | Key |
+|-------|------|-----|
+| Project | `.codex/config.toml` | `[mcp_servers.<name>]` |
+| Global | `~/.codex/config.toml` | `[mcp_servers.<name>]` |

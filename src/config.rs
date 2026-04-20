@@ -46,9 +46,6 @@ pub struct Config {
     #[serde(default)]
     pub logging: LoggingConfig,
 
-    /// Override the cache directory.
-    pub cache_dir: Option<PathBuf>,
-
     /// Default plugin sources that are always included unless disabled.
     #[serde(default)]
     pub defaults: DefaultsConfig,
@@ -86,7 +83,6 @@ impl Default for Config {
             hook_scope: HookScope::default(),
             agents: Vec::new(),
             logging: LoggingConfig::default(),
-            cache_dir: None,
             defaults: DefaultsConfig::default(),
             plugin_source: Vec::new(),
         }
@@ -174,7 +170,7 @@ impl Symposium {
 
         let config = load_config_from(&config_dir);
 
-        let cache_dir = resolve_cache_dir(&config, &config_dir);
+        let cache_dir = resolve_cache_dir(&config_dir);
         let _ = fs::create_dir_all(&cache_dir);
 
         Self {
@@ -194,11 +190,7 @@ impl Symposium {
 
         let config = load_config_from(&config_dir);
 
-        let cache_dir = if let Some(ref dir) = config.cache_dir {
-            dir.clone()
-        } else {
-            config_dir.join("cache")
-        };
+        let cache_dir = config_dir.join("cache");
         let _ = fs::create_dir_all(&cache_dir);
 
         // In test mode, use the root as the home directory so that
@@ -306,7 +298,7 @@ impl Symposium {
     }
 
     fn logs_dir(&self) -> PathBuf {
-        let dir = self.config_dir.join("logs");
+        let dir = resolve_logs_dir(&self.config_dir);
         let _ = fs::create_dir_all(&dir);
         dir
     }
@@ -337,11 +329,21 @@ fn resolve_config_dir_from_env() -> PathBuf {
     }
 }
 
-/// Resolve cache dir from config and environment.
-fn resolve_cache_dir(config: &Config, config_dir: &Path) -> PathBuf {
-    if let Some(ref dir) = config.cache_dir {
-        return dir.clone();
+/// Resolve logs dir from environment.
+///
+/// Resolution: SYMPOSIUM_HOME/logs → XDG_STATE_HOME/symposium/logs → config_dir/logs.
+fn resolve_logs_dir(config_dir: &Path) -> PathBuf {
+    if let Ok(home) = env::var("SYMPOSIUM_HOME") {
+        return PathBuf::from(home).join("logs");
     }
+    if let Ok(xdg) = env::var("XDG_STATE_HOME") {
+        return PathBuf::from(xdg).join("symposium").join("logs");
+    }
+    config_dir.join("logs")
+}
+
+/// Resolve cache dir from environment.
+fn resolve_cache_dir(config_dir: &Path) -> PathBuf {
     if let Ok(home) = env::var("SYMPOSIUM_HOME") {
         return PathBuf::from(home).join("cache");
     }
@@ -518,5 +520,36 @@ mod tests {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.agents.is_empty());
         assert!(config.auto_sync); // default true
+    }
+
+    #[test]
+    fn resolve_logs_dir_uses_xdg_state_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let xdg_state = tmp.path().join("state");
+        std::fs::create_dir_all(&xdg_state).unwrap();
+
+        // Temporarily set XDG_STATE_HOME and unset SYMPOSIUM_HOME
+        let old_state = env::var("XDG_STATE_HOME").ok();
+        let old_home = env::var("SYMPOSIUM_HOME").ok();
+        unsafe {
+            env::set_var("XDG_STATE_HOME", &xdg_state);
+            env::remove_var("SYMPOSIUM_HOME");
+        }
+
+        let result = resolve_logs_dir(tmp.path());
+
+        // Restore
+        unsafe {
+            match old_state {
+                Some(v) => env::set_var("XDG_STATE_HOME", v),
+                None => env::remove_var("XDG_STATE_HOME"),
+            }
+            match old_home {
+                Some(v) => env::set_var("SYMPOSIUM_HOME", v),
+                None => env::remove_var("SYMPOSIUM_HOME"),
+            }
+        }
+
+        assert_eq!(result, xdg_state.join("symposium").join("logs"));
     }
 }

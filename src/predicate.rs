@@ -5,39 +5,52 @@
 //! ```text
 //! serde                          -- bare crate name (any version)
 //! serde>=1.0                     -- crate with version constraint
+//! *                              -- wildcard (always matches)
 //! ```
 
 use anyhow::{Context, Result, bail};
 
 /// A predicate matching a single crate dependency, optionally constrained by version.
 ///
-/// Serializes to/from its string representation (e.g., `"serde>=1.0"`).
+/// The wildcard `*` always matches — even a workspace with zero dependencies.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Predicate {
-    pub name: String,
-    pub version_req: Option<semver::VersionReq>,
+pub enum Predicate {
+    /// Matches unconditionally, even workspaces with zero dependencies.
+    Wildcard,
+    /// Matches a specific crate, optionally constrained by version.
+    Crate(String, Option<semver::VersionReq>),
 }
 
 impl Predicate {
     /// Evaluate this predicate against a workspace dependency list.
     pub fn matches(&self, deps: &[(String, semver::Version)]) -> bool {
-        deps.iter().any(|(dep_name, dep_ver)| {
-            dep_name == &self.name
-                && self
-                    .version_req
-                    .as_ref()
-                    .map_or(true, |req| req.matches(dep_ver))
-        })
+        match self {
+            Predicate::Wildcard => true,
+            Predicate::Crate(name, version_req) => deps.iter().any(|(dep_name, dep_ver)| {
+                dep_name == name
+                    && version_req
+                        .as_ref()
+                        .map_or(true, |req| req.matches(dep_ver))
+            }),
+        }
     }
 
     /// Returns true if this predicate references the given crate name.
+    /// Wildcard does not reference any specific crate.
     pub fn references_crate(&self, name: &str) -> bool {
-        self.name == name
+        match self {
+            Predicate::Wildcard => false,
+            Predicate::Crate(n, _) => n == name,
+        }
     }
 
     /// Collect the crate name referenced by this predicate into a set.
+    /// Wildcard is a no-op — `*` is used for unconditional matching and
+    /// should not be looked up on crates.io during validation.
     pub fn collect_crate_names(&self, out: &mut std::collections::BTreeSet<String>) {
-        out.insert(self.name.clone());
+        if let Predicate::Crate(name, _) = self {
+            out.insert(name.clone());
+        }
     }
 }
 
@@ -58,6 +71,9 @@ pub fn parse(input: &str) -> Result<Predicate> {
     let input = input.trim();
     if input.is_empty() {
         bail!("empty predicate string");
+    }
+    if input == "*" {
+        return Ok(Predicate::Wildcard);
     }
     let mut parser = Parser::new(input);
     let pred = parser.parse_atom()?;
@@ -149,10 +165,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        Ok(Predicate {
-            name: name.to_string(),
-            version_req,
-        })
+        Ok(Predicate::Crate(name.to_string(), version_req))
     }
 }
 
@@ -176,11 +189,16 @@ impl<'de> serde::Deserialize<'de> for Predicate {
 
 impl std::fmt::Display for Predicate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.name)?;
-        if let Some(req) = &self.version_req {
-            write!(f, "{req}")?;
+        match self {
+            Predicate::Wildcard => write!(f, "*"),
+            Predicate::Crate(name, version_req) => {
+                write!(f, "{name}")?;
+                if let Some(req) = version_req {
+                    write!(f, "{req}")?;
+                }
+                Ok(())
+            }
         }
-        Ok(())
     }
 }
 
@@ -206,25 +224,13 @@ mod tests {
     #[test]
     fn parse_bare_name() {
         let p = parse("serde").unwrap();
-        assert_eq!(
-            p,
-            Predicate {
-                name: "serde".into(),
-                version_req: None,
-            }
-        );
+        assert_eq!(p, Predicate::Crate("serde".into(), None));
     }
 
     #[test]
     fn parse_name_with_hyphen() {
         let p = parse("tokio-stream").unwrap();
-        assert_eq!(
-            p,
-            Predicate {
-                name: "tokio-stream".into(),
-                version_req: None,
-            }
-        );
+        assert_eq!(p, Predicate::Crate("tokio-stream".into(), None));
     }
 
     #[test]
@@ -232,10 +238,10 @@ mod tests {
         let p = parse("serde>=1.0").unwrap();
         assert_eq!(
             p,
-            Predicate {
-                name: "serde".into(),
-                version_req: Some(semver::VersionReq::parse(">=1.0").unwrap()),
-            }
+            Predicate::Crate(
+                "serde".into(),
+                Some(semver::VersionReq::parse(">=1.0").unwrap())
+            )
         );
     }
 
@@ -244,10 +250,10 @@ mod tests {
         let p = parse("tokio^1.40").unwrap();
         assert_eq!(
             p,
-            Predicate {
-                name: "tokio".into(),
-                version_req: Some(semver::VersionReq::parse("^1.40").unwrap()),
-            }
+            Predicate::Crate(
+                "tokio".into(),
+                Some(semver::VersionReq::parse("^1.40").unwrap())
+            )
         );
     }
 
@@ -257,10 +263,10 @@ mod tests {
         let p = parse("serde=1.2").unwrap();
         assert_eq!(
             p,
-            Predicate {
-                name: "serde".into(),
-                version_req: Some(semver::VersionReq::parse("^1.2").unwrap()),
-            }
+            Predicate::Crate(
+                "serde".into(),
+                Some(semver::VersionReq::parse("^1.2").unwrap())
+            )
         );
     }
 
@@ -268,7 +274,9 @@ mod tests {
     fn parse_version_gte_not_rewritten() {
         // `>=1.0` stays as `>=1.0`, not rewritten to `^`
         let p = parse("serde>=1.0").unwrap();
-        let req = p.version_req.as_ref().unwrap();
+        let Predicate::Crate(_, Some(ref req)) = p else {
+            panic!("expected Crate variant");
+        };
         // >=1.0 matches 2.0, ^1.0 does not
         assert!(req.matches(&semver::Version::parse("2.0.0").unwrap()));
     }
@@ -292,10 +300,10 @@ mod tests {
         let p = parse("serde==1.2.0").unwrap();
         assert_eq!(
             p,
-            Predicate {
-                name: "serde".into(),
-                version_req: Some(semver::VersionReq::parse("=1.2.0").unwrap()),
-            }
+            Predicate::Crate(
+                "serde".into(),
+                Some(semver::VersionReq::parse("=1.2.0").unwrap())
+            )
         );
     }
 
@@ -406,17 +414,16 @@ mod tests {
     fn comma_separated_single() {
         let preds = parse_comma_separated("serde").unwrap();
         assert_eq!(preds.len(), 1);
-        assert_eq!(preds[0].name, "serde");
+        assert!(preds[0].references_crate("serde"));
     }
 
     #[test]
     fn comma_separated_multiple() {
         let preds = parse_comma_separated("serde, tokio>=1.0, anyhow").unwrap();
         assert_eq!(preds.len(), 3);
-        assert_eq!(preds[0].name, "serde");
-        assert_eq!(preds[1].name, "tokio");
-        assert!(preds[1].version_req.is_some());
-        assert_eq!(preds[2].name, "anyhow");
+        assert!(preds[0].references_crate("serde"));
+        assert!(preds[1].references_crate("tokio"));
+        assert!(preds[2].references_crate("anyhow"));
     }
 
     #[test]
@@ -441,5 +448,51 @@ mod tests {
     #[test]
     fn parse_error_trailing() {
         assert!(parse("serde blah").is_err());
+    }
+
+    // --- Wildcard tests ---
+
+    #[test]
+    fn parse_wildcard() {
+        let p = parse("*").unwrap();
+        assert_eq!(p, Predicate::Wildcard);
+        assert_eq!(p.to_string(), "*");
+        // Round-trip
+        let reparsed = parse(&p.to_string()).unwrap();
+        assert_eq!(p, reparsed);
+    }
+
+    #[test]
+    fn wildcard_matches_empty_deps() {
+        let p = parse("*").unwrap();
+        assert!(p.matches(&[]));
+    }
+
+    #[test]
+    fn wildcard_matches_any_deps() {
+        let p = parse("*").unwrap();
+        assert!(p.matches(&[("serde".into(), v("1.0.0"))]));
+    }
+
+    #[test]
+    fn wildcard_references_no_crate() {
+        let p = parse("*").unwrap();
+        assert!(!p.references_crate("serde"));
+    }
+
+    #[test]
+    fn wildcard_collect_crate_names_empty() {
+        let p = parse("*").unwrap();
+        let mut names = std::collections::BTreeSet::new();
+        p.collect_crate_names(&mut names);
+        assert!(names.is_empty());
+    }
+
+    #[test]
+    fn wildcard_in_comma_separated_list() {
+        let preds = parse_comma_separated("*, serde>=1.0").unwrap();
+        assert_eq!(preds.len(), 2);
+        assert_eq!(preds[0], Predicate::Wildcard);
+        assert!(preds[1].references_crate("serde"));
     }
 }

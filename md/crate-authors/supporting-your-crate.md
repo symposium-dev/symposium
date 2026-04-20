@@ -1,14 +1,6 @@
 # Supporting your crate
 
-If you maintain a Rust crate, you can teach AI assistants how to use your library well. Think of it as documentation that the AI actually reads.
-
-## What you can provide
-
-There are three kinds of extensions you can publish:
-
-- **Skills** — guidance documents that AI assistants receive automatically when a user's project depends on your crate.
-- **Hooks** — checks and transformations that run when the AI performs certain actions, like writing code or running commands.
-- **MCP servers** — tools and resources exposed to agents via the Model Context Protocol.
+If you maintain a Rust crate, you can extend Symposium with skills, MCP servers, or other extensions that will teach agents the best way to use your crate.
 
 ## Just want to add a skill?
 
@@ -16,14 +8,12 @@ If all you need is to publish guidance for your crate, you don't need to set up 
 
 See [Publishing skills](./publishing-skills.md) for the details.
 
-## Need hooks, or hooks and skills?
+## Moar power!
 
-If you want to publish hooks — or a combination of hooks and skills — you'll need to create a plugin. A plugin is a TOML manifest that ties everything together.
+There are three kinds of extensions you can publish:
+
+- **Skills** — guidance documents that AI assistants receive automatically when a user's project depends on your crate.
+- **Hooks** — checks and transformations that run when the AI performs certain actions, like writing code or running commands.
+- **MCP servers** — tools and resources exposed to agents via the Model Context Protocol.
 
 See [Creating a plugin](./creating-a-plugin.md) for how to set one up.
-
-## Want to expose tools via MCP?
-
-If your crate has an MCP server, you can register it through a plugin so agents discover it automatically.
-
-See [Publishing MCP servers](./publishing-mcp-servers.md) for details.

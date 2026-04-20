@@ -1,4 +1,4 @@
-# Skill definition reference
+# Skill definitions
 
 A skill is a `SKILL.md` file inside a skill directory. Skills follow the [agentskills.io](https://agentskills.io/specification.md) format.
 
@@ -21,7 +21,6 @@ A `SKILL.md` file has YAML frontmatter followed by a markdown body:
 name: serde-basics
 description: Basic guidance for serde usage
 crates: serde
-activation: always
 ---
 
 Prefer deriving `Serialize` and `Deserialize` on data types.
@@ -34,7 +33,6 @@ Prefer deriving `Serialize` and `Deserialize` on data types.
 | `name` | string | yes | Skill identifier. |
 | `description` | string | yes | Short description shown in skill listings. |
 | `crates` | string | no | Comma-separated crate atoms this skill is about (e.g., `crates: serde, tokio>=1.0`). Narrows the enclosing `[[skills]]` group scope — cannot widen it. |
-| `activation` | string | no | `always` or `optional`. Defaults to `optional`. |
 
 ## Crate atoms
 
@@ -42,18 +40,15 @@ Crate atoms specify a crate name with an optional version constraint:
 
 - `serde` — any version
 - `tokio>=1.40` — 1.40 or newer
+- `tokio>1.40` — strictly above 1.40
 - `regex<2.0` — below 2.0
+- `regex<=2.0` — 2.0 or below
+- `serde^1.0` — compatible with 1.0 (same as `=1.0`)
+- `serde~1.2` — patch-level changes only (>=1.2.0, <1.3.0)
 - `serde=1.0` — compatible-with-1.0 (equivalent to `^1.0`)
 - `serde==1.0.219` — exact version
 
-See [Skill matching](./skill-matching.md) for the full syntax.
-
-## Activation modes
-
-| Mode | Behavior |
-|------|----------|
-| `always` | Skill body is inlined in `symposium crate` output. Use for guidance that's broadly relevant whenever the crate is in use. |
-| `optional` (default) | Skill is listed with metadata and path but body is not inlined. Use for targeted workflows, migration guides, or debugging aids. |
+See [Crate predicates](./crate-predicates.md) for the full syntax.
 
 ## Scope composition
 

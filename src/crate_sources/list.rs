@@ -21,19 +21,39 @@ pub fn workspace_semver_pairs(cwd: &Path) -> Vec<(String, semver::Version)> {
         .collect()
 }
 
-/// List all crates in the workspace's resolved dependency graph.
+/// List direct dependencies of workspace members.
 ///
-/// Eventually this will also indicate which crates have specialized
-/// guidance available; for now it just returns the dependency list.
+/// Uses the resolve graph to identify direct dependencies rather than
+/// `metadata.packages` which includes the entire transitive closure.
 fn list_all_workspace_crates(cwd: &Path) -> Result<Vec<WorkspaceCrate>> {
     let metadata = MetadataCommand::new()
         .features(CargoOpt::AllFeatures)
         .current_dir(cwd)
         .exec()?;
 
+    let resolve = match &metadata.resolve {
+        Some(r) => r,
+        None => return Ok(Vec::new()),
+    };
+
+    // Collect direct dependency package IDs from workspace member nodes.
+    let ws_members: std::collections::HashSet<_> = metadata.workspace_members.iter().collect();
+    let mut direct_dep_ids: std::collections::HashSet<&cargo_metadata::PackageId> =
+        std::collections::HashSet::new();
+
+    for node in &resolve.nodes {
+        if ws_members.contains(&node.id) {
+            for dep in &node.deps {
+                direct_dep_ids.insert(&dep.pkg);
+            }
+        }
+    }
+
+    // Map package IDs to name/version, excluding workspace members themselves.
     let mut crates: Vec<_> = metadata
         .packages
         .iter()
+        .filter(|p| direct_dep_ids.contains(&p.id) && !ws_members.contains(&p.id))
         .map(|p| WorkspaceCrate {
             name: p.name.to_string(),
             version: p.version.to_string(),

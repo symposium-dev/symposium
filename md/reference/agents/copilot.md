@@ -23,3 +23,10 @@ Symposium creates a `symposium.json` file in the project hooks directory, and me
 Events registered: `preToolUse`, `postToolUse`, `userPromptSubmitted`, `sessionStart` (camelCase).
 
 Output format: JSON. Uses `"bash"` key instead of `"command"` for platform-specific dispatch. Any non-zero exit code denies (not just exit 2).
+
+## MCP servers
+
+| Scope | File | Key |
+|-------|------|-----|
+| Project | `.vscode/mcp.json` | `<name>` (top-level) |
+| Global | `~/.copilot/mcp-config.json` | `<name>` (top-level) |

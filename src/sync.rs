@@ -97,11 +97,12 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
         }
     }
 
-    // Collect MCP servers from all plugins
+    // Collect MCP servers from applicable plugins, filtered by workspace deps
     let mcp_servers: Vec<sacp::schema::McpServer> = registry
         .plugins
         .iter()
-        .flat_map(|p| p.plugin.mcp_servers.iter().cloned())
+        .filter(|p| p.plugin.applies_to_crates(&workspace))
+        .flat_map(|p| p.plugin.applicable_mcp_servers(&workspace))
         .collect();
 
     let server_names: Vec<&str> = mcp_servers
@@ -201,7 +202,7 @@ pub fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
     let mcp_servers: Vec<sacp::schema::McpServer> = registry
         .plugins
         .iter()
-        .flat_map(|p| p.plugin.mcp_servers.iter().cloned())
+        .flat_map(|p| p.plugin.mcp_servers.iter().map(|s| s.server.clone()))
         .collect();
 
     let server_names: Vec<&str> = mcp_servers

@@ -722,6 +722,7 @@ fn register_gemini_hooks(settings_path: &Path, out: &Output) -> Result<()> {
     let events = [
         ("BeforeTool", "pre-tool-use"),
         ("AfterTool", "post-tool-use"),
+        ("BeforeAgent", "user-prompt-submit"),
         ("SessionStart", "session-start"),
     ];
 
@@ -1318,5 +1319,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
         assert!(settings["hooks"]["BeforeTool"].is_array());
         assert!(settings["hooks"]["AfterTool"].is_array());
+        assert!(settings["hooks"]["BeforeAgent"].is_array());
+        assert!(settings["hooks"]["SessionStart"].is_array());
     }
 }

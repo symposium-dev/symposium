@@ -1,14 +1,30 @@
-# Plugin definition reference
+# Plugin definitions
 
-A plugin is a TOML manifest loaded from a configured plugin source. It can be a standalone `.toml` file or a `symposium.toml` inside a directory.
+A **symposium plugin** collects together all the extensions offered for a particular crate. Plugins are directories containing a `SYMPOSIUM.toml` manifest file that references skills, hooks, MCP servers, and other resources relevant to your crate. These extensions can be packaged within the plugin directory or the plugin can contain pointers to external repositories.
 
-## Minimal manifest
+Plugins enable capabilities beyond standalone skills — they're needed when you want to add hooks or MCP servers. For simple skill publishing, see [standalone skills](../crate-authors/publishing-skills.md) instead.
+
+## Example: a plugin definition with inline skills
+
+You could define a plugin definition with inline skills by having a directory struct like this:
+
+```
+myplugin/
+  SYMPOSIUM.toml
+  skills/
+    skill-a/
+      SKILL.md
+    skill-b/
+      SKILL.md
+```
+
+where `myplugin/SYMPOSIUM.toml` is as follows:
 
 ```toml
 name = "example"
+crates = ["*"]
 
 [[skills]]
-crates = ["serde"]
 source.path = "skills"
 ```
 
@@ -17,7 +33,23 @@ source.path = "skills"
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Plugin name. Used in logs and CLI output. |
-| `session-start-context` | string | no | Text injected into the agent's context at session start. See [Session start context](#session-start-context). |
+| `crates` | string or array | no | Which crates this plugin applies to. Use `["*"]` for all crates. See [Plugin-level filtering](#plugin-level-filtering). |
+
+**Note**: Every plugin must specify `crates` somewhere — either at the plugin level, in `[[skills]]` groups, or in `[[mcp_servers]]` entries. Plugins without any crate targeting will fail validation.
+
+## Plugin-level filtering
+
+The top-level `crates` field controls when the entire plugin is active:
+
+```toml
+name = "my-plugin"
+crates = ["serde", "tokio"]  # Only active in projects using serde OR tokio
+
+# OR use wildcard to always apply
+crates = ["*"]
+```
+
+If omitted, the plugin applies to all projects. Plugin-level filtering is combined with skill group filtering using AND logic — both must match for skills to be available.
 
 ## `[[skills]]` groups
 
@@ -25,7 +57,7 @@ Each `[[skills]]` entry declares a group of skills.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `crates` | string or array | Which crates this group advises on. Accepts a single string (`"serde"`) or array (`["serde", "tokio>=1.0"]`). See [Skill matching](./skill-matching.md) for atom syntax. |
+| `crates` | string or array | Which crates this group advises on. Accepts a single string (`"serde"`) or array (`["serde", "tokio>=1.0"]`). See [Crate predicates](./crate-predicates.md) for syntax. |
 | `source.path` | string | Local directory containing skill subdirectories. Resolved relative to the manifest file. |
 | `source.git` | string | GitHub URL pointing to a directory in a repository (e.g., `https://github.com/org/repo/tree/main/skills`). Symposium downloads the tarball, extracts the subdirectory, and caches it. |
 
@@ -33,7 +65,7 @@ A skill group must have exactly one of `source.path` or `source.git`.
 
 ## `[[hooks]]`
 
-Each `[[hooks]]` entry declares a hook.
+Each `[[hooks]]` entry declares a hook that responds to agent events.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -41,19 +73,40 @@ Each `[[hooks]]` entry declares a hook.
 | `event` | string | Event type to match (e.g., `PreToolUse`). |
 | `matcher` | string | Which tool invocations to match (e.g., `Bash`). Omit to match all. |
 | `command` | string | Command to run when the hook fires. Resolved relative to the plugin directory. |
+| `format` | string | Wire format for hook input/output. One of: `symposium` (default), `claude`, `codex`, `copilot`, `gemini`, `kiro`. Controls how the hook receives input and returns output. |
 
-## Session start context
+### Supported hook events
 
-The `session-start-context` field lets a plugin inject text into the agent's conversation context when a session begins. This is useful for critical guidance that the agent should see before doing any work.
+| Hook event | Description | CLI usage |
+|------------|-------------|-----------|
+| `PreToolUse` | Triggered before a tool (for example, `Bash`) is invoked by the agent. | `pre-tool-use` |
 
-```toml
-name = "rust-guidance"
-session-start-context = "**Critical:** Before authoring Rust code, run `symposium crate $name` for instructions."
+### Agent → hook name mapping
+
+| Tool / Event | Claude (`claude`) | Copilot (`copilot`) | Gemini (`gemini`) |
+|--------------|------------------------------------:|-------------------:|------------------:|
+| `PreToolUse` | `PreToolUse` | `PreToolUse` | `BeforeTool` |
+
+### Hook semantics
+
+- **Exit codes**:
+	- `0` — success: the hook's stdout is parsed as JSON and merged into the overall hook result.
+	- `2` (or no reported exit code) — treated as a failure: dispatch stops immediately and the hook's stderr is returned to the caller.
+	- any other non-zero code — treated as success for dispatching purposes; stdout is still parsed and merged when possible.
+
+- **Stdout handling**: Hooks should write a JSON object to stdout to contribute structured data back to the caller. Valid JSON objects are merged together across successful hooks; keys from later hooks overwrite earlier keys.
+
+- **Stderr handling**: If a hook exits with code `2` (or no exit code), dispatch returns immediately with the hook's stderr as the error message. Otherwise stderr is captured but not returned on success.
+
+### Testing hooks
+
+Use the CLI to test a hook with sample input:
+
+```bash
+echo '{"tool": "Bash", "input": "cargo test"}' | symposium hook claude pre-tool-use
 ```
 
-When multiple plugins provide `session-start-context`, all of their texts are combined (separated by blank lines) and returned to the agent as additional context.
-
-This works via the `SessionStart` hook event. When the agent starts a session, symposium collects `session-start-context` from all loaded plugins — including both user-level and project-level plugin sources — and returns the combined text.
+You can also use `copilot`, `gemini`, `codex`, or `kiro` as the agent name.
 
 ## `[[mcp_servers]]`
 
@@ -74,6 +127,7 @@ env = []
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Server name as it appears in the agent's MCP config. |
+| `crates` | string or array | Which crates this server applies to. Optional if plugin has top-level `crates`. |
 | `command` | string | Path to the server binary. |
 | `args` | array of strings | Arguments passed to the binary. |
 | `env` | array of objects | Environment variables to set when launching the server. |
@@ -94,6 +148,7 @@ headers = []
 |-------|------|-------------|
 | `type` | string | Must be `"http"`. |
 | `name` | string | Server name as it appears in the agent's MCP config. |
+| `crates` | string or array | Which crates this server applies to. Optional if plugin has top-level `crates`. |
 | `url` | string | HTTP endpoint URL. |
 | `headers` | array of objects | HTTP headers to set when making requests. |
 
@@ -111,12 +166,20 @@ headers = []
 |-------|------|-------------|
 | `type` | string | Must be `"sse"`. |
 | `name` | string | Server name as it appears in the agent's MCP config. |
+| `crates` | string or array | Which crates this server applies to. Optional if plugin has top-level `crates`. |
 | `url` | string | SSE endpoint URL. |
 | `headers` | array of objects | HTTP headers to set when making requests. |
 
 ### How registration works
 
 During `symposium sync --agent`, each MCP server entry is written into the agent's config file in the format that agent expects. Registration is idempotent — existing entries with correct values are left untouched, stale entries are updated in place.
+
+When a user runs `symposium sync` (or the hook triggers it automatically), Symposium:
+
+1. Collects `[[mcp_servers]]` entries from all enabled plugins.
+2. Writes each server into the agent's MCP configuration file.
+
+All supported agents have MCP server configuration. Symposium handles the format differences — you declare the server once and it works across agents.
 
 | Agent | Config location | Key |
 |-------|----------------|-----|
@@ -160,4 +223,4 @@ env = []
 symposium plugin validate path/to/symposium.toml
 ```
 
-This parses the manifest and reports any errors. Use `--check-crates` to also verify that crate names exist on crates.io.
+This parses the manifest and reports any errors. Crate name checking against crates.io is on by default; use `--no-check-crates` to skip it.

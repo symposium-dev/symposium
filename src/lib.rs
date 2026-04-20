@@ -13,3 +13,6 @@ pub mod sync;
 pub(crate) mod crate_sources;
 pub(crate) mod predicate;
 pub(crate) mod skills;
+
+#[cfg(test)]
+pub(crate) mod test_utils;

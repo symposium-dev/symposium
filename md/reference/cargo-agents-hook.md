@@ -12,9 +12,9 @@ symposium hook <AGENT> <EVENT>
 
 When your agent triggers a hook event, it calls `symposium hook` with the agent name and event type. The hook does two things:
 
-1. **Auto-sync** (if enabled) — when `auto-sync = true` in the user config, runs `symposium sync` to ensure skills are current for the workspace. Failures are logged but don't block hook dispatch.
+1. **Auto-sync** (if enabled) — when `auto-sync = true` in the user config, runs [`symposium sync`](./cargo-agents-sync.md) to ensure skills are current for the workspace. The workspace root is resolved from the hook payload's `cwd` field; if the payload does not include a working directory, the process's current working directory is used as a fallback. Failures are logged but don't block hook dispatch.
 
-2. **Dispatches to plugin hooks** — runs any hook handlers defined by plugins for the given event.
+2. **Dispatches to plugin hooks** — runs any hook handlers defined by [plugins](./plugin-definition.md#hooks) for the given event.
 
 ## Events
 

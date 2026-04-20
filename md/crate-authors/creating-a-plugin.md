@@ -1,84 +1,115 @@
 # Creating a plugin
 
-A plugin is a TOML manifest that bundles skills and hooks together. You need a plugin if you want to publish hooks, or if you want to host skills from your own repository rather than contributing them to the recommendations repo.
+A **symposium plugin** collects together all the extensions offered for a particular crate. Plugins can references skills, hooks, MCP servers, and other things that are relevant to your crate. These extensions can be packaged up as part of the plugin or the plugin can contain pointers to external repositories; the latter is often easier to update in a centralized fashion.
 
-## What's in a plugin
+Plugins are needed when you want to add mechanisms beyond skills, like hooks or MCP servers. If all you want to do is upload a skill, you can [publish a standalone skill instead](./publishing-skills.md).
 
-A plugin manifest has three parts:
+## Plugin structure
 
-1. **A name** — identifies the plugin in logs and CLI output.
-2. **Skill groups** (`[[skills]]`) — each one points at a directory of skills and declares which crates they're for.
-3. **Hooks** (`[[hooks]]`) — commands that run in response to agent events.
+A plugin is structured as a directory that contains a `SYMPOSIUM.toml` manifest file:
 
-Skills and hooks are both optional — a plugin can have just skills, just hooks, or both.
-
-## Skill groups
-
-Each `[[skills]]` entry declares which crates the skills apply to and where to find them. The source can be a local path or a git URL:
-
-```toml
-name = "widgetlib"
-
-# Skills live next to the manifest
-[[skills]]
-crates = ["widgetlib"]
-source.path = "skills"
+```
+my-crate-plugin/
+    SYMPOSIUM.toml
+    ... // potentially other stuff here
 ```
 
-```toml
-name = "widgetlib"
+The `SYMPOSIUM.toml` plugin manifest has these main sections:
 
-# Skills are fetched from a GitHub repository
+```toml
+name = "my-crate-plugin"
+
+# The `crates` field defines when the plugin applies. Use the special `crates = ["*"]` form to write a plugin that ALWAYS applies.
+crates = ["my-crate"]
+
+# Skills grouped by crate and version.  Skills can be located as a reference to another git repository.
 [[skills]]
-crates = ["widgetlib"]
-source.git = "https://github.com/org/widgetlib/tree/main/symposium/skills"
+crates = ["my-crate=2.0"]
+source.git = "https://github.com/org/my-crate/tree/main/skills/v2"
+
+# Skills can also be located by a path within the plugin itself.
+[[skills]]
+crates = ["my-crate=1.0"]
+source.path = "skills/v1"
+
+# Hooks for agent event callbacks
+[[hooks]]
+name = "validate-usage"
+event = "PreToolUse"
+command = "./scripts/validate.sh"
+
+# MCP servers for tool integration
+[[mcp-servers]]
+name = "my-crate-tools"
+command = ["my-crate-mcp-server"]
 ```
 
-Use `source.path` when skills are on the local machine or in the same repository as the manifest. Use `source.git` when they're hosted elsewhere — Symposium downloads and caches them automatically.
+## Publishing plugins
 
-**Warning:** Skills in a plugin will only be fetched if the `crates` list matches, so you must include it.
+**The most common way to publish a plugin is to upload the plugin directory to our [central recommendations repository][rr].** If you do this, we recommend keeping your skills and other resources in your own github repo, so that you can update them without updating the central repository.
 
-You can have multiple skill groups in one plugin, each targeting different crates or versions:
+[rr]: https://github.com/symposium-dev/recommendations
+
+**We expect in the future to make it possible to add plugins directly into your crate definition**, but that is not currently possible.
+
+**Plugins can also be added to a [custom plugin source][ps].** This is useful when you are defining rules for crates specific to your company or customized plugins that are tailored to the way that your project uses a crate. In this case, it's often convenient to package up the skills, MCP servers, etc together with the plugin.
+
+[ps]: ../custom-plugin-source.md
+
+## Example: plugin for widgetlib with remote skills
+
+Consider a `widgetlib` crate that wants to keep skills in its own repository but still be discoverable through Symposium.
+
+This would be done by first uploading a plugin to the [symposium-dev/recommendations][rr] repository:
+
+```text
+widgetlib/
+    SYMPOSIUM.toml
+```
+
+This `SYMPOSIUM.toml` file would list out the skills as pointers to a remote repository. In this case, let's say there are two groups of skills, one for v1.x and one for v2.x, and those skills are hosted on the repo `widgetlib/skills`:
 
 ```toml
 name = "widgetlib"
 
 [[skills]]
 crates = ["widgetlib=1.0"]
-source.path = "skills/v1"
+source.git = "https://github.com/widgetlib/skills/tree/main/symposium/skills/v1"
 
 [[skills]]
 crates = ["widgetlib=2.0"]
-source.path = "skills/v2"
+source.git = "https://github.com/widgetlib/skills/tree/main/symposium/skills/v2"
 ```
 
-## Hooks
+In this example, the `crates` criteria is placed on the skill groups. This is because the skill groups have distinct versions. If there were a `crates` declaraton at the top-level, then both the plugin crates definition *and* the skills definition must match (in addition to any `crates:` defined in the skill metadata!).
 
-Hooks let your plugin respond to agent events. See [Publishing hooks](./publishing-hooks.md) for details.
+The `widgetlib/skills` repo then would look like this:
 
-```toml
-[[hooks]]
-name = "check-widget-usage"
-event = "PreToolUse"
-matcher = "Bash"
-command = "./scripts/check-widget.sh"
+```text
+v1/
+    basics/
+        SKILL.md
+v2/
+    basics/
+        SKILL.md
+    migration/
+        SKILL.md
 ```
 
-## Where to put your plugin
+Given this setup, each time a new commit is pushed to `widgetlib/skills`, users' skills will automatically be updated to match.
 
-You have two options:
+## Details on how to define a plugin
 
-1. **In your crate's repository** — add a `symposium.toml` at the root (or a subdirectory). The recommendations repo can then reference it via a git URL.
-2. **In the recommendations repo** — submit a PR to [symposium-dev/recommendations](https://github.com/symposium-dev/recommendations) with your plugin manifest.
+See the reference for [the precise specification of what is allowed in a plugin definition](../reference/plugin-definition.md). This includes the details of how to define other plugin content beyond skills, such as hooks and MCP servers.
 
-## Validation
+## Validation and testing
+
+You can test that a plugin directory has the correct structure using the `symposium` CLI:
 
 ```bash
-symposium plugin validate path/to/symposium.toml
+# Validate your plugin manifest
+symposium plugin validate path/to/SYMPOSIUM.toml
+
+# Check that crate names exist on crates.io
+symposium plugin validate path/to/SYMPOSIUM.toml --check-crates
 ```
-
-This parses the manifest and reports any errors. Use `--check-crates` to also verify that crate names exist on crates.io.
-
-## Reference
-
-See the [Plugin definition reference](../reference/plugin-definition.md) for the full manifest format.

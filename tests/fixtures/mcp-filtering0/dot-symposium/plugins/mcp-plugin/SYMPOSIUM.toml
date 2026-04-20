@@ -1,0 +1,29 @@
+name = "mcp-plugin"
+crates = ["*"]
+
+[[mcp_servers]]
+name = "always-server"
+crates = ["*"]
+command = "/usr/bin/true"
+args = ["--stdio"]
+env = []
+
+[[mcp_servers]]
+name = "serde-server"
+crates = ["serde"]
+command = "/usr/bin/true"
+args = ["--stdio"]
+env = []
+
+[[mcp_servers]]
+name = "missing-crate-server"
+crates = ["reqwest"]
+command = "/usr/bin/true"
+args = ["--stdio"]
+env = []
+
+[[mcp_servers]]
+name = "inherited-server"
+command = "/usr/bin/true"
+args = ["--stdio"]
+env = []
