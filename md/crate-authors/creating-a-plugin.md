@@ -19,6 +19,9 @@ The `SYMPOSIUM.toml` plugin manifest has these main sections:
 ```toml
 name = "my-crate-plugin"
 
+# The `crates` field defines when the plugin applies. Use the special `crates = ["*"]` form to write a plugin that ALWAYS applies.
+crates = ["my-crate"]
+
 # Skills grouped by crate and version.  Skills can be located as a reference to another git repository.
 [[skills]]
 crates = ["my-crate=2.0"]
@@ -77,6 +80,8 @@ source.git = "https://github.com/widgetlib/skills/tree/main/symposium/skills/v1"
 crates = ["widgetlib=2.0"]
 source.git = "https://github.com/widgetlib/skills/tree/main/symposium/skills/v2"
 ```
+
+In this example, the `crates` criteria is placed on the skill groups. This is because the skill groups have distinct versions. If there were a `crates` declaraton at the top-level, then both the plugin crates definition *and* the skills definition must match (in addition to any `crates:` defined in the skill metadata!).
 
 The `widgetlib/skills` repo then would look like this:
 

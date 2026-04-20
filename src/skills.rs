@@ -700,6 +700,137 @@ mod tests {
         );
     }
 
+    // --- Multi-level crate filtering tests ---
+
+    #[tokio::test]
+    async fn test_plugin_level_filtering_blocks_skills() {
+        use crate::plugins::{Plugin, SkillGroup, PluginSource, ParsedPlugin, PluginRegistry};
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let sym = crate::config::Symposium::from_dir(tmp.path());
+
+        // Create a plugin that only applies to "other-crate"
+        let plugin = Plugin {
+            name: "other-crate-plugin".to_string(),
+            crates: Some(vec![pred("other-crate")]),
+            installation: None,
+            hooks: vec![],
+            skills: vec![SkillGroup {
+                crates: Some(vec![pred("serde")]), // Group targets serde
+                source: PluginSource::default(),
+            }],
+            mcp_servers: vec![],
+        };
+
+        let registry = PluginRegistry {
+            plugins: vec![ParsedPlugin {
+                path: tmp.path().join("plugin.toml"),
+                plugin,
+            }],
+            standalone_skills: vec![],
+        };
+
+        // Query for serde - should find no skills because plugin doesn't apply
+        let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
+
+        assert!(skills.is_empty(), "Plugin should be filtered out at plugin level");
+    }
+
+    #[tokio::test]
+    async fn test_group_level_filtering_blocks_skills() {
+        use crate::plugins::{Plugin, SkillGroup, PluginSource, ParsedPlugin, PluginRegistry};
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let sym = crate::config::Symposium::from_dir(tmp.path());
+
+        // Create a plugin with wildcard that has a group targeting different crate
+        let plugin = Plugin {
+            name: "wildcard-plugin".to_string(),
+            crates: Some(vec![pred("*")]), // Plugin applies to all
+            installation: None,
+            hooks: vec![],
+            skills: vec![SkillGroup {
+                crates: Some(vec![pred("other-crate")]), // But group targets other-crate
+                source: PluginSource::default(),
+            }],
+            mcp_servers: vec![],
+        };
+
+        let registry = PluginRegistry {
+            plugins: vec![ParsedPlugin {
+                path: tmp.path().join("plugin.toml"),
+                plugin,
+            }],
+            standalone_skills: vec![],
+        };
+
+        // Query for serde - should find no skills because group doesn't match
+        let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
+
+        assert!(skills.is_empty(), "Skills should be filtered out at group level");
+    }
+
+    #[tokio::test]
+    async fn test_all_levels_match_allows_skills() {
+        use crate::plugins::{Plugin, SkillGroup, PluginSource, ParsedPlugin, PluginRegistry};
+        use tempfile::TempDir;
+        use std::fs;
+
+        let tmp = TempDir::new().unwrap();
+        let sym = crate::config::Symposium::from_dir(tmp.path());
+
+        // Create skill directory and file
+        let skill_dir = tmp.path().join("serde-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: serde-basics
+                description: Basic serde usage
+                crates: serde
+                ---
+
+                Use derive macros.
+            "},
+        ).unwrap();
+
+        // Create a plugin where all levels match serde
+        let plugin = Plugin {
+            name: "serde-plugin".to_string(),
+            crates: Some(vec![pred("serde")]), // Plugin targets serde
+            installation: None,
+            hooks: vec![],
+            skills: vec![SkillGroup {
+                crates: Some(vec![pred("serde")]), // Group also targets serde
+                source: PluginSource {
+                    path: Some(skill_dir.to_path_buf()),
+                    git: None,
+                },
+            }],
+            mcp_servers: vec![],
+        };
+
+        let registry = PluginRegistry {
+            plugins: vec![ParsedPlugin {
+                path: tmp.path().join("plugin.toml"),
+                plugin,
+            }],
+            standalone_skills: vec![],
+        };
+
+        // Query for serde - should find the skill because all levels match
+        let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
+
+        assert_eq!(skills.len(), 1, "Should find one skill when all levels match");
+        assert_eq!(skills[0].skill.name(), "serde-basics");
+    }
+
     #[test]
     fn validate_standalone_skill_missing_name() {
         let tmp = tempfile::tempdir().unwrap();
@@ -923,136 +1054,6 @@ mod tests {
         let defaults = SkillGroup::default();
         let skills = discover_skills(tmp.path(), &defaults);
         assert!(skills.is_empty());
-    }
-
-    // --- Multi-level crate filtering tests ---
-
-    #[tokio::test]
-    async fn test_plugin_level_filtering_blocks_skills() {
-        use crate::plugins::{Plugin, SkillGroup, PluginSource, ParsedPlugin, PluginRegistry};
-        use tempfile::TempDir;
-
-        let tmp = TempDir::new().unwrap();
-        let sym = crate::config::Symposium::from_dir(tmp.path());
-
-        // Create a plugin that only applies to "other-crate"
-        let plugin = Plugin {
-            name: "other-crate-plugin".to_string(),
-            crates: Some(vec![pred("other-crate")]),
-            installation: None,
-            hooks: vec![],
-            skills: vec![SkillGroup {
-                crates: Some(vec![pred("serde")]), // Group targets serde
-                source: PluginSource::default(),
-            }],
-            mcp_servers: vec![],
-        };
-
-        let registry = PluginRegistry {
-            plugins: vec![ParsedPlugin {
-                path: tmp.path().join("plugin.toml"),
-                plugin,
-            }],
-            standalone_skills: vec![],
-        };
-
-        // Query for serde - should find no skills because plugin doesn't apply
-        let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
-        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
-
-        assert!(skills.is_empty(), "Plugin should be filtered out at plugin level");
-    }
-
-    #[tokio::test]
-    async fn test_group_level_filtering_blocks_skills() {
-        use crate::plugins::{Plugin, SkillGroup, PluginSource, ParsedPlugin, PluginRegistry};
-        use tempfile::TempDir;
-
-        let tmp = TempDir::new().unwrap();
-        let sym = crate::config::Symposium::from_dir(tmp.path());
-
-        // Create a plugin with wildcard that has a group targeting different crate
-        let plugin = Plugin {
-            name: "wildcard-plugin".to_string(),
-            crates: Some(vec![pred("*")]), // Plugin applies to all
-            installation: None,
-            hooks: vec![],
-            skills: vec![SkillGroup {
-                crates: Some(vec![pred("other-crate")]), // But group targets other-crate
-                source: PluginSource::default(),
-            }],
-            mcp_servers: vec![],
-        };
-
-        let registry = PluginRegistry {
-            plugins: vec![ParsedPlugin {
-                path: tmp.path().join("plugin.toml"),
-                plugin,
-            }],
-            standalone_skills: vec![],
-        };
-
-        // Query for serde - should find no skills because group doesn't match
-        let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
-        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
-
-        assert!(skills.is_empty(), "Skills should be filtered out at group level");
-    }
-
-    #[tokio::test]
-    async fn test_all_levels_match_allows_skills() {
-        use crate::plugins::{Plugin, SkillGroup, PluginSource, ParsedPlugin, PluginRegistry};
-        use tempfile::TempDir;
-
-        let tmp = TempDir::new().unwrap();
-        let sym = crate::config::Symposium::from_dir(tmp.path());
-
-        // Create skill directory and file
-        let skill_dir = tmp.path().join("serde-skill");
-        fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(
-            skill_dir.join("SKILL.md"),
-            indoc! {"
-                ---
-                name: serde-basics
-                description: Basic serde usage
-                crates: serde
-                ---
-
-                Use derive macros.
-            "},
-        ).unwrap();
-
-        // Create a plugin where all levels match serde
-        let plugin = Plugin {
-            name: "serde-plugin".to_string(),
-            crates: Some(vec![pred("serde")]), // Plugin targets serde
-            installation: None,
-            hooks: vec![],
-            skills: vec![SkillGroup {
-                crates: Some(vec![pred("serde")]), // Group also targets serde
-                source: PluginSource {
-                    path: Some(skill_dir.to_path_buf()),
-                    git: None,
-                },
-            }],
-            mcp_servers: vec![],
-        };
-
-        let registry = PluginRegistry {
-            plugins: vec![ParsedPlugin {
-                path: tmp.path().join("plugin.toml"),
-                plugin,
-            }],
-            standalone_skills: vec![],
-        };
-
-        // Query for serde - should find the skill because all levels match
-        let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
-        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
-
-        assert_eq!(skills.len(), 1, "Should find one skill when all levels match");
-        assert_eq!(skills[0].skill.name(), "serde-basics");
     }
 
     // --- AND composition tests for skill_matches ---
