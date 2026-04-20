@@ -787,15 +787,9 @@ mod tests {
 
     #[test]
     fn scan_source_dir_finds_plugins_and_standalone_skills() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-
-        // Create a plugin directory
-        let plugin_dir = dir.join("my-plugin");
-        std::fs::create_dir_all(&plugin_dir).unwrap();
-        std::fs::write(
-            plugin_dir.join("SYMPOSIUM.toml"),
-            indoc! {r#"
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File("my-plugin/SYMPOSIUM.toml", indoc! {r#"
                 name = "my-plugin"
                 crates = ["*"]
 
@@ -803,16 +797,8 @@ mod tests {
                 name = "test"
                 event = "PreToolUse"
                 command = "echo hi"
-            "#},
-        )
-        .unwrap();
-
-        // Create a standalone skill directory
-        let skill_dir = dir.join("assert-struct");
-        std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            indoc! {"
+            "#}),
+            File("assert-struct/SKILL.md", indoc! {"
                 ---
                 name: assert-struct
                 description: Check struct layout
@@ -820,14 +806,12 @@ mod tests {
                 ---
 
                 Use this skill.
-            "},
-        )
-        .unwrap();
+            "}),
+        ]);
+        // Also create a random directory (should be ignored)
+        std::fs::create_dir_all(tmp.path().join("not-a-plugin-or-skill")).unwrap();
 
-        // Create a random directory without SYMPOSIUM.toml or SKILL.md (should be ignored)
-        std::fs::create_dir_all(dir.join("not-a-plugin-or-skill")).unwrap();
-
-        let contents = scan_source_dir(dir).unwrap();
+        let contents = scan_source_dir(tmp.path()).unwrap();
         assert_eq!(contents.plugins.len(), 1);
         assert_eq!(
             contents.plugins[0].as_ref().unwrap().plugin.name,
@@ -854,23 +838,19 @@ mod tests {
 
     #[test]
     fn scan_source_dir_rejects_root_level_skill() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-
-        std::fs::write(
-            dir.join("SKILL.md"),
-            indoc! {"
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File("SKILL.md", indoc! {"
                 ---
                 name: root-skill
                 crates: serde
                 ---
 
                 Root level skill.
-            "},
-        )
-        .unwrap();
+            "}),
+        ]);
 
-        let err = scan_source_dir(dir).unwrap_err();
+        let err = scan_source_dir(tmp.path()).unwrap_err();
         assert!(
             err.to_string().contains("plugin source root contains SKILL.md"),
             "expected root SKILL.md error, got: {err}"
@@ -879,19 +859,15 @@ mod tests {
 
     #[test]
     fn scan_source_dir_rejects_root_level_plugin() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-
-        std::fs::write(
-            dir.join("SYMPOSIUM.toml"),
-            indoc! {r#"
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File("SYMPOSIUM.toml", indoc! {r#"
                 name = "root-plugin"
                 crates = ["*"]
-            "#},
-        )
-        .unwrap();
+            "#}),
+        ]);
 
-        let err = scan_source_dir(dir).unwrap_err();
+        let err = scan_source_dir(tmp.path()).unwrap_err();
         assert!(
             err.to_string().contains("plugin source root contains SYMPOSIUM.toml"),
             "expected root SYMPOSIUM.toml error, got: {err}"
@@ -900,38 +876,23 @@ mod tests {
 
     #[test]
     fn scan_source_dir_plugin_takes_precedence_over_skill() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-
-        // Create a directory with both SYMPOSIUM.toml and SKILL.md
-        let mixed_dir = dir.join("mixed");
-        std::fs::create_dir_all(&mixed_dir).unwrap();
-        
-        // SYMPOSIUM.toml should take precedence
-        std::fs::write(
-            mixed_dir.join("SYMPOSIUM.toml"),
-            indoc! {r#"
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File("mixed/SYMPOSIUM.toml", indoc! {r#"
                 name = "mixed-plugin"
                 crates = ["*"]
-            "#},
-        )
-        .unwrap();
-
-        // This SKILL.md should be ignored due to SYMPOSIUM.toml precedence
-        std::fs::write(
-            mixed_dir.join("SKILL.md"),
-            indoc! {"
+            "#}),
+            File("mixed/SKILL.md", indoc! {"
                 ---
                 name: ignored-skill
                 crates: serde
                 ---
 
                 This should be ignored.
-            "},
-        )
-        .unwrap();
+            "}),
+        ]);
 
-        let contents = scan_source_dir(dir).unwrap();
+        let contents = scan_source_dir(tmp.path()).unwrap();
         assert_eq!(contents.plugins.len(), 1);
         assert_eq!(
             contents.plugins[0].as_ref().unwrap().plugin.name,
@@ -942,33 +903,18 @@ mod tests {
 
     #[test]
     fn scan_source_dir_symposium_toml_precedence() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-
-        // Create a directory with both SYMPOSIUM.toml and other .toml files
-        let plugin_dir = dir.join("precedence-test");
-        std::fs::create_dir_all(&plugin_dir).unwrap();
-        
-        // SYMPOSIUM.toml should take precedence
-        std::fs::write(
-            plugin_dir.join("SYMPOSIUM.toml"),
-            indoc! {r#"
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File("precedence-test/SYMPOSIUM.toml", indoc! {r#"
                 name = "preferred-plugin"
                 crates = ["*"]
-            "#},
-        )
-        .unwrap();
-
-        // This other .toml should be ignored due to SYMPOSIUM.toml precedence
-        std::fs::write(
-            plugin_dir.join("other.toml"),
-            indoc! {r#"
+            "#}),
+            File("precedence-test/other.toml", indoc! {r#"
                 name = "ignored-plugin"
-            "#},
-        )
-        .unwrap();
+            "#}),
+        ]);
 
-        let contents = scan_source_dir(dir).unwrap();
+        let contents = scan_source_dir(tmp.path()).unwrap();
         assert_eq!(contents.plugins.len(), 1);
         assert_eq!(
             contents.plugins[0].as_ref().unwrap().plugin.name,
@@ -979,85 +925,43 @@ mod tests {
 
     #[test]
     fn scan_source_dir_pruning_behavior() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-
-        // Create the example structure:
-        // foo/
-        //     PLUGIN.toml
-        //     bar/
-        //         SKILL.md
-        // baz/
-        //     SKILL.md
-        //     qux/
-        //         PLUGIN.toml
-        //         SKILL.md
-
-        let foo_dir = dir.join("foo");
-        std::fs::create_dir_all(&foo_dir).unwrap();
-        std::fs::write(
-            foo_dir.join("SYMPOSIUM.toml"),
-            indoc! {r#"
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File("foo/SYMPOSIUM.toml", indoc! {r#"
                 name = "foo-plugin"
                 crates = ["*"]
-            "#},
-        )
-        .unwrap();
-
-        let foo_bar_dir = foo_dir.join("bar");
-        std::fs::create_dir_all(&foo_bar_dir).unwrap();
-        std::fs::write(
-            foo_bar_dir.join("SKILL.md"),
-            indoc! {"
+            "#}),
+            File("foo/bar/SKILL.md", indoc! {"
                 ---
                 name: foo-bar-skill
                 crates: serde
                 ---
 
                 Should be pruned.
-            "},
-        )
-        .unwrap();
-
-        let baz_dir = dir.join("baz");
-        std::fs::create_dir_all(&baz_dir).unwrap();
-        std::fs::write(
-            baz_dir.join("SKILL.md"),
-            indoc! {"
+            "}),
+            File("baz/SKILL.md", indoc! {"
                 ---
                 name: baz-skill
                 crates: tokio
                 ---
 
                 Should be found.
-            "},
-        )
-        .unwrap();
-
-        let baz_qux_dir = baz_dir.join("qux");
-        std::fs::create_dir_all(&baz_qux_dir).unwrap();
-        std::fs::write(
-            baz_qux_dir.join("SYMPOSIUM.toml"),
-            indoc! {r#"
+            "}),
+            File("baz/qux/SYMPOSIUM.toml", indoc! {r#"
                 name = "qux-plugin"
                 crates = ["*"]
-            "#},
-        )
-        .unwrap();
-        std::fs::write(
-            baz_qux_dir.join("SKILL.md"),
-            indoc! {"
+            "#}),
+            File("baz/qux/SKILL.md", indoc! {"
                 ---
                 name: qux-skill
                 crates: anyhow
                 ---
 
                 Should be pruned.
-            "},
-        )
-        .unwrap();
+            "}),
+        ]);
 
-        let contents = scan_source_dir(dir).unwrap();
+        let contents = scan_source_dir(tmp.path()).unwrap();
         
         // Should find foo/PLUGIN.toml as a plugin
         assert_eq!(contents.plugins.len(), 1);
@@ -1073,32 +977,14 @@ mod tests {
 
     #[test]
     fn validate_source_dir_mixed() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-
-        // Valid TOML plugin in subdirectory
-        let good_dir = dir.join("good-plugin");
-        std::fs::create_dir_all(&good_dir).unwrap();
-        std::fs::write(
-            good_dir.join("SYMPOSIUM.toml"),
-            indoc! {r#"
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File("good-plugin/SYMPOSIUM.toml", indoc! {r#"
                 name = "good-plugin"
                 crates = ["serde"]
-            "#},
-        )
-        .unwrap();
-
-        // Invalid TOML plugin in subdirectory
-        let bad_dir = dir.join("bad-plugin");
-        std::fs::create_dir_all(&bad_dir).unwrap();
-        std::fs::write(bad_dir.join("SYMPOSIUM.toml"), "not valid toml {{{").unwrap();
-
-        // Valid standalone skill
-        let skill_dir = dir.join("my-skill");
-        std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            indoc! {"
+            "#}),
+            File("bad-plugin/SYMPOSIUM.toml", "not valid toml {{{"),
+            File("my-skill/SKILL.md", indoc! {"
                 ---
                 name: my-skill
                 description: A skill
@@ -1106,27 +992,18 @@ mod tests {
                 ---
 
                 Body.
-            "},
-        )
-        .unwrap();
-
-        // Invalid standalone skill (missing name)
-        let bad_skill = dir.join("bad-skill");
-        std::fs::create_dir_all(&bad_skill).unwrap();
-        std::fs::write(
-            bad_skill.join("SKILL.md"),
-            indoc! {"
+            "}),
+            File("bad-skill/SKILL.md", indoc! {"
                 ---
                 description: No name
                 crates: serde
                 ---
 
                 Body.
-            "},
-        )
-        .unwrap();
+            "}),
+        ]);
 
-        let results = validate_source_dir(dir).unwrap();
+        let results = validate_source_dir(tmp.path()).unwrap();
         let ok_count = results.iter().filter(|r| r.result.is_ok()).count();
         let err_count = results.iter().filter(|r| r.result.is_err()).count();
         assert_eq!(results.len(), 4);
@@ -1136,30 +1013,16 @@ mod tests {
 
     #[test]
     fn collect_crate_names_from_source_dir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-
-        // TOML plugin with skill groups referencing crates (in subdirectory)
-        let plugin_dir = dir.join("my-plugin");
-        std::fs::create_dir_all(&plugin_dir).unwrap();
-        std::fs::write(
-            plugin_dir.join("SYMPOSIUM.toml"),
-            indoc! {r#"
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File("my-plugin/SYMPOSIUM.toml", indoc! {r#"
                 name = "my-plugin"
                 crates = ["*"]
 
                 [[skills]]
                 crates = ["serde", "serde_json>=1.0"]
-            "#},
-        )
-        .unwrap();
-
-        // Standalone skill referencing another crate
-        let skill_dir = dir.join("my-skill");
-        std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            indoc! {"
+            "#}),
+            File("my-skill/SKILL.md", indoc! {"
                 ---
                 name: my-skill
                 description: A skill
@@ -1167,31 +1030,20 @@ mod tests {
                 ---
 
                 Body.
-            "},
-        )
-        .unwrap();
+            "}),
+        ]);
 
-        let names = collect_crate_names_in_source_dir(dir).unwrap();
+        let names = collect_crate_names_in_source_dir(tmp.path()).unwrap();
         // BTreeSet means sorted output
         assert_eq!(names, vec!["anyhow", "serde", "serde_json"]);
     }
 
     #[test]
     fn collect_crate_names_skips_invalid_items() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-
-        // Invalid TOML in subdirectory (skipped)
-        let bad_dir = dir.join("bad-plugin");
-        std::fs::create_dir_all(&bad_dir).unwrap();
-        std::fs::write(bad_dir.join("SYMPOSIUM.toml"), "not valid {{{").unwrap();
-
-        // Valid standalone skill
-        let skill_dir = dir.join("good-skill");
-        std::fs::create_dir_all(&skill_dir).unwrap();
-        std::fs::write(
-            skill_dir.join("SKILL.md"),
-            indoc! {"
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File("bad-plugin/SYMPOSIUM.toml", "not valid {{{"),
+            File("good-skill/SKILL.md", indoc! {"
                 ---
                 name: good
                 description: Good skill
@@ -1199,26 +1051,17 @@ mod tests {
                 ---
 
                 Body.
-            "},
-        )
-        .unwrap();
-
-        // Invalid standalone skill (missing crates, skipped)
-        let bad_skill = dir.join("bad-skill");
-        std::fs::create_dir_all(&bad_skill).unwrap();
-        std::fs::write(
-            bad_skill.join("SKILL.md"),
-            indoc! {"
+            "}),
+            File("bad-skill/SKILL.md", indoc! {"
                 ---
                 name: bad
                 ---
 
                 Body.
-            "},
-        )
-        .unwrap();
+            "}),
+        ]);
 
-        let names = collect_crate_names_in_source_dir(dir).unwrap();
+        let names = collect_crate_names_in_source_dir(tmp.path()).unwrap();
         // Only the valid skill's crate name
         assert_eq!(names, vec!["serde"]);
     }
@@ -1303,31 +1146,17 @@ mod tests {
 
     #[test]
     fn validate_source_dir_enforces_crates_requirement() {
-        let tmp = tempfile::tempdir().unwrap();
-        let dir = tmp.path();
-
-        // Create plugin with no crates — should fail at TOML parse level
-        let plugin_dir = dir.join("no-crates-plugin");
-        std::fs::create_dir_all(&plugin_dir).unwrap();
-        std::fs::write(
-            plugin_dir.join("SYMPOSIUM.toml"),
-            indoc! {r#"
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File("no-crates-plugin/SYMPOSIUM.toml", indoc! {r#"
                 name = "no-crates-plugin"
 
                 [[hooks]]
                 name = "some-hook"
                 event = "PreToolUse"
                 command = "echo test"
-            "#},
-        )
-        .unwrap();
-
-        // Create plugin with top-level crates
-        let good_plugin_dir = dir.join("good-plugin");
-        std::fs::create_dir_all(&good_plugin_dir).unwrap();
-        std::fs::write(
-            good_plugin_dir.join("SYMPOSIUM.toml"),
-            indoc! {r#"
+            "#}),
+            File("good-plugin/SYMPOSIUM.toml", indoc! {r#"
                 name = "good-plugin"
                 crates = ["serde"]
 
@@ -1335,11 +1164,10 @@ mod tests {
                 name = "some-hook"
                 event = "PreToolUse"
                 command = "echo test"
-            "#},
-        )
-        .unwrap();
+            "#}),
+        ]);
 
-        let results = validate_source_dir(dir).unwrap();
+        let results = validate_source_dir(tmp.path()).unwrap();
         assert_eq!(results.len(), 2);
 
         let ok_count = results.iter().filter(|r| r.result.is_ok()).count();
