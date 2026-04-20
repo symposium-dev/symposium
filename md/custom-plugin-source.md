@@ -1,6 +1,6 @@
 # Custom plugin sources
 
-Custom plugin sources let you define your own sets of plugins without putting them in the [central recommendations repository][rr]. 
+Custom plugin sources let you define your own sets of plugins without putting them in the [central recommendations repository][rr].
 
 [rr]: https://github.com/symposium-dev/recommendations
 
