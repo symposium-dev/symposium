@@ -584,8 +584,7 @@ mod tests {
     fn register_claude_updates_stale() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("settings.json");
-        let stale =
-            json!({"mcpServers": {"symposium": {"command": "/old/path", "args": ["mcp"]}}});
+        let stale = json!({"mcpServers": {"symposium": {"command": "/old/path", "args": ["mcp"]}}});
         save_json(&path, &stale).unwrap();
 
         register_claude_mcp_servers(&path, &test_servers(), &Output::quiet()).unwrap();
@@ -638,15 +637,11 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         let doc: toml::Value = content.parse().unwrap();
         assert_eq!(
-            doc["mcp_servers"]["symposium"]["command"]
-                .as_str()
-                .unwrap(),
+            doc["mcp_servers"]["symposium"]["command"].as_str().unwrap(),
             "/usr/local/bin/cargo-agents"
         );
         assert_eq!(
-            doc["mcp_servers"]["symposium"]["args"]
-                .as_array()
-                .unwrap()[0]
+            doc["mcp_servers"]["symposium"]["args"].as_array().unwrap()[0]
                 .as_str()
                 .unwrap(),
             "mcp"
