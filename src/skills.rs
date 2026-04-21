@@ -335,7 +335,9 @@ fn collect_skills_applicable_to(
             predicate_sets.push(group_crates.clone());
         }
         if !skill.crates.is_empty() {
-            predicate_sets.push(PredicateSet { predicates: skill.crates.clone() });
+            predicate_sets.push(PredicateSet {
+                predicates: skill.crates.clone(),
+            });
         }
 
         let entry = SkillWithGroupContext {
@@ -1069,7 +1071,9 @@ mod tests {
             predicate_sets.push(PredicateSet { predicates: group });
         }
         if !skill_crates.is_empty() {
-            predicate_sets.push(PredicateSet { predicates: skill_crates });
+            predicate_sets.push(PredicateSet {
+                predicates: skill_crates,
+            });
         }
         SkillWithGroupContext {
             skill: Skill {
