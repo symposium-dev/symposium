@@ -9,7 +9,7 @@ Are you using an AI agent to write Rust code (or curious to try it)? If so, GREA
 
 ## What is Symposium?
 
-There are realy two answers to that question. The first one is that Symposium is a tool that examines what crates your project depends on and uses that to automatically install new skills, MCP servers, or other extensions. These extensions help your AI agent to write better code, avoid common footguns and pitfalls, and even leverage tools like the [Rust Token Killer (RTK)](GREAT NEWS!) to save you tokens.
+There are realy two answers to that question. The first one is that Symposium is a tool that examines what crates your project depends on and uses that to automatically install new skills, MCP servers, or other extensions. These extensions help your AI agent to write better code, avoid common footguns and pitfalls, and even leverage ecosystem tools like the [Rust Token Killer (RTK)](https://www.rtk-ai.app/) to save you tokens.
 
 The second one is that Symposium is an organization dedicated to one goal, "AI the Rust way", meaning reliable, efficient, and extensible. We are focused on interoperable, vendor-neutral, and community-oriented ways to make agents more reliable and efficient.
 
