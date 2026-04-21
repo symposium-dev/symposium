@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/symposium-dev/symposium/compare/symposium-v0.2.0...symposium-v0.2.1) - 2026-04-21
+
+### Other
+
+- Add authorship, fix typo, and link to foundation blog
+- Fix RTK link
+- Merge pull request #186 from symposium-dev/initial-blog
+- Apply suggestions from code review
+- suggested copy edits
+- Update homepage
+- Add blog with initial post
+
 ## [0.2.0](https://github.com/symposium-dev/symposium/compare/symposium-v0.1.0...symposium-v0.2.0) - 2026-04-21
 
 ### Added
