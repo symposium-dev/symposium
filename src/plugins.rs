@@ -28,6 +28,7 @@ pub struct PluginMcpServer {
 
 /// Source declaration for remote plugin artifacts.
 #[derive(Debug, Default, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct PluginSource {
     /// Path on the local filesystem.
     pub path: Option<PathBuf>,
@@ -41,6 +42,7 @@ pub struct PluginSource {
 /// Each group declares which crates it advises on (`crates`) and
 /// optionally a remote source for the skill files.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SkillGroup {
     /// Crate predicates this group advises on (e.g., `["serde", "serde_json>=1.0"]`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -110,11 +112,15 @@ impl Plugin {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Installation {
+    #[serde(default)]
+    pub summary: Option<String>,
     pub commands: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Hook {
     pub name: String,
     pub event: HookEvent,
@@ -202,6 +208,7 @@ struct SourceDirContents {
 
 /// Raw TOML manifest deserialized from a plugin `.toml` file.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct PluginManifest {
     name: String,
     crates: Vec<crate::predicate::Predicate>,
@@ -575,6 +582,10 @@ pub struct ValidationResult {
     pub kind: ValidationKind,
     /// `Ok(())` if valid, `Err` with the validation error.
     pub result: Result<()>,
+    /// Optional warning (non-fatal).
+    pub warning: Option<String>,
+    /// Child results (e.g., skills belonging to a plugin).
+    pub children: Vec<ValidationResult>,
 }
 
 /// The kind of item that was validated.
@@ -600,30 +611,78 @@ impl std::fmt::Display for ValidationKind {
 pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
     let contents = scan_source_dir(dir)?;
     let mut results = Vec::new();
+    let mut plugin_skill_dirs: Vec<PathBuf> = Vec::new();
 
     for plugin_result in contents.plugins {
-        let (path, result) = match plugin_result {
-            Ok(parsed) => (parsed.path, Ok(())),
+        let (path, plugin, result) = match plugin_result {
+            Ok(parsed) => (parsed.path.clone(), Some(parsed), Ok(())),
             Err(e) => {
-                // Extract the path from the error context if possible,
-                // otherwise use a placeholder.
                 let path = dir.join("<unknown>.toml");
-                (path, Err(e))
+                (path, None, Err(e))
             }
         };
+
+        let mut children = Vec::new();
+
+        // Validate that local skill groups contain discoverable skills.
+        if let Some(parsed) = &plugin {
+            let plugin_dir = parsed.path.parent().unwrap_or(dir);
+            for group in &parsed.plugin.skills {
+                if let Some(ref rel_path) = group.source.path {
+                    let joined = plugin_dir.join(rel_path);
+                    let skills_dir: PathBuf = joined.components().collect();
+                    plugin_skill_dirs.push(skills_dir.clone());
+                    let found = crate::skills::discover_skills(&skills_dir, group);
+                    if found.is_empty() {
+                        children.push(ValidationResult {
+                            path: skills_dir,
+                            kind: ValidationKind::Skill,
+                            result: Ok(()),
+                            warning: Some(
+                                "skill group source.path contains no SKILL.md files".into(),
+                            ),
+                            children: Vec::new(),
+                        });
+                    } else {
+                        for skill_result in found {
+                            let (skill_path, result) = match skill_result {
+                                Ok(skill) => (skill.path.clone(), Ok(())),
+                                Err(e) => (skills_dir.join("SKILL.md"), Err(e)),
+                            };
+                            children.push(ValidationResult {
+                                path: skill_path,
+                                kind: ValidationKind::Skill,
+                                result,
+                                warning: None,
+                                children: Vec::new(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
         results.push(ValidationResult {
-            path,
+            path: path.clone(),
             kind: ValidationKind::Plugin,
             result,
+            warning: None,
+            children,
         });
     }
 
     for skill_md in contents.skill_files {
+        // Skip skills already validated as part of a plugin group.
+        if plugin_skill_dirs.iter().any(|d| skill_md.starts_with(d)) {
+            continue;
+        }
         let result = crate::skills::load_standalone_skill(&skill_md).map(|_| ());
         results.push(ValidationResult {
             path: skill_md,
             kind: ValidationKind::Skill,
             result,
+            warning: None,
+            children: Vec::new(),
         });
     }
 
@@ -1118,6 +1177,22 @@ mod tests {
     async fn check_crate_exists_on_crates_io() {
         assert!(check_crate_exists("serde").await);
         assert!(!check_crate_exists("this-crate-definitely-does-not-exist-zzz").await);
+    }
+
+    #[test]
+    fn path_at_wrong_level_is_rejected() {
+        let toml = indoc! {r#"
+            name = "Symposium"
+            crates = ["*"]
+
+            [[skills]]
+            path = "."
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field"),
+            "expected unknown field error, got: {err}"
+        );
     }
 
     #[test]
