@@ -1,0 +1,5 @@
+name = "wildcard-plugin"
+crates = ["*"]
+
+[[skills]]
+source.path = "."
