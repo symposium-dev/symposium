@@ -207,8 +207,5 @@ fn print_validation_result(r: &plugins::ValidationResult, indent: &str) -> usize
 }
 
 fn count_results(results: &[plugins::ValidationResult]) -> usize {
-    results
-        .iter()
-        .map(|r| 1 + count_results(&r.children))
-        .sum()
+    results.iter().map(|r| 1 + count_results(&r.children)).sum()
 }
