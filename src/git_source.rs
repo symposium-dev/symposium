@@ -123,6 +123,8 @@ impl GitHubClient {
             .await
             .with_context(|| format!("failed to query GitHub API: {url}"))?;
 
+        tracing::trace!(%url, status = %resp.status(), "GitHub API resolve_commit_sha");
+
         if !resp.status().is_success() {
             bail!("GitHub API error (HTTP {}): {}", resp.status(), url);
         }
@@ -162,9 +164,12 @@ impl GitHubClient {
             );
         }
 
-        resp.bytes()
+        let bytes = resp
+            .bytes()
             .await
-            .context("failed to read tarball response body")
+            .context("failed to read tarball response body")?;
+        tracing::trace!(%url, bytes = bytes.len(), "tarball downloaded");
+        Ok(bytes)
     }
 }
 
@@ -350,6 +355,7 @@ impl PluginCacheManager {
         };
         let meta_json = serde_json::to_string_pretty(&meta)?;
         std::fs::write(meta_path, meta_json)?;
+        tracing::trace!(%sha, source_url, "cache meta written");
 
         Ok(())
     }

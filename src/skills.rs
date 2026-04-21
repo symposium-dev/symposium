@@ -127,6 +127,7 @@ async fn load_skills_for_group(
 
     // Pre-fetch filtering: skip groups whose crate predicates don't match any target.
     if !group_crates.is_empty() && !group_crates.iter().any(|p| p.matches(for_crates)) {
+        tracing::debug!(plugin = %plugin_path.display(), "skill group crates don't match, skipping");
         return (group_crates.to_vec(), Vec::new());
     }
 
@@ -311,12 +312,14 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
         );
     }
 
-    Ok(Skill {
+    let skill = Skill {
         frontmatter,
         crates,
         body: fm.body,
         path: skill_md_path.to_path_buf(),
-    })
+    };
+    tracing::debug!(name = %skill.name(), path = %skill_md_path.display(), "skill loaded");
+    Ok(skill)
 }
 
 /// Filter skills by crate constraints, collecting matches with group context.

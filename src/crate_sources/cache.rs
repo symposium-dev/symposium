@@ -50,22 +50,26 @@ impl CacheManager {
             .extraction_cache_dir
             .join(format!("{crate_name}-{version}"));
         if extraction_path.exists() {
+            tracing::debug!(%crate_name, %version, "crate cache hit (extraction cache)");
             return Ok(extraction_path);
         }
 
         // 2. Check cargo's extracted sources
         if let Some(cargo_src_path) = self.find_cargo_extracted_crate(crate_name, version)? {
+            tracing::debug!(%crate_name, %version, "crate cache hit (cargo src)");
             return Ok(cargo_src_path);
         }
 
         // 3. Check cargo's .crate cache
         if let Some(cached_crate_path) = self.find_cached_crate(crate_name, version)? {
+            tracing::debug!(%crate_name, %version, "extracting from cargo .crate cache");
             return extractor
                 .extract_crate_to_cache(&cached_crate_path, &extraction_path)
                 .await;
         }
 
         // 4. Download and extract
+        tracing::info!(%crate_name, %version, "downloading crate from crates.io");
         extractor
             .download_and_extract_crate(crate_name, version, &extraction_path)
             .await

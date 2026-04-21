@@ -26,11 +26,14 @@ impl<'a> VersionResolver<'a> {
     ) -> Result<(String, String)> {
         if let Some(spec) = version_spec {
             let version = self.resolve_version_constraint(crate_name, spec).await?;
+            tracing::debug!(%crate_name, %version, "resolved version from constraint");
             Ok((crate_name.to_string(), version))
         } else if let Some((canonical, version)) = self.find_in_workspace(crate_name) {
+            tracing::debug!(%canonical, %version, "resolved version from workspace");
             Ok((canonical, version))
         } else {
             let version = self.get_latest_version(crate_name).await?;
+            tracing::debug!(%crate_name, %version, "resolved latest version from crates.io");
             Ok((crate_name.to_string(), version))
         }
     }

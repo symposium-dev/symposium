@@ -457,6 +457,12 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
         }
     }
 
+    tracing::debug!(
+        plugins = plugins.len(),
+        standalone_skills = standalone_skills.len(),
+        "plugin registry loaded"
+    );
+
     PluginRegistry {
         plugins,
         standalone_skills,

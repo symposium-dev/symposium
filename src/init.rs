@@ -62,9 +62,11 @@ fn resolve_agents(opts: &InitOpts, existing: &[AgentEntry], out: &Output) -> Res
 /// Prompts for agents (unless provided), writes
 /// `~/.symposium/config.toml`, and registers global hooks.
 pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<()> {
+    tracing::info!("init started");
     out.println("Setting up symposium for your user account.\n");
 
     let agents = resolve_agents(opts, &sym.config.agents, out)?;
+    tracing::debug!(agents = ?agents.iter().map(|a| a.config_name()).collect::<Vec<_>>(), "resolved agents");
 
     sym.config.agents = agents
         .iter()
@@ -78,8 +80,14 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
     } else if interactive(out) {
         sym.config.hook_scope = prompt_for_hook_scope(sym.config.hook_scope)?;
     }
+    tracing::debug!(scope = ?sym.config.hook_scope, "hook scope");
 
     sym.save_config().context("failed to write user config")?;
+    tracing::info!(
+        agents = ?agents.iter().map(|a| a.config_name()).collect::<Vec<_>>(),
+        scope = ?sym.config.hook_scope,
+        "config written"
+    );
 
     let config_path = sym.config_dir().join("config.toml");
     let agent_names: Vec<_> = agents.iter().map(|a| a.display_name()).collect();
