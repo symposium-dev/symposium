@@ -14,7 +14,7 @@ Create `test-agents.toml` in the repo root (gitignored):
 
 ```toml
 # Run against these agents. Use `acpr --list` to see ACP registry agents.
-test-agents = ["claude-sdk", "kiro-cli-acp"]
+test-agents = ["claude-sdk"]
 ```
 
 Set to `[]` to skip agent tests entirely (used in CI):

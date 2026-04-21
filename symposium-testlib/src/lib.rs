@@ -547,7 +547,7 @@ fn configured_test_agents() -> Vec<TestAgent> {
 
     let content = match std::fs::read_to_string(&config_path) {
         Ok(c) => c,
-        Err(_) => r#"test-agents = ["claude-sdk", "kiro-cli-acp"]"#.to_string(),
+        Err(_) => r#"test-agents = ["claude-sdk"]"#.to_string(),
     };
 
     let config: TestAgentsConfig =
