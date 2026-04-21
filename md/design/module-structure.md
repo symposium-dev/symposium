@@ -26,7 +26,7 @@ Scans configured plugin source directories for TOML manifests and parses them in
 
 ### `skills.rs` — skill resolution and matching
 
-Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates crate predicates. Each resolved skill carries a `Vec<Vec<Predicate>>` (predicate sets) accumulated from plugin, group, and skill levels — every set must match (AND across sets, OR within). The early-out gates (`applies_to_crates` at plugin level, group-level pre-fetch filter) remain as performance optimizations to avoid unnecessary git fetches.
+Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates crate predicates at each level (plugin, group, skill) to determine which skills apply.
 
 ### `hook.rs` — hook handling
 

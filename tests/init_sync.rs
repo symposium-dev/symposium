@@ -371,7 +371,7 @@ async fn sync_installs_plugin_skill_group() {
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
 
-            let skill_file = workspace_root.join(".claude/skills/general-guidance/SKILL.md");
+            let skill_file = workspace_root.join(".claude/skills/serde-guidance/SKILL.md");
             assert!(
                 skill_file.exists(),
                 "sync should install skill from plugin [[skills]] group with source.path"

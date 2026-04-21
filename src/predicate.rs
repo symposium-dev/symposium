@@ -54,6 +54,17 @@ impl Predicate {
     }
 }
 
+/// A set of predicates where at least one must match (OR semantics).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PredicateSet(pub Vec<Predicate>);
+
+impl PredicateSet {
+    /// True if any predicate in this set matches the workspace deps.
+    pub fn matches(&self, deps: &[(String, semver::Version)]) -> bool {
+        self.0.iter().any(|p| p.matches(deps))
+    }
+}
+
 /// Parse a comma-separated predicate string into multiple predicates.
 ///
 /// Used for SKILL.md frontmatter where `crates: serde, tokio>=1.0` is a single line.

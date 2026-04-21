@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::config::Symposium;
 use crate::plugins::{ParsedPlugin, PluginRegistry, SkillGroup};
-use crate::predicate::{self, Predicate};
+use crate::predicate::{self, Predicate, PredicateSet};
 
 /// A parsed skill from a SKILL.md file.
 #[derive(Debug, Clone)]
@@ -42,19 +42,16 @@ impl Skill {
 pub struct SkillWithGroupContext {
     pub skill: Skill,
     /// Accumulated predicate sets: [plugin.crates, group.crates, skill.crates].
-    /// Empty vecs are omitted during construction.
-    pub predicate_sets: Vec<Vec<Predicate>>,
+    /// All predicate sets must match for the skill to apply.
+    pub predicate_sets: Vec<PredicateSet>,
 }
 
 impl SkillWithGroupContext {
     /// Check whether this skill matches the given workspace dependencies.
     ///
-    /// Every predicate set must have at least one matching predicate.
-    /// An empty `predicate_sets` vec is vacuously true.
+    /// Every predicate set must match. An empty vec is vacuously true.
     pub fn matches_workspace(&self, deps: &[(String, semver::Version)]) -> bool {
-        self.predicate_sets
-            .iter()
-            .all(|ps| ps.iter().any(|p| p.matches(deps)))
+        self.predicate_sets.iter().all(|ps| ps.matches(deps))
     }
 }
 
@@ -86,8 +83,8 @@ pub async fn skills_applicable_to(
 
             collect_skills_applicable_to(
                 &skills,
-                &plugin.crates,
-                &group_crates,
+                &PredicateSet(plugin.crates.clone()),
+                &PredicateSet(group_crates),
                 for_crates,
                 &mut results,
             );
@@ -96,10 +93,11 @@ pub async fn skills_applicable_to(
 
     // Standalone skills -- these are already loaded as part of the plugin
     // registry.
+    let empty = PredicateSet(vec![]);
     collect_skills_applicable_to(
         &registry.standalone_skills,
-        &[],
-        &[],
+        &empty,
+        &empty,
         for_crates,
         &mut results,
     );
@@ -320,21 +318,21 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
 /// Filter skills by crate constraints, collecting matches with group context.
 fn collect_skills_applicable_to(
     skills: &[Skill],
-    plugin_crates: &[Predicate],
-    group_crates: &[Predicate],
+    plugin_crates: &PredicateSet,
+    group_crates: &PredicateSet,
     for_crates: &[(String, semver::Version)],
     results: &mut Vec<SkillWithGroupContext>,
 ) {
     for skill in skills {
         let mut predicate_sets = Vec::new();
-        if !plugin_crates.is_empty() {
-            predicate_sets.push(plugin_crates.to_vec());
+        if !plugin_crates.0.is_empty() {
+            predicate_sets.push(plugin_crates.clone());
         }
-        if !group_crates.is_empty() {
-            predicate_sets.push(group_crates.to_vec());
+        if !group_crates.0.is_empty() {
+            predicate_sets.push(group_crates.clone());
         }
         if !skill.crates.is_empty() {
-            predicate_sets.push(skill.crates.clone());
+            predicate_sets.push(PredicateSet(skill.crates.clone()));
         }
 
         let entry = SkillWithGroupContext {
@@ -1061,10 +1059,10 @@ mod tests {
     fn resolved(skill_crates: Vec<Predicate>, group: Vec<Predicate>) -> SkillWithGroupContext {
         let mut predicate_sets = Vec::new();
         if !group.is_empty() {
-            predicate_sets.push(group);
+            predicate_sets.push(PredicateSet(group));
         }
         if !skill_crates.is_empty() {
-            predicate_sets.push(skill_crates);
+            predicate_sets.push(PredicateSet(skill_crates));
         }
         SkillWithGroupContext {
             skill: Skill {
