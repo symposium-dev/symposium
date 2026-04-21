@@ -96,7 +96,13 @@ pub async fn skills_applicable_to(
 
     // Standalone skills -- these are already loaded as part of the plugin
     // registry.
-    collect_skills_applicable_to(&registry.standalone_skills, &[], &[], for_crates, &mut results);
+    collect_skills_applicable_to(
+        &registry.standalone_skills,
+        &[],
+        &[],
+        for_crates,
+        &mut results,
+    );
 
     results
 }
