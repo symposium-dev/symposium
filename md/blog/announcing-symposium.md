@@ -9,7 +9,9 @@ Are you using an AI agent to write Rust code (or curious to try it)? If so, GREA
 
 ## What is Symposium?
 
-Symposium is a tool that examines what crates your project depends on and uses that to automatically install new skills, MCP servers, or other extensions. These extensions help your AI agent to write better code, avoid common footguns and pitfalls, and even leverage tools like the [Rust Token Killer (RTK)](GREAT NEWS!) to save you tokens.
+There are realy two answers to that question. The first one is that Symposium is a tool that examines what crates your project depends on and uses that to automatically install new skills, MCP servers, or other extensions. These extensions help your AI agent to write better code, avoid common footguns and pitfalls, and even leverage tools like the [Rust Token Killer (RTK)](GREAT NEWS!) to save you tokens.
+
+The second one is that Symposium is an organization dedicated to one goal, "AI the Rust way", meaning reliable, efficient, and extensible. We are focused on interoperable, vendor-neutral, and community-oriented ways to make agents more reliable and efficient.
 
 ## Getting started
 
@@ -22,7 +24,7 @@ cargo agents init
 
 The init command will prompt you to select what agents you want to use and a few other things. Based on that we install hooks that will cause Symposium to be invoked automatically. The next time you start an agent on a Rust project, Symposium will check if there are available skills or other extensions for the crates you use and set them up automatically. You shouldn't have to do anything else.
 
-# Our goals and principles
+# Symposium helps your agent write better code and use fewer tokens
 
 You may be familiar with various extensions that agents can work with, such has [MCP servers](https://modelcontextprotocol.io/docs/getting-started/intro), [Skills](https://agentskills.io/home), or Hooks. You may also know that different agents have different levels of support for these, and even different takes on them (Hooks, for example, are not as well-standardized as MCP servers and Skills). However, that doesn't diminish the fact that many people have built many tools around these extension systems. We want you to *easily* use these ecosystem tools.
 
@@ -30,11 +32,9 @@ You may *also* have run into cases where a model is "outdated" compared to eithe
 
 Finally, we want writing code with agents to be more *efficient* and *reliable*. Some of this comes from the above two goals, but part of it also comes from making sure that agents write code the way *you* would write it. For example, when you finish writing Rust code, you likely run `cargo check`, run your tests, or format your code - and we think that you should expect your agent to do the same. Simulatenously, efficiency *also* means that we want these tools to use as few tokens as possible.
 
-# Plugins
+# Symposium Plugins
 
-**Plugins** are the core mechanism that *define* what tools should be loaded and when. We have a [central repository](https://github.com/symposium-dev/recommendations) hosting recommended plugins, but projects can add additional plugin sources as well.
-
-Each plugin defines what crate it's applicable for, as well as the Skills, Hooks, and MCP servers to load.
+A Symposium **plugin** defines a set of extensions (mcp servers, skills, hooks, etc) and the conditions in which they should be used (currently: when a given version of a given crate is in the project's dependencies). Plugins are hosted on repositories called a "plugin source"; we define a [central repository](https://github.com/symposium-dev/recommendations) with our globally recommended plugins, but you can additional plugin sources of your own if you like.
 
 ## Skills
 
@@ -54,7 +54,7 @@ MCP servers were one of the first extensions made available by agents. They expo
 
 # What's next?
 
-Today, we're shipping a minimal, usual product for users to experiment with and hopefully find use from. But, we're far from done. We have a number of really interesting ideas to make Symposium even more useful.
+As we said in the beginning, the Symposium org is focused on "AI the Rust way" -- so what does that mean? We're starting with a minimal, usual product for users to experiment with and hopefully find use from. But, we're far from done. We have a number of really interesting ideas to make Symposium even more useful.
 
 We want to continue to expand the set of agent features that Symposium supports. When an agent supports a tool or similar, we want it to be a minimal process to be able to recommend that users of your crate also use that tool. Often, this means that we should "just install" those tools into project-local agent settings; but, we want to make sure that this is done *correctly* and supports the agents that our users use. However, we *also* want to support (when possible) more dynamic loading - such as by dispatching hooks through Symposium itself, or having Symposium register a transparent MCP server layer. There are lots of things we can do here, and we're excited to hear what people want and need first.
 
