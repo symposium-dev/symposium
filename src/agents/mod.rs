@@ -158,6 +158,7 @@ impl Agent {
 
     /// Register hooks in the global agent config.
     pub fn register_hooks(&self, home: &Path, _sym: &Symposium, out: &Output) -> Result<()> {
+        tracing::debug!(agent = %self.config_name(), "registering hooks");
         // Register hooks
         match self {
             Agent::Claude => {
@@ -243,6 +244,7 @@ impl Agent {
         servers: &[sacp::schema::McpServer],
         out: &Output,
     ) -> Result<()> {
+        tracing::debug!(agent = %self.config_name(), count = servers.len(), "registering MCP servers");
         match self {
             Agent::Claude => mcp_server_registration::register_claude_mcp_servers(
                 &home.join(".claude").join("settings.json"),
@@ -416,6 +418,7 @@ impl Agent {
 
     /// Install a single skill file into the agent's expected location.
     pub fn install_skill(&self, skill_source: &Path, dest_dir: &Path) -> Result<()> {
+        tracing::debug!(agent = %self.config_name(), src = %skill_source.display(), dest = %dest_dir.display(), "installing skill");
         fs::create_dir_all(dest_dir)?;
         let dest_file = dest_dir.join("SKILL.md");
         fs::copy(skill_source, &dest_file)?;

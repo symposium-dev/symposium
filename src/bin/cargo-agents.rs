@@ -24,6 +24,22 @@ async fn main() -> ExitCode {
     };
     let cli = Cli::parse_from(filtered);
 
+    // Log the command being invoked
+    match &cli.command {
+        Some(Commands::Init { .. }) => tracing::info!("cargo agents init"),
+        Some(Commands::Sync) => tracing::info!("cargo agents sync"),
+        Some(Commands::Plugin { command }) => {
+            tracing::info!(subcommand = ?command, "cargo agents plugin");
+        }
+        Some(Commands::Hook { agent, event }) => {
+            tracing::debug!(?agent, ?event, "cargo agents hook");
+        }
+        Some(Commands::CrateInfo { name, version }) => {
+            tracing::debug!(%name, version = ?version, "cargo agents crate-info");
+        }
+        None => {}
+    }
+
     // Hook commands are quiet by default (they're invoked by the agent, not the user)
     let is_hook = matches!(cli.command, Some(Commands::Hook { .. }));
     let out = if cli.quiet || is_hook {

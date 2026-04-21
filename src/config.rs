@@ -174,6 +174,9 @@ impl Symposium {
         let cache_dir = resolve_cache_dir(&config_dir);
         let _ = fs::create_dir_all(&cache_dir);
 
+        // Note: can't use tracing here — logging isn't initialized yet.
+        // init_logging() is called after construction.
+
         Self {
             config,
             config_dir,
@@ -231,6 +234,15 @@ impl Symposium {
             .with_writer(file)
             .with_ansi(false)
             .init();
+
+        tracing::debug!(
+            config_dir = %self.config_dir.display(),
+            cache_dir = %self.cache_dir.display(),
+            log_level = %level,
+            log_file = %log_path.display(),
+            "logging initialized"
+        );
+        tracing::trace!(config = ?self.config, "loaded config");
     }
 
     pub fn config_dir(&self) -> &Path {

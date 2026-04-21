@@ -21,7 +21,7 @@ pub type McpServerEntry = McpServer;
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PluginMcpServer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crates: Option<Vec<crate::predicate::Predicate>>,
+    pub crates: Option<crate::predicate::PredicateSet>,
     #[serde(flatten)]
     pub server: McpServerEntry,
 }
@@ -46,7 +46,7 @@ pub struct PluginSource {
 pub struct SkillGroup {
     /// Crate predicates this group advises on (e.g., `["serde", "serde_json>=1.0"]`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crates: Option<Vec<crate::predicate::Predicate>>,
+    pub crates: Option<crate::predicate::PredicateSet>,
     /// Remote source for skills.
     #[serde(default)]
     pub source: PluginSource,
@@ -74,7 +74,7 @@ pub struct ParsedPlugin {
 pub struct Plugin {
     pub name: String,
     /// Crate predicates this plugin applies to. `["*"]` for all crates.
-    pub crates: Vec<crate::predicate::Predicate>,
+    pub crates: crate::predicate::PredicateSet,
     pub installation: Option<Installation>,
     pub hooks: Vec<Hook>,
     pub skills: Vec<SkillGroup>,
@@ -87,7 +87,7 @@ impl Plugin {
     /// Check if this plugin applies to the given workspace crates.
     /// Returns true if any predicate matches.
     pub fn applies_to_crates(&self, workspace_crates: &[(String, semver::Version)]) -> bool {
-        self.crates.iter().any(|p| p.matches(workspace_crates))
+        self.crates.matches(workspace_crates)
     }
 
     /// Return MCP servers applicable to the given workspace crates.
@@ -101,10 +101,10 @@ impl Plugin {
         self.mcp_servers
             .iter()
             .filter(|s| {
-                let Some(ref preds) = s.crates else {
+                let Some(ref pred_set) = s.crates else {
                     return true;
                 };
-                preds.iter().any(|p| p.matches(workspace_crates))
+                pred_set.matches(workspace_crates)
             })
             .map(|s| s.server.clone())
             .collect()
@@ -211,7 +211,7 @@ struct SourceDirContents {
 #[serde(deny_unknown_fields)]
 struct PluginManifest {
     name: String,
-    crates: Vec<crate::predicate::Predicate>,
+    crates: crate::predicate::PredicateSet,
     #[serde(default)]
     installation: Option<Installation>,
     #[serde(default)]
@@ -457,6 +457,12 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
         }
     }
 
+    tracing::debug!(
+        plugins = plugins.len(),
+        standalone_skills = standalone_skills.len(),
+        "plugin registry loaded"
+    );
+
     PluginRegistry {
         plugins,
         standalone_skills,
@@ -699,19 +705,19 @@ pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
     let mut names = std::collections::BTreeSet::new();
 
     for plugin_result in contents.plugins.into_iter().flatten() {
-        for pred in &plugin_result.plugin.crates {
+        for pred in &plugin_result.plugin.crates.predicates {
             pred.collect_crate_names(&mut names);
         }
         for group in &plugin_result.plugin.skills {
-            if let Some(preds) = &group.crates {
-                for pred in preds {
+            if let Some(pred_set) = &group.crates {
+                for pred in &pred_set.predicates {
                     pred.collect_crate_names(&mut names);
                 }
             }
         }
         for mcp in &plugin_result.plugin.mcp_servers {
-            if let Some(preds) = &mcp.crates {
-                for pred in preds {
+            if let Some(pred_set) = &mcp.crates {
+                for pred in &pred_set.predicates {
                     pred.collect_crate_names(&mut names);
                 }
             }
@@ -767,8 +773,14 @@ mod tests {
     use super::*;
     use indoc::indoc;
 
+    use crate::predicate::PredicateSet;
+
     fn pred(s: &str) -> crate::predicate::Predicate {
         crate::predicate::parse(s).unwrap()
+    }
+
+    fn pred_set(s: &str) -> PredicateSet {
+        PredicateSet::parse(s).unwrap()
     }
 
     fn from_str(s: &str) -> Result<Plugin> {
@@ -820,8 +832,8 @@ mod tests {
         assert_eq!(plugin.skills.len(), 1);
         let group = &plugin.skills[0];
         let cr = group.crates.as_ref().unwrap();
-        assert_eq!(cr.len(), 1);
-        assert!(cr[0].references_crate("serde"));
+        assert_eq!(cr.predicates.len(), 1);
+        assert!(cr.predicates[0].references_crate("serde"));
         assert_eq!(
             group.source.git.as_ref().map(|s| s.as_str()),
             Some("https://github.com/org/repo/tree/main/serde")
@@ -840,8 +852,8 @@ mod tests {
         let plugin = from_str(toml).expect("parse");
         let group = &plugin.skills[0];
         let cr = group.crates.as_ref().unwrap();
-        assert_eq!(cr.len(), 1);
-        assert!(cr[0].references_crate("serde"));
+        assert_eq!(cr.predicates.len(), 1);
+        assert!(cr.predicates[0].references_crate("serde"));
     }
 
     #[test]
@@ -1210,8 +1222,8 @@ mod tests {
         let plugin = from_str(toml).expect("parse");
         assert_eq!(plugin.name, "multi-group");
         assert_eq!(plugin.skills.len(), 2);
-        assert!(plugin.skills[0].crates.as_ref().unwrap()[0].references_crate("serde"));
-        assert!(plugin.skills[1].crates.as_ref().unwrap()[0].references_crate("tokio"));
+        assert!(plugin.skills[0].crates.as_ref().unwrap().predicates[0].references_crate("serde"));
+        assert!(plugin.skills[1].crates.as_ref().unwrap().predicates[0].references_crate("tokio"));
     }
 
     #[test]
@@ -1224,7 +1236,7 @@ mod tests {
         // Plugin with wildcard - should apply to all
         let plugin_wildcard = Plugin {
             name: "wildcard".to_string(),
-            crates: vec![pred("*")],
+            crates: pred_set("*"),
             installation: None,
             hooks: vec![],
             skills: vec![],
@@ -1235,7 +1247,7 @@ mod tests {
         // Plugin targeting serde - should apply
         let plugin_serde = Plugin {
             name: "serde-plugin".to_string(),
-            crates: vec![pred("serde")],
+            crates: pred_set("serde"),
             installation: None,
             hooks: vec![],
             skills: vec![],
@@ -1246,7 +1258,7 @@ mod tests {
         // Plugin targeting non-existent crate - should not apply
         let plugin_other = Plugin {
             name: "other-plugin".to_string(),
-            crates: vec![pred("other-crate")],
+            crates: pred_set("other-crate"),
             installation: None,
             hooks: vec![],
             skills: vec![],
@@ -1257,7 +1269,7 @@ mod tests {
         // Plugin with version predicate - should reject wrong version
         let plugin_version = Plugin {
             name: "version-plugin".to_string(),
-            crates: vec![pred("tokio>=2.0")],
+            crates: pred_set("tokio>=2.0"),
             installation: None,
             hooks: vec![],
             skills: vec![],

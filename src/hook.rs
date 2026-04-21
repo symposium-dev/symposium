@@ -49,7 +49,9 @@ pub async fn execute_hook(
             anyhow::anyhow!("plugin blocked: {}", String::from_utf8_lossy(&stderr))
         })?;
 
-        Ok(handler.serialize_output(&final_output))
+        let serialized = handler.serialize_output(&final_output);
+        tracing::trace!(output_len = serialized.len(), "hook output serialized");
+        Ok(serialized)
     } else {
         // Agent doesn't support this event
         anyhow::bail!("agent {agent:?} does not support hook event {event:?}")
@@ -65,7 +67,7 @@ pub async fn run(sym: &Symposium, agent: HookAgent, event: HookEvent) -> ExitCod
         tracing::warn!(?event, error = %e, "failed to read hook stdin");
         return ExitCode::SUCCESS;
     }
-    tracing::debug!(?input);
+    tracing::trace!(?input, "hook stdin");
 
     match execute_hook(sym, agent, event, &input).await {
         Ok(bytes) => {
@@ -121,8 +123,10 @@ async fn run_auto_sync(
     fallback_cwd: &std::path::Path,
 ) {
     if !sym.config.auto_sync {
+        tracing::debug!("auto-sync disabled, skipping");
         return;
     }
+    tracing::debug!("auto-sync enabled, running");
     let cwd = match input.cwd() {
         Some(s) => std::path::PathBuf::from(s),
         None => fallback_cwd.to_path_buf(),
@@ -202,7 +206,7 @@ pub fn dispatch_plugin_hooks(
     let mut output = prior_output;
 
     for (plugin_name, hook) in hooks {
-        tracing::info!(?plugin_name, hook = %hook.name, cmd = %hook.command, format = ?hook.format, "running plugin hook");
+        tracing::debug!(?plugin_name, hook = %hook.name, cmd = %hook.command, format = ?hook.format, "running plugin hook");
 
         // Determine stdin for the plugin based on its declared format
         let hook_agent = hook.format.as_agent();
@@ -254,7 +258,7 @@ pub fn dispatch_plugin_hooks(
                     }
                 };
 
-                tracing::info!(?child_out, "hook finished");
+                tracing::trace!(?child_out, "hook finished");
 
                 match child_out.status.code() {
                     None | Some(2) => return Err(child_out.stderr),
@@ -354,20 +358,20 @@ fn hooks_for_payload(
     plugins: &[crate::plugins::ParsedPlugin],
     input: &symposium::InputEvent,
 ) -> Vec<(String, crate::plugins::Hook)> {
-    tracing::debug!(?input);
+    tracing::trace!(?input, "matching hooks for payload");
 
     let mut out = Vec::new();
 
     for ParsedPlugin { path: _, plugin } in plugins {
         let name = plugin.name.clone();
         for hook in &plugin.hooks {
-            tracing::debug!(?hook);
+            tracing::trace!(?hook);
             if hook.event != input.event() {
                 continue;
             }
             if let Some(matcher) = &hook.matcher {
                 if !input.matches_matcher(matcher) {
-                    tracing::info!(
+                    tracing::debug!(
                         ?input,
                         ?matcher,
                         "skipping hook due to non-matching matcher"

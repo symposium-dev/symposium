@@ -61,6 +61,7 @@ fn manifest_path(agent: Agent, project_root: &Path) -> std::path::PathBuf {
 /// clean up stale skills.
 pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     let project_root = crate::init::find_workspace_root(cwd)?;
+    tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
     // Load plugin registry and workspace deps
     let registry = plugins::load_registry(sym);
@@ -74,23 +75,12 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     // Find all applicable skills
     let applicable = skills::skills_applicable_to(sym, &registry, &workspace).await;
 
-    // Collect the set of skill names to install
-    let dep_names: BTreeSet<String> = workspace.iter().map(|(name, _)| name.clone()).collect();
     let mut skill_names: BTreeSet<String> = BTreeSet::new();
 
     // Build a map of skill_name -> skill for installation
     let mut to_install: Vec<(&str, &std::path::Path)> = Vec::new();
 
     for entry in &applicable {
-        // Only include skills whose crates are in the workspace
-        let dominated = entry
-            .effective_crate_names()
-            .iter()
-            .any(|c| dep_names.contains(c));
-        if !dominated {
-            continue;
-        }
-
         let name = entry.skill.name();
         if skill_names.insert(name.to_string()) {
             to_install.push((name, &entry.skill.path));
@@ -117,6 +107,13 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
 
     // Sync each configured agent
     let agent_names: Vec<String> = sym.config.agents.iter().map(|a| a.name.clone()).collect();
+
+    tracing::info!(
+        workspace_deps = workspace.len(),
+        agents = agent_names.len(),
+        skills = to_install.len(),
+        "sync started"
+    );
 
     if agent_names.is_empty() {
         out.info("no agents configured — run `symposium init` to add one");
@@ -150,6 +147,7 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
             match agent.install_skill(skill_source, &dest_dir) {
                 Ok(()) => {
                     new_manifest.installed.insert(skill_name.to_string());
+                    tracing::info!(%skill_name, agent = %agent_name, dest = %dest_dir.display(), "installed skill");
                     out.done(format!(
                         "installed skill {skill_name} → {}",
                         display_path(&dest_dir)
@@ -166,6 +164,7 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
             let dest_dir = agent.project_skill_dir(&project_root, stale);
             if dest_dir.exists() {
                 let _ = fs::remove_dir_all(&dest_dir);
+                tracing::info!(%stale, agent = %agent_name, "removed stale skill");
                 out.removed(format!(
                     "removed skill {stale} from {}",
                     display_path(&dest_dir)
@@ -188,6 +187,7 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     }
 
     if to_install.is_empty() {
+        tracing::debug!("no applicable skills for workspace dependencies");
         out.info("no applicable skills found for workspace dependencies");
     }
 

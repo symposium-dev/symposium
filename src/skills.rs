@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail};
 
 use crate::config::Symposium;
 use crate::plugins::{ParsedPlugin, PluginRegistry, SkillGroup};
-use crate::predicate::{self, Predicate};
+use crate::predicate::{self, Predicate, PredicateSet};
 
 /// A parsed skill from a SKILL.md file.
 #[derive(Debug, Clone)]
@@ -26,53 +26,32 @@ pub struct Skill {
 }
 
 impl Skill {
-    /// Check whether this skill advises on the given crate.
-    ///
-    /// Returns `true` if any skill-level `crates` predicate references the crate,
-    /// or if the skill has no skill-level `crates` (inheriting from the group).
-    pub fn advises_on(&self, crate_name: &str) -> bool {
-        self.crates.is_empty() || self.crates.iter().any(|p| p.references_crate(crate_name))
-    }
-
     /// Return the skill name from frontmatter, or "unknown".
     pub fn name(&self) -> &str {
         self.frontmatter
             .get("name")
             .map_or("unknown", |s| s.as_str())
     }
-
-    /// Return the crate names referenced by this skill's `crates` predicates.
-    pub fn crate_names(&self) -> Vec<String> {
-        let mut names = std::collections::BTreeSet::new();
-        for pred in &self.crates {
-            pred.collect_crate_names(&mut names);
-        }
-        names.into_iter().collect()
-    }
 }
 
-/// A skill paired with its group's crate predicates, for display purposes.
+/// A skill paired with all predicate sets from its lineage.
+///
+/// Each predicate set must match (AND across sets). Within a set,
+/// any predicate matching suffices (OR within a set). An empty
+/// `predicate_sets` vec means "always matches".
 pub struct SkillWithGroupContext {
     pub skill: Skill,
-    /// Group-level crate predicates (used when the skill has none of its own).
-    pub group_crates: Vec<Predicate>,
+    /// Accumulated predicate sets: [plugin.crates, group.crates, skill.crates].
+    /// All predicate sets must match for the skill to apply.
+    pub predicate_sets: Vec<PredicateSet>,
 }
 
 impl SkillWithGroupContext {
-    /// Return the effective crate names this skill applies to.
+    /// Check whether this skill matches the given workspace dependencies.
     ///
-    /// Uses skill-level crates if present, otherwise falls back to group-level.
-    pub fn effective_crate_names(&self) -> Vec<String> {
-        let mut names = std::collections::BTreeSet::new();
-        let preds = if !self.skill.crates.is_empty() {
-            &self.skill.crates
-        } else {
-            &self.group_crates
-        };
-        for pred in preds {
-            pred.collect_crate_names(&mut names);
-        }
-        names.into_iter().collect()
+    /// Every predicate set must match. An empty vec is vacuously true.
+    pub fn matches_workspace(&self, deps: &[(String, semver::Version)]) -> bool {
+        self.predicate_sets.iter().all(|ps| ps.matches(deps))
     }
 }
 
@@ -102,13 +81,26 @@ pub async fn skills_applicable_to(
         for group in &plugin.skills {
             let (group_crates, skills) = load_skills_for_group(sym, path, group, for_crates).await;
 
-            collect_skills_applicable_to(&skills, &group_crates, for_crates, &mut results);
+            collect_skills_applicable_to(
+                &skills,
+                &plugin.crates,
+                &group_crates,
+                for_crates,
+                &mut results,
+            );
         }
     }
 
     // Standalone skills -- these are already loaded as part of the plugin
     // registry.
-    collect_skills_applicable_to(&registry.standalone_skills, &[], for_crates, &mut results);
+    let empty = PredicateSet { predicates: vec![] };
+    collect_skills_applicable_to(
+        &registry.standalone_skills,
+        &empty,
+        &empty,
+        for_crates,
+        &mut results,
+    );
 
     results
 }
@@ -122,16 +114,20 @@ async fn load_skills_for_group(
     plugin_path: &Path,
     group: &SkillGroup,
     for_crates: &[(String, semver::Version)],
-) -> (Vec<Predicate>, Vec<Skill>) {
-    let group_crates = group.crates.as_deref().unwrap_or_default();
+) -> (PredicateSet, Vec<Skill>) {
+    let group_crates = group
+        .crates
+        .clone()
+        .unwrap_or_else(|| PredicateSet { predicates: vec![] });
 
     // Pre-fetch filtering: skip groups whose crate predicates don't match any target.
-    if !group_crates.is_empty() && !group_crates.iter().any(|p| p.matches(for_crates)) {
-        return (group_crates.to_vec(), Vec::new());
+    if !group_crates.predicates.is_empty() && !group_crates.matches(for_crates) {
+        tracing::debug!(plugin = %plugin_path.display(), "skill group crates don't match, skipping");
+        return (group_crates, Vec::new());
     }
 
     let Some(dir) = resolve_skill_dir(sym, plugin_path, group).await else {
-        return (group_crates.to_vec(), Vec::new());
+        return (group_crates, Vec::new());
     };
 
     let mut skills = Vec::new();
@@ -144,7 +140,7 @@ async fn load_skills_for_group(
         }
     }
 
-    (group_crates.to_vec(), skills)
+    (group_crates, skills)
 }
 
 /// Discover all skills found in a given directory.
@@ -219,7 +215,8 @@ async fn resolve_skill_dir(
     group: &SkillGroup,
 ) -> Option<PathBuf> {
     if let Some(path) = &group.source.path {
-        return Some(plugin_path.join(path));
+        let plugin_dir = plugin_path.parent().unwrap_or(plugin_path);
+        return Some(plugin_dir.join(path));
     }
 
     if let Some(git_source) = &group.source.git {
@@ -311,57 +308,47 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
         );
     }
 
-    Ok(Skill {
+    let skill = Skill {
         frontmatter,
         crates,
         body: fm.body,
         path: skill_md_path.to_path_buf(),
-    })
+    };
+    tracing::debug!(name = %skill.name(), path = %skill_md_path.display(), "skill loaded");
+    Ok(skill)
 }
 
 /// Filter skills by crate constraints, collecting matches with group context.
 fn collect_skills_applicable_to(
     skills: &[Skill],
-    group_crates: &[Predicate],
+    plugin_crates: &PredicateSet,
+    group_crates: &PredicateSet,
     for_crates: &[(String, semver::Version)],
     results: &mut Vec<SkillWithGroupContext>,
 ) {
     for skill in skills {
-        if !skill_matches(skill, group_crates, for_crates) {
+        let mut predicate_sets = Vec::new();
+        if !plugin_crates.predicates.is_empty() {
+            predicate_sets.push(plugin_crates.clone());
+        }
+        if !group_crates.predicates.is_empty() {
+            predicate_sets.push(group_crates.clone());
+        }
+        if !skill.crates.is_empty() {
+            predicate_sets.push(PredicateSet {
+                predicates: skill.crates.clone(),
+            });
+        }
+
+        let entry = SkillWithGroupContext {
+            skill: skill.clone(),
+            predicate_sets,
+        };
+
+        if !entry.matches_workspace(for_crates) {
             continue;
         }
-        results.push(SkillWithGroupContext {
-            skill: skill.clone(),
-            group_crates: group_crates.to_vec(),
-        });
-    }
-}
-
-/// Check whether a skill matches the target crates.
-///
-/// If both skill-level and group-level `crates` are present, BOTH must match
-/// (AND composition). If only one level has `crates`, that level alone decides.
-/// Returns false if neither level has any crate predicates.
-fn skill_matches(
-    skill: &Skill,
-    group_crates: &[Predicate],
-    for_crates: &[(String, semver::Version)],
-) -> bool {
-    let skill_ok = if skill.crates.is_empty() {
-        None
-    } else {
-        Some(skill.crates.iter().any(|p| p.matches(for_crates)))
-    };
-    let group_ok = if group_crates.is_empty() {
-        None
-    } else {
-        Some(group_crates.iter().any(|p| p.matches(for_crates)))
-    };
-    match (skill_ok, group_ok) {
-        (Some(s), Some(g)) => s && g, // AND: both must match
-        (Some(s), None) => s,
-        (None, Some(g)) => g,
-        (None, None) => false,
+        results.push(entry);
     }
 }
 
@@ -435,6 +422,10 @@ mod tests {
     /// Parse a predicate string for use in test fixtures.
     fn pred(s: &str) -> Predicate {
         crate::predicate::parse(s).unwrap()
+    }
+
+    fn pred_set(s: &str) -> PredicateSet {
+        PredicateSet::parse(s).unwrap()
     }
 
     // --- Frontmatter parsing ---
@@ -558,7 +549,7 @@ mod tests {
         .unwrap();
 
         let defaults = SkillGroup {
-            crates: Some(vec![pred("tokio")]),
+            crates: Some(pred_set("tokio")),
             ..Default::default()
         };
         let skill = load_skill(&skill_md, &defaults).unwrap();
@@ -587,7 +578,7 @@ mod tests {
         .unwrap();
 
         let defaults = SkillGroup {
-            crates: Some(vec![pred("tokio")]),
+            crates: Some(pred_set("tokio")),
             ..Default::default()
         };
         let skill = load_skill(&skill_md, &defaults).unwrap();
@@ -640,7 +631,7 @@ mod tests {
 
         // Plugin defaults provide crates, so the skill doesn't need its own
         let defaults = SkillGroup {
-            crates: Some(vec![pred("serde")]),
+            crates: Some(pred_set("serde")),
             ..Default::default()
         };
         let skill = load_skill(&skill_md, &defaults).unwrap();
@@ -714,11 +705,11 @@ mod tests {
         // Create a plugin that only applies to "other-crate"
         let plugin = Plugin {
             name: "other-crate-plugin".to_string(),
-            crates: vec![pred("other-crate")],
+            crates: pred_set("other-crate"),
             installation: None,
             hooks: vec![],
             skills: vec![SkillGroup {
-                crates: Some(vec![pred("serde")]), // Group targets serde
+                crates: Some(pred_set("serde")), // Group targets serde
                 source: PluginSource::default(),
             }],
             mcp_servers: vec![],
@@ -753,11 +744,11 @@ mod tests {
         // Create a plugin with wildcard that has a group targeting different crate
         let plugin = Plugin {
             name: "wildcard-plugin".to_string(),
-            crates: vec![pred("*")], // Plugin applies to all
+            crates: pred_set("*"), // Plugin applies to all
             installation: None,
             hooks: vec![],
             skills: vec![SkillGroup {
-                crates: Some(vec![pred("other-crate")]), // But group targets other-crate
+                crates: Some(pred_set("other-crate")), // But group targets other-crate
                 source: PluginSource::default(),
             }],
             mcp_servers: vec![],
@@ -810,11 +801,11 @@ mod tests {
         // Create a plugin where all levels match serde
         let plugin = Plugin {
             name: "serde-plugin".to_string(),
-            crates: vec![pred("serde")], // Plugin targets serde
+            crates: pred_set("serde"), // Plugin targets serde
             installation: None,
             hooks: vec![],
             skills: vec![SkillGroup {
-                crates: Some(vec![pred("serde")]), // Group also targets serde
+                crates: Some(pred_set("serde")), // Group also targets serde
                 source: PluginSource {
                     path: Some(skill_dir.to_path_buf()),
                     git: None,
@@ -925,7 +916,7 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].skill.name(), "standalone-serde");
         // No group context for standalone skills
-        assert!(results[0].group_crates.is_empty());
+        assert_eq!(results[0].predicate_sets.len(), 1); // just skill-level crates
     }
 
     // --- Discovery ---
@@ -1068,76 +1059,72 @@ mod tests {
         assert!(skills.is_empty());
     }
 
-    // --- AND composition tests for skill_matches ---
+    // --- AND composition tests for matches_workspace ---
 
     fn v(s: &str) -> semver::Version {
         semver::Version::parse(s).unwrap()
     }
 
+    fn resolved(skill_crates: Vec<Predicate>, group: Vec<Predicate>) -> SkillWithGroupContext {
+        let mut predicate_sets = Vec::new();
+        if !group.is_empty() {
+            predicate_sets.push(PredicateSet { predicates: group });
+        }
+        if !skill_crates.is_empty() {
+            predicate_sets.push(PredicateSet {
+                predicates: skill_crates,
+            });
+        }
+        SkillWithGroupContext {
+            skill: Skill {
+                frontmatter: BTreeMap::new(),
+                crates: vec![],
+                body: String::new(),
+                path: PathBuf::new(),
+            },
+            predicate_sets,
+        }
+    }
+
     #[test]
-    fn skill_matches_and_both_present_both_satisfied() {
-        // Skill crates: tokio, Group crates: serde → requires BOTH
-        let skill = Skill {
-            frontmatter: BTreeMap::new(),
-            crates: vec![pred("tokio")],
-            body: String::new(),
-            path: PathBuf::new(),
-        };
-        let group = vec![pred("serde")];
+    fn matches_workspace_both_sets_satisfied() {
+        let entry = resolved(vec![pred("tokio")], vec![pred("serde")]);
         let ws = vec![("serde".into(), v("1.0.0")), ("tokio".into(), v("1.0.0"))];
-        assert!(skill_matches(&skill, &group, &ws));
+        assert!(entry.matches_workspace(&ws));
     }
 
     #[test]
-    fn skill_matches_and_skill_missing_from_workspace() {
-        // Skill crates: tokio, Group crates: serde, workspace has only serde → AND fails
-        let skill = Skill {
-            frontmatter: BTreeMap::new(),
-            crates: vec![pred("tokio")],
-            body: String::new(),
-            path: PathBuf::new(),
-        };
-        let group = vec![pred("serde")];
+    fn matches_workspace_skill_set_missing() {
+        let entry = resolved(vec![pred("tokio")], vec![pred("serde")]);
         let ws = vec![("serde".into(), v("1.0.0"))];
-        assert!(!skill_matches(&skill, &group, &ws));
+        assert!(!entry.matches_workspace(&ws));
     }
 
     #[test]
-    fn skill_matches_no_skill_crates_uses_group() {
-        // Skill has no crates, group has serde → only serde required
-        let skill = Skill {
-            frontmatter: BTreeMap::new(),
-            crates: vec![],
-            body: String::new(),
-            path: PathBuf::new(),
-        };
-        let group = vec![pred("serde")];
+    fn matches_workspace_group_only() {
+        let entry = resolved(vec![], vec![pred("serde")]);
         let ws = vec![("serde".into(), v("1.0.0"))];
-        assert!(skill_matches(&skill, &group, &ws));
+        assert!(entry.matches_workspace(&ws));
     }
 
     #[test]
-    fn skill_matches_skill_crates_no_group() {
-        // Skill has serde, group has nothing → only serde required
-        let skill = Skill {
-            frontmatter: BTreeMap::new(),
-            crates: vec![pred("serde")],
-            body: String::new(),
-            path: PathBuf::new(),
-        };
+    fn matches_workspace_skill_only() {
+        let entry = resolved(vec![pred("serde")], vec![]);
         let ws = vec![("serde".into(), v("1.0.0"))];
-        assert!(skill_matches(&skill, &[], &ws));
+        assert!(entry.matches_workspace(&ws));
     }
 
     #[test]
-    fn skill_matches_neither_level_returns_false() {
-        let skill = Skill {
-            frontmatter: BTreeMap::new(),
-            crates: vec![],
-            body: String::new(),
-            path: PathBuf::new(),
-        };
+    fn matches_workspace_empty_predicate_sets() {
+        let entry = resolved(vec![], vec![]);
         let ws = vec![("serde".into(), v("1.0.0"))];
-        assert!(!skill_matches(&skill, &[], &ws));
+        assert!(entry.matches_workspace(&ws));
+    }
+
+    #[test]
+    fn matches_workspace_wildcard() {
+        let entry = resolved(vec![], vec![pred("*")]);
+        let ws = vec![("serde".into(), v("1.0.0"))];
+        assert!(entry.matches_workspace(&ws));
     }
 }

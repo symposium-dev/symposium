@@ -356,3 +356,54 @@ async fn sync_excludes_transitive_deps() {
     .await
     .unwrap();
 }
+
+/// `sync` installs skills defined inside a plugin's `[[skills]]` group
+/// with `source.path = "."`. The skill directory should resolve relative
+/// to the plugin's parent directory, not the TOML file path itself.
+#[tokio::test]
+async fn sync_installs_plugin_skill_group() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-skill-group0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+
+            let skill_file = workspace_root.join(".claude/skills/serde-guidance/SKILL.md");
+            assert!(
+                skill_file.exists(),
+                "sync should install skill from plugin [[skills]] group with source.path"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `sync` installs skills from a plugin with `crates = ["*"]`.
+/// Wildcard predicates should match any workspace.
+#[tokio::test]
+async fn sync_installs_wildcard_plugin_skill() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-skill-group0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+
+            let skill_file = workspace_root.join(".claude/skills/wildcard-guidance/SKILL.md");
+            assert!(
+                skill_file.exists(),
+                "sync should install skill from wildcard plugin"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
