@@ -112,6 +112,7 @@ impl Default for DefaultsConfig {
 
 /// A configured plugin source — either a git repository or a local path.
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct PluginSourceConfig {
     /// Display name for this source.
     pub name: String,
