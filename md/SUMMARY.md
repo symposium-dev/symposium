@@ -13,7 +13,7 @@
 - [Introduction](./introduction.md)
 - [About symposium](./about.md)
 - [Blog](./blog/outline.md)
-  - [Announcing Symposium](./blog/announcing-symposium.md)
+  - [Announcing Symposium (2026-04-21)](./blog/announcing-symposium.md)
 
 # User's guide
 

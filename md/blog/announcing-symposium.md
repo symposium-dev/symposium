@@ -15,7 +15,7 @@ The second one is that Symposium is an organization dedicated to one goal, "AI t
 
 ## Getting started
 
-The primary way to interact with Symposium today is through the `cargo agents` CLI command. If you want to try it, do this:
+You interact with Symposium through the `cargo agents` CLI command. If you want to try it, do this:
 
 ```rust
 cargo binstall symposium # or `cargo install`
@@ -28,7 +28,7 @@ The init command will prompt you to select what agents you want to use and a few
 
 You may be familiar with various extensions that agents can work with, such has [MCP servers](https://modelcontextprotocol.io/docs/getting-started/intro), [Skills](https://agentskills.io/home), or Hooks. You may also know that different agents have different levels of support for these, and even different takes on them (Hooks, for example, are not as well-standardized as MCP servers and Skills). However, that doesn't diminish the fact that many people have built many tools around these extension systems. We want you to *easily* use these ecosystem tools.
 
-You may *also* have run into cases where a model is "outdated" compared to either the Rust language itself (e.g. there may be a newer language feature that is more idiomatic) or was trained on an older versions of a crate that you are using. It's generally not hard to get models to follow newer conventions, but they need to be *told* to do so. We want to make that easier and more automated. 
+You may *also* have run into cases where a model is "outdated" compared to either the Rust language itself (e.g., there may be a newer language feature that is more idiomatic) or was trained on an older versions of a crate that you are using. It's generally not hard to get models to follow newer conventions, but they need to be *told* to do so. We want to make that easier and more automated. 
 
 Finally, we want writing code with agents to be more *efficient* and *reliable*. Some of this comes from the above two goals, but part of it also comes from making sure that agents write code the way *you* would write it. For example, when you finish writing Rust code, you likely run `cargo check`, run your tests, or format your code - and we think that you should expect your agent to do the same. Simulatenously, efficiency *also* means that we want these tools to use as few tokens as possible.
 
