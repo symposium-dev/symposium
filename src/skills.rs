@@ -83,8 +83,8 @@ pub async fn skills_applicable_to(
 
             collect_skills_applicable_to(
                 &skills,
-                &PredicateSet(plugin.crates.clone()),
-                &PredicateSet(group_crates),
+                &plugin.crates,
+                &group_crates,
                 for_crates,
                 &mut results,
             );
@@ -93,7 +93,7 @@ pub async fn skills_applicable_to(
 
     // Standalone skills -- these are already loaded as part of the plugin
     // registry.
-    let empty = PredicateSet(vec![]);
+    let empty = PredicateSet { predicates: vec![] };
     collect_skills_applicable_to(
         &registry.standalone_skills,
         &empty,
@@ -114,17 +114,20 @@ async fn load_skills_for_group(
     plugin_path: &Path,
     group: &SkillGroup,
     for_crates: &[(String, semver::Version)],
-) -> (Vec<Predicate>, Vec<Skill>) {
-    let group_crates = group.crates.as_deref().unwrap_or_default();
+) -> (PredicateSet, Vec<Skill>) {
+    let group_crates = group
+        .crates
+        .clone()
+        .unwrap_or_else(|| PredicateSet { predicates: vec![] });
 
     // Pre-fetch filtering: skip groups whose crate predicates don't match any target.
-    if !group_crates.is_empty() && !group_crates.iter().any(|p| p.matches(for_crates)) {
+    if !group_crates.predicates.is_empty() && !group_crates.matches(for_crates) {
         tracing::debug!(plugin = %plugin_path.display(), "skill group crates don't match, skipping");
-        return (group_crates.to_vec(), Vec::new());
+        return (group_crates, Vec::new());
     }
 
     let Some(dir) = resolve_skill_dir(sym, plugin_path, group).await else {
-        return (group_crates.to_vec(), Vec::new());
+        return (group_crates, Vec::new());
     };
 
     let mut skills = Vec::new();
@@ -137,7 +140,7 @@ async fn load_skills_for_group(
         }
     }
 
-    (group_crates.to_vec(), skills)
+    (group_crates, skills)
 }
 
 /// Discover all skills found in a given directory.
@@ -325,14 +328,14 @@ fn collect_skills_applicable_to(
 ) {
     for skill in skills {
         let mut predicate_sets = Vec::new();
-        if !plugin_crates.0.is_empty() {
+        if !plugin_crates.predicates.is_empty() {
             predicate_sets.push(plugin_crates.clone());
         }
-        if !group_crates.0.is_empty() {
+        if !group_crates.predicates.is_empty() {
             predicate_sets.push(group_crates.clone());
         }
         if !skill.crates.is_empty() {
-            predicate_sets.push(PredicateSet(skill.crates.clone()));
+            predicate_sets.push(PredicateSet { predicates: skill.crates.clone() });
         }
 
         let entry = SkillWithGroupContext {
@@ -417,6 +420,10 @@ mod tests {
     /// Parse a predicate string for use in test fixtures.
     fn pred(s: &str) -> Predicate {
         crate::predicate::parse(s).unwrap()
+    }
+
+    fn pred_set(s: &str) -> PredicateSet {
+        PredicateSet::parse(s).unwrap()
     }
 
     // --- Frontmatter parsing ---
@@ -540,7 +547,7 @@ mod tests {
         .unwrap();
 
         let defaults = SkillGroup {
-            crates: Some(vec![pred("tokio")]),
+            crates: Some(pred_set("tokio")),
             ..Default::default()
         };
         let skill = load_skill(&skill_md, &defaults).unwrap();
@@ -569,7 +576,7 @@ mod tests {
         .unwrap();
 
         let defaults = SkillGroup {
-            crates: Some(vec![pred("tokio")]),
+            crates: Some(pred_set("tokio")),
             ..Default::default()
         };
         let skill = load_skill(&skill_md, &defaults).unwrap();
@@ -622,7 +629,7 @@ mod tests {
 
         // Plugin defaults provide crates, so the skill doesn't need its own
         let defaults = SkillGroup {
-            crates: Some(vec![pred("serde")]),
+            crates: Some(pred_set("serde")),
             ..Default::default()
         };
         let skill = load_skill(&skill_md, &defaults).unwrap();
@@ -696,11 +703,11 @@ mod tests {
         // Create a plugin that only applies to "other-crate"
         let plugin = Plugin {
             name: "other-crate-plugin".to_string(),
-            crates: vec![pred("other-crate")],
+            crates: pred_set("other-crate"),
             installation: None,
             hooks: vec![],
             skills: vec![SkillGroup {
-                crates: Some(vec![pred("serde")]), // Group targets serde
+                crates: Some(pred_set("serde")), // Group targets serde
                 source: PluginSource::default(),
             }],
             mcp_servers: vec![],
@@ -735,11 +742,11 @@ mod tests {
         // Create a plugin with wildcard that has a group targeting different crate
         let plugin = Plugin {
             name: "wildcard-plugin".to_string(),
-            crates: vec![pred("*")], // Plugin applies to all
+            crates: pred_set("*"), // Plugin applies to all
             installation: None,
             hooks: vec![],
             skills: vec![SkillGroup {
-                crates: Some(vec![pred("other-crate")]), // But group targets other-crate
+                crates: Some(pred_set("other-crate")), // But group targets other-crate
                 source: PluginSource::default(),
             }],
             mcp_servers: vec![],
@@ -792,11 +799,11 @@ mod tests {
         // Create a plugin where all levels match serde
         let plugin = Plugin {
             name: "serde-plugin".to_string(),
-            crates: vec![pred("serde")], // Plugin targets serde
+            crates: pred_set("serde"), // Plugin targets serde
             installation: None,
             hooks: vec![],
             skills: vec![SkillGroup {
-                crates: Some(vec![pred("serde")]), // Group also targets serde
+                crates: Some(pred_set("serde")), // Group also targets serde
                 source: PluginSource {
                     path: Some(skill_dir.to_path_buf()),
                     git: None,
@@ -1059,10 +1066,10 @@ mod tests {
     fn resolved(skill_crates: Vec<Predicate>, group: Vec<Predicate>) -> SkillWithGroupContext {
         let mut predicate_sets = Vec::new();
         if !group.is_empty() {
-            predicate_sets.push(PredicateSet(group));
+            predicate_sets.push(PredicateSet { predicates: group });
         }
         if !skill_crates.is_empty() {
-            predicate_sets.push(PredicateSet(skill_crates));
+            predicate_sets.push(PredicateSet { predicates: skill_crates });
         }
         SkillWithGroupContext {
             skill: Skill {

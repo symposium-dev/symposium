@@ -55,13 +55,23 @@ impl Predicate {
 }
 
 /// A set of predicates where at least one must match (OR semantics).
-#[derive(Debug, Clone, PartialEq)]
-pub struct PredicateSet(pub Vec<Predicate>);
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct PredicateSet {
+    pub predicates: Vec<Predicate>,
+}
 
 impl PredicateSet {
+    /// Parse a comma-separated predicate string into a set.
+    pub fn parse(input: &str) -> Result<Self> {
+        Ok(Self {
+            predicates: parse_comma_separated(input)?,
+        })
+    }
+
     /// True if any predicate in this set matches the workspace deps.
     pub fn matches(&self, deps: &[(String, semver::Version)]) -> bool {
-        self.0.iter().any(|p| p.matches(deps))
+        self.predicates.iter().any(|p| p.matches(deps))
     }
 }
 
