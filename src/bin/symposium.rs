@@ -114,22 +114,14 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                             return ExitCode::FAILURE;
                         }
                         for r in &results {
-                            match &r.result {
-                                Ok(()) => {
-                                    println!("ok: {} ({})", r.path.display(), r.kind);
-                                }
-                                Err(e) => {
-                                    eprintln!("FAIL: {} ({}): {e}", r.path.display(), r.kind);
-                                    errors += 1;
-                                }
-                            }
+                            errors += print_validation_result(r, "  ");
                         }
-                        let total = results.len();
+                        let total = count_results(&results);
                         let passed = total - errors;
-                        println!("\n{passed}/{total} valid");
+                        println!("\n  {passed}/{total} valid");
                     }
                     Err(e) => {
-                        eprintln!("{}: {e}", path.display());
+                        eprintln!("✗ {}: {e}", path.display());
                         return ExitCode::FAILURE;
                     }
                 }
@@ -139,21 +131,21 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                         Ok(crate_names) => {
                             if !crate_names.is_empty() {
                                 println!(
-                                    "\nChecking {} crate name(s) on crates.io...",
+                                    "\n📦 Checking {} crate name(s) on crates.io...",
                                     crate_names.len()
                                 );
                                 for name in &crate_names {
                                     if plugins::check_crate_exists(name).await {
-                                        println!("  ok: {name}");
+                                        println!("  ✅ {name}");
                                     } else {
-                                        eprintln!("  FAIL: {name} not found on crates.io");
+                                        eprintln!("  ✗ {name} — not found on crates.io");
                                         errors += 1;
                                     }
                                 }
                             }
                         }
                         Err(e) => {
-                            eprintln!("failed to collect crate names: {e}");
+                            eprintln!("✗ failed to collect crate names: {e}");
                             errors += 1;
                         }
                     }
@@ -190,4 +182,33 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
             }
         },
     }
+}
+
+fn print_validation_result(r: &plugins::ValidationResult, indent: &str) -> usize {
+    let mut errors = 0;
+    match &r.result {
+        Ok(()) => {
+            if let Some(ref w) = r.warning {
+                println!("{indent}⚠️  {} ({}): {w}", r.path.display(), r.kind);
+            } else {
+                println!("{indent}✅ {} ({})", r.path.display(), r.kind);
+            }
+        }
+        Err(e) => {
+            eprintln!("{indent}✗ {} ({}): {e}", r.path.display(), r.kind);
+            errors += 1;
+        }
+    }
+    let child_indent = format!("{indent}    ");
+    for child in &r.children {
+        errors += print_validation_result(child, &child_indent);
+    }
+    errors
+}
+
+fn count_results(results: &[plugins::ValidationResult]) -> usize {
+    results
+        .iter()
+        .map(|r| 1 + count_results(&r.children))
+        .sum()
 }
