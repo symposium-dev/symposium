@@ -1,43 +1,43 @@
-# `symposium plugin`
+# `cargo agents plugin`
 
 Manage plugin sources.
 
 ## Usage
 
 ```bash
-symposium plugin <SUBCOMMAND>
+cargo agents plugin <SUBCOMMAND>
 ```
 
 ## Subcommands
 
-### `symposium plugin sync`
+### `cargo agents plugin sync`
 
 ```bash
-symposium plugin sync [PROVIDER]
+cargo agents plugin sync [PROVIDER]
 ```
 
 Fetch or update git-based plugin sources. If a provider name is given, syncs only that provider (ignoring `auto-update` settings). If omitted, syncs all providers that have `auto-update = true`.
 
-### `symposium plugin list`
+### `cargo agents plugin list`
 
 ```bash
-symposium plugin list
+cargo agents plugin list
 ```
 
 List all configured plugin sources and the plugins they provide.
 
-### `symposium plugin show`
+### `cargo agents plugin show`
 
 ```bash
-symposium plugin show <PLUGIN>
+cargo agents plugin show <PLUGIN>
 ```
 
 Show details for a specific plugin, including its TOML configuration and source file path.
 
-### `symposium plugin validate`
+### `cargo agents plugin validate`
 
 ```bash
-symposium plugin validate <PATH> [--no-check-crates]
+cargo agents plugin validate <PATH> [--no-check-crates]
 ```
 
 Validate a plugin source directory or a single TOML manifest file. Useful when authoring plugins.

@@ -1,4 +1,4 @@
-# `symposium sync`
+# `cargo agents sync`
 
 Scans workspace dependencies, installs applicable skills into agent directories, and cleans up stale skills.
 

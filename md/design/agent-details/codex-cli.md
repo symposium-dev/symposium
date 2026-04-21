@@ -222,7 +222,7 @@ The MCP server entry is added under `[mcp_servers]` in the TOML config:
 
 ```toml
 [mcp_servers.symposium]
-command = "/path/to/symposium"
+command = "/path/to/cargo-agents"
 args = ["mcp"]
 ```
 

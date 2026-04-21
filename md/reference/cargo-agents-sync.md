@@ -1,11 +1,11 @@
-# `symposium sync`
+# `cargo agents sync`
 
 Synchronize skills with workspace dependencies.
 
 ## Usage
 
 ```bash
-symposium sync
+cargo agents sync
 ```
 
 ## Behavior
@@ -26,14 +26,14 @@ Must be run from within a Rust workspace. Performs the following steps:
 
 ## Automatic sync
 
-By default (`auto-sync = true`), `symposium sync` runs automatically during hook invocations. This keeps skills in sync with workspace dependencies without manual intervention. Set `auto-sync = false` in the user config to disable this and sync manually.
+By default (`auto-sync = true`), `cargo agents sync` runs automatically during hook invocations. This keeps skills in sync with workspace dependencies without manual intervention. Set `auto-sync = false` in the user config to disable this and sync manually.
 
 ## Example
 
 ```bash
 # One-time setup
-symposium init --add-agent claude
+cargo agents init --add-agent claude
 
 # Sync skills for the current workspace
-symposium sync
+cargo agents sync
 ```

@@ -12,7 +12,17 @@ async fn main() -> ExitCode {
     let mut sym = config::Symposium::from_environment();
     sym.init_logging();
 
-    let cli = Cli::parse();
+    // When invoked as `cargo agents`, cargo passes "agents" as the first arg.
+    // Strip it so clap sees the real arguments.
+    let args: Vec<_> = std::env::args_os().collect();
+    let filtered: Vec<_> = if args.len() > 1 && args[1] == "agents" {
+        std::iter::once(args[0].clone())
+            .chain(args[2..].iter().cloned())
+            .collect()
+    } else {
+        args
+    };
+    let cli = Cli::parse_from(filtered);
 
     // Hook commands are quiet by default (they're invoked by the agent, not the user)
     let is_hook = matches!(cli.command, Some(Commands::Hook { .. }));

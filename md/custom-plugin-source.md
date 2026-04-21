@@ -29,7 +29,7 @@ git = "https://github.com/mycompany/symposium-plugins"
 auto-update = true
 ```
 
-We recommend creating a CI tool that runs [`symposium plugin validate`](./reference/cargo-agents-plugin.md) on your repository with every PR to ensure it is properly formatted.
+We recommend creating a CI tool that runs [`cargo agents plugin validate`](./reference/cargo-agents-plugin.md) on your repository with every PR to ensure it is properly formatted.
 
 ### Local directory
 
@@ -48,4 +48,4 @@ See the [reference section](./reference/plugin-source.md) for details on what a 
 
 ## Managing sources
 
-The [`symposium plugin`](./reference/cargo-agents-plugin.md) command allows you to perform operatons on the installed plugin sources, like synchronizing their contents or validating their structure.
+The [`cargo agents plugin`](./reference/cargo-agents-plugin.md) command allows you to perform operatons on the installed plugin sources, like synchronizing their contents or validating their structure.

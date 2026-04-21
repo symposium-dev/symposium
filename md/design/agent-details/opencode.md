@@ -170,7 +170,7 @@ The MCP server entry is added under `mcp` in the JSON config:
 {
   "mcp": {
     "symposium": {
-      "command": "/path/to/symposium",
+      "command": "/path/to/cargo-agents",
       "args": ["mcp"]
     }
   }

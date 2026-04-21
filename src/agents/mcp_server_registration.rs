@@ -542,7 +542,8 @@ mod tests {
 
     fn test_servers() -> Vec<McpServer> {
         vec![McpServer::Stdio(
-            McpServerStdio::new("symposium", "/usr/local/bin/symposium").args(vec!["mcp".into()]),
+            McpServerStdio::new("symposium", "/usr/local/bin/cargo-agents")
+                .args(vec!["mcp".into()]),
         )]
     }
 
@@ -562,7 +563,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             settings["mcpServers"]["symposium"]["command"],
-            "/usr/local/bin/symposium"
+            "/usr/local/bin/cargo-agents"
         );
         assert_eq!(settings["mcpServers"]["symposium"]["args"][0], "mcp");
     }
@@ -592,7 +593,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             settings["mcpServers"]["symposium"]["command"],
-            "/usr/local/bin/symposium"
+            "/usr/local/bin/cargo-agents"
         );
     }
 
@@ -609,7 +610,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             settings["mcpServers"]["symposium"]["command"],
-            "/usr/local/bin/symposium"
+            "/usr/local/bin/cargo-agents"
         );
     }
 
@@ -637,7 +638,7 @@ mod tests {
         let doc: toml::Value = content.parse().unwrap();
         assert_eq!(
             doc["mcp_servers"]["symposium"]["command"].as_str().unwrap(),
-            "/usr/local/bin/symposium"
+            "/usr/local/bin/cargo-agents"
         );
         assert_eq!(
             doc["mcp_servers"]["symposium"]["args"].as_array().unwrap()[0]
@@ -676,7 +677,7 @@ mod tests {
         let entry = &doc["mcp_servers"]["symposium"];
         assert_eq!(
             entry["command"].as_str().unwrap(),
-            "/usr/local/bin/symposium"
+            "/usr/local/bin/cargo-agents"
         );
         assert_eq!(
             entry["args"].as_array().unwrap()[0].as_str().unwrap(),
@@ -712,7 +713,10 @@ mod tests {
 
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(config["symposium"]["command"], "/usr/local/bin/symposium");
+        assert_eq!(
+            config["symposium"]["command"],
+            "/usr/local/bin/cargo-agents"
+        );
         assert_eq!(config["symposium"]["args"][0], "mcp");
     }
 
@@ -739,7 +743,10 @@ mod tests {
 
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(config["symposium"]["command"], "/usr/local/bin/symposium");
+        assert_eq!(
+            config["symposium"]["command"],
+            "/usr/local/bin/cargo-agents"
+        );
     }
 
     #[test]
@@ -768,7 +775,7 @@ mod tests {
         assert_eq!(ext["provider"].as_str().unwrap(), "mcp");
         assert_eq!(
             ext["config"]["command"].as_str().unwrap(),
-            "/usr/local/bin/symposium"
+            "/usr/local/bin/cargo-agents"
         );
     }
 
@@ -817,7 +824,7 @@ mod tests {
             doc["extensions"]["symposium"]["config"]["command"]
                 .as_str()
                 .unwrap(),
-            "/usr/local/bin/symposium",
+            "/usr/local/bin/cargo-agents",
         );
         // Still exactly one extension
         assert_eq!(doc["extensions"].as_mapping().unwrap().len(), 1);
@@ -856,7 +863,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             config["mcp"]["symposium"]["command"],
-            "/usr/local/bin/symposium"
+            "/usr/local/bin/cargo-agents"
         );
         assert_eq!(config["mcp"]["symposium"]["args"][0], "mcp");
     }
@@ -886,7 +893,7 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
             config["mcp"]["symposium"]["command"],
-            "/usr/local/bin/symposium"
+            "/usr/local/bin/cargo-agents"
         );
     }
 

@@ -1,6 +1,6 @@
 # Configuration
 
-`symposium` uses a single user-wide configuration file at `~/.symposium/config.toml`. Created by `symposium init`.
+`cargo agents` uses a single user-wide configuration file at `~/.symposium/config.toml`. Created by `cargo agents init`.
 
 ## Full example
 
@@ -34,14 +34,14 @@ path = "my-plugins"
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `auto-sync` | bool | `true` | Automatically run `symposium sync` during hook invocations. When enabled, skills are kept in sync with workspace dependencies without manual intervention. |
+| `auto-sync` | bool | `true` | Automatically run `cargo agents sync` during hook invocations. When enabled, skills are kept in sync with workspace dependencies without manual intervention. |
 | `hook-scope` | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace. |
 
 ### Hook scope: control whether Symposium activates in all projects or only those you select
 
 Registering hooks globally ensures that Symposium activates whenever you use the selected agent, which means that it will work in any Rust project automatically.
 
-Registering hooks at the project level requires you to run `symposium sync` within each project at least once to create the hooks. After that, the `auto-sync` feature will keep you up-to-date.
+Registering hooks at the project level requires you to run `cargo agents sync` within each project at least once to create the hooks. After that, the `auto-sync` feature will keep you up-to-date.
 
 ## `[[agent]]`
 

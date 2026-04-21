@@ -242,7 +242,7 @@ The MCP server entry is added under `mcpServers`:
 {
   "mcpServers": {
     "symposium": {
-      "command": "/path/to/symposium",
+      "command": "/path/to/cargo-agents",
       "args": ["mcp"]
     }
   }

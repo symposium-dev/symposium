@@ -230,7 +230,7 @@ impl TestContext {
     /// Run a `symposium` CLI command in-process, returning captured output
     /// with temp-dir paths normalized.
     pub async fn symposium(&mut self, args: &[&str]) -> anyhow::Result<String> {
-        let mut full_args = vec!["symposium", "-q"];
+        let mut full_args = vec!["cargo-agents", "-q"];
         full_args.extend_from_slice(args);
 
         let cli = Cli::try_parse_from(&full_args).map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -387,8 +387,8 @@ impl TestContext {
             .join("agent_harness/run_scenario.py");
 
         // Build CARGO_BIN_DIR from the binary path cargo gives us.
-        let bin_exe = std::env::var("CARGO_BIN_EXE_symposium")
-            .expect("CARGO_BIN_EXE_symposium must be set (run via cargo test)");
+        let bin_exe = std::env::var("CARGO_BIN_EXE_cargo-agents")
+            .expect("CARGO_BIN_EXE_cargo-agents must be set (run via cargo test)");
         let bin_dir = Path::new(&bin_exe)
             .parent()
             .expect("binary has parent dir")
@@ -451,14 +451,14 @@ struct FixtureScanResult {
 ///
 /// Text files (`.toml`, `.md`, `.json`, `.txt`, `.ts`, `.js`) have variables expanded:
 /// - `$TEST_DIR` — the tempdir root
-/// - `$BINARY` — path to the `symposium` binary (from `CARGO_BIN_EXE_symposium`)
+/// - `$BINARY` — path to the `cargo-agents` binary (from `CARGO_BIN_EXE_cargo-agents`)
 async fn setup_fixture(fixtures: &[&str]) -> TestContext {
     let fixtures_base = Path::new(env!("SYMPOSIUM_FIXTURES_DIR"));
     let tempdir = tempfile::tempdir().expect("failed to create tempdir");
     let root = tempdir.path();
 
     let test_dir = root.to_str().expect("tempdir path is UTF-8");
-    let binary = std::env::var("CARGO_BIN_EXE_symposium").unwrap_or_default();
+    let binary = std::env::var("CARGO_BIN_EXE_cargo-agents").unwrap_or_default();
 
     let vars = [("$TEST_DIR", test_dir), ("$BINARY", &binary)];
 
@@ -653,8 +653,8 @@ async fn run_with_acp_session(
         .unwrap_or_else(|| ctx.sym.config_dir().to_path_buf());
 
     // Set env vars so the agent subprocess finds symposium and writes traces.
-    let bin_exe = std::env::var("CARGO_BIN_EXE_symposium")
-        .expect("CARGO_BIN_EXE_symposium must be set (run via cargo test)");
+    let bin_exe = std::env::var("CARGO_BIN_EXE_cargo-agents")
+        .expect("CARGO_BIN_EXE_cargo-agents must be set (run via cargo test)");
     let bin_dir = Path::new(&bin_exe).parent().expect("binary has parent dir");
     let path = format!(
         "{}:{}",

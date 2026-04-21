@@ -447,7 +447,7 @@ fn register_claude_hooks(settings_path: &Path, out: &Output) -> Result<()> {
         "UserPromptSubmit",
         "SessionStart",
     ] {
-        let command = format!("symposium hook claude {}", event_to_cli_arg(event));
+        let command = format!("cargo-agents hook claude {}", event_to_cli_arg(event));
         if ensure_claude_hook_entry(hooks_obj, event, &command) {
             added.push(event);
         }
@@ -484,7 +484,7 @@ fn ensure_claude_hook_entry(
                 hooks.iter().any(|h| {
                     h.get("command")
                         .and_then(|c| c.as_str())
-                        .is_some_and(|c| c.starts_with("symposium hook"))
+                        .is_some_and(|c| c.starts_with("cargo-agents hook"))
                 })
             })
     });
@@ -527,7 +527,7 @@ fn register_codex_hooks(hooks_path: &Path, out: &Output) -> Result<()> {
         "UserPromptSubmit",
         "SessionStart",
     ] {
-        let command = format!("symposium hook codex {}", event_to_cli_arg(event));
+        let command = format!("cargo-agents hook codex {}", event_to_cli_arg(event));
         if ensure_codex_hook_entry(hooks_obj, event, &command) {
             added.push(event);
         }
@@ -564,7 +564,7 @@ fn ensure_codex_hook_entry(
                 hooks.iter().any(|h| {
                     h.get("command")
                         .and_then(|c| c.as_str())
-                        .is_some_and(|c| c.starts_with("symposium hook"))
+                        .is_some_and(|c| c.starts_with("cargo-agents hook"))
                 })
             })
     });
@@ -585,7 +585,7 @@ fn ensure_codex_hook_entry(
 }
 
 fn unregister_codex_hooks(hooks_path: &Path, out: &Output) {
-    unregister_settings_hooks(hooks_path, "symposium hook", out);
+    unregister_settings_hooks(hooks_path, "cargo-agents hook", out);
 }
 
 // ---------------------------------------------------------------------------
@@ -611,7 +611,7 @@ fn register_copilot_hooks_global(config_path: &Path, out: &Output) -> Result<()>
             a.iter().any(|h| {
                 h.get("bash")
                     .and_then(|c| c.as_str())
-                    .is_some_and(|c| c.starts_with("symposium hook"))
+                    .is_some_and(|c| c.starts_with("cargo-agents hook"))
             })
         })
     });
@@ -642,7 +642,7 @@ fn register_copilot_hooks(hooks_dir: &Path, out: &Output) -> Result<()> {
 
     if hook_file.exists() {
         let existing = fs::read_to_string(&hook_file)?;
-        if existing.contains("symposium hook") {
+        if existing.contains("cargo-agents hook") {
             out.already_ok(format!("{display}: hooks already registered"));
             return Ok(());
         }
@@ -670,7 +670,7 @@ fn copilot_hook_entries() -> Vec<(&'static str, serde_json::Value)> {
             "preToolUse",
             json!({
                 "type": "command",
-                "bash": "symposium hook copilot pre-tool-use",
+                "bash": "cargo-agents hook copilot pre-tool-use",
                 "timeoutSec": 10
             }),
         ),
@@ -678,7 +678,7 @@ fn copilot_hook_entries() -> Vec<(&'static str, serde_json::Value)> {
             "postToolUse",
             json!({
                 "type": "command",
-                "bash": "symposium hook copilot post-tool-use",
+                "bash": "cargo-agents hook copilot post-tool-use",
                 "timeoutSec": 10
             }),
         ),
@@ -686,7 +686,7 @@ fn copilot_hook_entries() -> Vec<(&'static str, serde_json::Value)> {
             "userPromptSubmitted",
             json!({
                 "type": "command",
-                "bash": "symposium hook copilot user-prompt-submit",
+                "bash": "cargo-agents hook copilot user-prompt-submit",
                 "timeoutSec": 10
             }),
         ),
@@ -694,7 +694,7 @@ fn copilot_hook_entries() -> Vec<(&'static str, serde_json::Value)> {
             "sessionStart",
             json!({
                 "type": "command",
-                "bash": "symposium hook copilot session-start",
+                "bash": "cargo-agents hook copilot session-start",
                 "timeoutSec": 10
             }),
         ),
@@ -727,7 +727,7 @@ fn register_gemini_hooks(settings_path: &Path, out: &Output) -> Result<()> {
     ];
 
     for (gemini_event, cli_arg) in events {
-        let command = format!("symposium hook gemini {cli_arg}");
+        let command = format!("cargo-agents hook gemini {cli_arg}");
         if ensure_gemini_hook_entry(hooks_obj, gemini_event, &command) {
             added.push(gemini_event);
         }
@@ -764,7 +764,7 @@ fn ensure_gemini_hook_entry(
                 hooks.iter().any(|h| {
                     h.get("command")
                         .and_then(|c| c.as_str())
-                        .is_some_and(|c| c.starts_with("symposium hook"))
+                        .is_some_and(|c| c.starts_with("cargo-agents hook"))
                 })
             })
     });
@@ -874,7 +874,7 @@ fn ensure_kiro_hook_entry(
     let already_registered = arr.iter().any(|e| {
         e.get("command")
             .and_then(|c| c.as_str())
-            .is_some_and(|c| c.starts_with("symposium hook"))
+            .is_some_and(|c| c.starts_with("cargo-agents hook"))
     });
 
     if already_registered {
@@ -892,26 +892,26 @@ fn kiro_hook_entries() -> Vec<(&'static str, serde_json::Value)> {
             "preToolUse",
             json!({
                 "matcher": "*",
-                "command": "symposium hook kiro pre-tool-use"
+                "command": "cargo-agents hook kiro pre-tool-use"
             }),
         ),
         (
             "postToolUse",
             json!({
                 "matcher": "*",
-                "command": "symposium hook kiro post-tool-use"
+                "command": "cargo-agents hook kiro post-tool-use"
             }),
         ),
         (
             "userPromptSubmit",
             json!({
-                "command": "symposium hook kiro user-prompt-submit"
+                "command": "cargo-agents hook kiro user-prompt-submit"
             }),
         ),
         (
             "agentSpawn",
             json!({
-                "command": "symposium hook kiro session-start"
+                "command": "cargo-agents hook kiro session-start"
             }),
         ),
     ]
@@ -975,11 +975,11 @@ fn unregister_settings_hooks(settings_path: &Path, command_prefix: &str, out: &O
 }
 
 fn unregister_claude_hooks(settings_path: &Path, out: &Output) {
-    unregister_settings_hooks(settings_path, "symposium hook", out);
+    unregister_settings_hooks(settings_path, "cargo-agents hook", out);
 }
 
 fn unregister_gemini_hooks(settings_path: &Path, out: &Output) {
-    unregister_settings_hooks(settings_path, "symposium hook", out);
+    unregister_settings_hooks(settings_path, "cargo-agents hook", out);
 }
 
 /// Remove symposium hooks from a Copilot project hooks directory.
@@ -1022,7 +1022,7 @@ fn unregister_flat_hooks(config_path: &Path, command_key: &str, out: &Output) {
                 !entry
                     .get(command_key)
                     .and_then(|c| c.as_str())
-                    .is_some_and(|c| c.starts_with("symposium hook"))
+                    .is_some_and(|c| c.starts_with("cargo-agents hook"))
             });
             if entries.len() < before {
                 changed = true;
@@ -1228,7 +1228,7 @@ mod tests {
 
         // Verify flat format (command directly on entry, no nested hooks array)
         let pre_tool = &content["hooks"]["preToolUse"][0];
-        assert_eq!(pre_tool["command"], "symposium hook kiro pre-tool-use");
+        assert_eq!(pre_tool["command"], "cargo-agents hook kiro pre-tool-use");
         assert_eq!(pre_tool["matcher"], "*");
         assert!(pre_tool.get("hooks").is_none());
     }

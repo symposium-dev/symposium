@@ -103,7 +103,7 @@ Each `[[hooks]]` entry declares a hook that responds to agent events.
 Use the CLI to test a hook with sample input:
 
 ```bash
-echo '{"tool": "Bash", "input": "cargo test"}' | symposium hook claude pre-tool-use
+echo '{"tool": "Bash", "input": "cargo test"}' | cargo agents hook claude pre-tool-use
 ```
 
 You can also use `copilot`, `gemini`, `codex`, or `kiro` as the agent name.
@@ -172,9 +172,9 @@ headers = []
 
 ### How registration works
 
-During `symposium sync --agent`, each MCP server entry is written into the agent's config file in the format that agent expects. Registration is idempotent — existing entries with correct values are left untouched, stale entries are updated in place.
+During `cargo agents sync --agent`, each MCP server entry is written into the agent's config file in the format that agent expects. Registration is idempotent — existing entries with correct values are left untouched, stale entries are updated in place.
 
-When a user runs `symposium sync` (or the hook triggers it automatically), Symposium:
+When a user runs `cargo agents sync` (or the hook triggers it automatically), Symposium:
 
 1. Collects `[[mcp_servers]]` entries from all enabled plugins.
 2. Writes each server into the agent's MCP configuration file.
@@ -220,7 +220,7 @@ env = []
 ## Validation
 
 ```bash
-symposium plugin validate path/to/symposium.toml
+cargo agents plugin validate path/to/symposium.toml
 ```
 
 This parses the manifest and reports any errors. Crate name checking against crates.io is on by default; use `--no-check-crates` to skip it.

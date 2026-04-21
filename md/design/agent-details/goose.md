@@ -68,7 +68,7 @@ extensions:
   symposium:
     provider: mcp
     config:
-      command: /path/to/symposium
+      command: /path/to/cargo-agents
       args: [mcp]
 ```
 

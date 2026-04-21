@@ -7,8 +7,8 @@ async fn help() {
         assert!(result.is_err());
         let err = format!("{}", result.unwrap_err());
         assert!(
-            err.contains("symposium"),
-            "help should mention symposium: {err}"
+            err.contains("cargo"),
+            "help should mention cargo agents: {err}"
         );
         Ok(())
     })

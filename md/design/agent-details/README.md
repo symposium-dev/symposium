@@ -7,7 +7,7 @@
 
 For each agent it supports, symposium needs to know:
 
-1. **Hook registration** — where and how to write config so the agent calls `symposium hook`
+1. **Hook registration** — where and how to write config so the agent calls `cargo-agents hook`
 2. **Hook I/O protocol** — event names, input/output field names, exit code semantics
 3. **Extension installation** — where skill files go (project and global)
 4. **Custom instructions** — where the agent reads project-level instructions

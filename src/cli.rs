@@ -18,8 +18,8 @@ use crate::sync;
 /// Parsed CLI arguments.
 #[derive(Debug, Parser)]
 #[command(
-    name = "symposium",
-    bin_name = "symposium",
+    name = "cargo-agents",
+    bin_name = "cargo agents",
     version,
     about = "AI the Rust Way"
 )]
