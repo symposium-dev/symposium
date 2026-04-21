@@ -84,4 +84,4 @@ Each skill uses `crates` to limit itself to specific versions.
 | `crates` | Which crate(s) this skill is about. Comma-separated: `crates: serde, serde_json`. | Yes |
 | `compatibility` | English-language list of agents or editors this skill works with, if it doesn't apply universally. See the [compatibility field spec](https://agentskills.io/specification#compatibility-field). |
 
-See the [Skill definition reference](../reference/skill-definition.md) for the full format, the [Skill matching reference](../reference/skill-matching.md) for version constraint syntax, and the [agentskills.io quickstart](https://agentskills.io/skill-creation/quickstart) for general guidance on writing effective skills.
+See the [Skill definition reference](../reference/skill-definition.md) for the full format, the [Crate predicates reference](../reference/crate-predicates.md) for version constraint syntax, and the [agentskills.io quickstart](https://agentskills.io/skill-creation/quickstart) for general guidance on writing effective skills.

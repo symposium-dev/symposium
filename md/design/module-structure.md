@@ -26,12 +26,12 @@ Scans configured plugin source directories for TOML manifests and parses them in
 
 ### `skills.rs` — skill resolution and matching
 
-Given a `PluginRegistry` and workspace dependencies, this module does the actual work: resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, evaluates crate predicates, and formats output. Separates results into `always` (inlined) vs `optional` (listed with metadata).
+Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates crate predicates. Each resolved skill carries a `Vec<Vec<Predicate>>` (predicate sets) accumulated from plugin, group, and skill levels — every set must match (AND across sets, OR within). The early-out gates (`applies_to_crates` at plugin level, group-level pre-fetch filter) remain as performance optimizations to avoid unnecessary git fetches.
 
-### `hook.rs` and `session_state.rs` — hook handling
+### `hook.rs` — hook handling
 
-`hook.rs` handles the three hook events: `PostToolUse` (tracks which skills the agent has loaded), `UserPromptSubmit` (scans prompts for crate mentions and nudges about unloaded skills), and `PreToolUse` (dispatches to plugin-defined hook commands). When `auto-sync` is enabled, runs `sync` as a side effect during hook invocations. `session_state.rs` persists per-session data (activations, nudge history, prompt count) as JSON files.
+Handles the hook pipeline: parse agent wire-format input → auto-sync → builtin dispatch → plugin hook dispatch → serialize output. When `auto-sync` is enabled, runs `sync` as a side effect during hook invocations. Plugin hooks are spawned as shell commands with format routing between agent wire formats and the symposium canonical format.
 
-### `dispatch.rs` — shared dispatch logic
+### `crate_command.rs` — crate source lookup
 
-Contains `dispatch_crate()`, which resolves crate skills and formats output. Called by the CLI's `crate-info` command and the test harness's `invoke()` helper.
+Contains `dispatch_crate()`, which resolves a crate's version and fetches its source code. Called by the CLI's `crate-info` command.
