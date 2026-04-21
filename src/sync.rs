@@ -75,23 +75,12 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     // Find all applicable skills
     let applicable = skills::skills_applicable_to(sym, &registry, &workspace).await;
 
-    // Collect the set of skill names to install
-    let dep_names: BTreeSet<String> = workspace.iter().map(|(name, _)| name.clone()).collect();
     let mut skill_names: BTreeSet<String> = BTreeSet::new();
 
     // Build a map of skill_name -> skill for installation
     let mut to_install: Vec<(&str, &std::path::Path)> = Vec::new();
 
     for entry in &applicable {
-        // Only include skills whose crates are in the workspace
-        let dominated = entry
-            .effective_crate_names()
-            .iter()
-            .any(|c| dep_names.contains(c));
-        if !dominated {
-            continue;
-        }
-
         let name = entry.skill.name();
         if skill_names.insert(name.to_string()) {
             to_install.push((name, &entry.skill.path));
