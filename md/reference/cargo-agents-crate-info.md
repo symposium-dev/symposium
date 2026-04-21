@@ -1,11 +1,11 @@
-# `symposium crate`
+# `symposium crate-info`
 
 Find crate sources and guidance.
 
 ## Usage
 
 ```bash
-symposium crate <NAME> [--version <VERSION>]
+symposium crate-info <NAME> [--version <VERSION>]
 ```
 
 ## Behavior

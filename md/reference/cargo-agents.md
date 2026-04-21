@@ -8,9 +8,7 @@
 |---------|-------------|
 | [`symposium init`](./cargo-agents-init.md) | Set up user-wide configuration |
 | [`symposium sync`](./cargo-agents-sync.md) | Synchronize skills with workspace dependencies |
-| [`symposium crate`](./cargo-agents-crate.md) | Find crate sources and guidance |
 | [`symposium plugin`](./cargo-agents-plugin.md) | Manage plugin sources |
-| [`symposium hook`](./cargo-agents-hook.md) | Hook entry point invoked by your agent (internal) |
 
 ## Global options
 
