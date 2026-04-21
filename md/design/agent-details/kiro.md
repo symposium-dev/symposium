@@ -241,7 +241,7 @@ The MCP server entry is added under `mcpServers`:
 ```json
 {
   "mcpServers": {
-    "cargo-agents": {
+    "symposium": {
       "command": "/path/to/cargo-agents",
       "args": ["mcp"]
     }

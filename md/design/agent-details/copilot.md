@@ -172,7 +172,7 @@ Symposium registers MCP servers in the Copilot config as top-level keys
 
 ```json
 {
-  "cargo-agents": {
+  "symposium": {
     "command": "/path/to/cargo-agents",
     "args": ["mcp"]
   }

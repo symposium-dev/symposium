@@ -198,7 +198,7 @@ Example hook registration:
         "matcher": ".*",
         "hooks": [
           {
-            "name": "cargo-agents",
+            "name": "symposium",
             "type": "command",
             "command": "cargo-agents hook gemini pre-tool-use",
             "timeout": 10000
@@ -254,12 +254,12 @@ The input payload includes `tool_name`, `tool_input`, `mcp_context`, `session_id
 
 ### Hook registration
 
-Kiro hooks live in agent JSON files under `.kiro/agents/`. Symposium creates a `cargo-agents.json` agent file with its hooks. Kiro uses camelCase event names.
+Kiro hooks live in agent JSON files under `.kiro/agents/`. Symposium creates a `symposium.json` agent file with its hooks. Kiro uses camelCase event names.
 
 | Scope | File |
 |-------|------|
-| Global | `~/.kiro/agents/cargo-agents.json` |
-| Project | `.kiro/agents/cargo-agents.json` |
+| Global | `~/.kiro/agents/symposium.json` |
+| Project | `.kiro/agents/symposium.json` |
 
 Example hook registration:
 
@@ -304,7 +304,7 @@ Input includes `hook_event_name`, `cwd`, `tool_name`, and `tool_input` on stdin 
 
 ### Unregistration
 
-Unregistration deletes the `cargo-agents.json` file.
+Unregistration deletes the `symposium.json` file.
 
 ---
 

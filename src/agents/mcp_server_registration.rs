@@ -542,13 +542,13 @@ mod tests {
 
     fn test_servers() -> Vec<McpServer> {
         vec![McpServer::Stdio(
-            McpServerStdio::new("cargo-agents", "/usr/local/bin/cargo-agents")
+            McpServerStdio::new("symposium", "/usr/local/bin/cargo-agents")
                 .args(vec!["mcp".into()]),
         )]
     }
 
     fn test_server_names() -> Vec<&'static str> {
-        vec!["cargo-agents"]
+        vec!["symposium"]
     }
 
     // -- Claude MCP (also covers Gemini and Kiro via delegation) --
@@ -562,10 +562,10 @@ mod tests {
         let settings: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
-            settings["mcpServers"]["cargo-agents"]["command"],
+            settings["mcpServers"]["symposium"]["command"],
             "/usr/local/bin/cargo-agents"
         );
-        assert_eq!(settings["mcpServers"]["cargo-agents"]["args"][0], "mcp");
+        assert_eq!(settings["mcpServers"]["symposium"]["args"][0], "mcp");
     }
 
     #[test]
@@ -585,7 +585,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("settings.json");
         let stale =
-            json!({"mcpServers": {"cargo-agents": {"command": "/old/path", "args": ["mcp"]}}});
+            json!({"mcpServers": {"symposium": {"command": "/old/path", "args": ["mcp"]}}});
         save_json(&path, &stale).unwrap();
 
         register_claude_mcp_servers(&path, &test_servers(), &Output::quiet()).unwrap();
@@ -593,7 +593,7 @@ mod tests {
         let settings: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
-            settings["mcpServers"]["cargo-agents"]["command"],
+            settings["mcpServers"]["symposium"]["command"],
             "/usr/local/bin/cargo-agents"
         );
     }
@@ -610,7 +610,7 @@ mod tests {
         let settings: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
-            settings["mcpServers"]["cargo-agents"]["command"],
+            settings["mcpServers"]["symposium"]["command"],
             "/usr/local/bin/cargo-agents"
         );
     }
@@ -624,7 +624,7 @@ mod tests {
 
         let settings: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(settings["mcpServers"].get("cargo-agents").is_none());
+        assert!(settings["mcpServers"].get("symposium").is_none());
     }
 
     // -- Codex MCP (TOML) --
@@ -638,13 +638,13 @@ mod tests {
         let content = fs::read_to_string(&path).unwrap();
         let doc: toml::Value = content.parse().unwrap();
         assert_eq!(
-            doc["mcp_servers"]["cargo-agents"]["command"]
+            doc["mcp_servers"]["symposium"]["command"]
                 .as_str()
                 .unwrap(),
             "/usr/local/bin/cargo-agents"
         );
         assert_eq!(
-            doc["mcp_servers"]["cargo-agents"]["args"]
+            doc["mcp_servers"]["symposium"]["args"]
                 .as_array()
                 .unwrap()[0]
                 .as_str()
@@ -671,7 +671,7 @@ mod tests {
         let path = tmp.path().join("config.toml");
         fs::write(
             &path,
-            "[mcp_servers.cargo-agents]\ncommand = \"/old/path\"\nargs = [\"old-arg\"]\n",
+            "[mcp_servers.symposium]\ncommand = \"/old/path\"\nargs = [\"old-arg\"]\n",
         )
         .unwrap();
 
@@ -679,7 +679,7 @@ mod tests {
 
         let content = fs::read_to_string(&path).unwrap();
         let doc: toml::Value = content.parse().unwrap();
-        let entry = &doc["mcp_servers"]["cargo-agents"];
+        let entry = &doc["mcp_servers"]["symposium"];
         assert_eq!(
             entry["command"].as_str().unwrap(),
             "/usr/local/bin/cargo-agents"
@@ -703,7 +703,7 @@ mod tests {
         let doc: toml::Value = content.parse().unwrap();
         assert!(
             doc.get("mcp_servers")
-                .and_then(|s| s.get("cargo-agents"))
+                .and_then(|s| s.get("symposium"))
                 .is_none()
         );
     }
@@ -719,10 +719,10 @@ mod tests {
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
-            config["cargo-agents"]["command"],
+            config["symposium"]["command"],
             "/usr/local/bin/cargo-agents"
         );
-        assert_eq!(config["cargo-agents"]["args"][0], "mcp");
+        assert_eq!(config["symposium"]["args"][0], "mcp");
     }
 
     #[test]
@@ -741,7 +741,7 @@ mod tests {
     fn register_copilot_updates_stale() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("mcp.json");
-        let stale = json!({"cargo-agents": {"command": "/old/path", "args": ["mcp"]}});
+        let stale = json!({"symposium": {"command": "/old/path", "args": ["mcp"]}});
         save_json(&path, &stale).unwrap();
 
         register_copilot_mcp_servers(&path, &test_servers(), &Output::quiet()).unwrap();
@@ -749,7 +749,7 @@ mod tests {
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
-            config["cargo-agents"]["command"],
+            config["symposium"]["command"],
             "/usr/local/bin/cargo-agents"
         );
     }
@@ -763,7 +763,7 @@ mod tests {
 
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(config.get("cargo-agents").is_none());
+        assert!(config.get("symposium").is_none());
     }
 
     // -- Goose MCP (YAML) --
@@ -776,7 +776,7 @@ mod tests {
 
         let content = fs::read_to_string(&path).unwrap();
         let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
-        let ext = &doc["extensions"]["cargo-agents"];
+        let ext = &doc["extensions"]["symposium"];
         assert_eq!(ext["provider"].as_str().unwrap(), "mcp");
         assert_eq!(
             ext["config"]["command"].as_str().unwrap(),
@@ -808,7 +808,7 @@ mod tests {
             let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
             assert!(
                 doc.get("extensions")
-                    .and_then(|e| e.get("cargo-agents"))
+                    .and_then(|e| e.get("symposium"))
                     .is_none()
             );
         }
@@ -819,14 +819,14 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("config.yaml");
         // Write a config with an old binary path
-        fs::write(&path, "extensions:\n  cargo-agents:\n    provider: mcp\n    config:\n      command: \"/old/path\"\n      args: [\"mcp\"]\n").unwrap();
+        fs::write(&path, "extensions:\n  symposium:\n    provider: mcp\n    config:\n      command: \"/old/path\"\n      args: [\"mcp\"]\n").unwrap();
 
         register_goose_mcp_servers(&path, &test_servers(), &Output::quiet()).unwrap();
 
         let content = fs::read_to_string(&path).unwrap();
         let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&content).unwrap();
         assert_eq!(
-            doc["extensions"]["cargo-agents"]["config"]["command"]
+            doc["extensions"]["symposium"]["config"]["command"]
                 .as_str()
                 .unwrap(),
             "/usr/local/bin/cargo-agents",
@@ -867,10 +867,10 @@ mod tests {
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
-            config["mcp"]["cargo-agents"]["command"],
+            config["mcp"]["symposium"]["command"],
             "/usr/local/bin/cargo-agents"
         );
-        assert_eq!(config["mcp"]["cargo-agents"]["args"][0], "mcp");
+        assert_eq!(config["mcp"]["symposium"]["args"][0], "mcp");
     }
 
     #[test]
@@ -889,7 +889,7 @@ mod tests {
     fn register_opencode_updates_stale() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("opencode.json");
-        let stale = json!({"mcp": {"cargo-agents": {"command": "/old/path", "args": ["mcp"]}}});
+        let stale = json!({"mcp": {"symposium": {"command": "/old/path", "args": ["mcp"]}}});
         save_json(&path, &stale).unwrap();
 
         register_opencode_mcp_servers(&path, &test_servers(), &Output::quiet()).unwrap();
@@ -897,7 +897,7 @@ mod tests {
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(
-            config["mcp"]["cargo-agents"]["command"],
+            config["mcp"]["symposium"]["command"],
             "/usr/local/bin/cargo-agents"
         );
     }
@@ -911,6 +911,6 @@ mod tests {
 
         let config: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(config["mcp"].get("cargo-agents").is_none());
+        assert!(config["mcp"].get("symposium").is_none());
     }
 }

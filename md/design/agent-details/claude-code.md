@@ -192,7 +192,7 @@ file used for hooks:
 ```json
 {
   "mcpServers": {
-    "cargo-agents": {
+    "symposium": {
       "command": "/path/to/cargo-agents",
       "args": ["mcp"]
     }

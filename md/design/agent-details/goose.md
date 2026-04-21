@@ -65,7 +65,7 @@ The MCP server entry is added under `extensions` in the YAML config:
 
 ```yaml
 extensions:
-  cargo-agents:
+  symposium:
     provider: mcp
     config:
       command: /path/to/cargo-agents

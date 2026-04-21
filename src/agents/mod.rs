@@ -637,7 +637,7 @@ fn register_copilot_hooks_global(config_path: &Path, out: &Output) -> Result<()>
 /// Register hooks in a project-level Copilot hooks directory (`.github/hooks/`).
 fn register_copilot_hooks(hooks_dir: &Path, out: &Output) -> Result<()> {
     fs::create_dir_all(hooks_dir)?;
-    let hook_file = hooks_dir.join("cargo-agents.json");
+    let hook_file = hooks_dir.join("symposium.json");
     let display = display_path(&hook_file);
 
     if hook_file.exists() {
@@ -776,7 +776,7 @@ fn ensure_gemini_hook_entry(
     arr.push(json!({
         "matcher": ".*",
         "hooks": [{
-            "name": "cargo-agents",
+            "name": "symposium",
             "type": "command",
             "command": command,
             "timeout": 10000
@@ -834,14 +834,14 @@ fn merge_kiro_hooks(
     (changed, added)
 }
 
-/// Register hooks by creating a Kiro agent file (`.kiro/agents/cargo-agents.json`).
+/// Register hooks by creating a Kiro agent file (`.kiro/agents/symposium.json`).
 fn register_kiro_hooks(agents_dir: &Path, out: &Output) -> Result<()> {
     fs::create_dir_all(agents_dir)?;
-    let hook_file = agents_dir.join("cargo-agents.json");
+    let hook_file = agents_dir.join("symposium.json");
     let display = display_path(&hook_file);
 
     let mut config = load_json_or_empty(&hook_file)?;
-    let (changed, added) = merge_kiro_hooks(&mut config, "cargo-agents");
+    let (changed, added) = merge_kiro_hooks(&mut config, "symposium");
 
     if !changed {
         out.already_ok(format!("{display}: hooks already registered"));
@@ -919,7 +919,7 @@ fn kiro_hook_entries() -> Vec<(&'static str, serde_json::Value)> {
 
 /// Remove the symposium agent file from a Kiro agents directory.
 fn unregister_kiro_hooks(agents_dir: &Path, out: &Output) {
-    let hook_file = agents_dir.join("cargo-agents.json");
+    let hook_file = agents_dir.join("symposium.json");
     if hook_file.exists() {
         let display = display_path(&hook_file);
         if fs::remove_file(&hook_file).is_ok() {
@@ -984,7 +984,7 @@ fn unregister_gemini_hooks(settings_path: &Path, out: &Output) {
 
 /// Remove symposium hooks from a Copilot project hooks directory.
 fn unregister_copilot_hooks(hooks_dir: &Path, out: &Output) {
-    let hook_file = hooks_dir.join("cargo-agents.json");
+    let hook_file = hooks_dir.join("symposium.json");
     if hook_file.exists() {
         let display = display_path(&hook_file);
         if fs::remove_file(&hook_file).is_ok() {
@@ -1179,7 +1179,7 @@ mod tests {
         let hooks_dir = tmp.path().join("hooks");
         register_copilot_hooks(&hooks_dir, &Output::quiet()).unwrap();
 
-        let hook_file = hooks_dir.join("cargo-agents.json");
+        let hook_file = hooks_dir.join("symposium.json");
         assert!(hook_file.exists());
         let content: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&hook_file).unwrap()).unwrap();
@@ -1216,11 +1216,11 @@ mod tests {
         let agents_dir = tmp.path().join("agents");
         register_kiro_hooks(&agents_dir, &Output::quiet()).unwrap();
 
-        let hook_file = agents_dir.join("cargo-agents.json");
+        let hook_file = agents_dir.join("symposium.json");
         assert!(hook_file.exists());
         let content: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&hook_file).unwrap()).unwrap();
-        assert_eq!(content["name"], "cargo-agents");
+        assert_eq!(content["name"], "symposium");
         assert!(content["hooks"]["preToolUse"].is_array());
         assert!(content["hooks"]["postToolUse"].is_array());
         assert!(content["hooks"]["userPromptSubmit"].is_array());
@@ -1240,7 +1240,7 @@ mod tests {
         register_kiro_hooks(&agents_dir, &Output::quiet()).unwrap();
         register_kiro_hooks(&agents_dir, &Output::quiet()).unwrap();
 
-        let hook_file = agents_dir.join("cargo-agents.json");
+        let hook_file = agents_dir.join("symposium.json");
         let content: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&hook_file).unwrap()).unwrap();
         let pre_tool = content["hooks"]["preToolUse"].as_array().unwrap();
@@ -1253,7 +1253,7 @@ mod tests {
         let agents_dir = tmp.path().join("agents");
         register_kiro_hooks(&agents_dir, &Output::quiet()).unwrap();
 
-        let hook_file = agents_dir.join("cargo-agents.json");
+        let hook_file = agents_dir.join("symposium.json");
         assert!(hook_file.exists());
 
         unregister_kiro_hooks(&agents_dir, &Output::quiet());
