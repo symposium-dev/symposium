@@ -16,7 +16,9 @@ async fn main() -> ExitCode {
     // Strip it so clap sees the real arguments.
     let args: Vec<_> = std::env::args_os().collect();
     let filtered: Vec<_> = if args.len() > 1 && args[1] == "agents" {
-        std::iter::once(args[0].clone()).chain(args[2..].iter().cloned()).collect()
+        std::iter::once(args[0].clone())
+            .chain(args[2..].iter().cloned())
+            .collect()
     } else {
         args
     };
