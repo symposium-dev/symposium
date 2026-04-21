@@ -2,7 +2,7 @@
 authors = ["Niko Matsakis"]
 language = "en"
 src = "md"
-title = "Cargo Agents"
+title = "Symposium"
 
 [preprocessor.mermaid]
 command = "mdbook-mermaid"
