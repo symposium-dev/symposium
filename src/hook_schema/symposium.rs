@@ -3,6 +3,7 @@
 //! Each agent module converts to/from these types. Builtin dispatch
 //! operates entirely on these types.
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use super::HookEvent;
@@ -87,12 +88,14 @@ impl InputEvent {
         if matcher == "*" {
             return true;
         }
-        match self {
-            InputEvent::PreToolUse(p) => matcher.contains(&p.tool_name),
-            InputEvent::PostToolUse(p) => matcher.contains(&p.tool_name),
-            InputEvent::UserPromptSubmit(_) => true,
-            InputEvent::SessionStart(_) => true,
-        }
+
+        let tool_name = match self {
+            InputEvent::PreToolUse(p) => &p.tool_name,
+            InputEvent::PostToolUse(p) => &p.tool_name,
+            InputEvent::UserPromptSubmit(_) | InputEvent::SessionStart(_) => return true,
+        };
+
+        Regex::new(matcher).map_or(false, |re| re.is_match(tool_name))
     }
 }
 
@@ -218,5 +221,48 @@ impl super::AgentHookInput for InputEvent {
     }
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_matchers_use_regex_against_tool_name() {
+        let input = InputEvent::PreToolUse(PreToolUseInput {
+            tool_name: "mcp__filesystem__read".to_string(),
+            tool_input: serde_json::Value::Null,
+            session_id: None,
+            cwd: None,
+        });
+
+        assert!(input.matches_matcher("mcp__.*"));
+        assert!(input.matches_matcher("^mcp__filesystem__read$"));
+        assert!(!input.matches_matcher("^Bash$"));
+        assert!(!input.matches_matcher("^filesystem$"));
+    }
+
+    #[test]
+    fn invalid_regex_matchers_do_not_match() {
+        let input = InputEvent::PostToolUse(PostToolUseInput {
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::Value::Null,
+            tool_response: serde_json::Value::Null,
+            session_id: None,
+            cwd: None,
+        });
+
+        assert!(!input.matches_matcher("("));
+    }
+
+    #[test]
+    fn wildcard_matches_everything() {
+        let input = InputEvent::SessionStart(SessionStartInput {
+            session_id: None,
+            cwd: None,
+        });
+
+        assert!(input.matches_matcher("*"));
     }
 }
