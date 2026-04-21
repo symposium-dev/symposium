@@ -34,4 +34,4 @@ Given a `PluginRegistry` and workspace dependencies, this module does the actual
 
 ### `dispatch.rs` — shared dispatch logic
 
-Contains `dispatch_crate()`, which resolves crate skills and formats output. Called by the CLI's `crate` command and the test harness's `invoke()` helper.
+Contains `dispatch_crate()`, which resolves crate skills and formats output. Called by the CLI's `crate-info` command and the test harness's `invoke()` helper.

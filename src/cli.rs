@@ -58,6 +58,7 @@ pub enum Commands {
     Sync,
 
     /// Hook entry point invoked by your agent (internal)
+    #[command(hide = true)]
     Hook {
         /// The agent (claude, copilot, gemini)
         agent: hook::HookAgent,
@@ -73,7 +74,8 @@ pub enum Commands {
     },
 
     /// Find crate sources
-    Crate {
+    #[command(hide = true)]
+    CrateInfo {
         /// Crate name
         name: String,
 
@@ -132,7 +134,7 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
 
         Commands::Sync => sync::sync(sym, cwd, out).await,
 
-        Commands::Crate { name, version } => {
+        Commands::CrateInfo { name, version } => {
             match crate_command::dispatch_crate(sym, &name, version.as_deref(), cwd).await {
                 DispatchResult::Ok(output) => {
                     print!("{output}");
