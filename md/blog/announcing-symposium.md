@@ -1,15 +1,20 @@
 # Announcing Symposium - AI The Rust Way
 
+**Authored By: Jack Huey**
+
 Are you using an AI agent to write Rust code (or curious to try it)? If so, GREAT NEWS! We'd like to share with you **Symposium** - a Rust-focused interoperability layer that connects AI agents to crate-authored skills, tools, and workflows.
 
 (If you've read Niko's [previous][symposium-blog-1] [blog posts][symposium-blog-2] talking about Symposium, this is pretty different! The tool we're announcing today is the result of many iterations of figuring out what exactly the "thing we want" is. So please, read on!)
+
+Also, this announcement comes with exciting news: Symposium has joined the Rust Foundation's Rust Innovation Lab (RIL)! Be sure to check out the [Foundation's blog post](https://rustfoundation.org/media/welcoming-symposium-to-the-rust-innovation-lab/).
+
 
 [symposium-blog-1]: https://smallcultfollowing.com/babysteps/blog/2025/09/24/symposium/
 [symposium-blog-2]: https://smallcultfollowing.com/babysteps/blog/2025/10/08/symmacp/
 
 ## What is Symposium?
 
-There are realy two answers to that question. The first one is that Symposium is a tool that examines what crates your project depends on and uses that to automatically install new skills, MCP servers, or other extensions. These extensions help your AI agent to write better code, avoid common footguns and pitfalls, and even leverage ecosystem tools like the [Rust Token Killer (RTK)](https://www.rtk-ai.app/) to save you tokens.
+There are really two answers to that question. The first one is that Symposium is a tool that examines what crates your project depends on and uses that to automatically install new skills, MCP servers, or other extensions. These extensions help your AI agent to write better code, avoid common footguns and pitfalls, and even leverage ecosystem tools like the [Rust Token Killer (RTK)](https://www.rtk-ai.app/) to save you tokens.
 
 The second one is that Symposium is an organization dedicated to one goal, "AI the Rust way", meaning reliable, efficient, and extensible. We are focused on interoperable, vendor-neutral, and community-oriented ways to make agents more reliable and efficient.
 
