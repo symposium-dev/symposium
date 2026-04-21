@@ -220,7 +220,8 @@ async fn resolve_skill_dir(
     group: &SkillGroup,
 ) -> Option<PathBuf> {
     if let Some(path) = &group.source.path {
-        return Some(plugin_path.join(path));
+        let plugin_dir = plugin_path.parent().unwrap_or(plugin_path);
+        return Some(plugin_dir.join(path));
     }
 
     if let Some(git_source) = &group.source.git {
