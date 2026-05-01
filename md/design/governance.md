@@ -35,7 +35,7 @@ We want to keep moving quickly, especially in this early phase, therefore we hav
 
 ## Sync meeting
 
-We hold a regular sync meeting to discuss recent changes, plans, and direction. The meeting is open to all maintainers and contributors. If you're interested in attending, reach out to a core team member on Zulip.
+We hold a regular sync meeting to discuss recent changes, plans, and direction. The meeting is open to all maintainers and contributors. If you're interested in attending, reach out to a core team member on [Zulip](https://symposium-dev.zulipchat.com).
 
 ## Releases
 
@@ -43,4 +43,4 @@ Merging a release PR is coordinated among core team members.
 
 ## Getting involved
 
-The best way to get started is to pick up an issue, open a PR, and join the conversation on Zulip. Landing non-trivial contributions and attending the sync meeting is the path to joining the devs team.
+The best way to get started is to pick up an [issue](https://github.com/symposium-dev/symposium/issues), open a [PR](https://github.com/symposium-dev/symposium/pulls), and join the conversation on [Zulip](https://symposium-dev.zulipchat.com). Landing non-trivial contributions and attending the sync meeting is the path to joining the devs team.
