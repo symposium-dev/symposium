@@ -102,7 +102,7 @@ pub struct ClaudePreToolUseHookOutput {
     )]
     pub permission_decision_reason: Option<String>,
     #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
-    pub updated_input: Option<String>,
+    pub updated_input: Option<serde_json::Value>,
     #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
     pub additional_context: Option<String>,
     #[serde(flatten)]
@@ -172,9 +172,7 @@ impl AgentHookOutput for ClaudePreToolUseOutput {
         let h = self.hook_specific_output.as_ref();
         symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput {
             additional_context: h.and_then(|h| h.additional_context.clone()),
-            updated_input: h
-                .and_then(|h| h.updated_input.as_ref())
-                .and_then(|s| serde_json::from_str(s).ok()),
+            updated_input: h.and_then(|h| h.updated_input.clone()),
         })
     }
     fn to_hook_output(&self) -> serde_json::Value {
@@ -182,6 +180,36 @@ impl AgentHookOutput for ClaudePreToolUseOutput {
     }
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pre_tool_use_updated_input_preserves_json_object() {
+        let hook_output = ClaudePreToolUseOutput {
+            hook_specific_output: Some(ClaudePreToolUseHookOutput {
+                hook_event_name: "PreToolUse".into(),
+                permission_decision: None,
+                permission_decision_reason: None,
+                updated_input: Some(serde_json::json!({"command": "safe-cmd"})),
+                additional_context: Some("context".into()),
+                rest: serde_json::Map::new(),
+            }),
+            ..Default::default()
+        };
+
+        let symposium::OutputEvent::PreToolUse(output) = hook_output.to_symposium() else {
+            panic!("wrong output type")
+        };
+
+        assert_eq!(output.additional_context.as_deref(), Some("context"));
+        assert_eq!(
+            output.updated_input,
+            Some(serde_json::json!({"command": "safe-cmd"}))
+        );
     }
 }
 
