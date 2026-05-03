@@ -37,15 +37,112 @@ pub enum UpdateLevel {
     Fetch,
 }
 
-/// Source declaration for remote plugin artifacts.
-#[derive(Debug, Default, Serialize, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
+/// Source declaration for a skill group.
+///
+/// Accepts a table with at most one of `path`, `git`, or `crate_path` set,
+/// or the shorthand string `source = "crate"` (equivalent to
+/// `source.crate_path = "skills"`).
+#[derive(Debug, Default, Clone)]
 pub struct PluginSource {
     /// Path on the local filesystem.
     pub path: Option<PathBuf>,
 
     /// GitHub URL pointing to a directory in a repository.
     pub git: Option<String>,
+
+    /// Relative path inside fetched crate sources (e.g., `"skills"`).
+    pub crate_path: Option<String>,
+}
+
+/// Default crate_path when using `source = "crate"` shorthand.
+const DEFAULT_CRATE_SKILL_PATH: &str = "skills";
+
+impl serde::Serialize for PluginSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        // Emit the `source = "crate"` shorthand when the source is *only* the
+        // default crate_path.
+        if self.path.is_none()
+            && self.git.is_none()
+            && self.crate_path.as_deref() == Some(DEFAULT_CRATE_SKILL_PATH)
+        {
+            return serializer.serialize_str("crate");
+        }
+        let len = self.path.is_some() as usize
+            + self.git.is_some() as usize
+            + self.crate_path.is_some() as usize;
+        let mut map = serializer.serialize_map(Some(len))?;
+        if let Some(ref p) = self.path {
+            map.serialize_entry("path", p)?;
+        }
+        if let Some(ref g) = self.git {
+            map.serialize_entry("git", g)?;
+        }
+        if let Some(ref cp) = self.crate_path {
+            map.serialize_entry("crate_path", cp)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PluginSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de;
+
+        /// Helper for table-form deserialization.
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct PluginSourceFields {
+            #[serde(default)]
+            path: Option<PathBuf>,
+            #[serde(default)]
+            git: Option<String>,
+            #[serde(default)]
+            crate_path: Option<String>,
+        }
+
+        struct PluginSourceVisitor;
+
+        impl<'de> de::Visitor<'de> for PluginSourceVisitor {
+            type Value = PluginSource;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(r#""crate" or a table with path/git/crate_path"#)
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                match v {
+                    "crate" => Ok(PluginSource {
+                        crate_path: Some(DEFAULT_CRATE_SKILL_PATH.into()),
+                        ..PluginSource::default()
+                    }),
+                    other => Err(de::Error::custom(format!(
+                        "unknown source shorthand \"{other}\"; only \"crate\" is supported"
+                    ))),
+                }
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+                let fields =
+                    PluginSourceFields::deserialize(de::value::MapAccessDeserializer::new(map))?;
+                let count = fields.path.is_some() as u8
+                    + fields.git.is_some() as u8
+                    + fields.crate_path.is_some() as u8;
+                if count > 1 {
+                    return Err(de::Error::custom(
+                        "source.path, source.git, and source.crate_path are mutually exclusive",
+                    ));
+                }
+                Ok(PluginSource {
+                    path: fields.path,
+                    git: fields.git,
+                    crate_path: fields.crate_path,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(PluginSourceVisitor)
+    }
 }
 
 /// A `[[skills]]` entry from a plugin manifest.
@@ -1171,6 +1268,8 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
         hooks.push(validate_hook(raw, &mut installations, &mut names)?);
     }
 
+    validate_skill_groups(&manifest.crates, &manifest.skills)?;
+
     Ok(Plugin {
         name: manifest.name,
         crates: manifest.crates,
@@ -1179,6 +1278,51 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
         skills: manifest.skills,
         mcp_servers: manifest.mcp_servers,
     })
+}
+
+/// Validate skill-group source constraints that serde alone cannot express.
+///
+/// - At parse time we enforce: if a group uses `source.crate_path` (including
+///   the `source = "crate"` shorthand), at least one non-wildcard predicate
+///   must be reachable from the group — either on the plugin itself or on the
+///   group's own `crates` — so that Symposium can resolve concrete crates to
+///   fetch.
+///
+/// Valid:
+///   crates = ["serde"]             + source = "crate"         → fetch serde
+///   crates = ["*"], group ["serde"] + source.crate_path = …   → fetch serde
+///   crates = ["*", "serde"]        + source.crate_path = …    → fetch serde
+///
+/// Invalid:
+///   crates = ["*"]                 + source = "crate"         → no concrete crate
+///   crates = ["*"], group ["*"]    + source.crate_path = …    → no concrete crate
+fn validate_skill_groups(
+    plugin_crates: &crate::predicate::PredicateSet,
+    skills: &[SkillGroup],
+) -> Result<()> {
+    for (i, group) in skills.iter().enumerate() {
+        if group.source.crate_path.is_some() {
+            let has_non_wildcard = plugin_crates
+                .predicates
+                .iter()
+                .chain(
+                    group
+                        .crates
+                        .as_ref()
+                        .map(|ps| ps.predicates.as_slice())
+                        .unwrap_or_default(),
+                )
+                .any(|p| !matches!(p, crate::predicate::Predicate::Wildcard));
+            if !has_non_wildcard {
+                bail!(
+                    "skills group {i} uses source.crate_path but all predicates \
+                     (plugin-level and group-level) are wildcards or absent — \
+                     at least one non-wildcard predicate is required to resolve concrete crates"
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2661,6 +2805,295 @@ mod tests {
         assert!(
             err.to_string().contains("unknown installation"),
             "got: {err}"
+        );
+    }
+
+    // --- source mutual exclusivity and crate_path tests ---
+
+    #[test]
+    fn parse_crate_path_source() {
+        let toml = indoc! {r#"
+            name = "crate-path-plugin"
+            crates = ["serde"]
+
+            [[skills]]
+            source.crate_path = "skills"
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(
+            plugin.skills[0].source.crate_path.as_deref(),
+            Some("skills")
+        );
+        assert!(plugin.skills[0].source.path.is_none());
+        assert!(plugin.skills[0].source.git.is_none());
+    }
+
+    #[test]
+    fn parse_source_crate_shorthand() {
+        let toml = indoc! {r#"
+            name = "crate-shorthand"
+            crates = ["serde"]
+
+            [[skills]]
+            source = "crate"
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(
+            plugin.skills[0].source.crate_path.as_deref(),
+            Some("skills"),
+            r#"source = "crate" should set crate_path = Some("skills"), got {:?}"#,
+            plugin.skills[0].source
+        );
+    }
+
+    #[test]
+    fn parse_source_unknown_string_is_error() {
+        let toml = indoc! {r#"
+            name = "bad"
+            crates = ["serde"]
+
+            [[skills]]
+            source = "magic"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown source shorthand"),
+            "expected unknown shorthand error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn reject_path_and_git() {
+        let toml = indoc! {r#"
+            name = "bad"
+            crates = ["serde"]
+
+            [[skills]]
+            source.path = "."
+            source.git = "https://github.com/org/repo/tree/main/x"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("mutually exclusive"), "{err}");
+    }
+
+    #[test]
+    fn reject_path_and_crate_path() {
+        let toml = indoc! {r#"
+            name = "bad"
+            crates = ["serde"]
+
+            [[skills]]
+            source.path = "."
+            source.crate_path = "skills"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("mutually exclusive"), "{err}");
+    }
+
+    #[test]
+    fn reject_git_and_crate_path() {
+        let toml = indoc! {r#"
+            name = "bad"
+            crates = ["serde"]
+
+            [[skills]]
+            source.git = "https://github.com/org/repo/tree/main/x"
+            source.crate_path = "skills"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("mutually exclusive"), "{err}");
+    }
+
+    // --- wildcard + crate_path validation tests ---
+
+    #[test]
+    fn crate_path_valid_with_plugin_non_wildcard() {
+        let toml = indoc! {r#"
+            name = "ok"
+            crates = ["serde"]
+
+            [[skills]]
+            source.crate_path = "skills"
+        "#};
+        from_str(toml).expect("should be valid");
+    }
+
+    #[test]
+    fn crate_path_valid_with_group_non_wildcard() {
+        let toml = indoc! {r#"
+            name = "ok"
+            crates = ["*"]
+
+            [[skills]]
+            crates = ["serde"]
+            source.crate_path = "skills"
+        "#};
+        from_str(toml).expect("should be valid");
+    }
+
+    #[test]
+    fn crate_path_valid_with_mixed_wildcard_and_concrete() {
+        let toml = indoc! {r#"
+            name = "ok"
+            crates = ["*", "serde"]
+
+            [[skills]]
+            source.crate_path = "skills"
+        "#};
+        from_str(toml).expect("should be valid");
+    }
+
+    #[test]
+    fn crate_path_reject_all_wildcards() {
+        let toml = indoc! {r#"
+            name = "bad"
+            crates = ["*"]
+
+            [[skills]]
+            crates = ["*"]
+            source.crate_path = "skills"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("non-wildcard"), "{err}");
+    }
+
+    #[test]
+    fn crate_path_reject_wildcard_plugin_no_group_crates() {
+        let toml = indoc! {r#"
+            name = "bad"
+            crates = ["*"]
+
+            [[skills]]
+            source.crate_path = "skills"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("non-wildcard"), "{err}");
+    }
+
+    // --- TOML serialization round-trip tests ---
+
+    /// Serialize a plugin to TOML and parse it back.
+    fn roundtrip(plugin: &Plugin) -> Plugin {
+        let toml_str = toml::to_string_pretty(plugin).expect("serialize");
+        from_str(&toml_str).unwrap_or_else(|e| panic!("round-trip parse failed:\n{toml_str}\n{e}"))
+    }
+
+    #[test]
+    fn roundtrip_source_crate_shorthand() {
+        let plugin = from_str(indoc! {r#"
+            name = "rt"
+            crates = ["serde"]
+
+            [[skills]]
+            source = "crate"
+        "#})
+        .unwrap();
+        let rt = roundtrip(&plugin);
+        assert_eq!(rt.skills[0].source.crate_path.as_deref(), Some("skills"));
+    }
+
+    #[test]
+    fn roundtrip_source_crate_path_custom() {
+        let plugin = from_str(indoc! {r#"
+            name = "rt"
+            crates = ["serde"]
+
+            [[skills]]
+            source.crate_path = ".symposium/skills"
+        "#})
+        .unwrap();
+        let rt = roundtrip(&plugin);
+        assert_eq!(
+            rt.skills[0].source.crate_path.as_deref(),
+            Some(".symposium/skills")
+        );
+    }
+
+    #[test]
+    fn roundtrip_source_path() {
+        let plugin = from_str(indoc! {r#"
+            name = "rt"
+            crates = ["serde"]
+
+            [[skills]]
+            source.path = "skills/v1"
+        "#})
+        .unwrap();
+        let rt = roundtrip(&plugin);
+        assert_eq!(
+            rt.skills[0].source.path.as_deref(),
+            Some(std::path::Path::new("skills/v1"))
+        );
+    }
+
+    #[test]
+    fn roundtrip_source_git() {
+        let plugin = from_str(indoc! {r#"
+            name = "rt"
+            crates = ["serde"]
+
+            [[skills]]
+            source.git = "https://github.com/org/repo/tree/main/skills"
+        "#})
+        .unwrap();
+        let rt = roundtrip(&plugin);
+        assert_eq!(
+            rt.skills[0].source.git.as_deref(),
+            Some("https://github.com/org/repo/tree/main/skills")
+        );
+    }
+
+    #[test]
+    fn roundtrip_source_none() {
+        let plugin = from_str(indoc! {r#"
+            name = "rt"
+            crates = ["serde"]
+
+            [[skills]]
+            crates = ["serde"]
+        "#})
+        .unwrap();
+        let rt = roundtrip(&plugin);
+        assert!(rt.skills[0].source.path.is_none());
+        assert!(rt.skills[0].source.git.is_none());
+        assert!(rt.skills[0].source.crate_path.is_none());
+    }
+
+    #[test]
+    fn serialize_crate_shorthand_uses_string_form() {
+        let plugin = from_str(indoc! {r#"
+            name = "rt"
+            crates = ["serde"]
+
+            [[skills]]
+            source = "crate"
+        "#})
+        .unwrap();
+        let toml_str = toml::to_string_pretty(&plugin).expect("serialize");
+        assert!(
+            toml_str.contains(r#"source = "crate""#),
+            "crate_path = Some(\"skills\") should serialize as source = \"crate\", got:\n{toml_str}"
+        );
+    }
+
+    #[test]
+    fn serialize_custom_crate_path_uses_table_form() {
+        let plugin = from_str(indoc! {r#"
+            name = "rt"
+            crates = ["serde"]
+
+            [[skills]]
+            source.crate_path = ".symposium/skills"
+        "#})
+        .unwrap();
+        let toml_str = toml::to_string_pretty(&plugin).expect("serialize");
+        assert!(
+            toml_str.contains("crate_path"),
+            "non-default crate_path should serialize as a table, got:\n{toml_str}"
+        );
+        assert!(
+            !toml_str.contains(r#"source = "crate""#),
+            "non-default crate_path should NOT use shorthand, got:\n{toml_str}"
         );
     }
 }

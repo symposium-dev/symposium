@@ -852,6 +852,7 @@ mod tests {
                 source: PluginSource {
                     path: Some(skill_dir.to_path_buf()),
                     git: None,
+                    crate_path: None,
                 },
             }],
             mcp_servers: vec![],
