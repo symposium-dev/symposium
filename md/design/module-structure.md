@@ -44,4 +44,4 @@ Handles the hook pipeline: parse agent wire-format input → auto-sync → built
 
 ### `crate_command.rs` — crate source lookup
 
-Contains `dispatch_crate()`, which resolves a crate's version and fetches its source code. Called by the CLI's `crate-info` command. Uses `PathOverrides` (from `crate_sources`) to resolve path dependencies to their local source directory.
+Contains `dispatch_crate()`, which resolves a crate's version and fetches its source code. Called by the CLI's `crate-info` command. Path dependencies are resolved to their local source directory via `WorkspaceCrate.path`.

@@ -486,11 +486,24 @@ async fn setup_fixture(fixtures: &[&str]) -> TestContext {
         .unwrap_or_else(|| root.to_path_buf());
 
     assert!(
-        scan.workspace_dirs.len() <= 1,
-        "multiple Cargo.toml found in fixtures: {:?}",
+        scan.workspace_dirs.len() <= 1
+            || scan.workspace_dirs.iter().all(|d| {
+                // All other Cargo.toml dirs must be subdirectories of the shallowest one.
+                let shallowest = scan
+                    .workspace_dirs
+                    .iter()
+                    .min_by_key(|p| p.components().count())
+                    .unwrap();
+                d == shallowest || d.starts_with(shallowest)
+            }),
+        "multiple unrelated Cargo.toml found in fixtures: {:?}",
         scan.workspace_dirs
     );
-    let workspace_root = scan.workspace_dirs.first().cloned();
+    let workspace_root = scan
+        .workspace_dirs
+        .iter()
+        .min_by_key(|p| p.components().count())
+        .cloned();
 
     let sym = Symposium::from_dir(&config_dir);
 

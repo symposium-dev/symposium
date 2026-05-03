@@ -10,4 +10,4 @@ When a skill group uses `source = "crate"` or `source.crate_path`, the sync flow
 2. For each crate in the set, `RustCrateFetch` fetches the source — checking path overrides (for local path deps), then the cargo registry cache, then crates.io.
 3. `discover_skills()` scans the specified subdirectory within each fetched crate source.
 
-The key code paths are in `skills.rs` (`load_skills_for_group`), `predicate.rs` (`matched_crates`, `union_matched_crates`), and `crate_sources/mod.rs` (`RustCrateFetch`, `PathOverrides`).
+The key code paths are in `skills.rs` (`load_skills_for_group`), `predicate.rs` (`matched_crates`, `union_matched_crates`), and `crate_sources/mod.rs` (`RustCrateFetch`, `WorkspaceCrate`).
