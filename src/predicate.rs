@@ -73,6 +73,61 @@ impl PredicateSet {
     pub fn matches(&self, deps: &[(String, semver::Version)]) -> bool {
         self.predicates.iter().any(|p| p.matches(deps))
     }
+
+    /// Resolve predicates against workspace, returning concrete matched crates.
+    ///
+    /// Wildcards match (contribute to "did anything match?") but yield no concrete crates.
+    /// Returns `None` if no predicate matches at all.
+    /// Returns `Some(vec![])` if only wildcards matched.
+    /// Returns `Some(vec![...])` with concrete (name, version) pairs otherwise.
+    pub fn matched_crates(
+        &self,
+        workspace: &[(String, semver::Version)],
+    ) -> Option<Vec<(String, semver::Version)>> {
+        let mut any_matched = false;
+        let mut result = Vec::new();
+        for pred in &self.predicates {
+            match pred {
+                Predicate::Wildcard => {
+                    any_matched = true;
+                }
+                Predicate::Crate(name, version_req) => {
+                    for (dep_name, dep_ver) in workspace {
+                        if dep_name == name
+                            && version_req
+                                .as_ref()
+                                .map_or(true, |req| req.matches(dep_ver))
+                        {
+                            any_matched = true;
+                            result.push((dep_name.clone(), dep_ver.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        if any_matched { Some(result) } else { None }
+    }
+}
+
+/// Union matched crates from multiple predicate sets.
+///
+/// Returns the deduplicated set of concrete crates matched by any level.
+pub fn union_matched_crates(
+    predicate_sets: &[&PredicateSet],
+    workspace: &[(String, semver::Version)],
+) -> Vec<(String, semver::Version)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for ps in predicate_sets {
+        if let Some(matched) = ps.matched_crates(workspace) {
+            for pair in matched {
+                if seen.insert(pair.0.clone()) {
+                    result.push(pair);
+                }
+            }
+        }
+    }
+    result
 }
 
 /// Parse a comma-separated predicate string into multiple predicates.
@@ -515,5 +570,102 @@ mod tests {
         assert_eq!(preds.len(), 2);
         assert_eq!(preds[0], Predicate::Wildcard);
         assert!(preds[1].references_crate("serde"));
+    }
+
+    // --- matched_crates tests ---
+
+    #[test]
+    fn matched_crates_single_match() {
+        let ps = PredicateSet::parse("serde").unwrap();
+        let ws = vec![("serde".into(), v("1.0.210"))];
+        let matched = ps.matched_crates(&ws).unwrap();
+        assert_eq!(matched, vec![("serde".into(), v("1.0.210"))]);
+    }
+
+    #[test]
+    fn matched_crates_no_match() {
+        let ps = PredicateSet::parse("serde").unwrap();
+        let ws = vec![("tokio".into(), v("1.38.0"))];
+        assert!(ps.matched_crates(&ws).is_none());
+    }
+
+    #[test]
+    fn matched_crates_wildcard_only() {
+        let ps = PredicateSet::parse("*").unwrap();
+        let ws = vec![("serde".into(), v("1.0.210"))];
+        let matched = ps.matched_crates(&ws).unwrap();
+        assert!(matched.is_empty());
+    }
+
+    #[test]
+    fn matched_crates_wildcard_plus_concrete() {
+        let ps = PredicateSet {
+            predicates: parse_comma_separated("*, serde").unwrap(),
+        };
+        let ws = vec![("serde".into(), v("1.0.210"))];
+        let matched = ps.matched_crates(&ws).unwrap();
+        assert_eq!(matched, vec![("serde".into(), v("1.0.210"))]);
+    }
+
+    #[test]
+    fn matched_crates_version_not_satisfied() {
+        let ps = PredicateSet::parse("aws-sdk-dynamodb>=1.2").unwrap();
+        let ws = vec![("aws-sdk-dynamodb".into(), v("1.1.0"))];
+        assert!(ps.matched_crates(&ws).is_none());
+    }
+
+    #[test]
+    fn matched_crates_multiple_predicates() {
+        let ps = PredicateSet {
+            predicates: parse_comma_separated("serde, tokio").unwrap(),
+        };
+        let ws = vec![
+            ("serde".into(), v("1.0.210")),
+            ("tokio".into(), v("1.38.0")),
+        ];
+        let matched = ps.matched_crates(&ws).unwrap();
+        assert_eq!(matched.len(), 2);
+    }
+
+    #[test]
+    fn matched_crates_partial_match() {
+        let ps = PredicateSet {
+            predicates: parse_comma_separated("serde, tokio").unwrap(),
+        };
+        let ws = vec![("serde".into(), v("1.0.210"))];
+        let matched = ps.matched_crates(&ws).unwrap();
+        assert_eq!(matched, vec![("serde".into(), v("1.0.210"))]);
+    }
+
+    // --- union_matched_crates tests ---
+
+    #[test]
+    fn union_matched_crates_deduplicates() {
+        let ps1 = PredicateSet::parse("serde").unwrap();
+        let ps2 = PredicateSet::parse("serde").unwrap();
+        let ws = vec![("serde".into(), v("1.0.210"))];
+        let result = union_matched_crates(&[&ps1, &ps2], &ws);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn union_matched_crates_combines_levels() {
+        let plugin = PredicateSet::parse("tokio").unwrap();
+        let group = PredicateSet::parse("serde").unwrap();
+        let ws = vec![
+            ("serde".into(), v("1.0.210")),
+            ("tokio".into(), v("1.38.0")),
+        ];
+        let result = union_matched_crates(&[&plugin, &group], &ws);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn union_matched_crates_wildcard_plugin_concrete_group() {
+        let plugin = PredicateSet::parse("*").unwrap();
+        let group = PredicateSet::parse("serde").unwrap();
+        let ws = vec![("serde".into(), v("1.0.210"))];
+        let result = union_matched_crates(&[&plugin, &group], &ws);
+        assert_eq!(result, vec![("serde".into(), v("1.0.210"))]);
     }
 }
