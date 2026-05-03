@@ -1,0 +1,8 @@
+[package]
+name = "crate-y"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crate-x = { path = "crate-x" }
+crate-z = { path = "crate-z" }

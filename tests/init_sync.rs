@@ -446,6 +446,56 @@ async fn sync_installs_wildcard_plugin_skill() {
     .await
     .unwrap();
 }
+
+/// `sync` installs skills from a crate source via `source.crate_path`.
+///
+/// Fixture layout:
+/// - `crate-y` depends on `crate-x` and `crate-z` (path deps)
+/// - `crate-x` ships `skills/x-guidance/SKILL.md` (default path via `source = "crate"`)
+/// - `crate-z` ships `.symposium/skills/z-guidance/SKILL.md` (custom path)
+#[tokio::test]
+async fn sync_installs_skill_from_crate_path() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-path0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+
+            // crate-x: default path via source = "crate"
+            let skill_file = workspace_root.join(".claude/skills/x-guidance/SKILL.md");
+            assert!(
+                skill_file.exists(),
+                "sync should install skill from crate-x via source = \"crate\""
+            );
+            let content = std::fs::read_to_string(&skill_file)?;
+            assert!(content.contains("Use crate-x like this"));
+
+            // crate-z: custom path via source.crate_path = ".symposium/skills"
+            let skill_file = workspace_root.join(".claude/skills/z-guidance/SKILL.md");
+            assert!(
+                skill_file.exists(),
+                "sync should install skill from crate-z via custom crate_path"
+            );
+            let content = std::fs::read_to_string(&skill_file)?;
+            assert!(content.contains("Use crate-z like this"));
+
+            let manifest_path = workspace_root.join(".claude/skills/.symposium.toml");
+            let manifest = std::fs::read_to_string(&manifest_path)?;
+            assert!(manifest.contains("x-guidance"));
+            assert!(manifest.contains("z-guidance"));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `crate-info` resolves a `[patch.crates-io]` crate to its local path.
+///
+/// Fixture layout:
 /// - `patch-demo` depends on `crate-x = "0.1.0"` (crates.io)
 /// - `[patch.crates-io]` overrides `crate-x` with a local path
 /// - `crate-x` ships `skills/x-patched-guidance/SKILL.md`

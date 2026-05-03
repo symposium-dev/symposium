@@ -1,0 +1,5 @@
+name = "crate-z-plugin"
+crates = ["crate-z"]
+
+[[skills]]
+source.crate_path = ".symposium/skills"
