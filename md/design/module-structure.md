@@ -32,9 +32,11 @@ Also discovers standalone `SKILL.md` files not wrapped in a plugin. Returns a `P
 
 Defines `Source` (the `source = "..."`-tagged enum: `cargo`, `github`, `binary`) and `acquire_source`, which downloads / installs / clones the source and returns an `AcquiredSource` whose `resolve_executable` / `resolve_script` methods turn a relative `executable`/`script` name into a concrete path. The `Runnable` enum (`Exec(PathBuf)` or `Script(PathBuf)`) is the final form a hook command resolves to. The `git` submodule handles GitHub tarball acquisition and caching.
 
+Validates skill group source constraints at parse time: mutual exclusivity of `source.path`/`source.git`/`source.crate_path`, and the requirement that `source.crate_path` has at least one non-wildcard predicate.
+
 ### `skills.rs` — skill resolution and matching
 
-Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates crate predicates at each level (plugin, group, skill) to determine which skills apply.
+Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates crate predicates at each level (plugin, group, skill) to determine which skills apply. For `source.crate_path` groups, resolves predicates to a matched crate set and fetches each crate's source via `RustCrateFetch`.
 
 ### `hook.rs` — hook handling
 
@@ -42,4 +44,4 @@ Handles the hook pipeline: parse agent wire-format input → auto-sync → built
 
 ### `crate_command.rs` — crate source lookup
 
-Contains `dispatch_crate()`, which resolves a crate's version and fetches its source code. Called by the CLI's `crate-info` command.
+Contains `dispatch_crate()`, which resolves a crate's version and fetches its source code. Called by the CLI's `crate-info` command. Uses `PathOverrides` (from `crate_sources`) to resolve path dependencies to their local source directory.
