@@ -77,7 +77,7 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
 
     if let Some(scope) = opts.hook_scope {
         sym.config.hook_scope = scope;
-    } else if interactive(out) {
+    } else if !agents.is_empty() && interactive(out) {
         sym.config.hook_scope = prompt_for_hook_scope(sym.config.hook_scope)?;
     }
     tracing::debug!(scope = ?sym.config.hook_scope, "hook scope");
@@ -90,6 +90,17 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
     );
 
     let config_path = sym.config_dir().join("config.toml");
+
+    if agents.is_empty() {
+        // Uninstall: unregister all hooks and MCP servers for every agent.
+        crate::sync::register_hooks(sym, out).context("failed to unregister hooks")?;
+        out.done(format!(
+            "{}: wrote user config (no agents — symposium uninstalled)",
+            display_path(&config_path),
+        ));
+        return Ok(());
+    }
+
     let agent_names: Vec<_> = agents.iter().map(|a| a.display_name()).collect();
     out.done(format!(
         "{}: wrote user config (agents: {})",
@@ -144,10 +155,6 @@ fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {
         .items(&items)
         .defaults(&defaults)
         .interact()?;
-
-    if selections.is_empty() {
-        bail!("at least one agent must be selected");
-    }
 
     Ok(selections.into_iter().map(|i| agents[i]).collect())
 }
