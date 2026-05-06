@@ -1,4 +1,4 @@
-//! Init command: `symposium init`.
+//! Init command: `cargo agents init`.
 
 use std::io::IsTerminal;
 use std::path::PathBuf;

@@ -24,13 +24,13 @@
 
 ```bash
 cargo binstall symposium # or: cargo install symposium
-symposium init
+cargo agents init
 ```
 
 After initialization, start your agent in a Rust project as usual.
 
 - For first-time setup details, see [Installing Symposium](./install.md).
-- For command reference, see [The `symposium` command](./reference/cargo-agents.md).
+- For command reference, see [The `cargo agents` command](./reference/cargo-agents.md).
 - For agent compatibility, see [Supported agents](./reference/supported-agents.md).
 
 ## Recent posts
