@@ -1,0 +1,43 @@
+name = "test-plugin"
+crates = ["*"]
+
+# A reusable shell installation referenced by name.
+[[installations]]
+name = "named-shell"
+source = "shell"
+command = "echo '{\"PreToolUse\":{\"additionalContext\":\"named-shell-output\"}}'"
+
+# Inline shell command in `command` — promoted to a synthetic installation
+# named after the hook (`inline-shell-bash`).
+[[hooks]]
+name = "inline-shell-bash"
+event = "PreToolUse"
+matcher = "Bash"
+command = { source = "shell", command = "echo '{\"PreToolUse\":{\"additionalContext\":\"inline-shell-output\"}}'" }
+format = "symposium"
+
+# Hook that references the named installation above.
+[[hooks]]
+name = "named-ref-read"
+event = "PreToolUse"
+matcher = "Read"
+command = "named-shell"
+format = "symposium"
+
+# Hook with a (no-op) requirement — verifies the requirements path runs.
+[[hooks]]
+name = "with-requirements"
+event = "PreToolUse"
+matcher = "Edit"
+requirements = [{ source = "shell", command = "true" }]
+command = { source = "shell", command = "echo '{\"PreToolUse\":{\"additionalContext\":\"with-requirements-output\"}}'" }
+format = "symposium"
+
+# Shell hook with positional args — emits the first arg.
+[[hooks]]
+name = "shell-args"
+event = "PreToolUse"
+matcher = "Glob"
+command = { source = "shell", command = "echo \"{\\\"PreToolUse\\\":{\\\"additionalContext\\\":\\\"shell-args:$1\\\"}}\"" }
+args = ["picked-up"]
+format = "symposium"

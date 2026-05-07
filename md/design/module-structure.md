@@ -22,7 +22,15 @@ Implements `cargo agents sync`. Scans workspace dependencies, finds applicable s
 
 ### `plugins.rs` — plugin registry
 
-Scans configured plugin source directories for TOML manifests and parses them into `Plugin` structs. Each plugin contains `SkillGroup`s (which crates, where to find the skills) and `Hook`s (event handlers). Also discovers standalone `SKILL.md` files not wrapped in a plugin. Returns a `PluginRegistry` — a table of contents that doesn't load skill content.
+Scans configured plugin source directories for TOML manifests and parses them into `Plugin` structs. Validation here turns the raw TOML into:
+- `Installation` entries (`name` + `requirements: Vec<String>` + `InstallationKind`) collected on `Plugin.installations`. Inline installation references appearing on hooks or other installations are *promoted* into synthetic `Installation` entries with derived names (`<hook>` for an inline `command`, `<owner>__req_<i>` for an inline requirement), so all references in the validated form are plain names.
+- `Hook` entries with `command: String` (the name of an `Installation`) and `requirements: Vec<String>` (also names).
+
+Also discovers standalone `SKILL.md` files not wrapped in a plugin. Returns a `PluginRegistry` — a table of contents that doesn't load skill content.
+
+### `installation.rs` — installation kinds and resolution
+
+Defines `InstallationKind` (the `source = "..."`-tagged enum: `cargo`, `local`, `binary`, `github`, `shell`) and `resolve_installation`, which turns a `kind` into either a `ResolvedCommand::Exec(PathBuf)` or `ResolvedCommand::Shell { command, args }` (or `Ok(None)` for github acquired without a sub-path). Side-effect: installs / clones / downloads as needed. The `git` submodule handles GitHub tarball acquisition and caching.
 
 ### `skills.rs` — skill resolution and matching
 
@@ -30,7 +38,7 @@ Given a `PluginRegistry` and workspace dependencies, this module resolves skill 
 
 ### `hook.rs` — hook handling
 
-Handles the hook pipeline: parse agent wire-format input → auto-sync → builtin dispatch → plugin hook dispatch → serialize output. When `auto-sync` is enabled, runs `sync` as a side effect during hook invocations. Plugin hooks are spawned as shell commands with format routing between agent wire formats and the symposium canonical format.
+Handles the hook pipeline: parse agent wire-format input → auto-sync → builtin dispatch → plugin hook dispatch → serialize output. The dispatch path matches plugin `Hook`s against the event, builds a `ResolvedHook` per match (looking up the named installations on the plugin), then for each `ResolvedHook`: acquires its `requirements` (best-effort), resolves the command into a `SpawnSpec`, and spawns. Format routing converts hook output between agent wire formats and the symposium canonical format.
 
 ### `crate_command.rs` — crate source lookup
 

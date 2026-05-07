@@ -1,14 +1,99 @@
 use std::{
     io::{Read, Write},
+    path::PathBuf,
     process::{Command, ExitCode, Stdio},
 };
 
+use crate::installation::{InstallationKind, ResolvedCommand, resolve_installation};
+use crate::plugins::HookFormat;
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
     plugins::ParsedPlugin,
 };
-use crate::{distribution::resolve_distribution, installation::install_from_source};
+
+/// A hook prepared for dispatch — installation names looked up to concrete
+/// kinds, so the dispatch loop never has to scan the plugin's installations
+/// list again.
+struct ResolvedHook {
+    plugin_name: String,
+    hook_name: String,
+    format: HookFormat,
+    requirements: Vec<InstallationKind>,
+    command: InstallationKind,
+    sub_path: Option<String>,
+    args: Vec<String>,
+}
+
+impl ResolvedHook {
+    fn build(parsed_plugin: &ParsedPlugin, hook: &crate::plugins::Hook) -> anyhow::Result<Self> {
+        let installations = &parsed_plugin.plugin.installations;
+        let lookup = |name: &str| -> anyhow::Result<InstallationKind> {
+            installations
+                .iter()
+                .find(|i| i.name == name)
+                .map(|i| i.kind.clone())
+                .ok_or_else(|| anyhow::anyhow!("installation `{name}` not found in plugin"))
+        };
+
+        let command = lookup(&hook.command)?;
+        let requirements = hook
+            .requirements
+            .iter()
+            .map(|name| lookup(name))
+            .collect::<anyhow::Result<Vec<_>>>()?;
+
+        Ok(Self {
+            plugin_name: parsed_plugin.plugin.name.clone(),
+            hook_name: hook.name.clone(),
+            format: hook.format.clone(),
+            requirements,
+            command,
+            sub_path: hook.sub_path.clone(),
+            args: hook.args.clone(),
+        })
+    }
+}
+
+enum SpawnSpec {
+    Exec { path: PathBuf, args: Vec<String> },
+    Shell { command: String, args: Vec<String> },
+}
+
+async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Result<SpawnSpec> {
+    let resolved = resolve_installation(sym, &hook.command, hook.sub_path.as_deref())
+        .await?
+        .ok_or_else(|| {
+            anyhow::anyhow!("hook `{}`: command resolved to no executable", hook.hook_name)
+        })?;
+    match resolved {
+        ResolvedCommand::Exec(path) => Ok(SpawnSpec::Exec { path, args: hook.args.clone() }),
+        ResolvedCommand::Shell { command, args: install_args } => {
+            let args = if hook.args.is_empty() { install_args } else { hook.args.clone() };
+            Ok(SpawnSpec::Shell { command, args })
+        }
+    }
+}
+
+fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
+    match spec {
+        SpawnSpec::Shell { command, args } => Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .arg("sh")
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn(),
+        SpawnSpec::Exec { path, args } => Command::new(path)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn(),
+    }
+}
 
 // Re-export hook schema types for convenience.
 pub use crate::hook_schema::{HookAgent, HookEvent};
@@ -38,17 +123,12 @@ pub async fn execute_hook(
         let prior_output = builtin_agent_output.to_hook_output();
 
         // Plugin dispatch with format routing
-        let final_output = dispatch_plugin_hooks(
-            sym,
-            agent,
-            event,
-            &sym_input,
-            payload.as_ref(),
-            prior_output,
-        )
-        .map_err(|stderr| {
-            anyhow::anyhow!("plugin blocked: {}", String::from_utf8_lossy(&stderr))
-        })?;
+        let final_output =
+            dispatch_plugin_hooks(sym, agent, event, &sym_input, payload.as_ref(), prior_output)
+                .await
+                .map_err(|stderr| {
+                    anyhow::anyhow!("plugin blocked: {}", String::from_utf8_lossy(&stderr))
+                })?;
 
         let serialized = handler.serialize_output(&final_output);
         tracing::trace!(output_len = serialized.len(), "hook output serialized");
@@ -193,7 +273,7 @@ pub enum PluginHookOutput {
 /// When formats differ, conversion goes through symposium canonical types.
 ///
 /// Returns `Ok(json)` on success, `Err(stderr)` on exit code 2.
-pub fn dispatch_plugin_hooks(
+pub async fn dispatch_plugin_hooks(
     sym: &Symposium,
     host_agent: HookAgent,
     event: HookEvent,
@@ -202,18 +282,22 @@ pub fn dispatch_plugin_hooks(
     prior_output: serde_json::Value,
 ) -> Result<serde_json::Value, Vec<u8>> {
     let plugins = crate::plugins::load_all_plugins(sym);
-    let hooks = hooks_for_payload(&plugins, sym_input);
+    let hooks = dispatched_hooks_for_payload(&plugins, sym_input);
 
     let mut output = prior_output;
 
-    let runtime = tokio::runtime::Handle::current();
+    for hook in hooks {
+        tracing::info!(
+            plugin = %hook.plugin_name,
+            hook = %hook.hook_name,
+            format = ?hook.format,
+            "running plugin hook"
+        );
 
-    for (plugin_name, hook) in hooks {
-        tracing::info!(?plugin_name, hook = %hook.name, cmd = ?hook.command, format = ?hook.format, "running plugin hook");
-
-        for requirement in &hook.requirements {
-            if let Err(e) = runtime.block_on(install_from_source(sym, requirement)) {
-                tracing::error!(?requirement, error = %e, "failed to install hook requirement");
+        // Acquire each requirement (best-effort).
+        for spec in &hook.requirements {
+            if let Err(e) = resolve_installation(sym, spec, None).await {
+                tracing::error!(?spec, error = %e, "failed to install hook requirement");
             }
         }
 
@@ -240,45 +324,15 @@ pub fn dispatch_plugin_hooks(
         let stdin_str = match hook_input.to_string() {
             Ok(s) => s,
             Err(e) => {
-                tracing::error!(?plugin_name, hook = %hook.name, error = %e, "failed to serialize hook input");
+                tracing::error!(plugin = %hook.plugin_name, hook = %hook.hook_name, error = %e, "failed to serialize hook input");
                 continue;
             }
         };
 
-        let spawn_res = match (&hook.distribution, &hook.command) {
-            (Some(distribution), command @ _) => {
-                if command.is_some() {
-                    tracing::warn!(
-                        "Both distribution and command are specified. Ignoring command."
-                    );
-                    continue;
-                }
-                let resolved = runtime.block_on(resolve_distribution(sym, distribution));
-                let resolved_path = match resolved {
-                    Ok(p) => p,
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to resolve hook distribution");
-                        continue;
-                    }
-                };
-
-                Command::new("sh")
-                    .arg(&resolved_path.path)
-                    .args(&resolved_path.args)
-                    .stdin(Stdio::piped())
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-            }
-            (None, Some(command)) => Command::new("sh")
-                .arg("-c")
-                .arg(command)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn(),
-            (None, None) => {
-                tracing::error!("No distribution or command specified for hook. Skipping.");
+        let spawn_res = match build_spawn_spec(sym, &hook).await {
+            Ok(spec) => spawn_from_spec(spec),
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to prepare hook command");
                 continue;
             }
         };
@@ -392,33 +446,41 @@ pub fn merge(a: &mut serde_json::Value, b: serde_json::Value) {
     *a = b;
 }
 
-/// Return all hooks (with their plugin name) that match the event in `payload`.
-fn hooks_for_payload(
-    plugins: &[crate::plugins::ParsedPlugin],
+/// Match plugin hooks against the incoming event, then resolve every
+/// `InstallationRef` (named or inline) on the matched hooks into a concrete
+/// `InstallationKind`. The resulting `ResolvedHook`s are ready to dispatch
+/// without further plugin lookups.
+fn dispatched_hooks_for_payload(
+    plugins: &[ParsedPlugin],
     input: &symposium::InputEvent,
-) -> Vec<(String, crate::plugins::Hook)> {
+) -> Vec<ResolvedHook> {
     tracing::trace!(?input, "matching hooks for payload");
 
     let mut out = Vec::new();
 
-    for ParsedPlugin { path: _, plugin } in plugins {
-        let name = plugin.name.clone();
-        for hook in &plugin.hooks {
+    for parsed_plugin in plugins {
+        for hook in &parsed_plugin.plugin.hooks {
             tracing::trace!(?hook);
             if hook.event != input.event() {
                 continue;
             }
             if let Some(matcher) = &hook.matcher {
                 if !input.matches_matcher(matcher) {
-                    tracing::debug!(
-                        ?input,
-                        ?matcher,
-                        "skipping hook due to non-matching matcher"
-                    );
+                    tracing::debug!(?input, ?matcher, "skipping hook due to non-matching matcher");
                     continue;
                 }
             }
-            out.push((name.clone(), hook.clone()));
+            match ResolvedHook::build(parsed_plugin, hook) {
+                Ok(dispatched) => out.push(dispatched),
+                Err(e) => {
+                    tracing::warn!(
+                        plugin = %parsed_plugin.plugin.name,
+                        hook = %hook.name,
+                        error = %e,
+                        "failed to resolve hook for dispatch"
+                    );
+                }
+            }
         }
     }
 

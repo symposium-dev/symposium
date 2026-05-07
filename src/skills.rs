@@ -199,8 +199,8 @@ pub(crate) fn prune_nested_skills(paths: &mut Vec<PathBuf>) {
 
 /// Fetch a skill group's git source, returning the cached directory path.
 async fn fetch_skill_source(sym: &Symposium, git_url: &str) -> Result<PathBuf> {
-    let source = crate::distribution::git::parse_github_url(git_url)?;
-    let cache_mgr = crate::distribution::git::GitCacheManager::new(sym, "plugins");
+    let source = crate::installation::git::parse_github_url(git_url)?;
+    let cache_mgr = crate::installation::git::GitCacheManager::new(sym, "plugins");
     cache_mgr
         .get_or_fetch(&source, git_url, crate::plugins::UpdateLevel::None)
         .await
@@ -706,13 +706,13 @@ mod tests {
         let plugin = Plugin {
             name: "other-crate-plugin".to_string(),
             crates: pred_set("other-crate"),
-            installation: None,
             hooks: vec![],
             skills: vec![SkillGroup {
                 crates: Some(pred_set("serde")), // Group targets serde
                 source: PluginSource::default(),
             }],
             mcp_servers: vec![],
+            installations: Vec::new(),
         };
 
         let registry = PluginRegistry {
@@ -745,13 +745,13 @@ mod tests {
         let plugin = Plugin {
             name: "wildcard-plugin".to_string(),
             crates: pred_set("*"), // Plugin applies to all
-            installation: None,
             hooks: vec![],
             skills: vec![SkillGroup {
                 crates: Some(pred_set("other-crate")), // But group targets other-crate
                 source: PluginSource::default(),
             }],
             mcp_servers: vec![],
+            installations: Vec::new(),
         };
 
         let registry = PluginRegistry {
@@ -802,7 +802,6 @@ mod tests {
         let plugin = Plugin {
             name: "serde-plugin".to_string(),
             crates: pred_set("serde"), // Plugin targets serde
-            installation: None,
             hooks: vec![],
             skills: vec![SkillGroup {
                 crates: Some(pred_set("serde")), // Group also targets serde
@@ -812,6 +811,7 @@ mod tests {
                 },
             }],
             mcp_servers: vec![],
+            installations: Vec::new(),
         };
 
         let registry = PluginRegistry {

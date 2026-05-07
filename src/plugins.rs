@@ -1,14 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::config::Symposium;
-use crate::distribution::Distribution;
 use crate::hook::HookEvent;
 use crate::hook_schema::HookAgent;
-use crate::installation::InstallationSource;
+use crate::installation::InstallationKind;
 
 use sacp::schema::McpServer;
 
@@ -64,8 +63,36 @@ pub struct SkillGroup {
     pub source: PluginSource,
 }
 
-/// Deserialize is handled by Predicate's own Deserialize impl (parses each string element).
-/// No custom deserializer needed — `crates` is always `Option<Vec<Predicate>>`.
+/// Raw command reference as it appears in TOML: a string (named installation
+/// reference) or an inline installation table (`{ source = "...", … }`).
+///
+/// Inline forms are promoted at validation time into synthetic
+/// `[[installations]]` entries, so the validated `Plugin` only ever stores
+/// installation references as plain names.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawInstallationRef {
+    Named(String),
+    Inline(InstallationKind),
+}
+
+/// A `[[installations]]` entry in the validated `Plugin`.
+///
+/// Inline references on hooks and on other installations are promoted to
+/// synthetic entries here, so this is the single source of truth: every
+/// `Hook.command` and `Hook.requirements` / `Installation.requirements`
+/// names a member of `Plugin.installations`.
+///
+/// Stored in a `Vec` so declaration order is preserved (relevant for
+/// iteration and pretty-print).
+#[derive(Debug, Clone, Serialize)]
+pub struct Installation {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requirements: Vec<String>,
+    #[serde(flatten)]
+    pub kind: InstallationKind,
+}
 
 /// A parsed plugin with its path and manifest.
 #[derive(Debug, Clone)]
@@ -77,7 +104,7 @@ pub struct ParsedPlugin {
     pub plugin: Plugin,
 }
 
-/// A loaded plugin manifest with hooks and skill groups.
+/// A loaded, *validated* plugin manifest.
 ///
 /// This is a table of contents — it describes what skills and hooks are
 /// available, but does not load skill content. The skills layer handles
@@ -87,11 +114,12 @@ pub struct Plugin {
     pub name: String,
     /// Crate predicates this plugin applies to. `["*"]` for all crates.
     pub crates: crate::predicate::PredicateSet,
-    pub installation: Option<Installation>,
+    /// Named installation entries available to hooks in this plugin.
+    /// Order matches declaration order in the manifest.
+    pub installations: Vec<Installation>,
     pub hooks: Vec<Hook>,
     pub skills: Vec<SkillGroup>,
     /// MCP servers to register for this plugin.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<PluginMcpServer>,
 }
 
@@ -123,27 +151,194 @@ impl Plugin {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct Installation {
-    #[serde(default)]
-    pub summary: Option<String>,
-    pub commands: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
+/// A validated hook definition.
+///
+/// `command` is the name of an `Installation` in the plugin (possibly a
+/// synthetic one promoted from an inline declaration). `sub_path` and `args`
+/// are the resolved invocation details.
+#[derive(Debug, Clone, Serialize)]
 pub struct Hook {
     pub name: String,
     pub event: HookEvent,
     pub agent: Option<HookAgent>,
     pub matcher: Option<String>,
-    pub distribution: Option<Distribution>,
-    #[serde(default)]
-    pub requirements: Vec<InstallationSource>,
-    pub command: Option<String>,
-    #[serde(default)]
+    /// Installation names to acquire before the hook runs. Includes the
+    /// command installation's own requirements (one level of expansion).
+    pub requirements: Vec<String>,
+    /// Name of the installation whose executable (or shell command) to run.
+    pub command: String,
+    /// For `github` installations, the file inside the cached repo to run.
+    /// `None` for all other sources.
+    pub sub_path: Option<String>,
+    /// Resolved invocation arguments. Empty for `shell` installations.
+    pub args: Vec<String>,
     pub format: HookFormat,
+}
+
+/// Resolve a `RawInstallationRef`. If named, validate against the existing
+/// installations and return the name. If inline, promote the inline kind to
+/// a new synthetic `Installation` (named via `synth_name`) appended to
+/// `installations`, and return the synthetic name.
+fn resolve_or_promote(
+    raw: RawInstallationRef,
+    installations: &mut Vec<Installation>,
+    names: &mut std::collections::BTreeSet<String>,
+    synth_name: impl FnOnce() -> String,
+    ctx: &str,
+) -> Result<String> {
+    match raw {
+        RawInstallationRef::Named(name) => {
+            if !names.contains(&name) {
+                bail!("{ctx} references unknown installation `{name}`");
+            }
+            Ok(name)
+        }
+        RawInstallationRef::Inline(kind) => {
+            let name = synth_name();
+            if !names.insert(name.clone()) {
+                bail!(
+                    "{ctx}: synthetic installation name `{name}` conflicts with an existing one"
+                );
+            }
+            validate_installation_kind(&name, &kind)?;
+            installations.push(Installation { name: name.clone(), requirements: Vec::new(), kind });
+            Ok(name)
+        }
+    }
+}
+
+/// Validate a raw hook into a `Hook`, promoting any inline `command` /
+/// `requirements` into synthetic entries on `installations`.
+fn validate_hook(
+    raw: RawHook,
+    installations: &mut Vec<Installation>,
+    names: &mut std::collections::BTreeSet<String>,
+) -> Result<Hook> {
+    let RawHook {
+        name: hook_name,
+        event,
+        agent,
+        matcher,
+        requirements: raw_requirements,
+        command: raw_command,
+        path,
+        args,
+        format,
+    } = raw;
+
+    let command = resolve_or_promote(
+        raw_command,
+        installations,
+        names,
+        || hook_name.clone(),
+        &format!("hook `{hook_name}`"),
+    )?;
+
+    let kind = installations
+        .iter()
+        .find(|i| i.name == command)
+        .map(|i| &i.kind)
+        .expect("just resolved");
+
+    let (sub_path, final_args) = match kind {
+        InstallationKind::Shell(s) => {
+            if path.is_some() {
+                bail!("hook `{hook_name}`: shell installations don't take a `path`");
+            }
+            (None, choose_args(&hook_name, &s.args, args)?)
+        }
+        InstallationKind::Cargo(c) => {
+            if path.is_some() {
+                bail!("hook `{hook_name}`: cargo installations don't take a `path`");
+            }
+            (None, choose_args(&hook_name, &c.args, args)?)
+        }
+        InstallationKind::Local(l) => {
+            if path.is_some() {
+                bail!("hook `{hook_name}`: local installations don't take a `path`");
+            }
+            (None, choose_args(&hook_name, &l.args, args)?)
+        }
+        InstallationKind::Binary(_) => {
+            if path.is_some() {
+                bail!("hook `{hook_name}`: binary installations don't take a `path`");
+            }
+            (None, args)
+        }
+        InstallationKind::Github(gh) => {
+            let chosen = match (gh.path.as_deref(), path.as_deref()) {
+                (None, None) => bail!(
+                    "hook `{hook_name}`: github installation requires a `path` \
+                     (set it on the installation or on the hook, but not both)"
+                ),
+                (Some(_), Some(_)) => bail!(
+                    "hook `{hook_name}`: github installation already declares a `path`; \
+                     remove it from one of the installation or hook"
+                ),
+                (Some(p), None) => p.to_string(),
+                (None, Some(p)) => p.to_string(),
+            };
+            (Some(chosen), choose_args(&hook_name, &gh.args, args)?)
+        }
+    };
+
+    let mut final_requirements: Vec<String> = installations
+        .iter()
+        .find(|i| i.name == command)
+        .map(|i| i.requirements.clone())
+        .unwrap_or_default();
+
+    for (i, raw_req) in raw_requirements.into_iter().enumerate() {
+        let req = resolve_or_promote(
+            raw_req,
+            installations,
+            names,
+            || format!("{hook_name}__req_{i}"),
+            &format!("hook `{hook_name}` requirement[{i}]"),
+        )?;
+        if let Some(entry) = installations.iter().find(|i| i.name == req) {
+            final_requirements.extend(entry.requirements.iter().cloned());
+        }
+        final_requirements.push(req);
+    }
+
+    Ok(Hook {
+        name: hook_name,
+        event,
+        agent,
+        matcher,
+        requirements: final_requirements,
+        command,
+        sub_path,
+        args: final_args,
+        format,
+    })
+}
+
+/// Resolve hook-level `args` against installation-level defaults.
+fn choose_args(hook_name: &str, install_args: &[String], hook_args: Vec<String>) -> Result<Vec<String>> {
+    match (install_args.is_empty(), hook_args.is_empty()) {
+        (false, false) => bail!(
+            "hook `{hook_name}`: `args` is set on both the installation and the hook; \
+             remove it from one"
+        ),
+        (true, _) => Ok(hook_args),
+        (false, true) => Ok(install_args.to_vec()),
+    }
+}
+
+/// Validate semantic constraints on an installation kind that serde alone
+/// cannot express (e.g. `args` on a github installation requires `path`).
+fn validate_installation_kind(name: &str, kind: &InstallationKind) -> Result<()> {
+    if let InstallationKind::Github(gh) = kind {
+        if !gh.args.is_empty() && gh.path.is_none() {
+            bail!(
+                "installation `{name}`: `args` requires `path` to be set on the same \
+                 installation (without a path there is no executable to apply args to)"
+            );
+        }
+    }
+    Ok(())
 }
 
 /// The wire format a plugin hook expects for input/output.
@@ -225,17 +420,54 @@ struct SourceDirContents {
 /// Raw TOML manifest deserialized from a plugin `.toml` file.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct PluginManifest {
+struct RawPluginManifest {
     name: String,
     crates: crate::predicate::PredicateSet,
     #[serde(default)]
-    installation: Option<Installation>,
+    installations: Vec<RawNamedInstallation>,
     #[serde(default)]
-    hooks: Vec<Hook>,
+    hooks: Vec<RawHook>,
     #[serde(default)]
     skills: Vec<SkillGroup>,
     #[serde(default)]
     mcp_servers: Vec<PluginMcpServer>,
+}
+
+/// `[[installations]]` entry: `name` and optional `requirements` plus a
+/// flattened `InstallationKind`.
+#[derive(Debug, Deserialize)]
+struct RawNamedInstallation {
+    name: String,
+    /// Other installations to acquire whenever this installation is referenced.
+    /// Appended (one level) to the consuming hook's requirements.
+    #[serde(default)]
+    requirements: Vec<RawInstallationRef>,
+    #[serde(flatten)]
+    kind: InstallationKind,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawHook {
+    name: String,
+    event: HookEvent,
+    #[serde(default)]
+    agent: Option<HookAgent>,
+    #[serde(default)]
+    matcher: Option<String>,
+    #[serde(default)]
+    requirements: Vec<RawInstallationRef>,
+    /// Named installation (`"my-install"`) or inline installation table.
+    command: RawInstallationRef,
+    /// For github installations: the file inside the repo. Mutually exclusive
+    /// with `path` set on the installation itself.
+    #[serde(default)]
+    path: Option<String>,
+    /// Invocation arguments. Override any `args` declared on the installation.
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    format: HookFormat,
 }
 
 /// Fetch/update git-based plugin sources.
@@ -415,7 +647,7 @@ fn resolve_one_source(
             return Some(base_dir.join(p));
         }
     } else if let Some(ref git_url) = source.git {
-        match crate::distribution::git::parse_github_url(git_url) {
+        match crate::installation::git::parse_github_url(git_url) {
             Ok(gh) => return Some(cache_base.join(gh.cache_key())),
             Err(e) => {
                 tracing::warn!(source = %source.name, error = %e, "bad plugin source URL");
@@ -431,7 +663,7 @@ async fn fetch_plugin_source(
     git_url: &str,
     update: UpdateLevel,
 ) -> Result<PathBuf> {
-    use crate::distribution::git;
+    use crate::installation::git;
 
     let source = git::parse_github_url(git_url)?;
     let cache_mgr = git::GitCacheManager::new(sym, "plugin-sources");
@@ -763,24 +995,63 @@ pub async fn check_crate_exists(crate_name: &str) -> bool {
     client.get_crate(crate_name).await.is_ok()
 }
 
-/// Load a single plugin from a TOML manifest.
-///
-/// `local_dir` is the containing directory when the manifest lives inside a
-/// plugin directory (used as fallback skill directory when no `source.git`).
+/// Load and validate a single plugin from a TOML manifest.
 pub fn load_plugin(manifest_path: &Path) -> Result<ParsedPlugin> {
     let content = fs::read_to_string(manifest_path)?;
-    let manifest: PluginManifest = toml::from_str(&content)?;
+    let manifest: RawPluginManifest = toml::from_str(&content)?;
+    let plugin = validate_manifest(manifest)
+        .with_context(|| format!("validating `{}`", manifest_path.display()))?;
+    Ok(ParsedPlugin { path: manifest_path.to_path_buf(), plugin })
+}
 
-    Ok(ParsedPlugin {
-        path: manifest_path.to_path_buf(),
-        plugin: Plugin {
-            name: manifest.name,
-            crates: manifest.crates,
-            installation: manifest.installation,
-            hooks: manifest.hooks,
-            skills: manifest.skills,
-            mcp_servers: manifest.mcp_servers,
-        },
+/// Convert a raw manifest into a validated `Plugin`.
+///
+/// User-declared `[[installations]]` come first in the resulting list, in
+/// declaration order. Inline references on installations and hooks are
+/// promoted into synthetic entries appended to the same list so that every
+/// validated reference is a plain name.
+fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
+    let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for entry in &manifest.installations {
+        if !names.insert(entry.name.clone()) {
+            bail!("duplicate installation name `{}`", entry.name);
+        }
+        validate_installation_kind(&entry.name, &entry.kind)?;
+    }
+
+    let mut installations: Vec<Installation> = Vec::with_capacity(manifest.installations.len());
+    for raw in manifest.installations {
+        let RawNamedInstallation { name, requirements: raw_reqs, kind } = raw;
+        // Pre-register the entry so synthesized requirement names can use
+        // `<name>__req_<i>` without colliding with the entry itself.
+        installations.push(Installation { name: name.clone(), requirements: Vec::new(), kind });
+        let mut reqs = Vec::with_capacity(raw_reqs.len());
+        for (i, r) in raw_reqs.into_iter().enumerate() {
+            let req = resolve_or_promote(
+                r,
+                &mut installations,
+                &mut names,
+                || format!("{name}__req_{i}"),
+                &format!("installation `{name}` requirement[{i}]"),
+            )?;
+            reqs.push(req);
+        }
+        let idx = installations.iter().position(|i| i.name == name).expect("just pushed");
+        installations[idx].requirements = reqs;
+    }
+
+    let mut hooks = Vec::with_capacity(manifest.hooks.len());
+    for raw in manifest.hooks {
+        hooks.push(validate_hook(raw, &mut installations, &mut names)?);
+    }
+
+    Ok(Plugin {
+        name: manifest.name,
+        crates: manifest.crates,
+        installations,
+        hooks,
+        skills: manifest.skills,
+        mcp_servers: manifest.mcp_servers,
     })
 }
 
@@ -800,29 +1071,23 @@ mod tests {
     }
 
     fn from_str(s: &str) -> Result<Plugin> {
-        let manifest: PluginManifest = toml::from_str(s)?;
-        Ok(Plugin {
-            name: manifest.name,
-            crates: manifest.crates,
-            installation: manifest.installation,
-            hooks: manifest.hooks,
-            skills: manifest.skills,
-            mcp_servers: manifest.mcp_servers,
-        })
+        let manifest: RawPluginManifest = toml::from_str(s)?;
+        validate_manifest(manifest)
     }
 
     const SAMPLE: &str = indoc! {r#"
         name = "example-plugin"
         crates = ["*"]
 
-        [installation]
-        summary = "Download and install helper"
-        commands = ["wget https://example.org/bin/tool"]
+        [[installations]]
+        name = "tool"
+        source = "cargo"
+        crate = "example-tool"
 
         [[hooks]]
         name = "test"
         event = "PreToolUse"
-        command = "echo open"
+        command = "tool"
     "#};
 
     #[test]
@@ -885,7 +1150,7 @@ mod tests {
                 [[hooks]]
                 name = "test"
                 event = "PreToolUse"
-                command = "echo hi"
+                command = { source = "shell", command = "echo hi" }
             "#},
             ),
             File(
@@ -1253,10 +1518,10 @@ mod tests {
         let plugin_wildcard = Plugin {
             name: "wildcard".to_string(),
             crates: pred_set("*"),
-            installation: None,
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
+            installations: Vec::new(),
         };
         assert!(plugin_wildcard.applies_to_crates(&workspace_crates));
 
@@ -1264,10 +1529,10 @@ mod tests {
         let plugin_serde = Plugin {
             name: "serde-plugin".to_string(),
             crates: pred_set("serde"),
-            installation: None,
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
+            installations: Vec::new(),
         };
         assert!(plugin_serde.applies_to_crates(&workspace_crates));
 
@@ -1275,10 +1540,10 @@ mod tests {
         let plugin_other = Plugin {
             name: "other-plugin".to_string(),
             crates: pred_set("other-crate"),
-            installation: None,
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
+            installations: Vec::new(),
         };
         assert!(!plugin_other.applies_to_crates(&workspace_crates));
 
@@ -1286,10 +1551,10 @@ mod tests {
         let plugin_version = Plugin {
             name: "version-plugin".to_string(),
             crates: pred_set("tokio>=2.0"),
-            installation: None,
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
+            installations: Vec::new(),
         };
         assert!(!plugin_version.applies_to_crates(&workspace_crates));
     }
@@ -1306,7 +1571,7 @@ mod tests {
                 [[hooks]]
                 name = "some-hook"
                 event = "PreToolUse"
-                command = "echo test"
+                command = { source = "shell", command = "echo test" }
             "#},
             ),
             File(
@@ -1318,7 +1583,7 @@ mod tests {
                 [[hooks]]
                 name = "some-hook"
                 event = "PreToolUse"
-                command = "echo test"
+                command = { source = "shell", command = "echo test" }
             "#},
             ),
         ]);
@@ -1405,5 +1670,510 @@ mod tests {
                 },
             )"#]]
         .assert_eq(&format!("{entry:#?}"));
+    }
+
+    /// Cargo-installed binary referenced by name as the hook's command.
+    /// Demonstrates the "install a binary, run it as a hook" pattern.
+    #[test]
+    fn cargo_install_used_as_hook() {
+        let toml = indoc! {r#"
+            name = "cargo-as-hook"
+            crates = ["*"]
+
+            [[installations]]
+            name = "rg"
+            source = "cargo"
+            crate = "ripgrep"
+            binary = "rg"
+
+            [[hooks]]
+            name = "rg-version"
+            event = "PreToolUse"
+            command = "rg"
+            args = ["--version"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        let hook = &plugin.hooks[0];
+        assert_eq!(hook.command, "rg");
+        assert_eq!(hook.sub_path, None);
+        assert_eq!(hook.args, vec!["--version".to_string()]);
+    }
+
+    /// rtk: install the rtk binary as a requirement, run a hook script
+    /// pulled from a separate github source. The command's `path` picks the
+    /// file inside the repo at the use site.
+    #[test]
+    fn rtk_requirement_plus_github_command() {
+        let toml = indoc! {r#"
+            name = "rtk-plugin"
+            crates = ["*"]
+
+            [[installations]]
+            name = "rtk"
+            source = "cargo"
+            crate = "rtk"
+
+            [[installations]]
+            name = "rtk-hooks"
+            source = "github"
+            url = "https://github.com/example/rtk-hooks"
+
+            [[hooks]]
+            name = "rewrite"
+            event = "PreToolUse"
+            requirements = ["rtk"]
+            command = "rtk-hooks"
+            path = "hooks/claude/rtk-rewrite.sh"
+            args = ["--format"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        let hook = &plugin.hooks[0];
+        assert_eq!(hook.requirements, vec!["rtk".to_string()]);
+        assert_eq!(hook.command, "rtk-hooks");
+        assert_eq!(hook.sub_path.as_deref(), Some("hooks/claude/rtk-rewrite.sh"));
+        assert_eq!(hook.args, vec!["--format".to_string()]);
+    }
+
+    /// `path` on a github installation acts as a default and the hook can
+    /// reference it without a hook-level `path`.
+    #[test]
+    fn github_path_on_installation_is_used() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "g"
+            source = "github"
+            url = "https://github.com/o/r"
+            path = "scripts/x.sh"
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = "g"
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.hooks[0].sub_path.as_deref(), Some("scripts/x.sh"));
+    }
+
+    #[test]
+    fn missing_named_installation_errors() {
+        let toml = indoc! {r#"
+            name = "bad-plugin"
+            crates = ["*"]
+
+            [[hooks]]
+            name = "rewrite"
+            event = "PreToolUse"
+            command = "nope"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown installation"),
+            "expected unknown-installation error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn cargo_with_hook_path_is_error() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "foo"
+            source = "cargo"
+            crate = "rtk"
+
+            [[hooks]]
+            name = "bad"
+            event = "PreToolUse"
+            command = "foo"
+            path = "bin/x"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("cargo installations don't take a `path`"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn github_missing_path_is_error() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "foo"
+            source = "github"
+            url = "https://github.com/org/repo"
+
+            [[hooks]]
+            name = "bad-gh"
+            event = "PreToolUse"
+            command = "foo"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("github installation requires a `path`"),
+            "got: {err}"
+        );
+    }
+
+    /// Path is allowed on the installation OR the hook, but not both.
+    #[test]
+    fn github_path_specified_twice_is_error() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "foo"
+            source = "github"
+            url = "https://github.com/org/repo"
+            path = "a.sh"
+
+            [[hooks]]
+            name = "dup-path"
+            event = "PreToolUse"
+            command = "foo"
+            path = "b.sh"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("already declares a `path`"),
+            "got: {err}"
+        );
+    }
+
+    /// `args` on a github installation requires `path` on the same
+    /// installation (otherwise there is no executable to apply args to).
+    #[test]
+    fn github_args_without_path_is_error() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "foo"
+            source = "github"
+            url = "https://github.com/org/repo"
+            args = ["--flag"]
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = "foo"
+            path = "x.sh"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("`args` requires `path`"),
+            "got: {err}"
+        );
+    }
+
+    /// `args` may be set on the installation OR the hook, but not both.
+    #[test]
+    fn args_set_on_both_layers_is_error() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "rg"
+            source = "cargo"
+            crate = "ripgrep"
+            binary = "rg"
+            args = ["--default"]
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = "rg"
+            args = ["--override"]
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("`args` is set on both"),
+            "got: {err}"
+        );
+    }
+
+    /// Hook with no args inherits installation defaults.
+    #[test]
+    fn hook_inherits_installation_args() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "rg"
+            source = "cargo"
+            crate = "ripgrep"
+            binary = "rg"
+            args = ["--default"]
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = "rg"
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.hooks[0].args, vec!["--default".to_string()]);
+    }
+
+    /// Inline command is promoted to a synthetic installation named after the hook.
+    #[test]
+    fn inline_installation_in_command() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[hooks]]
+            name = "inline"
+            event = "PreToolUse"
+            command = { source = "cargo", crate = "rtk", binary = "rtk" }
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        let hook = &plugin.hooks[0];
+        assert_eq!(hook.command, "inline");
+        let installation = plugin.installations.iter().find(|i| i.name == "inline").expect("synthetic");
+        assert!(matches!(&installation.kind, InstallationKind::Cargo(c) if c.crate_name == "rtk"));
+        assert_eq!(hook.sub_path, None);
+        assert!(hook.args.is_empty());
+    }
+
+    /// Shell strings go through an inline `shell` source. A bare string
+    /// `command = "..."` is always interpreted as a named-installation ref.
+    #[test]
+    fn shell_via_inline_source() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[hooks]]
+            name = "echo"
+            event = "PreToolUse"
+            command = { source = "shell", command = "echo hi" }
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.hooks[0].command, "echo");
+        let installation = plugin.installations.iter().find(|i| i.name == "echo").expect("synthetic");
+        assert!(matches!(&installation.kind, InstallationKind::Shell(s) if s.command == "echo hi"));
+    }
+
+    /// Inline command's synthesized name (= hook name) clashing with an
+    /// existing user-declared installation is rejected.
+    #[test]
+    fn inline_command_name_clash_errors() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "h"
+            source = "cargo"
+            crate = "x"
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = { source = "shell", command = "echo hi" }
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("conflicts"), "got: {err}");
+    }
+
+    /// Shell hooks accept positional args (passed as `$1`, `$2`, … inside the shell command).
+    #[test]
+    fn shell_with_args_is_ok() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = { source = "shell", command = "echo $1" }
+            args = ["hello"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.hooks[0].args, vec!["hello".to_string()]);
+    }
+
+    #[test]
+    fn duplicate_installation_name_errors() {
+        let toml = indoc! {r#"
+            name = "dup"
+            crates = ["*"]
+
+            [[installations]]
+            name = "x"
+            source = "cargo"
+            crate = "a"
+
+            [[installations]]
+            name = "x"
+            source = "cargo"
+            crate = "b"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("duplicate installation"), "got: {err}");
+    }
+
+    #[test]
+    fn requirements_named_and_inline() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "rtk"
+            source = "cargo"
+            crate = "rtk"
+
+            [[hooks]]
+            name = "uses-req"
+            event = "PreToolUse"
+            requirements = [
+                "rtk",
+                { source = "cargo", crate = "ripgrep" },
+            ]
+            command = { source = "shell", command = "echo done" }
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        let reqs = &plugin.hooks[0].requirements;
+        assert_eq!(reqs.len(), 2);
+        assert_eq!(reqs[0], "rtk");
+        assert_eq!(reqs[1], "uses-req__req_1");
+        let synth = plugin.installations.iter().find(|i| i.name == "uses-req__req_1").expect("synthetic");
+        assert!(matches!(&synth.kind, InstallationKind::Cargo(_)));
+    }
+
+    /// An installation's own `requirements` are appended (one level) to any
+    /// hook that references that installation as its command.
+    #[test]
+    fn installation_requirements_propagate_to_hook() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "rtk"
+            source = "cargo"
+            crate = "rtk"
+
+            [[installations]]
+            name = "rtk-hooks"
+            source = "github"
+            url = "https://github.com/example/rtk-hooks"
+            requirements = ["rtk"]
+
+            [[hooks]]
+            name = "rewrite"
+            event = "PreToolUse"
+            command = "rtk-hooks"
+            path = "hooks/x.sh"
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        let reqs = &plugin.hooks[0].requirements;
+        // Installation-level prerequisites come first.
+        assert_eq!(reqs, &vec!["rtk".to_string()]);
+    }
+
+    /// Installation-level requirements pull in via a named hook requirement
+    /// too, not just the command.
+    #[test]
+    fn installation_requirements_propagate_via_named_hook_requirement() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "a"
+            source = "cargo"
+            crate = "a"
+
+            [[installations]]
+            name = "b"
+            source = "cargo"
+            crate = "b"
+            requirements = ["a"]
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            requirements = ["b"]
+            command = { source = "shell", command = "echo hi" }
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        let reqs = &plugin.hooks[0].requirements;
+        // b's reqs (a) come before b itself.
+        assert_eq!(reqs, &vec!["a".to_string(), "b".to_string()]);
+    }
+
+    /// Installation requirements can also be inline.
+    #[test]
+    fn installation_requirements_can_be_inline() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "rtk-hooks"
+            source = "github"
+            url = "https://github.com/example/rtk-hooks"
+            requirements = [{ source = "cargo", crate = "rtk" }]
+
+            [[hooks]]
+            name = "rewrite"
+            event = "PreToolUse"
+            command = "rtk-hooks"
+            path = "hooks/x.sh"
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        let reqs = &plugin.hooks[0].requirements;
+        assert_eq!(reqs.len(), 1);
+        let synth_name = &reqs[0];
+        assert_eq!(synth_name, "rtk-hooks__req_0");
+        let synth = plugin.installations.iter().find(|i| &i.name == synth_name).expect("synthetic");
+        assert!(matches!(&synth.kind, InstallationKind::Cargo(_)));
+    }
+
+    /// An unknown name in an installation's `requirements` is rejected at
+    /// parse time, just like in hook requirements.
+    #[test]
+    fn installation_requirement_unknown_name_errors() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "x"
+            source = "cargo"
+            crate = "x"
+            requirements = ["nope"]
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("unknown installation"), "got: {err}");
+    }
+
+    #[test]
+    fn requirements_unknown_named_errors() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            requirements = ["nope"]
+            command = { source = "shell", command = "echo hi" }
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("unknown installation"), "got: {err}");
     }
 }

@@ -34,6 +34,10 @@ source.path = "skills"
 |-------|------|----------|-------------|
 | `name` | string | yes | Plugin name. Used in logs and CLI output. |
 | `crates` | string or array | no | Which crates this plugin applies to. Use `["*"]` for all crates. See [Plugin-level filtering](#plugin-level-filtering). |
+| `installations` | array of tables | no | Named installation declarations (`[[installations]]`). Hooks reference these by name. See [Installations](#installations). |
+| `skills` | array of tables | no | Skill groups (`[[skills]]`). |
+| `hooks` | array of tables | no | Hooks (`[[hooks]]`). |
+| `mcp_servers` | array of tables | no | MCP server registrations (`[[mcp_servers]]`). |
 
 **Note**: Every plugin must specify `crates` somewhere — either at the plugin level, in `[[skills]]` groups, or in `[[mcp_servers]]` entries. Plugins without any crate targeting will fail validation.
 
@@ -63,6 +67,89 @@ Each `[[skills]]` entry declares a group of skills.
 
 A skill group must have exactly one of `source.path` or `source.git`.
 
+## Installations
+
+An **installation** describes how to obtain (and optionally pre-configure) something a hook will run. Hooks then reference an installation as their `command` — either by name (`command = "rtk"`) or inline at the use site (`command = { source = "cargo", … }`).
+
+A `[[installations]]` entry has a `name` plus the source-specific fields below.
+
+### Installation sources
+
+Each installation has a `source` discriminator that determines how the bits get on disk:
+
+- **Single binary**: `cargo`, `local`, `binary` — produces one executable.
+- **Directory of files**: `github` — clones (a subtree of) a repo; the hook (or installation) picks a sub-path.
+- **No file**: `shell` — a shell string run via `sh -c`.
+
+`args` may appear on most installation variants as a default invocation; the hook command can override.
+
+#### `cargo`
+
+```toml
+[[installations]]
+name = "rg"
+source = "cargo"
+crate = "ripgrep"
+version = "13.0.0"   # optional; defaults to latest stable
+binary = "rg"        # required if the crate exposes multiple binaries
+args = ["--version"] # optional default args
+```
+
+Symposium attempts `cargo binstall` first, falls back to `cargo install`, and caches the result under `~/.symposium/cache/binaries/<crate>/<version>/bin/`. Hook-level `path` is not allowed (cargo always produces a single binary).
+
+#### `local`
+
+```toml
+[[installations]]
+name = "check"
+source = "local"
+command = "./scripts/check.sh"   # relative to plugin dir, or absolute
+args = ["--strict"]              # optional default args
+```
+
+#### `github`
+
+```toml
+[[installations]]
+name = "rtk-hooks"
+source = "github"
+url = "https://github.com/example/rtk-hooks"
+path = "hooks/claude/rtk-rewrite.sh"   # optional; see below
+args = ["--format"]                    # only valid when `path` is also set
+```
+
+Acquires the repo (or a subtree, if `url` points at `…/tree/<ref>/<path>`) into a local cache.
+
+A path inside the repo must be supplied, **on the installation OR on the hook — not both**. Setting `path` on the installation pins this entry to a specific file; omitting it lets multiple hooks each pick a different file via hook-level `path`.
+
+`args` on the installation is only valid when `path` is also set there (otherwise there's no executable yet to apply args to).
+
+#### `binary`
+
+Per-platform prebuilt archives:
+
+```toml
+[[installations]]
+name = "agent-hook"
+source = "binary"
+"linux-x86_64"   = { archive = "https://example.com/linux.tar.gz",  cmd = "./hook" }
+"darwin-aarch64" = { archive = "https://example.com/macos.tar.gz", cmd = "./hook" }
+```
+
+Symposium selects the entry matching the current platform (`darwin-aarch64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`, `windows-x86_64`, etc.), downloads and extracts the archive once, and runs `cmd`.
+
+#### `shell`
+
+```toml
+[[installations]]
+name = "log-hi"
+source = "shell"
+command = "echo $1"
+args = ["hello"]   # optional; passed as positional parameters $1, $2, …
+```
+
+Symposium spawns `sh -c <command> sh <args…>`, so user-supplied args are visible inside the shell command as `$1`, `$2`, … (`$0` is the literal `"sh"`).
+
 ## `[[hooks]]`
 
 Each `[[hooks]]` entry declares a hook that responds to agent events.
@@ -71,120 +158,126 @@ Each `[[hooks]]` entry declares a hook that responds to agent events.
 |-------|------|-------------|
 | `name` | string | Descriptive name for the hook (used in logs). |
 | `event` | string | Event type to match (e.g., `PreToolUse`). |
-| `matcher` | string | Which tool invocations to match (e.g., `Bash`). Omit to match all. |
-| `command` | string (optional) | Command to run when the hook fires. Resolved relative to the plugin directory. If `distribution` is provided, `command` should not be specified and is ignored. |
-| `distribution` | object (optional) | Describe how to obtain and run the hook as a distributable artifact. |
-| `requirements` | array of objects (optional) | A list of installation sources that must be present before running the hook. |
-| `agent` | string (optional) | Restrict the hook to a specific agent (e.g., `claude`, `copilot`, `gemini`, `kiro`). |
-| `format` | string | Wire format for hook input/output. One of: `symposium` (default), `claude`, `codex`, `copilot`, `gemini`, `kiro`. Controls how the hook receives input and returns output. |
+| `matcher` | string (optional) | Which tool invocations to match (e.g., `Bash`). Omit to match all. |
+| `command` | string or table | What to run. A string names a `[[installations]]` entry; a table is an inline installation declaration (promoted to a synthetic `[[installations]]` entry named after the hook). |
+| `path` | string (optional) | For github installations, the file inside the cached repo. Forbidden for other sources. Must not also be set on the installation. |
+| `args` | array (optional) | Invocation arguments. Forbidden when the same installation also declares `args`. |
+| `requirements` | array (optional) | Installations to acquire before running. Same shape as `command` (string name or inline declaration). |
+| `agent` | string (optional) | Restrict the hook to a specific agent (`claude`, `copilot`, `gemini`, `kiro`, …). |
+| `format` | string | Wire format for hook input/output. One of: `symposium` (default), `claude`, `codex`, `copilot`, `gemini`, `kiro`. |
 
-### Hook distributions
+### Examples
 
-Hooks may be provided as a local `command` (the historical behavior) or as a `distribution` object. The `distribution` object must include a `source` discriminator and the fields listed for that source below.
-
-#### `cargo`
-
-- TOML example:
+Run a cargo-installed binary as the hook:
 
 ```toml
-distribution = { source = "cargo", crate = "ripgrep", version = "13.0.0", binary = "rg", args = ["--version"] }
+[[installations]]
+name = "rg"
+source = "cargo"
+crate = "ripgrep"
+binary = "rg"
+
+[[hooks]]
+name = "rg-version"
+event = "PreToolUse"
+command = "rg"
+args = ["--version"]
 ```
 
-- Fields:
-  - `source` (string, required) — must be `"cargo"`.
-  - `crate` (string, required) — crate name on crates.io.
-  - `version` (string, optional) — semver or exact version; if omitted the latest stable is used.
-  - `binary` (string, optional) — explicit binary name to run; if omitted the crate must expose a single binary.
-  - `args` (array of strings, optional) — args passed to the binary.
-  - `path` (string, optional) — use `cargo install --path <path>` when present.
-  - `git` (string, optional) — use `cargo install --git <git>` when present.
-
-- Semantics: when `path` or `git` is present Symposium installs from source using cargo. Otherwise it resolves the version (querying crates.io when needed), attempts to install a prebuilt binary (via `cargo binstall` if available) and falls back to `cargo install`. Installed binaries are cached under Symposium's binary cache (e.g., `binaries/<crate>/<version>/bin/`). The hook executes the installed binary with any configured `args`.
-
-#### `local`
-
-- TOML example:
+Install rtk as a side requirement and run a hook script from a separate github source:
 
 ```toml
-distribution = { source = "local", command = "./scripts/check-widget.sh", args = ["--flag"] }
+[[installations]]
+name = "rtk"
+source = "cargo"
+crate = "rtk"
+
+[[installations]]
+name = "rtk-hooks"
+source = "github"
+url = "https://github.com/example/rtk-hooks"
+
+[[hooks]]
+name = "rewrite"
+event = "PreToolUse"
+requirements = ["rtk"]
+command = "rtk-hooks"
+path = "hooks/claude/rtk-rewrite.sh"
+args = ["--format"]
 ```
 
-- Fields:
-  - `source` (string, required) — must be `"local"`.
-  - `command` (string, required) — path to executable (resolved relative to the plugin directory, or absolute).
-  - `args` (array of strings, optional)
-
-- Semantics: the command is executed directly from the resolved path with the specified `args`.
-
-#### `github`
-
-- TOML example:
+Inline a one-off cargo install directly:
 
 ```toml
-distribution = { source = "github", url = "https://github.com/org/repo", path = "bin/agent-hook", args = ["--help"] }
+[[hooks]]
+name = "rg-test"
+event = "PreToolUse"
+command = { source = "cargo", crate = "ripgrep", binary = "rg" }
+args = ["--version"]
 ```
 
-- Fields:
-  - `source` (string, required) — must be `"github"`.
-  - `url` (string, required) — GitHub repository or tree URL identifying the source repo.
-  - `path` (string, required) — path inside the repo to the executable file.
-  - `args` (array of strings, optional)
-
-- Semantics: Symposium fetches and caches the repository (or the referenced subtree), verifies the `path` exists in the cache, and runs the file at the cached path with any `args`.
-
-#### `binary`
-
-- TOML example (per-platform inline tables; keys that include `-` may be quoted):
+Run a shell command:
 
 ```toml
-distribution = {
-  source = "binary",
-  ["linux-x86_64"] = { archive = "https://example.com/linux.tar.gz", cmd = "./hook", args = ["--serve"] },
-  ["darwin-aarch64"] = { archive = "https://example.com/macos.tar.gz", cmd = "./hook" }
-}
+[[hooks]]
+name = "echo-hi"
+event = "PreToolUse"
+command = { source = "shell", command = "echo hi" }
 ```
 
-- Fields (per-platform table):
-  - key: platform string (e.g., `linux-x86_64`, `darwin-aarch64`, `windows-x86_64`).
-  - `archive` (string, required) — URL to an archive containing the binary (tar.gz, zip).
-  - `cmd` (string, required) — path within the archive to the executable to run (may include `./`).
-  - `args` (array of strings, optional)
-
-- Semantics: Symposium selects the entry matching the current platform (see platform key mapping), downloads and caches the archive, extracts it into the cache, ensures executable permissions, and runs `cmd` with `args`.
-
-Note: if both a top-level `command` and a `distribution` are present on a hook, Symposium prefers `distribution` and ignores `command` (a warning is logged).
-
-### Requirements (installation sources)
-
-Hooks may declare a `requirements` array. Each entry describes an installation source Symposium will attempt to satisfy before executing the hook. Install attempts are best-effort: Symposium logs installation errors and continues with hook dispatch rather than failing the entire event.
-
-#### `cargo`
-
-- TOML example:
+Run a local script bundled with the plugin:
 
 ```toml
-requirements = [
-  { type = "cargo", crate = "my-tool", version = "0.2.1", binary = "mytool" },
-  { type = "cargo", crate = "other", git = "https://github.com/org/other" }
-]
+[[hooks]]
+name = "check"
+event = "PreToolUse"
+command = { source = "local", command = "scripts/check.sh" }
+args = ["--strict"]
 ```
 
-- Fields:
-  - `type` (string, required) — must be `"cargo"`.
-  - `crate` (string, required) — crate name on crates.io.
-  - `version` (string, optional) — version to install; if omitted the latest stable is used.
-  - `binary` (string, optional) — expected binary name (used for cache lookup / verification).
-  - `path` (string, optional) — if present, install using `cargo install --path <path>`.
-  - `git` (string, optional) — if present, install using `cargo install --git <git>`.
+### Requirements
 
-- Semantics: for registry installs (no `git`/`path`) Symposium resolves the version (when needed), tries to obtain a prebuilt binary (via `cargo binstall` if available) and falls back to `cargo install`. For `git` or `path` installs it uses `cargo install` with the matching flag. Installed artifacts are cached under Symposium's binary cache. Installation failures are logged and do not abort hook dispatch.
+`requirements` ensures other installations are acquired before the hook runs. Useful when the hook's command relies on something else being on disk (or eventually on `$PATH`).
 
+```toml
+[[hooks]]
+name = "uses-rtk-via-script"
+event = "PreToolUse"
+requirements = ["rtk", { source = "cargo", crate = "ripgrep" }]
+command = { source = "local", command = "scripts/uses-rtk.sh" }
+```
+
+Requirements may also be declared on an `[[installations]]` entry. Whenever that installation is referenced — as a hook's `command` or in another `requirements` list — its declared requirements are appended (one level, prerequisites first):
+
+```toml
+[[installations]]
+name = "rtk"
+source = "cargo"
+crate = "rtk"
+
+[[installations]]
+name = "rtk-hooks"
+source = "github"
+url = "https://github.com/example/rtk-hooks"
+requirements = ["rtk"]   # rtk gets installed whenever rtk-hooks is used
+
+[[hooks]]
+name = "rewrite"
+event = "PreToolUse"
+command = "rtk-hooks"   # implicitly pulls in `rtk` as a requirement
+path = "hooks/claude/rtk-rewrite.sh"
+```
+
+Requirement installation is best-effort: failures are logged and dispatch continues.
 
 ### Supported hook events
 
 | Hook event | Description | CLI usage |
 |------------|-------------|-----------|
-| `PreToolUse` | Triggered before a tool (for example, `Bash`) is invoked by the agent. | `pre-tool-use` |
+| `PreToolUse` | Before a tool (e.g., `Bash`) is invoked by the agent. | `pre-tool-use` |
+| `PostToolUse` | After a tool completes. | `post-tool-use` |
+| `UserPromptSubmit` | When the user submits a prompt. | `user-prompt-submit` |
+| `SessionStart` | When an agent session starts. | `session-start` |
 
 ### Agent → hook name mapping
 
@@ -300,6 +393,7 @@ All supported agents have MCP server configuration. Symposium handles the format
 
 ```toml
 name = "widgetlib"
+crates = ["widgetlib"]
 
 [[skills]]
 crates = ["widgetlib=1.0"]
@@ -313,7 +407,7 @@ source.git = "https://github.com/org/widgetlib/tree/main/symposium/serde-skills"
 name = "check-widget-usage"
 event = "PreToolUse"
 matcher = "Bash"
-command = "./scripts/check-widget.sh"
+command = { source = "local", command = "./scripts/check-widget.sh" }
 
 [[mcp_servers]]
 name = "widgetlib-mcp"

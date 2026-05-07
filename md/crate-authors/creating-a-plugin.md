@@ -32,25 +32,34 @@ source.git = "https://github.com/org/my-crate/tree/main/skills/v2"
 crates = ["my-crate=1.0"]
 source.path = "skills/v1"
 
+# A reusable, named installation. Hooks reference these by name.
+[[installations]]
+name = "rg"
+source = "cargo"
+crate = "ripgrep"
+version = "13.0.0"
+binary = "rg"
+
 # Hooks for agent event callbacks
 [[hooks]]
 name = "validate-usage"
 event = "PreToolUse"
-# simple local script
-command = "./scripts/validate.sh"
+# Run a local script bundled with the plugin
+command = { source = "local", command = "./scripts/validate.sh" }
 
 [[hooks]]
-name = "cargo-installer-hook"
+name = "ripgrep-hook"
 event = "PreToolUse"
-# use a cargo-distributed binary (example)
-distribution = { source = "cargo", crate = "ripgrep", version = "13.0.0", binary = "rg" }
-# install a helper tool before running the hook
-requirements = [ { type = "cargo", crate = "my-tool", version = "0.2.1" } ]
+# Run the cargo-installed binary by name, with hook-level args
+command = "rg"
+args = ["--version"]
+# Install a separate helper before running the hook
+requirements = [{ source = "cargo", crate = "my-tool", version = "0.2.1" }]
 
 # MCP servers for tool integration
-[[mcp-servers]]
+[[mcp_servers]]
 name = "my-crate-tools"
-command = ["my-crate-mcp-server"]
+command = "my-crate-mcp-server"
 ```
 
 ## Publishing plugins
