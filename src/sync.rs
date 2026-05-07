@@ -116,7 +116,7 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     );
 
     if agent_names.is_empty() {
-        out.info("no agents configured — run `symposium init` to add one");
+        out.info("no agents configured, run `cargo agents init` to add one");
         return Ok(());
     }
 
