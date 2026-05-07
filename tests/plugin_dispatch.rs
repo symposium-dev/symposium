@@ -9,25 +9,29 @@ use symposium_testlib::{HookStep, TestMode, with_fixture};
 /// installation named after the hook and runs end-to-end.
 #[tokio::test(flavor = "multi_thread")]
 async fn inline_shell_hook_emits_context() {
-    with_fixture(TestMode::SimulationOnly, &["plugin-hooks0"], async |mut ctx| {
-        let result = ctx
-            .prompt_or_hook(
-                "ignored",
-                &[HookStep::PreToolUse {
-                    tool_name: "Bash".to_string(),
-                    tool_input: json!({"command": "ls"}),
-                }],
-                HookAgent::Claude,
-            )
-            .await?;
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hooks0"],
+        async |mut ctx| {
+            let result = ctx
+                .prompt_or_hook(
+                    "ignored",
+                    &[HookStep::PreToolUse {
+                        tool_name: "Bash".to_string(),
+                        tool_input: json!({"command": "ls"}),
+                    }],
+                    HookAgent::Claude,
+                )
+                .await?;
 
-        assert!(
-            result.has_context_containing("inline-shell-output"),
-            "expected `inline-shell-output` in hook output, got: {:#?}",
-            result.outputs_for(HookEvent::PreToolUse),
-        );
-        Ok(())
-    })
+            assert!(
+                result.has_context_containing("inline-shell-output"),
+                "expected `inline-shell-output` in hook output, got: {:#?}",
+                result.outputs_for(HookEvent::PreToolUse),
+            );
+            Ok(())
+        },
+    )
     .await
     .unwrap();
 }
@@ -35,25 +39,29 @@ async fn inline_shell_hook_emits_context() {
 /// `command = "named-shell"` resolves the named installation at dispatch time.
 #[tokio::test(flavor = "multi_thread")]
 async fn named_installation_resolves_at_dispatch() {
-    with_fixture(TestMode::SimulationOnly, &["plugin-hooks0"], async |mut ctx| {
-        let result = ctx
-            .prompt_or_hook(
-                "ignored",
-                &[HookStep::PreToolUse {
-                    tool_name: "Read".to_string(),
-                    tool_input: json!({"file_path": "/tmp/x"}),
-                }],
-                HookAgent::Claude,
-            )
-            .await?;
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hooks0"],
+        async |mut ctx| {
+            let result = ctx
+                .prompt_or_hook(
+                    "ignored",
+                    &[HookStep::PreToolUse {
+                        tool_name: "Read".to_string(),
+                        tool_input: json!({"file_path": "/tmp/x"}),
+                    }],
+                    HookAgent::Claude,
+                )
+                .await?;
 
-        assert!(
-            result.has_context_containing("named-shell-output"),
-            "expected `named-shell-output` in hook output, got: {:#?}",
-            result.outputs_for(HookEvent::PreToolUse),
-        );
-        Ok(())
-    })
+            assert!(
+                result.has_context_containing("named-shell-output"),
+                "expected `named-shell-output` in hook output, got: {:#?}",
+                result.outputs_for(HookEvent::PreToolUse),
+            );
+            Ok(())
+        },
+    )
     .await
     .unwrap();
 }
@@ -63,25 +71,29 @@ async fn named_installation_resolves_at_dispatch() {
 /// without needing real install side-effects.
 #[tokio::test(flavor = "multi_thread")]
 async fn hook_with_requirements_runs() {
-    with_fixture(TestMode::SimulationOnly, &["plugin-hooks0"], async |mut ctx| {
-        let result = ctx
-            .prompt_or_hook(
-                "ignored",
-                &[HookStep::PreToolUse {
-                    tool_name: "Edit".to_string(),
-                    tool_input: json!({"file_path": "/tmp/x"}),
-                }],
-                HookAgent::Claude,
-            )
-            .await?;
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hooks0"],
+        async |mut ctx| {
+            let result = ctx
+                .prompt_or_hook(
+                    "ignored",
+                    &[HookStep::PreToolUse {
+                        tool_name: "Edit".to_string(),
+                        tool_input: json!({"file_path": "/tmp/x"}),
+                    }],
+                    HookAgent::Claude,
+                )
+                .await?;
 
-        assert!(
-            result.has_context_containing("with-requirements-output"),
-            "expected `with-requirements-output` in hook output, got: {:#?}",
-            result.outputs_for(HookEvent::PreToolUse),
-        );
-        Ok(())
-    })
+            assert!(
+                result.has_context_containing("with-requirements-output"),
+                "expected `with-requirements-output` in hook output, got: {:#?}",
+                result.outputs_for(HookEvent::PreToolUse),
+            );
+            Ok(())
+        },
+    )
     .await
     .unwrap();
 }
@@ -89,25 +101,123 @@ async fn hook_with_requirements_runs() {
 /// Hook-level `args` reach the shell as positional parameters (`$1`, …).
 #[tokio::test(flavor = "multi_thread")]
 async fn shell_hook_receives_positional_args() {
-    with_fixture(TestMode::SimulationOnly, &["plugin-hooks0"], async |mut ctx| {
-        let result = ctx
-            .prompt_or_hook(
-                "ignored",
-                &[HookStep::PreToolUse {
-                    tool_name: "Glob".to_string(),
-                    tool_input: json!({"pattern": "*.rs"}),
-                }],
-                HookAgent::Claude,
-            )
-            .await?;
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hooks0"],
+        async |mut ctx| {
+            let result = ctx
+                .prompt_or_hook(
+                    "ignored",
+                    &[HookStep::PreToolUse {
+                        tool_name: "Glob".to_string(),
+                        tool_input: json!({"pattern": "*.rs"}),
+                    }],
+                    HookAgent::Claude,
+                )
+                .await?;
 
-        assert!(
-            result.has_context_containing("shell-args:picked-up"),
-            "expected hook to receive `picked-up` as $1, got: {:#?}",
-            result.outputs_for(HookEvent::PreToolUse),
-        );
-        Ok(())
-    })
+            assert!(
+                result.has_context_containing("shell-args:picked-up"),
+                "expected hook to receive `picked-up` as $1, got: {:#?}",
+                result.outputs_for(HookEvent::PreToolUse),
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `install_commands` declared on an installation run after the kind-specific
+/// install step. Here, the install command writes a JSON file the hook's
+/// shell command then reads — proving the post-install step happened first.
+#[tokio::test(flavor = "multi_thread")]
+async fn install_commands_run_before_command() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hooks0"],
+        async |mut ctx| {
+            let result = ctx
+                .prompt_or_hook(
+                    "ignored",
+                    &[HookStep::PreToolUse {
+                        tool_name: "WebFetch".to_string(),
+                        tool_input: json!({"url": "https://example.com"}),
+                    }],
+                    HookAgent::Claude,
+                )
+                .await?;
+
+            assert!(
+                result.has_context_containing("install-cmd-ran"),
+                "expected `install-cmd-ran` (proof install_commands ran), got: {:#?}",
+                result.outputs_for(HookEvent::PreToolUse),
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `install_commands` declared on an *inline* command (promoted to a
+/// synthetic installation) also run before the resolved command.
+#[tokio::test(flavor = "multi_thread")]
+async fn inline_install_commands_run_before_command() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hooks0"],
+        async |mut ctx| {
+            let result = ctx
+                .prompt_or_hook(
+                    "ignored",
+                    &[HookStep::PreToolUse {
+                        tool_name: "Write".to_string(),
+                        tool_input: json!({"file_path": "/tmp/x", "content": "y"}),
+                    }],
+                    HookAgent::Claude,
+                )
+                .await?;
+
+            assert!(
+                result.has_context_containing("inline-install-cmd-ran"),
+                "expected `inline-install-cmd-ran` in hook output, got: {:#?}",
+                result.outputs_for(HookEvent::PreToolUse),
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Hook-level `script` overrides a bare installation: the installation only
+/// contributes `install_commands`, the hook supplies the runnable.
+#[tokio::test(flavor = "multi_thread")]
+async fn hook_supplies_script_against_bare_installation() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hooks0"],
+        async |mut ctx| {
+            let result = ctx
+                .prompt_or_hook(
+                    "ignored",
+                    &[HookStep::PreToolUse {
+                        tool_name: "Task".to_string(),
+                        tool_input: json!({"description": "x"}),
+                    }],
+                    HookAgent::Claude,
+                )
+                .await?;
+
+            assert!(
+                result.has_context_containing("hook-supplied-script-output"),
+                "expected `hook-supplied-script-output` in hook output, got: {:#?}",
+                result.outputs_for(HookEvent::PreToolUse),
+            );
+            Ok(())
+        },
+    )
     .await
     .unwrap();
 }
@@ -116,25 +226,29 @@ async fn shell_hook_receives_positional_args() {
 /// matches produces no `additionalContext` in the merged output.
 #[tokio::test(flavor = "multi_thread")]
 async fn matcher_filters_out_non_matching_hooks() {
-    with_fixture(TestMode::SimulationOnly, &["plugin-hooks0"], async |mut ctx| {
-        let result = ctx
-            .prompt_or_hook(
-                "ignored",
-                &[HookStep::PreToolUse {
-                    tool_name: "Grep".to_string(),
-                    tool_input: json!({"pattern": "foo"}),
-                }],
-                HookAgent::Claude,
-            )
-            .await?;
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hooks0"],
+        async |mut ctx| {
+            let result = ctx
+                .prompt_or_hook(
+                    "ignored",
+                    &[HookStep::PreToolUse {
+                        tool_name: "Grep".to_string(),
+                        tool_input: json!({"pattern": "foo"}),
+                    }],
+                    HookAgent::Claude,
+                )
+                .await?;
 
-        assert!(
-            !result.has_context_containing("output"),
-            "no hook should fire for `Grep`, got: {:#?}",
-            result.outputs_for(HookEvent::PreToolUse),
-        );
-        Ok(())
-    })
+            assert!(
+                !result.has_context_containing("output"),
+                "no hook should fire for `Grep`, got: {:#?}",
+                result.outputs_for(HookEvent::PreToolUse),
+            );
+            Ok(())
+        },
+    )
     .await
     .unwrap();
 }

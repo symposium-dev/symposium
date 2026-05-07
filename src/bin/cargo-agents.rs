@@ -199,7 +199,7 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
             Some(ParsedPlugin { path, plugin: _ }) => {
                 println!("# Source: {}", path.display());
                 println!();
-                print!("{}",tokio::fs::read_to_string(path).await.unwrap());
+                print!("{}", tokio::fs::read_to_string(path).await.unwrap());
                 ExitCode::SUCCESS
             }
             None => {

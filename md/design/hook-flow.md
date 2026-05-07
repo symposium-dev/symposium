@@ -8,9 +8,11 @@ Entry point invoked by the agent's hook system on session events.
 
 2. **Dispatch to plugin hooks** — for each enabled plugin that defines a hook handler for the incoming event:
    - Ensure any `requirements` for the hook are acquired (on-demand, best-effort).
-   - Resolve the hook's `command` (a named installation reference or inline spec) into a runnable form:
-     - `shell` source → spawn `sh -c <command>`.
-     - any other source → acquire (install / cache / clone as needed) and obtain a path on disk; for `github`, the validated `sub_path` picks the file inside the cached repo. Spawn the path with the resolved `args`.
+   - Resolve the hook's `command` (a named installation reference or inline declaration) into a runnable form:
+     - If the installation declares a `source`, acquire it (install / cache / clone) and resolve the `executable` / `script` against the cached location.
+     - If no source, the `executable` / `script` is taken as a path on disk.
+     - Run the installation's `install_commands` (post-source) before invoking the runnable.
+     - Spawn `path args…` directly for `Exec`, or `sh path args…` for `Script`.
    - Pass the event JSON on stdin to the plugin's hook.
    - Collect output from each handler.
    - Merge results (e.g., allow/block decisions, output text) across all handlers.

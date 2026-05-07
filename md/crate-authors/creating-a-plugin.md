@@ -38,14 +38,14 @@ name = "rg"
 source = "cargo"
 crate = "ripgrep"
 version = "13.0.0"
-binary = "rg"
+executable = "rg"
 
 # Hooks for agent event callbacks
 [[hooks]]
 name = "validate-usage"
 event = "PreToolUse"
-# Run a local script bundled with the plugin
-command = { source = "local", command = "./scripts/validate.sh" }
+# Run a script bundled with the plugin
+command = { script = "./scripts/validate.sh" }
 
 [[hooks]]
 name = "ripgrep-hook"

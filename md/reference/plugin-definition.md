@@ -69,19 +69,25 @@ A skill group must have exactly one of `source.path` or `source.git`.
 
 ## Installations
 
-An **installation** describes how to obtain (and optionally pre-configure) something a hook will run. Hooks then reference an installation as their `command` — either by name (`command = "rtk"`) or inline at the use site (`command = { source = "cargo", … }`).
+An **installation** describes how to obtain (and optionally pre-configure) something a hook will run. Hooks then reference an installation as their `command` — either by name (`command = "rtk"`) or inline at the use site (`command = { script = "scripts/x.sh" }`).
 
-A `[[installations]]` entry has a `name` plus the source-specific fields below.
+A `[[installations]]` entry has a `name` plus any of:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `source` | string | Optional. How to acquire bits onto disk. One of `cargo`, `github`, `binary` (see below). When omitted, no acquisition step runs. |
+| `install_commands` | array of strings | Optional. Shell commands run (in order) after the source step. Useful for post-install setup such as aliasing, or when *only* have manual commands. Each command must exit zero. |
+| `requirements` | array | Optional. Other installations to acquire whenever this one is referenced. Strings name `[[installations]]` entries; tables are inline declarations. |
+| `executable` | string | Optional. Path to a binary to run. For `cargo`, the binary name (looked up in the install's `bin/` dir). For `github` / `binary`, a path inside the acquired tree. With no source, a path on disk. |
+| `script` | string | Optional. Same resolution rules as `executable`, but invoked as `sh <path> <args>`. |
+| `args` | array of strings | Optional. Default invocation arguments. |
+
+
+`executable` and `script` are mutually exclusive — pick one. The hook layer applies the same rule, and **at most one of `executable` / `script` may be set across the hook AND the installation it references**. An installation may have neither (then it's pure setup — useful as a `requirements` entry). For a hook to run, the chosen layer pair must end up with exactly one runnable.
+
+> Inline installations (used as `command` or as a requirement entry) accept the same fields, including `requirements`.
 
 ### Installation sources
-
-Each installation has a `source` discriminator that determines how the bits get on disk:
-
-- **Single binary**: `cargo`, `local`, `binary` — produces one executable.
-- **Directory of files**: `github` — clones (a subtree of) a repo; the hook (or installation) picks a sub-path.
-- **No file**: `shell` — a shell string run via `sh -c`.
-
-`args` may appear on most installation variants as a default invocation; the hook command can override.
 
 #### `cargo`
 
@@ -90,21 +96,22 @@ Each installation has a `source` discriminator that determines how the bits get 
 name = "rg"
 source = "cargo"
 crate = "ripgrep"
-version = "13.0.0"   # optional; defaults to latest stable
-binary = "rg"        # required if the crate exposes multiple binaries
-args = ["--version"] # optional default args
+version = "13.0.0"     # optional; defaults to latest stable
+executable = "rg"      # the binary to run; if omitted and the crate has a single binary, that one is used
+args = ["--version"]   # optional default args
 ```
 
-Symposium attempts `cargo binstall` first, falls back to `cargo install`, and caches the result under `~/.symposium/cache/binaries/<crate>/<version>/bin/`. Hook-level `path` is not allowed (cargo always produces a single binary).
+Symposium attempts `cargo binstall` first, falls back to `cargo install`, and caches the result under `~/.symposium/cache/binaries/<crate>/<version>/bin/`. The chosen `executable` resolves to `<cache>/bin/<executable>`.
 
-#### `local`
+To install from a git repo instead of crates.io, set `git`:
 
 ```toml
 [[installations]]
-name = "check"
-source = "local"
-command = "./scripts/check.sh"   # relative to plugin dir, or absolute
-args = ["--strict"]              # optional default args
+name = "tool"
+source = "cargo"
+crate = "tool"
+git = "https://github.com/example/tool"
+executable = "tool"   # required for git sources (crates.io is not consulted)
 ```
 
 #### `github`
@@ -114,41 +121,33 @@ args = ["--strict"]              # optional default args
 name = "rtk-hooks"
 source = "github"
 url = "https://github.com/example/rtk-hooks"
-path = "hooks/claude/rtk-rewrite.sh"   # optional; see below
-args = ["--format"]                    # only valid when `path` is also set
+script = "hooks/claude/rtk-rewrite.sh"   # optional; see below
+args = ["--format"]
 ```
 
-Acquires the repo (or a subtree, if `url` points at `…/tree/<ref>/<path>`) into a local cache.
+Acquires the repo (or a subtree, if `url` points at `…/tree/<ref>/<path>`) into a local cache. The chosen `executable` / `script` resolves to a file inside the cached tree.
 
-A path inside the repo must be supplied, **on the installation OR on the hook — not both**. Setting `path` on the installation pins this entry to a specific file; omitting it lets multiple hooks each pick a different file via hook-level `path`.
+`executable`/`script` may be set on the installation or on the hook (but not both, in any combination). Setting it on the installation pins this entry to a specific file; omitting it lets multiple hooks each pick a different file.
 
-`args` on the installation is only valid when `path` is also set there (otherwise there's no executable yet to apply args to).
+#### no source
 
-#### `binary`
-
-Per-platform prebuilt archives:
+Omit `source` entirely when you just need to point at a path on disk (or rely on `install_commands` to put one there):
 
 ```toml
 [[installations]]
-name = "agent-hook"
-source = "binary"
-"linux-x86_64"   = { archive = "https://example.com/linux.tar.gz",  cmd = "./hook" }
-"darwin-aarch64" = { archive = "https://example.com/macos.tar.gz", cmd = "./hook" }
+name = "tool"
+executable = "/usr/local/bin/tool"
 ```
 
-Symposium selects the entry matching the current platform (`darwin-aarch64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`, `windows-x86_64`, etc.), downloads and extracts the archive once, and runs `cmd`.
-
-#### `shell`
+Or "shell-only" installations — useful as side-effect requirements:
 
 ```toml
 [[installations]]
-name = "log-hi"
-source = "shell"
-command = "echo $1"
-args = ["hello"]   # optional; passed as positional parameters $1, $2, …
+name = "setup"
+install_commands = [
+    "ln -sf $HOME/.cache/foo $HOME/.local/bin/foo",
+]
 ```
-
-Symposium spawns `sh -c <command> sh <args…>`, so user-supplied args are visible inside the shell command as `$1`, `$2`, … (`$0` is the literal `"sh"`).
 
 ## `[[hooks]]`
 
@@ -159,9 +158,10 @@ Each `[[hooks]]` entry declares a hook that responds to agent events.
 | `name` | string | Descriptive name for the hook (used in logs). |
 | `event` | string | Event type to match (e.g., `PreToolUse`). |
 | `matcher` | string (optional) | Which tool invocations to match (e.g., `Bash`). Omit to match all. |
-| `command` | string or table | What to run. A string names a `[[installations]]` entry; a table is an inline installation declaration (promoted to a synthetic `[[installations]]` entry named after the hook). |
-| `path` | string (optional) | For github installations, the file inside the cached repo. Forbidden for other sources. Must not also be set on the installation. |
-| `args` | array (optional) | Invocation arguments. Forbidden when the same installation also declares `args`. |
+| `command` | string or table | What to run. A string names a `[[installations]]` entry; a table is an inline installation (promoted to a synthetic entry named after the hook). |
+| `executable` | string (optional) | Path to a binary inside (or relative to) the installation. At most one of `executable`/`script` set across hook + installation. |
+| `script` | string (optional) | Path to a shell script to run via `sh`. Same exclusivity rule as `executable`. |
+| `args` | array (optional) | Invocation arguments. Forbidden when the installation also declares `args`. |
 | `requirements` | array (optional) | Installations to acquire before running. Same shape as `command` (string name or inline declaration). |
 | `agent` | string (optional) | Restrict the hook to a specific agent (`claude`, `copilot`, `gemini`, `kiro`, …). |
 | `format` | string | Wire format for hook input/output. One of: `symposium` (default), `claude`, `codex`, `copilot`, `gemini`, `kiro`. |
@@ -175,7 +175,7 @@ Run a cargo-installed binary as the hook:
 name = "rg"
 source = "cargo"
 crate = "ripgrep"
-binary = "rg"
+executable = "rg"
 
 [[hooks]]
 name = "rg-version"
@@ -202,7 +202,7 @@ name = "rewrite"
 event = "PreToolUse"
 requirements = ["rtk"]
 command = "rtk-hooks"
-path = "hooks/claude/rtk-rewrite.sh"
+script = "hooks/claude/rtk-rewrite.sh"
 args = ["--format"]
 ```
 
@@ -212,27 +212,35 @@ Inline a one-off cargo install directly:
 [[hooks]]
 name = "rg-test"
 event = "PreToolUse"
-command = { source = "cargo", crate = "ripgrep", binary = "rg" }
+command = { source = "cargo", crate = "ripgrep", executable = "rg" }
 args = ["--version"]
 ```
 
-Run a shell command:
-
-```toml
-[[hooks]]
-name = "echo-hi"
-event = "PreToolUse"
-command = { source = "shell", command = "echo hi" }
-```
-
-Run a local script bundled with the plugin:
+Run a script file on disk (no source):
 
 ```toml
 [[hooks]]
 name = "check"
 event = "PreToolUse"
-command = { source = "local", command = "scripts/check.sh" }
-args = ["--strict"]
+command = { script = "scripts/check.sh", args = ["--strict"] }
+```
+
+A cargo install with a post-install step (e.g. to symlink a wrapper script):
+
+```toml
+[[installations]]
+name = "rtk"
+source = "cargo"
+crate = "rtk"
+install_commands = [
+    "ln -sf $HOME/.symposium/cache/binaries/rtk/*/bin/rtk $HOME/.local/bin/rtk",
+]
+
+[[hooks]]
+name = "rtk-rewrite"
+event = "PreToolUse"
+command = "rtk"
+args = ["rewrite"]
 ```
 
 ### Requirements
@@ -244,7 +252,7 @@ args = ["--strict"]
 name = "uses-rtk-via-script"
 event = "PreToolUse"
 requirements = ["rtk", { source = "cargo", crate = "ripgrep" }]
-command = { source = "local", command = "scripts/uses-rtk.sh" }
+command = { script = "scripts/uses-rtk.sh" }
 ```
 
 Requirements may also be declared on an `[[installations]]` entry. Whenever that installation is referenced — as a hook's `command` or in another `requirements` list — its declared requirements are appended (one level, prerequisites first):
@@ -264,8 +272,8 @@ requirements = ["rtk"]   # rtk gets installed whenever rtk-hooks is used
 [[hooks]]
 name = "rewrite"
 event = "PreToolUse"
-command = "rtk-hooks"   # implicitly pulls in `rtk` as a requirement
-path = "hooks/claude/rtk-rewrite.sh"
+command = "rtk-hooks"
+script = "hooks/claude/rtk-rewrite.sh"
 ```
 
 Requirement installation is best-effort: failures are logged and dispatch continues.

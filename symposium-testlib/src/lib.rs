@@ -714,7 +714,7 @@ async fn run_with_acp_session(
 fn is_text_file(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|e| e.to_str()),
-        Some("toml" | "md" | "json" | "txt" | "ts" | "js")
+        Some("toml" | "md" | "json" | "txt" | "ts" | "js" | "sh")
     )
 }
 
