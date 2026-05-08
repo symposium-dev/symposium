@@ -198,7 +198,7 @@ pub enum AgentSession {
     /// Claude Agent SDK — shells out to Python per-prompt.
     ClaudeSdk,
     /// ACP agent with a persistent session.
-    Acp(sacp::ActiveSession<'static, sacp::Agent>),
+    Acp(Box<sacp::ActiveSession<'static, sacp::Agent>>),
 }
 
 /// Test context wrapping an isolated `Symposium` instance.
@@ -241,11 +241,8 @@ impl TestContext {
             .clone()
             .unwrap_or_else(|| self.sym.config_dir().to_path_buf());
 
-        match cli.command {
-            Some(cmd) => {
-                symposium::cli::run(&mut self.sym, cmd, &cwd, &out).await?;
-            }
-            None => {}
+        if let Some(cmd) = cli.command {
+            symposium::cli::run(&mut self.sym, cmd, &cwd, &out).await?;
         }
 
         Ok(String::new())
@@ -328,7 +325,7 @@ impl TestContext {
                 let hooks: Vec<HookTrace> = trace_content
                     .lines()
                     .filter(|l| !l.is_empty())
-                    .map(|l| serde_json::from_str(l))
+                    .map(serde_json::from_str)
                     .collect::<Result<_, _>>()?;
 
                 let response = if text.is_empty() { None } else { Some(text) };
@@ -426,7 +423,7 @@ impl TestContext {
         let hooks: Vec<HookTrace> = trace_content
             .lines()
             .filter(|l| !l.is_empty())
-            .map(|l| serde_json::from_str(l))
+            .map(serde_json::from_str)
             .collect::<Result<_, _>>()?;
 
         let response = std::fs::read_to_string(&response_path).ok();
@@ -504,15 +501,13 @@ async fn setup_fixture(fixtures: &[&str]) -> TestContext {
         );
     }
 
-    let ctx = TestContext {
+    TestContext {
         sym,
         tempdir: root.to_path_buf(),
         _tempdir_guard: Some(tempdir),
         workspace_root,
         session: None,
-    };
-
-    ctx
+    }
 }
 
 /// Which modes a test should run in.
@@ -702,7 +697,7 @@ async fn run_with_acp_session(
                 .start_session()
                 .await?;
 
-            ctx.session = Some(AgentSession::Acp(session));
+            ctx.session = Some(AgentSession::Acp(Box::new(session)));
             f(ctx).await.map_err(sacp::util::internal_error)?;
             Ok(())
         })
