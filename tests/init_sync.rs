@@ -120,6 +120,45 @@ async fn sync_installs_skills() {
     .unwrap();
 }
 
+/// `sync` rejects malformed skill frontmatter before installing skills.
+#[tokio::test]
+async fn sync_skips_invalid_skill_frontmatter() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["invalid-skill0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
+            let registry = symposium::plugins::load_registry(&ctx.sym);
+            assert!(
+                registry.warnings.iter().any(|warning| {
+                    warning.path.ends_with("bad-skill/SKILL.md")
+                        && warning.message.contains("failed to parse frontmatter")
+                }),
+                "registry should record a warning for skipped invalid skill"
+            );
+
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skill_file = workspace_root.join(".agents/skills/rust-best-practice/SKILL.md");
+            assert!(
+                !skill_file.exists(),
+                "sync should not install a skill with invalid YAML frontmatter"
+            );
+
+            let manifest_path = workspace_root.join(".agents/skills/.symposium.toml");
+            let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+            assert!(
+                !manifest.contains("rust-best-practice"),
+                "manifest should not track a rejected skill"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// `sync` removes stale skills tracked in the manifest.
 #[tokio::test]
 async fn sync_removes_stale_skills() {
