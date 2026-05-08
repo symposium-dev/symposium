@@ -194,7 +194,7 @@ pub async fn execute_hook(
 
         // Builtin dispatch → symposium output → host agent output as Value
         let builtin_sym_output = dispatch_builtin(sym, &sym_input).await;
-        let builtin_agent_output = handler.from_symposium_output(&builtin_sym_output);
+        let builtin_agent_output = handler.translate_output(&builtin_sym_output);
         let prior_output = builtin_agent_output.to_hook_output();
 
         // Plugin dispatch with format routing
@@ -393,7 +393,7 @@ pub async fn dispatch_plugin_hooks(
             let handler = target.event(event);
             match handler {
                 Some(h) => {
-                    temp_input = h.from_symposium_input(sym_input);
+                    temp_input = h.translate_input(sym_input);
                     &*temp_input
                 }
                 None => continue, // target agent doesn't support this event
@@ -460,7 +460,7 @@ pub async fn dispatch_plugin_hooks(
                             match target_h.parse_output(&child_out.stdout) {
                                 Ok(hook_out) => {
                                     let sym_out = hook_out.to_symposium();
-                                    let host_out = host_h.from_symposium_output(&sym_out);
+                                    let host_out = host_h.translate_output(&sym_out);
                                     host_out.to_hook_output()
                                 }
                                 Err(e) => {
@@ -476,7 +476,7 @@ pub async fn dispatch_plugin_hooks(
                                     if let Ok(sym_out) =
                                         serde_json::from_value::<symposium::OutputEvent>(v.clone())
                                     {
-                                        let host_out = host_h.from_symposium_output(&sym_out);
+                                        let host_out = host_h.translate_output(&sym_out);
                                         host_out.to_hook_output()
                                     } else {
                                         v // fallback: use raw JSON

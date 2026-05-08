@@ -127,7 +127,7 @@ pub trait AgentHookEvent {
         Self::Output::parse_output(output)
     }
     /// Convert a canonical symposium output event into this agent's output.
-    fn from_symposium_output(&self, output: &symposium::OutputEvent) -> Self::Output {
+    fn translate_output(&self, output: &symposium::OutputEvent) -> Self::Output {
         Self::Output::from_symposium(output)
     }
 
@@ -155,10 +155,10 @@ pub trait ErasedAgentHookEvent {
     fn parse_output(&self, output: &[u8]) -> Result<Box<dyn AgentHookOutput>>;
 
     /// Convert a canonical symposium output event into a boxed agent output.
-    fn from_symposium_output(&self, output: &symposium::OutputEvent) -> Box<dyn AgentHookOutput>;
+    fn translate_output(&self, output: &symposium::OutputEvent) -> Box<dyn AgentHookOutput>;
 
     /// Convert a canonical symposium input event into a boxed agent payload.
-    fn from_symposium_input(&self, input: &symposium::InputEvent) -> Box<dyn AgentHookInput>;
+    fn translate_input(&self, input: &symposium::InputEvent) -> Box<dyn AgentHookInput>;
 
     /// Serialize the final accumulated output (as JSON Value) to bytes for stdout.
     /// Most agents emit JSON; Kiro emits plain text.
@@ -182,11 +182,11 @@ where
         let o = self.0.parse_output(output)?;
         Ok(Box::new(o))
     }
-    fn from_symposium_output(&self, output: &symposium::OutputEvent) -> Box<dyn AgentHookOutput> {
-        Box::new(self.0.from_symposium_output(output))
+    fn translate_output(&self, output: &symposium::OutputEvent) -> Box<dyn AgentHookOutput> {
+        Box::new(self.0.translate_output(output))
     }
 
-    fn from_symposium_input(&self, input: &symposium::InputEvent) -> Box<dyn AgentHookInput> {
+    fn translate_input(&self, input: &symposium::InputEvent) -> Box<dyn AgentHookInput> {
         Box::new(E::Input::from_symposium(input))
     }
 

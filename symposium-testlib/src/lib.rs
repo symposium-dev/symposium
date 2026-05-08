@@ -348,7 +348,7 @@ impl TestContext {
             let handler = agent
                 .event(event)
                 .ok_or_else(|| anyhow::anyhow!("agent {agent:?} does not support {event:?}"))?;
-            let agent_input = handler.from_symposium_input(&sym_input);
+            let agent_input = handler.translate_input(&sym_input);
             let input_str = agent_input.to_string()?;
 
             let output_bytes = hook::execute_hook(&self.sym, agent, event, &input_str).await?;
