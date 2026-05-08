@@ -400,11 +400,6 @@ fn parse_frontmatter(content: &str) -> Result<RawFrontmatter> {
             bail!("SKILL.md frontmatter keys must be strings");
         };
 
-        if key == "applies-when" {
-            // Ignored — applies-when is no longer supported.
-            continue;
-        }
-
         let Some(value) = value.as_str() else {
             bail!("SKILL.md frontmatter field `{key}` must be a string");
         };
