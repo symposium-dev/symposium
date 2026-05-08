@@ -306,7 +306,7 @@ pub(super) fn unregister_codex_mcp_servers(
 
     let mut changed = false;
     for name in names {
-        if mcp_servers.remove(*name).is_some() {
+        if mcp_servers.remove(name).is_some() {
             out.removed(format!("{display}: removed {name} MCP server"));
             changed = true;
         }

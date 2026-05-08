@@ -220,7 +220,7 @@ async fn resolve_skill_dir(
     }
 
     if let Some(git_source) = &group.source.git {
-        match fetch_skill_source(sym, &git_source).await {
+        match fetch_skill_source(sym, git_source).await {
             Ok(path) => return Some(path),
             Err(e) => {
                 tracing::warn!(git = %git_source, error = %e, "failed to fetch skill source");

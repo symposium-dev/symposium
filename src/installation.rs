@@ -246,11 +246,7 @@ fn install_cargo_crate_sync(
     Ok(())
 }
 
-pub fn get_binary_cache_dir<'sym>(
-    sym: &'sym Symposium,
-    krate: &str,
-    version: &str,
-) -> Result<PathBuf> {
+pub fn get_binary_cache_dir(sym: &Symposium, krate: &str, version: &str) -> Result<PathBuf> {
     let path = sym.cache_dir().join("binaries").join(krate).join(version);
     Ok(path)
 }

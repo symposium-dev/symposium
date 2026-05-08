@@ -131,7 +131,7 @@ fn prompt_for_hook_scope(current: crate::config::HookScope) -> Result<crate::con
 
     let selection = dialoguer::Select::new()
         .with_prompt("Install hooks and agent configuration")
-        .items(&items)
+        .items(items)
         .default(default)
         .interact()?;
 
@@ -152,7 +152,7 @@ fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {
 
     let selections = MultiSelect::new()
         .with_prompt("Which agents do you use? (space to select, enter to confirm)")
-        .items(&items)
+        .items(items)
         .defaults(&defaults)
         .interact()?;
 
