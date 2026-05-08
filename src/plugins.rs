@@ -1148,6 +1148,30 @@ mod tests {
     }
 
     #[test]
+    fn validate_source_dir_rejects_illformed_standalone_skill() {
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[File(
+            "bad-skill/SKILL.md",
+            indoc! {"
+                ---
+                name: rust-best-practice
+                description: [Critical] Best practice for Rust coding.
+                crates: serde
+                ---
+
+                Body.
+            "},
+        )]);
+
+        let results = validate_source_dir(tmp.path()).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].result.is_err(),
+            "standalone skill with non-string YAML value should fail validation"
+        );
+    }
+
+    #[test]
     fn collect_crate_names_from_source_dir() {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
