@@ -354,6 +354,7 @@ fn collect_skills_applicable_to(
 
 /// Raw frontmatter fields extracted from a SKILL.md file.
 /// `crates` is comma-separated on a single line.
+#[derive(Debug)]
 struct RawFrontmatter {
     fields: BTreeMap<String, String>,
     /// Raw `crates` value (comma-separated predicate string).
@@ -385,24 +386,33 @@ fn parse_frontmatter(content: &str) -> Result<RawFrontmatter> {
         .strip_prefix('\n')
         .unwrap_or(after_first_fence.get(body_start..).unwrap_or(""));
 
+    let yaml: serde_yaml_ng::Value =
+        serde_yaml_ng::from_str(frontmatter_text).context("frontmatter is not valid YAML")?;
+    let mapping = yaml
+        .as_mapping()
+        .context("SKILL.md frontmatter must be a YAML mapping")?;
+
     let mut fields = BTreeMap::new();
     let mut crates = None;
 
-    for line in frontmatter_text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
+    for (key, value) in mapping {
+        let Some(key) = key.as_str() else {
+            bail!("SKILL.md frontmatter keys must be strings");
+        };
+
+        if key == "applies-when" {
+            // Ignored — applies-when is no longer supported.
             continue;
         }
-        if let Some((key, value)) = line.split_once(':') {
-            let key = key.trim();
-            let value = value.trim().to_string();
-            if key == "crates" {
-                crates = Some(value);
-            } else if key == "applies-when" {
-                // Ignored — applies-when is no longer supported.
-            } else {
-                fields.insert(key.to_string(), value);
-            }
+
+        let Some(value) = value.as_str() else {
+            bail!("SKILL.md frontmatter field `{key}` must be a string");
+        };
+
+        if key == "crates" {
+            crates = Some(value.to_string());
+        } else {
+            fields.insert(key.to_string(), value.to_string());
         }
     }
 
@@ -463,6 +473,43 @@ mod tests {
         "};
         let fm = parse_frontmatter(content).unwrap();
         assert_eq!(fm.crates.as_deref(), Some("serde, serde_json>=1.0, toml"));
+    }
+
+    #[test]
+    fn parse_frontmatter_rejects_invalid_yaml_description() {
+        let content = indoc! {"
+            ---
+            name: rust-best-practice
+            description: [Critical] Best practice for Rust coding.
+            ---
+
+            Body.
+        "};
+
+        let err = parse_frontmatter(content).unwrap_err();
+        assert!(
+            err.to_string().contains("frontmatter is not valid YAML"),
+            "expected YAML parse error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_frontmatter_rejects_non_string_description() {
+        let content = indoc! {"
+            ---
+            name: rust-best-practice
+            description: [Critical]
+            ---
+
+            Body.
+        "};
+
+        let err = parse_frontmatter(content).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("frontmatter field `description` must be a string"),
+            "expected scalar string error, got: {err}"
+        );
     }
 
     #[test]
@@ -677,7 +724,7 @@ mod tests {
                 ---
                 name: bad
                 description: Bad crates skill
-                crates: >=not_valid!!
+                crates: \">=not_valid!!\"
                 ---
 
                 Body.
