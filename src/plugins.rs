@@ -671,11 +671,9 @@ pub fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
         if let Some(ref path) = source_path
             && let Ok(contents) = scan_source_dir(path)
         {
-            for result in contents.plugins {
-                if let Ok(parsed_plugin) = result {
-                    if parsed_plugin.plugin.name == name {
-                        return Some(parsed_plugin);
-                    }
+            for parsed_plugin in contents.plugins.into_iter().flatten() {
+                if parsed_plugin.plugin.name == name {
+                    return Some(parsed_plugin);
                 }
             }
         }
@@ -1166,10 +1164,6 @@ mod tests {
 
     use crate::predicate::PredicateSet;
 
-    fn pred(s: &str) -> crate::predicate::Predicate {
-        crate::predicate::parse(s).unwrap()
-    }
-
     fn pred_set(s: &str) -> PredicateSet {
         PredicateSet::parse(s).unwrap()
     }
@@ -1220,7 +1214,7 @@ mod tests {
         assert_eq!(cr.predicates.len(), 1);
         assert!(cr.predicates[0].references_crate("serde"));
         assert_eq!(
-            group.source.git.as_ref().map(|s| s.as_str()),
+            group.source.git.as_deref(),
             Some("https://github.com/org/repo/tree/main/serde")
         );
     }
