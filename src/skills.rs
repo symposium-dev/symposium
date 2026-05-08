@@ -265,10 +265,10 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
     let mut frontmatter = fm.fields;
 
     // Strip surrounding quotes from name if present (YAML scalars may be quoted)
-    if let Some(name) = frontmatter.get_mut("name") {
-        if let Some(unquoted) = name.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-            *name = unquoted.to_string();
-        }
+    if let Some(name) = frontmatter.get_mut("name")
+        && let Some(unquoted) = name.strip_prefix('"').and_then(|s| s.strip_suffix('"'))
+    {
+        *name = unquoted.to_string();
     }
 
     let name = frontmatter

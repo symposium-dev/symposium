@@ -219,62 +219,56 @@ impl GitCacheManager {
         let meta_path = plugin_dir.join(CACHE_META_FILENAME);
 
         // If cached, check freshness according to update level
-        if plugin_dir.exists() {
-            if let Some(meta) = self.read_meta(&meta_path) {
-                // Debounce: if fetched recently, skip the API call entirely
-                if matches!(update, UpdateLevel::None) {
-                    if let Ok(fetched_at) = chrono::DateTime::parse_from_rfc3339(&meta.fetched_at) {
-                        let age = chrono::Utc::now() - fetched_at.with_timezone(&chrono::Utc);
-                        if age < chrono::Duration::from_std(DEBOUNCE_DURATION).unwrap() {
-                            tracing::debug!(%cache_key, "plugin cache is recent, skipping check");
-                            return Ok(plugin_dir);
-                        }
-                    }
+        if plugin_dir.exists()
+            && let Some(meta) = self.read_meta(&meta_path)
+        {
+            // Debounce: if fetched recently, skip the API call entirely
+            if matches!(update, UpdateLevel::None)
+                && let Ok(fetched_at) = chrono::DateTime::parse_from_rfc3339(&meta.fetched_at)
+            {
+                let age = chrono::Utc::now() - fetched_at.with_timezone(&chrono::Utc);
+                if age < chrono::Duration::from_std(DEBOUNCE_DURATION).unwrap() {
+                    tracing::debug!(%cache_key, "plugin cache is recent, skipping check");
+                    return Ok(plugin_dir);
                 }
+            }
 
-                // Fetch level: skip freshness check, always re-download
-                if matches!(update, UpdateLevel::Fetch) {
-                    tracing::info!(%cache_key, "force-fetching plugin source");
-                    let sha = self.client.resolve_commit_sha(source).await?;
+            // Fetch level: skip freshness check, always re-download
+            if matches!(update, UpdateLevel::Fetch) {
+                tracing::info!(%cache_key, "force-fetching plugin source");
+                let sha = self.client.resolve_commit_sha(source).await?;
+                self.fetch_and_cache_with_sha(source, source_url, &plugin_dir, &meta_path, &sha)
+                    .await?;
+                return Ok(plugin_dir);
+            }
+
+            // None (past debounce) or Check: check freshness via API
+            match self.client.resolve_commit_sha(source).await {
+                Ok(remote_sha) => {
+                    if meta.commit_sha == remote_sha {
+                        tracing::debug!(%cache_key, "plugin cache is fresh");
+                        // Update fetched_at so subsequent debounce checks use this time
+                        self.touch_meta(&meta_path, &meta);
+                        return Ok(plugin_dir);
+                    }
+                    tracing::info!(%cache_key, "plugin cache is stale, re-fetching");
                     self.fetch_and_cache_with_sha(
                         source,
                         source_url,
                         &plugin_dir,
                         &meta_path,
-                        &sha,
+                        &remote_sha,
                     )
                     .await?;
                     return Ok(plugin_dir);
                 }
-
-                // None (past debounce) or Check: check freshness via API
-                match self.client.resolve_commit_sha(source).await {
-                    Ok(remote_sha) => {
-                        if meta.commit_sha == remote_sha {
-                            tracing::debug!(%cache_key, "plugin cache is fresh");
-                            // Update fetched_at so subsequent debounce checks use this time
-                            self.touch_meta(&meta_path, &meta);
-                            return Ok(plugin_dir);
-                        }
-                        tracing::info!(%cache_key, "plugin cache is stale, re-fetching");
-                        self.fetch_and_cache_with_sha(
-                            source,
-                            source_url,
-                            &plugin_dir,
-                            &meta_path,
-                            &remote_sha,
-                        )
-                        .await?;
-                        return Ok(plugin_dir);
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            %cache_key,
-                            error = %e,
-                            "failed to check freshness, using cached version"
-                        );
-                        return Ok(plugin_dir);
-                    }
+                Err(e) => {
+                    tracing::warn!(
+                        %cache_key,
+                        error = %e,
+                        "failed to check freshness, using cached version"
+                    );
+                    return Ok(plugin_dir);
                 }
             }
         }

@@ -970,10 +970,8 @@ fn unregister_settings_hooks(settings_path: &Path, command_prefix: &str, out: &O
         }
     }
 
-    if changed {
-        if let Ok(()) = save_json(settings_path, &settings) {
-            out.removed(format!("{display}: removed hooks"));
-        }
+    if changed && let Ok(()) = save_json(settings_path, &settings) {
+        out.removed(format!("{display}: removed hooks"));
     }
 }
 
@@ -1033,10 +1031,8 @@ fn unregister_flat_hooks(config_path: &Path, command_key: &str, out: &Output) {
         }
     }
 
-    if changed {
-        if let Ok(()) = save_json(config_path, &config) {
-            out.removed(format!("{display}: removed hooks"));
-        }
+    if changed && let Ok(()) = save_json(config_path, &config) {
+        out.removed(format!("{display}: removed hooks"));
     }
 }
 
