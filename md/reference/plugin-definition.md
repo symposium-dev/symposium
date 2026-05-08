@@ -34,6 +34,10 @@ source.path = "skills"
 |-------|------|----------|-------------|
 | `name` | string | yes | Plugin name. Used in logs and CLI output. |
 | `crates` | string or array | no | Which crates this plugin applies to. Use `["*"]` for all crates. See [Plugin-level filtering](#plugin-level-filtering). |
+| `installations` | array of tables | no | Named installation declarations (`[[installations]]`). Hooks reference these by name. See [Installations](#installations). |
+| `skills` | array of tables | no | Skill groups (`[[skills]]`). |
+| `hooks` | array of tables | no | Hooks (`[[hooks]]`). |
+| `mcp_servers` | array of tables | no | MCP server registrations (`[[mcp_servers]]`). |
 
 **Note**: Every plugin must specify `crates` somewhere — either at the plugin level, in `[[skills]]` groups, or in `[[mcp_servers]]` entries. Plugins without any crate targeting will fail validation.
 
@@ -63,6 +67,88 @@ Each `[[skills]]` entry declares a group of skills.
 
 A skill group must have exactly one of `source.path` or `source.git`.
 
+## Installations
+
+An **installation** describes how to obtain (and optionally pre-configure) something a hook will run. Hooks then reference an installation as their `command` — either by name (`command = "rtk"`) or inline at the use site (`command = { script = "scripts/x.sh" }`).
+
+A `[[installations]]` entry has a `name` plus any of:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `source` | string | Optional. How to acquire bits onto disk. One of `cargo`, `github`, `binary` (see below). When omitted, no acquisition step runs. |
+| `install_commands` | array of strings | Optional. Shell commands run (in order) after the source step. Useful for post-install setup such as aliasing, or when *only* have manual commands. Each command must exit zero. |
+| `requirements` | array | Optional. Other installations to acquire whenever this one is referenced. Strings name `[[installations]]` entries; tables are inline declarations. |
+| `executable` | string | Optional. Path to a binary to run. For `cargo`, the binary name (looked up in the install's `bin/` dir). For `github` / `binary`, a path inside the acquired tree. With no source, a path on disk. |
+| `script` | string | Optional. Same resolution rules as `executable`, but invoked as `sh <path> <args>`. |
+| `args` | array of strings | Optional. Default invocation arguments. |
+
+
+`executable` and `script` are mutually exclusive — pick one. The hook layer applies the same rule, and **at most one of `executable` / `script` may be set across the hook AND the installation it references**. An installation may have neither (then it's pure setup — useful as a `requirements` entry). For a hook to run, the chosen layer pair must end up with exactly one runnable.
+
+> Inline installations (used as `command` or as a requirement entry) accept the same fields, including `requirements`.
+
+### Installation sources
+
+#### `cargo`
+
+```toml
+[[installations]]
+name = "rg"
+source = "cargo"
+crate = "ripgrep"
+version = "13.0.0"     # optional; defaults to latest stable
+executable = "rg"      # the binary to run; if omitted and the crate has a single binary, that one is used
+args = ["--version"]   # optional default args
+```
+
+Symposium attempts `cargo binstall` first, falls back to `cargo install`, and caches the result under `~/.symposium/cache/binaries/<crate>/<version>/bin/`. The chosen `executable` resolves to `<cache>/bin/<executable>`.
+
+To install from a git repo instead of crates.io, set `git`:
+
+```toml
+[[installations]]
+name = "tool"
+source = "cargo"
+crate = "tool"
+git = "https://github.com/example/tool"
+executable = "tool"   # required for git sources (crates.io is not consulted)
+```
+
+#### `github`
+
+```toml
+[[installations]]
+name = "rtk-hooks"
+source = "github"
+url = "https://github.com/example/rtk-hooks"
+script = "hooks/claude/rtk-rewrite.sh"   # optional; see below
+args = ["--format"]
+```
+
+Acquires the repo (or a subtree, if `url` points at `…/tree/<ref>/<path>`) into a local cache. The chosen `executable` / `script` resolves to a file inside the cached tree.
+
+`executable`/`script` may be set on the installation or on the hook (but not both, in any combination). Setting it on the installation pins this entry to a specific file; omitting it lets multiple hooks each pick a different file.
+
+#### no source
+
+Omit `source` entirely when you just need to point at a path on disk (or rely on `install_commands` to put one there):
+
+```toml
+[[installations]]
+name = "tool"
+executable = "/usr/local/bin/tool"
+```
+
+Or "shell-only" installations — useful as side-effect requirements:
+
+```toml
+[[installations]]
+name = "setup"
+install_commands = [
+    "ln -sf $HOME/.cache/foo $HOME/.local/bin/foo",
+]
+```
+
 ## `[[hooks]]`
 
 Each `[[hooks]]` entry declares a hook that responds to agent events.
@@ -71,15 +157,135 @@ Each `[[hooks]]` entry declares a hook that responds to agent events.
 |-------|------|-------------|
 | `name` | string | Descriptive name for the hook (used in logs). |
 | `event` | string | Event type to match (e.g., `PreToolUse`). |
-| `matcher` | string | Which tool invocations to match (e.g., `Bash`). Omit to match all. |
-| `command` | string | Command to run when the hook fires. Resolved relative to the plugin directory. |
-| `format` | string | Wire format for hook input/output. One of: `symposium` (default), `claude`, `codex`, `copilot`, `gemini`, `kiro`. Controls how the hook receives input and returns output. |
+| `matcher` | string (optional) | Which tool invocations to match (e.g., `Bash`). Omit to match all. |
+| `command` | string or table | What to run. A string names a `[[installations]]` entry; a table is an inline installation (promoted to a synthetic entry named after the hook). |
+| `executable` | string (optional) | Path to a binary inside (or relative to) the installation. At most one of `executable`/`script` set across hook + installation. |
+| `script` | string (optional) | Path to a shell script to run via `sh`. Same exclusivity rule as `executable`. |
+| `args` | array (optional) | Invocation arguments. Forbidden when the installation also declares `args`. |
+| `requirements` | array (optional) | Installations to acquire before running. Same shape as `command` (string name or inline declaration). |
+| `agent` | string (optional) | Restrict the hook to a specific agent (`claude`, `copilot`, `gemini`, `kiro`, …). |
+| `format` | string | Wire format for hook input/output. One of: `symposium` (default), `claude`, `codex`, `copilot`, `gemini`, `kiro`. |
+
+### Examples
+
+Run a cargo-installed binary as the hook:
+
+```toml
+[[installations]]
+name = "rg"
+source = "cargo"
+crate = "ripgrep"
+executable = "rg"
+
+[[hooks]]
+name = "rg-version"
+event = "PreToolUse"
+command = "rg"
+args = ["--version"]
+```
+
+Install rtk as a side requirement and run a hook script from a separate github source:
+
+```toml
+[[installations]]
+name = "rtk"
+source = "cargo"
+crate = "rtk"
+
+[[installations]]
+name = "rtk-hooks"
+source = "github"
+url = "https://github.com/example/rtk-hooks"
+
+[[hooks]]
+name = "rewrite"
+event = "PreToolUse"
+requirements = ["rtk"]
+command = "rtk-hooks"
+script = "hooks/claude/rtk-rewrite.sh"
+args = ["--format"]
+```
+
+Inline a one-off cargo install directly:
+
+```toml
+[[hooks]]
+name = "rg-test"
+event = "PreToolUse"
+command = { source = "cargo", crate = "ripgrep", executable = "rg" }
+args = ["--version"]
+```
+
+Run a script file on disk (no source):
+
+```toml
+[[hooks]]
+name = "check"
+event = "PreToolUse"
+command = { script = "scripts/check.sh", args = ["--strict"] }
+```
+
+A cargo install with a post-install step (e.g. to symlink a wrapper script):
+
+```toml
+[[installations]]
+name = "rtk"
+source = "cargo"
+crate = "rtk"
+install_commands = [
+    "ln -sf $HOME/.symposium/cache/binaries/rtk/*/bin/rtk $HOME/.local/bin/rtk",
+]
+
+[[hooks]]
+name = "rtk-rewrite"
+event = "PreToolUse"
+command = "rtk"
+args = ["rewrite"]
+```
+
+### Requirements
+
+`requirements` ensures other installations are acquired before the hook runs. Useful when the hook's command relies on something else being on disk (or eventually on `$PATH`).
+
+```toml
+[[hooks]]
+name = "uses-rtk-via-script"
+event = "PreToolUse"
+requirements = ["rtk", { source = "cargo", crate = "ripgrep" }]
+command = { script = "scripts/uses-rtk.sh" }
+```
+
+Requirements may also be declared on an `[[installations]]` entry. Whenever that installation is referenced — as a hook's `command` or in another `requirements` list — its declared requirements are appended (one level, prerequisites first):
+
+```toml
+[[installations]]
+name = "rtk"
+source = "cargo"
+crate = "rtk"
+
+[[installations]]
+name = "rtk-hooks"
+source = "github"
+url = "https://github.com/example/rtk-hooks"
+requirements = ["rtk"]   # rtk gets installed whenever rtk-hooks is used
+
+[[hooks]]
+name = "rewrite"
+event = "PreToolUse"
+command = "rtk-hooks"
+script = "hooks/claude/rtk-rewrite.sh"
+```
+
+Requirement installation is best-effort: failures are logged and dispatch continues.
 
 ### Supported hook events
 
 | Hook event | Description | CLI usage |
 |------------|-------------|-----------|
-| `PreToolUse` | Triggered before a tool (for example, `Bash`) is invoked by the agent. | `pre-tool-use` |
+| `PreToolUse` | Before a tool (e.g., `Bash`) is invoked by the agent. | `pre-tool-use` |
+| `PostToolUse` | After a tool completes. | `post-tool-use` |
+| `UserPromptSubmit` | When the user submits a prompt. | `user-prompt-submit` |
+| `SessionStart` | When an agent session starts. | `session-start` |
 
 ### Agent → hook name mapping
 
@@ -195,6 +401,7 @@ All supported agents have MCP server configuration. Symposium handles the format
 
 ```toml
 name = "widgetlib"
+crates = ["widgetlib"]
 
 [[skills]]
 crates = ["widgetlib=1.0"]
@@ -208,7 +415,7 @@ source.git = "https://github.com/org/widgetlib/tree/main/symposium/serde-skills"
 name = "check-widget-usage"
 event = "PreToolUse"
 matcher = "Bash"
-command = "./scripts/check-widget.sh"
+command = { source = "local", command = "./scripts/check-widget.sh" }
 
 [[mcp_servers]]
 name = "widgetlib-mcp"

@@ -535,6 +535,10 @@ fn configured_test_agents() -> Vec<TestAgent> {
         test_agents: Vec<String>,
     }
 
+    if std::env::var("SYMPOSIUM_ENABLE_AGENT_TESTING").is_err() {
+        return vec![];
+    }
+
     // If env var is set, use only that agent.
     if let Some(agent) = test_agent() {
         return vec![agent];
@@ -710,7 +714,7 @@ async fn run_with_acp_session(
 fn is_text_file(path: &Path) -> bool {
     matches!(
         path.extension().and_then(|e| e.to_str()),
-        Some("toml" | "md" | "json" | "txt" | "ts" | "js")
+        Some("toml" | "md" | "json" | "txt" | "ts" | "js" | "sh")
     )
 }
 

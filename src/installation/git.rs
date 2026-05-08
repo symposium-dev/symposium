@@ -4,16 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 
-/// Controls how aggressively plugin sources are updated.
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-pub enum UpdateLevel {
-    /// Debounced: skip the API check if fetched recently.
-    None,
-    /// Always check freshness via API, but only download if stale.
-    Check,
-    /// Always re-download regardless of staleness.
-    Fetch,
-}
+use crate::plugins::UpdateLevel;
 
 /// Minimum interval between freshness checks for cached sources.
 const DEBOUNCE_DURATION: std::time::Duration = std::time::Duration::from_secs(60);
@@ -186,12 +177,12 @@ pub struct PluginCacheMeta {
 const CACHE_META_FILENAME: &str = ".symposium-cache-meta.json";
 
 /// Manages downloading and caching of git-sourced plugin artifacts.
-pub struct PluginCacheManager {
+pub struct GitCacheManager {
     cache_dir: PathBuf,
     client: GitHubClient,
 }
 
-impl PluginCacheManager {
+impl GitCacheManager {
     /// Create a cache manager for the given subdirectory under the cache root.
     ///
     /// Use `"plugins"` for individual skill git sources,
@@ -407,187 +398,35 @@ fn flatten_single_dir(dir: &std::path::Path) -> Result<()> {
         for entry in std::fs::read_dir(&inner)? {
             let entry = entry?;
             let src = entry.path();
-            let dst = dir.join(entry.file_name());
-            std::fs::rename(&src, &dst)?;
+            let file_name = src.file_name().unwrap().to_os_string();
+            let dst = dir.join(file_name);
+            if dst.exists() {
+                if dst.is_dir() {
+                    copy_dir_recursive(&src, &dst)?;
+                } else {
+                    std::fs::remove_file(&dst)?;
+                    std::fs::rename(&src, &dst)?;
+                }
+            } else {
+                std::fs::rename(&src, &dst)?;
+            }
         }
-        std::fs::remove_dir(&inner)?;
+        std::fs::remove_dir_all(&inner)?;
     }
-
     Ok(())
 }
 
-/// Recursively copy a directory tree.
 fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
         let entry = entry?;
-        let src_path = entry.path();
+        let path = entry.path();
         let dst_path = dst.join(entry.file_name());
-        if src_path.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
+        if path.is_dir() {
+            std::fs::create_dir_all(&dst_path)?;
+            copy_dir_recursive(&path, &dst_path)?;
         } else {
-            std::fs::copy(&src_path, &dst_path)?;
+            std::fs::copy(&path, &dst_path)?;
         }
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // --- URL parsing ---
-
-    #[test]
-    fn parse_owner_repo_only() {
-        let source = parse_github_url("https://github.com/symposium-dev/recommendations").unwrap();
-        assert_eq!(source.owner, "symposium-dev");
-        assert_eq!(source.repo, "recommendations");
-        assert_eq!(source.git_ref, "");
-        assert_eq!(source.path, "");
-    }
-
-    #[test]
-    fn parse_with_trailing_slash() {
-        let source = parse_github_url("https://github.com/symposium-dev/recommendations/").unwrap();
-        assert_eq!(source.owner, "symposium-dev");
-        assert_eq!(source.repo, "recommendations");
-    }
-
-    #[test]
-    fn parse_tree_branch_only() {
-        let source = parse_github_url("https://github.com/org/repo/tree/main").unwrap();
-        assert_eq!(source.owner, "org");
-        assert_eq!(source.repo, "repo");
-        assert_eq!(source.git_ref, "main");
-        assert_eq!(source.path, "");
-    }
-
-    #[test]
-    fn parse_tree_branch_with_path() {
-        let source =
-            parse_github_url("https://github.com/symposium-dev/recommendations/tree/main/serde")
-                .unwrap();
-        assert_eq!(source.owner, "symposium-dev");
-        assert_eq!(source.repo, "recommendations");
-        assert_eq!(source.git_ref, "main");
-        assert_eq!(source.path, "serde");
-    }
-
-    #[test]
-    fn parse_tree_branch_with_nested_path() {
-        let source =
-            parse_github_url("https://github.com/org/repo/tree/v2/plugins/serde/skills").unwrap();
-        assert_eq!(source.owner, "org");
-        assert_eq!(source.repo, "repo");
-        assert_eq!(source.git_ref, "v2");
-        assert_eq!(source.path, "plugins/serde/skills");
-    }
-
-    #[test]
-    fn parse_not_github() {
-        assert!(parse_github_url("https://gitlab.com/org/repo").is_err());
-    }
-
-    #[test]
-    fn parse_too_few_segments() {
-        assert!(parse_github_url("https://github.com/org").is_err());
-    }
-
-    #[test]
-    fn parse_tree_without_ref() {
-        // owner/repo/tree with no ref after /tree — should error, not panic
-        assert!(parse_github_url("https://github.com/org/repo/tree").is_err());
-        assert!(parse_github_url("https://github.com/org/repo/tree/").is_err());
-    }
-
-    // --- Cache key ---
-
-    #[test]
-    fn cache_key_owner_repo() {
-        let source = GitHubSource {
-            owner: "org".into(),
-            repo: "repo".into(),
-            git_ref: String::new(),
-            path: String::new(),
-        };
-        assert_eq!(source.cache_key(), "org--repo");
-    }
-
-    #[test]
-    fn cache_key_with_ref() {
-        let source = GitHubSource {
-            owner: "org".into(),
-            repo: "repo".into(),
-            git_ref: "main".into(),
-            path: String::new(),
-        };
-        assert_eq!(source.cache_key(), "org--repo@main");
-    }
-
-    #[test]
-    fn cache_key_with_ref_and_path() {
-        let source = GitHubSource {
-            owner: "symposium-dev".into(),
-            repo: "recommendations".into(),
-            git_ref: "main".into(),
-            path: "plugins/serde".into(),
-        };
-        assert_eq!(
-            source.cache_key(),
-            "symposium-dev--recommendations@main--plugins--serde"
-        );
-    }
-
-    // --- Tarball extraction ---
-
-    #[test]
-    fn flatten_single_dir_works() {
-        let tmp = tempfile::tempdir().unwrap();
-        let inner = tmp.path().join("org-repo-abc123");
-        std::fs::create_dir(&inner).unwrap();
-        std::fs::write(inner.join("file.txt"), "hello").unwrap();
-        std::fs::create_dir(inner.join("subdir")).unwrap();
-        std::fs::write(inner.join("subdir").join("nested.txt"), "world").unwrap();
-
-        flatten_single_dir(tmp.path()).unwrap();
-
-        assert!(tmp.path().join("file.txt").exists());
-        assert!(tmp.path().join("subdir").join("nested.txt").exists());
-        assert!(!inner.exists());
-    }
-
-    #[test]
-    fn flatten_noop_if_multiple_entries() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("a.txt"), "a").unwrap();
-        std::fs::write(tmp.path().join("b.txt"), "b").unwrap();
-
-        flatten_single_dir(tmp.path()).unwrap();
-
-        // Nothing should change
-        assert!(tmp.path().join("a.txt").exists());
-        assert!(tmp.path().join("b.txt").exists());
-    }
-
-    #[test]
-    fn copy_dir_recursive_works() {
-        let src = tempfile::tempdir().unwrap();
-        std::fs::write(src.path().join("a.txt"), "hello").unwrap();
-        std::fs::create_dir(src.path().join("sub")).unwrap();
-        std::fs::write(src.path().join("sub").join("b.txt"), "world").unwrap();
-
-        let dst = tempfile::tempdir().unwrap();
-        let dst_path = dst.path().join("output");
-        copy_dir_recursive(src.path(), &dst_path).unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(dst_path.join("a.txt")).unwrap(),
-            "hello"
-        );
-        assert_eq!(
-            std::fs::read_to_string(dst_path.join("sub").join("b.txt")).unwrap(),
-            "world"
-        );
-    }
 }

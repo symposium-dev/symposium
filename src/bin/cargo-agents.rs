@@ -184,8 +184,8 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                 }
             } else {
                 match plugins::load_plugin(&path) {
-                    Ok(ParsedPlugin { path: _, plugin }) => {
-                        println!("{}", toml::to_string_pretty(&plugin).unwrap());
+                    Ok(ParsedPlugin { path, plugin: _ }) => {
+                        println!("{}", tokio::fs::read_to_string(path).await.unwrap());
                         ExitCode::SUCCESS
                     }
                     Err(e) => {
@@ -196,10 +196,10 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
             }
         }
         PluginCommand::Show { plugin } => match plugins::find_plugin(sym, &plugin) {
-            Some(ParsedPlugin { path, plugin }) => {
+            Some(ParsedPlugin { path, plugin: _ }) => {
                 println!("# Source: {}", path.display());
                 println!();
-                print!("{}", toml::to_string_pretty(&plugin).unwrap());
+                print!("{}", tokio::fs::read_to_string(path).await.unwrap());
                 ExitCode::SUCCESS
             }
             None => {

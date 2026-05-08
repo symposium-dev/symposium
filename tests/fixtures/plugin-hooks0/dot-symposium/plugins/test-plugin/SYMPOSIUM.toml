@@ -1,0 +1,82 @@
+name = "test-plugin"
+crates = ["*"]
+
+# A reusable installation referenced by name. No source — `script` points to a
+# file on disk (variable-expanded by the fixture loader).
+[[installations]]
+name = "named-shell"
+script = "$TEST_DIR/dot-symposium/plugins/test-plugin/scripts/named-shell.sh"
+
+# Inline `command` — promoted to a synthetic installation named after the hook
+# (`inline-shell-bash`).
+[[hooks]]
+name = "inline-shell-bash"
+event = "PreToolUse"
+matcher = "Bash"
+command = { script = "$TEST_DIR/dot-symposium/plugins/test-plugin/scripts/inline-shell.sh" }
+format = "symposium"
+
+# Hook that references the named installation above.
+[[hooks]]
+name = "named-ref-read"
+event = "PreToolUse"
+matcher = "Read"
+command = "named-shell"
+format = "symposium"
+
+# Hook with a (no-op) requirement — verifies the requirements path runs.
+[[hooks]]
+name = "with-requirements"
+event = "PreToolUse"
+matcher = "Edit"
+requirements = [{ install_commands = ["true"] }]
+command = { script = "$TEST_DIR/dot-symposium/plugins/test-plugin/scripts/with-requirements.sh" }
+format = "symposium"
+
+# Inline script with positional args — declared inline (args inside the table,
+# since cross-layer args is forbidden).
+[[hooks]]
+name = "shell-args"
+event = "PreToolUse"
+matcher = "Glob"
+command = { script = "$TEST_DIR/dot-symposium/plugins/test-plugin/scripts/shell-args.sh", args = ["picked-up"] }
+format = "symposium"
+
+# Installation with `install_commands` that prepares a marker file the hook's
+# script then reads. Demonstrates the post-install step running before the
+# hook's resolved command.
+[[installations]]
+name = "with-install-cmds"
+script = "$TEST_DIR/dot-symposium/plugins/test-plugin/scripts/read-marker.sh"
+install_commands = ["echo '{\"PreToolUse\":{\"additionalContext\":\"install-cmd-ran\"}}' > $TEST_DIR/install-marker.json"]
+
+[[hooks]]
+name = "needs-install-cmds"
+event = "PreToolUse"
+matcher = "WebFetch"
+command = "with-install-cmds"
+format = "symposium"
+
+# Same pattern as above, but the installation is declared inline on the hook —
+# exercises `install_commands` carrying through promotion of an inline command.
+[[hooks]]
+name = "inline-install-cmds"
+event = "PreToolUse"
+matcher = "Write"
+command = { script = "$TEST_DIR/dot-symposium/plugins/test-plugin/scripts/read-inline-marker.sh", install_commands = ["echo '{\"PreToolUse\":{\"additionalContext\":\"inline-install-cmd-ran\"}}' > $TEST_DIR/inline-install-marker.json"] }
+format = "symposium"
+
+# Bare installation (only `install_commands`) referenced by a hook that
+# supplies the runnable via hook-level `script`. Exercises the dispatch path
+# where the resolved executable/script comes from the hook layer.
+[[installations]]
+name = "bare-setup"
+install_commands = ["true"]
+
+[[hooks]]
+name = "hook-supplies-script"
+event = "PreToolUse"
+matcher = "Task"
+command = "bare-setup"
+script = "$TEST_DIR/dot-symposium/plugins/test-plugin/scripts/hook-supplied.sh"
+format = "symposium"
