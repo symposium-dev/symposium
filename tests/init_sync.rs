@@ -128,6 +128,15 @@ async fn sync_skips_invalid_skill_frontmatter() {
         &["invalid-skill0", "workspace0"],
         async |mut ctx| {
             ctx.symposium(&["init", "--add-agent", "codex"]).await?;
+            let registry = symposium::plugins::load_registry(&ctx.sym);
+            assert!(
+                registry.warnings.iter().any(|warning| {
+                    warning.path.ends_with("bad-skill/SKILL.md")
+                        && warning.message.contains("failed to parse frontmatter")
+                }),
+                "registry should record a warning for skipped invalid skill"
+            );
+
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();

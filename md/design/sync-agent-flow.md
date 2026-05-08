@@ -10,7 +10,7 @@ Scans workspace dependencies, installs applicable skills into agent directories,
 
 3. **Scan dependencies** — read the full dependency graph from the workspace.
 
-4. **Match skills to dependencies** — for each plugin, parse `SKILL.md` YAML frontmatter, reject malformed or non-string metadata, then evaluate skill group crate predicates and individual skill `crates` frontmatter against the workspace dependencies.
+4. **Match skills to dependencies** — for each plugin, parse `SKILL.md` YAML frontmatter, reject malformed or non-string metadata, warn about skipped invalid skills, then evaluate skill group crate predicates and individual skill `crates` frontmatter against the workspace dependencies.
 
 5. **Install skills per agent** — for each configured agent:
    - Copy applicable `SKILL.md` files into the agent's expected skill directory.

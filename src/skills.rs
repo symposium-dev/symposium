@@ -768,6 +768,7 @@ mod tests {
                 plugin,
             }],
             standalone_skills: vec![],
+            warnings: vec![],
         };
 
         // Query for serde - should find no skills because plugin doesn't apply
@@ -807,6 +808,7 @@ mod tests {
                 plugin,
             }],
             standalone_skills: vec![],
+            warnings: vec![],
         };
 
         // Query for serde - should find no skills because group doesn't match
@@ -867,6 +869,7 @@ mod tests {
                 plugin,
             }],
             standalone_skills: vec![],
+            warnings: vec![],
         };
 
         // Query for serde - should find the skill because all levels match
@@ -955,6 +958,7 @@ mod tests {
         let registry = PluginRegistry {
             plugins: Vec::new(),
             standalone_skills: vec![skill],
+            warnings: vec![],
         };
 
         let sym = crate::config::Symposium::from_dir(tmp.path());

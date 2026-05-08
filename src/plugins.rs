@@ -196,6 +196,17 @@ pub struct PluginRegistry {
     /// Skills discovered as standalone directories containing a `SKILL.md`
     /// file directly in a plugin source directory (no TOML manifest needed).
     pub standalone_skills: Vec<crate::skills::Skill>,
+    /// Non-fatal load warnings for plugins or standalone skills that were skipped.
+    pub warnings: Vec<LoadWarning>,
+}
+
+/// A non-fatal plugin source load failure.
+#[derive(Debug, Clone)]
+pub struct LoadWarning {
+    /// Path to the plugin or skill that was skipped.
+    pub path: PathBuf,
+    /// Human-readable error message.
+    pub message: String,
 }
 
 /// Raw scan results from a plugin source directory.
@@ -430,6 +441,7 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
     let sources = sym.plugin_sources();
     let mut plugins = Vec::new();
     let mut standalone_skills = Vec::new();
+    let mut warnings = Vec::new();
 
     for dir in resolve_plugin_source_dirs(sym, &sources) {
         match scan_source_dir(&dir) {
@@ -437,22 +449,38 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
                 for result in contents.plugins {
                     match result {
                         Ok(p) => plugins.push(p),
-                        Err(e) => tracing::warn!(error = %e, "failed to load plugin"),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to load plugin");
+                            warnings.push(LoadWarning {
+                                path: dir.join("<unknown>.toml"),
+                                message: format!("failed to load plugin: {e}"),
+                            });
+                        }
                     }
                 }
                 for skill_md in contents.skill_files {
                     match crate::skills::load_standalone_skill(&skill_md) {
                         Ok(skill) => standalone_skills.push(skill),
-                        Err(e) => tracing::warn!(
-                            path = %skill_md.display(),
-                            error = %e,
-                            "failed to load standalone skill"
-                        ),
+                        Err(e) => {
+                            tracing::warn!(
+                                path = %skill_md.display(),
+                                error = %e,
+                                "failed to load standalone skill"
+                            );
+                            warnings.push(LoadWarning {
+                                path: skill_md,
+                                message: format!("failed to load standalone skill: {e}"),
+                            });
+                        }
                     }
                 }
             }
             Err(e) => {
                 tracing::warn!(dir = %dir.display(), error = %e, "failed to scan plugin source dir");
+                warnings.push(LoadWarning {
+                    path: dir,
+                    message: format!("failed to scan plugin source dir: {e}"),
+                });
             }
         }
     }
@@ -466,6 +494,7 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
     PluginRegistry {
         plugins,
         standalone_skills,
+        warnings,
     }
 }
 

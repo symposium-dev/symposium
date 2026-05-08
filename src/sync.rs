@@ -67,6 +67,14 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     let registry = plugins::load_registry(sym);
     let workspace = crate::crate_sources::workspace_semver_pairs(&project_root);
 
+    for warning in &registry.warnings {
+        out.warn(format!(
+            "skipping {}: {}",
+            display_path(&warning.path),
+            warning.message
+        ));
+    }
+
     out.info(format!(
         "scanning {} workspace dependencies",
         workspace.len()
