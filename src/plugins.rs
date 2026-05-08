@@ -419,10 +419,11 @@ fn validate_installation(install: &Installation) -> Result<()> {
 /// - Not all agents have hook wire formats (e.g., Goose uses MCP extensions,
 ///   OpenCode uses JS plugins), so only agents with shell-hook JSON formats
 ///   appear here.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HookFormat {
     /// Symposium canonical format (default).
+    #[default]
     Symposium,
     /// A specific agent's wire format.
     Claude,
@@ -430,12 +431,6 @@ pub enum HookFormat {
     Copilot,
     Gemini,
     Kiro,
-}
-
-impl Default for HookFormat {
-    fn default() -> Self {
-        HookFormat::Symposium
-    }
 }
 
 impl HookFormat {
