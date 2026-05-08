@@ -171,10 +171,10 @@ impl<'a> Parser<'a> {
                 // `==X.Y` → exact match (`=X.Y` in semver)
                 // `=X.Y`  → compatible version (`^X.Y`), matching Cargo's default
                 // `>=`, `<=`, `>`, `<`, `^`, `~` → passed through as-is
-                let constraint = if raw.starts_with("==") {
-                    std::borrow::Cow::Owned(format!("={}", &raw[2..]))
-                } else if raw.starts_with('=') {
-                    std::borrow::Cow::Owned(format!("^{}", &raw[1..]))
+                let constraint = if let Some(rest) = raw.strip_prefix("==") {
+                    std::borrow::Cow::Owned(format!("={rest}"))
+                } else if let Some(rest) = raw.strip_prefix('=') {
+                    std::borrow::Cow::Owned(format!("^{rest}"))
                 } else {
                     std::borrow::Cow::Borrowed(raw)
                 };
