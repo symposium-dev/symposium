@@ -142,10 +142,8 @@ async fn load_skills_for_group(
     }
 
     // Handle crate_path source: fetch crate sources and discover skills inside them.
-    if let PluginSource::CratePath(explicit_path) = &group.source {
-        let crate_path = explicit_path
-            .as_deref()
-            .unwrap_or(PluginSource::DEFAULT_CRATE_PATH);
+    if let PluginSource::CratePath(source) = &group.source {
+        let crate_path = source.as_str();
         let matched = predicate::union_matched_crates(&[plugin_crates, &group_crates], for_crates);
         let mut skills = Vec::new();
         for (name, _version) in &matched {
