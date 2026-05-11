@@ -23,7 +23,7 @@
 # For crate authors
 
 - [Supporting your crate](./crate-authors/supporting-your-crate.md)
-- [Authoring a plugin](./crate-authors/publishing-skills.md)
+- [Authoring a plugin](./crate-authors/authoring-a-plugin.md)
 
 # Appendices
 

@@ -2,7 +2,7 @@
 
 A **symposium plugin** collects together all the extensions offered for a particular crate. Plugins are directories containing a `SYMPOSIUM.toml` manifest file that references skills, hooks, MCP servers, and other resources relevant to your crate. These extensions can be packaged within the plugin directory or the plugin can contain pointers to external repositories.
 
-Plugins enable capabilities beyond standalone skills — they're needed when you want to add hooks or MCP servers. For simple skill publishing, see [Authoring a plugin](../crate-authors/publishing-skills.md) instead.
+Plugins enable capabilities beyond standalone skills — they're needed when you want to add hooks or MCP servers. For simple skill publishing, see [Authoring a plugin](../crate-authors/authoring-a-plugin.md) instead.
 
 ## Example: a plugin definition with inline skills
 
@@ -73,7 +73,7 @@ A skill group must have exactly one of `source.path`, `source.git`, `source = "c
 
 When using `source = "crate"` or `source.crate_path`, Symposium resolves the crate predicates in scope (plugin-level and group-level) to determine which crate sources to fetch, then looks for skills inside each crate's source tree.
 
-This is the recommended way for crate authors to ship skills alongside their crate. See [Authoring a plugin](../crate-authors/publishing-skills.md) for details.
+This is the recommended way for crate authors to ship skills alongside their crate. See [Authoring a plugin](../crate-authors/authoring-a-plugin.md) for details.
 
 ```toml
 name = "serde-plugin"
