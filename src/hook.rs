@@ -510,18 +510,18 @@ pub async fn dispatch_plugin_hooks(
 /// Fields with null values in `b` will delete the corresponding field in `a`.
 /// Fields not present in `b` will be left unchanged in `a`.
 pub fn merge(a: &mut serde_json::Value, b: serde_json::Value) {
-    if let serde_json::Value::Object(a) = a {
-        if let serde_json::Value::Object(b) = b {
-            for (k, v) in b {
-                if v.is_null() {
-                    a.remove(&k);
-                } else {
-                    merge(a.entry(k).or_insert(serde_json::Value::Null), v);
-                }
+    if let serde_json::Value::Object(a) = a
+        && let serde_json::Value::Object(b) = b
+    {
+        for (k, v) in b {
+            if v.is_null() {
+                a.remove(&k);
+            } else {
+                merge(a.entry(k).or_insert(serde_json::Value::Null), v);
             }
-
-            return;
         }
+
+        return;
     }
 
     *a = b;
@@ -545,15 +545,15 @@ fn dispatched_hooks_for_payload(
             if hook.event != input.event() {
                 continue;
             }
-            if let Some(matcher) = &hook.matcher {
-                if !input.matches_matcher(matcher) {
-                    tracing::debug!(
-                        ?input,
-                        ?matcher,
-                        "skipping hook due to non-matching matcher"
-                    );
-                    continue;
-                }
+            if let Some(matcher) = &hook.matcher
+                && !input.matches_matcher(matcher)
+            {
+                tracing::debug!(
+                    ?input,
+                    ?matcher,
+                    "skipping hook due to non-matching matcher"
+                );
+                continue;
             }
             match ResolvedHook::build(parsed_plugin, hook) {
                 Ok(dispatched) => out.push(dispatched),

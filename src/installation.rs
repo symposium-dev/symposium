@@ -169,14 +169,14 @@ fn install_cargo_crate_sync(
     use std::fs;
     use std::process::Command;
 
-    if let Some(parent) = cache_dir.parent() {
-        if parent.exists() {
-            for entry in fs::read_dir(parent)? {
-                let entry = entry?;
-                let path = entry.path();
-                if path != cache_dir && path.is_dir() {
-                    fs::remove_dir_all(&path).ok();
-                }
+    if let Some(parent) = cache_dir.parent()
+        && parent.exists()
+    {
+        for entry in fs::read_dir(parent)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path != cache_dir && path.is_dir() {
+                fs::remove_dir_all(&path).ok();
             }
         }
     }

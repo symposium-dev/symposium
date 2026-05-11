@@ -83,10 +83,10 @@ impl Output {
 
 /// Replace the home directory prefix with `~` for display.
 pub fn display_path(path: &Path) -> String {
-    if let Some(home) = dirs::home_dir() {
-        if let Ok(rest) = path.strip_prefix(&home) {
-            return format!("~/{}", rest.display());
-        }
+    if let Some(home) = dirs::home_dir()
+        && let Ok(rest) = path.strip_prefix(&home)
+    {
+        return format!("~/{}", rest.display());
     }
     path.display().to_string()
 }
