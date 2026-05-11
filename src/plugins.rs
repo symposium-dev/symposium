@@ -184,7 +184,9 @@ impl<'de> serde::Deserialize<'de> for PluginSource {
                 Ok(match (fields.path, fields.git, fields.crate_path) {
                     (Some(p), None, None) => PluginSource::Path(p),
                     (None, Some(url), None) => PluginSource::Git(url),
-                    (None, None, Some(cp)) => PluginSource::CratePath(CratePathSource::explicit(cp)),
+                    (None, None, Some(cp)) => {
+                        PluginSource::CratePath(CratePathSource::explicit(cp))
+                    }
                     (None, None, None) => PluginSource::None,
                     // Unreachable given the `count > 1` guard above.
                     _ => unreachable!("count > 1 guard"),
