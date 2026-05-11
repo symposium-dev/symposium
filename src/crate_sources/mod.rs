@@ -11,6 +11,15 @@ mod version;
 
 pub use list::{WorkspaceCrate, workspace_crates};
 
+/// Normalize a crate name for hyphen/underscore-insensitive comparison.
+///
+/// Cargo treats `foo-bar` and `foo_bar` as the same crate name (published
+/// name on crates.io vs. Rust module identifier), so any name-equality check
+/// against a user-supplied query should go through this normalization.
+pub(crate) fn normalize_crate_name(name: &str) -> String {
+    name.replace('-', "_")
+}
+
 /// Result of fetching a crate's sources
 #[derive(Debug, Clone)]
 pub struct FetchResult {
@@ -51,11 +60,11 @@ impl<'a> RustCrateFetch<'a> {
     pub async fn fetch(self) -> Result<FetchResult> {
         // Check path overrides first (local path dependencies).
         if self.version_spec.is_none() {
-            let normalized = self.crate_name.replace('-', "_");
+            let normalized = normalize_crate_name(&self.crate_name);
             if let Some(wc) = self
                 .workspace
                 .iter()
-                .find(|wc| wc.path.is_some() && wc.name.replace('-', "_") == normalized)
+                .find(|wc| wc.path.is_some() && normalize_crate_name(&wc.name) == normalized)
             {
                 let path = wc.path.as_ref().unwrap();
                 tracing::debug!(crate_name = %wc.name, path = %path.display(), "resolved from path override");
