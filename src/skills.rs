@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::config::Symposium;
-use crate::plugins::{ParsedPlugin, PluginRegistry, SkillGroup};
+use crate::plugins::{ParsedPlugin, PluginRegistry, PluginSource, SkillGroup};
 use crate::predicate::{self, Predicate, PredicateSet};
 
 /// A parsed skill from a SKILL.md file.
@@ -142,7 +142,10 @@ async fn load_skills_for_group(
     }
 
     // Handle crate_path source: fetch crate sources and discover skills inside them.
-    if let Some(crate_path) = &group.source.crate_path {
+    if let PluginSource::CratePath(explicit_path) = &group.source {
+        let crate_path = explicit_path
+            .as_deref()
+            .unwrap_or(PluginSource::DEFAULT_CRATE_PATH);
         let matched = predicate::union_matched_crates(&[plugin_crates, &group_crates], for_crates);
         let mut skills = Vec::new();
         for (name, _version) in &matched {
@@ -263,12 +266,12 @@ async fn resolve_skill_dir(
     plugin_path: &Path,
     group: &SkillGroup,
 ) -> Option<PathBuf> {
-    if let Some(path) = &group.source.path {
+    if let PluginSource::Path(path) = &group.source {
         let plugin_dir = plugin_path.parent().unwrap_or(plugin_path);
         return Some(plugin_dir.join(path));
     }
 
-    if let Some(git_source) = &group.source.git {
+    if let PluginSource::Git(git_source) = &group.source {
         match fetch_skill_source(sym, git_source).await {
             Ok(path) => return Some(path),
             Err(e) => {
@@ -906,10 +909,7 @@ mod tests {
             hooks: vec![],
             skills: vec![SkillGroup {
                 crates: Some(pred_set("serde")), // Group also targets serde
-                source: PluginSource {
-                    path: Some(skill_dir.to_path_buf()),
-                    ..PluginSource::default()
-                },
+                source: PluginSource::Path(skill_dir.to_path_buf()),
             }],
             mcp_servers: vec![],
             installations: Vec::new(),

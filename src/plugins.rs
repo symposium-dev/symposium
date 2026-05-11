@@ -42,46 +42,67 @@ pub enum UpdateLevel {
 /// Accepts a table with at most one of `path`, `git`, or `crate_path` set,
 /// or the shorthand string `source = "crate"` (equivalent to
 /// `source.crate_path = "skills"`).
-#[derive(Debug, Default, Clone)]
-pub struct PluginSource {
-    /// Path on the local filesystem.
-    pub path: Option<PathBuf>,
-
+///
+/// The shorthand and explicit forms are *preserved* through parse/serialize
+/// round-trips: `source = "crate"` deserializes to `CratePath(None)` and
+/// serializes back as `"crate"`; `source.crate_path = "skills"` deserializes
+/// to `CratePath(Some("skills"))` and serializes back as the table form,
+/// even though both resolve to the same on-disk path.
+#[derive(Debug, Clone, Default)]
+pub enum PluginSource {
+    /// No source specified (skills discovered in the plugin directory itself).
+    #[default]
+    None,
+    /// Local filesystem path, relative to the plugin manifest.
+    Path(PathBuf),
     /// GitHub URL pointing to a directory in a repository.
-    pub git: Option<String>,
-
-    /// Relative path inside fetched crate sources (e.g., `"skills"`).
-    pub crate_path: Option<String>,
+    Git(String),
+    /// Relative subpath inside a fetched crate's source tree.
+    ///
+    /// `None` captures the shorthand `source = "crate"` (use the default
+    /// subdir). `Some(p)` captures explicit `source.crate_path = "<p>"`.
+    CratePath(Option<String>),
 }
 
-/// Default crate_path when using `source = "crate"` shorthand.
-const DEFAULT_CRATE_SKILL_PATH: &str = "skills";
+impl PluginSource {
+    /// Default subdirectory used when the user writes `source = "crate"`.
+    pub const DEFAULT_CRATE_PATH: &'static str = "skills";
+
+    /// Resolved subpath for a `CratePath` source, substituting the default
+    /// for the shorthand form. Returns `None` for non-CratePath variants.
+    pub fn resolved_crate_path(&self) -> Option<&str> {
+        match self {
+            PluginSource::CratePath(Some(p)) => Some(p),
+            PluginSource::CratePath(None) => Some(Self::DEFAULT_CRATE_PATH),
+            _ => None,
+        }
+    }
+}
 
 impl serde::Serialize for PluginSource {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
-        // Emit the `source = "crate"` shorthand when the source is *only* the
-        // default crate_path.
-        if self.path.is_none()
-            && self.git.is_none()
-            && self.crate_path.as_deref() == Some(DEFAULT_CRATE_SKILL_PATH)
-        {
-            return serializer.serialize_str("crate");
+        match self {
+            PluginSource::None => serializer.serialize_map(Some(0))?.end(),
+            PluginSource::Path(p) => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("path", p)?;
+                map.end()
+            }
+            PluginSource::Git(url) => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("git", url)?;
+                map.end()
+            }
+            // Shorthand form — user wrote `source = "crate"`.
+            PluginSource::CratePath(None) => serializer.serialize_str("crate"),
+            // Explicit form — user wrote `source.crate_path = "<p>"`.
+            PluginSource::CratePath(Some(p)) => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("crate_path", p)?;
+                map.end()
+            }
         }
-        let len = self.path.is_some() as usize
-            + self.git.is_some() as usize
-            + self.crate_path.is_some() as usize;
-        let mut map = serializer.serialize_map(Some(len))?;
-        if let Some(ref p) = self.path {
-            map.serialize_entry("path", p)?;
-        }
-        if let Some(ref g) = self.git {
-            map.serialize_entry("git", g)?;
-        }
-        if let Some(ref cp) = self.crate_path {
-            map.serialize_entry("crate_path", cp)?;
-        }
-        map.end()
     }
 }
 
@@ -112,10 +133,7 @@ impl<'de> serde::Deserialize<'de> for PluginSource {
 
             fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
                 match v {
-                    "crate" => Ok(PluginSource {
-                        crate_path: Some(DEFAULT_CRATE_SKILL_PATH.into()),
-                        ..PluginSource::default()
-                    }),
+                    "crate" => Ok(PluginSource::CratePath(None)),
                     other => Err(de::Error::custom(format!(
                         "unknown source shorthand \"{other}\"; only \"crate\" is supported"
                     ))),
@@ -133,10 +151,13 @@ impl<'de> serde::Deserialize<'de> for PluginSource {
                         "source.path, source.git, and source.crate_path are mutually exclusive",
                     ));
                 }
-                Ok(PluginSource {
-                    path: fields.path,
-                    git: fields.git,
-                    crate_path: fields.crate_path,
+                Ok(match (fields.path, fields.git, fields.crate_path) {
+                    (Some(p), None, None) => PluginSource::Path(p),
+                    (None, Some(url), None) => PluginSource::Git(url),
+                    (None, None, Some(cp)) => PluginSource::CratePath(Some(cp)),
+                    (None, None, None) => PluginSource::None,
+                    // Unreachable given the `count > 1` guard above.
+                    _ => unreachable!("count > 1 guard"),
                 })
             }
         }
@@ -1079,7 +1100,7 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
         if let Some(parsed) = &plugin {
             let plugin_dir = parsed.path.parent().unwrap_or(dir);
             for group in &parsed.plugin.skills {
-                if let Some(ref rel_path) = group.source.path {
+                if let PluginSource::Path(ref rel_path) = group.source {
                     let joined = plugin_dir.join(rel_path);
                     let skills_dir: PathBuf = joined.components().collect();
                     plugin_skill_dirs.push(skills_dir.clone());
@@ -1301,7 +1322,7 @@ fn validate_skill_groups(
     skills: &[SkillGroup],
 ) -> Result<()> {
     for (i, group) in skills.iter().enumerate() {
-        if group.source.crate_path.is_some() {
+        if matches!(group.source, PluginSource::CratePath(_)) {
             let has_non_wildcard = plugin_crates
                 .predicates
                 .iter()
@@ -1381,9 +1402,13 @@ mod tests {
         let cr = group.crates.as_ref().unwrap();
         assert_eq!(cr.predicates.len(), 1);
         assert!(cr.predicates[0].references_crate("serde"));
-        assert_eq!(
-            group.source.git.as_deref(),
-            Some("https://github.com/org/repo/tree/main/serde")
+        assert!(
+            matches!(
+                &group.source,
+                PluginSource::Git(url) if url == "https://github.com/org/repo/tree/main/serde"
+            ),
+            "expected Git source, got {:?}",
+            group.source
         );
     }
 
@@ -2820,12 +2845,14 @@ mod tests {
             source.crate_path = "skills"
         "#};
         let plugin = from_str(toml).expect("parse");
-        assert_eq!(
-            plugin.skills[0].source.crate_path.as_deref(),
-            Some("skills")
+        assert!(
+            matches!(
+                &plugin.skills[0].source,
+                PluginSource::CratePath(Some(p)) if p == "skills"
+            ),
+            r#"explicit source.crate_path = "skills" should be CratePath(Some("skills")), got {:?}"#,
+            plugin.skills[0].source,
         );
-        assert!(plugin.skills[0].source.path.is_none());
-        assert!(plugin.skills[0].source.git.is_none());
     }
 
     #[test]
@@ -2838,11 +2865,41 @@ mod tests {
             source = "crate"
         "#};
         let plugin = from_str(toml).expect("parse");
-        assert_eq!(
-            plugin.skills[0].source.crate_path.as_deref(),
-            Some("skills"),
-            r#"source = "crate" should set crate_path = Some("skills"), got {:?}"#,
-            plugin.skills[0].source
+        assert!(
+            matches!(&plugin.skills[0].source, PluginSource::CratePath(None)),
+            r#"source = "crate" shorthand should be CratePath(None), got {:?}"#,
+            plugin.skills[0].source,
+        );
+    }
+
+    /// The shorthand and explicit forms are intentionally distinguishable in
+    /// the data model so that the serializer can preserve whichever form the
+    /// user originally wrote, even when the explicit form happens to resolve
+    /// to the default subdirectory.
+    #[test]
+    fn explicit_default_path_preserves_table_form() {
+        let plugin = from_str(indoc! {r#"
+            name = "rt"
+            crates = ["serde"]
+
+            [[skills]]
+            source.crate_path = "skills"
+        "#})
+        .unwrap();
+        // Parsed value is the explicit variant.
+        assert!(matches!(
+            &plugin.skills[0].source,
+            PluginSource::CratePath(Some(p)) if p == "skills"
+        ));
+        // Serialized form keeps the table, does NOT collapse to "crate".
+        let toml_str = toml::to_string_pretty(&plugin).expect("serialize");
+        assert!(
+            !toml_str.contains(r#"source = "crate""#),
+            "explicit `source.crate_path = \"skills\"` should NOT collapse to shorthand, got:\n{toml_str}"
+        );
+        assert!(
+            toml_str.contains("crate_path"),
+            "explicit form should remain a table, got:\n{toml_str}"
         );
     }
 
@@ -2970,6 +3027,21 @@ mod tests {
         assert!(err.to_string().contains("non-wildcard"), "{err}");
     }
 
+    /// Shorthand (`source = "crate"`) is also subject to the wildcard check,
+    /// since it resolves to CratePath too.
+    #[test]
+    fn crate_shorthand_reject_all_wildcards() {
+        let toml = indoc! {r#"
+            name = "bad"
+            crates = ["*"]
+
+            [[skills]]
+            source = "crate"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("non-wildcard"), "{err}");
+    }
+
     // --- TOML serialization round-trip tests ---
 
     /// Serialize a plugin to TOML and parse it back.
@@ -2989,7 +3061,11 @@ mod tests {
         "#})
         .unwrap();
         let rt = roundtrip(&plugin);
-        assert_eq!(rt.skills[0].source.crate_path.as_deref(), Some("skills"));
+        assert!(
+            matches!(&rt.skills[0].source, PluginSource::CratePath(None)),
+            "shorthand should round-trip as CratePath(None), got {:?}",
+            rt.skills[0].source,
+        );
     }
 
     #[test]
@@ -3003,9 +3079,13 @@ mod tests {
         "#})
         .unwrap();
         let rt = roundtrip(&plugin);
-        assert_eq!(
-            rt.skills[0].source.crate_path.as_deref(),
-            Some(".symposium/skills")
+        assert!(
+            matches!(
+                &rt.skills[0].source,
+                PluginSource::CratePath(Some(p)) if p == ".symposium/skills"
+            ),
+            r#"explicit crate_path should round-trip as CratePath(Some(...)), got {:?}"#,
+            rt.skills[0].source,
         );
     }
 
@@ -3020,9 +3100,13 @@ mod tests {
         "#})
         .unwrap();
         let rt = roundtrip(&plugin);
-        assert_eq!(
-            rt.skills[0].source.path.as_deref(),
-            Some(std::path::Path::new("skills/v1"))
+        assert!(
+            matches!(
+                &rt.skills[0].source,
+                PluginSource::Path(p) if p.as_path() == std::path::Path::new("skills/v1")
+            ),
+            "expected Path source, got {:?}",
+            rt.skills[0].source,
         );
     }
 
@@ -3037,9 +3121,13 @@ mod tests {
         "#})
         .unwrap();
         let rt = roundtrip(&plugin);
-        assert_eq!(
-            rt.skills[0].source.git.as_deref(),
-            Some("https://github.com/org/repo/tree/main/skills")
+        assert!(
+            matches!(
+                &rt.skills[0].source,
+                PluginSource::Git(url) if url == "https://github.com/org/repo/tree/main/skills"
+            ),
+            "expected Git source, got {:?}",
+            rt.skills[0].source,
         );
     }
 
@@ -3054,9 +3142,11 @@ mod tests {
         "#})
         .unwrap();
         let rt = roundtrip(&plugin);
-        assert!(rt.skills[0].source.path.is_none());
-        assert!(rt.skills[0].source.git.is_none());
-        assert!(rt.skills[0].source.crate_path.is_none());
+        assert!(
+            matches!(&rt.skills[0].source, PluginSource::None),
+            "expected None source, got {:?}",
+            rt.skills[0].source,
+        );
     }
 
     #[test]
@@ -3072,7 +3162,7 @@ mod tests {
         let toml_str = toml::to_string_pretty(&plugin).expect("serialize");
         assert!(
             toml_str.contains(r#"source = "crate""#),
-            "crate_path = Some(\"skills\") should serialize as source = \"crate\", got:\n{toml_str}"
+            "CratePath(None) should serialize as source = \"crate\", got:\n{toml_str}"
         );
     }
 
@@ -3089,11 +3179,11 @@ mod tests {
         let toml_str = toml::to_string_pretty(&plugin).expect("serialize");
         assert!(
             toml_str.contains("crate_path"),
-            "non-default crate_path should serialize as a table, got:\n{toml_str}"
+            "explicit crate_path should serialize as a table, got:\n{toml_str}"
         );
         assert!(
             !toml_str.contains(r#"source = "crate""#),
-            "non-default crate_path should NOT use shorthand, got:\n{toml_str}"
+            "explicit crate_path should NOT use shorthand, got:\n{toml_str}"
         );
     }
 }
