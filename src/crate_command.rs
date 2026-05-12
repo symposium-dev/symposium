@@ -14,14 +14,14 @@ pub enum DispatchResult {
 }
 
 pub async fn dispatch_crate(
-    sym: &Symposium,
+    _sym: &Symposium,
     name: &str,
     version: Option<&str>,
     cwd: &Path,
 ) -> DispatchResult {
     tracing::debug!(%name, ?version, "crate-info dispatched");
     let workspace = crate_sources::workspace_crates(cwd);
-    let mut fetch = crate_sources::RustCrateFetch::new(name, &workspace, sym.cache_dir());
+    let mut fetch = crate_sources::RustCrateFetch::new(name, &workspace);
     if let Some(v) = version {
         fetch = fetch.version(v);
     }

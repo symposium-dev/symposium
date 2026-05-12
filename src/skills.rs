@@ -147,7 +147,7 @@ async fn load_skills_for_group(
         let matched = predicate::union_matched_crates(&[plugin_crates, &group_crates], for_crates);
         let mut skills = Vec::new();
         for (name, _version) in &matched {
-            match crate::crate_sources::RustCrateFetch::new(name, workspace_crates, sym.cache_dir())
+            match crate::crate_sources::RustCrateFetch::new(name, workspace_crates)
                 .fetch()
                 .await
             {
