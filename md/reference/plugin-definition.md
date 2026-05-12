@@ -64,8 +64,8 @@ Each `[[skills]]` entry declares a group of skills.
 | `crates` | string or array | Which crates this group advises on. Accepts a single string (`"serde"`) or array (`["serde", "tokio>=1.0"]`). See [Crate predicates](./crate-predicates.md) for syntax. |
 | `source.path` | string | Local directory containing skill subdirectories. Resolved relative to the manifest file. |
 | `source.git` | string | GitHub URL pointing to a directory in a repository (e.g., `https://github.com/org/repo/tree/main/skills`). Symposium downloads the tarball, extracts the subdirectory, and caches it. |
-| `source = "crate"` | string | Look for skills inside the matched crates' published source, in the default `skills/` directory. See [Crate-sourced skills](#crate-sourced-skills). |
-| `source.crate_path` | string | Like `source = "crate"`, but with a custom directory path (e.g., `source.crate_path = ".symposium/skills"`). |
+| `source = "crate"` | string | Look for skills inside the matched crates' published source, in the default `.symposium/skills/` directory. See [Crate-sourced skills](#crate-sourced-skills). |
+| `source.crate_path` | string | Like `source = "crate"`, but with a custom directory path (e.g., `source.crate_path = "docs/skills"`). |
 
 A skill group must have exactly one of `source.path`, `source.git`, `source = "crate"`, or `source.crate_path`.
 

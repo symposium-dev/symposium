@@ -20,18 +20,19 @@ See the [Skill definition reference](../reference/skill-definition.md) for the f
 
 ### Embedding skills in your crate (recommended)
 
-If you maintain the crate, we recommend shipping skills directly in your source tree. Place skill directories under `skills/`:
+If you maintain the crate, we recommend shipping skills directly in your source tree. Place skill directories under `.symposium/skills/`:
 
 ```
 my-crate/
     Cargo.toml
     src/
         lib.rs
-    skills/
-        basics/
-            SKILL.md
-        advanced-patterns/
-            SKILL.md
+    .symposium/
+        skills/
+            basics/
+                SKILL.md
+            advanced-patterns/
+                SKILL.md
 ```
 
 To make Symposium aware of your skills, open a PR adding a plugin manifest to the [central recommendations repository][rr]. This is a small TOML file that tells Symposium to look inside your crate's source:
@@ -46,11 +47,11 @@ source = "crate"
 
 Symposium fetches the crate source (from the local cargo cache or crates.io) and discovers the skills. Users always get skills matching the version they have installed.
 
-We recommend placing skills in `skills/`, but if you prefer a different directory, you can use `source.crate_path`:
+We recommend placing skills in `.symposium/skills/`, but if you prefer a different directory, you can use `source.crate_path`:
 
 ```toml
 [[skills]]
-source.crate_path = ".symposium/skills"
+source.crate_path = "skills"
 ```
 
 ### Standalone skills (for third-party crates)
