@@ -31,6 +31,13 @@ pub struct Config {
     #[serde(default = "default_true", rename = "auto-sync")]
     pub auto_sync: bool,
 
+    /// Propagate user-authored skills from `.agents/skills/` to each
+    /// configured agent's skill directory (e.g. `.claude/skills/`,
+    /// `.kiro/skills/`). Skills that symposium itself installed into
+    /// `.agents/skills/` are not propagated.
+    #[serde(default = "default_true", rename = "agents-syncing")]
+    pub agents_syncing: bool,
+
     /// Where to install agent hooks.
     #[serde(
         default,
@@ -80,6 +87,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             auto_sync: true,
+            agents_syncing: true,
             hook_scope: HookScope::default(),
             agents: Vec::new(),
             logging: LoggingConfig::default(),
@@ -533,6 +541,16 @@ mod tests {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.agents.is_empty());
         assert!(config.auto_sync); // default true
+        assert!(config.agents_syncing); // default true
+    }
+
+    #[test]
+    fn parse_agents_syncing_disabled() {
+        let config: Config = toml::from_str(indoc! {"
+            agents-syncing = false
+        "})
+        .unwrap();
+        assert!(!config.agents_syncing);
     }
 
     #[test]

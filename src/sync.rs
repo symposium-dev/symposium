@@ -59,6 +59,93 @@ fn skills_parent_dir(agent: Agent, project_root: &Path) -> PathBuf {
         .to_path_buf()
 }
 
+/// Discover user-authored skills in `<project_root>/.agents/skills/`.
+///
+/// A skill is user-authored iff its directory contains `SKILL.md` and does
+/// *not* contain the `.symposium` marker. Symposium never writes markers
+/// into source skills, so this unambiguously separates user content from
+/// copies symposium put there itself.
+fn discover_user_authored_skills(project_root: &Path) -> Vec<PathBuf> {
+    let agents_skills_dir = project_root.join(".agents").join("skills");
+    let Ok(entries) = fs::read_dir(&agents_skills_dir) else {
+        return Vec::new();
+    };
+
+    let mut skills: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .filter(|p| p.join("SKILL.md").is_file())
+        .filter(|p| !p.join(MARKER_FILE).exists())
+        .collect();
+    skills.sort();
+    skills
+}
+
+/// Recursively copy the contents of `src` into `dst`. Creates `dst` if
+/// missing. Regular files are copied with `fs::copy`; subdirectories are
+/// walked. Symlinks and other special files are ignored.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    fs::create_dir_all(dst).with_context(|| format!("create {}", dst.display()))?;
+    for entry in fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else if file_type.is_file() {
+            fs::copy(&src_path, &dst_path)
+                .with_context(|| format!("copy {} → {}", src_path.display(), dst_path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Propagate a user-authored skill from `.agents/skills/<name>/` to
+/// `dest_dir`, returning `Ok(true)` if propagation happened (so the caller
+/// should record `dest_dir` as installed).
+///
+/// Leaves `dest_dir` alone if it exists and lacks the `.symposium` marker —
+/// the user put something there by hand and we must not clobber it.
+fn propagate_user_skill(
+    source_dir: &Path,
+    dest_dir: &Path,
+    project_root: &Path,
+    out: &Output,
+) -> Result<bool> {
+    if dest_dir == source_dir {
+        // Agent reads from the same directory as the source — nothing to do.
+        return Ok(false);
+    }
+
+    let target_is_managed = dest_dir.join(MARKER_FILE).exists();
+    if dest_dir.exists() && !target_is_managed {
+        out.warn(format!(
+            "skipping propagation to {}: user-managed skill already present",
+            display_path(dest_dir)
+        ));
+        return Ok(false);
+    }
+
+    // Clear any prior symposium-managed copy so removed files don't linger.
+    if dest_dir.exists() {
+        fs::remove_dir_all(dest_dir).with_context(|| format!("remove {}", dest_dir.display()))?;
+    }
+
+    create_managed_dir_all(dest_dir, project_root)?;
+    copy_dir_recursive(source_dir, dest_dir)?;
+
+    // Drop the marker and a wildcard .gitignore. These overwrite anything
+    // the source happened to contain, so the destination is uniformly
+    // symposium-managed regardless of what was in the source tree.
+    fs::write(dest_dir.join(MARKER_FILE), "")
+        .with_context(|| format!("write marker in {}", dest_dir.display()))?;
+    fs::write(dest_dir.join(".gitignore"), "*\n")
+        .with_context(|| format!("write .gitignore in {}", dest_dir.display()))?;
+    Ok(true)
+}
+
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
 pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
@@ -181,6 +268,53 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
                 }
                 Err(e) => {
                     out.warn(format!("failed to install skill {skill_name}: {e}"));
+                }
+            }
+        }
+    }
+
+    // Propagate user-authored skills from `.agents/skills/` into every
+    // configured agent that reads skills from a different directory. Skills
+    // are "user-authored" when they lack the `.symposium` marker — symposium
+    // never writes that marker into a source, so this never re-propagates
+    // symposium's own installs. See the agents-syncing feature docs.
+    if sym.config.agents_syncing {
+        let user_authored = discover_user_authored_skills(&project_root);
+        if !user_authored.is_empty() {
+            tracing::debug!(
+                count = user_authored.len(),
+                "propagating user-authored skills from .agents/skills/"
+            );
+            for agent_name in &agent_names {
+                let agent = Agent::from_config_name(agent_name)?;
+                for source_dir in &user_authored {
+                    let name = match source_dir.file_name().and_then(|n| n.to_str()) {
+                        Some(n) => n,
+                        None => continue,
+                    };
+                    let dest_dir = agent.project_skill_dir(&project_root, name);
+                    match propagate_user_skill(source_dir, &dest_dir, &project_root, out) {
+                        Ok(true) => {
+                            installed_dirs.insert(dest_dir.clone());
+                            tracing::info!(
+                                skill = %name,
+                                agent = %agent_name,
+                                dest = %dest_dir.display(),
+                                "propagated skill from .agents/skills/"
+                            );
+                            out.done(format!(
+                                "propagated skill {name} → {}",
+                                display_path(&dest_dir)
+                            ));
+                        }
+                        Ok(false) => {}
+                        Err(e) => {
+                            out.warn(format!(
+                                "failed to propagate skill {name} to {}: {e}",
+                                display_path(&dest_dir)
+                            ));
+                        }
+                    }
                 }
             }
         }
