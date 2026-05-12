@@ -451,8 +451,8 @@ async fn sync_installs_wildcard_plugin_skill() {
 ///
 /// Fixture layout:
 /// - `crate-y` depends on `crate-x` and `crate-z` (path deps)
-/// - `crate-x` ships `skills/x-guidance/SKILL.md` (default path via `source = "crate"`)
-/// - `crate-z` ships `.symposium/skills/z-guidance/SKILL.md` (custom path)
+/// - `crate-x` ships `.symposium/skills/x-guidance/SKILL.md` (default path via `source = "crate"`)
+/// - `crate-z` ships `guidance/z-guidance/SKILL.md` (custom path via `source.crate_path`)
 #[tokio::test]
 async fn sync_installs_skill_from_crate_path() {
     with_fixture(
@@ -473,7 +473,7 @@ async fn sync_installs_skill_from_crate_path() {
             let content = std::fs::read_to_string(&skill_file)?;
             assert!(content.contains("Use crate-x like this"));
 
-            // crate-z: custom path via source.crate_path = ".symposium/skills"
+            // crate-z: custom path via source.crate_path = "guidance"
             let skill_file = workspace_root.join(".claude/skills/z-guidance/SKILL.md");
             assert!(
                 skill_file.exists(),
