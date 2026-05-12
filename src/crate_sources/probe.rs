@@ -107,7 +107,9 @@ fn find_crate_in_metadata(dir: &Path, crate_name: &str) -> Result<FetchResult> {
     let manifest_path: PathBuf = package.manifest_path.clone().into();
     let path = manifest_path
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("manifest path `{}` has no parent", manifest_path.display()))?
+        .ok_or_else(|| {
+            anyhow::anyhow!("manifest path `{}` has no parent", manifest_path.display())
+        })?
         .to_path_buf();
 
     Ok(FetchResult {
