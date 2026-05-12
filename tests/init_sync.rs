@@ -106,13 +106,22 @@ async fn sync_installs_skills() {
                 "sync should install serde-guidance skill"
             );
 
-            let manifest_path = workspace_root.join(".claude/skills/.symposium.toml");
-            assert!(manifest_path.exists(), "manifest should be written");
-            let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+            // Each installed skill directory carries a `.symposium` marker so
+            // future syncs (and other tools) can identify it as symposium-managed.
+            let marker = workspace_root.join(".claude/skills/serde-guidance/.symposium");
             assert!(
-                manifest.contains("serde-guidance"),
-                "manifest should track installed skill"
+                marker.exists(),
+                "skill dir should contain .symposium marker"
             );
+
+            // Skill dirs symposium creates get a wildcard gitignore so the
+            // marker, SKILL.md, and gitignore itself stay out of version control.
+            for dir in [".claude/skills", ".claude/skills/serde-guidance"] {
+                let gi = workspace_root.join(dir).join(".gitignore");
+                assert!(gi.exists(), "missing .gitignore in {dir}");
+                let contents = std::fs::read_to_string(&gi).unwrap();
+                assert_eq!(contents.trim(), "*", "unexpected .gitignore in {dir}");
+            }
             Ok(())
         },
     )
@@ -146,11 +155,11 @@ async fn sync_skips_invalid_skill_frontmatter() {
                 "sync should not install a skill with invalid YAML frontmatter"
             );
 
-            let manifest_path = workspace_root.join(".agents/skills/.symposium.toml");
-            let manifest = std::fs::read_to_string(&manifest_path).unwrap();
+            // No marker should exist for the rejected skill.
+            let marker = workspace_root.join(".agents/skills/rust-best-practice/.symposium");
             assert!(
-                !manifest.contains("rust-best-practice"),
-                "manifest should not track a rejected skill"
+                !marker.exists(),
+                "rejected skill directory should not exist"
             );
             Ok(())
         },
@@ -159,7 +168,7 @@ async fn sync_skips_invalid_skill_frontmatter() {
     .unwrap();
 }
 
-/// `sync` removes stale skills tracked in the manifest.
+/// `sync` removes stale skills marked by a `.symposium` file.
 #[tokio::test]
 async fn sync_removes_stale_skills() {
     with_fixture(
@@ -171,18 +180,12 @@ async fn sync_removes_stale_skills() {
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
 
-            let manifest_path = workspace_root.join(".claude/skills/.symposium.toml");
-            let manifest = std::fs::read_to_string(&manifest_path).unwrap();
-            let manifest = manifest.replace(
-                r#"installed = ["#,
-                r#"installed = [
-    "fake-old-skill","#,
-            );
-            std::fs::write(&manifest_path, &manifest).unwrap();
-
+            // Plant a fake "previously installed" skill: a marker file makes
+            // the dir look symposium-managed, so the next sync should reap it.
             let fake_dir = workspace_root.join(".claude/skills/fake-old-skill");
             std::fs::create_dir_all(&fake_dir).unwrap();
             std::fs::write(fake_dir.join("SKILL.md"), "old").unwrap();
+            std::fs::write(fake_dir.join(".symposium"), "").unwrap();
 
             ctx.symposium(&["sync"]).await?;
 
@@ -197,7 +200,8 @@ async fn sync_removes_stale_skills() {
     .unwrap();
 }
 
-/// `sync` does not touch skills not in the manifest (user-managed).
+/// `sync` does not touch skill directories without the `.symposium` marker
+/// (user-managed).
 #[tokio::test]
 async fn sync_preserves_user_managed_skills() {
     with_fixture(
@@ -482,10 +486,16 @@ async fn sync_installs_skill_from_crate_path() {
             let content = std::fs::read_to_string(&skill_file)?;
             assert!(content.contains("Use crate-z like this"));
 
-            let manifest_path = workspace_root.join(".claude/skills/.symposium.toml");
-            let manifest = std::fs::read_to_string(&manifest_path)?;
-            assert!(manifest.contains("x-guidance"));
-            assert!(manifest.contains("z-guidance"));
+            assert!(
+                workspace_root
+                    .join(".claude/skills/x-guidance/.symposium")
+                    .exists()
+            );
+            assert!(
+                workspace_root
+                    .join(".claude/skills/z-guidance/.symposium")
+                    .exists()
+            );
             Ok(())
         },
     )
@@ -580,6 +590,100 @@ async fn crate_info_resolves_path_dependency() {
         }
         Ok(())
     })
+    .await
+    .unwrap();
+}
+
+/// Installing default skills in a freshly-initialized git repo must not leak
+/// symposium artifacts into `git status`. The skill directories symposium
+/// creates carry a wildcard `.gitignore` that hides everything they contain,
+/// so `git status` should be clean after sync.
+#[tokio::test]
+async fn sync_installations_are_gitignored() {
+    use std::process::Command;
+
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+
+            // Helper: run a git command in the workspace root, bail on failure.
+            // `-c core.excludesFile=/dev/null` makes the test independent of
+            // the developer's global gitignore (e.g. one that hides `.claude/`),
+            // so behavior matches CI.
+            let git = |args: &[&str]| -> anyhow::Result<String> {
+                let mut full_args = vec!["-c", "core.excludesFile=/dev/null"];
+                full_args.extend_from_slice(args);
+                let out = Command::new("git")
+                    .args(&full_args)
+                    .current_dir(&workspace_root)
+                    .output()?;
+                if !out.status.success() {
+                    anyhow::bail!(
+                        "git {args:?} failed: {}",
+                        String::from_utf8_lossy(&out.stderr)
+                    );
+                }
+                Ok(String::from_utf8(out.stdout)?)
+            };
+
+            // Fresh git repo with the fixture's project files committed.
+            git(&["init", "--quiet", "--initial-branch=main"])?;
+            git(&["config", "user.email", "test@example.com"])?;
+            git(&["config", "user.name", "Test"])?;
+            git(&["config", "commit.gpgsign", "false"])?;
+
+            // Keep the snapshot focused on symposium-managed paths by
+            // excluding test-harness infrastructure (`dot-symposium/` is
+            // where the fixture plants the user-level `~/.symposium/`) and
+            // `cargo metadata`'s generated `Cargo.lock`.
+            std::fs::write(
+                workspace_root.join(".gitignore"),
+                "dot-symposium/\nCargo.lock\n",
+            )?;
+
+            git(&["add", "."])?;
+            git(&["commit", "--quiet", "-m", "initial"])?;
+
+            // Install default skills for a single agent.
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            // Sanity: the skill and marker are actually on disk.
+            assert!(
+                workspace_root
+                    .join(".claude/skills/serde-guidance/SKILL.md")
+                    .exists(),
+                "skill should be installed on disk"
+            );
+            assert!(
+                workspace_root
+                    .join(".claude/skills/serde-guidance/.symposium")
+                    .exists(),
+                "marker should be on disk"
+            );
+
+            // Use `-uall` so untracked dirs expand to their leaf paths —
+            // gives deterministic output regardless of git's collapsing rules.
+            let status = git(&["status", "--porcelain", "-uall"])?;
+
+            // Skill dirs are fully gitignored by the wildcard `.gitignore`
+            // symposium drops into them, so they don't appear here.
+            //
+            // `.claude/settings.json` does appear: the `plugins0` fixture
+            // sets `hook-scope = "project"`, so init+sync register hooks
+            // into the workspace's `.claude/settings.json` rather than the
+            // user's home dir. That file is the user's to commit (or not);
+            // symposium doesn't gitignore it.
+            expect_test::expect![[r#"
+                ?? .claude/settings.json
+            "#]]
+            .assert_eq(&status);
+
+            Ok(())
+        },
+    )
     .await
     .unwrap();
 }
