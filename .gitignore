@@ -26,7 +26,6 @@ target/
 *.tmp
 *.temp
 .netrc
-.claude
 killme.*
 xxx.*
 
@@ -47,8 +46,10 @@ yarn-error.log*
 *.swo
 *~
 
-# Kiro directory
+# Agent-specific directories 
 .kiro/
+.claude/
+.agents/
 .sparkle-space/
 
 # Build output
