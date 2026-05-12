@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 
 use crate::config::Symposium;
-use crate::plugins::{ParsedPlugin, PluginRegistry, SkillGroup};
+use crate::plugins::{ParsedPlugin, PluginRegistry, PluginSource, SkillGroup};
 use crate::predicate::{self, Predicate, PredicateSet};
 
 /// A parsed skill from a SKILL.md file.
@@ -65,27 +65,40 @@ impl SkillWithGroupContext {
 pub async fn skills_applicable_to(
     sym: &Symposium,
     registry: &PluginRegistry,
-    for_crates: &[(String, semver::Version)],
+    workspace_crates: &[crate::crate_sources::WorkspaceCrate],
 ) -> Vec<SkillWithGroupContext> {
     let mut results = Vec::new();
+
+    let for_crates: Vec<(String, semver::Version)> = workspace_crates
+        .iter()
+        .map(|wc| (wc.name.clone(), wc.version.clone()))
+        .collect();
 
     // Skills from plugin manifests. We iterate these separately
     // because we lazily load skill groups, so there
     // is extra logic.
     for ParsedPlugin { path, plugin } in &registry.plugins {
         // First check if plugin applies to these crates
-        if !plugin.applies_to_crates(for_crates) {
+        if !plugin.applies_to_crates(&for_crates) {
             continue;
         }
 
         for group in &plugin.skills {
-            let (group_crates, skills) = load_skills_for_group(sym, path, group, for_crates).await;
+            let (group_crates, skills) = load_skills_for_group(
+                sym,
+                path,
+                &plugin.crates,
+                group,
+                workspace_crates,
+                &for_crates,
+            )
+            .await;
 
             collect_skills_applicable_to(
                 &skills,
                 &plugin.crates,
                 &group_crates,
-                for_crates,
+                &for_crates,
                 &mut results,
             );
         }
@@ -98,7 +111,7 @@ pub async fn skills_applicable_to(
         &registry.standalone_skills,
         &empty,
         &empty,
-        for_crates,
+        &for_crates,
         &mut results,
     );
 
@@ -112,7 +125,9 @@ pub async fn skills_applicable_to(
 async fn load_skills_for_group(
     sym: &Symposium,
     plugin_path: &Path,
+    plugin_crates: &PredicateSet,
     group: &SkillGroup,
+    workspace_crates: &[crate::crate_sources::WorkspaceCrate],
     for_crates: &[(String, semver::Version)],
 ) -> (PredicateSet, Vec<Skill>) {
     let group_crates = group
@@ -124,6 +139,41 @@ async fn load_skills_for_group(
     if !group_crates.predicates.is_empty() && !group_crates.matches(for_crates) {
         tracing::debug!(plugin = %plugin_path.display(), "skill group crates don't match, skipping");
         return (group_crates, Vec::new());
+    }
+
+    // Handle crate_path source: fetch crate sources and discover skills inside them.
+    if let PluginSource::CratePath(source) = &group.source {
+        let crate_path = source.as_str();
+        let matched = predicate::union_matched_crates(&[plugin_crates, &group_crates], for_crates);
+        let mut skills = Vec::new();
+        for (name, _version) in &matched {
+            match crate::crate_sources::RustCrateFetch::new(name, workspace_crates, sym.cache_dir())
+                .fetch()
+                .await
+            {
+                Ok(result) => {
+                    let dir = result.path.join(crate_path);
+                    for skill_result in discover_skills(&dir, group) {
+                        match skill_result {
+                            Ok(skill) => skills.push(skill),
+                            Err(e) => tracing::warn!(
+                                crate_name = %name,
+                                error = %e,
+                                "failed to load skill from crate source"
+                            ),
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        crate_name = %name,
+                        error = %e,
+                        "failed to fetch crate source for skills"
+                    );
+                }
+            }
+        }
+        return (group_crates, skills);
     }
 
     let Some(dir) = resolve_skill_dir(sym, plugin_path, group).await else {
@@ -214,12 +264,12 @@ async fn resolve_skill_dir(
     plugin_path: &Path,
     group: &SkillGroup,
 ) -> Option<PathBuf> {
-    if let Some(path) = &group.source.path {
+    if let PluginSource::Path(path) = &group.source {
         let plugin_dir = plugin_path.parent().unwrap_or(plugin_path);
         return Some(plugin_dir.join(path));
     }
 
-    if let Some(git_source) = &group.source.git {
+    if let PluginSource::Git(git_source) = &group.source {
         match fetch_skill_source(sym, git_source).await {
             Ok(path) => return Some(path),
             Err(e) => {
@@ -767,7 +817,11 @@ mod tests {
         };
 
         // Query for serde - should find no skills because plugin doesn't apply
-        let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let workspace_crates = vec![crate::crate_sources::WorkspaceCrate {
+            name: "serde".to_string(),
+            version: semver::Version::new(1, 0, 0),
+            path: None,
+        }];
         let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
 
         assert!(
@@ -807,7 +861,11 @@ mod tests {
         };
 
         // Query for serde - should find no skills because group doesn't match
-        let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let workspace_crates = vec![crate::crate_sources::WorkspaceCrate {
+            name: "serde".to_string(),
+            version: semver::Version::new(1, 0, 0),
+            path: None,
+        }];
         let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
 
         assert!(
@@ -849,10 +907,7 @@ mod tests {
             hooks: vec![],
             skills: vec![SkillGroup {
                 crates: Some(pred_set("serde")), // Group also targets serde
-                source: PluginSource {
-                    path: Some(skill_dir.to_path_buf()),
-                    git: None,
-                },
+                source: PluginSource::Path(skill_dir.to_path_buf()),
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
@@ -867,8 +922,11 @@ mod tests {
             warnings: vec![],
         };
 
-        // Query for serde - should find the skill because all levels match
-        let workspace_crates = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let workspace_crates = vec![crate::crate_sources::WorkspaceCrate {
+            name: "serde".to_string(),
+            version: semver::Version::new(1, 0, 0),
+            path: None,
+        }];
         let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
 
         assert_eq!(
@@ -957,7 +1015,11 @@ mod tests {
         };
 
         let sym = crate::config::Symposium::from_dir(tmp.path());
-        let workspace = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let workspace = vec![crate::crate_sources::WorkspaceCrate {
+            name: "serde".to_string(),
+            version: semver::Version::new(1, 0, 0),
+            path: None,
+        }];
         let results = skills_applicable_to(&sym, &registry, &workspace).await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].skill.name(), "standalone-serde");

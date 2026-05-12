@@ -1,31 +1,30 @@
 //! List workspace crates with available guidance
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use cargo_metadata::{CargoOpt, MetadataCommand};
 
-/// A crate in the workspace's dependency graph
+/// A crate in the workspace's dependency graph.
+#[derive(Debug, Clone)]
 pub struct WorkspaceCrate {
     pub name: String,
-    pub version: String,
+    pub version: semver::Version,
+    /// Local source path for path dependencies (from `cargo metadata`).
+    /// `None` for registry crates.
+    pub path: Option<PathBuf>,
 }
 
-/// Load workspace crates and return as `(name, semver::Version)` pairs
-/// for predicate evaluation. Returns an empty list on failure.
-pub fn workspace_semver_pairs(cwd: &Path) -> Vec<(String, semver::Version)> {
-    list_all_workspace_crates(cwd)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|c| semver::Version::parse(&c.version).ok().map(|v| (c.name, v)))
-        .collect()
-}
-
-/// List direct dependencies of workspace members.
+/// Load workspace crates with parsed versions and local path overrides.
 ///
-/// Uses the resolve graph to identify direct dependencies rather than
-/// `metadata.packages` which includes the entire transitive closure.
-fn list_all_workspace_crates(cwd: &Path) -> Result<Vec<WorkspaceCrate>> {
+/// Combines dependency resolution and path-override detection into a single
+/// `cargo metadata` call. Path dependencies (those with no registry source)
+/// get their `path` field populated so callers can resolve them locally.
+pub fn workspace_crates(cwd: &Path) -> Vec<WorkspaceCrate> {
+    load_workspace_crates(cwd).unwrap_or_default()
+}
+
+fn load_workspace_crates(cwd: &Path) -> Result<Vec<WorkspaceCrate>> {
     let metadata = MetadataCommand::new()
         .features(CargoOpt::AllFeatures)
         .current_dir(cwd)
@@ -49,14 +48,32 @@ fn list_all_workspace_crates(cwd: &Path) -> Result<Vec<WorkspaceCrate>> {
         }
     }
 
-    // Map package IDs to name/version, excluding workspace members themselves.
+    // Build a map from package name to local source path for path deps
+    // (packages with no registry source).
+    let path_overrides: std::collections::HashMap<String, PathBuf> = metadata
+        .packages
+        .iter()
+        .filter(|p| p.source.is_none())
+        .filter_map(|p| {
+            p.manifest_path
+                .parent()
+                .map(|dir| (p.name.clone(), dir.into()))
+        })
+        .collect();
+
+    // Map package IDs to WorkspaceCrate, excluding workspace members themselves.
     let mut crates: Vec<_> = metadata
         .packages
         .iter()
         .filter(|p| direct_dep_ids.contains(&p.id) && !ws_members.contains(&p.id))
-        .map(|p| WorkspaceCrate {
-            name: p.name.to_string(),
-            version: p.version.to_string(),
+        .filter_map(|p| {
+            semver::Version::parse(&p.version.to_string())
+                .ok()
+                .map(|v| WorkspaceCrate {
+                    path: path_overrides.get(&p.name).cloned(),
+                    name: p.name.to_string(),
+                    version: v,
+                })
         })
         .collect();
 

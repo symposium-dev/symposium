@@ -16,3 +16,13 @@ fold.enable = true
 fold.level = 0
 git-repository-url = "https://github.com/symposium-dev/symposium"
 edit-url-template = "https://github.com/symposium-dev/symposium/edit/main/md/{path}"
+
+# Redirects for pages that have been renamed. The key is the old path
+# (relative to the book root, including leading slash), and the value is
+# the new page (relative to the redirect's location).
+[output.html.redirect]
+# `crate-authors/publishing-skills.md` → `crate-authors/authoring-a-plugin.md`
+# (renamed 2026-05 when the page was consolidated with the old
+# `creating-a-plugin.md`).
+"/crate-authors/publishing-skills.html" = "authoring-a-plugin.html"
+"/crate-authors/creating-a-plugin.html" = "authoring-a-plugin.html"

@@ -65,7 +65,7 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
 
     // Load plugin registry and workspace deps
     let registry = plugins::load_registry(sym);
-    let workspace = crate::crate_sources::workspace_semver_pairs(&project_root);
+    let workspace = crate::crate_sources::workspace_crates(&project_root);
 
     for warning in &registry.warnings {
         out.warn(format!(
@@ -96,11 +96,15 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     }
 
     // Collect MCP servers from applicable plugins, filtered by workspace deps
+    let semver_pairs: Vec<(String, semver::Version)> = workspace
+        .iter()
+        .map(|wc| (wc.name.clone(), wc.version.clone()))
+        .collect();
     let mcp_servers: Vec<sacp::schema::McpServer> = registry
         .plugins
         .iter()
-        .filter(|p| p.plugin.applies_to_crates(&workspace))
-        .flat_map(|p| p.plugin.applicable_mcp_servers(&workspace))
+        .filter(|p| p.plugin.applies_to_crates(&semver_pairs))
+        .flat_map(|p| p.plugin.applicable_mcp_servers(&semver_pairs))
         .collect();
 
     let server_names: Vec<&str> = mcp_servers

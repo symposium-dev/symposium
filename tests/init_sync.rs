@@ -446,3 +446,140 @@ async fn sync_installs_wildcard_plugin_skill() {
     .await
     .unwrap();
 }
+
+/// `sync` installs skills from a crate source via `source.crate_path`.
+///
+/// Fixture layout:
+/// - `crate-y` depends on `crate-x` and `crate-z` (path deps)
+/// - `crate-x` ships `skills/x-guidance/SKILL.md` (default path via `source = "crate"`)
+/// - `crate-z` ships `.symposium/skills/z-guidance/SKILL.md` (custom path)
+#[tokio::test]
+async fn sync_installs_skill_from_crate_path() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-path0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+
+            // crate-x: default path via source = "crate"
+            let skill_file = workspace_root.join(".claude/skills/x-guidance/SKILL.md");
+            assert!(
+                skill_file.exists(),
+                "sync should install skill from crate-x via source = \"crate\""
+            );
+            let content = std::fs::read_to_string(&skill_file)?;
+            assert!(content.contains("Use crate-x like this"));
+
+            // crate-z: custom path via source.crate_path = ".symposium/skills"
+            let skill_file = workspace_root.join(".claude/skills/z-guidance/SKILL.md");
+            assert!(
+                skill_file.exists(),
+                "sync should install skill from crate-z via custom crate_path"
+            );
+            let content = std::fs::read_to_string(&skill_file)?;
+            assert!(content.contains("Use crate-z like this"));
+
+            let manifest_path = workspace_root.join(".claude/skills/.symposium.toml");
+            let manifest = std::fs::read_to_string(&manifest_path)?;
+            assert!(manifest.contains("x-guidance"));
+            assert!(manifest.contains("z-guidance"));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `crate-info` resolves a `[patch.crates-io]` crate to its local path.
+///
+/// Fixture layout:
+/// - `patch-demo` depends on `crate-x = "0.1.0"` (crates.io)
+/// - `[patch.crates-io]` overrides `crate-x` with a local path
+/// - `crate-x` ships `skills/x-patched-guidance/SKILL.md`
+#[tokio::test]
+async fn crate_info_resolves_patched_crate_to_local_path() {
+    with_fixture(TestMode::SimulationOnly, &["patch-crate0"], async |ctx| {
+        let cwd = ctx.workspace_root.as_ref().unwrap();
+        let result = symposium::crate_command::dispatch_crate(&ctx.sym, "crate-x", None, cwd).await;
+        match result {
+            symposium::crate_command::DispatchResult::Ok(output) => {
+                assert!(output.contains("crate-x"), "should name crate-x: {output}");
+                // The resolved path should point inside the fixture's local crate-x dir
+                assert!(
+                    output.contains("crate-x"),
+                    "should resolve to local path: {output}"
+                );
+                // Should NOT contain "registry" or "crates.io" — it's a local override
+                assert!(
+                    !output.contains("registry"),
+                    "patched crate should not resolve from registry: {output}"
+                );
+            }
+            symposium::crate_command::DispatchResult::Err(e) => {
+                panic!("crate-info should succeed for patched crate: {e}");
+            }
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+/// `sync` installs skills from a `[patch.crates-io]`-overridden crate.
+#[tokio::test]
+async fn sync_installs_skill_from_patched_crate() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["patch-crate0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+
+            let skill_file = workspace_root.join(".claude/skills/x-patched-guidance/SKILL.md");
+            assert!(
+                skill_file.exists(),
+                "sync should install skill from patched crate-x"
+            );
+            let content = std::fs::read_to_string(&skill_file)?;
+            assert!(content.contains("Use patched crate-x like this"));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `crate-info` resolves a path dependency to its local source directory.
+#[tokio::test]
+async fn crate_info_resolves_path_dependency() {
+    with_fixture(TestMode::SimulationOnly, &["crate-path0"], async |ctx| {
+        let cwd = ctx.workspace_root.as_ref().unwrap();
+
+        let result = symposium::crate_command::dispatch_crate(&ctx.sym, "crate-x", None, cwd).await;
+        match result {
+            symposium::crate_command::DispatchResult::Ok(output) => {
+                assert!(output.contains("crate-x"), "should name crate-x: {output}");
+                assert!(
+                    !output.contains("registry"),
+                    "path dep should not resolve from registry: {output}"
+                );
+                // The source path should point to the local crate-x directory
+                assert!(
+                    output.contains("crate-x"),
+                    "should resolve to local crate-x path: {output}"
+                );
+            }
+            symposium::crate_command::DispatchResult::Err(e) => {
+                panic!("crate-info should succeed for path dependency: {e}");
+            }
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+}

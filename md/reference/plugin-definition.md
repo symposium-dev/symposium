@@ -2,7 +2,7 @@
 
 A **symposium plugin** collects together all the extensions offered for a particular crate. Plugins are directories containing a `SYMPOSIUM.toml` manifest file that references skills, hooks, MCP servers, and other resources relevant to your crate. These extensions can be packaged within the plugin directory or the plugin can contain pointers to external repositories.
 
-Plugins enable capabilities beyond standalone skills — they're needed when you want to add hooks or MCP servers. For simple skill publishing, see [standalone skills](../crate-authors/publishing-skills.md) instead.
+Plugins enable capabilities beyond standalone skills — they're needed when you want to add hooks or MCP servers. For simple skill publishing, see [Authoring a plugin](../crate-authors/authoring-a-plugin.md) instead.
 
 ## Example: a plugin definition with inline skills
 
@@ -64,8 +64,26 @@ Each `[[skills]]` entry declares a group of skills.
 | `crates` | string or array | Which crates this group advises on. Accepts a single string (`"serde"`) or array (`["serde", "tokio>=1.0"]`). See [Crate predicates](./crate-predicates.md) for syntax. |
 | `source.path` | string | Local directory containing skill subdirectories. Resolved relative to the manifest file. |
 | `source.git` | string | GitHub URL pointing to a directory in a repository (e.g., `https://github.com/org/repo/tree/main/skills`). Symposium downloads the tarball, extracts the subdirectory, and caches it. |
+| `source = "crate"` | string | Look for skills inside the matched crates' published source, in the default `skills/` directory. See [Crate-sourced skills](#crate-sourced-skills). |
+| `source.crate_path` | string | Like `source = "crate"`, but with a custom directory path (e.g., `source.crate_path = ".symposium/skills"`). |
 
-A skill group must have exactly one of `source.path` or `source.git`.
+A skill group must have exactly one of `source.path`, `source.git`, `source = "crate"`, or `source.crate_path`.
+
+### Crate-sourced skills
+
+When using `source = "crate"` or `source.crate_path`, Symposium resolves the crate predicates in scope (plugin-level and group-level) to determine which crate sources to fetch, then looks for skills inside each crate's source tree.
+
+This is the recommended way for crate authors to ship skills alongside their crate. See [Authoring a plugin](../crate-authors/authoring-a-plugin.md) for details.
+
+```toml
+name = "serde-plugin"
+crates = ["serde"]
+
+[[skills]]
+source = "crate"
+```
+
+At least one non-wildcard crate predicate must be present (at either the plugin or group level) so that Symposium knows which crate sources to fetch. See [Matched crate set](./crate-predicates.md#matched-crate-set) for details.
 
 ## Installations
 
@@ -403,10 +421,12 @@ All supported agents have MCP server configuration. Symposium handles the format
 name = "widgetlib"
 crates = ["widgetlib"]
 
+# Skills shipped inside the widgetlib crate source (in skills/)
 [[skills]]
-crates = ["widgetlib=1.0"]
-source.path = "skills/general"
+crates = ["widgetlib"]
+source = "crate"
 
+# Additional skills hosted in a git repo
 [[skills]]
 crates = ["widgetlib=1.0"]
 source.git = "https://github.com/org/widgetlib/tree/main/symposium/serde-skills"

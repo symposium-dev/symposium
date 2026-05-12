@@ -42,10 +42,10 @@ impl<'a> VersionResolver<'a> {
     ///
     /// Returns the canonical name (as published) and version.
     fn find_in_workspace(&self, crate_name: &str) -> Option<(String, String)> {
-        let normalized = crate_name.replace('-', "_");
+        let normalized = super::normalize_crate_name(crate_name);
         self.workspace
             .iter()
-            .find(|(name, _)| name.replace('-', "_") == normalized)
+            .find(|(name, _)| super::normalize_crate_name(name) == normalized)
             .map(|(name, v)| (name.clone(), v.to_string()))
     }
 
