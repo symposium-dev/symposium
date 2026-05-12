@@ -18,6 +18,7 @@
 # User's guide
 
 - [Installing Symposium](./install.md)
+- [Workspace skills](./workspace-skills.md)
 - [Custom plugin sources](./custom-plugin-source.md)
 
 # For crate authors
