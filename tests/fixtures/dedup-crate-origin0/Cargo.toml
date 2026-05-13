@@ -1,0 +1,7 @@
+[package]
+name = "dedup-host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crate-x = { path = "crate-x" }

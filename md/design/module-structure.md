@@ -38,6 +38,12 @@ Validates skill group source constraints at parse time: mutual exclusivity of `s
 
 Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates crate predicates at each level (plugin, group, skill) to determine which skills apply. For `source.crate_path` groups, resolves predicates to a matched crate set and fetches each crate's source via `RustCrateFetch`.
 
+Each applicable skill carries a `SkillOrigin` describing *where* it came from, used at sync time for dedup and install-path disambiguation:
+- `Crate { name, version }` — from a crate-source resolution (`source = "crate"` / `source.crate_path`). Two `Crate` origins with the same `(name, version)` are the same logical skill, regardless of which plugin pointed at them.
+- `Plugin { plugin_name }` — from a plugin's own `source.path` / `source.git`, or from a standalone `SKILL.md`. Standalone skills use `"<source-name>::<rel-path>"` as the plugin name so two registries can each contribute a same-named standalone, and so two standalones at different relative paths within the same registry stay distinct.
+
+`sync` installs each surviving skill into `<agent-skills-dir>/<skill-name>-<origin-hash>/`, where `origin-hash` is a short FNV-1a digest of the origin. The `.symposium` marker, wildcard `.gitignore`, and stale-cleanup walk all key on the marker file rather than directory name shape, so they continue to work unchanged.
+
 ### `hook.rs` — hook handling
 
 Handles the hook pipeline: parse agent wire-format input → auto-sync → builtin dispatch → plugin hook dispatch → serialize output. The dispatch path matches plugin `Hook`s against the event, builds a `ResolvedHook` per match (looking up the named installations on the plugin), then for each `ResolvedHook`: acquires its `requirements` (best-effort), runs `install_commands` after the source step, picks a `Runnable` from (hook-or-install) `executable`/`script`, and spawns it (binary directly for `Exec`, via `sh <path>` for `Script`). Format routing converts hook output between agent wire formats and the symposium canonical format.

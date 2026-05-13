@@ -192,15 +192,19 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     // Find all applicable skills
     let applicable = skills::skills_applicable_to(sym, &registry, &workspace).await;
 
-    let mut skill_names: BTreeSet<String> = BTreeSet::new();
-
-    // Build a map of skill_name -> skill for installation
-    let mut to_install: Vec<(&str, &std::path::Path)> = Vec::new();
+    // Dedup by `(skill_name, SkillOrigin)`: two `Crate` origins with the
+    // same (name, version) collapse (the skills are the same logical bytes
+    // from the same crate source); two `Plugin` origins always survive
+    // independently. The installed directory name embeds the origin's
+    // hash, so distinct origins land in distinct directories on disk.
+    let mut seen: BTreeSet<(String, skills::SkillOrigin)> = BTreeSet::new();
+    let mut to_install: Vec<(String, &std::path::Path)> = Vec::new();
 
     for entry in &applicable {
-        let name = entry.skill.name();
-        if skill_names.insert(name.to_string()) {
-            to_install.push((name, &entry.skill.path));
+        let name = entry.skill.name().to_string();
+        if seen.insert((name.clone(), entry.origin.clone())) {
+            let dir_name = format!("{name}-{}", entry.origin.short_hash());
+            to_install.push((dir_name, &entry.skill.path));
         }
     }
 
@@ -261,8 +265,8 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
             .register_global_mcp_servers(&hook_root, &mcp_servers, out)
             .context("failed to register MCP servers")?;
 
-        for &(skill_name, skill_source) in &to_install {
-            let dest_dir = agent.project_skill_dir(&project_root, skill_name);
+        for (dir_name, skill_source) in &to_install {
+            let dest_dir = agent.project_skill_dir(&project_root, dir_name);
 
             // Create the destination (and any missing parents) with a `*` gitignore
             // in each new directory.
@@ -280,14 +284,14 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
                         out.warn(format!("failed to mark {}: {e}", display_path(&dest_dir)));
                     }
                     installed_dirs.insert(dest_dir.clone());
-                    tracing::info!(%skill_name, agent = %agent_name, dest = %dest_dir.display(), "installed skill");
+                    tracing::info!(skill = %dir_name, agent = %agent_name, dest = %dest_dir.display(), "installed skill");
                     out.done(format!(
-                        "installed skill {skill_name} → {}",
+                        "installed skill {dir_name} → {}",
                         display_path(&dest_dir)
                     ));
                 }
                 Err(e) => {
-                    out.warn(format!("failed to install skill {skill_name}: {e}"));
+                    out.warn(format!("failed to install skill {dir_name}: {e}"));
                 }
             }
         }

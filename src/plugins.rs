@@ -614,6 +614,16 @@ pub struct PluginInfo {
     pub skill_groups_count: usize,
 }
 
+/// A standalone skill in the registry, paired with the origin it should be
+/// attributed to (derived from the source name + the skill's path within
+/// that source, so two registries can each contribute a same-named
+/// standalone skill without colliding).
+#[derive(Debug, Clone)]
+pub struct StandaloneSkill {
+    pub skill: crate::skills::Skill,
+    pub origin: crate::skills::SkillOrigin,
+}
+
 /// Loaded plugin registry: plugins from TOML manifests and standalone skills
 /// discovered directly in plugin source directories.
 #[derive(Debug)]
@@ -622,7 +632,7 @@ pub struct PluginRegistry {
     pub plugins: Vec<ParsedPlugin>,
     /// Skills discovered as standalone directories containing a `SKILL.md`
     /// file directly in a plugin source directory (no TOML manifest needed).
-    pub standalone_skills: Vec<crate::skills::Skill>,
+    pub standalone_skills: Vec<StandaloneSkill>,
     /// Non-fatal load warnings for plugins or standalone skills that were skipped.
     pub warnings: Vec<LoadWarning>,
 }
@@ -837,7 +847,9 @@ pub fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
     None
 }
 
-/// Resolve the directories for all configured plugin sources.
+/// Resolve the directories for all configured plugin sources, paired with
+/// each source's display name (used to attribute standalone skills to a
+/// stable origin).
 ///
 /// For `path` sources: resolves relative to the source's `base_dir`, or uses absolute paths as-is.
 /// For `git` sources: computes the cache path under `~/.symposium/cache/plugin-sources/`.
@@ -846,13 +858,13 @@ pub fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
 fn resolve_plugin_source_dirs(
     sym: &Symposium,
     sources: &[crate::config::ResolvedPluginSource],
-) -> Vec<PathBuf> {
+) -> Vec<(String, PathBuf)> {
     let cache_base = sym.cache_dir().join("plugin-sources");
 
     let mut dirs = Vec::new();
     for resolved in sources {
         if let Some(dir) = resolve_one_source(&resolved.source, &resolved.base_dir, &cache_base) {
-            dirs.push(dir);
+            dirs.push((resolved.source.name.clone(), dir));
         }
     }
     dirs
@@ -889,6 +901,30 @@ fn resolve_one_source(
     None
 }
 
+/// Build the `SkillOrigin` for a standalone skill discovered at
+/// `skill_md` inside the plugin source rooted at `source_dir`.
+///
+/// The encoded `plugin_name` is `<source-name>::<rel-skill-dir>`, where
+/// `rel-skill-dir` is the skill's parent directory relative to the source
+/// root. This is what disambiguates two registries that each ship a
+/// `my-skill/SKILL.md` standalone, and also disambiguates two standalones
+/// at different relative paths within the same registry.
+fn standalone_skill_origin(
+    source_name: &str,
+    source_dir: &Path,
+    skill_md: &Path,
+) -> crate::skills::SkillOrigin {
+    let skill_dir = skill_md.parent().unwrap_or(skill_md);
+    let rel = skill_dir
+        .strip_prefix(source_dir)
+        .unwrap_or(skill_dir)
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/");
+    crate::skills::SkillOrigin::Plugin {
+        plugin_name: format!("{source_name}::{rel}"),
+    }
+}
+
 /// Fetch a plugin source repository, returning the cached directory path.
 async fn fetch_plugin_source(
     sym: &Symposium,
@@ -912,7 +948,7 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
     let mut standalone_skills = Vec::new();
     let mut warnings = Vec::new();
 
-    for dir in resolve_plugin_source_dirs(sym, &sources) {
+    for (source_name, dir) in resolve_plugin_source_dirs(sym, &sources) {
         match scan_source_dir(&dir) {
             Ok(contents) => {
                 for result in contents.plugins {
@@ -929,7 +965,10 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
                 }
                 for skill_md in contents.skill_files {
                     match crate::skills::load_standalone_skill(&skill_md) {
-                        Ok(skill) => standalone_skills.push(skill),
+                        Ok(skill) => {
+                            let origin = standalone_skill_origin(&source_name, &dir, &skill_md);
+                            standalone_skills.push(StandaloneSkill { skill, origin });
+                        }
                         Err(e) => {
                             tracing::warn!(
                                 path = %skill_md.display(),

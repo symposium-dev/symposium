@@ -34,7 +34,77 @@ impl Skill {
     }
 }
 
-/// A skill paired with all predicate sets from its lineage.
+/// Where a skill came from.
+///
+/// Two skills with equal `SkillOrigin` and equal name install to the same
+/// directory and dedupe; everything else installs independently. This lets
+/// two plugins that legitimately both supply a same-named skill from
+/// different sources coexist, while collapsing the case where two plugins
+/// just happen to point at the same logical bundle.
+///
+/// - `Crate { name, version }` — the skill came from walking the source tree
+///   of a specific crate version (`source = "crate"` / `source.crate_path`).
+///   Identity is `(name, version)` only: two plugins targeting the same
+///   crate version produce the same logical skills regardless of which
+///   plugin pointed at them.
+/// - `Plugin { plugin_name }` — the skill came from a plugin's own source
+///   (`source.path` / `source.git`) or from a standalone `SKILL.md`. For
+///   standalone skills, `plugin_name` is `"<source-name>::<rel-path>"`,
+///   where `rel-path` is the skill directory's path relative to its
+///   plugin-source root, so two registries can each contribute a
+///   standalone `my-skill/SKILL.md` without collision.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SkillOrigin {
+    Crate {
+        name: String,
+        version: semver::Version,
+    },
+    Plugin {
+        plugin_name: String,
+    },
+}
+
+impl SkillOrigin {
+    /// 8-char hex hash used to disambiguate the skill's install directory.
+    ///
+    /// FNV-1a 64-bit over a stable serialization (a tag byte plus the
+    /// origin's string fields), folded to 32 bits. Collisions are
+    /// theoretically possible but vanishingly unlikely within one
+    /// workspace, and a collision merely means two distinct origins
+    /// would install to the same dir — caught at install time as a name
+    /// clash, not silent data loss.
+    pub fn short_hash(&self) -> String {
+        let mut bytes = Vec::new();
+        match self {
+            SkillOrigin::Crate { name, version } => {
+                bytes.push(b'C');
+                bytes.extend_from_slice(name.as_bytes());
+                bytes.push(0);
+                bytes.extend_from_slice(version.to_string().as_bytes());
+            }
+            SkillOrigin::Plugin { plugin_name } => {
+                bytes.push(b'P');
+                bytes.extend_from_slice(plugin_name.as_bytes());
+            }
+        }
+        let h = fnv1a64(&bytes);
+        format!("{:08x}", (h ^ (h >> 32)) as u32)
+    }
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut h = OFFSET;
+    for &b in bytes {
+        h ^= b as u64;
+        h = h.wrapping_mul(PRIME);
+    }
+    h
+}
+
+/// A skill paired with all predicate sets from its lineage and the origin
+/// it was discovered through.
 ///
 /// Each predicate set must match (AND across sets). Within a set,
 /// any predicate matching suffices (OR within a set). An empty
@@ -44,6 +114,9 @@ pub struct SkillWithGroupContext {
     /// Accumulated predicate sets: [plugin.crates, group.crates, skill.crates].
     /// All predicate sets must match for the skill to apply.
     pub predicate_sets: Vec<PredicateSet>,
+    /// Where the skill was discovered. Drives install-path disambiguation
+    /// and dedup at sync time.
+    pub origin: SkillOrigin,
 }
 
 impl SkillWithGroupContext {
@@ -87,6 +160,7 @@ pub async fn skills_applicable_to(
             let (group_crates, skills) = load_skills_for_group(
                 sym,
                 path,
+                &plugin.name,
                 &plugin.crates,
                 group,
                 workspace_crates,
@@ -94,26 +168,32 @@ pub async fn skills_applicable_to(
             )
             .await;
 
-            collect_skills_applicable_to(
-                &skills,
-                &plugin.crates,
-                &group_crates,
-                &for_crates,
-                &mut results,
-            );
+            for (skill, origin) in skills {
+                collect_skill_applicable_to(
+                    &skill,
+                    origin,
+                    &plugin.crates,
+                    &group_crates,
+                    &for_crates,
+                    &mut results,
+                );
+            }
         }
     }
 
-    // Standalone skills -- these are already loaded as part of the plugin
-    // registry.
+    // Standalone skills already carry their own `SkillOrigin` (computed
+    // from the plugin source name and the skill's path within that source).
     let empty = PredicateSet { predicates: vec![] };
-    collect_skills_applicable_to(
-        &registry.standalone_skills,
-        &empty,
-        &empty,
-        &for_crates,
-        &mut results,
-    );
+    for entry in &registry.standalone_skills {
+        collect_skill_applicable_to(
+            &entry.skill,
+            entry.origin.clone(),
+            &empty,
+            &empty,
+            &for_crates,
+            &mut results,
+        );
+    }
 
     results
 }
@@ -121,15 +201,20 @@ pub async fn skills_applicable_to(
 /// Discover and load skills for a group, applying pre-fetch filtering.
 ///
 /// Checks group-level `crates` predicates against `for_crates` before
-/// fetching git sources, to avoid unnecessary downloads.
+/// fetching git sources, to avoid unnecessary downloads. Each returned
+/// skill is paired with the `SkillOrigin` it was discovered through:
+/// `Crate { name, version }` for crate-path groups (one origin per
+/// matched crate, using the canonical name/version from the fetch
+/// result), and `Plugin { plugin_name }` for path/git/none groups.
 async fn load_skills_for_group(
     sym: &Symposium,
     plugin_path: &Path,
+    plugin_name: &str,
     plugin_crates: &PredicateSet,
     group: &SkillGroup,
     workspace_crates: &[crate::crate_sources::WorkspaceCrate],
     for_crates: &[(String, semver::Version)],
-) -> (PredicateSet, Vec<Skill>) {
+) -> (PredicateSet, Vec<(Skill, SkillOrigin)>) {
     let group_crates = group
         .crates
         .clone()
@@ -152,10 +237,31 @@ async fn load_skills_for_group(
                 .await
             {
                 Ok(result) => {
+                    // The fetch result holds the canonical name/version
+                    // (hyphen/underscore normalized for path deps, exact
+                    // version from cargo metadata for registry deps), so
+                    // two plugins resolving the same crate produce the
+                    // same `SkillOrigin::Crate` and dedupe at sync time.
+                    let version = match semver::Version::parse(&result.version) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::warn!(
+                                crate_name = %name,
+                                version = %result.version,
+                                error = %e,
+                                "skipping crate-source skills: unparseable version"
+                            );
+                            continue;
+                        }
+                    };
+                    let origin = SkillOrigin::Crate {
+                        name: result.name.clone(),
+                        version,
+                    };
                     let dir = result.path.join(crate_path);
                     for skill_result in discover_skills(&dir, group) {
                         match skill_result {
-                            Ok(skill) => skills.push(skill),
+                            Ok(skill) => skills.push((skill, origin.clone())),
                             Err(e) => tracing::warn!(
                                 crate_name = %name,
                                 error = %e,
@@ -180,10 +286,13 @@ async fn load_skills_for_group(
         return (group_crates, Vec::new());
     };
 
+    let origin = SkillOrigin::Plugin {
+        plugin_name: plugin_name.to_string(),
+    };
     let mut skills = Vec::new();
     for result in discover_skills(&dir, group) {
         match result {
-            Ok(skill) => skills.push(skill),
+            Ok(skill) => skills.push((skill, origin.clone())),
             Err(e) => {
                 tracing::warn!(plugin = %plugin_path.display(), error = %e, "failed to load skill")
             }
@@ -368,38 +477,39 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
     Ok(skill)
 }
 
-/// Filter skills by crate constraints, collecting matches with group context.
-fn collect_skills_applicable_to(
-    skills: &[Skill],
+/// Filter a single skill by crate constraints, pushing it onto `results`
+/// if it matches with its origin attached.
+fn collect_skill_applicable_to(
+    skill: &Skill,
+    origin: SkillOrigin,
     plugin_crates: &PredicateSet,
     group_crates: &PredicateSet,
     for_crates: &[(String, semver::Version)],
     results: &mut Vec<SkillWithGroupContext>,
 ) {
-    for skill in skills {
-        let mut predicate_sets = Vec::new();
-        if !plugin_crates.predicates.is_empty() {
-            predicate_sets.push(plugin_crates.clone());
-        }
-        if !group_crates.predicates.is_empty() {
-            predicate_sets.push(group_crates.clone());
-        }
-        if !skill.crates.is_empty() {
-            predicate_sets.push(PredicateSet {
-                predicates: skill.crates.clone(),
-            });
-        }
-
-        let entry = SkillWithGroupContext {
-            skill: skill.clone(),
-            predicate_sets,
-        };
-
-        if !entry.matches_workspace(for_crates) {
-            continue;
-        }
-        results.push(entry);
+    let mut predicate_sets = Vec::new();
+    if !plugin_crates.predicates.is_empty() {
+        predicate_sets.push(plugin_crates.clone());
     }
+    if !group_crates.predicates.is_empty() {
+        predicate_sets.push(group_crates.clone());
+    }
+    if !skill.crates.is_empty() {
+        predicate_sets.push(PredicateSet {
+            predicates: skill.crates.clone(),
+        });
+    }
+
+    let entry = SkillWithGroupContext {
+        skill: skill.clone(),
+        predicate_sets,
+        origin,
+    };
+
+    if !entry.matches_workspace(for_crates) {
+        return;
+    }
+    results.push(entry);
 }
 
 /// Raw frontmatter fields extracted from a SKILL.md file.
@@ -1010,7 +1120,12 @@ mod tests {
         let skill = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap();
         let registry = PluginRegistry {
             plugins: Vec::new(),
-            standalone_skills: vec![skill],
+            standalone_skills: vec![crate::plugins::StandaloneSkill {
+                skill,
+                origin: SkillOrigin::Plugin {
+                    plugin_name: "test::my-skill".to_string(),
+                },
+            }],
             warnings: vec![],
         };
 
@@ -1191,6 +1306,9 @@ mod tests {
                 path: PathBuf::new(),
             },
             predicate_sets,
+            origin: SkillOrigin::Plugin {
+                plugin_name: "test".to_string(),
+            },
         }
     }
 
