@@ -794,6 +794,60 @@ async fn sync_keeps_distinct_plugin_origins_with_same_skill_name() {
     .unwrap();
 }
 
+/// Two origins → both suffixed. Remove one origin, sync again → the
+/// survivor moves to the unsuffixed slot and the suffixed leftover is
+/// reaped via the marker-based stale-cleanup walk.
+#[tokio::test]
+async fn sync_promotes_to_unsuffixed_when_conflict_disappears() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["distinct-plugin-origins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            // Baseline: two origins, both suffixed, neither at the
+            // plain slot.
+            let installed = find_installed_skills(&skills_dir, "code-review");
+            assert_eq!(installed.len(), 2, "expected two suffixed installs");
+            assert!(
+                !skills_dir.join("code-review").exists(),
+                "unsuffixed slot must be vacant while both origins coexist"
+            );
+
+            // Remove plugin-b so only plugin-a's `code-review` survives.
+            std::fs::remove_dir_all(ctx.sym.config_dir().join("plugins/plugin-b"))?;
+
+            ctx.symposium(&["sync"]).await?;
+
+            // The survivor now lives at the plain slot.
+            let installed = find_installed_skills(&skills_dir, "code-review");
+            assert_eq!(
+                installed.len(),
+                1,
+                "exactly one install should remain after removing plugin-b; got {installed:?}"
+            );
+            assert_eq!(
+                installed[0].file_name().and_then(|n| n.to_str()),
+                Some("code-review"),
+                "the surviving origin should be promoted to the unsuffixed slot"
+            );
+            // And it's still plugin-a's content (plugin-b was removed).
+            let body = std::fs::read_to_string(installed[0].join("SKILL.md"))?;
+            assert!(
+                body.contains("Plugin-A"),
+                "promoted install should be plugin-a's body, got: {body}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// A pre-existing user-managed directory at the skill's unsuffixed slot
 /// (no `.symposium` marker) forces sync to fall back to the hashed
 /// directory name rather than clobber the user's content.
