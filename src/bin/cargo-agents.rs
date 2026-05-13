@@ -5,7 +5,7 @@ use symposium::cli::{Cli, Commands, PluginCommand};
 use symposium::config;
 use symposium::hook;
 use symposium::output::Output;
-use symposium::plugins::{self, ParsedPlugin};
+use symposium::plugins;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -183,9 +183,10 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                     ExitCode::SUCCESS
                 }
             } else {
-                match plugins::load_plugin(&path) {
-                    Ok(ParsedPlugin { path, plugin: _ }) => {
-                        println!("{}", tokio::fs::read_to_string(path).await.unwrap());
+                let parent = path.parent().unwrap_or(&path);
+                match plugins::load_plugin(&path, "", parent) {
+                    Ok(p) => {
+                        println!("{}", tokio::fs::read_to_string(p.path).await.unwrap());
                         ExitCode::SUCCESS
                     }
                     Err(e) => {
@@ -196,10 +197,10 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
             }
         }
         PluginCommand::Show { plugin } => match plugins::find_plugin(sym, &plugin) {
-            Some(ParsedPlugin { path, plugin: _ }) => {
-                println!("# Source: {}", path.display());
+            Some(p) => {
+                println!("# Source: {}", p.path.display());
                 println!();
-                print!("{}", tokio::fs::read_to_string(path).await.unwrap());
+                print!("{}", tokio::fs::read_to_string(p.path).await.unwrap());
                 ExitCode::SUCCESS
             }
             None => {

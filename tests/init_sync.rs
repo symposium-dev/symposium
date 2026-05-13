@@ -745,6 +745,46 @@ async fn sync_dedups_same_crate_origin_across_plugins() {
     .unwrap();
 }
 
+/// Two plugins in the same registry source whose `source.path` groups
+/// resolve to the same on-disk skill bundle produce the same
+/// `SkillOrigin::Source` and dedupe to a single install.
+///
+/// Identity is `(source_name, skill-path-relative-to-source-root)`, so
+/// the path the SKILL.md actually lives at is what matters — not the
+/// plugin name that pointed at it. Standalone discovery of the same
+/// SKILL.md (the registry walk also surfaces it as a standalone since
+/// nothing claims its parent) collapses to that same origin too.
+#[tokio::test]
+async fn sync_dedups_same_source_path_across_plugins() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["dedup-source-origin0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let installed = find_installed_skills(
+                &workspace_root.join(".claude/skills"),
+                "shared-skill",
+            );
+            assert_eq!(
+                installed.len(),
+                1,
+                "two plugins pointing at the same skill bundle must collapse to one install; got {installed:?}"
+            );
+            assert_eq!(
+                installed[0].file_name().and_then(|n| n.to_str()),
+                Some("shared-skill"),
+                "single dedup'd origin should land at the unsuffixed name"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// Two plugins each contributing a skill named `code-review` from their
 /// own `source.path` produce distinct `SkillOrigin::Plugin { plugin_name }`
 /// values, so both install — under separate hashed directory names.

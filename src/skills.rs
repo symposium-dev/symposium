@@ -42,6 +42,10 @@ impl Skill {
 /// different sources coexist, while collapsing the case where two plugins
 /// just happen to point at the same logical bundle.
 ///
+/// What matters for identity is *where the skill bytes live*, not which
+/// plugin manifest pointed at them. Two plugins in the same registry
+/// source that both reference the same on-disk skill therefore dedupe.
+///
 /// - `Crate { name, version }` — the skill came from walking the source tree
 ///   of a specific crate version (`source = "crate"` / `source.crate_path`).
 ///   Identity is `(name, version)` only: two plugins targeting the same
@@ -56,12 +60,13 @@ impl Skill {
 ///   forms (root URL vs. a `tree/<ref>/<subpath>` URL) collapse to one
 ///   install if they end up loading the same SKILL.md from the same
 ///   commit; different SKILL.md files within one repo stay distinct.
-/// - `Plugin { plugin_name, disambiguator }` — the skill came from a
-///   plugin's `source.path` group, or from a standalone `SKILL.md`. For
-///   plugin groups, `disambiguator` is the stringified `source.path`
-///   value, so two `path` groups within the same plugin stay distinct.
-///   For standalones, `plugin_name` is the registry source name and
-///   `disambiguator` is the skill's path relative to the source root.
+/// - `Source { source_name, skill_path }` — the skill came from a
+///   plugin's `source.path` group, or from a standalone `SKILL.md` in
+///   a registry source. `source_name` is the registry source's
+///   display name (e.g. `"user-plugins"`); `skill_path` is the
+///   SKILL.md's parent directory relative to the source root, with
+///   forward slashes. Two plugins in the same source pointing at the
+///   same on-disk skill bundle therefore produce the same origin.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 pub enum SkillOrigin {
     Crate {
@@ -78,29 +83,39 @@ pub enum SkillOrigin {
         /// slashes.
         skill_path: String,
     },
-    Plugin {
-        plugin_name: String,
-        disambiguator: String,
+    Source {
+        /// Registry source's display name from the user config.
+        source_name: String,
+        /// SKILL.md's parent directory, relative to the source root,
+        /// normalized to forward slashes.
+        skill_path: String,
     },
 }
 
 impl SkillOrigin {
-    /// 8-char hex prefix of a SHA-256 over the JSON-serialized origin.
+    /// Short, readable disambiguator embedded into install paths.
     ///
-    /// Collisions are vanishingly unlikely within one workspace, and a
-    /// collision merely means two distinct origins would install to the
-    /// same dir — caught at install time as a name clash, not silent
-    /// data loss.
+    /// For `Crate` we expand to `<name>-<version>` — readable on disk
+    /// and already collision-free within a workspace. The other
+    /// variants don't have a clean printable form, so we hash:
+    /// 8-hex-char prefix of SHA-256 over the JSON-serialized origin.
+    /// Hash collisions there would manifest as a name clash at install
+    /// time, not silent data loss.
     pub fn short_hash(&self) -> String {
-        use sha2::{Digest, Sha256};
-        let bytes = serde_json::to_vec(self).expect("SkillOrigin always serializes");
-        let digest = Sha256::digest(&bytes);
-        let mut out = String::with_capacity(8);
-        for byte in &digest[..4] {
-            use std::fmt::Write;
-            write!(out, "{byte:02x}").unwrap();
+        match self {
+            SkillOrigin::Crate { name, version } => format!("{name}-{version}"),
+            SkillOrigin::Git { .. } | SkillOrigin::Source { .. } => {
+                use sha2::{Digest, Sha256};
+                let bytes = serde_json::to_vec(self).expect("SkillOrigin always serializes");
+                let digest = Sha256::digest(&bytes);
+                let mut out = String::with_capacity(8);
+                for byte in &digest[..4] {
+                    use std::fmt::Write;
+                    write!(out, "{byte:02x}").unwrap();
+                }
+                out
+            }
         }
-        out
     }
 }
 
@@ -151,23 +166,16 @@ pub async fn skills_applicable_to(
     // Skills from plugin manifests. We iterate these separately
     // because we lazily load skill groups, so there
     // is extra logic.
-    for ParsedPlugin { path, plugin } in &registry.plugins {
+    for parsed in &registry.plugins {
+        let plugin = &parsed.plugin;
         // First check if plugin applies to these crates
         if !plugin.applies_to_crates(&for_crates) {
             continue;
         }
 
         for group in &plugin.skills {
-            let (group_crates, skills) = load_skills_for_group(
-                sym,
-                path,
-                &plugin.name,
-                &plugin.crates,
-                group,
-                workspace_crates,
-                &for_crates,
-            )
-            .await;
+            let (group_crates, skills) =
+                load_skills_for_group(sym, parsed, group, workspace_crates, &for_crates).await;
 
             for (skill, origin) in skills {
                 collect_skill_applicable_to(
@@ -209,17 +217,19 @@ pub async fn skills_applicable_to(
 ///   matched crate (canonical name/version from the fetch result).
 /// - `Git` → `SkillOrigin::Git { repo, commit_sha, skill_path }`, one
 ///   per discovered SKILL.md (path varies per skill within the group).
-/// - `Path` / `None` → `SkillOrigin::Plugin { plugin_name,
-///   disambiguator }`, identical for every skill in the group.
+/// - `Path` → `SkillOrigin::Source { source_name, skill_path }`, with
+///   `skill_path` computed per discovered SKILL.md relative to the
+///   plugin source root. Two plugins in the same source pointing at
+///   the same on-disk skill therefore produce the same origin.
 async fn load_skills_for_group(
     sym: &Symposium,
-    plugin_path: &Path,
-    plugin_name: &str,
-    plugin_crates: &PredicateSet,
+    parsed: &ParsedPlugin,
     group: &SkillGroup,
     workspace_crates: &[crate::crate_sources::WorkspaceCrate],
     for_crates: &[(String, semver::Version)],
 ) -> (PredicateSet, Vec<(Skill, SkillOrigin)>) {
+    let plugin = &parsed.plugin;
+    let plugin_path = parsed.path.as_path();
     let group_crates = group
         .crates
         .clone()
@@ -235,7 +245,7 @@ async fn load_skills_for_group(
         PluginSource::CratePath(source) => {
             load_crate_path_skills(
                 source.as_str(),
-                plugin_crates,
+                &plugin.crates,
                 &group_crates,
                 group,
                 workspace_crates,
@@ -247,11 +257,7 @@ async fn load_skills_for_group(
         PluginSource::Path(p) => {
             let plugin_dir = plugin_path.parent().unwrap_or(plugin_path);
             let dir = plugin_dir.join(p);
-            let origin = SkillOrigin::Plugin {
-                plugin_name: plugin_name.to_string(),
-                disambiguator: p.to_string_lossy().into_owned(),
-            };
-            load_path_skills(&dir, group, plugin_path, origin)
+            load_path_skills(&dir, group, parsed)
         }
         PluginSource::None => {
             // No source — nothing to discover. Kept distinct from the
@@ -360,23 +366,51 @@ async fn load_git_skills(
 }
 
 /// Discover skills under a local `source.path` directory and stamp each
-/// with the supplied (plugin-scoped) origin.
+/// with a `Source` origin keyed on `(source_name, skill-path-relative-to-source-root)`.
+/// Two plugins in the same source pointing at the same on-disk skill
+/// therefore produce the same origin.
 fn load_path_skills(
     dir: &Path,
     group: &SkillGroup,
-    plugin_path: &Path,
-    origin: SkillOrigin,
+    parsed: &ParsedPlugin,
 ) -> Vec<(Skill, SkillOrigin)> {
     let mut skills = Vec::new();
     for result in discover_skills(dir, group) {
         match result {
-            Ok(skill) => skills.push((skill, origin.clone())),
+            Ok(skill) => {
+                let origin = SkillOrigin::Source {
+                    source_name: parsed.source_name.clone(),
+                    skill_path: skill_path_relative_to(&parsed.source_dir, &skill.path),
+                };
+                skills.push((skill, origin));
+            }
             Err(e) => {
-                tracing::warn!(plugin = %plugin_path.display(), error = %e, "failed to load skill")
+                tracing::warn!(plugin = %parsed.path.display(), error = %e, "failed to load skill")
             }
         }
     }
     skills
+}
+
+/// SKILL.md's parent directory relative to a given root, normalized to
+/// forward slashes. Canonicalizes both ends first so that two routes
+/// to the same on-disk skill (e.g. `plugin-a/../shared/the-skill` vs.
+/// the standalone walk's direct `shared/the-skill`) collapse to the
+/// same string.
+///
+/// Falls back to the unnormalized path on canonicalization failure
+/// (better than panicking) — that just degrades dedup to per-route
+/// without losing correctness.
+fn skill_path_relative_to(root: &Path, skill_md: &Path) -> String {
+    let skill_dir = skill_md.parent().unwrap_or(skill_md);
+    let canonical_skill =
+        std::fs::canonicalize(skill_dir).unwrap_or_else(|_| skill_dir.to_path_buf());
+    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    canonical_skill
+        .strip_prefix(&canonical_root)
+        .unwrap_or(&canonical_skill)
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/")
 }
 
 /// Compute a SKILL.md's path relative to the *repository root*, using
@@ -736,21 +770,21 @@ mod tests {
             name: "foo".into(),
             version: semver::Version::new(1, 0, 0),
         };
-        let p = SkillOrigin::Plugin {
-            plugin_name: "foo".into(),
-            disambiguator: "1.0.0".into(),
+        let s = SkillOrigin::Source {
+            source_name: "foo".into(),
+            skill_path: "1.0.0".into(),
         };
         let g = SkillOrigin::Git {
             repo: "foo/bar".into(),
             commit_sha: "deadbeef".into(),
             skill_path: "1.0.0".into(),
         };
-        assert_ne!(c, p);
+        assert_ne!(c, s);
         assert_ne!(c, g);
-        assert_ne!(p, g);
-        assert_ne!(c.short_hash(), p.short_hash());
+        assert_ne!(s, g);
+        assert_ne!(c.short_hash(), s.short_hash());
         assert_ne!(c.short_hash(), g.short_hash());
-        assert_ne!(p.short_hash(), g.short_hash());
+        assert_ne!(s.short_hash(), g.short_hash());
     }
 
     // --- Frontmatter parsing ---
@@ -1081,6 +1115,8 @@ mod tests {
             plugins: vec![ParsedPlugin {
                 path: tmp.path().join("plugin.toml"),
                 plugin,
+                source_name: "test".to_string(),
+                source_dir: tmp.path().to_path_buf(),
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1125,6 +1161,8 @@ mod tests {
             plugins: vec![ParsedPlugin {
                 path: tmp.path().join("plugin.toml"),
                 plugin,
+                source_name: "test".to_string(),
+                source_dir: tmp.path().to_path_buf(),
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1187,6 +1225,8 @@ mod tests {
             plugins: vec![ParsedPlugin {
                 path: tmp.path().join("plugin.toml"),
                 plugin,
+                source_name: "test".to_string(),
+                source_dir: tmp.path().to_path_buf(),
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1282,9 +1322,9 @@ mod tests {
             plugins: Vec::new(),
             standalone_skills: vec![crate::plugins::StandaloneSkill {
                 skill,
-                origin: SkillOrigin::Plugin {
-                    plugin_name: "test".to_string(),
-                    disambiguator: "my-skill".to_string(),
+                origin: SkillOrigin::Source {
+                    source_name: "test".to_string(),
+                    skill_path: "my-skill".to_string(),
                 },
             }],
             warnings: vec![],
@@ -1467,9 +1507,9 @@ mod tests {
                 path: PathBuf::new(),
             },
             predicate_sets,
-            origin: SkillOrigin::Plugin {
-                plugin_name: "test".to_string(),
-                disambiguator: String::new(),
+            origin: SkillOrigin::Source {
+                source_name: "test".to_string(),
+                skill_path: String::new(),
             },
         }
     }

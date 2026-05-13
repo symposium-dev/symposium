@@ -289,6 +289,17 @@ pub struct ParsedPlugin {
 
     /// The parsed plugin manifest.
     pub plugin: Plugin,
+
+    /// The plugin source the manifest was discovered through (e.g.
+    /// `"user-plugins"`, `"symposium-recommendations"`, or a name from
+    /// a `[[plugin-source]]` entry in the user config). Two plugins in
+    /// the same source that point at the same on-disk skill bundle
+    /// produce the same `SkillOrigin::Source` and dedupe at sync time.
+    pub source_name: String,
+
+    /// The plugin source's root directory on disk. Used as the base for
+    /// computing the `skill_path` field on `SkillOrigin::Source`.
+    pub source_dir: PathBuf,
 }
 
 /// A loaded, *validated* plugin manifest.
@@ -804,15 +815,15 @@ pub fn list_plugins(sym: &Symposium) -> Vec<ProviderInfo> {
         let source = &resolved.source;
         let source_path = resolve_plugin_source_dir(sym, resolved);
         let plugins: Vec<PluginInfo> = source_path
-            .and_then(|p| scan_source_dir(&p).ok())
+            .and_then(|p| scan_source_dir(&p, &source.name).ok())
             .map(|c| c.plugins)
             .unwrap_or_default()
             .into_iter()
             .filter_map(|r| r.ok())
-            .map(|ParsedPlugin { path: _, plugin: p }| PluginInfo {
-                name: p.name,
-                hooks_count: p.hooks.len(),
-                skill_groups_count: p.skills.len(),
+            .map(|p| PluginInfo {
+                name: p.plugin.name,
+                hooks_count: p.plugin.hooks.len(),
+                skill_groups_count: p.plugin.skills.len(),
             })
             .collect();
 
@@ -835,7 +846,7 @@ pub fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
     for resolved in &sources {
         let source_path = resolve_plugin_source_dir(sym, resolved);
         if let Some(ref path) = source_path
-            && let Ok(contents) = scan_source_dir(path)
+            && let Ok(contents) = scan_source_dir(path, &resolved.source.name)
         {
             for parsed_plugin in contents.plugins.into_iter().flatten() {
                 if parsed_plugin.plugin.name == name {
@@ -904,25 +915,32 @@ fn resolve_one_source(
 /// Build the `SkillOrigin` for a standalone skill discovered at
 /// `skill_md` inside the plugin source rooted at `source_dir`.
 ///
-/// `plugin_name` is the registry source name (so two registries that
-/// each ship a same-named standalone produce distinct origins);
-/// `disambiguator` is the skill's parent directory relative to the
-/// source root (so two standalones at different relative paths within
-/// the same registry also stay distinct).
+/// Identity is `(source_name, skill_path-relative-to-source-root)`,
+/// which matches the `Source` origin assigned to plugin `source.path`
+/// groups. So a standalone skill at `<source>/foo/SKILL.md` and a
+/// plugin in the same source whose `source.path` points at `foo/`
+/// produce the *same* origin — they describe the same on-disk skill.
 fn standalone_skill_origin(
     source_name: &str,
     source_dir: &Path,
     skill_md: &Path,
 ) -> crate::skills::SkillOrigin {
     let skill_dir = skill_md.parent().unwrap_or(skill_md);
-    let rel = skill_dir
-        .strip_prefix(source_dir)
-        .unwrap_or(skill_dir)
+    // Canonicalize both ends so the result matches what
+    // `load_path_skills` produces for a plugin pointing at the same
+    // on-disk skill via `../`-laden joins.
+    let canonical_skill =
+        std::fs::canonicalize(skill_dir).unwrap_or_else(|_| skill_dir.to_path_buf());
+    let canonical_root =
+        std::fs::canonicalize(source_dir).unwrap_or_else(|_| source_dir.to_path_buf());
+    let rel = canonical_skill
+        .strip_prefix(&canonical_root)
+        .unwrap_or(&canonical_skill)
         .to_string_lossy()
         .replace(std::path::MAIN_SEPARATOR, "/");
-    crate::skills::SkillOrigin::Plugin {
-        plugin_name: source_name.to_string(),
-        disambiguator: rel,
+    crate::skills::SkillOrigin::Source {
+        source_name: source_name.to_string(),
+        skill_path: rel,
     }
 }
 
@@ -950,7 +968,7 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
     let mut warnings = Vec::new();
 
     for (source_name, dir) in resolve_plugin_source_dirs(sym, &sources) {
-        match scan_source_dir(&dir) {
+        match scan_source_dir(&dir, &source_name) {
             Ok(contents) => {
                 for result in contents.plugins {
                     match result {
@@ -1014,7 +1032,12 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
 /// 2. Skill = directory with `SKILL.md` file
 /// 3. Plugin takes precedence over skill in the same directory
 /// 4. Once a directory is claimed as plugin/skill, don't recurse into it
-fn scan_source_dir<P: AsRef<Path>>(dir: P) -> Result<SourceDirContents> {
+///
+/// `source_name` is the registry source the directory was reached
+/// through; it gets stamped onto each `ParsedPlugin` so origin
+/// attribution can use it later. Callers that don't care about origin
+/// attribution (CLI validation, tests) pass `""`.
+fn scan_source_dir<P: AsRef<Path>>(dir: P, source_name: &str) -> Result<SourceDirContents> {
     let mut plugins = Vec::new();
     let mut skill_files = Vec::new();
 
@@ -1034,7 +1057,7 @@ fn scan_source_dir<P: AsRef<Path>>(dir: P) -> Result<SourceDirContents> {
         }
     }
 
-    discover_in_directory(dir, &mut plugins, &mut skill_files)?;
+    discover_in_directory(dir, source_name, dir, &mut plugins, &mut skill_files)?;
 
     Ok(SourceDirContents {
         plugins,
@@ -1043,8 +1066,14 @@ fn scan_source_dir<P: AsRef<Path>>(dir: P) -> Result<SourceDirContents> {
 }
 
 /// Recursively discover plugins and skills with precedence and pruning.
+///
+/// `source_name` and `source_dir` describe the registry source root —
+/// passed through unchanged on recursion and stamped onto each
+/// discovered `ParsedPlugin`.
 fn discover_in_directory(
     dir: &Path,
+    source_name: &str,
+    source_dir: &Path,
     plugins: &mut Vec<Result<ParsedPlugin>>,
     skill_files: &mut Vec<PathBuf>,
 ) -> Result<()> {
@@ -1063,7 +1092,7 @@ fn discover_in_directory(
         if let Some(discovered) = discover_directory_type(&path)? {
             match discovered {
                 DirectoryType::Plugin(toml_path) => {
-                    let plugin = load_plugin(&toml_path)
+                    let plugin = load_plugin(&toml_path, source_name, source_dir)
                         .with_context(|| format!("loading plugin from `{}`", toml_path.display()));
 
                     tracing::debug!(
@@ -1085,7 +1114,7 @@ fn discover_in_directory(
             // Don't recurse - directory is claimed
         } else {
             // Directory doesn't contain plugin/skill, recurse into it
-            discover_in_directory(&path, plugins, skill_files)?;
+            discover_in_directory(&path, source_name, source_dir, plugins, skill_files)?;
         }
     }
 
@@ -1153,7 +1182,7 @@ impl std::fmt::Display for ValidationKind {
 /// Scans for TOML plugin manifests and standalone SKILL.md files,
 /// attempts to load each, and returns validation results for all items found.
 pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
-    let contents = scan_source_dir(dir)?;
+    let contents = scan_source_dir(dir, "")?;
     let mut results = Vec::new();
     let mut plugin_skill_dirs: Vec<PathBuf> = Vec::new();
 
@@ -1239,7 +1268,7 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
 /// standalone SKILL.md files, returning deduplicated crate names.
 /// Items that fail to load are silently skipped.
 pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
-    let contents = scan_source_dir(dir)?;
+    let contents = scan_source_dir(dir, "")?;
     let mut names = std::collections::BTreeSet::new();
 
     for plugin_result in contents.plugins.into_iter().flatten() {
@@ -1286,7 +1315,17 @@ pub async fn check_crate_exists(crate_name: &str) -> bool {
 }
 
 /// Load and validate a single plugin from a TOML manifest.
-pub fn load_plugin(manifest_path: &Path) -> Result<ParsedPlugin> {
+///
+/// `source_name` and `source_dir` describe the plugin source the
+/// manifest was found through (used for `SkillOrigin::Source`
+/// attribution at sync time). Standalone callers — like the
+/// `plugin validate` CLI — that don't need origin attribution can pass
+/// an empty string and the manifest's parent directory.
+pub fn load_plugin(
+    manifest_path: &Path,
+    source_name: &str,
+    source_dir: &Path,
+) -> Result<ParsedPlugin> {
     let content = fs::read_to_string(manifest_path)?;
     let manifest: RawPluginManifest = toml::from_str(&content)?;
     let plugin = validate_manifest(manifest)
@@ -1294,6 +1333,8 @@ pub fn load_plugin(manifest_path: &Path) -> Result<ParsedPlugin> {
     Ok(ParsedPlugin {
         path: manifest_path.to_path_buf(),
         plugin,
+        source_name: source_name.to_string(),
+        source_dir: source_dir.to_path_buf(),
     })
 }
 
@@ -1532,7 +1573,7 @@ mod tests {
         // Also create a random directory (should be ignored)
         std::fs::create_dir_all(tmp.path().join("not-a-plugin-or-skill")).unwrap();
 
-        let contents = scan_source_dir(tmp.path()).unwrap();
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
         assert_eq!(contents.plugins.len(), 1);
         assert_eq!(
             contents.plugins[0].as_ref().unwrap().plugin.name,
@@ -1545,14 +1586,14 @@ mod tests {
     #[test]
     fn scan_source_dir_empty() {
         let tmp = tempfile::tempdir().unwrap();
-        let contents = scan_source_dir(tmp.path()).unwrap();
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
         assert!(contents.plugins.is_empty());
         assert!(contents.skill_files.is_empty());
     }
 
     #[test]
     fn scan_source_dir_missing() {
-        let contents = scan_source_dir("/nonexistent/path/abc123").unwrap();
+        let contents = scan_source_dir("/nonexistent/path/abc123", "").unwrap();
         assert!(contents.plugins.is_empty());
         assert!(contents.skill_files.is_empty());
     }
@@ -1572,7 +1613,7 @@ mod tests {
             "},
         )]);
 
-        let err = scan_source_dir(tmp.path()).unwrap_err();
+        let err = scan_source_dir(tmp.path(), "").unwrap_err();
         assert!(
             err.to_string()
                 .contains("plugin source root contains SKILL.md"),
@@ -1591,7 +1632,7 @@ mod tests {
             "#},
         )]);
 
-        let err = scan_source_dir(tmp.path()).unwrap_err();
+        let err = scan_source_dir(tmp.path(), "").unwrap_err();
         assert!(
             err.to_string()
                 .contains("plugin source root contains SYMPOSIUM.toml"),
@@ -1623,7 +1664,7 @@ mod tests {
             ),
         ]);
 
-        let contents = scan_source_dir(tmp.path()).unwrap();
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
         assert_eq!(contents.plugins.len(), 1);
         assert_eq!(contents.skill_files.len(), 0);
         expect_test::expect![[r#"mixed-plugin"#]]
@@ -1649,7 +1690,7 @@ mod tests {
             ),
         ]);
 
-        let contents = scan_source_dir(tmp.path()).unwrap();
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
         assert_eq!(contents.plugins.len(), 1);
         assert_eq!(contents.skill_files.len(), 0);
         expect_test::expect![[r#"preferred-plugin"#]]
@@ -1709,7 +1750,7 @@ mod tests {
             ),
         ]);
 
-        let contents = scan_source_dir(tmp.path()).unwrap();
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
         assert_eq!(contents.plugins.len(), 1);
         assert_eq!(contents.skill_files.len(), 1);
         expect_test::expect![[r#"foo-plugin"#]]
