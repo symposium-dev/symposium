@@ -18,7 +18,7 @@ Implements `cargo agents init`. Prompts for agents (or accepts `--add-agent`/`--
 
 ### `sync.rs` — synchronization command
 
-Implements `cargo agents sync`. Scans workspace dependencies, finds applicable skills from plugin sources, installs them into each configured agent's skill directory, manages a per-agent `.symposium.toml` manifest to track installed skills, and cleans up stale skills. Also provides `register_hooks()` for use by `init`.
+Implements `cargo agents sync`. Scans workspace dependencies, finds applicable skills from plugin sources, installs them into each configured agent's skill directory, and drops a `.symposium` marker file into each installed skill directory. On subsequent syncs, scans every agent's skills parent directory and reaps any marker-bearing subdirectory it didn't install this time, leaving user-managed skills (which lack the marker) untouched. Writes a `.gitignore` with `*` into every directory it creates. Also provides `register_hooks()` for use by `init`.
 
 ### `plugins.rs` — plugin registry
 

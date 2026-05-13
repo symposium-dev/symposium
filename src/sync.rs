@@ -2,14 +2,13 @@
 //!
 //! Scans workspace dependencies, finds applicable skills from plugin sources,
 //! installs them into each configured agent's skill directory, and cleans up
-//! stale skills using a per-agent manifest.
+//! stale skills by looking for a `.symposium` marker file in each skill dir.
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 
 use crate::agents::Agent;
 use crate::config::Symposium;
@@ -17,48 +16,51 @@ use crate::output::{Output, display_path};
 use crate::plugins;
 use crate::skills;
 
-/// Manifest tracking which skills symposium installed for a given agent.
-/// Stored at e.g. `.agents/skills/.symposium.toml` or `.claude/skills/.symposium.toml`.
-#[derive(Debug, Default, Deserialize, Serialize)]
-struct SkillManifest {
-    /// Skill names installed by symposium.
-    #[serde(default)]
-    installed: BTreeSet<String>,
+/// Marker file written into every skill directory symposium installs.
+///
+/// Cleanup walks each agent's skills parent dir and removes any subdir
+/// containing this marker that isn't in the freshly-installed set, leaving
+/// user-managed skill directories (which lack the marker) untouched.
+const MARKER_FILE: &str = ".symposium";
+
+/// Create `path` (and any missing ancestors up to `boundary`), writing a
+/// `.gitignore` file containing `*` into each directory we newly create.
+///
+/// `boundary` is the workspace root — we never walk above it, and we do not
+/// write a `.gitignore` there (it already exists and isn't ours to manage).
+/// If `path` or an ancestor already exists, no `.gitignore` is added — we
+/// only annotate directories we actually create.
+pub(crate) fn create_managed_dir_all(path: &Path, boundary: &Path) -> Result<()> {
+    if path.exists() {
+        return Ok(());
+    }
+    if path == boundary {
+        fs::create_dir_all(path).with_context(|| format!("create {}", path.display()))?;
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        create_managed_dir_all(parent, boundary)?;
+    }
+    fs::create_dir(path).with_context(|| format!("create {}", path.display()))?;
+    let gi = path.join(".gitignore");
+    if !gi.exists() {
+        fs::write(&gi, "*\n").with_context(|| format!("write {}", gi.display()))?;
+    }
+    Ok(())
 }
 
-impl SkillManifest {
-    fn load(path: &Path) -> Self {
-        fs::read_to_string(path)
-            .ok()
-            .and_then(|s| toml::from_str(&s).ok())
-            .unwrap_or_default()
-    }
-
-    fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let contents = toml::to_string_pretty(self)?;
-        fs::write(path, contents)?;
-        Ok(())
-    }
-}
-
-/// Returns the manifest path for a given agent's skill directory.
-fn manifest_path(agent: Agent, project_root: &Path) -> std::path::PathBuf {
-    // Use the agent's skill dir parent (e.g. `.agents/skills/`, `.claude/skills/`)
-    // and put the manifest there.
-    let dummy_dir = agent.project_skill_dir(project_root, ".symposium-probe");
-    // dummy_dir is e.g. `.agents/skills/.symposium-probe`
-    // parent is `.agents/skills/`
-    dummy_dir
+/// Skills parent directory for an agent (e.g. `.claude/skills/` or
+/// `.agents/skills/`), derived from `Agent::project_skill_dir`.
+fn skills_parent_dir(agent: Agent, project_root: &Path) -> PathBuf {
+    agent
+        .project_skill_dir(project_root, "_")
         .parent()
         .expect("skill dir must have parent")
-        .join(".symposium.toml")
+        .to_path_buf()
 }
 
 /// Run the full sync: discover applicable skills, install into agent dirs,
-/// clean up stale skills.
+/// clean up stale installations.
 pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     let project_root = crate::init::find_workspace_root(cwd)?;
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
@@ -132,6 +134,10 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
         return Ok(());
     }
 
+    // Track every skill directory we (re)install during this sync. Anything
+    // we find later that has the marker file but isn't in this set is stale.
+    let mut installed_dirs: BTreeSet<PathBuf> = BTreeSet::new();
+
     for agent_name in &agent_names {
         let agent = Agent::from_config_name(agent_name)?;
 
@@ -148,17 +154,25 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
             .register_global_mcp_servers(&hook_root, &mcp_servers, out)
             .context("failed to register MCP servers")?;
 
-        // Install skills and manage manifest
-        let manifest_file = manifest_path(agent, &project_root);
-        let old_manifest = SkillManifest::load(&manifest_file);
-
-        let mut new_manifest = SkillManifest::default();
-
         for &(skill_name, skill_source) in &to_install {
             let dest_dir = agent.project_skill_dir(&project_root, skill_name);
+
+            // Create the destination (and any missing parents) with a `*` gitignore
+            // in each new directory.
+            if let Err(e) = create_managed_dir_all(&dest_dir, &project_root) {
+                out.warn(format!("failed to create {}: {e}", display_path(&dest_dir)));
+                continue;
+            }
+
             match agent.install_skill(skill_source, &dest_dir) {
                 Ok(()) => {
-                    new_manifest.installed.insert(skill_name.to_string());
+                    // Drop the marker so future syncs (and other tools) can
+                    // recognize this directory as symposium-managed.
+                    let marker = dest_dir.join(MARKER_FILE);
+                    if let Err(e) = fs::write(&marker, "") {
+                        out.warn(format!("failed to write {}: {e}", display_path(&marker)));
+                    }
+                    installed_dirs.insert(dest_dir.clone());
                     tracing::info!(%skill_name, agent = %agent_name, dest = %dest_dir.display(), "installed skill");
                     out.done(format!(
                         "installed skill {skill_name} → {}",
@@ -170,24 +184,41 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
                 }
             }
         }
+    }
 
-        // Remove stale skills (in old manifest but not in new)
-        for stale in old_manifest.installed.difference(&new_manifest.installed) {
-            let dest_dir = agent.project_skill_dir(&project_root, stale);
-            if dest_dir.exists() {
-                let _ = fs::remove_dir_all(&dest_dir);
-                tracing::info!(%stale, agent = %agent_name, "removed stale skill");
-                out.removed(format!(
-                    "removed skill {stale} from {}",
-                    display_path(&dest_dir)
-                ));
+    // Stale-skill cleanup: scan every agent's skills parent directory (across
+    // all known agents, so we also clean up after agents removed from config)
+    // and remove subdirs containing the marker that we didn't just install.
+    let mut scanned: BTreeSet<PathBuf> = BTreeSet::new();
+    for &agent in Agent::all() {
+        let parent = skills_parent_dir(agent, &project_root);
+        if !scanned.insert(parent.clone()) {
+            continue;
+        }
+        let Ok(entries) = fs::read_dir(&parent) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() || installed_dirs.contains(&path) {
+                continue;
+            }
+            if !path.join(MARKER_FILE).exists() {
+                continue;
+            }
+            match fs::remove_dir_all(&path) {
+                Ok(()) => {
+                    tracing::info!(path = %path.display(), "removed stale skill");
+                    out.removed(format!("removed {}", display_path(&path)));
+                }
+                Err(e) => {
+                    out.warn(format!(
+                        "failed to remove stale {}: {e}",
+                        display_path(&path)
+                    ));
+                }
             }
         }
-
-        // Write updated manifest
-        new_manifest
-            .save(&manifest_file)
-            .context("failed to write skill manifest")?;
     }
 
     // Unregister hooks/MCP for agents no longer configured
