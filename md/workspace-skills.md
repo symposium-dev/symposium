@@ -11,24 +11,6 @@ The default skill location therefore varies depending on the intended audience:
 | Maintaining your crate | `.agents/skills` |
 | [Using your crate](./crate-authors/supporting-your-crate.md) | `.symposium/skills` |
 
-## Setting the "distribution" for `.symposium` skills
-
-Some projects do not like to check-in the `.agents` directory. An alternative is to add skills into `.symposium/skills` and set the `distribution` header to `workspace`:
-
-```
-# Example
-#
-# In .symposium/skills/integration-test/SKILL.md
-
----
-name: Adding an integration test
-description: "Instructions for adding integration tests into this project"
-distribution: workspace
----
-
-...
-```
-
 ## Recommended git setup
 
 We recommend you commit your `.agents/skills` or `.symposium/skills` into the repository. Symposium installs a `.gitignore` file into every skill that it creates, so automatically copied and installed skills should not dirty your git status.
