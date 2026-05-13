@@ -794,6 +794,81 @@ async fn sync_keeps_distinct_plugin_origins_with_same_skill_name() {
     .unwrap();
 }
 
+/// One origin initially → unsuffixed install. Introduce a second
+/// origin → both must move to suffixed names; the prior unsuffixed
+/// install (still has the marker, no longer in the freshly-installed
+/// set) is reaped.
+#[tokio::test]
+async fn sync_demotes_to_suffixed_when_conflict_appears() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["distinct-plugin-origins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+            // Park plugin-b *outside* any plugin source dir so it isn't
+            // discovered. (`tempdir/` sits next to the user config root,
+            // which is itself a plugin source — so we can't park inside
+            // the same parent.)
+            let plugins_dir = ctx.sym.config_dir().join("plugins");
+            let parked = ctx.tempdir.join("parked-plugin-b");
+            std::fs::rename(plugins_dir.join("plugin-b"), &parked)?;
+
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            // Baseline: only plugin-a's `code-review` is visible, so it
+            // takes the plain slot.
+            let installed = find_installed_skills(&skills_dir, "code-review");
+            assert_eq!(installed.len(), 1, "expected one unsuffixed install");
+            assert_eq!(
+                installed[0].file_name().and_then(|n| n.to_str()),
+                Some("code-review"),
+                "single origin should land at the unsuffixed slot"
+            );
+
+            // Re-introduce plugin-b. Now there are two origins.
+            std::fs::rename(&parked, plugins_dir.join("plugin-b"))?;
+
+            ctx.symposium(&["sync"]).await?;
+
+            // Both origins now install under suffixed names; the
+            // previous unsuffixed dir is gone (reaped via the marker
+            // walk because it's no longer in the freshly-installed set).
+            let installed = find_installed_skills(&skills_dir, "code-review");
+            assert_eq!(
+                installed.len(),
+                2,
+                "both origins should install under suffixed names; got {installed:?}"
+            );
+            assert!(
+                !skills_dir.join("code-review").exists(),
+                "the prior unsuffixed install must be reaped"
+            );
+            for p in &installed {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap();
+                assert!(
+                    name.starts_with("code-review-"),
+                    "expected hashed suffix on `{name}`"
+                );
+            }
+
+            // And the bodies cover both plugins.
+            let bodies: Vec<String> = installed
+                .iter()
+                .map(|p| std::fs::read_to_string(p.join("SKILL.md")).unwrap())
+                .collect();
+            assert!(bodies.iter().any(|b| b.contains("Plugin-A")));
+            assert!(bodies.iter().any(|b| b.contains("Plugin-B")));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// Two origins → both suffixed. Remove one origin, sync again → the
 /// survivor moves to the unsuffixed slot and the suffixed leftover is
 /// reaped via the marker-based stale-cleanup walk.
