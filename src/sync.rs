@@ -74,6 +74,13 @@ fn mark_generated_skill_directory(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Does `dir` contain the `.symposium` marker, i.e. is it a symposium-managed
+/// skill directory? Returns `false` for user-authored skills and for any
+/// directory symposium did not create.
+fn has_symposium_marker(dir: &Path) -> bool {
+    dir.join(MARKER_FILE).exists()
+}
+
 /// Discover user-authored skills in `<project_root>/.agents/skills/`.
 ///
 /// A skill is user-authored iff its directory contains `SKILL.md` and does
@@ -91,7 +98,7 @@ fn discover_user_authored_skills(project_root: &Path) -> Vec<PathBuf> {
         .map(|e| e.path())
         .filter(|p| p.is_dir())
         .filter(|p| p.join("SKILL.md").is_file())
-        .filter(|p| !p.join(MARKER_FILE).exists())
+        .filter(|p| !has_symposium_marker(p))
         .collect();
     skills.sort();
     skills
@@ -134,7 +141,7 @@ fn propagate_user_skill(
         return Ok(false);
     }
 
-    let target_is_managed = dest_dir.join(MARKER_FILE).exists();
+    let target_is_managed = has_symposium_marker(dest_dir);
     if dest_dir.exists() && !target_is_managed {
         out.warn(format!(
             "skipping propagation to {}: user-managed skill already present",
@@ -350,7 +357,7 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
             if !path.is_dir() || installed_dirs.contains(&path) {
                 continue;
             }
-            if !path.join(MARKER_FILE).exists() {
+            if !has_symposium_marker(&path) {
                 continue;
             }
             match fs::remove_dir_all(&path) {
