@@ -1221,6 +1221,7 @@ mod tests {
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
+            subcommands: BTreeMap::new(),
         };
 
         let registry = PluginRegistry {
@@ -1267,6 +1268,7 @@ mod tests {
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
+            subcommands: BTreeMap::new(),
         };
 
         let registry = PluginRegistry {
@@ -1331,6 +1333,7 @@ mod tests {
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
+            subcommands: BTreeMap::new(),
         };
 
         let registry = PluginRegistry {
