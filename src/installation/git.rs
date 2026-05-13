@@ -350,6 +350,12 @@ impl GitCacheManager {
         serde_json::from_str(&content).ok()
     }
 
+    /// Read the cache meta for a plugin directory previously returned by
+    /// [`get_or_fetch`]. Returns `None` if the meta is missing or malformed.
+    pub fn read_meta_for(&self, plugin_dir: &std::path::Path) -> Option<PluginCacheMeta> {
+        self.read_meta(&plugin_dir.join(CACHE_META_FILENAME))
+    }
+
     /// Update `fetched_at` to now so the debounce window resets.
     fn touch_meta(&self, path: &std::path::Path, meta: &PluginCacheMeta) {
         let updated = PluginCacheMeta {

@@ -47,21 +47,36 @@ impl Skill {
 ///   Identity is `(name, version)` only: two plugins targeting the same
 ///   crate version produce the same logical skills regardless of which
 ///   plugin pointed at them.
+/// - `Git { repo, commit_sha, skill_path }` — the skill came from a
+///   `source.git` group. Identity is the triple `(repo, commit_sha,
+///   skill_path)`: the repo is in `<owner>/<repo>` form (no `tree/<ref>`
+///   prefix), the commit SHA is the resolved hash that was actually
+///   fetched, and `skill_path` is the SKILL.md's path within the repo
+///   tree. Two plugins that pointed at the same repo via different URL
+///   forms (root URL vs. a `tree/<ref>/<subpath>` URL) collapse to one
+///   install if they end up loading the same SKILL.md from the same
+///   commit; different SKILL.md files within one repo stay distinct.
 /// - `Plugin { plugin_name, disambiguator }` — the skill came from a
-///   plugin's own source (`source.path` / `source.git`) or from a
-///   standalone `SKILL.md`. `plugin_name` is the plugin's `name` (or the
-///   plugin source's `name` for standalones); `disambiguator` is the
-///   stringified `source.path` / `source.git` value for plugin groups, or
-///   the standalone skill's path relative to the plugin source for
-///   standalones. The pair distinguishes (a) two skill groups within the
-///   same plugin, (b) two registries each shipping a same-named
-///   standalone, and (c) two standalones at different relative paths in
-///   the same registry.
+///   plugin's `source.path` group, or from a standalone `SKILL.md`. For
+///   plugin groups, `disambiguator` is the stringified `source.path`
+///   value, so two `path` groups within the same plugin stay distinct.
+///   For standalones, `plugin_name` is the registry source name and
+///   `disambiguator` is the skill's path relative to the source root.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 pub enum SkillOrigin {
     Crate {
         name: String,
         version: semver::Version,
+    },
+    Git {
+        /// `<owner>/<repo>` — the repository identity, stripped of any
+        /// branch / subpath URL components.
+        repo: String,
+        /// Commit SHA actually fetched (from the cache meta).
+        commit_sha: String,
+        /// SKILL.md's path within the repo tree, normalized to forward
+        /// slashes.
+        skill_path: String,
     },
     Plugin {
         plugin_name: String,
@@ -268,24 +283,53 @@ async fn load_skills_for_group(
         return (group_crates, skills);
     }
 
+    // Handle git source: fetch, then build a per-skill `Git` origin so
+    // two plugins that load the same SKILL.md at the same path from the
+    // same commit collapse — even if their `source.git` URLs differed
+    // (root vs `tree/<ref>/<subpath>` form).
+    if let PluginSource::Git(url) = &group.source {
+        let (gh, cache_dir, commit_sha) = match fetch_git_skill_source(sym, url).await {
+            Some(triple) => triple,
+            None => return (group_crates, Vec::new()),
+        };
+        let mut skills = Vec::new();
+        for result in discover_skills(&cache_dir, group) {
+            match result {
+                Ok(skill) => {
+                    let skill_path = skill_path_within_repo(&cache_dir, &skill.path, &gh.path);
+                    let origin = SkillOrigin::Git {
+                        repo: format!("{}/{}", gh.owner, gh.repo),
+                        commit_sha: commit_sha.clone(),
+                        skill_path,
+                    };
+                    skills.push((skill, origin));
+                }
+                Err(e) => {
+                    tracing::warn!(plugin = %plugin_path.display(), error = %e, "failed to load skill")
+                }
+            }
+        }
+        return (group_crates, skills);
+    }
+
     let Some(dir) = resolve_skill_dir(sym, plugin_path, group).await else {
         return (group_crates, Vec::new());
     };
 
-    // The disambiguator identifies *this* skill group within the plugin,
-    // so two groups in the same plugin (each with its own source) don't
-    // collide. We use the raw source value: `source.path` value for path
-    // groups, `source.git` URL for git groups, empty for `source = none`.
-    let disambiguator = match &group.source {
-        PluginSource::Path(p) => p.to_string_lossy().into_owned(),
-        PluginSource::Git(url) => url.clone(),
-        PluginSource::None => String::new(),
-        // CratePath was handled above and never reaches this branch.
-        PluginSource::CratePath(_) => String::new(),
-    };
-    let origin = SkillOrigin::Plugin {
-        plugin_name: plugin_name.to_string(),
-        disambiguator,
+    // Path / None groups are plugin-local; identity is plugin name plus
+    // the raw `source.path` value, so two `path` groups within one
+    // plugin don't collide. (`CratePath` and `Git` were handled above.)
+    let origin = match &group.source {
+        PluginSource::Path(p) => SkillOrigin::Plugin {
+            plugin_name: plugin_name.to_string(),
+            disambiguator: p.to_string_lossy().into_owned(),
+        },
+        PluginSource::None | PluginSource::CratePath(_) | PluginSource::Git(_) => {
+            SkillOrigin::Plugin {
+                plugin_name: plugin_name.to_string(),
+                disambiguator: String::new(),
+            }
+        }
     };
     let mut skills = Vec::new();
     for result in discover_skills(&dir, group) {
@@ -298,6 +342,63 @@ async fn load_skills_for_group(
     }
 
     (group_crates, skills)
+}
+
+/// Compute a SKILL.md's path relative to the *repository root*, using
+/// the cache directory (which holds the subtree the user pointed at via
+/// `tree/<ref>/<subpath>`) and the source's intra-repo subpath.
+///
+/// Returned with forward-slash separators so the value is stable across
+/// platforms — it's part of the `SkillOrigin::Git` identity.
+fn skill_path_within_repo(cache_dir: &Path, skill_md: &Path, source_subpath: &str) -> String {
+    let skill_dir = skill_md.parent().unwrap_or(skill_md);
+    let rel = skill_dir
+        .strip_prefix(cache_dir)
+        .unwrap_or(skill_dir)
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/");
+    if source_subpath.is_empty() {
+        rel
+    } else if rel.is_empty() {
+        source_subpath.to_string()
+    } else {
+        format!("{source_subpath}/{rel}")
+    }
+}
+
+/// Fetch a `source.git` group's tarball and look up the resolved commit
+/// SHA from the cache meta. Returns `None` (with a warning) on failure.
+async fn fetch_git_skill_source(
+    sym: &Symposium,
+    git_url: &str,
+) -> Option<(crate::installation::git::GitHubSource, PathBuf, String)> {
+    let gh = match crate::installation::git::parse_github_url(git_url) {
+        Ok(gh) => gh,
+        Err(e) => {
+            tracing::warn!(git = %git_url, error = %e, "failed to parse git URL");
+            return None;
+        }
+    };
+    let cache_mgr = crate::installation::git::GitCacheManager::new(sym, "plugins");
+    let cache_dir = match cache_mgr
+        .get_or_fetch(&gh, git_url, crate::plugins::UpdateLevel::None)
+        .await
+    {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(git = %git_url, error = %e, "failed to fetch skill source");
+            return None;
+        }
+    };
+    let Some(meta) = cache_mgr.read_meta_for(&cache_dir) else {
+        tracing::warn!(
+            git = %git_url,
+            cache_dir = %cache_dir.display(),
+            "skipping git skill group: cache meta missing (cannot pin commit SHA)"
+        );
+        return None;
+    };
+    Some((gh, cache_dir, meta.commit_sha))
 }
 
 /// Discover all skills found in a given directory.
@@ -354,20 +455,13 @@ pub(crate) fn prune_nested_skills(paths: &mut Vec<PathBuf>) {
     *paths = kept;
 }
 
-/// Fetch a skill group's git source, returning the cached directory path.
-async fn fetch_skill_source(sym: &Symposium, git_url: &str) -> Result<PathBuf> {
-    let source = crate::installation::git::parse_github_url(git_url)?;
-    let cache_mgr = crate::installation::git::GitCacheManager::new(sym, "plugins");
-    cache_mgr
-        .get_or_fetch(&source, git_url, crate::plugins::UpdateLevel::None)
-        .await
-}
-
-/// Resolve the skill directory for a group, fetching from git if needed.
+/// Resolve the skill directory for a `Path` / `None` group. Git groups
+/// are handled separately by [`fetch_git_skill_source`], and `CratePath`
+/// has its own branch in [`load_skills_for_group`].
 ///
 /// Returns `None` if the group has no source and the plugin has no local dir.
 async fn resolve_skill_dir(
-    sym: &Symposium,
+    _sym: &Symposium,
     plugin_path: &Path,
     group: &SkillGroup,
 ) -> Option<PathBuf> {
@@ -375,17 +469,6 @@ async fn resolve_skill_dir(
         let plugin_dir = plugin_path.parent().unwrap_or(plugin_path);
         return Some(plugin_dir.join(path));
     }
-
-    if let PluginSource::Git(git_source) = &group.source {
-        match fetch_skill_source(sym, git_source).await {
-            Ok(path) => return Some(path),
-            Err(e) => {
-                tracing::warn!(git = %git_source, error = %e, "failed to fetch skill source");
-                return None;
-            }
-        }
-    }
-
     None
 }
 
@@ -589,6 +672,67 @@ mod tests {
 
     fn pred_set(s: &str) -> PredicateSet {
         PredicateSet::parse(s).unwrap()
+    }
+
+    // --- SkillOrigin identity ---
+
+    #[test]
+    fn skill_origin_git_dedups_when_repo_sha_and_path_match() {
+        // Two `Git` origins that point at the same repo, the same
+        // commit SHA, and the same path within that commit are the
+        // *same* skill regardless of which URL form (or which plugin)
+        // brought us there.
+        let a = SkillOrigin::Git {
+            repo: "foo/bar".into(),
+            commit_sha: "deadbeef".into(),
+            skill_path: "skills/code-review".into(),
+        };
+        let b = SkillOrigin::Git {
+            repo: "foo/bar".into(),
+            commit_sha: "deadbeef".into(),
+            skill_path: "skills/code-review".into(),
+        };
+        assert_eq!(a, b);
+        assert_eq!(a.short_hash(), b.short_hash());
+    }
+
+    #[test]
+    fn skill_origin_git_distinct_paths_stay_distinct() {
+        let a = SkillOrigin::Git {
+            repo: "foo/bar".into(),
+            commit_sha: "deadbeef".into(),
+            skill_path: "skills/a".into(),
+        };
+        let b = SkillOrigin::Git {
+            repo: "foo/bar".into(),
+            commit_sha: "deadbeef".into(),
+            skill_path: "skills/b".into(),
+        };
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn skill_origin_kinds_are_distinct() {
+        // Distinct variants must not collide even with similar field values.
+        let c = SkillOrigin::Crate {
+            name: "foo".into(),
+            version: semver::Version::new(1, 0, 0),
+        };
+        let p = SkillOrigin::Plugin {
+            plugin_name: "foo".into(),
+            disambiguator: "1.0.0".into(),
+        };
+        let g = SkillOrigin::Git {
+            repo: "foo/bar".into(),
+            commit_sha: "deadbeef".into(),
+            skill_path: "1.0.0".into(),
+        };
+        assert_ne!(c, p);
+        assert_ne!(c, g);
+        assert_ne!(p, g);
+        assert_ne!(c.short_hash(), p.short_hash());
+        assert_ne!(c.short_hash(), g.short_hash());
+        assert_ne!(p.short_hash(), g.short_hash());
     }
 
     // --- Frontmatter parsing ---
