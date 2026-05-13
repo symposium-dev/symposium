@@ -52,7 +52,9 @@ Propagated destinations receive the same `.symposium` marker and `*` `.gitignore
 - Disabling `agents-syncing = false` also removes previously propagated copies on the next sync.
 - A pre-existing, user-managed file in the target directory (no marker) is never overwritten.
 
-When the only configured agents use `.agents/skills/` directly, the feature is a no-op (the source and target are the same directory).### Hook scope: control whether Symposium activates in all projects or only those you select
+When the only configured agents use `.agents/skills/` directly, the feature is a no-op (the source and target are the same directory).
+
+### Hook scope: control whether Symposium activates in all projects or only those you select
 
 Registering hooks globally ensures that Symposium activates whenever you use the selected agent, which means that it will work in any Rust project automatically.
 

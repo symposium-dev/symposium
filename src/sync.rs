@@ -59,6 +59,21 @@ fn skills_parent_dir(agent: Agent, project_root: &Path) -> PathBuf {
         .to_path_buf()
 }
 
+/// Mark a directory as symposium-generated: drop the `.symposium` marker
+/// and a `.gitignore` containing `*` so the directory is recognized on
+/// future syncs and kept out of version control.
+///
+/// Idempotent — overwrites any pre-existing marker or `.gitignore` in
+/// `dir`. Callers use this both for freshly-installed plugin skills and
+/// for skills propagated by the agents-syncing feature.
+fn mark_generated_skill_directory(dir: &Path) -> Result<()> {
+    fs::write(dir.join(MARKER_FILE), "")
+        .with_context(|| format!("write marker in {}", dir.display()))?;
+    fs::write(dir.join(".gitignore"), "*\n")
+        .with_context(|| format!("write .gitignore in {}", dir.display()))?;
+    Ok(())
+}
+
 /// Discover user-authored skills in `<project_root>/.agents/skills/`.
 ///
 /// A skill is user-authored iff its directory contains `SKILL.md` and does
@@ -136,13 +151,11 @@ fn propagate_user_skill(
     create_managed_dir_all(dest_dir, project_root)?;
     copy_dir_recursive(source_dir, dest_dir)?;
 
-    // Drop the marker and a wildcard .gitignore. These overwrite anything
-    // the source happened to contain, so the destination is uniformly
-    // symposium-managed regardless of what was in the source tree.
-    fs::write(dest_dir.join(MARKER_FILE), "")
-        .with_context(|| format!("write marker in {}", dest_dir.display()))?;
-    fs::write(dest_dir.join(".gitignore"), "*\n")
-        .with_context(|| format!("write .gitignore in {}", dest_dir.display()))?;
+    // The copy may have clobbered any marker or `.gitignore` written by
+    // `create_managed_dir_all`, so re-apply them. This also guarantees a
+    // uniform "symposium-managed" shape regardless of what the source
+    // skill directory happened to contain.
+    mark_generated_skill_directory(dest_dir)?;
     Ok(true)
 }
 
@@ -253,11 +266,11 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
 
             match agent.install_skill(skill_source, &dest_dir) {
                 Ok(()) => {
-                    // Drop the marker so future syncs (and other tools) can
-                    // recognize this directory as symposium-managed.
-                    let marker = dest_dir.join(MARKER_FILE);
-                    if let Err(e) = fs::write(&marker, "") {
-                        out.warn(format!("failed to write {}: {e}", display_path(&marker)));
+                    // Mark the directory as symposium-managed (marker +
+                    // wildcard .gitignore). Kept as a warning on failure so
+                    // a broken install doesn't halt the whole sync.
+                    if let Err(e) = mark_generated_skill_directory(&dest_dir) {
+                        out.warn(format!("failed to mark {}: {e}", display_path(&dest_dir)));
                     }
                     installed_dirs.insert(dest_dir.clone());
                     tracing::info!(%skill_name, agent = %agent_name, dest = %dest_dir.display(), "installed skill");

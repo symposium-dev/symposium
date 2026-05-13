@@ -46,20 +46,6 @@ yarn-error.log*
 *.swo
 *~
 
-# Agent-specific directories (local dev installs at project root; fixtures
-# under tests/ may legitimately contain these for test setup).
-/.kiro/
-/.claude/
-/.agents/
-/.sparkle-space/
-
-# Re-include agent-ish directories when they appear inside test fixtures.
-# Needed to override the user's global ~/.gitignore which typically
-# excludes .agents/, .claude/, .kiro/ everywhere.
-!tests/fixtures/**/.agents/
-!tests/fixtures/**/.claude/
-!tests/fixtures/**/.kiro/
-
 # Build output
 dist/
 

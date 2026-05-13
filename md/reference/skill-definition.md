@@ -2,10 +2,7 @@
 
 A skill is a `SKILL.md` file inside a skill directory. Skills follow the [agentskills.io](https://agentskills.io/specification.md) format.
 
-Skills are typically supplied by a [plugin](./plugin-definition.md), but
-you can also drop a `SKILL.md` directly into `<workspace>/.agents/skills/`
-to author a skill specific to a single project — see
-[Workspace skills](../workspace-skills.md).
+Skills can be supplied by a [plugin](./plugin-definition.md) or [by adding skills into the `.agents/skills` directory within the workspace](../workspace-skills.md).
 
 ## Directory layout
 
