@@ -40,9 +40,9 @@ Given a `PluginRegistry` and workspace dependencies, this module resolves skill 
 
 Each applicable skill carries a `SkillOrigin` describing *where* it came from, used at sync time for dedup and install-path disambiguation:
 - `Crate { name, version }` — from a crate-source resolution (`source = "crate"` / `source.crate_path`). Two `Crate` origins with the same `(name, version)` are the same logical skill, regardless of which plugin pointed at them.
-- `Plugin { plugin_name }` — from a plugin's own `source.path` / `source.git`, or from a standalone `SKILL.md`. Standalone skills use `"<source-name>::<rel-path>"` as the plugin name so two registries can each contribute a same-named standalone, and so two standalones at different relative paths within the same registry stay distinct.
+- `Plugin { plugin_name, disambiguator }` — from a plugin's own `source.path` / `source.git`, or from a standalone `SKILL.md`. For plugin groups, `disambiguator` is the raw `source.path` value or `source.git` URL, so two skill groups within one plugin (or two plugins at different sources) stay distinct. For standalones, `plugin_name` is the registry source name and `disambiguator` is the skill's path relative to that source root.
 
-`sync` installs each surviving skill into `<agent-skills-dir>/<skill-name>-<origin-hash>/`, where `origin-hash` is a short FNV-1a digest of the origin. The `.symposium` marker, wildcard `.gitignore`, and stale-cleanup walk all key on the marker file rather than directory name shape, so they continue to work unchanged.
+`sync` installs each surviving skill into `<agent-skills-dir>/<skill-name>-<origin-hash>/`, where `origin-hash` is the first 8 hex chars of SHA-256 over the JSON-serialized origin. The `.symposium` marker, wildcard `.gitignore`, and stale-cleanup walk all key on the marker file rather than directory name shape, so they continue to work unchanged.
 
 ### `hook.rs` — hook handling
 

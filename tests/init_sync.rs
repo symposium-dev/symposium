@@ -778,6 +778,40 @@ async fn sync_keeps_distinct_plugin_origins_with_same_skill_name() {
     .unwrap();
 }
 
+/// One plugin with two `[[skills]]` groups, each with its own `source.path`,
+/// each producing a same-named skill. The group source goes into the
+/// origin's `disambiguator`, so both groups install — without colliding.
+#[tokio::test]
+async fn sync_keeps_distinct_groups_within_one_plugin() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["multi-group-plugin0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let installed =
+                find_installed_skills(&workspace_root.join(".claude/skills"), "shared-name");
+            assert_eq!(
+                installed.len(),
+                2,
+                "two skill groups within one plugin must both install; got {installed:?}"
+            );
+
+            let bodies: Vec<String> = installed
+                .iter()
+                .map(|p| std::fs::read_to_string(p.join("SKILL.md")).unwrap())
+                .collect();
+            assert!(bodies.iter().any(|b| b.contains("Group-A")));
+            assert!(bodies.iter().any(|b| b.contains("Group-B")));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// Two standalone skills both named `my-skill` but living at different
 /// paths within the registry source (`foo/my-skill/SKILL.md` and
 /// `bar/my-skill/SKILL.md`) produce distinct origins (the relative path

@@ -47,13 +47,17 @@ impl Skill {
 ///   Identity is `(name, version)` only: two plugins targeting the same
 ///   crate version produce the same logical skills regardless of which
 ///   plugin pointed at them.
-/// - `Plugin { plugin_name }` — the skill came from a plugin's own source
-///   (`source.path` / `source.git`) or from a standalone `SKILL.md`. For
-///   standalone skills, `plugin_name` is `"<source-name>::<rel-path>"`,
-///   where `rel-path` is the skill directory's path relative to its
-///   plugin-source root, so two registries can each contribute a
-///   standalone `my-skill/SKILL.md` without collision.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+/// - `Plugin { plugin_name, disambiguator }` — the skill came from a
+///   plugin's own source (`source.path` / `source.git`) or from a
+///   standalone `SKILL.md`. `plugin_name` is the plugin's `name` (or the
+///   plugin source's `name` for standalones); `disambiguator` is the
+///   stringified `source.path` / `source.git` value for plugin groups, or
+///   the standalone skill's path relative to the plugin source for
+///   standalones. The pair distinguishes (a) two skill groups within the
+///   same plugin, (b) two registries each shipping a same-named
+///   standalone, and (c) two standalones at different relative paths in
+///   the same registry.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 pub enum SkillOrigin {
     Crate {
         name: String,
@@ -61,46 +65,28 @@ pub enum SkillOrigin {
     },
     Plugin {
         plugin_name: String,
+        disambiguator: String,
     },
 }
 
 impl SkillOrigin {
-    /// 8-char hex hash used to disambiguate the skill's install directory.
+    /// 8-char hex prefix of a SHA-256 over the JSON-serialized origin.
     ///
-    /// FNV-1a 64-bit over a stable serialization (a tag byte plus the
-    /// origin's string fields), folded to 32 bits. Collisions are
-    /// theoretically possible but vanishingly unlikely within one
-    /// workspace, and a collision merely means two distinct origins
-    /// would install to the same dir — caught at install time as a name
-    /// clash, not silent data loss.
+    /// Collisions are vanishingly unlikely within one workspace, and a
+    /// collision merely means two distinct origins would install to the
+    /// same dir — caught at install time as a name clash, not silent
+    /// data loss.
     pub fn short_hash(&self) -> String {
-        let mut bytes = Vec::new();
-        match self {
-            SkillOrigin::Crate { name, version } => {
-                bytes.push(b'C');
-                bytes.extend_from_slice(name.as_bytes());
-                bytes.push(0);
-                bytes.extend_from_slice(version.to_string().as_bytes());
-            }
-            SkillOrigin::Plugin { plugin_name } => {
-                bytes.push(b'P');
-                bytes.extend_from_slice(plugin_name.as_bytes());
-            }
+        use sha2::{Digest, Sha256};
+        let bytes = serde_json::to_vec(self).expect("SkillOrigin always serializes");
+        let digest = Sha256::digest(&bytes);
+        let mut out = String::with_capacity(8);
+        for byte in &digest[..4] {
+            use std::fmt::Write;
+            write!(out, "{byte:02x}").unwrap();
         }
-        let h = fnv1a64(&bytes);
-        format!("{:08x}", (h ^ (h >> 32)) as u32)
+        out
     }
-}
-
-fn fnv1a64(bytes: &[u8]) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut h = OFFSET;
-    for &b in bytes {
-        h ^= b as u64;
-        h = h.wrapping_mul(PRIME);
-    }
-    h
 }
 
 /// A skill paired with all predicate sets from its lineage and the origin
@@ -286,8 +272,20 @@ async fn load_skills_for_group(
         return (group_crates, Vec::new());
     };
 
+    // The disambiguator identifies *this* skill group within the plugin,
+    // so two groups in the same plugin (each with its own source) don't
+    // collide. We use the raw source value: `source.path` value for path
+    // groups, `source.git` URL for git groups, empty for `source = none`.
+    let disambiguator = match &group.source {
+        PluginSource::Path(p) => p.to_string_lossy().into_owned(),
+        PluginSource::Git(url) => url.clone(),
+        PluginSource::None => String::new(),
+        // CratePath was handled above and never reaches this branch.
+        PluginSource::CratePath(_) => String::new(),
+    };
     let origin = SkillOrigin::Plugin {
         plugin_name: plugin_name.to_string(),
+        disambiguator,
     };
     let mut skills = Vec::new();
     for result in discover_skills(&dir, group) {
@@ -1123,7 +1121,8 @@ mod tests {
             standalone_skills: vec![crate::plugins::StandaloneSkill {
                 skill,
                 origin: SkillOrigin::Plugin {
-                    plugin_name: "test::my-skill".to_string(),
+                    plugin_name: "test".to_string(),
+                    disambiguator: "my-skill".to_string(),
                 },
             }],
             warnings: vec![],
@@ -1308,6 +1307,7 @@ mod tests {
             predicate_sets,
             origin: SkillOrigin::Plugin {
                 plugin_name: "test".to_string(),
+                disambiguator: String::new(),
             },
         }
     }

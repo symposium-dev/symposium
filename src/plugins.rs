@@ -904,11 +904,11 @@ fn resolve_one_source(
 /// Build the `SkillOrigin` for a standalone skill discovered at
 /// `skill_md` inside the plugin source rooted at `source_dir`.
 ///
-/// The encoded `plugin_name` is `<source-name>::<rel-skill-dir>`, where
-/// `rel-skill-dir` is the skill's parent directory relative to the source
-/// root. This is what disambiguates two registries that each ship a
-/// `my-skill/SKILL.md` standalone, and also disambiguates two standalones
-/// at different relative paths within the same registry.
+/// `plugin_name` is the registry source name (so two registries that
+/// each ship a same-named standalone produce distinct origins);
+/// `disambiguator` is the skill's parent directory relative to the
+/// source root (so two standalones at different relative paths within
+/// the same registry also stay distinct).
 fn standalone_skill_origin(
     source_name: &str,
     source_dir: &Path,
@@ -921,7 +921,8 @@ fn standalone_skill_origin(
         .to_string_lossy()
         .replace(std::path::MAIN_SEPARATOR, "/");
     crate::skills::SkillOrigin::Plugin {
-        plugin_name: format!("{source_name}::{rel}"),
+        plugin_name: source_name.to_string(),
+        disambiguator: rel,
     }
 }
 
