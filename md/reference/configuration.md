@@ -6,6 +6,7 @@
 
 ```toml
 auto-sync = true
+agents-syncing = true
 hook-scope = "global"
 
 [[agent]]
@@ -35,7 +36,23 @@ path = "my-plugins"
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `auto-sync` | bool | `true` | Automatically run `cargo agents sync` during hook invocations. When enabled, skills are kept in sync with workspace dependencies without manual intervention. |
+| `agents-syncing` | bool | `true` | Propagate user-authored skills from `.agents/skills/` into the per-agent skill directories of any configured agent that does not natively use `.agents/skills/` (such as `.claude/skills/` or `.kiro/skills/`). Skills that symposium itself installed — identified by the `.symposium` marker file — are not propagated. See [Workspace skills](../workspace-skills.md) for the user-guide overview, or [Agents syncing](#agents-syncing-mirror-user-authored-skills) below for details. |
 | `hook-scope` | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace. |
+
+### Agents syncing: mirror user-authored skills
+
+Agents such as Copilot, Gemini, Codex, Goose, and OpenCode all read skills from the vendor-neutral `.agents/skills/` directory, but Claude Code and Kiro use their own paths (`.claude/skills/` and `.kiro/skills/`). When `agents-syncing` is enabled, `cargo agents sync` mirrors any skill that *you* put in `.agents/skills/` into each configured agent's own skill directory, so a single authored copy is visible to every agent.
+
+A skill is treated as user-authored when its directory contains `SKILL.md` but does *not* contain the `.symposium` marker. Symposium never writes a marker into source skills, so the distinction between "user content" and "a copy symposium made" is unambiguous.
+
+Propagated destinations receive the same `.symposium` marker and `*` `.gitignore` that plugin-installed skills get, which means:
+
+- Updates to the source (`.agents/skills/<name>/`) are re-copied on each sync.
+- Removing the source removes the propagated copies on the next sync (via the normal stale-skill reap).
+- Disabling `agents-syncing = false` also removes previously propagated copies on the next sync.
+- A pre-existing, user-managed file in the target directory (no marker) is never overwritten.
+
+When the only configured agents use `.agents/skills/` directly, the feature is a no-op (the source and target are the same directory).
 
 ### Hook scope: control whether Symposium activates in all projects or only those you select
 

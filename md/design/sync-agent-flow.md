@@ -17,9 +17,11 @@ Scans workspace dependencies, installs applicable skills into agent directories,
    - Drop a `.symposium` marker file into each installed skill directory so future syncs (and other tools) can recognize it as symposium-managed.
    - For every skill directory symposium creates along the way (the skill directory itself or its `skills/` parent), write a `.gitignore` containing a single `*` so symposium-managed files stay out of version control.
 
-6. **Reap stale skills** — across every known agent's skills parent directory, remove any subdirectory that contains the `.symposium` marker but wasn't installed this sync. Directories without the marker (user-managed) are left untouched.
+6. **Propagate user-authored skills (agents-syncing)** — if `agents-syncing` is enabled in the user config, mirror skills the user placed in `<workspace>/.agents/skills/` into each configured agent's own skill directory. A skill is "user-authored" when its directory contains `SKILL.md` but lacks the `.symposium` marker (symposium never writes markers into source skills). Propagated destinations receive the same marker and `*` `.gitignore` as plugin-installed skills, so they participate in the normal stale-skill reap: removing the source — or disabling `agents-syncing` — causes the destinations to be cleaned up on the next sync. A destination directory without a marker is user-managed and is never overwritten.
 
-7. **Register hooks** — ensure global hooks and MCP servers are registered for all configured agents. Unregister hooks for agents no longer in the config.
+7. **Reap stale skills** — across every known agent's skills parent directory, remove any subdirectory that contains the `.symposium` marker but wasn't installed this sync. Directories without the marker (user-managed) are left untouched.
+
+8. **Register hooks** — ensure global hooks and MCP servers are registered for all configured agents. Unregister hooks for agents no longer in the config.
 
 ## Marker file
 

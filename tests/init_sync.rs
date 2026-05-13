@@ -687,3 +687,207 @@ async fn sync_installations_are_gitignored() {
     .await
     .unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// agents-syncing: propagate user-authored skills from `.agents/skills/`
+// ---------------------------------------------------------------------------
+
+/// User-authored skills in `.agents/skills/` are propagated to agents that
+/// read skills from a different directory (e.g. Claude → `.claude/skills/`).
+/// Companion files next to `SKILL.md` are copied too, and the destination
+/// receives a `.symposium` marker so future syncs recognize it as managed.
+#[tokio::test]
+async fn agents_syncing_propagates_user_authored_skill_to_claude() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0", "user-skills0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+
+            // Source is untouched. Notably, symposium does not drop a marker
+            // into source skills — that's what keeps them "user-authored".
+            let source = workspace_root.join(".agents/skills/user-authored-skill");
+            assert!(source.join("SKILL.md").exists(), "source SKILL.md stays");
+            assert!(
+                !source.join(".symposium").exists(),
+                "symposium must not mark source skills"
+            );
+
+            // Propagated copy exists with SKILL.md, companion files, marker,
+            // and wildcard gitignore.
+            let dest = workspace_root.join(".claude/skills/user-authored-skill");
+            assert!(dest.join("SKILL.md").exists(), "SKILL.md propagated");
+            assert!(
+                dest.join("REFERENCE.md").exists(),
+                "companion files propagated"
+            );
+            assert!(dest.join(".symposium").exists(), "marker present");
+            let gi = std::fs::read_to_string(dest.join(".gitignore"))?;
+            assert_eq!(gi.trim(), "*", "destination gitignore is wildcard");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// When only agents that natively read `.agents/skills/` are configured,
+/// propagation has no distinct target directory and is a no-op.
+#[tokio::test]
+async fn agents_syncing_noop_when_only_agents_path_used() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0", "user-skills0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "copilot"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+
+            // Source stays in place, unmarked.
+            let source = workspace_root.join(".agents/skills/user-authored-skill");
+            assert!(source.join("SKILL.md").exists());
+            assert!(
+                !source.join(".symposium").exists(),
+                "source must remain unmarked"
+            );
+            // No other agent's skills dir should have been created.
+            assert!(!workspace_root.join(".claude/skills").exists());
+            assert!(!workspace_root.join(".kiro/skills").exists());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Setting `agents-syncing = false` disables propagation entirely.
+#[tokio::test]
+async fn agents_syncing_disabled_skips_propagation() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0", "user-skills0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.sym.config.agents_syncing = false;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            assert!(
+                !workspace_root
+                    .join(".claude/skills/user-authored-skill")
+                    .exists(),
+                "propagation should not occur when agents-syncing is disabled"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Removing a user-authored skill from `.agents/skills/` causes its
+/// previously propagated copy to be reaped by the next sync (the marker
+/// is still there, but it's no longer in the freshly-installed set).
+#[tokio::test]
+async fn agents_syncing_cleans_up_removed_user_skill() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0", "user-skills0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            let propagated = workspace_root.join(".claude/skills/user-authored-skill");
+            assert!(propagated.exists(), "first sync should propagate");
+            assert!(propagated.join(".symposium").exists());
+
+            // User removes the source.
+            std::fs::remove_dir_all(workspace_root.join(".agents/skills/user-authored-skill"))?;
+
+            ctx.symposium(&["sync"]).await?;
+
+            assert!(
+                !propagated.exists(),
+                "second sync should reap propagated copy once source is removed"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Turning `agents-syncing` off on a subsequent sync removes previously
+/// propagated copies — the feature self-heals when disabled.
+#[tokio::test]
+async fn agents_syncing_disabling_removes_previously_propagated_skills() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0", "user-skills0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            let propagated = workspace_root.join(".claude/skills/user-authored-skill");
+            assert!(propagated.exists(), "first sync should propagate");
+
+            ctx.sym.config.agents_syncing = false;
+            ctx.symposium(&["sync"]).await?;
+
+            assert!(
+                !propagated.exists(),
+                "disabling agents-syncing should clean up previously propagated copies"
+            );
+            // Source must remain untouched.
+            assert!(
+                workspace_root
+                    .join(".agents/skills/user-authored-skill/SKILL.md")
+                    .exists()
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// A pre-existing, user-managed directory in the target (no `.symposium`
+/// marker) is not overwritten even when a same-named skill exists in
+/// `.agents/skills/`.
+#[tokio::test]
+async fn agents_syncing_does_not_overwrite_user_managed_target() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0", "user-skills0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+
+            // Pre-existing, user-managed file in the target with the same name.
+            let target_dir = workspace_root.join(".claude/skills/user-authored-skill");
+            std::fs::create_dir_all(&target_dir)?;
+            let preexisting = target_dir.join("SKILL.md");
+            std::fs::write(&preexisting, "pre-existing user content")?;
+
+            ctx.symposium(&["sync"]).await?;
+
+            // File untouched — propagation must not clobber user-managed content.
+            let content = std::fs::read_to_string(&preexisting)?;
+            assert_eq!(content, "pre-existing user content");
+            assert!(
+                !target_dir.join(".symposium").exists(),
+                "no marker should be dropped onto a user-managed directory"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
