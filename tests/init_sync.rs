@@ -148,6 +148,15 @@ async fn sync_installs_skills() {
 
             let skill_dir = find_installed_skill(&skills_dir, "serde-guidance");
 
+            // No name collision and no pre-existing user-managed dir at
+            // the unsuffixed slot, so sync uses the plain name (no
+            // origin-hash suffix).
+            assert_eq!(
+                skill_dir.file_name().and_then(|n| n.to_str()),
+                Some("serde-guidance"),
+                "single-origin skill should install without a hash suffix"
+            );
+
             // Each installed skill directory carries a `.symposium` marker so
             // future syncs (and other tools) can identify it as symposium-managed.
             assert!(
@@ -722,6 +731,13 @@ async fn sync_dedups_same_crate_origin_across_plugins() {
                 1,
                 "two plugins resolving the same crate-x must collapse to one install; got {installed:?}"
             );
+            // Dedup left a single origin, so the install gets the
+            // unsuffixed name (no hash needed to disambiguate).
+            assert_eq!(
+                installed[0].file_name().and_then(|n| n.to_str()),
+                Some("code-review"),
+                "dedup'd single origin should land at the unsuffixed name"
+            );
             Ok(())
         },
     )
@@ -771,6 +787,63 @@ async fn sync_keeps_distinct_plugin_origins_with_same_skill_name() {
                 .collect();
             assert!(bodies.iter().any(|b| b.contains("Plugin-A")));
             assert!(bodies.iter().any(|b| b.contains("Plugin-B")));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// A pre-existing user-managed directory at the skill's unsuffixed slot
+/// (no `.symposium` marker) forces sync to fall back to the hashed
+/// directory name rather than clobber the user's content.
+#[tokio::test]
+async fn sync_falls_back_to_hashed_name_when_user_dir_in_the_way() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            // Plant a user-managed dir at the slot symposium would
+            // normally pick. No `.symposium` marker → user-owned.
+            let user_dir = workspace_root.join(".claude/skills/serde-guidance");
+            std::fs::create_dir_all(&user_dir)?;
+            std::fs::write(user_dir.join("SKILL.md"), "user content")?;
+
+            ctx.symposium(&["sync"]).await?;
+
+            // The user's content is untouched.
+            assert_eq!(
+                std::fs::read_to_string(user_dir.join("SKILL.md"))?,
+                "user content"
+            );
+            assert!(
+                !user_dir.join(".symposium").exists(),
+                "no marker should be planted on the user's dir"
+            );
+
+            // And symposium still installed the skill — under a hashed
+            // name. `find_installed_skills` requires a `SKILL.md` plus a
+            // matching directory shape; the suffix variant is the only
+            // one that should carry the marker.
+            let installed =
+                find_installed_skills(&workspace_root.join(".claude/skills"), "serde-guidance");
+            let hashed: Vec<_> = installed
+                .iter()
+                .filter(|p| p.join(".symposium").exists())
+                .collect();
+            assert_eq!(
+                hashed.len(),
+                1,
+                "sync should install one symposium-managed copy under a hashed name; got {hashed:?}"
+            );
+            assert_ne!(
+                hashed[0].file_name().and_then(|n| n.to_str()),
+                Some("serde-guidance"),
+                "must not use the unsuffixed slot when a user dir occupies it"
+            );
             Ok(())
         },
     )
