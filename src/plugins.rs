@@ -319,6 +319,10 @@ pub struct Plugin {
     pub skills: Vec<SkillGroup>,
     /// MCP servers to register for this plugin.
     pub mcp_servers: Vec<PluginMcpServer>,
+    /// Subcommands vended by this plugin, keyed by the name the user types
+    /// after `cargo agents`. Empty for plugins that vend no subcommands.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub subcommands: std::collections::BTreeMap<String, Subcommand>,
 }
 
 impl Plugin {
@@ -347,6 +351,31 @@ impl Plugin {
             .map(|s| s.server.clone())
             .collect()
     }
+}
+
+/// Whether a subcommand is intended for human or agent use.
+///
+/// Controls grouping in `cargo agents --help`; does not gate dispatch.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Audience {
+    Humans,
+    #[default]
+    Agents,
+}
+
+/// A validated `[subcommand.<name>]` entry.
+///
+/// `command` is the name of an `Installation` in the plugin (possibly a
+/// synthetic one promoted from an inline declaration), matching the same
+/// resolution pattern as `Hook.command`.
+#[derive(Debug, Clone, Serialize)]
+pub struct Subcommand {
+    pub description: String,
+    pub audience: Audience,
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crates: Option<crate::predicate::PredicateSet>,
 }
 
 /// A validated hook definition.
@@ -679,6 +708,10 @@ struct RawPluginManifest {
     skills: Vec<SkillGroup>,
     #[serde(default)]
     mcp_servers: Vec<PluginMcpServer>,
+    /// TOML key is singular (`[subcommand.<name>]`); the validated field on
+    /// `Plugin` is plural (`subcommands`).
+    #[serde(default)]
+    subcommand: std::collections::BTreeMap<String, RawSubcommand>,
 }
 
 /// `[[installations]]` entry: a name plus the same fields as a `RawInlineInstallation`.
@@ -697,6 +730,21 @@ struct RawNamedInstallation {
     script: Option<String>,
     #[serde(default)]
     args: Vec<String>,
+}
+
+/// Raw `[subcommand.<name>]` entry. The TOML table-key is the subcommand
+/// name; this struct carries the table body.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSubcommand {
+    description: String,
+    #[serde(default)]
+    audience: Audience,
+    /// Named installation (`"my-install"`) or inline installation table —
+    /// same shape as `RawHook.command`.
+    command: RawInstallationRef,
+    #[serde(default)]
+    crates: Option<crate::predicate::PredicateSet>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1402,6 +1450,12 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
         hooks.push(validate_hook(raw, &mut installations, &mut names)?);
     }
 
+    let mut subcommands = std::collections::BTreeMap::new();
+    for (name, raw) in manifest.subcommand {
+        let sub = validate_subcommand(name.clone(), raw, &mut installations, &mut names)?;
+        subcommands.insert(name, sub);
+    }
+
     validate_skill_groups(&manifest.crates, &manifest.skills)?;
 
     Ok(Plugin {
@@ -1411,6 +1465,69 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
         hooks,
         skills: manifest.skills,
         mcp_servers: manifest.mcp_servers,
+        subcommands,
+    })
+}
+
+/// Names a plugin subcommand cannot use because they collide with built-in
+/// `cargo agents` commands.
+const RESERVED_SUBCOMMAND_NAMES: &[&str] =
+    &["init", "sync", "hook", "plugin", "crate-info", "help"];
+
+/// Maximum length (bytes) of a subcommand's `description` field.
+const MAX_SUBCOMMAND_DESCRIPTION_LEN: usize = 1024;
+
+/// Validate the user-typed name of a `[subcommand.<name>]` table.
+fn validate_subcommand_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        bail!("subcommand name is empty");
+    }
+    if RESERVED_SUBCOMMAND_NAMES.contains(&name) {
+        bail!("subcommand `{name}` shadows a built-in `cargo agents` command");
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!("subcommand `{name}` has invalid characters (allow ASCII alphanumeric, `-`, `_`)");
+    }
+    Ok(())
+}
+
+/// Validate a raw subcommand into a `Subcommand`, promoting any inline
+/// `command` into a synthetic installation entry.
+fn validate_subcommand(
+    name: String,
+    raw: RawSubcommand,
+    installations: &mut Vec<Installation>,
+    names: &mut std::collections::BTreeSet<String>,
+) -> Result<Subcommand> {
+    validate_subcommand_name(&name)?;
+
+    let RawSubcommand {
+        description,
+        audience,
+        command: raw_command,
+        crates,
+    } = raw;
+
+    if description.len() > MAX_SUBCOMMAND_DESCRIPTION_LEN {
+        bail!("subcommand `{name}` description exceeds {MAX_SUBCOMMAND_DESCRIPTION_LEN} chars");
+    }
+
+    let command = resolve_or_promote(
+        raw_command,
+        installations,
+        names,
+        &mut || name.clone(),
+        &format!("subcommand `{name}`"),
+    )?;
+
+    Ok(Subcommand {
+        description,
+        audience,
+        command,
+        crates,
     })
 }
 
@@ -1463,6 +1580,7 @@ fn validate_skill_groups(
 mod tests {
     use super::*;
     use indoc::indoc;
+    use std::collections::BTreeMap;
 
     use crate::predicate::PredicateSet;
 
@@ -1950,6 +2068,7 @@ mod tests {
             skills: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
+            subcommands: BTreeMap::new(),
         };
         assert!(plugin_wildcard.applies_to_crates(&workspace_crates));
 
@@ -1961,6 +2080,7 @@ mod tests {
             skills: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
+            subcommands: BTreeMap::new(),
         };
         assert!(plugin_serde.applies_to_crates(&workspace_crates));
 
@@ -1972,6 +2092,7 @@ mod tests {
             skills: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
+            subcommands: BTreeMap::new(),
         };
         assert!(!plugin_other.applies_to_crates(&workspace_crates));
 
@@ -1983,6 +2104,7 @@ mod tests {
             skills: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
+            subcommands: BTreeMap::new(),
         };
         assert!(!plugin_version.applies_to_crates(&workspace_crates));
     }
@@ -3311,5 +3433,228 @@ mod tests {
             !toml_str.contains(r#"source = "crate""#),
             "explicit crate_path should NOT use shorthand, got:\n{toml_str}"
         );
+    }
+
+    #[test]
+    fn parse_subcommand_minimal_named() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "tool"
+            source = "cargo"
+            crate = "example-tool"
+
+            [subcommand.foo]
+            description = "Run foo"
+            command = "tool"
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.subcommands.len(), 1);
+        let sub = &plugin.subcommands["foo"];
+        assert_eq!(sub.description, "Run foo");
+        assert_eq!(sub.audience, Audience::Agents); // default
+        assert_eq!(sub.command, "tool");
+    }
+
+    #[test]
+    fn parse_subcommand_audience_humans() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "tool"
+            source = "cargo"
+            crate = "example-tool"
+
+            [subcommand.foo]
+            description = "Run foo"
+            command = "tool"
+            audience = "humans"
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.subcommands["foo"].audience, Audience::Humans);
+    }
+
+    #[test]
+    fn parse_subcommand_inline_command_is_promoted() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [subcommand.foo]
+            description = "Run foo"
+            command = { source = "cargo", crate = "example-tool", executable = "example-tool" }
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        // The inline command is promoted to a synthetic installation named
+        // after the subcommand.
+        assert_eq!(plugin.subcommands["foo"].command, "foo");
+        let install = plugin
+            .installations
+            .iter()
+            .find(|i| i.name == "foo")
+            .expect("synthetic installation present");
+        assert_eq!(install.executable.as_deref(), Some("example-tool"));
+    }
+
+    #[test]
+    fn parse_subcommand_rejects_unknown_field() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [subcommand.foo]
+            description = "Run foo"
+            command = "tool"
+            bogus = 42
+        "#};
+        let err = from_str(toml).err().expect("expected error");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("bogus") || msg.contains("unknown"), "{msg}");
+    }
+
+    #[test]
+    fn parse_subcommand_rejects_reserved_name() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "tool"
+            source = "cargo"
+            crate = "example-tool"
+
+            [subcommand.init]
+            description = "Try to shadow init"
+            command = "tool"
+        "#};
+        let err = from_str(toml).err().expect("expected error");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("shadows") && msg.contains("init"), "{msg}");
+    }
+
+    #[test]
+    fn parse_subcommand_rejects_invalid_name_chars() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "tool"
+            source = "cargo"
+            crate = "example-tool"
+
+            [subcommand."foo.bar"]
+            description = "dotted name"
+            command = "tool"
+        "#};
+        let err = from_str(toml).err().expect("expected error");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("invalid characters"), "{msg}");
+    }
+
+    #[test]
+    fn parse_subcommand_rejects_oversized_description() {
+        let huge = "x".repeat(1100);
+        let toml = format!(
+            r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "tool"
+            source = "cargo"
+            crate = "example-tool"
+
+            [subcommand.foo]
+            description = "{huge}"
+            command = "tool"
+            "#
+        );
+        let err = from_str(&toml).err().expect("expected error");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("1024"), "{msg}");
+    }
+
+    #[test]
+    fn parse_subcommand_unknown_command_reference_fails() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [subcommand.foo]
+            description = "..."
+            command = "missing"
+        "#};
+        let err = from_str(toml).err().expect("expected error");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("unknown installation"), "{msg}");
+    }
+
+    #[test]
+    fn scan_source_dir_loads_plugin_with_subcommand() {
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[File(
+            "demo-plugin/SYMPOSIUM.toml",
+            indoc! {r#"
+                name = "demo-plugin"
+                crates = ["example-crate"]
+
+                [[installations]]
+                name = "example-tool"
+                source = "cargo"
+                crate = "example-tool"
+                executable = "example-tool"
+                args = ["serve"]
+
+                [subcommand.demo]
+                description = "Run the demo tool"
+                audience = "agents"
+                command = "example-tool"
+            "#},
+        )]);
+
+        let contents = scan_source_dir(tmp.path()).unwrap();
+        assert_eq!(contents.plugins.len(), 1);
+        let parsed = contents.plugins[0].as_ref().unwrap();
+        let sub = &parsed.plugin.subcommands["demo"];
+        assert_eq!(sub.description, "Run the demo tool");
+        assert_eq!(sub.audience, Audience::Agents);
+        assert_eq!(sub.command, "example-tool");
+
+        let install = parsed
+            .plugin
+            .installations
+            .iter()
+            .find(|i| i.name == "example-tool")
+            .expect("named installation present");
+        assert_eq!(install.executable.as_deref(), Some("example-tool"));
+        assert_eq!(install.args, vec!["serve".to_string()]);
+    }
+
+    #[test]
+    fn parse_subcommand_with_crates_predicate() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "tool"
+            source = "cargo"
+            crate = "example-tool"
+
+            [subcommand.foo]
+            description = "Only for serde projects"
+            command = "tool"
+            crates = ["serde"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        let sub = &plugin.subcommands["foo"];
+        let cr = sub.crates.as_ref().expect("crates predicate present");
+        assert_eq!(cr.predicates.len(), 1);
+        assert!(cr.predicates[0].references_crate("serde"));
     }
 }
