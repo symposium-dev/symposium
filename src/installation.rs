@@ -36,6 +36,17 @@ pub struct CargoSource {
     /// crates.io is not consulted to discover binary names.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git: Option<String>,
+    /// Install into the user's global cargo location (`~/.cargo/bin`) instead
+    /// of a symposium-managed cache. The default (`false`) uses
+    /// `cargo install --root <symposium-cache>` so binaries don't pollute the
+    /// global namespace; hook execution adds the cache `bin/` to `$PATH` so
+    /// scripts can still invoke them by name.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub global: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// A directory of files acquired from a GitHub repository (or subtree).
@@ -142,18 +153,27 @@ pub async fn query_crate_binaries(
 }
 
 /// Install a crate using cargo binstall (fast) or cargo install (fallback).
+///
+/// `cache_dir` is `Some` for scoped installs (passed via `--root`) and `None`
+/// for global installs (uses cargo's default location).
 pub(crate) async fn install_cargo_crate(
     crate_name: &str,
     version: &str,
     binary_name: Option<String>,
-    cache_dir: PathBuf,
+    cache_dir: Option<PathBuf>,
     git: Option<String>,
 ) -> Result<()> {
     let crate_name = crate_name.to_string();
     let version = version.to_string();
 
     tokio::task::spawn_blocking(move || {
-        install_cargo_crate_sync(&crate_name, &version, binary_name, &cache_dir, git)
+        install_cargo_crate_sync(
+            &crate_name,
+            &version,
+            binary_name,
+            cache_dir.as_deref(),
+            git,
+        )
     })
     .await
     .context("Cargo install task panicked")?
@@ -163,41 +183,54 @@ fn install_cargo_crate_sync(
     crate_name: &str,
     version: &str,
     binary_name: Option<String>,
-    cache_dir: &Path,
+    cache_dir: Option<&Path>,
     git: Option<String>,
 ) -> Result<()> {
     use std::fs;
     use std::process::Command;
 
-    if let Some(parent) = cache_dir.parent()
-        && parent.exists()
-    {
-        for entry in fs::read_dir(parent)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path != cache_dir && path.is_dir() {
-                fs::remove_dir_all(&path).ok();
+    if let Some(cache_dir) = cache_dir {
+        if let Some(parent) = cache_dir.parent()
+            && parent.exists()
+        {
+            for entry in fs::read_dir(parent)? {
+                let entry = entry?;
+                let path = entry.path();
+                if path != cache_dir && path.is_dir() {
+                    fs::remove_dir_all(&path).ok();
+                }
             }
         }
+        fs::create_dir_all(cache_dir)?;
     }
 
-    fs::create_dir_all(cache_dir)?;
-
-    let crate_spec = format!("{}@{}", crate_name, version);
+    // Empty version → just the crate name. Avoids `cargo install rtk@` which
+    // cargo rejects.
+    let crate_spec = if version.is_empty() {
+        crate_name.to_string()
+    } else {
+        format!("{}@{}", crate_name, version)
+    };
+    let cache_dir_str = cache_dir.map(|p| p.to_str().unwrap().to_string());
 
     // Try cargo binstall first (faster, uses prebuilt binaries).
     tracing::info!("Attempting cargo binstall for {}", crate_spec);
-    let mut binstall_args = vec!["binstall", "--no-confirm", "--root"];
+    let mut binstall_args: Vec<&str> = vec!["binstall", "--no-confirm"];
+    if let Some(dir) = cache_dir_str.as_deref() {
+        binstall_args.push("--root");
+        binstall_args.push(dir);
+    }
     if let Some(git) = &git {
         binstall_args.push("--git");
         binstall_args.push(git);
     }
-    binstall_args.extend([cache_dir.to_str().unwrap(), &crate_spec]);
-    let binstall_result = Command::new("cargo").args(binstall_args).output();
+    binstall_args.push(&crate_spec);
+    let binstall_result = Command::new("cargo").args(&binstall_args).output();
 
-    let binary_path = binary_name
-        .as_ref()
-        .map(|bin| cache_dir.join("bin").join(platform_binary_exe(bin)));
+    let binary_path = match (cache_dir, binary_name.as_ref()) {
+        (Some(dir), Some(bin)) => Some(dir.join("bin").join(platform_binary_exe(bin))),
+        _ => None,
+    };
 
     match binstall_result {
         Ok(output) if output.status.success() => {
@@ -223,14 +256,18 @@ fn install_cargo_crate_sync(
     }
 
     tracing::info!("Falling back to cargo install for {}", crate_spec);
-    let mut args = vec!["install", "--root"];
+    let mut args: Vec<&str> = vec!["install"];
+    if let Some(dir) = cache_dir_str.as_deref() {
+        args.push("--root");
+        args.push(dir);
+    }
     if let Some(git) = &git {
         args.push("--git");
         args.push(git);
     }
-    args.extend([cache_dir.to_str().unwrap(), &crate_spec]);
+    args.push(&crate_spec);
     let install_result = Command::new("cargo")
-        .args(args)
+        .args(&args)
         .output()
         .context("Failed to run cargo install")?;
 
@@ -263,16 +300,49 @@ fn git_cache_version(git_url: &str, version: Option<&str>) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-/// Acquire a cargo installation: install if missing, return the cache dir
-/// plus the resolved binary name (when discoverable from crates.io).
+/// Outcome of acquiring a cargo source.
+struct AcquiredCargo {
+    /// Symposium-managed cache dir, or `None` for global installs (no --root).
+    cache_dir: Option<PathBuf>,
+    /// The resolved binary name, when known.
+    resolved_executable: Option<String>,
+}
+
+/// Acquire a cargo installation: install if missing.
+///
+/// Three branches, in priority order:
+/// - `global = true`: skip crates.io, install with no `--root` (binary lands
+///   in the user's `$CARGO_HOME/bin`). Validation guarantees the caller has
+///   set `executable`, so no inference needed. `cache_dir = None` is the
+///   signal that the source is unmanaged.
+/// - `git` source: skip crates.io, install with `--root <cache>` and
+///   `--git <url>`. Validation guarantees `executable`.
+/// - Plain crates.io: query for version + bin_names; auto-infer the binary
+///   when the crate has exactly one.
 async fn acquire_cargo(
     sym: &Symposium,
     cargo: &CargoSource,
     executable_hint: Option<&str>,
-) -> Result<(PathBuf, Option<String>)> {
-    // For git sources, we don't consult crates.io. Cache key folds in the URL
-    // and the user's version (if any). The user must specify `executable`
-    // since we have no other way to pick a binary.
+) -> Result<AcquiredCargo> {
+    if cargo.global {
+        // Validation requires `executable` for global cargo.
+        let resolved = executable_hint
+            .expect("validate_installation enforces `executable` for cargo + global")
+            .to_string();
+        install_cargo_crate(
+            &cargo.crate_name,
+            cargo.version.as_deref().unwrap_or(""),
+            Some(resolved.clone()),
+            None,
+            cargo.git.clone(),
+        )
+        .await?;
+        return Ok(AcquiredCargo {
+            cache_dir: None,
+            resolved_executable: Some(resolved),
+        });
+    }
+
     if let Some(git_url) = cargo.git.as_deref() {
         let resolved = match executable_hint {
             Some(name) => name.to_string(),
@@ -283,19 +353,22 @@ async fn acquire_cargo(
             ),
         };
         let cache_version = git_cache_version(git_url, cargo.version.as_deref());
-        let cache_dir = get_binary_cache_dir(sym, &cargo.crate_name, &cache_version)?;
-        let probe = cache_dir.join("bin").join(platform_binary_exe(&resolved));
+        let dir = get_binary_cache_dir(sym, &cargo.crate_name, &cache_version)?;
+        let probe = dir.join("bin").join(platform_binary_exe(&resolved));
         if !probe.exists() {
             install_cargo_crate(
                 &cargo.crate_name,
                 cargo.version.as_deref().unwrap_or(""),
                 Some(resolved.clone()),
-                cache_dir.clone(),
+                Some(dir.clone()),
                 Some(git_url.to_string()),
             )
             .await?;
         }
-        return Ok((cache_dir, Some(resolved)));
+        return Ok(AcquiredCargo {
+            cache_dir: Some(dir),
+            resolved_executable: Some(resolved),
+        });
     }
 
     let (version, bin_names) =
@@ -314,24 +387,26 @@ async fn acquire_cargo(
         },
     };
 
-    let cache_dir = get_binary_cache_dir(sym, &cargo.crate_name, &version)?;
-    let probe_path = resolved
+    let dir = get_binary_cache_dir(sym, &cargo.crate_name, &version)?;
+    let probe = resolved
         .as_ref()
-        .map(|n| cache_dir.join("bin").join(platform_binary_exe(n)));
-
-    let already = probe_path.as_ref().map_or(false, |p| p.exists());
+        .map(|n| dir.join("bin").join(platform_binary_exe(n)));
+    let already = probe.as_ref().map_or(false, |p| p.exists());
     if !already {
         install_cargo_crate(
             &cargo.crate_name,
             &version,
             resolved.clone(),
-            cache_dir.clone(),
+            Some(dir.clone()),
             None,
         )
         .await?;
     }
 
-    Ok((cache_dir, resolved))
+    Ok(AcquiredCargo {
+        cache_dir: Some(dir),
+        resolved_executable: resolved,
+    })
 }
 
 /// Acquire a github source: returns the cache directory containing the repo
@@ -345,16 +420,24 @@ pub(crate) async fn acquire_github(sym: &Symposium, git: &GithubSource) -> Resul
         .await
 }
 
-/// Acquired source — where files ended up on disk, plus the kind so
-/// `executable` / `script` can be resolved correctly relative to it.
-#[derive(Debug)]
+/// Intermediate result of acquiring a `Source`: where the bits landed and
+/// the layout-specific hooks needed to turn an `executable` / `script` name
+/// into a concrete path. Consumed by `hook::acquire_installation`, which
+/// wraps this together with the installation's name, `install_commands`,
+/// and (for no-source installs) absolute path defaults to produce the
+/// fully-resolved `AcquiredInstallation`.
 pub struct AcquiredSource {
-    pub base: PathBuf,
-    pub kind: AcquiredKind,
-    /// For cargo, the binary name we ended up with (from `executable_hint`
-    /// or by inferring the crate's sole binary). Used as the fallback when
-    /// the hook command supplies no explicit executable. `None` for github.
+    /// Where bits landed. `None` for global cargo (binary is in
+    /// `~/.cargo/bin`, which we don't manage).
+    pub base: Option<PathBuf>,
+    /// For cargo, the binary name that was installed. Used as the fallback
+    /// when neither the installation nor the hook supplies an explicit
+    /// `executable`. `None` for github (which has no notion of "default
+    /// binary").
     pub resolved_executable: Option<String>,
+    /// Layout discriminator — cargo binaries live under `<base>/bin/`,
+    /// github paths live under `<base>/` directly.
+    pub kind: AcquiredKind,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -364,25 +447,37 @@ pub enum AcquiredKind {
 }
 
 impl AcquiredSource {
-    /// Path of an `executable` declared on installation/hook.
+    /// Resolve an `executable` name to an absolute path inside the cache.
+    /// Only valid for managed sources (`self.base.is_some()`); callers
+    /// should special-case unmanaged sources (global cargo) before calling.
+    /// Cargo applies the platform exe suffix; github does not.
     pub fn resolve_executable(&self, name: &str) -> PathBuf {
+        let base = self
+            .base
+            .as_ref()
+            .expect("resolve_executable called on unmanaged source");
         match self.kind {
-            AcquiredKind::Cargo => self.base.join("bin").join(platform_binary_exe(name)),
-            AcquiredKind::Github => self.base.join(name.trim_start_matches("./")),
+            AcquiredKind::Cargo => base.join("bin").join(platform_binary_exe(name)),
+            AcquiredKind::Github => base.join(name.trim_start_matches("./")),
         }
     }
 
-    /// Path of a `script` declared on installation/hook.
+    /// Resolve a `script` name to an absolute path inside the cache.
+    /// Same managed-only constraint as `resolve_executable`.
     pub fn resolve_script(&self, name: &str) -> PathBuf {
-        match self.kind {
-            AcquiredKind::Cargo => self.base.join("bin").join(name.trim_start_matches("./")),
-            AcquiredKind::Github => self.base.join(name.trim_start_matches("./")),
-        }
+        let base = self
+            .base
+            .as_ref()
+            .expect("resolve_script called on unmanaged source");
+        base.join(if matches!(self.kind, AcquiredKind::Cargo) {
+            format!("bin/{}", name.trim_start_matches("./"))
+        } else {
+            name.trim_start_matches("./").to_string()
+        })
     }
 }
 
-/// Acquire a source, downloading / installing as needed. The returned
-/// `AcquiredSource` is used to resolve `executable` / `script` paths.
+/// Acquire a source, downloading / installing as needed.
 ///
 /// `executable_hint` is only used for cargo (to pick which binary to install
 /// for multi-binary crates, or as the binary name when using a git source).
@@ -393,28 +488,19 @@ pub async fn acquire_source(
 ) -> Result<AcquiredSource> {
     match source {
         Source::Cargo(c) => {
-            let (base, resolved) = acquire_cargo(sym, c, executable_hint).await?;
+            let acquired = acquire_cargo(sym, c, executable_hint).await?;
             Ok(AcquiredSource {
-                base,
+                base: acquired.cache_dir,
+                resolved_executable: acquired.resolved_executable,
                 kind: AcquiredKind::Cargo,
-                resolved_executable: resolved,
             })
         }
         Source::Github(g) => Ok(AcquiredSource {
-            base: acquire_github(sym, g).await?,
-            kind: AcquiredKind::Github,
+            base: Some(acquire_github(sym, g).await?),
             resolved_executable: None,
+            kind: AcquiredKind::Github,
         }),
     }
-}
-
-/// What an installation resolves to once acquired.
-#[derive(Debug)]
-pub enum Runnable {
-    /// Run as a binary: `path args...`.
-    Exec(PathBuf),
-    /// Run as a shell script: `sh path args...`.
-    Script(PathBuf),
 }
 
 /// Ensure a path is executable on Unix. No-op on other platforms.

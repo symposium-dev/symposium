@@ -80,3 +80,19 @@ matcher = "Task"
 command = "bare-setup"
 script = "$TEST_DIR/dot-symposium/plugins/test-plugin/scripts/hook-supplied.sh"
 format = "symposium"
+
+# Env-var test: a no-source requirement with an absolute `executable` exposes
+# `$SYMPOSIUM_helper` to the hook script. The script echoes the env var so the
+# integration test can assert the wiring.
+[[installations]]
+name = "helper"
+executable = "$TEST_DIR/helper-bin"
+install_commands = ["echo helper-payload > $TEST_DIR/helper-bin"]
+
+[[hooks]]
+name = "env-var-test"
+event = "PreToolUse"
+matcher = "TodoWrite"
+requirements = ["helper"]
+command = { script = "$TEST_DIR/dot-symposium/plugins/test-plugin/scripts/echo-helper-env.sh" }
+format = "symposium"

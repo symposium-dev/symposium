@@ -53,7 +53,7 @@ crates = ["serde", "tokio"]  # Only active in projects using serde OR tokio
 crates = ["*"]
 ```
 
-If omitted, the plugin applies to all projects. Plugin-level filtering is combined with skill group filtering using AND logic — both must match for skills to be available.
+Plugin-level filtering is combined with skill group filtering using AND logic — both must match for skills to be available.
 
 ## `[[skills]]` groups
 
@@ -119,7 +119,7 @@ executable = "rg"      # the binary to run; if omitted and the crate has a singl
 args = ["--version"]   # optional default args
 ```
 
-Symposium attempts `cargo binstall` first, falls back to `cargo install`, and caches the result under `~/.symposium/cache/binaries/<crate>/<version>/bin/`. The chosen `executable` resolves to `<cache>/bin/<executable>`.
+Symposium attempts `cargo binstall` first, falls back to `cargo install`, and caches the result under `~/.symposium/cache/binaries/<crate>/<version>/bin/` (passing `--root` so the install doesn't pollute `~/.cargo/bin`). The chosen `executable` resolves to `<cache>/bin/<executable>`. Hooks that depend on this installation get `<cache>/bin/` prepended to `$PATH`, so scripts can invoke the binary by name.
 
 To install from a git repo instead of crates.io, set `git`:
 
@@ -130,6 +130,17 @@ source = "cargo"
 crate = "tool"
 git = "https://github.com/example/tool"
 executable = "tool"   # required for git sources (crates.io is not consulted)
+```
+
+To install into the user's global cargo location (`~/.cargo/bin`) instead of a symposium-managed cache, set `global = true`. No `--root` is passed; `$PATH` is not augmented (the binary is expected to already be on `$PATH`).
+
+```toml
+[[installations]]
+name = "rg"
+source = "cargo"
+crate = "ripgrep"
+executable = "rg"
+global = true
 ```
 
 #### `github`
@@ -295,6 +306,22 @@ script = "hooks/claude/rtk-rewrite.sh"
 ```
 
 Requirement installation is best-effort: failures are logged and dispatch continues.
+
+### Hook environment
+
+Hooks are spawned with the following extras on top of the parent environment:
+
+| Variable | When set | Value |
+|----------|----------|-------|
+| `$SYMPOSIUM_DIR_<name>` | Installation has a symposium-managed cache (scoped cargo, github) | Absolute path to the cache / clone directory. |
+| `$SYMPOSIUM_<name>` | Installation resolves to a runnable with an absolute path | Absolute path to the resolved executable / script. |
+| `$PATH` | One or more dependencies contribute a runnable with an absolute path | Each runnable's parent dir is prepended, with the hook's `command` first. |
+
+`<name>` is the installation name with non-alphanumeric characters replaced by `_` (e.g. `rtk-hooks` → `SYMPOSIUM_DIR_rtk_hooks`). Both the hook's `command` installation and every requirement (recursively, one level via installation-level requirements) contribute.
+
+Global cargo installs (`global = true`) don't set `$SYMPOSIUM_DIR_<name>` or augment `$PATH` — the binary is expected to already be on the user's `$PATH` via `~/.cargo/bin`.
+
+> **`install_commands` runs before env vars are set.** The `$SYMPOSIUM_*` vars and the augmented `$PATH` are only available to the hook's spawned process. `install_commands` runs earlier, inside the symposium dispatch process, so it cannot reference its own (or any other) installation's env vars. Use absolute paths in `install_commands` instead.
 
 ### Supported hook events
 
