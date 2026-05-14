@@ -7,7 +7,6 @@
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
@@ -20,24 +19,37 @@ const USER_AGENT: &str = "symposium (https://github.com/symposium-dev/symposium)
 const REPO_URL: &str = "https://github.com/symposium-dev/symposium";
 const BINARY_NAME: &str = "cargo-agents";
 
-/// Query crates.io for the latest published version of symposium.
-pub async fn latest_version() -> Result<semver::Version> {
-    let client = crates_io_api::AsyncClient::new(USER_AGENT, Duration::from_millis(1000))
-        .context("failed to create crates.io client")?;
-    let krate = client
-        .get_crate(CRATE_NAME)
-        .await
-        .context("failed to query crates.io for symposium")?;
-    let max_version = &krate.crate_data.max_version;
-    semver::Version::parse(max_version).context("failed to parse latest version from crates.io")
+/// Query the registry for the latest published version of symposium
+/// by running `cargo search symposium --limit 1`.
+pub fn latest_version() -> Result<semver::Version> {
+    let output = Command::new("cargo")
+        .args(["search", CRATE_NAME, "--limit", "1"])
+        .output()
+        .context("failed to run cargo search")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("cargo search failed: {stderr}");
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // First line: `symposium = "0.3.0"    # AI the Rust Way`
+    let version_str = stdout
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix(&format!("{CRATE_NAME} = \"")))
+        .and_then(|rest| rest.split('"').next())
+        .context("unexpected cargo search output")?;
+
+    semver::Version::parse(version_str).context("failed to parse version from cargo search")
 }
 
 /// Check whether a newer version is available.  Returns `Some(latest)`
 /// if an upgrade is available, `None` if we're current or ahead.
-pub async fn check_upgrade() -> Result<Option<semver::Version>> {
+pub fn check_upgrade() -> Result<Option<semver::Version>> {
     let current =
         semver::Version::parse(CURRENT_VERSION).context("failed to parse current version")?;
-    let latest = latest_version().await?;
+    let latest = latest_version()?;
     if latest > current {
         Ok(Some(latest))
     } else {
@@ -47,7 +59,7 @@ pub async fn check_upgrade() -> Result<Option<semver::Version>> {
 
 /// Run the self-update using the configured source strategy.
 pub async fn self_update(out: &Output, source: UpdateSource) -> Result<()> {
-    let target_version = match check_upgrade().await {
+    let target_version = match check_upgrade() {
         Ok(Some(latest)) => {
             out.info(format!("updating symposium {CURRENT_VERSION} → {latest}"));
             latest
@@ -131,10 +143,7 @@ async fn download_release(version: &semver::Version, install_dir: &std::path::Pa
         .context("failed to download release")?;
 
     if !response.status().is_success() {
-        bail!(
-            "download failed: HTTP {} from {url}",
-            response.status()
-        );
+        bail!("download failed: HTTP {} from {url}", response.status());
     }
 
     let bytes = response
@@ -227,8 +236,7 @@ fn install_binary(binary_bytes: &[u8], install_dir: &std::path::Path) -> Result<
             .context("failed to set executable permissions")?;
     }
 
-    tmp.persist(&dest)
-        .context("failed to replace binary")?;
+    tmp.persist(&dest).context("failed to replace binary")?;
 
     tracing::info!(path = %dest.display(), "installed updated binary");
     Ok(())

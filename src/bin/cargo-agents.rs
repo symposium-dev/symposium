@@ -67,7 +67,7 @@ async fn main() -> ExitCode {
         match sym.config.auto_update {
             AutoUpdate::Off => unreachable!(),
             AutoUpdate::Warn => {
-                if let Ok(Some(latest)) = self_update::check_upgrade().await {
+                if let Ok(Some(latest)) = self_update::check_upgrade() {
                     out.warn(format!(
                         "symposium {} is available (current: {}). \
                          Run `cargo agents self-update` to upgrade.",
@@ -77,12 +77,14 @@ async fn main() -> ExitCode {
                 }
             }
             AutoUpdate::On => {
-                if let Ok(Some(latest)) = self_update::check_upgrade().await {
+                if let Ok(Some(latest)) = self_update::check_upgrade() {
                     out.info(format!(
                         "auto-updating symposium {} → {latest}...",
                         state::CURRENT_VERSION,
                     ));
-                    if let Err(e) = self_update::self_update(&Output::quiet(), sym.config.update_source).await {
+                    if let Err(e) =
+                        self_update::self_update(&Output::quiet(), sym.config.update_source).await
+                    {
                         out.warn(format!("auto-update failed: {e}"));
                     } else {
                         self_update::re_exec();
