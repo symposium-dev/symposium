@@ -1641,3 +1641,46 @@ async fn auto_update_re_execs_on_hook() {
         .expect("failed to spawn");
     assert_surprise(&output);
 }
+
+#[tokio::test]
+async fn session_start_hook_warns_about_update_in_context() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&mock_cargo_script("99.0.0"));
+            ctx.sym.config.auto_update = symposium::config::AutoUpdate::Warn;
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+            // Clear the throttle so the hook's session-start check fires.
+            let dir = ctx.sym.config_dir().to_path_buf();
+            let mut state = symposium::state::load(&dir).unwrap_or_default();
+            state.last_update_check = None;
+            let contents = toml::to_string_pretty(&state).unwrap();
+            std::fs::write(dir.join("state.toml"), contents).unwrap();
+
+            let result = ctx
+                .prompt_or_hook(
+                    "hello",
+                    &[symposium_testlib::HookStep::session_start()],
+                    symposium::hook_schema::HookAgent::Claude,
+                )
+                .await?;
+
+            assert!(
+                result.has_context_containing("99.0.0 is available"),
+                "session-start should include update nudge in additionalContext: {:#?}",
+                result.hooks,
+            );
+            assert!(
+                result.has_context_containing("cargo agents self-update"),
+                "nudge should mention self-update command: {:#?}",
+                result.hooks,
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}

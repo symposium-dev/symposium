@@ -58,12 +58,17 @@ async fn main() -> ExitCode {
     plugins::ensure_plugin_sources(&sym, cli.update).await;
 
     // Auto-update = "on": check for updates and re-exec if a new binary was
-    // installed.  Skipped for self-update (which always checks explicitly).
-    // The warn path is handled inside cli::run via maybe_warn_for_update.
-    if !matches!(cli.command, Some(Commands::SelfUpdate))
-        && self_update::maybe_check_for_update(&sym, &out).await
-    {
-        self_update::re_exec();
+    // installed.  Skipped for self-update (which always checks explicitly)
+    // and for hooks (session-start injects the warn nudge into hook output;
+    // the "on" re-exec for hooks is handled here).
+    if !matches!(cli.command, Some(Commands::SelfUpdate)) && !is_hook {
+        if self_update::maybe_check_for_update(&sym, &out).await {
+            self_update::re_exec();
+        }
+    } else if is_hook && sym.config.auto_update == config::AutoUpdate::On {
+        if self_update::maybe_check_for_update(&sym, &Output::quiet()).await {
+            self_update::re_exec();
+        }
     }
 
     let cwd = std::env::current_dir().expect("failed to get current directory");
