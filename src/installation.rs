@@ -437,3 +437,85 @@ pub fn make_executable(path: &Path) -> Result<()> {
     let _ = path;
     Ok(())
 }
+
+/// Run a list of post-install shell commands sequentially. Stops at the first
+/// failure.
+pub async fn run_install_commands(commands: &[String]) -> Result<()> {
+    for cmd in commands {
+        let status = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(cmd)
+            .status()
+            .await?;
+        if !status.success() {
+            bail!("install command `{cmd}` exited with {status}");
+        }
+    }
+    Ok(())
+}
+
+/// Acquire an installation as a requirement: run its kind-specific source
+/// step (if any), then any declared `install_commands`. Does NOT resolve to
+/// a runnable — requirements are only ever "ensure on disk".
+pub async fn install_requirement(
+    sym: &Symposium,
+    install: &crate::plugins::Installation,
+) -> Result<()> {
+    if let Some(source) = &install.source {
+        acquire_source(sym, source, install.executable.as_deref()).await?;
+    }
+    run_install_commands(&install.install_commands).await
+}
+
+/// Acquire an installation's source (if any), run its `install_commands`, and
+/// pick a `Runnable` from (`installation.executable`/`script`) with the
+/// caller's overrides used when the installation leaves them unset.
+///
+/// `label` is the caller's identifier for error messages (e.g. `"hook `foo`"`
+/// or `"subcommand `bar`"`). Used purely for diagnostics; does not affect
+/// resolution.
+///
+/// Validation (in `plugins.rs`) guarantees that across the installation and
+/// the caller-side overrides, at most one of `executable`/`script` is set,
+/// so this function does not re-check that invariant.
+pub async fn resolve_runnable(
+    sym: &Symposium,
+    installation: &crate::plugins::Installation,
+    override_executable: Option<&str>,
+    override_script: Option<&str>,
+    label: &str,
+) -> Result<Runnable> {
+    let exec_choice = installation.executable.as_deref().or(override_executable);
+    let script_choice = installation.script.as_deref().or(override_script);
+
+    let acquired = match &installation.source {
+        Some(source) => Some(acquire_source(sym, source, exec_choice).await?),
+        None => None,
+    };
+
+    run_install_commands(&installation.install_commands).await?;
+
+    let runnable = match (acquired, exec_choice, script_choice) {
+        (Some(a), Some(name), None) => Runnable::Exec(a.resolve_executable(name)),
+        (Some(a), None, Some(name)) => Runnable::Script(a.resolve_script(name)),
+        (Some(a), None, None) => {
+            // Cargo single-binary fallback: the binary name resolved at
+            // acquisition time (from crates.io or the explicit hint).
+            if let Some(name) = a.resolved_executable.as_deref() {
+                Runnable::Exec(a.resolve_executable(name))
+            } else {
+                bail!("{label}: command resolved to no executable or script");
+            }
+        }
+        (None, Some(name), None) => Runnable::Exec(PathBuf::from(name)),
+        (None, None, Some(name)) => Runnable::Script(PathBuf::from(name)),
+        (None, None, None) => bail!("{label}: command resolved to no executable or script"),
+        // Unreachable: validation rejects executable+script set together.
+        (_, Some(_), Some(_)) => unreachable!("validation forbids both executable and script"),
+    };
+
+    if let Runnable::Exec(path) = &runnable {
+        make_executable(path).ok();
+    }
+    Ok(runnable)
+}
