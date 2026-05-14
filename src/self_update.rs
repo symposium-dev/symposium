@@ -22,7 +22,7 @@ const BINARY_NAME: &str = "cargo-agents";
 /// Query the registry for the latest published version of symposium
 /// by running `cargo search symposium --limit 1`.
 pub fn latest_version() -> Result<semver::Version> {
-    let output = Command::new("cargo")
+    let output = crate::cargo_command()
         .args(["search", CRATE_NAME, "--limit", "1"])
         .output()
         .context("failed to run cargo search")?;
@@ -33,8 +33,14 @@ pub fn latest_version() -> Result<semver::Version> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // First line: `symposium = "0.3.0"    # AI the Rust Way`
-    let version_str = stdout
+    parse_cargo_search_output(&stdout)
+}
+
+/// Parse the version from `cargo search` output.
+///
+/// Expected format: `symposium = "0.3.0"    # AI the Rust Way`
+fn parse_cargo_search_output(output: &str) -> Result<semver::Version> {
+    let version_str = output
         .lines()
         .next()
         .and_then(|line| line.strip_prefix(&format!("{CRATE_NAME} = \"")))
@@ -247,7 +253,7 @@ fn install_binary(binary_bytes: &[u8], install_dir: &std::path::Path) -> Result<
 // ---------------------------------------------------------------------------
 
 fn cargo_install() -> Result<()> {
-    let status = Command::new("cargo")
+    let status = crate::cargo_command()
         .args(["install", CRATE_NAME, "--force"])
         .status()
         .context("failed to run cargo install")?;
@@ -294,5 +300,91 @@ pub fn re_exec() -> ! {
                 std::process::exit(1);
             });
         std::process::exit(status.code().unwrap_or(1));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_search_output_typical() {
+        let output = r#"symposium = "1.2.3"    # AI the Rust Way
+... and 105 crates more (use --limit N to see more)
+"#;
+        let v = parse_cargo_search_output(output).unwrap();
+        assert_eq!(v, semver::Version::new(1, 2, 3));
+    }
+
+    #[test]
+    fn parse_search_output_prerelease() {
+        let output = "symposium = \"0.4.0-beta.1\"    # AI the Rust Way\n";
+        let v = parse_cargo_search_output(output).unwrap();
+        assert_eq!(v.to_string(), "0.4.0-beta.1");
+    }
+
+    #[test]
+    fn parse_search_output_no_description() {
+        let output = "symposium = \"0.3.0\"\n";
+        let v = parse_cargo_search_output(output).unwrap();
+        assert_eq!(v, semver::Version::new(0, 3, 0));
+    }
+
+    #[test]
+    fn parse_search_output_wrong_crate() {
+        let output = "something-else = \"1.0.0\"    # Not symposium\n";
+        assert!(parse_cargo_search_output(output).is_err());
+    }
+
+    #[test]
+    fn parse_search_output_empty() {
+        assert!(parse_cargo_search_output("").is_err());
+    }
+
+    #[test]
+    fn extract_tarball_finds_binary() {
+        let tarball = build_test_tarball("cargo-agents", b"fake-binary-content");
+        let result = extract_tarball(&tarball).unwrap();
+        assert_eq!(result, b"fake-binary-content");
+    }
+
+    #[test]
+    fn extract_tarball_missing_binary() {
+        let tarball = build_test_tarball("wrong-name", b"data");
+        assert!(extract_tarball(&tarball).is_err());
+    }
+
+    #[test]
+    fn install_binary_creates_executable() {
+        let tmp = tempfile::tempdir().unwrap();
+        install_binary(b"#!/bin/sh\necho hello", tmp.path()).unwrap();
+
+        let installed = tmp.path().join(BINARY_NAME);
+        assert!(installed.exists());
+        assert_eq!(std::fs::read(&installed).unwrap(), b"#!/bin/sh\necho hello");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&installed).unwrap().permissions().mode();
+            assert!(mode & 0o111 != 0, "binary should be executable");
+        }
+    }
+
+    fn build_test_tarball(filename: &str, content: &[u8]) -> Vec<u8> {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        {
+            let mut builder = tar::Builder::new(&mut encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_size(content.len() as u64);
+            header.set_mode(0o755);
+            header.set_cksum();
+            builder.append_data(&mut header, filename, content).unwrap();
+            builder.finish().unwrap();
+        }
+        encoder.finish().unwrap()
     }
 }

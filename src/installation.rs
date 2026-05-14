@@ -167,7 +167,6 @@ fn install_cargo_crate_sync(
     git: Option<String>,
 ) -> Result<()> {
     use std::fs;
-    use std::process::Command;
 
     if let Some(parent) = cache_dir.parent()
         && parent.exists()
@@ -193,7 +192,7 @@ fn install_cargo_crate_sync(
         binstall_args.push(git);
     }
     binstall_args.extend([cache_dir.to_str().unwrap(), &crate_spec]);
-    let binstall_result = Command::new("cargo").args(binstall_args).output();
+    let binstall_result = crate::cargo_command().args(binstall_args).output();
 
     let binary_path = binary_name
         .as_ref()
@@ -229,7 +228,7 @@ fn install_cargo_crate_sync(
         args.push(git);
     }
     args.extend([cache_dir.to_str().unwrap(), &crate_spec]);
-    let install_result = Command::new("cargo")
+    let install_result = crate::cargo_command()
         .args(args)
         .output()
         .context("Failed to run cargo install")?;

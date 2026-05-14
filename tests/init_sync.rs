@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use symposium::state;
 use symposium_testlib::{TestMode, with_fixture};
 
 /// Read the user config file from the test context.
@@ -1288,6 +1289,90 @@ async fn agents_syncing_does_not_overwrite_user_managed_target() {
                 !target_dir.join(".symposium").exists(),
                 "no marker should be dropped onto a user-managed directory"
             );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// Self-update integration tests
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Self-update / state integration tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn self_update_command_exists() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            // Verify self-update is a recognized CLI command by parsing it.
+            // We don't actually run the update (that would hit the network),
+            // but this confirms the command is wired through dispatch.
+            let result = ctx.symposium(&["self-update"]).await;
+            // Will fail with network error or "up to date" — both are OK,
+            // we just care it didn't fail with "unknown command".
+            match result {
+                Ok(_) => {}
+                Err(e) => {
+                    let msg = format!("{e:#}");
+                    assert!(
+                        !msg.contains("not supported") && !msg.contains("unrecognized"),
+                        "self-update should be a valid command, got: {msg}"
+                    );
+                }
+            }
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn state_toml_tracks_version() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |ctx| {
+            assert!(state::load(ctx.sym.config_dir()).is_none());
+
+            state::ensure_current(ctx.sym.config_dir());
+
+            let s = state::load(ctx.sym.config_dir()).expect("state.toml should exist");
+            assert_eq!(s.version, state::CURRENT_VERSION);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn state_toml_update_check_throttling() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |ctx| {
+            let dir = ctx.sym.config_dir();
+
+            // First check: should be allowed (no state yet).
+            assert!(state::should_check_for_update(dir));
+
+            // Record a check.
+            state::record_update_check(dir);
+
+            // Immediately after: should be throttled.
+            assert!(!state::should_check_for_update(dir));
+
+            // Stamp version — should preserve the last-update-check.
+            state::stamp(dir);
+            assert!(!state::should_check_for_update(dir));
+
             Ok(())
         },
     )

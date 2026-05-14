@@ -57,16 +57,17 @@ async fn main() -> ExitCode {
     // Ensure git-based plugin sources are up to date (non-blocking on failure).
     plugins::ensure_plugin_sources(&sym, cli.update).await;
 
-    // Auto-update check (skip for hooks and self-update itself).
-    if !is_hook
-        && !matches!(cli.command, Some(Commands::SelfUpdate))
+    // Auto-update check (skip for self-update itself, which always checks).
+    // For hooks: "warn" is skipped (stderr isn't visible to the agent), but
+    // "on" still auto-updates silently so the next invocation uses the new binary.
+    if !matches!(cli.command, Some(Commands::SelfUpdate))
         && sym.config.auto_update != AutoUpdate::Off
         && state::should_check_for_update(sym.config_dir())
     {
         state::record_update_check(sym.config_dir());
         match sym.config.auto_update {
             AutoUpdate::Off => unreachable!(),
-            AutoUpdate::Warn => {
+            AutoUpdate::Warn if !is_hook => {
                 if let Ok(Some(latest)) = self_update::check_upgrade() {
                     out.warn(format!(
                         "symposium {} is available (current: {}). \
@@ -78,19 +79,24 @@ async fn main() -> ExitCode {
             }
             AutoUpdate::On => {
                 if let Ok(Some(latest)) = self_update::check_upgrade() {
-                    out.info(format!(
-                        "auto-updating symposium {} → {latest}...",
-                        state::CURRENT_VERSION,
-                    ));
+                    if !is_hook {
+                        out.info(format!(
+                            "auto-updating symposium {} → {latest}...",
+                            state::CURRENT_VERSION,
+                        ));
+                    }
                     if let Err(e) =
                         self_update::self_update(&Output::quiet(), sym.config.update_source).await
                     {
-                        out.warn(format!("auto-update failed: {e}"));
+                        if !is_hook {
+                            out.warn(format!("auto-update failed: {e}"));
+                        }
                     } else {
                         self_update::re_exec();
                     }
                 }
             }
+            _ => {}
         }
     }
 
