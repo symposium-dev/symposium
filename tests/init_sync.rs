@@ -1358,12 +1358,12 @@ async fn state_toml_tracks_version() {
         TestMode::SimulationOnly,
         &["plugins0", "workspace0"],
         async |ctx| {
-            let dir = ctx.sym.config_dir();
-            assert!(symposium::state::load(dir).is_none());
+            let dir = ctx.sym.config_dir().to_path_buf();
+            assert!(symposium::state::load(&dir).is_none());
 
-            symposium::state::ensure_current(dir);
+            symposium::state::ensure_current(&dir);
 
-            let s = symposium::state::load(dir).expect("state.toml should exist");
+            let s = symposium::state::load(&dir).expect("state.toml should exist");
             assert_eq!(s.version, symposium::state::CURRENT_VERSION);
             Ok(())
         },
@@ -1378,15 +1378,98 @@ async fn state_toml_update_check_throttling() {
         TestMode::SimulationOnly,
         &["plugins0", "workspace0"],
         async |ctx| {
-            let dir = ctx.sym.config_dir();
+            let dir = ctx.sym.config_dir().to_path_buf();
 
-            assert!(symposium::state::should_check_for_update(dir));
-            symposium::state::record_update_check(dir);
-            assert!(!symposium::state::should_check_for_update(dir));
+            assert!(symposium::state::should_check_for_update(&dir));
+            symposium::state::record_update_check(&dir);
+            assert!(!symposium::state::should_check_for_update(&dir));
 
-            symposium::state::stamp(dir);
-            assert!(!symposium::state::should_check_for_update(dir));
+            symposium::state::stamp(&dir);
+            assert!(!symposium::state::should_check_for_update(&dir));
 
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn sync_triggers_update_check() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&mock_cargo_script("99.0.0"));
+            ctx.sym.config.auto_update = symposium::config::AutoUpdate::Warn;
+
+            let dir = ctx.sym.config_dir().to_path_buf();
+            assert!(symposium::state::load(&dir).is_none());
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let s = symposium::state::load(&dir).expect("state.toml should exist after sync");
+            assert!(
+                s.last_update_check.is_some(),
+                "sync should have triggered an update check"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn sync_skips_update_check_when_throttled() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&mock_cargo_script("99.0.0"));
+            ctx.sym.config.auto_update = symposium::config::AutoUpdate::Warn;
+
+            let dir = ctx.sym.config_dir().to_path_buf();
+
+            // Record a recent check so the throttle kicks in.
+            symposium::state::record_update_check(&dir);
+            let before = symposium::state::load(&dir).unwrap().last_update_check;
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let after = symposium::state::load(&dir).unwrap().last_update_check;
+            assert_eq!(
+                before, after,
+                "update check should not have re-run within the throttle window"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn self_update_skips_check_when_disabled() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&mock_cargo_script("99.0.0"));
+            ctx.sym.config.auto_update = symposium::config::AutoUpdate::Off;
+
+            let dir = ctx.sym.config_dir().to_path_buf();
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let s = symposium::state::load(&dir);
+            let checked = s.as_ref().and_then(|s| s.last_update_check.as_ref());
+            assert!(
+                checked.is_none(),
+                "auto-update = off should not trigger any update check"
+            );
             Ok(())
         },
     )

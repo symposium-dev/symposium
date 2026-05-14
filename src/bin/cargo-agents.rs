@@ -2,7 +2,7 @@ use clap::Parser;
 use std::process::ExitCode;
 
 use symposium::cli::{Cli, Commands, PluginCommand};
-use symposium::config::{self, AutoUpdate};
+use symposium::config;
 use symposium::hook;
 use symposium::output::Output;
 use symposium::plugins;
@@ -57,45 +57,14 @@ async fn main() -> ExitCode {
     // Ensure git-based plugin sources are up to date (non-blocking on failure).
     plugins::ensure_plugin_sources(&sym, cli.update).await;
 
-    // Auto-update check (skip for self-update itself, which always checks).
-    // For hooks: "warn" is skipped (stderr isn't visible to the agent), but
-    // "on" still auto-updates silently so the next invocation uses the new binary.
-    if !matches!(cli.command, Some(Commands::SelfUpdate))
-        && sym.config.auto_update != AutoUpdate::Off
-        && state::should_check_for_update(sym.config_dir())
-    {
-        state::record_update_check(sym.config_dir());
-        match sym.config.auto_update {
-            AutoUpdate::Off => unreachable!(),
-            AutoUpdate::Warn if !is_hook => {
-                if let Ok(Some(latest)) = self_update::check_upgrade(&sym) {
-                    out.warn(format!(
-                        "symposium {} is available (current: {}). \
-                         Run `cargo agents self-update` to upgrade.",
-                        latest,
-                        state::CURRENT_VERSION,
-                    ));
-                }
-            }
-            AutoUpdate::On => {
-                if let Ok(Some(latest)) = self_update::check_upgrade(&sym) {
-                    if !is_hook {
-                        out.info(format!(
-                            "auto-updating symposium {} → {latest}...",
-                            state::CURRENT_VERSION,
-                        ));
-                    }
-                    if let Err(e) = self_update::self_update(&sym, &Output::quiet()).await {
-                        if !is_hook {
-                            out.warn(format!("auto-update failed: {e}"));
-                        }
-                    } else {
-                        self_update::re_exec();
-                    }
-                }
-            }
-            _ => {}
-        }
+    // For hook invocations, run the auto-update check here (hooks don't go
+    // through cli::run which handles it for other commands).  Only the
+    // auto-update = "on" re-exec path lives in the binary; the warn path
+    // is handled inside cli::run / maybe_check_for_update.
+    // Hooks don't go through cli::run(), so run the update check here.
+    // If auto-update = "on" succeeded, re-exec into the new binary.
+    if is_hook && self_update::maybe_check_for_update(&sym, &Output::quiet()).await {
+        self_update::re_exec();
     }
 
     let cwd = std::env::current_dir().expect("failed to get current directory");

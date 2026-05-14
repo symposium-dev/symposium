@@ -10,8 +10,9 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::{Symposium, UpdateSource};
+use crate::config::{AutoUpdate, Symposium, UpdateSource};
 use crate::output::Output;
+use crate::state;
 use crate::state::CURRENT_VERSION;
 
 const CRATE_NAME: &str = "symposium";
@@ -61,6 +62,49 @@ pub fn check_upgrade(sym: &Symposium) -> Result<Option<semver::Version>> {
         Ok(Some(latest))
     } else {
         Ok(None)
+    }
+}
+
+/// Periodic update check, called before command dispatch.
+///
+/// Respects `auto-update` config and the 24-hour throttle.  For `warn`,
+/// prints a nudge.  For `on`, downloads and installs the update, then
+/// returns `true` so the caller can re-exec into the new binary.
+pub async fn maybe_check_for_update(sym: &Symposium, out: &Output) -> bool {
+    if sym.config.auto_update == AutoUpdate::Off {
+        return false;
+    }
+    if !state::should_check_for_update(sym.config_dir()) {
+        return false;
+    }
+    state::record_update_check(sym.config_dir());
+
+    let latest = match check_upgrade(sym) {
+        Ok(Some(v)) => v,
+        _ => return false,
+    };
+
+    match sym.config.auto_update {
+        AutoUpdate::Warn => {
+            out.warn(format!(
+                "symposium {latest} is available (current: {CURRENT_VERSION}). \
+                 Run `cargo agents self-update` to upgrade.",
+            ));
+            false
+        }
+        AutoUpdate::On => {
+            out.info(format!(
+                "auto-updating symposium {CURRENT_VERSION} → {latest}..."
+            ));
+            match self_update(sym, &Output::quiet()).await {
+                Ok(()) => true,
+                Err(e) => {
+                    out.warn(format!("auto-update failed: {e}"));
+                    false
+                }
+            }
+        }
+        AutoUpdate::Off => unreachable!(),
     }
 }
 

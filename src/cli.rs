@@ -122,6 +122,13 @@ pub enum PluginCommand {
 /// `cwd` is the working directory for commands that need it (sync, start, crate).
 /// The binary passes `std::env::current_dir()`; tests pass the fixture workspace root.
 pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -> Result<()> {
+    // Periodic update check (skipped for self-update, which always checks).
+    // The return value signals whether a re-exec is needed (auto-update = "on"),
+    // but cli::run() can't replace the process — the binary handles that.
+    if !matches!(cmd, Commands::SelfUpdate) {
+        self_update::maybe_check_for_update(sym, out).await;
+    }
+
     match cmd {
         Commands::Init {
             agents,
