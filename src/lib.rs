@@ -4,6 +4,7 @@ pub mod config;
 pub mod crate_command;
 pub mod hook;
 pub mod hook_schema;
+pub(crate) mod installation;
 pub mod output;
 pub mod plugins;
 pub mod self_update;

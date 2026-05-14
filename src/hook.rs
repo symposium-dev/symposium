@@ -4,13 +4,14 @@ use std::{
     process::{Command, ExitCode, Stdio},
 };
 
+use crate::installation::{install_requirement, resolve_runnable};
 use crate::plugins::{HookFormat, Installation};
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
     plugins::ParsedPlugin,
 };
-use symposium_install::{Runnable, acquire_source, make_executable};
+use symposium_install::Runnable;
 
 /// A hook prepared for dispatch — installation names looked up to concrete
 /// `Installation` entries, so the dispatch loop never has to scan the plugin's
@@ -60,102 +61,33 @@ impl ResolvedHook {
     }
 }
 
-/// Acquire an installation as a requirement: run its kind-specific source
-/// step (if any), then any declared `install_commands`. Does NOT resolve to
-/// a runnable — requirements are only ever "ensure on disk".
-async fn install(sym: &Symposium, install: &Installation) -> anyhow::Result<()> {
-    if let Some(source) = &install.source {
-        acquire_source(
-            &sym.install_context(),
-            source,
-            install.executable.as_deref(),
-        )
-        .await?;
-    }
-    run_install_commands(&install.install_commands).await
-}
-
-/// Run a list of post-install shell commands sequentially. Stops at the first
-/// failure.
-async fn run_install_commands(commands: &[String]) -> anyhow::Result<()> {
-    for cmd in commands {
-        let status = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .status()
-            .await?;
-        if !status.success() {
-            anyhow::bail!("install command `{cmd}` exited with {status}");
-        }
-    }
-    Ok(())
-}
-
 enum SpawnSpec {
     Exec { path: PathBuf, args: Vec<String> },
     Script { path: PathBuf, args: Vec<String> },
 }
 
 async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Result<SpawnSpec> {
-    let installation = &hook.command;
-    // Validation guarantees only one slot is set across hook + installation.
-    let exec_choice = installation
-        .executable
-        .as_deref()
-        .or(hook.hook_executable.as_deref());
-    let script_choice = installation
-        .script
-        .as_deref()
-        .or(hook.hook_script.as_deref());
+    let label = format!("hook `{}`", hook.hook_name);
+    let runnable = resolve_runnable(
+        sym,
+        &hook.command,
+        hook.hook_executable.as_deref(),
+        hook.hook_script.as_deref(),
+        &label,
+    )
+    .await?;
 
-    // Acquire the source if any.
-    let acquired = match &installation.source {
-        Some(source) => Some(acquire_source(&sym.install_context(), source, exec_choice).await?),
-        None => None,
-    };
-
-    // install_commands run after source acquisition.
-    run_install_commands(&installation.install_commands).await?;
-
-    let runnable = match (acquired, exec_choice, script_choice) {
-        (Some(a), Some(name), None) => Runnable::Exec(a.executable_named(name)),
-        (Some(a), None, Some(name)) => Runnable::Script(a.script_named(name)),
-        (Some(a), None, None) => {
-            // Cargo single-binary fallback: use the binary name resolved at
-            // acquisition time (from crates.io or the explicit hint).
-            if let Some(name) = a.resolved_executable.as_deref() {
-                Runnable::Exec(a.executable_named(name))
-            } else {
-                anyhow::bail!(
-                    "hook `{}`: command resolved to no executable or script",
-                    hook.hook_name
-                );
-            }
-        }
-        (None, Some(name), None) => Runnable::Exec(PathBuf::from(name)),
-        (None, None, Some(name)) => Runnable::Script(PathBuf::from(name)),
-        (None, None, None) => anyhow::bail!(
-            "hook `{}`: command resolved to no executable or script",
-            hook.hook_name
-        ),
-        // Unreachable: validation rejects executable+script set together.
-        (_, Some(_), Some(_)) => unreachable!("validation forbids both executable and script"),
-    };
-
-    match runnable {
-        Runnable::Exec(path) => {
-            make_executable(&path).ok();
-            Ok(SpawnSpec::Exec {
-                path,
-                args: hook.args.clone(),
-            })
-        }
-        Runnable::Script(path) => Ok(SpawnSpec::Script {
+    Ok(match runnable {
+        Runnable::Exec(path) => SpawnSpec::Exec {
             path,
             args: hook.args.clone(),
-        }),
+        },
+        Runnable::Script(path) => SpawnSpec::Script {
+            path,
+            args: hook.args.clone(),
+        },
         _ => anyhow::bail!("hook `{}`: unsupported runnable kind", hook.hook_name),
-    }
+    })
 }
 
 fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
@@ -435,7 +367,7 @@ pub async fn dispatch_plugin_hooks(
 
         // Acquire each requirement (best-effort).
         for requirement in &hook.requirements {
-            if let Err(e) = install(sym, requirement).await {
+            if let Err(e) = install_requirement(sym, requirement).await {
                 tracing::error!(name = %requirement.name, error = %e, "failed to install hook requirement");
             }
         }
