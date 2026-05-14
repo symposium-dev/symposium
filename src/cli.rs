@@ -13,6 +13,7 @@ use crate::crate_command::{self, DispatchResult};
 use crate::hook;
 use crate::init::{self, InitOpts};
 use crate::output::Output;
+use crate::self_update;
 use crate::sync;
 
 /// Parsed CLI arguments.
@@ -72,6 +73,9 @@ pub enum Commands {
         #[command(subcommand)]
         command: PluginCommand,
     },
+
+    /// Update symposium to the latest version
+    SelfUpdate,
 
     /// Find crate sources
     #[command(hide = true)]
@@ -133,6 +137,8 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
         }
 
         Commands::Sync => sync::sync(sym, cwd, out).await,
+
+        Commands::SelfUpdate => self_update::self_update(out, sym.config.update_source).await,
 
         Commands::CrateInfo { name, version } => {
             match crate_command::dispatch_crate(sym, &name, version.as_deref(), cwd).await {

@@ -8,6 +8,52 @@ use tracing::Level;
 // User configuration (~/.symposium/config.toml)
 // ---------------------------------------------------------------------------
 
+/// Auto-update behavior for the symposium binary.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoUpdate {
+    /// Never check for or install updates.
+    Off,
+    /// Print a warning when a newer version is available.
+    #[default]
+    Warn,
+    /// Automatically download and re-exec into the new version.
+    On,
+}
+
+impl AutoUpdate {
+    fn is_default(&self) -> bool {
+        matches!(self, AutoUpdate::Warn)
+    }
+}
+
+impl std::fmt::Display for AutoUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AutoUpdate::Off => write!(f, "off"),
+            AutoUpdate::Warn => write!(f, "warn"),
+            AutoUpdate::On => write!(f, "on"),
+        }
+    }
+}
+
+/// Where self-update fetches the new binary from.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateSource {
+    /// Download a prebuilt binary from the GitHub release.
+    #[default]
+    Binary,
+    /// Build from source via `cargo install`.
+    Source,
+}
+
+impl UpdateSource {
+    fn is_default(&self) -> bool {
+        matches!(self, UpdateSource::Binary)
+    }
+}
+
 /// Where agent hooks are installed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -45,6 +91,22 @@ pub struct Config {
         skip_serializing_if = "HookScope::is_default"
     )]
     pub hook_scope: HookScope,
+
+    /// Auto-update behavior for the symposium binary.
+    #[serde(
+        default,
+        rename = "auto-update",
+        skip_serializing_if = "AutoUpdate::is_default"
+    )]
+    pub auto_update: AutoUpdate,
+
+    /// Where self-update fetches the new binary from.
+    #[serde(
+        default,
+        rename = "self-update-source",
+        skip_serializing_if = "UpdateSource::is_default"
+    )]
+    pub update_source: UpdateSource,
 
     /// Agents configured for this user.
     #[serde(default, rename = "agent")]
@@ -89,6 +151,8 @@ impl Default for Config {
             auto_sync: true,
             agents_syncing: true,
             hook_scope: HookScope::default(),
+            auto_update: AutoUpdate::default(),
+            update_source: UpdateSource::default(),
             agents: Vec::new(),
             logging: LoggingConfig::default(),
             defaults: DefaultsConfig::default(),
