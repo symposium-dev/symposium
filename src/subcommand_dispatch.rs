@@ -11,7 +11,7 @@ use std::{ffi::OsString, path::Path, process::ExitStatus};
 use crate::{
     config::Symposium,
     crate_sources::{WorkspaceCrate, workspace_crates},
-    installation::resolve_runnable,
+    installation::{acquire_installation, resolve_runnable},
     plugins::{self, ParsedPlugin, Plugin, PluginRegistry, Subcommand},
 };
 use anyhow::{Context, Result, bail};
@@ -117,13 +117,9 @@ pub async fn dispatch_external(
         })?;
 
     let runnable = resolve_runnable(
-        sym,
-        installation,
-        None,
-        None,
+        acquire_installation(sym, installation, None, None).await?,
         &format!("subcommand `{name}`"),
-    )
-    .await?;
+    )?;
 
     spawn(runnable, &installation.args, &forwarded).await
 }
@@ -140,7 +136,6 @@ async fn spawn(
             cmd.arg(path_buf);
             cmd
         }
-        _ => bail!("unsupported runnable kind"),
     };
 
     cmd.args(install_args).args(forwarded);
