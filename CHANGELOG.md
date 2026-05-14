@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/symposium-dev/symposium/compare/symposium-v0.3.0...symposium-v0.4.0) - 2026-05-14
+
+### Added
+
+- inject update nudge into session-start hook additionalContext
+- add self-update command and auto-update infrastructure
+
+### Fixed
+
+- normalize CURRENT_VERSION in test snapshots for release compatibility
+- use atomic rename in mock cargo install to avoid "Text file busy"
+- rustfmt formatting and switch version check to cargo search
+
+### Other
+
+- remove binary download, default auto-update to on, add init prompt
+- auto-update re-exec for both sync and hook invocations
+- end-to-end auto-update re-exec with mock cargo install
+- snapshot output for update check tests with expect_test
+- capture Output messages, assert update warning text
+- move auto-update check into cli::run, add integration tests
+- move cargo override from env var to Symposium field
+- cargo search, cargo_command() helper, tests, hook update behavior
+- SkillOrigin keyed on source location, readable Crate dirs
+- demotion to suffixed names when a new origin introduces a conflict
+- promotion to unsuffixed slot when origin conflict disappears
+- only suffix skill dirs with origin hash on conflict
+- dispatch on group source via single match in load_skills_for_group
+- SkillOrigin::Git keys on (repo, commit_sha, skill_path)
+- per-group disambiguator on SkillOrigin::Plugin; sha2 hash
+- introduce SkillOrigin and dedup skill installs by origin
+- add has_symposium_marker helper
+- address review comments
+- drop unimplemented 'distribution: workspace' section
+- rewrite workspace-skills page
+- Document workspace skills in user guide
+- Add agents-syncing: mirror user-authored skills across agent dirs
+
 ## [0.3.0](https://github.com/symposium-dev/symposium/compare/symposium-v0.2.1...symposium-v0.3.0) - 2026-05-13
 
 ### Added
