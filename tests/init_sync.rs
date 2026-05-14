@@ -1550,11 +1550,15 @@ case "$1" in
         exit 0
         ;;
     install)
-        cat > '{bin}' <<'SCRIPT'
+        # Write to a temp file then atomic-rename to avoid "Text file busy"
+        # on Linux (can't overwrite a running executable, but rename works).
+        tmp='{bin}.new'
+        cat > "$tmp" <<'SCRIPT'
 #!/bin/sh
 echo "SURPRISE!"
 SCRIPT
-        chmod +x '{bin}'
+        chmod +x "$tmp"
+        mv -f "$tmp" '{bin}'
         exit 0
         ;;
     metadata)
