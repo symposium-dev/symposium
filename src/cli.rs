@@ -123,10 +123,11 @@ pub enum PluginCommand {
 /// The binary passes `std::env::current_dir()`; tests pass the fixture workspace root.
 pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -> Result<()> {
     // Periodic update check (skipped for self-update, which always checks).
-    // The return value signals whether a re-exec is needed (auto-update = "on"),
-    // but cli::run() can't replace the process — the binary handles that.
+    // In the binary, re-exec happens if auto-update = "on" succeeds.
+    // Here in the library we just run the warn check; the binary wraps
+    // this with re-exec logic.
     if !matches!(cmd, Commands::SelfUpdate) {
-        self_update::maybe_check_for_update(sym, out).await;
+        self_update::maybe_warn_for_update(sym, out);
     }
 
     match cmd {

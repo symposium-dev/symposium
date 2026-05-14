@@ -1488,3 +1488,104 @@ async fn self_update_skips_check_when_disabled() {
     .await
     .unwrap();
 }
+
+/// End-to-end auto-update test: run the real binary as a subprocess with
+/// `auto-update = "on"` and `self-update-source = "source"`.  The mock
+/// cargo's `install` handler replaces the binary with a script that prints
+/// "SURPRISE!", so after the auto-update + re-exec we should see that
+/// message in the output.
+#[tokio::test]
+async fn auto_update_on_re_execs_into_new_binary() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+
+    let config_dir = root.join("dot-symposium");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config.toml"),
+        indoc::indoc! {r#"
+            auto-update = "on"
+            self-update-source = "source"
+            hook-scope = "project"
+
+            [[agent]]
+            name = "claude"
+        "#},
+    )
+    .unwrap();
+
+    std::fs::write(
+        root.join("Cargo.toml"),
+        indoc::indoc! {r#"
+            [package]
+            name = "test-workspace"
+            version = "0.1.0"
+            edition = "2021"
+        "#},
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "").unwrap();
+
+    let bin_dir = root.join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let real_binary = std::env::var("CARGO_BIN_EXE_cargo-agents").expect("must run via cargo test");
+    let binary_copy = bin_dir.join("cargo-agents");
+    std::fs::copy(&real_binary, &binary_copy).unwrap();
+
+    let mock_cargo = root.join("mock-cargo");
+    std::fs::write(
+        &mock_cargo,
+        format!(
+            r#"#!/bin/sh
+case "$1" in
+    search)
+        echo 'symposium = "99.0.0"    # AI the Rust Way'
+        exit 0
+        ;;
+    install)
+        cat > '{bin}' <<'SCRIPT'
+#!/bin/sh
+echo "SURPRISE!"
+SCRIPT
+        chmod +x '{bin}'
+        exit 0
+        ;;
+    metadata)
+        exec cargo "$@"
+        ;;
+    *)
+        exec cargo "$@"
+        ;;
+esac
+"#,
+            bin = binary_copy.display(),
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&mock_cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let output = std::process::Command::new(&binary_copy)
+        .args(["sync"])
+        .current_dir(root)
+        .env("SYMPOSIUM_HOME", &config_dir)
+        .env("SYMPOSIUM_CARGO", &mock_cargo)
+        .env("CARGO_HOME", &bin_dir)
+        .output()
+        .expect("failed to spawn binary");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}{stderr}");
+
+    assert!(
+        combined.contains("SURPRISE!"),
+        "after auto-update + re-exec, the new binary should have run.\n\
+         stdout: {stdout}\nstderr: {stderr}\nexit: {:?}",
+        output.status,
+    );
+}

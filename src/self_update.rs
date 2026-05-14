@@ -65,11 +65,33 @@ pub fn check_upgrade(sym: &Symposium) -> Result<Option<semver::Version>> {
     }
 }
 
-/// Periodic update check, called before command dispatch.
+/// Warn-only update check for the library path (`cli::run`).
 ///
-/// Respects `auto-update` config and the 24-hour throttle.  For `warn`,
-/// prints a nudge.  For `on`, downloads and installs the update, then
-/// returns `true` so the caller can re-exec into the new binary.
+/// Respects config and the 24-hour throttle.  Prints a nudge when
+/// `auto-update = "warn"` and a newer version exists.  Does nothing for
+/// `off` or `on` — the binary handles `on` (which needs re-exec).
+pub fn maybe_warn_for_update(sym: &Symposium, out: &Output) {
+    if sym.config.auto_update != AutoUpdate::Warn {
+        return;
+    }
+    if !state::should_check_for_update(sym.config_dir()) {
+        return;
+    }
+    state::record_update_check(sym.config_dir());
+
+    if let Ok(Some(latest)) = check_upgrade(sym) {
+        out.warn(format!(
+            "symposium {latest} is available (current: {CURRENT_VERSION}). \
+             Run `cargo agents self-update` to upgrade.",
+        ));
+    }
+}
+
+/// Full update check for the binary startup path.
+///
+/// Respects config and the 24-hour throttle.  For `warn`, prints a
+/// nudge.  For `on`, downloads and installs the update, then returns
+/// `true` so the caller can re-exec into the new binary.
 pub async fn maybe_check_for_update(sym: &Symposium, out: &Output) -> bool {
     if sym.config.auto_update == AutoUpdate::Off {
         return false;

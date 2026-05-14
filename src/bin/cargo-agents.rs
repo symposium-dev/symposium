@@ -57,13 +57,12 @@ async fn main() -> ExitCode {
     // Ensure git-based plugin sources are up to date (non-blocking on failure).
     plugins::ensure_plugin_sources(&sym, cli.update).await;
 
-    // For hook invocations, run the auto-update check here (hooks don't go
-    // through cli::run which handles it for other commands).  Only the
-    // auto-update = "on" re-exec path lives in the binary; the warn path
-    // is handled inside cli::run / maybe_check_for_update.
-    // Hooks don't go through cli::run(), so run the update check here.
-    // If auto-update = "on" succeeded, re-exec into the new binary.
-    if is_hook && self_update::maybe_check_for_update(&sym, &Output::quiet()).await {
+    // Auto-update = "on": check for updates and re-exec if a new binary was
+    // installed.  Skipped for self-update (which always checks explicitly).
+    // The warn path is handled inside cli::run via maybe_warn_for_update.
+    if !matches!(cli.command, Some(Commands::SelfUpdate))
+        && self_update::maybe_check_for_update(&sym, &out).await
+    {
         self_update::re_exec();
     }
 

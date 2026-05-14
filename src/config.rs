@@ -250,12 +250,14 @@ impl Symposium {
         // Note: can't use tracing here — logging isn't initialized yet.
         // init_logging() is called after construction.
 
+        let cargo_override = env::var("SYMPOSIUM_CARGO").ok().map(PathBuf::from);
+
         Self {
             config,
             config_dir,
             cache_dir,
             home_dir,
-            cargo_override: None,
+            cargo_override,
         }
     }
 
