@@ -10,7 +10,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use crate::config::UpdateSource;
+use crate::config::{Symposium, UpdateSource};
 use crate::output::Output;
 use crate::state::CURRENT_VERSION;
 
@@ -21,8 +21,9 @@ const BINARY_NAME: &str = "cargo-agents";
 
 /// Query the registry for the latest published version of symposium
 /// by running `cargo search symposium --limit 1`.
-pub fn latest_version() -> Result<semver::Version> {
-    let output = crate::cargo_command()
+pub fn latest_version(sym: &Symposium) -> Result<semver::Version> {
+    let output = sym
+        .cargo_command()
         .args(["search", CRATE_NAME, "--limit", "1"])
         .output()
         .context("failed to run cargo search")?;
@@ -52,10 +53,10 @@ fn parse_cargo_search_output(output: &str) -> Result<semver::Version> {
 
 /// Check whether a newer version is available.  Returns `Some(latest)`
 /// if an upgrade is available, `None` if we're current or ahead.
-pub fn check_upgrade() -> Result<Option<semver::Version>> {
+pub fn check_upgrade(sym: &Symposium) -> Result<Option<semver::Version>> {
     let current =
         semver::Version::parse(CURRENT_VERSION).context("failed to parse current version")?;
-    let latest = latest_version()?;
+    let latest = latest_version(sym)?;
     if latest > current {
         Ok(Some(latest))
     } else {
@@ -64,8 +65,8 @@ pub fn check_upgrade() -> Result<Option<semver::Version>> {
 }
 
 /// Run the self-update using the configured source strategy.
-pub async fn self_update(out: &Output, source: UpdateSource) -> Result<()> {
-    let target_version = match check_upgrade() {
+pub async fn self_update(sym: &Symposium, out: &Output) -> Result<()> {
+    let target_version = match check_upgrade(sym) {
         Ok(Some(latest)) => {
             out.info(format!("updating symposium {CURRENT_VERSION} → {latest}"));
             latest
@@ -80,9 +81,9 @@ pub async fn self_update(out: &Output, source: UpdateSource) -> Result<()> {
         }
     };
 
-    match source {
+    match sym.config.update_source {
         UpdateSource::Source => {
-            cargo_install()?;
+            cargo_install(sym)?;
             out.done(format!("updated to {target_version} (cargo install)"));
         }
         UpdateSource::Binary => {
@@ -94,7 +95,7 @@ pub async fn self_update(out: &Output, source: UpdateSource) -> Result<()> {
                 Err(e) => {
                     tracing::warn!("prebuilt download failed: {e:#}");
                     out.info("prebuilt binary not available, falling back to cargo install...");
-                    cargo_install()?;
+                    cargo_install(sym)?;
                     out.done(format!("updated to {target_version} (cargo install)"));
                 }
             }
@@ -252,8 +253,9 @@ fn install_binary(binary_bytes: &[u8], install_dir: &std::path::Path) -> Result<
 // Fallback: cargo install
 // ---------------------------------------------------------------------------
 
-fn cargo_install() -> Result<()> {
-    let status = crate::cargo_command()
+fn cargo_install(sym: &Symposium) -> Result<()> {
+    let status = sym
+        .cargo_command()
         .args(["install", CRATE_NAME, "--force"])
         .status()
         .context("failed to run cargo install")?;

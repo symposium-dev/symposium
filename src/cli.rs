@@ -138,7 +138,7 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
 
         Commands::Sync => sync::sync(sym, cwd, out).await,
 
-        Commands::SelfUpdate => self_update::self_update(out, sym.config.update_source).await,
+        Commands::SelfUpdate => self_update::self_update(sym, out).await,
 
         Commands::CrateInfo { name, version } => {
             match crate_command::dispatch_crate(sym, &name, version.as_deref(), cwd).await {

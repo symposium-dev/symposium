@@ -1,5 +1,3 @@
-use std::process::Command;
-
 pub mod agents;
 pub mod cli;
 pub mod config;
@@ -20,8 +18,3 @@ pub(crate) mod skills;
 
 #[cfg(test)]
 pub(crate) mod test_utils;
-
-/// Build a `Command` for the cargo binary, falling back to `"cargo"`.
-pub fn cargo_command() -> Command {
-    Command::new("cargo")
-}

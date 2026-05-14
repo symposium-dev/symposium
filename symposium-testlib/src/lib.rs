@@ -431,6 +431,22 @@ impl TestContext {
         Ok(SubmitResult { hooks, response })
     }
 
+    /// Point `cargo` invocations at a mock script for the duration of this test.
+    ///
+    /// Writes the given shell script into the tempdir and configures `Symposium`
+    /// to use it instead of the real `cargo`.  No environment variables are
+    /// mutated, so tests can run in parallel without interference.
+    pub fn set_mock_cargo(&mut self, script: &str) {
+        let script_path = self.tempdir.join("mock-cargo");
+        std::fs::write(&script_path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        self.sym.set_cargo_override(script_path);
+    }
+
     /// Replace temp directory paths with a stable placeholder for snapshot tests.
     pub fn normalize_paths(&self, output: &str) -> String {
         let config_dir = self.sym.config_dir().to_string_lossy().to_string();

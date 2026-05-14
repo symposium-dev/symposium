@@ -169,7 +169,7 @@ fn propagate_user_skill(
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
 pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
-    let project_root = crate::init::find_workspace_root(cwd)?;
+    let project_root = crate::init::find_workspace_root(sym, cwd)?;
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
     // Load plugin registry and workspace deps

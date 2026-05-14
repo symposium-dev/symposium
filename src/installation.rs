@@ -143,23 +143,26 @@ pub async fn query_crate_binaries(
 
 /// Install a crate using cargo binstall (fast) or cargo install (fallback).
 pub(crate) async fn install_cargo_crate(
+    sym: &crate::config::Symposium,
     crate_name: &str,
     version: &str,
     binary_name: Option<String>,
     cache_dir: PathBuf,
     git: Option<String>,
 ) -> Result<()> {
+    let sym = sym.clone();
     let crate_name = crate_name.to_string();
     let version = version.to_string();
 
     tokio::task::spawn_blocking(move || {
-        install_cargo_crate_sync(&crate_name, &version, binary_name, &cache_dir, git)
+        install_cargo_crate_sync(&sym, &crate_name, &version, binary_name, &cache_dir, git)
     })
     .await
     .context("Cargo install task panicked")?
 }
 
 fn install_cargo_crate_sync(
+    sym: &crate::config::Symposium,
     crate_name: &str,
     version: &str,
     binary_name: Option<String>,
@@ -192,7 +195,7 @@ fn install_cargo_crate_sync(
         binstall_args.push(git);
     }
     binstall_args.extend([cache_dir.to_str().unwrap(), &crate_spec]);
-    let binstall_result = crate::cargo_command().args(binstall_args).output();
+    let binstall_result = sym.cargo_command().args(binstall_args).output();
 
     let binary_path = binary_name
         .as_ref()
@@ -228,7 +231,8 @@ fn install_cargo_crate_sync(
         args.push(git);
     }
     args.extend([cache_dir.to_str().unwrap(), &crate_spec]);
-    let install_result = crate::cargo_command()
+    let install_result = sym
+        .cargo_command()
         .args(args)
         .output()
         .context("Failed to run cargo install")?;
@@ -286,6 +290,7 @@ async fn acquire_cargo(
         let probe = cache_dir.join("bin").join(platform_binary_exe(&resolved));
         if !probe.exists() {
             install_cargo_crate(
+                sym,
                 &cargo.crate_name,
                 cargo.version.as_deref().unwrap_or(""),
                 Some(resolved.clone()),
@@ -321,6 +326,7 @@ async fn acquire_cargo(
     let already = probe_path.as_ref().map_or(false, |p| p.exists());
     if !already {
         install_cargo_crate(
+            sym,
             &cargo.crate_name,
             &version,
             resolved.clone(),

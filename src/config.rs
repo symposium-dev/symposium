@@ -227,6 +227,7 @@ pub struct Symposium {
     config_dir: PathBuf,
     cache_dir: PathBuf,
     home_dir: PathBuf,
+    cargo_override: Option<PathBuf>,
 }
 
 impl Symposium {
@@ -254,6 +255,7 @@ impl Symposium {
             config_dir,
             cache_dir,
             home_dir,
+            cargo_override: None,
         }
     }
 
@@ -278,7 +280,24 @@ impl Symposium {
             config_dir,
             cache_dir,
             home_dir,
+            cargo_override: None,
         }
+    }
+
+    /// Build a `Command` for the cargo binary.
+    ///
+    /// Uses the test override if set, otherwise plain `"cargo"`.
+    pub fn cargo_command(&self) -> std::process::Command {
+        match &self.cargo_override {
+            Some(path) => std::process::Command::new(path),
+            None => std::process::Command::new("cargo"),
+        }
+    }
+
+    /// Override the cargo binary path (test-only).
+    #[doc(hidden)]
+    pub fn set_cargo_override(&mut self, path: PathBuf) {
+        self.cargo_override = Some(path);
     }
 
     /// Initialize logging. Call once at startup.

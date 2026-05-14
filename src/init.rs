@@ -164,8 +164,9 @@ fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {
 // ---------------------------------------------------------------------------
 
 /// Find the workspace root using `cargo metadata`, run from the given directory.
-pub fn find_workspace_root(cwd: &std::path::Path) -> Result<PathBuf> {
-    let output = crate::cargo_command()
+pub fn find_workspace_root(sym: &Symposium, cwd: &std::path::Path) -> Result<PathBuf> {
+    let output = sym
+        .cargo_command()
         .args(["metadata", "--no-deps", "--format-version=1"])
         .current_dir(cwd)
         .output()

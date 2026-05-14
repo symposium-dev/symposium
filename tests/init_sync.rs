@@ -2,7 +2,6 @@
 
 use std::path::{Path, PathBuf};
 
-use symposium::state;
 use symposium_testlib::{TestMode, with_fixture};
 
 /// Read the user config file from the test context.
@@ -1297,35 +1296,55 @@ async fn agents_syncing_does_not_overwrite_user_managed_target() {
 }
 
 // ---------------------------------------------------------------------------
-// Self-update integration tests
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
 // Self-update / state integration tests
 // ---------------------------------------------------------------------------
 
+fn mock_cargo_script(search_version: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+case "$1" in
+    search)
+        echo 'symposium = "{search_version}"    # AI the Rust Way'
+        exit 0
+        ;;
+    metadata)
+        exec cargo "$@"
+        ;;
+    install)
+        exit 0
+        ;;
+    *)
+        exec cargo "$@"
+        ;;
+esac
+"#
+    )
+}
+
 #[tokio::test]
-async fn self_update_command_exists() {
+async fn self_update_reports_up_to_date() {
     with_fixture(
         TestMode::SimulationOnly,
         &["plugins0", "workspace0"],
         async |mut ctx| {
-            // Verify self-update is a recognized CLI command by parsing it.
-            // We don't actually run the update (that would hit the network),
-            // but this confirms the command is wired through dispatch.
-            let result = ctx.symposium(&["self-update"]).await;
-            // Will fail with network error or "up to date" — both are OK,
-            // we just care it didn't fail with "unknown command".
-            match result {
-                Ok(_) => {}
-                Err(e) => {
-                    let msg = format!("{e:#}");
-                    assert!(
-                        !msg.contains("not supported") && !msg.contains("unrecognized"),
-                        "self-update should be a valid command, got: {msg}"
-                    );
-                }
-            }
+            ctx.set_mock_cargo(&mock_cargo_script(symposium::state::CURRENT_VERSION));
+            ctx.symposium(&["self-update"]).await?;
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn self_update_detects_newer_version() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&mock_cargo_script("99.0.0"));
+            ctx.sym.config.update_source = symposium::config::UpdateSource::Source;
+            ctx.symposium(&["self-update"]).await?;
             Ok(())
         },
     )
@@ -1339,12 +1358,13 @@ async fn state_toml_tracks_version() {
         TestMode::SimulationOnly,
         &["plugins0", "workspace0"],
         async |ctx| {
-            assert!(state::load(ctx.sym.config_dir()).is_none());
+            let dir = ctx.sym.config_dir();
+            assert!(symposium::state::load(dir).is_none());
 
-            state::ensure_current(ctx.sym.config_dir());
+            symposium::state::ensure_current(dir);
 
-            let s = state::load(ctx.sym.config_dir()).expect("state.toml should exist");
-            assert_eq!(s.version, state::CURRENT_VERSION);
+            let s = symposium::state::load(dir).expect("state.toml should exist");
+            assert_eq!(s.version, symposium::state::CURRENT_VERSION);
             Ok(())
         },
     )
@@ -1360,18 +1380,12 @@ async fn state_toml_update_check_throttling() {
         async |ctx| {
             let dir = ctx.sym.config_dir();
 
-            // First check: should be allowed (no state yet).
-            assert!(state::should_check_for_update(dir));
+            assert!(symposium::state::should_check_for_update(dir));
+            symposium::state::record_update_check(dir);
+            assert!(!symposium::state::should_check_for_update(dir));
 
-            // Record a check.
-            state::record_update_check(dir);
-
-            // Immediately after: should be throttled.
-            assert!(!state::should_check_for_update(dir));
-
-            // Stamp version — should preserve the last-update-check.
-            state::stamp(dir);
-            assert!(!state::should_check_for_update(dir));
+            symposium::state::stamp(dir);
+            assert!(!symposium::state::should_check_for_update(dir));
 
             Ok(())
         },
