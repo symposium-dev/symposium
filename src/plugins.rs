@@ -3617,7 +3617,7 @@ mod tests {
             "#},
         )]);
 
-        let contents = scan_source_dir(tmp.path()).unwrap();
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
         assert_eq!(contents.plugins.len(), 1);
         let parsed = contents.plugins[0].as_ref().unwrap();
         let sub = &parsed.plugin.subcommands["demo"];
