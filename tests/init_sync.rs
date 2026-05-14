@@ -1406,13 +1406,22 @@ async fn sync_triggers_update_check() {
             let dir = ctx.sym.config_dir().to_path_buf();
             assert!(symposium::state::load(&dir).is_none());
 
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
-            ctx.symposium(&["sync"]).await?;
+            // init is the first command through cli::run(), so it triggers
+            // the update check (and consumes the 24h window).
+            let output = ctx.symposium(&["init", "--add-agent", "claude"]).await?;
 
-            let s = symposium::state::load(&dir).expect("state.toml should exist after sync");
+            let s = symposium::state::load(&dir).expect("state.toml should exist");
             assert!(
                 s.last_update_check.is_some(),
-                "sync should have triggered an update check"
+                "init should have triggered an update check"
+            );
+            assert!(
+                output.contains("99.0.0 is available"),
+                "should warn about the newer version, got: {output}"
+            );
+            assert!(
+                output.contains("cargo agents self-update"),
+                "warning should mention the self-update command, got: {output}"
             );
             Ok(())
         },

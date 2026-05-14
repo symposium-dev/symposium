@@ -227,15 +227,14 @@ impl Drop for TestContext {
 }
 
 impl TestContext {
-    /// Run a `symposium` CLI command in-process, returning captured output
-    /// with temp-dir paths normalized.
+    /// Run a `symposium` CLI command in-process, returning captured output.
     pub async fn symposium(&mut self, args: &[&str]) -> anyhow::Result<String> {
-        let mut full_args = vec!["cargo-agents", "-q"];
+        let mut full_args = vec!["cargo-agents"];
         full_args.extend_from_slice(args);
 
         let cli = Cli::try_parse_from(&full_args).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        let out = symposium::output::Output::quiet();
+        let out = symposium::output::Output::capturing();
         let cwd = self
             .workspace_root
             .clone()
@@ -245,7 +244,7 @@ impl TestContext {
             symposium::cli::run(&mut self.sym, cmd, &cwd, &out).await?;
         }
 
-        Ok(String::new())
+        Ok(out.captured().join("\n"))
     }
 
     /// Run the full hook pipeline: parse → builtin → plugins → serialize.
