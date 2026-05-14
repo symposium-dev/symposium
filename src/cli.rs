@@ -13,6 +13,7 @@ use crate::crate_command::{self, DispatchResult};
 use crate::hook;
 use crate::init::{self, InitOpts};
 use crate::output::Output;
+use crate::self_update;
 use crate::sync;
 
 /// Parsed CLI arguments.
@@ -73,6 +74,9 @@ pub enum Commands {
         command: PluginCommand,
     },
 
+    /// Update symposium to the latest version
+    SelfUpdate,
+
     /// Find crate sources
     #[command(hide = true)]
     CrateInfo {
@@ -118,6 +122,14 @@ pub enum PluginCommand {
 /// `cwd` is the working directory for commands that need it (sync, start, crate).
 /// The binary passes `std::env::current_dir()`; tests pass the fixture workspace root.
 pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -> Result<()> {
+    // Periodic update check (skipped for self-update, which always checks).
+    // In the binary, re-exec happens if auto-update = "on" succeeds.
+    // Here in the library we just run the warn check; the binary wraps
+    // this with re-exec logic.
+    if !matches!(cmd, Commands::SelfUpdate) {
+        self_update::maybe_warn_for_update(sym, out);
+    }
+
     match cmd {
         Commands::Init {
             agents,
@@ -133,6 +145,8 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
         }
 
         Commands::Sync => sync::sync(sym, cwd, out).await,
+
+        Commands::SelfUpdate => self_update::self_update(sym, out),
 
         Commands::CrateInfo { name, version } => {
             match crate_command::dispatch_crate(sym, &name, version.as_deref(), cwd).await {

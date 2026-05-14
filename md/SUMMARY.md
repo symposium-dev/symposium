@@ -32,6 +32,7 @@
   - [The `cargo agents` command](./reference/cargo-agents.md)
     - [`cargo agents init`](./reference/cargo-agents-init.md)
     - [`cargo agents sync`](./reference/cargo-agents-sync.md)
+    - [`cargo agents self-update`](./reference/cargo-agents-self-update.md)
     - [`cargo agents plugin`](./reference/cargo-agents-plugin.md)
     - [Unstable agent commands](./reference/cargo-agents-unstable.md)
       - [`cargo agents crate-info`](./reference/cargo-agents-crate-info.md)

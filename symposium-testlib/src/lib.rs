@@ -227,15 +227,14 @@ impl Drop for TestContext {
 }
 
 impl TestContext {
-    /// Run a `symposium` CLI command in-process, returning captured output
-    /// with temp-dir paths normalized.
+    /// Run a `symposium` CLI command in-process, returning captured output.
     pub async fn symposium(&mut self, args: &[&str]) -> anyhow::Result<String> {
-        let mut full_args = vec!["cargo-agents", "-q"];
+        let mut full_args = vec!["cargo-agents"];
         full_args.extend_from_slice(args);
 
         let cli = Cli::try_parse_from(&full_args).map_err(|e| anyhow::anyhow!("{e}"))?;
 
-        let out = symposium::output::Output::quiet();
+        let out = symposium::output::Output::capturing();
         let cwd = self
             .workspace_root
             .clone()
@@ -245,7 +244,7 @@ impl TestContext {
             symposium::cli::run(&mut self.sym, cmd, &cwd, &out).await?;
         }
 
-        Ok(String::new())
+        Ok(out.captured().join("\n"))
     }
 
     /// Run the full hook pipeline: parse → builtin → plugins → serialize.
@@ -429,6 +428,22 @@ impl TestContext {
         let response = std::fs::read_to_string(&response_path).ok();
 
         Ok(SubmitResult { hooks, response })
+    }
+
+    /// Point `cargo` invocations at a mock script for the duration of this test.
+    ///
+    /// Writes the given shell script into the tempdir and configures `Symposium`
+    /// to use it instead of the real `cargo`.  No environment variables are
+    /// mutated, so tests can run in parallel without interference.
+    pub fn set_mock_cargo(&mut self, script: &str) {
+        let script_path = self.tempdir.join("mock-cargo");
+        std::fs::write(&script_path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        self.sym.set_cargo_override(script_path);
     }
 
     /// Replace temp directory paths with a stable placeholder for snapshot tests.

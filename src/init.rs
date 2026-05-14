@@ -82,6 +82,11 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
     }
     tracing::debug!(scope = ?sym.config.hook_scope, "hook scope");
 
+    if !agents.is_empty() && interactive(out) {
+        sym.config.auto_update = prompt_for_auto_update(sym.config.auto_update)?;
+    }
+    tracing::debug!(auto_update = ?sym.config.auto_update, "auto-update");
+
     sym.save_config().context("failed to write user config")?;
     tracing::info!(
         agents = ?agents.iter().map(|a| a.config_name()).collect::<Vec<_>>(),
@@ -141,6 +146,33 @@ fn prompt_for_hook_scope(current: crate::config::HookScope) -> Result<crate::con
     })
 }
 
+fn prompt_for_auto_update(current: crate::config::AutoUpdate) -> Result<crate::config::AutoUpdate> {
+    use crate::config::AutoUpdate;
+
+    let items = [
+        "Auto-update (recommended)",
+        "Warn when updates are available",
+        "Off",
+    ];
+    let default = match current {
+        AutoUpdate::On => 0,
+        AutoUpdate::Warn => 1,
+        AutoUpdate::Off => 2,
+    };
+
+    let selection = dialoguer::Select::new()
+        .with_prompt("Automatic updates")
+        .items(items)
+        .default(default)
+        .interact()?;
+
+    Ok(match selection {
+        0 => AutoUpdate::On,
+        1 => AutoUpdate::Warn,
+        _ => AutoUpdate::Off,
+    })
+}
+
 fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {
     let agents = Agent::all();
     let items: Vec<&str> = agents.iter().map(|a| a.display_name()).collect();
@@ -164,8 +196,9 @@ fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {
 // ---------------------------------------------------------------------------
 
 /// Find the workspace root using `cargo metadata`, run from the given directory.
-pub fn find_workspace_root(cwd: &std::path::Path) -> Result<PathBuf> {
-    let output = std::process::Command::new("cargo")
+pub fn find_workspace_root(sym: &Symposium, cwd: &std::path::Path) -> Result<PathBuf> {
+    let output = sym
+        .cargo_command()
         .args(["metadata", "--no-deps", "--format-version=1"])
         .current_dir(cwd)
         .output()

@@ -7,6 +7,8 @@ pub mod hook_schema;
 pub mod init;
 pub mod output;
 pub mod plugins;
+pub mod self_update;
+pub mod state;
 pub mod sync;
 
 pub(crate) mod crate_sources;

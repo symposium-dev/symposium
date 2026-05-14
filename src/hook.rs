@@ -316,12 +316,33 @@ pub async fn dispatch_builtin(
     }
 }
 
-/// Handle SessionStart: return empty (no session-start-context support).
+/// Handle SessionStart: check for updates and nudge the user via context.
 fn handle_session_start(
-    _sym: &Symposium,
+    sym: &Symposium,
     _payload: &symposium::SessionStartInput,
 ) -> symposium::OutputEvent {
-    symposium::OutputEvent::empty_for(HookEvent::SessionStart)
+    use crate::config::AutoUpdate;
+    use crate::self_update;
+    use crate::state;
+    use crate::state::CURRENT_VERSION;
+
+    if sym.config.auto_update != AutoUpdate::Warn {
+        return symposium::OutputEvent::empty_for(HookEvent::SessionStart);
+    }
+    if !state::should_check_for_update(sym.config_dir()) {
+        return symposium::OutputEvent::empty_for(HookEvent::SessionStart);
+    }
+    state::record_update_check(sym.config_dir());
+
+    if let Ok(Some(latest)) = self_update::check_upgrade(sym) {
+        let msg = format!(
+            "symposium {latest} is available (current: {CURRENT_VERSION}). \
+             Run `cargo agents self-update` to upgrade."
+        );
+        symposium::OutputEvent::with_context(HookEvent::SessionStart, msg)
+    } else {
+        symposium::OutputEvent::empty_for(HookEvent::SessionStart)
+    }
 }
 
 /// Handle PostToolUse: no-op for now.

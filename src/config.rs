@@ -8,6 +8,35 @@ use tracing::Level;
 // User configuration (~/.symposium/config.toml)
 // ---------------------------------------------------------------------------
 
+/// Auto-update behavior for the symposium binary.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoUpdate {
+    /// Never check for or install updates.
+    Off,
+    /// Print a warning when a newer version is available.
+    Warn,
+    /// Automatically install updates and re-exec into the new version.
+    #[default]
+    On,
+}
+
+impl AutoUpdate {
+    fn is_default(&self) -> bool {
+        matches!(self, AutoUpdate::On)
+    }
+}
+
+impl std::fmt::Display for AutoUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AutoUpdate::Off => write!(f, "off"),
+            AutoUpdate::Warn => write!(f, "warn"),
+            AutoUpdate::On => write!(f, "on"),
+        }
+    }
+}
+
 /// Where agent hooks are installed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -45,6 +74,14 @@ pub struct Config {
         skip_serializing_if = "HookScope::is_default"
     )]
     pub hook_scope: HookScope,
+
+    /// Auto-update behavior for the symposium binary.
+    #[serde(
+        default,
+        rename = "auto-update",
+        skip_serializing_if = "AutoUpdate::is_default"
+    )]
+    pub auto_update: AutoUpdate,
 
     /// Agents configured for this user.
     #[serde(default, rename = "agent")]
@@ -89,6 +126,7 @@ impl Default for Config {
             auto_sync: true,
             agents_syncing: true,
             hook_scope: HookScope::default(),
+            auto_update: AutoUpdate::default(),
             agents: Vec::new(),
             logging: LoggingConfig::default(),
             defaults: DefaultsConfig::default(),
@@ -163,6 +201,7 @@ pub struct Symposium {
     config_dir: PathBuf,
     cache_dir: PathBuf,
     home_dir: PathBuf,
+    cargo_override: Option<PathBuf>,
 }
 
 impl Symposium {
@@ -185,11 +224,14 @@ impl Symposium {
         // Note: can't use tracing here — logging isn't initialized yet.
         // init_logging() is called after construction.
 
+        let cargo_override = env::var("SYMPOSIUM_CARGO").ok().map(PathBuf::from);
+
         Self {
             config,
             config_dir,
             cache_dir,
             home_dir,
+            cargo_override,
         }
     }
 
@@ -214,7 +256,24 @@ impl Symposium {
             config_dir,
             cache_dir,
             home_dir,
+            cargo_override: None,
         }
+    }
+
+    /// Build a `Command` for the cargo binary.
+    ///
+    /// Uses the test override if set, otherwise plain `"cargo"`.
+    pub fn cargo_command(&self) -> std::process::Command {
+        match &self.cargo_override {
+            Some(path) => std::process::Command::new(path),
+            None => std::process::Command::new("cargo"),
+        }
+    }
+
+    /// Override the cargo binary path (test-only).
+    #[doc(hidden)]
+    pub fn set_cargo_override(&mut self, path: PathBuf) {
+        self.cargo_override = Some(path);
     }
 
     /// Initialize logging. Call once at startup.

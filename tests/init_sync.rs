@@ -1294,3 +1294,395 @@ async fn agents_syncing_does_not_overwrite_user_managed_target() {
     .await
     .unwrap();
 }
+
+// ---------------------------------------------------------------------------
+// Self-update / state integration tests
+// ---------------------------------------------------------------------------
+
+fn mock_cargo_script(search_version: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+case "$1" in
+    search)
+        echo 'symposium = "{search_version}"    # AI the Rust Way'
+        exit 0
+        ;;
+    metadata)
+        exec cargo "$@"
+        ;;
+    install)
+        exit 0
+        ;;
+    *)
+        exec cargo "$@"
+        ;;
+esac
+"#
+    )
+}
+
+#[tokio::test]
+async fn self_update_reports_up_to_date() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&mock_cargo_script(symposium::state::CURRENT_VERSION));
+            ctx.symposium(&["self-update"]).await?;
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn self_update_detects_newer_version() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&mock_cargo_script("99.0.0"));
+            ctx.symposium(&["self-update"]).await?;
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn state_toml_tracks_version() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |ctx| {
+            let dir = ctx.sym.config_dir().to_path_buf();
+            assert!(symposium::state::load(&dir).is_none());
+
+            symposium::state::ensure_current(&dir);
+
+            let s = symposium::state::load(&dir).expect("state.toml should exist");
+            assert_eq!(s.version, symposium::state::CURRENT_VERSION);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn state_toml_update_check_throttling() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |ctx| {
+            let dir = ctx.sym.config_dir().to_path_buf();
+
+            assert!(symposium::state::should_check_for_update(&dir));
+            symposium::state::record_update_check(&dir);
+            assert!(!symposium::state::should_check_for_update(&dir));
+
+            symposium::state::stamp(&dir);
+            assert!(!symposium::state::should_check_for_update(&dir));
+
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn sync_triggers_update_check() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&mock_cargo_script("99.0.0"));
+            ctx.sym.config.auto_update = symposium::config::AutoUpdate::Warn;
+
+            let dir = ctx.sym.config_dir().to_path_buf();
+            assert!(symposium::state::load(&dir).is_none());
+
+            // init is the first command through cli::run(), so it triggers
+            // the update check (and consumes the 24h window).
+            let output = ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let output = ctx.normalize_paths(&output);
+
+            let s = symposium::state::load(&dir).expect("state.toml should exist");
+            assert!(
+                s.last_update_check.is_some(),
+                "init should have triggered an update check"
+            );
+            expect_test::expect![[r#"
+                ⚠️  symposium 99.0.0 is available (current: 0.3.0). Run `cargo agents self-update` to upgrade.
+                Setting up symposium for your user account.
+
+                ✅ $CONFIG_DIR/config.toml: wrote user config (agents: Claude Code)"#]].assert_eq(&output);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn sync_skips_update_check_when_throttled() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&mock_cargo_script("99.0.0"));
+            ctx.sym.config.auto_update = symposium::config::AutoUpdate::Warn;
+
+            let dir = ctx.sym.config_dir().to_path_buf();
+
+            // Record a recent check so the throttle kicks in.
+            symposium::state::record_update_check(&dir);
+            let before = symposium::state::load(&dir).unwrap().last_update_check;
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let after = symposium::state::load(&dir).unwrap().last_update_check;
+            assert_eq!(
+                before, after,
+                "update check should not have re-run within the throttle window"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn self_update_skips_check_when_disabled() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&mock_cargo_script("99.0.0"));
+            ctx.sym.config.auto_update = symposium::config::AutoUpdate::Off;
+
+            let dir = ctx.sym.config_dir().to_path_buf();
+            let output = ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let output = ctx.normalize_paths(&output);
+
+            let s = symposium::state::load(&dir);
+            let checked = s.as_ref().and_then(|s| s.last_update_check.as_ref());
+            assert!(
+                checked.is_none(),
+                "auto-update = off should not trigger any update check"
+            );
+            expect_test::expect![[r#"
+                Setting up symposium for your user account.
+
+                ✅ $CONFIG_DIR/config.toml: wrote user config (agents: Claude Code)"#]]
+            .assert_eq(&output);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Set up a temp dir with auto-update = "on", a mock cargo that replaces
+/// the binary with a "SURPRISE!" script on install, and return the paths
+/// needed to run the binary as a subprocess.
+struct AutoUpdateFixture {
+    _tmp: tempfile::TempDir,
+    root: PathBuf,
+    binary: PathBuf,
+    config_dir: PathBuf,
+    mock_cargo: PathBuf,
+    bin_dir: PathBuf,
+}
+
+fn setup_auto_update_fixture() -> AutoUpdateFixture {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+
+    let config_dir = root.join("dot-symposium");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config.toml"),
+        indoc::indoc! {r#"
+            auto-update = "on"
+            hook-scope = "project"
+
+            [[agent]]
+            name = "claude"
+        "#},
+    )
+    .unwrap();
+
+    std::fs::write(
+        root.join("Cargo.toml"),
+        indoc::indoc! {r#"
+            [package]
+            name = "test-workspace"
+            version = "0.1.0"
+            edition = "2021"
+        "#},
+    )
+    .unwrap();
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::write(root.join("src/lib.rs"), "").unwrap();
+
+    let bin_dir = root.join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let real_binary = std::env::var("CARGO_BIN_EXE_cargo-agents").expect("must run via cargo test");
+    let binary = bin_dir.join("cargo-agents");
+    std::fs::copy(&real_binary, &binary).unwrap();
+
+    let mock_cargo = root.join("mock-cargo");
+    std::fs::write(
+        &mock_cargo,
+        format!(
+            r#"#!/bin/sh
+case "$1" in
+    search)
+        echo 'symposium = "99.0.0"    # AI the Rust Way'
+        exit 0
+        ;;
+    install)
+        # Write to a temp file then atomic-rename to avoid "Text file busy"
+        # on Linux (can't overwrite a running executable, but rename works).
+        tmp='{bin}.new'
+        cat > "$tmp" <<'SCRIPT'
+#!/bin/sh
+echo "SURPRISE!"
+SCRIPT
+        chmod +x "$tmp"
+        mv -f "$tmp" '{bin}'
+        exit 0
+        ;;
+    metadata)
+        exec cargo "$@"
+        ;;
+    *)
+        exec cargo "$@"
+        ;;
+esac
+"#,
+            bin = binary.display(),
+        ),
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&mock_cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    AutoUpdateFixture {
+        _tmp: tmp,
+        root,
+        binary,
+        config_dir,
+        mock_cargo,
+        bin_dir,
+    }
+}
+
+impl AutoUpdateFixture {
+    fn command(&self) -> std::process::Command {
+        let mut cmd = std::process::Command::new(&self.binary);
+        cmd.current_dir(&self.root)
+            .env("SYMPOSIUM_HOME", &self.config_dir)
+            .env("SYMPOSIUM_CARGO", &self.mock_cargo)
+            .env("CARGO_HOME", &self.bin_dir);
+        cmd
+    }
+}
+
+fn assert_surprise(output: &std::process::Output) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let combined = format!("{stdout}{stderr}");
+    assert!(
+        combined.contains("SURPRISE!"),
+        "after auto-update + re-exec, the new binary should have run.\n\
+         stdout: {stdout}\nstderr: {stderr}\nexit: {:?}",
+        output.status,
+    );
+}
+
+#[tokio::test]
+async fn auto_update_re_execs_on_sync() {
+    let fix = setup_auto_update_fixture();
+    let output = fix
+        .command()
+        .args(["sync"])
+        .output()
+        .expect("failed to spawn");
+    assert_surprise(&output);
+}
+
+#[tokio::test]
+async fn auto_update_re_execs_on_hook() {
+    let fix = setup_auto_update_fixture();
+    let output = fix
+        .command()
+        .args(["hook", "claude", "session-start"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(ref mut stdin) = child.stdin {
+                let _ = stdin.write_all(
+                    br#"{"hook_event_name":"SessionStart","session_id":"test","cwd":"/"}"#,
+                );
+            }
+            child.wait_with_output()
+        })
+        .expect("failed to spawn");
+    assert_surprise(&output);
+}
+
+#[tokio::test]
+async fn session_start_hook_warns_about_update_in_context() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.set_mock_cargo(&mock_cargo_script("99.0.0"));
+            ctx.sym.config.auto_update = symposium::config::AutoUpdate::Warn;
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+            // Clear the throttle so the hook's session-start check fires.
+            let dir = ctx.sym.config_dir().to_path_buf();
+            let mut state = symposium::state::load(&dir).unwrap_or_default();
+            state.last_update_check = None;
+            let contents = toml::to_string_pretty(&state).unwrap();
+            std::fs::write(dir.join("state.toml"), contents).unwrap();
+
+            let result = ctx
+                .prompt_or_hook(
+                    "hello",
+                    &[symposium_testlib::HookStep::session_start()],
+                    symposium::hook_schema::HookAgent::Claude,
+                )
+                .await?;
+
+            assert!(
+                result.has_context_containing("99.0.0 is available"),
+                "session-start should include update nudge in additionalContext: {:#?}",
+                result.hooks,
+            );
+            assert!(
+                result.has_context_containing("cargo agents self-update"),
+                "nudge should mention self-update command: {:#?}",
+                result.hooks,
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}

@@ -6,6 +6,8 @@ use symposium::config;
 use symposium::hook;
 use symposium::output::Output;
 use symposium::plugins;
+use symposium::self_update;
+use symposium::state;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -34,11 +36,15 @@ async fn main() -> ExitCode {
         Some(Commands::Hook { agent, event }) => {
             tracing::debug!(?agent, ?event, "cargo agents hook");
         }
+        Some(Commands::SelfUpdate) => tracing::info!("cargo agents self-update"),
         Some(Commands::CrateInfo { name, version }) => {
             tracing::debug!(%name, version = ?version, "cargo agents crate-info");
         }
         None => {}
     }
+
+    // Stamp state.toml with the running binary version (silently updates on mismatch).
+    state::ensure_current(sym.config_dir());
 
     // Hook commands are quiet by default (they're invoked by the agent, not the user)
     let is_hook = matches!(cli.command, Some(Commands::Hook { .. }));
@@ -50,6 +56,20 @@ async fn main() -> ExitCode {
 
     // Ensure git-based plugin sources are up to date (non-blocking on failure).
     plugins::ensure_plugin_sources(&sym, cli.update).await;
+
+    // Auto-update = "on": check for updates and re-exec if a new binary was
+    // installed.  Skipped for self-update (which always checks explicitly)
+    // and for hooks (session-start injects the warn nudge into hook output;
+    // the "on" re-exec for hooks is handled here).
+    if !matches!(cli.command, Some(Commands::SelfUpdate)) && !is_hook {
+        if self_update::maybe_check_for_update(&sym, &out).await {
+            self_update::re_exec();
+        }
+    } else if is_hook && sym.config.auto_update == config::AutoUpdate::On {
+        if self_update::maybe_check_for_update(&sym, &Output::quiet()).await {
+            self_update::re_exec();
+        }
+    }
 
     let cwd = std::env::current_dir().expect("failed to get current directory");
 

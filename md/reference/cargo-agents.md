@@ -9,6 +9,7 @@
 | [`cargo agents init`](./cargo-agents-init.md) | Set up user-wide configuration |
 | [`cargo agents sync`](./cargo-agents-sync.md) | Synchronize skills with workspace dependencies |
 | [`cargo agents plugin`](./cargo-agents-plugin.md) | Manage plugin sources |
+| [`cargo agents self-update`](./cargo-agents-self-update.md) | Update symposium to the latest version |
 
 ## Global options
 

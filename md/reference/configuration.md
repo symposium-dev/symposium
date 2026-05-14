@@ -8,6 +8,7 @@
 auto-sync = true
 agents-syncing = true
 hook-scope = "global"
+auto-update = "on"
 
 [[agent]]
 name = "claude"
@@ -38,6 +39,7 @@ path = "my-plugins"
 | `auto-sync` | bool | `true` | Automatically run `cargo agents sync` during hook invocations. When enabled, skills are kept in sync with workspace dependencies without manual intervention. |
 | `agents-syncing` | bool | `true` | Propagate user-authored skills from `.agents/skills/` into the per-agent skill directories of any configured agent that does not natively use `.agents/skills/` (such as `.claude/skills/` or `.kiro/skills/`). Skills that symposium itself installed — identified by the `.symposium` marker file — are not propagated. See [Workspace skills](../workspace-skills.md) for the user-guide overview, or [Agents syncing](#agents-syncing-mirror-user-authored-skills) below for details. |
 | `hook-scope` | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace. |
+| `auto-update` | string | `"on"` | Controls automatic update behavior. `"off"` disables update checks entirely. `"warn"` checks the registry (at most once per 24 hours) and prints a message when a newer version is available. `"on"` automatically installs the update via `cargo install` and re-executes the command with the new binary. |
 
 ### Agents syncing: mirror user-authored skills
 
@@ -111,6 +113,7 @@ User-wide data lives under `~/.symposium/` by default. Override with environment
 | Path | Purpose |
 |------|---------|
 | `~/.symposium/config.toml` | User configuration |
+| `~/.symposium/state.toml` | Persistent state (binary version stamp, last update check) |
 | `~/.symposium/plugins/` | User-defined plugins |
 | `~/.symposium/cache/` | Cache directory (crate sources, plugin sources) |
 | `~/.symposium/logs/` | Log files (one per invocation, timestamped) |
