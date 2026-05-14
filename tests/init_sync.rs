@@ -1489,15 +1489,21 @@ async fn self_update_skips_check_when_disabled() {
     .unwrap();
 }
 
-/// End-to-end auto-update test: run the real binary as a subprocess with
-/// `auto-update = "on"` and `self-update-source = "source"`.  The mock
-/// cargo's `install` handler replaces the binary with a script that prints
-/// "SURPRISE!", so after the auto-update + re-exec we should see that
-/// message in the output.
-#[tokio::test]
-async fn auto_update_on_re_execs_into_new_binary() {
+/// Set up a temp dir with auto-update = "on", a mock cargo that replaces
+/// the binary with a "SURPRISE!" script on install, and return the paths
+/// needed to run the binary as a subprocess.
+struct AutoUpdateFixture {
+    _tmp: tempfile::TempDir,
+    root: PathBuf,
+    binary: PathBuf,
+    config_dir: PathBuf,
+    mock_cargo: PathBuf,
+    bin_dir: PathBuf,
+}
+
+fn setup_auto_update_fixture() -> AutoUpdateFixture {
     let tmp = tempfile::tempdir().unwrap();
-    let root = tmp.path();
+    let root = tmp.path().to_path_buf();
 
     let config_dir = root.join("dot-symposium");
     std::fs::create_dir_all(&config_dir).unwrap();
@@ -1530,8 +1536,8 @@ async fn auto_update_on_re_execs_into_new_binary() {
     let bin_dir = root.join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let real_binary = std::env::var("CARGO_BIN_EXE_cargo-agents").expect("must run via cargo test");
-    let binary_copy = bin_dir.join("cargo-agents");
-    std::fs::copy(&real_binary, &binary_copy).unwrap();
+    let binary = bin_dir.join("cargo-agents");
+    std::fs::copy(&real_binary, &binary).unwrap();
 
     let mock_cargo = root.join("mock-cargo");
     std::fs::write(
@@ -1559,7 +1565,7 @@ SCRIPT
         ;;
 esac
 "#,
-            bin = binary_copy.display(),
+            bin = binary.display(),
         ),
     )
     .unwrap();
@@ -1569,23 +1575,69 @@ esac
         std::fs::set_permissions(&mock_cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    let output = std::process::Command::new(&binary_copy)
-        .args(["sync"])
-        .current_dir(root)
-        .env("SYMPOSIUM_HOME", &config_dir)
-        .env("SYMPOSIUM_CARGO", &mock_cargo)
-        .env("CARGO_HOME", &bin_dir)
-        .output()
-        .expect("failed to spawn binary");
+    AutoUpdateFixture {
+        _tmp: tmp,
+        root,
+        binary,
+        config_dir,
+        mock_cargo,
+        bin_dir,
+    }
+}
 
+impl AutoUpdateFixture {
+    fn command(&self) -> std::process::Command {
+        let mut cmd = std::process::Command::new(&self.binary);
+        cmd.current_dir(&self.root)
+            .env("SYMPOSIUM_HOME", &self.config_dir)
+            .env("SYMPOSIUM_CARGO", &self.mock_cargo)
+            .env("CARGO_HOME", &self.bin_dir);
+        cmd
+    }
+}
+
+fn assert_surprise(output: &std::process::Output) {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let combined = format!("{stdout}{stderr}");
-
     assert!(
         combined.contains("SURPRISE!"),
         "after auto-update + re-exec, the new binary should have run.\n\
          stdout: {stdout}\nstderr: {stderr}\nexit: {:?}",
         output.status,
     );
+}
+
+#[tokio::test]
+async fn auto_update_re_execs_on_sync() {
+    let fix = setup_auto_update_fixture();
+    let output = fix
+        .command()
+        .args(["sync"])
+        .output()
+        .expect("failed to spawn");
+    assert_surprise(&output);
+}
+
+#[tokio::test]
+async fn auto_update_re_execs_on_hook() {
+    let fix = setup_auto_update_fixture();
+    let output = fix
+        .command()
+        .args(["hook", "claude", "session-start"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            use std::io::Write;
+            if let Some(ref mut stdin) = child.stdin {
+                let _ = stdin.write_all(
+                    br#"{"hook_event_name":"SessionStart","session_id":"test","cwd":"/"}"#,
+                );
+            }
+            child.wait_with_output()
+        })
+        .expect("failed to spawn");
+    assert_surprise(&output);
 }
