@@ -549,15 +549,22 @@ fn validate_installation(install: &Installation) -> Result<()> {
             install.name
         );
     }
-    if let Some(Source::Cargo(c)) = &install.source
-        && c.git.is_some()
-        && install.executable.is_none()
-    {
-        bail!(
-            "installation `{}`: cargo source with `git` requires `executable` to be set \
-             (crates.io is not consulted, so the binary name is unknown)",
-            install.name
-        );
+    if let Some(Source::Cargo(c)) = &install.source {
+        if c.git.is_some() && install.executable.is_none() {
+            bail!(
+                "installation `{}`: cargo source with `git` requires `executable` to be set \
+                 (crates.io is not consulted, so the binary name is unknown)",
+                install.name
+            );
+        }
+        if c.global && install.executable.is_none() {
+            bail!(
+                "installation `{}`: cargo source with `global = true` requires `executable` to \
+                 be set (the binary is spawned by name via `$PATH` lookup, so we don't infer \
+                 it from crates.io)",
+                install.name
+            );
+        }
     }
     Ok(())
 }
@@ -2587,6 +2594,65 @@ mod tests {
             command = "rg"
         "#};
         from_str(toml).expect("parse");
+    }
+
+    /// `global = true` on cargo source round-trips through validation.
+    #[test]
+    fn cargo_global_field_round_trips() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "rg"
+            source = "cargo"
+            crate = "ripgrep"
+            executable = "rg"
+            global = true
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = "rg"
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        let install = plugin
+            .installations
+            .iter()
+            .find(|i| i.name == "rg")
+            .unwrap();
+        match &install.source {
+            Some(Source::Cargo(c)) => assert!(c.global),
+            _ => panic!("expected cargo source"),
+        }
+    }
+
+    /// Cargo source with `global = true` and no `executable` is rejected at
+    /// parse time — we don't infer the binary from crates.io for global
+    /// installs, so the user must say what to spawn.
+    #[test]
+    fn cargo_global_without_executable_errors() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "rg"
+            source = "cargo"
+            crate = "ripgrep"
+            global = true
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = "rg"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("`global = true` requires `executable`"),
+            "got: {err}"
+        );
     }
 
     /// `git` field on cargo source round-trips through validation.
