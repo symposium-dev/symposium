@@ -1416,7 +1416,7 @@ async fn sync_triggers_update_check() {
                 "init should have triggered an update check"
             );
             expect_test::expect![[r#"
-                ⚠️  symposium 99.0.0 is available (current: 0.3.0). Run `cargo agents self-update` to upgrade.
+                ⚠️  symposium 99.0.0 is available (current: $VERSION). Run `cargo agents self-update` to upgrade.
                 Setting up symposium for your user account.
 
                 ✅ $CONFIG_DIR/config.toml: wrote user config (agents: Claude Code)"#]].assert_eq(&output);

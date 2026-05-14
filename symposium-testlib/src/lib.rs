@@ -446,10 +446,12 @@ impl TestContext {
         self.sym.set_cargo_override(script_path);
     }
 
-    /// Replace temp directory paths with a stable placeholder for snapshot tests.
+    /// Replace variable content with stable placeholders for snapshot tests.
     pub fn normalize_paths(&self, output: &str) -> String {
         let config_dir = self.sym.config_dir().to_string_lossy().to_string();
-        output.replace(&config_dir, "$CONFIG_DIR")
+        output
+            .replace(&config_dir, "$CONFIG_DIR")
+            .replace(symposium::state::CURRENT_VERSION, "$VERSION")
     }
 }
 
