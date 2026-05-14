@@ -1409,20 +1409,18 @@ async fn sync_triggers_update_check() {
             // init is the first command through cli::run(), so it triggers
             // the update check (and consumes the 24h window).
             let output = ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let output = ctx.normalize_paths(&output);
 
             let s = symposium::state::load(&dir).expect("state.toml should exist");
             assert!(
                 s.last_update_check.is_some(),
                 "init should have triggered an update check"
             );
-            assert!(
-                output.contains("99.0.0 is available"),
-                "should warn about the newer version, got: {output}"
-            );
-            assert!(
-                output.contains("cargo agents self-update"),
-                "warning should mention the self-update command, got: {output}"
-            );
+            expect_test::expect![[r#"
+                ⚠️  symposium 99.0.0 is available (current: 0.3.0). Run `cargo agents self-update` to upgrade.
+                Setting up symposium for your user account.
+
+                ✅ $CONFIG_DIR/config.toml: wrote user config (agents: Claude Code)"#]].assert_eq(&output);
             Ok(())
         },
     )
@@ -1470,8 +1468,8 @@ async fn self_update_skips_check_when_disabled() {
             ctx.sym.config.auto_update = symposium::config::AutoUpdate::Off;
 
             let dir = ctx.sym.config_dir().to_path_buf();
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
-            ctx.symposium(&["sync"]).await?;
+            let output = ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let output = ctx.normalize_paths(&output);
 
             let s = symposium::state::load(&dir);
             let checked = s.as_ref().and_then(|s| s.last_update_check.as_ref());
@@ -1479,6 +1477,11 @@ async fn self_update_skips_check_when_disabled() {
                 checked.is_none(),
                 "auto-update = off should not trigger any update check"
             );
+            expect_test::expect![[r#"
+                Setting up symposium for your user account.
+
+                ✅ $CONFIG_DIR/config.toml: wrote user config (agents: Claude Code)"#]]
+            .assert_eq(&output);
             Ok(())
         },
     )
