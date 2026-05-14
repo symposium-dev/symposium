@@ -192,15 +192,22 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     // Find all applicable skills
     let applicable = skills::skills_applicable_to(sym, &registry, &workspace).await;
 
-    let mut skill_names: BTreeSet<String> = BTreeSet::new();
-
-    // Build a map of skill_name -> skill for installation
-    let mut to_install: Vec<(&str, &std::path::Path)> = Vec::new();
+    // Dedup by `(skill_name, SkillOrigin)`: two `Crate` origins with the
+    // same (name, version) collapse (the skills are the same logical bytes
+    // from the same crate source); two `Plugin` origins always survive
+    // independently. Skills that survive dedup are recorded with both
+    // their plain name and their origin so we can decide later whether
+    // each one needs an `<name>-<hash>` suffix to avoid collisions.
+    let mut seen: BTreeSet<(String, skills::SkillOrigin)> = BTreeSet::new();
+    let mut to_install: Vec<(String, skills::SkillOrigin, &std::path::Path)> = Vec::new();
+    let mut name_counts: std::collections::BTreeMap<String, usize> =
+        std::collections::BTreeMap::new();
 
     for entry in &applicable {
-        let name = entry.skill.name();
-        if skill_names.insert(name.to_string()) {
-            to_install.push((name, &entry.skill.path));
+        let name = entry.skill.name().to_string();
+        if seen.insert((name.clone(), entry.origin.clone())) {
+            *name_counts.entry(name.clone()).or_default() += 1;
+            to_install.push((name, entry.origin.clone(), &entry.skill.path));
         }
     }
 
@@ -261,8 +268,23 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
             .register_global_mcp_servers(&hook_root, &mcp_servers, out)
             .context("failed to register MCP servers")?;
 
-        for &(skill_name, skill_source) in &to_install {
-            let dest_dir = agent.project_skill_dir(&project_root, skill_name);
+        for (skill_name, origin, skill_source) in &to_install {
+            // Pick the install dir name for this skill on *this* agent:
+            // - If exactly one origin claims the name and the un-suffixed
+            //   slot is "available" (nonexistent or symposium-managed),
+            //   use the plain `<skill-name>/`.
+            // - Otherwise fall back to `<skill-name>-<origin-hash>/` so
+            //   distinct origins coexist and we never clobber a
+            //   user-managed directory.
+            let unique_name = name_counts.get(skill_name).copied().unwrap_or(0) == 1;
+            let plain_dir = agent.project_skill_dir(&project_root, skill_name);
+            let plain_available = !plain_dir.exists() || has_symposium_marker(&plain_dir);
+            let dir_name = if unique_name && plain_available {
+                skill_name.clone()
+            } else {
+                format!("{skill_name}-{}", origin.short_hash())
+            };
+            let dest_dir = agent.project_skill_dir(&project_root, &dir_name);
 
             // Create the destination (and any missing parents) with a `*` gitignore
             // in each new directory.
@@ -280,14 +302,14 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
                         out.warn(format!("failed to mark {}: {e}", display_path(&dest_dir)));
                     }
                     installed_dirs.insert(dest_dir.clone());
-                    tracing::info!(%skill_name, agent = %agent_name, dest = %dest_dir.display(), "installed skill");
+                    tracing::info!(skill = %dir_name, agent = %agent_name, dest = %dest_dir.display(), "installed skill");
                     out.done(format!(
-                        "installed skill {skill_name} → {}",
+                        "installed skill {dir_name} → {}",
                         display_path(&dest_dir)
                     ));
                 }
                 Err(e) => {
-                    out.warn(format!("failed to install skill {skill_name}: {e}"));
+                    out.warn(format!("failed to install skill {dir_name}: {e}"));
                 }
             }
         }

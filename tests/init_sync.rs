@@ -1,11 +1,56 @@
 //! Integration tests for init and sync flows.
 
+use std::path::{Path, PathBuf};
+
 use symposium_testlib::{TestMode, with_fixture};
 
 /// Read the user config file from the test context.
 fn read_user_config(ctx: &symposium_testlib::TestContext) -> String {
     let path = ctx.sym.config_dir().join("config.toml");
     std::fs::read_to_string(&path).unwrap_or_else(|_| "(not found)".to_string())
+}
+
+/// Locate every installed skill directory under `parent` whose name is
+/// `<skill_name>` or `<skill_name>-<hash>`. Sync embeds an origin-derived
+/// hash in the directory name to keep distinct origins from colliding.
+fn find_installed_skills(parent: &Path, skill_name: &str) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        let matches = name == skill_name
+            || (name.starts_with(skill_name)
+                && name.as_bytes().get(skill_name.len()) == Some(&b'-'));
+        if matches && path.join("SKILL.md").is_file() {
+            out.push(path);
+        }
+    }
+    out.sort();
+    out
+}
+
+/// Locate the unique installed skill directory by name. Panics if 0 or
+/// >1 directories match. Use `find_installed_skills` when the test cares
+/// about how many were installed.
+fn find_installed_skill(parent: &Path, skill_name: &str) -> PathBuf {
+    let mut hits = find_installed_skills(parent, skill_name);
+    assert_eq!(
+        hits.len(),
+        1,
+        "expected exactly one installed skill named `{skill_name}` under {}, found {}: {:?}",
+        parent.display(),
+        hits.len(),
+        hits,
+    );
+    hits.pop().unwrap()
 }
 
 /// `init` defaults to global hook scope — hooks go to home dir.
@@ -99,28 +144,37 @@ async fn sync_installs_skills() {
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
 
-            let skill_file = workspace_root.join(".claude/skills/serde-guidance/SKILL.md");
-            assert!(
-                skill_file.exists(),
-                "sync should install serde-guidance skill"
+            let skill_dir = find_installed_skill(&skills_dir, "serde-guidance");
+
+            // No name collision and no pre-existing user-managed dir at
+            // the unsuffixed slot, so sync uses the plain name (no
+            // origin-hash suffix).
+            assert_eq!(
+                skill_dir.file_name().and_then(|n| n.to_str()),
+                Some("serde-guidance"),
+                "single-origin skill should install without a hash suffix"
             );
 
             // Each installed skill directory carries a `.symposium` marker so
             // future syncs (and other tools) can identify it as symposium-managed.
-            let marker = workspace_root.join(".claude/skills/serde-guidance/.symposium");
             assert!(
-                marker.exists(),
+                skill_dir.join(".symposium").exists(),
                 "skill dir should contain .symposium marker"
             );
 
             // Skill dirs symposium creates get a wildcard gitignore so the
             // marker, SKILL.md, and gitignore itself stay out of version control.
-            for dir in [".claude/skills", ".claude/skills/serde-guidance"] {
-                let gi = workspace_root.join(dir).join(".gitignore");
-                assert!(gi.exists(), "missing .gitignore in {dir}");
+            for gi in [skills_dir.join(".gitignore"), skill_dir.join(".gitignore")] {
+                assert!(gi.exists(), "missing .gitignore at {}", gi.display());
                 let contents = std::fs::read_to_string(&gi).unwrap();
-                assert_eq!(contents.trim(), "*", "unexpected .gitignore in {dir}");
+                assert_eq!(
+                    contents.trim(),
+                    "*",
+                    "unexpected .gitignore at {}",
+                    gi.display()
+                );
             }
             Ok(())
         },
@@ -149,17 +203,11 @@ async fn sync_skips_invalid_skill_frontmatter() {
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-            let skill_file = workspace_root.join(".agents/skills/rust-best-practice/SKILL.md");
+            let installed =
+                find_installed_skills(&workspace_root.join(".agents/skills"), "rust-best-practice");
             assert!(
-                !skill_file.exists(),
-                "sync should not install a skill with invalid YAML frontmatter"
-            );
-
-            // No marker should exist for the rejected skill.
-            let marker = workspace_root.join(".agents/skills/rust-best-practice/.symposium");
-            assert!(
-                !marker.exists(),
-                "rejected skill directory should not exist"
+                installed.is_empty(),
+                "sync should not install a skill with invalid YAML frontmatter; got {installed:?}"
             );
             Ok(())
         },
@@ -387,10 +435,11 @@ async fn sync_excludes_transitive_deps() {
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
 
             // mio-guidance should NOT be installed (mio is transitive, not direct)
-            let mio_skill = workspace_root.join(".claude/skills/mio-guidance/SKILL.md");
+            let installed =
+                find_installed_skills(&workspace_root.join(".claude/skills"), "mio-guidance");
             assert!(
-                !mio_skill.exists(),
-                "skill targeting transitive dep (mio) should NOT be installed"
+                installed.is_empty(),
+                "skill targeting transitive dep (mio) should NOT be installed; got {installed:?}"
             );
 
             Ok(())
@@ -413,12 +462,7 @@ async fn sync_installs_plugin_skill_group() {
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-
-            let skill_file = workspace_root.join(".claude/skills/serde-guidance/SKILL.md");
-            assert!(
-                skill_file.exists(),
-                "sync should install skill from plugin [[skills]] group with source.path"
-            );
+            find_installed_skill(&workspace_root.join(".claude/skills"), "serde-guidance");
             Ok(())
         },
     )
@@ -438,12 +482,7 @@ async fn sync_installs_wildcard_plugin_skill() {
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-
-            let skill_file = workspace_root.join(".claude/skills/wildcard-guidance/SKILL.md");
-            assert!(
-                skill_file.exists(),
-                "sync should install skill from wildcard plugin"
-            );
+            find_installed_skill(&workspace_root.join(".claude/skills"), "wildcard-guidance");
             Ok(())
         },
     )
@@ -467,35 +506,19 @@ async fn sync_installs_skill_from_crate_path() {
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
 
             // crate-x: default path via source = "crate"
-            let skill_file = workspace_root.join(".claude/skills/x-guidance/SKILL.md");
-            assert!(
-                skill_file.exists(),
-                "sync should install skill from crate-x via source = \"crate\""
-            );
-            let content = std::fs::read_to_string(&skill_file)?;
+            let x_dir = find_installed_skill(&skills_dir, "x-guidance");
+            let content = std::fs::read_to_string(x_dir.join("SKILL.md"))?;
             assert!(content.contains("Use crate-x like this"));
+            assert!(x_dir.join(".symposium").exists());
 
             // crate-z: custom path via source.crate_path = "guidance"
-            let skill_file = workspace_root.join(".claude/skills/z-guidance/SKILL.md");
-            assert!(
-                skill_file.exists(),
-                "sync should install skill from crate-z via custom crate_path"
-            );
-            let content = std::fs::read_to_string(&skill_file)?;
+            let z_dir = find_installed_skill(&skills_dir, "z-guidance");
+            let content = std::fs::read_to_string(z_dir.join("SKILL.md"))?;
             assert!(content.contains("Use crate-z like this"));
-
-            assert!(
-                workspace_root
-                    .join(".claude/skills/x-guidance/.symposium")
-                    .exists()
-            );
-            assert!(
-                workspace_root
-                    .join(".claude/skills/z-guidance/.symposium")
-                    .exists()
-            );
+            assert!(z_dir.join(".symposium").exists());
             Ok(())
         },
     )
@@ -549,13 +572,9 @@ async fn sync_installs_skill_from_patched_crate() {
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-
-            let skill_file = workspace_root.join(".claude/skills/x-patched-guidance/SKILL.md");
-            assert!(
-                skill_file.exists(),
-                "sync should install skill from patched crate-x"
-            );
-            let content = std::fs::read_to_string(&skill_file)?;
+            let skill_dir =
+                find_installed_skill(&workspace_root.join(".claude/skills"), "x-patched-guidance");
+            let content = std::fs::read_to_string(skill_dir.join("SKILL.md"))?;
             assert!(content.contains("Use patched crate-x like this"));
             Ok(())
         },
@@ -651,16 +670,14 @@ async fn sync_installations_are_gitignored() {
             ctx.symposium(&["sync"]).await?;
 
             // Sanity: the skill and marker are actually on disk.
+            let skill_dir =
+                find_installed_skill(&workspace_root.join(".claude/skills"), "serde-guidance");
             assert!(
-                workspace_root
-                    .join(".claude/skills/serde-guidance/SKILL.md")
-                    .exists(),
+                skill_dir.join("SKILL.md").exists(),
                 "skill should be installed on disk"
             );
             assert!(
-                workspace_root
-                    .join(".claude/skills/serde-guidance/.symposium")
-                    .exists(),
+                skill_dir.join(".symposium").exists(),
                 "marker should be on disk"
             );
 
@@ -681,6 +698,392 @@ async fn sync_installations_are_gitignored() {
             "#]]
             .assert_eq(&status);
 
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// SkillOrigin dedup
+// ---------------------------------------------------------------------------
+
+/// Two plugins both with `source = "crate"` pointing at the same crate
+/// produce the same `SkillOrigin::Crate { name, version }`, so the skill
+/// installs exactly once.
+#[tokio::test]
+async fn sync_dedups_same_crate_origin_across_plugins() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["dedup-crate-origin0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let installed = find_installed_skills(
+                &workspace_root.join(".claude/skills"),
+                "code-review",
+            );
+            assert_eq!(
+                installed.len(),
+                1,
+                "two plugins resolving the same crate-x must collapse to one install; got {installed:?}"
+            );
+            // Dedup left a single origin, so the install gets the
+            // unsuffixed name (no hash needed to disambiguate).
+            assert_eq!(
+                installed[0].file_name().and_then(|n| n.to_str()),
+                Some("code-review"),
+                "dedup'd single origin should land at the unsuffixed name"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Two plugins in the same registry source whose `source.path` groups
+/// resolve to the same on-disk skill bundle produce the same
+/// `SkillOrigin::Source` and dedupe to a single install.
+///
+/// Identity is `(source_name, skill-path-relative-to-source-root)`, so
+/// the path the SKILL.md actually lives at is what matters — not the
+/// plugin name that pointed at it. Standalone discovery of the same
+/// SKILL.md (the registry walk also surfaces it as a standalone since
+/// nothing claims its parent) collapses to that same origin too.
+#[tokio::test]
+async fn sync_dedups_same_source_path_across_plugins() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["dedup-source-origin0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let installed = find_installed_skills(
+                &workspace_root.join(".claude/skills"),
+                "shared-skill",
+            );
+            assert_eq!(
+                installed.len(),
+                1,
+                "two plugins pointing at the same skill bundle must collapse to one install; got {installed:?}"
+            );
+            assert_eq!(
+                installed[0].file_name().and_then(|n| n.to_str()),
+                Some("shared-skill"),
+                "single dedup'd origin should land at the unsuffixed name"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Two plugins each contributing a skill named `code-review` from their
+/// own `source.path` produce distinct `SkillOrigin::Plugin { plugin_name }`
+/// values, so both install — under separate hashed directory names.
+#[tokio::test]
+async fn sync_keeps_distinct_plugin_origins_with_same_skill_name() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["distinct-plugin-origins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let installed = find_installed_skills(
+                &workspace_root.join(".claude/skills"),
+                "code-review",
+            );
+            assert_eq!(
+                installed.len(),
+                2,
+                "two plugins each shipping a `code-review` skill must both install; got {installed:?}"
+            );
+
+            // Each install dir has the expected disambiguating suffix.
+            let names: Vec<String> = installed
+                .iter()
+                .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(str::to_string))
+                .collect();
+            for n in &names {
+                assert!(
+                    n.starts_with("code-review-"),
+                    "expected hashed suffix on `{n}`"
+                );
+            }
+
+            // And the bodies came from different plugins.
+            let bodies: Vec<String> = installed
+                .iter()
+                .map(|p| std::fs::read_to_string(p.join("SKILL.md")).unwrap())
+                .collect();
+            assert!(bodies.iter().any(|b| b.contains("Plugin-A")));
+            assert!(bodies.iter().any(|b| b.contains("Plugin-B")));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// One origin initially → unsuffixed install. Introduce a second
+/// origin → both must move to suffixed names; the prior unsuffixed
+/// install (still has the marker, no longer in the freshly-installed
+/// set) is reaped.
+#[tokio::test]
+async fn sync_demotes_to_suffixed_when_conflict_appears() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["distinct-plugin-origins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+            // Park plugin-b *outside* any plugin source dir so it isn't
+            // discovered. (`tempdir/` sits next to the user config root,
+            // which is itself a plugin source — so we can't park inside
+            // the same parent.)
+            let plugins_dir = ctx.sym.config_dir().join("plugins");
+            let parked = ctx.tempdir.join("parked-plugin-b");
+            std::fs::rename(plugins_dir.join("plugin-b"), &parked)?;
+
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            // Baseline: only plugin-a's `code-review` is visible, so it
+            // takes the plain slot.
+            let installed = find_installed_skills(&skills_dir, "code-review");
+            assert_eq!(installed.len(), 1, "expected one unsuffixed install");
+            assert_eq!(
+                installed[0].file_name().and_then(|n| n.to_str()),
+                Some("code-review"),
+                "single origin should land at the unsuffixed slot"
+            );
+
+            // Re-introduce plugin-b. Now there are two origins.
+            std::fs::rename(&parked, plugins_dir.join("plugin-b"))?;
+
+            ctx.symposium(&["sync"]).await?;
+
+            // Both origins now install under suffixed names; the
+            // previous unsuffixed dir is gone (reaped via the marker
+            // walk because it's no longer in the freshly-installed set).
+            let installed = find_installed_skills(&skills_dir, "code-review");
+            assert_eq!(
+                installed.len(),
+                2,
+                "both origins should install under suffixed names; got {installed:?}"
+            );
+            assert!(
+                !skills_dir.join("code-review").exists(),
+                "the prior unsuffixed install must be reaped"
+            );
+            for p in &installed {
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap();
+                assert!(
+                    name.starts_with("code-review-"),
+                    "expected hashed suffix on `{name}`"
+                );
+            }
+
+            // And the bodies cover both plugins.
+            let bodies: Vec<String> = installed
+                .iter()
+                .map(|p| std::fs::read_to_string(p.join("SKILL.md")).unwrap())
+                .collect();
+            assert!(bodies.iter().any(|b| b.contains("Plugin-A")));
+            assert!(bodies.iter().any(|b| b.contains("Plugin-B")));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Two origins → both suffixed. Remove one origin, sync again → the
+/// survivor moves to the unsuffixed slot and the suffixed leftover is
+/// reaped via the marker-based stale-cleanup walk.
+#[tokio::test]
+async fn sync_promotes_to_unsuffixed_when_conflict_disappears() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["distinct-plugin-origins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            // Baseline: two origins, both suffixed, neither at the
+            // plain slot.
+            let installed = find_installed_skills(&skills_dir, "code-review");
+            assert_eq!(installed.len(), 2, "expected two suffixed installs");
+            assert!(
+                !skills_dir.join("code-review").exists(),
+                "unsuffixed slot must be vacant while both origins coexist"
+            );
+
+            // Remove plugin-b so only plugin-a's `code-review` survives.
+            std::fs::remove_dir_all(ctx.sym.config_dir().join("plugins/plugin-b"))?;
+
+            ctx.symposium(&["sync"]).await?;
+
+            // The survivor now lives at the plain slot.
+            let installed = find_installed_skills(&skills_dir, "code-review");
+            assert_eq!(
+                installed.len(),
+                1,
+                "exactly one install should remain after removing plugin-b; got {installed:?}"
+            );
+            assert_eq!(
+                installed[0].file_name().and_then(|n| n.to_str()),
+                Some("code-review"),
+                "the surviving origin should be promoted to the unsuffixed slot"
+            );
+            // And it's still plugin-a's content (plugin-b was removed).
+            let body = std::fs::read_to_string(installed[0].join("SKILL.md"))?;
+            assert!(
+                body.contains("Plugin-A"),
+                "promoted install should be plugin-a's body, got: {body}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// A pre-existing user-managed directory at the skill's unsuffixed slot
+/// (no `.symposium` marker) forces sync to fall back to the hashed
+/// directory name rather than clobber the user's content.
+#[tokio::test]
+async fn sync_falls_back_to_hashed_name_when_user_dir_in_the_way() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            // Plant a user-managed dir at the slot symposium would
+            // normally pick. No `.symposium` marker → user-owned.
+            let user_dir = workspace_root.join(".claude/skills/serde-guidance");
+            std::fs::create_dir_all(&user_dir)?;
+            std::fs::write(user_dir.join("SKILL.md"), "user content")?;
+
+            ctx.symposium(&["sync"]).await?;
+
+            // The user's content is untouched.
+            assert_eq!(
+                std::fs::read_to_string(user_dir.join("SKILL.md"))?,
+                "user content"
+            );
+            assert!(
+                !user_dir.join(".symposium").exists(),
+                "no marker should be planted on the user's dir"
+            );
+
+            // And symposium still installed the skill — under a hashed
+            // name. `find_installed_skills` requires a `SKILL.md` plus a
+            // matching directory shape; the suffix variant is the only
+            // one that should carry the marker.
+            let installed =
+                find_installed_skills(&workspace_root.join(".claude/skills"), "serde-guidance");
+            let hashed: Vec<_> = installed
+                .iter()
+                .filter(|p| p.join(".symposium").exists())
+                .collect();
+            assert_eq!(
+                hashed.len(),
+                1,
+                "sync should install one symposium-managed copy under a hashed name; got {hashed:?}"
+            );
+            assert_ne!(
+                hashed[0].file_name().and_then(|n| n.to_str()),
+                Some("serde-guidance"),
+                "must not use the unsuffixed slot when a user dir occupies it"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// One plugin with two `[[skills]]` groups, each with its own `source.path`,
+/// each producing a same-named skill. The group source goes into the
+/// origin's `disambiguator`, so both groups install — without colliding.
+#[tokio::test]
+async fn sync_keeps_distinct_groups_within_one_plugin() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["multi-group-plugin0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let installed =
+                find_installed_skills(&workspace_root.join(".claude/skills"), "shared-name");
+            assert_eq!(
+                installed.len(),
+                2,
+                "two skill groups within one plugin must both install; got {installed:?}"
+            );
+
+            let bodies: Vec<String> = installed
+                .iter()
+                .map(|p| std::fs::read_to_string(p.join("SKILL.md")).unwrap())
+                .collect();
+            assert!(bodies.iter().any(|b| b.contains("Group-A")));
+            assert!(bodies.iter().any(|b| b.contains("Group-B")));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Two standalone skills both named `my-skill` but living at different
+/// paths within the registry source (`foo/my-skill/SKILL.md` and
+/// `bar/my-skill/SKILL.md`) produce distinct origins (the relative path
+/// is part of the `SkillOrigin::Plugin` identifier), so both install.
+#[tokio::test]
+async fn sync_keeps_distinct_standalone_origins_at_different_paths() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["distinct-standalone-paths0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let installed = find_installed_skills(
+                &workspace_root.join(".claude/skills"),
+                "my-skill",
+            );
+            assert_eq!(
+                installed.len(),
+                2,
+                "two standalone skills at different relative paths must both install; got {installed:?}"
+            );
+
+            let bodies: Vec<String> = installed
+                .iter()
+                .map(|p| std::fs::read_to_string(p.join("SKILL.md")).unwrap())
+                .collect();
+            assert!(bodies.iter().any(|b| b.contains("Foo body")));
+            assert!(bodies.iter().any(|b| b.contains("Bar body")));
             Ok(())
         },
     )
