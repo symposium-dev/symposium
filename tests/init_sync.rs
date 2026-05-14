@@ -1343,7 +1343,6 @@ async fn self_update_detects_newer_version() {
         &["plugins0", "workspace0"],
         async |mut ctx| {
             ctx.set_mock_cargo(&mock_cargo_script("99.0.0"));
-            ctx.sym.config.update_source = symposium::config::UpdateSource::Source;
             ctx.symposium(&["self-update"]).await?;
             Ok(())
         },
@@ -1511,7 +1510,6 @@ fn setup_auto_update_fixture() -> AutoUpdateFixture {
         config_dir.join("config.toml"),
         indoc::indoc! {r#"
             auto-update = "on"
-            self-update-source = "source"
             hook-scope = "project"
 
             [[agent]]

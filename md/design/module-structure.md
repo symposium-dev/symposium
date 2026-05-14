@@ -55,7 +55,7 @@ Manages `state.toml` in the config directory. Tracks the semver of the binary th
 
 ### `self_update.rs` — self-update
 
-Implements `cargo agents self-update`. Queries crates.io for the latest published version, then downloads the prebuilt binary from the GitHub release (`cargo-agents-{target}.tar.gz`), extracts it, and atomically replaces the installed binary. Falls back to `cargo install` when no prebuilt binary is available for the current platform. Also provides `re_exec()` which replaces the current process with the newly installed binary (Unix `exec`, spawn-and-exit on Windows) — used by the `auto-update = "on"` startup path.
+Implements `cargo agents self-update`. Queries the registry for the latest published version via `cargo search`, then installs it via `cargo install symposium --force`. Also provides `re_exec()` which replaces the current process with the newly installed binary (Unix `exec`, spawn-and-exit on Windows) — used by the `auto-update = "on"` startup path. Contains `maybe_warn_for_update()` (sync, for the `warn` library path) and `maybe_check_for_update()` (async, for the binary `on` + re-exec path).
 
 ### `crate_command.rs` — crate source lookup
 

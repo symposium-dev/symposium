@@ -82,6 +82,11 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
     }
     tracing::debug!(scope = ?sym.config.hook_scope, "hook scope");
 
+    if !agents.is_empty() && interactive(out) {
+        sym.config.auto_update = prompt_for_auto_update(sym.config.auto_update)?;
+    }
+    tracing::debug!(auto_update = ?sym.config.auto_update, "auto-update");
+
     sym.save_config().context("failed to write user config")?;
     tracing::info!(
         agents = ?agents.iter().map(|a| a.config_name()).collect::<Vec<_>>(),
@@ -138,6 +143,33 @@ fn prompt_for_hook_scope(current: crate::config::HookScope) -> Result<crate::con
     Ok(match selection {
         0 => HookScope::Global,
         _ => HookScope::Project,
+    })
+}
+
+fn prompt_for_auto_update(current: crate::config::AutoUpdate) -> Result<crate::config::AutoUpdate> {
+    use crate::config::AutoUpdate;
+
+    let items = [
+        "Auto-update (recommended)",
+        "Warn when updates are available",
+        "Off",
+    ];
+    let default = match current {
+        AutoUpdate::On => 0,
+        AutoUpdate::Warn => 1,
+        AutoUpdate::Off => 2,
+    };
+
+    let selection = dialoguer::Select::new()
+        .with_prompt("Automatic updates")
+        .items(items)
+        .default(default)
+        .interact()?;
+
+    Ok(match selection {
+        0 => AutoUpdate::On,
+        1 => AutoUpdate::Warn,
+        _ => AutoUpdate::Off,
     })
 }
 
