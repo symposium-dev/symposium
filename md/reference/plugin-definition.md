@@ -34,6 +34,7 @@ source.path = "skills"
 |-------|------|----------|-------------|
 | `name` | string | yes | Plugin name. Used in logs and CLI output. |
 | `crates` | string or array | no | Which crates this plugin applies to. Use `["*"]` for all crates. See [Plugin-level filtering](#plugin-level-filtering). |
+| `shell_predicates` | array of strings | no | Shell commands that must all exit 0 for the plugin to apply. See [Shell predicates](./shell-predicates.md). |
 | `installations` | array of tables | no | Named installation declarations (`[[installations]]`). Hooks reference these by name. See [Installations](#installations). |
 | `skills` | array of tables | no | Skill groups (`[[skills]]`). |
 | `hooks` | array of tables | no | Hooks (`[[hooks]]`). |
@@ -62,6 +63,7 @@ Each `[[skills]]` entry declares a group of skills.
 | Field | Type | Description |
 |-------|------|-------------|
 | `crates` | string or array | Which crates this group advises on. Accepts a single string (`"serde"`) or array (`["serde", "tokio>=1.0"]`). See [Crate predicates](./crate-predicates.md) for syntax. |
+| `shell_predicates` | array of strings | Shell commands that must all exit 0 for the group to install. See [Shell predicates](./shell-predicates.md). |
 | `source.path` | string | Local directory containing skill subdirectories. Resolved relative to the manifest file. |
 | `source.git` | string | GitHub URL pointing to a directory in a repository (e.g., `https://github.com/org/repo/tree/main/skills`). Symposium downloads the tarball, extracts the subdirectory, and caches it. |
 | `source = "crate"` | string | Look for skills inside the matched crates' source trees. Layout is determined by `[package.metadata.symposium]` in each crate's `Cargo.toml`. See [Crate-sourced skills](#crate-sourced-skills). |
@@ -253,6 +255,7 @@ Each `[[hooks]]` entry declares a hook that responds to agent events. For the JS
 | `requirements` | array (optional) | Installations to acquire before running. Same shape as `command` (string name or inline declaration). |
 | `agent` | string (optional) | Restrict the hook to a specific agent (`claude`, `copilot`, `gemini`, `kiro`, …). |
 | `format` | string | Wire format the handler expects on stdin. `symposium` (default): symposium converts the agent's event to its canonical format before delivering. Any agent name (`claude`, `codex`, `copilot`, `gemini`, `kiro`): the handler receives that agent's native wire format. Symposium always intermediates — it never registers plugin hooks directly into agent configs. See [Hooks](../crate-authors/authoring-a-plugin.md#hooks). |
+| `shell_predicates` | array (optional) | Shell commands that must all exit 0 for the hook to dispatch. Evaluated per-dispatch. See [Shell predicates](./shell-predicates.md). |
 
 ### Examples
 
@@ -461,6 +464,7 @@ env = []
 |-------|------|-------------|
 | `name` | string | Server name as it appears in the agent's MCP config. |
 | `crates` | string or array | Which crates this server applies to. Optional if plugin has top-level `crates`. |
+| `shell_predicates` | array of strings | Shell commands that must all exit 0 for the server to register. See [Shell predicates](./shell-predicates.md). |
 | `command` | string | Path to the server binary. |
 | `args` | array of strings | Arguments passed to the binary. |
 | `env` | array of objects | Environment variables to set when launching the server. |

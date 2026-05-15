@@ -28,6 +28,8 @@ pub struct Skill {
     pub frontmatter: BTreeMap<String, String>,
     /// Crate predicates this skill advises on (skill-level; ANDed with group-level).
     pub crates: Vec<Predicate>,
+    /// Shell predicates from skill frontmatter; ANDed with plugin and group levels.
+    pub shell_predicates: crate::shell_predicate::ShellPredicateSet,
     /// The body content (everything after frontmatter).
     pub body: String,
     /// Path to the SKILL.md file on disk.
@@ -132,6 +134,10 @@ impl SkillOrigin {
 /// Each predicate set must match (AND across sets). Within a set,
 /// any predicate matching suffices (OR within a set). An empty
 /// `predicate_sets` vec means "always matches".
+///
+/// Shell predicates aren't stored here — callers gate on plugin- and
+/// group-level shell predicates upstream, and the skill-level set is
+/// evaluated once during collection.
 pub struct SkillWithGroupContext {
     pub skill: Skill,
     /// Accumulated predicate sets: [plugin.crates, group.crates, skill.crates].
@@ -145,7 +151,7 @@ pub struct SkillWithGroupContext {
 impl SkillWithGroupContext {
     /// Check whether this skill matches the given workspace dependencies.
     ///
-    /// Every predicate set must match. An empty vec is vacuously true.
+    /// Every crate predicate set must match. An empty vec is vacuously true.
     pub fn matches_workspace(&self, deps: &[(String, semver::Version)]) -> bool {
         self.predicate_sets.iter().all(|ps| ps.matches(deps))
     }
@@ -182,6 +188,19 @@ pub async fn skills_applicable_to(
                     plugin: plugin.name.clone(),
                     matched: false,
                     reason: Some("plugin-level crate predicates not satisfied".into()),
+                },
+            );
+            continue;
+        }
+
+        // Shell predicates at the plugin level gate everything below.
+        // Evaluated before group fetching to avoid wasted work.
+        if !plugin.shell_predicates_hold() {
+            tracing::debug!(
+                report = %crate::report::ReportEvent::PluginConsidered {
+                    plugin: plugin.name.clone(),
+                    matched: false,
+                    reason: Some("plugin-level shell predicates not satisfied".into()),
                 },
             );
             continue;
@@ -287,6 +306,14 @@ async fn load_skills_for_group(
                 reason: Some("group crate predicates not satisfied".into()),
             },
         );
+        return (group_crates, Vec::new());
+    }
+
+    // Pre-fetch filtering: skip groups whose shell predicates don't hold.
+    // Done before any git/crates fetch so we don't pay network cost when a
+    // tool the group depends on isn't installed.
+    if !group.shell_predicates.evaluate() {
+        tracing::debug!(plugin = %plugin_path.display(), "skill group shell_predicates failed, skipping");
         return (group_crates, Vec::new());
     }
 
@@ -776,6 +803,14 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
         Vec::new()
     };
 
+    let shell_predicates = crate::shell_predicate::ShellPredicateSet {
+        commands: fm
+            .shell_predicates
+            .as_deref()
+            .map(crate::shell_predicate::parse_comma_separated)
+            .unwrap_or_default(),
+    };
+
     // Warn if no crates at either level — the skill won't match anything,
     // but we don't fail so a misconfigured plugin can't bring down the tool.
     if crates.is_empty() && group.crates.is_none() {
@@ -788,6 +823,7 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
     let skill = Skill {
         frontmatter,
         crates,
+        shell_predicates,
         body: fm.body,
         path: skill_md_path.to_path_buf(),
     };
@@ -795,8 +831,11 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
     Ok(skill)
 }
 
-/// Filter a single skill by crate constraints, pushing it onto `results`
-/// if it matches with its origin attached.
+/// Filter skills by crate + shell predicate constraints, collecting matches
+/// with group context.
+///
+/// Plugin- and group-level shell predicates have already been evaluated by
+/// callers as a pre-filter, so we only evaluate the skill-level set here.
 fn collect_skill_applicable_to(
     skill: &Skill,
     origin: SkillOrigin,
@@ -836,6 +875,17 @@ fn collect_skill_applicable_to(
         );
         return;
     }
+    if !entry.skill.shell_predicates.evaluate() {
+        tracing::debug!(
+            report = %crate::report::ReportEvent::SkillConsidered {
+                skill: skill.name().to_string(),
+                plugin: plugin_name.to_string(),
+                matched: false,
+                reason: Some("skill-level shell predicates not satisfied".into()),
+            },
+        );
+        return;
+    }
 
     tracing::debug!(
         report = %crate::report::ReportEvent::SkillConsidered {
@@ -855,6 +905,8 @@ struct RawFrontmatter {
     fields: BTreeMap<String, String>,
     /// Raw `crates` value (comma-separated predicate string).
     crates: Option<String>,
+    /// Raw `shell_predicates` value (comma-separated shell command string).
+    shell_predicates: Option<String>,
     body: String,
 }
 
@@ -890,6 +942,7 @@ fn parse_frontmatter(content: &str) -> Result<RawFrontmatter> {
 
     let mut fields = BTreeMap::new();
     let mut crates = None;
+    let mut shell_predicates = None;
 
     for (key, value) in mapping {
         let Some(key) = key.as_str() else {
@@ -900,16 +953,19 @@ fn parse_frontmatter(content: &str) -> Result<RawFrontmatter> {
             bail!("SKILL.md frontmatter field `{key}` must be a string");
         };
 
-        if key == "crates" {
-            crates = Some(value.to_string());
-        } else {
-            fields.insert(key.to_string(), value.to_string());
+        match key {
+            "crates" => crates = Some(value.to_string()),
+            "shell_predicates" => shell_predicates = Some(value.to_string()),
+            _ => {
+                fields.insert(key.to_string(), value.to_string());
+            }
         }
     }
 
     Ok(RawFrontmatter {
         fields,
         crates,
+        shell_predicates,
         body: body.to_string(),
     })
 }
@@ -1330,10 +1386,12 @@ mod tests {
         let plugin = Plugin {
             name: "other-crate-plugin".to_string(),
             crates: pred_set("other-crate"),
+            shell_predicates: Default::default(),
             hooks: vec![],
             skills: vec![SkillGroup {
                 crates: Some(pred_set("serde")), // Group targets serde
                 source: PluginSource::default(),
+                ..Default::default()
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
@@ -1377,10 +1435,12 @@ mod tests {
         let plugin = Plugin {
             name: "wildcard-plugin".to_string(),
             crates: pred_set("*"), // Plugin applies to all
+            shell_predicates: Default::default(),
             hooks: vec![],
             skills: vec![SkillGroup {
                 crates: Some(pred_set("other-crate")), // But group targets other-crate
                 source: PluginSource::default(),
+                ..Default::default()
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
@@ -1442,10 +1502,12 @@ mod tests {
         let plugin = Plugin {
             name: "serde-plugin".to_string(),
             crates: pred_set("serde"), // Plugin targets serde
+            shell_predicates: Default::default(),
             hooks: vec![],
             skills: vec![SkillGroup {
                 crates: Some(pred_set("serde")), // Group also targets serde
                 source: PluginSource::Path(skill_dir.to_path_buf()),
+                ..Default::default()
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
@@ -1476,6 +1538,161 @@ mod tests {
             "Should find one skill when all levels match"
         );
         assert_eq!(skills[0].skill.name(), "serde-basics");
+    }
+
+    #[tokio::test]
+    async fn shell_predicate_failure_filters_skill() {
+        use crate::plugins::{ParsedPlugin, Plugin, PluginRegistry, PluginSource, SkillGroup};
+        use std::fs;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let sym = crate::config::Symposium::from_dir(tmp.path());
+
+        let skill_dir = tmp.path().join("serde-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: serde-basics
+                description: Basic serde usage
+                crates: serde
+                ---
+
+                Use derive macros.
+            "},
+        )
+        .unwrap();
+
+        // Plugin matches by crates, but shell_predicate fails.
+        let plugin = Plugin {
+            name: "p".into(),
+            crates: pred_set("serde"),
+            shell_predicates: crate::shell_predicate::ShellPredicateSet {
+                commands: vec!["false".into()],
+            },
+            hooks: vec![],
+            skills: vec![SkillGroup {
+                crates: Some(pred_set("serde")),
+                source: PluginSource::Path(skill_dir.to_path_buf()),
+                ..Default::default()
+            }],
+            mcp_servers: vec![],
+            installations: Vec::new(),
+            subcommands: Default::default(),
+        };
+
+        let registry = PluginRegistry {
+            plugins: vec![ParsedPlugin {
+                path: tmp.path().join("plugin.toml"),
+                plugin,
+                source_name: "test".to_string(),
+                source_dir: PathBuf::from(".".to_string()),
+            }],
+            standalone_skills: vec![],
+            warnings: vec![],
+        };
+
+        let workspace = vec![crate::crate_sources::WorkspaceCrate {
+            name: "serde".into(),
+            version: semver::Version::new(1, 0, 0),
+            path: None,
+        }];
+        let skills = skills_applicable_to(&sym, &registry, &workspace).await;
+        assert!(
+            skills.is_empty(),
+            "plugin shell_predicate=false should filter out skills"
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_predicate_pass_allows_skill() {
+        use crate::plugins::{ParsedPlugin, Plugin, PluginRegistry, PluginSource, SkillGroup};
+        use std::fs;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let sym = crate::config::Symposium::from_dir(tmp.path());
+
+        let skill_dir = tmp.path().join("serde-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: serde-basics
+                description: Basic serde usage
+                crates: serde
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let plugin = Plugin {
+            name: "p".into(),
+            crates: pred_set("serde"),
+            shell_predicates: crate::shell_predicate::ShellPredicateSet {
+                commands: vec!["true".into()],
+            },
+            hooks: vec![],
+            skills: vec![SkillGroup {
+                crates: Some(pred_set("serde")),
+                source: PluginSource::Path(skill_dir.to_path_buf()),
+                shell_predicates: crate::shell_predicate::ShellPredicateSet {
+                    commands: vec!["true".into()],
+                },
+                ..Default::default()
+            }],
+            mcp_servers: vec![],
+            installations: Vec::new(),
+            subcommands: Default::default(),
+        };
+
+        let registry = PluginRegistry {
+            plugins: vec![ParsedPlugin {
+                path: tmp.path().join("plugin.toml"),
+                plugin,
+                source_name: "test".to_string(),
+                source_dir: PathBuf::from(".".to_string()),
+            }],
+            standalone_skills: vec![],
+            warnings: vec![],
+        };
+
+        let workspace = vec![crate::crate_sources::WorkspaceCrate {
+            name: "serde".into(),
+            version: semver::Version::new(1, 0, 0),
+            path: None,
+        }];
+        let skills = skills_applicable_to(&sym, &registry, &workspace).await;
+        assert_eq!(skills.len(), 1);
+    }
+
+    #[test]
+    fn skill_frontmatter_parses_shell_predicates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_md = tmp.path().join("SKILL.md");
+        std::fs::write(
+            &skill_md,
+            indoc! {"
+                ---
+                name: with-shell
+                description: A skill with shell predicates
+                crates: serde
+                shell_predicates: command -v rg, test -f Cargo.toml
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let skill = load_skill(&skill_md, &SkillGroup::default()).unwrap();
+        assert_eq!(skill.shell_predicates.commands.len(), 2);
+        assert_eq!(skill.shell_predicates.commands[0], "command -v rg");
     }
 
     #[test]
@@ -1734,6 +1951,7 @@ mod tests {
             skill: Skill {
                 frontmatter: BTreeMap::new(),
                 crates: vec![],
+                shell_predicates: Default::default(),
                 body: String::new(),
                 path: PathBuf::new(),
             },

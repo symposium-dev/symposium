@@ -655,6 +655,16 @@ fn dispatched_hooks_for_payload(
     let mut out = Vec::new();
 
     for parsed_plugin in plugins {
+        // Plugin-level shell predicates gate every hook in the plugin.
+        // Evaluated once per plugin per dispatch — cheap commands only.
+        if !parsed_plugin.plugin.shell_predicates_hold() {
+            tracing::debug!(
+                plugin = %parsed_plugin.plugin.name,
+                "plugin shell_predicates failed, skipping hooks"
+            );
+            continue;
+        }
+
         let mut native_match: Option<&crate::plugins::Hook> = None;
         let mut symposium_match: Option<&crate::plugins::Hook> = None;
 
@@ -684,6 +694,21 @@ fn dispatched_hooks_for_payload(
 
         let selected = native_match.or(symposium_match);
         if let Some(hook) = selected {
+            // Hook-level shell predicates are evaluated at dispatch so they
+            // pick up live state (file present, tool installed, …).
+            if !hook.shell_predicates.evaluate() {
+                tracing::debug!(
+                    report = %crate::report::ReportEvent::HookConsidered {
+                        plugin: parsed_plugin.plugin.name.clone(),
+                        hook: hook.name.clone(),
+                        event: format!("{:?}", input.event()),
+                        selected: false,
+                        format: Some(format!("{:?}", hook.format)),
+                        reason: Some("hook shell predicates not satisfied".into()),
+                    },
+                );
+                continue;
+            }
             tracing::debug!(
                 report = %crate::report::ReportEvent::HookConsidered {
                     plugin: parsed_plugin.plugin.name.clone(),
@@ -729,6 +754,8 @@ fn dispatched_hooks_for_payload(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     #[test]
@@ -871,5 +898,90 @@ mod tests {
     fn symposium_output_empty_has_no_context() {
         let output = symposium::OutputEvent::empty_for(HookEvent::PreToolUse);
         assert!(output.additional_context().is_none());
+    }
+
+    /// Helper: build a minimal plugin with a single PreToolUse hook backed
+    /// by a no-op script installation (no `source`, just an on-disk script).
+    fn plugin_with_hook(
+        plugin_shell: Vec<&str>,
+        hook_shell: Vec<&str>,
+    ) -> crate::plugins::ParsedPlugin {
+        use crate::plugins::{Hook, HookFormat, Installation, Plugin};
+
+        let install = Installation {
+            name: "no-op".into(),
+            requirements: vec![],
+            install_commands: vec![],
+            source: None,
+            executable: None,
+            script: Some("/bin/true".into()),
+            args: vec![],
+        };
+        let hook = Hook {
+            name: "h".into(),
+            event: HookEvent::PreToolUse,
+            agent: None,
+            matcher: None,
+            requirements: vec![],
+            command: "no-op".into(),
+            executable: None,
+            script: None,
+            args: vec![],
+            format: HookFormat::Symposium,
+            shell_predicates: crate::shell_predicate::ShellPredicateSet {
+                commands: hook_shell.into_iter().map(String::from).collect(),
+            },
+        };
+        let plugin = Plugin {
+            name: "test-plugin".into(),
+            crates: crate::predicate::PredicateSet::parse("*").unwrap(),
+            shell_predicates: crate::shell_predicate::ShellPredicateSet {
+                commands: plugin_shell.into_iter().map(String::from).collect(),
+            },
+            installations: vec![install],
+            hooks: vec![hook],
+            skills: vec![],
+            mcp_servers: vec![],
+            subcommands: BTreeMap::new(),
+        };
+        crate::plugins::ParsedPlugin {
+            path: std::path::PathBuf::from("test.toml"),
+            plugin,
+            source_name: "test-source".to_string(),
+            source_dir: PathBuf::from(".".to_string()),
+        }
+    }
+
+    fn pre_tool_use_input() -> symposium::InputEvent {
+        symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
+            "Bash".into(),
+            serde_json::json!({}),
+            None,
+            None,
+        ))
+    }
+
+    #[test]
+    fn dispatch_skips_when_plugin_shell_predicate_fails() {
+        let plugin = plugin_with_hook(vec!["false"], vec![]);
+        let hooks =
+            dispatched_hooks_for_payload(&[plugin], &pre_tool_use_input(), HookAgent::Claude);
+        assert!(hooks.is_empty(), "plugin-level false should drop all hooks");
+    }
+
+    #[test]
+    fn dispatch_skips_when_hook_shell_predicate_fails() {
+        let plugin = plugin_with_hook(vec![], vec!["false"]);
+        let hooks =
+            dispatched_hooks_for_payload(&[plugin], &pre_tool_use_input(), HookAgent::Claude);
+        assert!(hooks.is_empty(), "hook-level false should drop the hook");
+    }
+
+    #[test]
+    fn dispatch_includes_when_shell_predicates_pass() {
+        let plugin = plugin_with_hook(vec!["true"], vec!["true"]);
+        let hooks =
+            dispatched_hooks_for_payload(&[plugin], &pre_tool_use_input(), HookAgent::Claude);
+        assert_eq!(hooks.len(), 1);
     }
 }

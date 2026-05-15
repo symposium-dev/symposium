@@ -211,6 +211,7 @@ mod tests {
                 name: name.into(),
                 hooks: vec![],
                 crates: parse_predicates(crates),
+                shell_predicates: Default::default(),
                 skills: vec![],
                 mcp_servers: vec![],
                 subcommands,
