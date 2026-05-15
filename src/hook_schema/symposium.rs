@@ -203,8 +203,9 @@ impl OutputEvent {
     }
 }
 
-// ── AgentHookInput for InputEvent ────────────────────────────────────
-// Allows symposium-format plugins to receive canonical InputEvent JSON.
+// ── AgentHookInput / AgentHookOutput for canonical types ─────────────
+// Allows agents that speak symposium format natively (e.g. OpenCode)
+// to reuse these types directly as their wire format.
 
 impl super::AgentHookInput for InputEvent {
     fn parse_input(payload: &str) -> anyhow::Result<Self> {
@@ -223,6 +224,39 @@ impl super::AgentHookInput for InputEvent {
         self
     }
 }
+
+macro_rules! symposium_output_impl {
+    ($ty:ident, $variant:ident) => {
+        impl super::AgentHookOutput for $ty {
+            fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
+                if output.is_empty() {
+                    return Ok(Self::default());
+                }
+                Ok(serde_json::from_slice(output)?)
+            }
+            fn from_symposium(event: &OutputEvent) -> Self {
+                match event {
+                    OutputEvent::$variant(o) => o.clone(),
+                    _ => Self::default(),
+                }
+            }
+            fn to_symposium(&self) -> OutputEvent {
+                OutputEvent::$variant(self.clone())
+            }
+            fn to_hook_output(&self) -> serde_json::Value {
+                serde_json::to_value(self).unwrap()
+            }
+            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+                self
+            }
+        }
+    };
+}
+
+symposium_output_impl!(PreToolUseOutput, PreToolUse);
+symposium_output_impl!(PostToolUseOutput, PostToolUse);
+symposium_output_impl!(UserPromptSubmitOutput, UserPromptSubmit);
+symposium_output_impl!(SessionStartOutput, SessionStart);
 
 #[cfg(test)]
 mod tests {

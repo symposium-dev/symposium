@@ -1,0 +1,14 @@
+{
+  "name": "@symposium/opencode-plugin",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "description": "Symposium hook bridge for OpenCode",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": ["src"],
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.14.0"
+  }
+}

@@ -252,3 +252,99 @@ async fn matcher_filters_out_non_matching_hooks() {
     .await
     .unwrap();
 }
+
+/// OpenCode as host agent with a symposium-format hook: the inline shell hook
+/// produces `additionalContext` that flows through the symposium → OpenCode path.
+#[tokio::test(flavor = "multi_thread")]
+async fn opencode_host_receives_symposium_hook_context() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hooks0"],
+        async |mut ctx| {
+            let result = ctx
+                .prompt_or_hook(
+                    "ignored",
+                    &[HookStep::PreToolUse {
+                        tool_name: "Bash".to_string(),
+                        tool_input: json!({"command": "ls"}),
+                    }],
+                    HookAgent::OpenCode,
+                )
+                .await?;
+
+            assert!(
+                result.has_context_containing("inline-shell-output"),
+                "expected `inline-shell-output` in OpenCode hook output, got: {:#?}",
+                result.outputs_for(HookEvent::PreToolUse),
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// OpenCode as host agent: matcher filtering still works — a tool name no hook
+/// matches produces no additionalContext.
+#[tokio::test(flavor = "multi_thread")]
+async fn opencode_host_matcher_filters() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hooks0"],
+        async |mut ctx| {
+            let result = ctx
+                .prompt_or_hook(
+                    "ignored",
+                    &[HookStep::PreToolUse {
+                        tool_name: "Grep".to_string(),
+                        tool_input: json!({"pattern": "foo"}),
+                    }],
+                    HookAgent::OpenCode,
+                )
+                .await?;
+
+            assert!(
+                !result.has_context_containing("output"),
+                "no hook should fire for `Grep` via OpenCode, got: {:#?}",
+                result.outputs_for(HookEvent::PreToolUse),
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// OpenCode receives PostToolUse hook output.
+#[tokio::test(flavor = "multi_thread")]
+async fn opencode_host_post_tool_use() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hooks0"],
+        async |mut ctx| {
+            let result = ctx
+                .prompt_or_hook(
+                    "ignored",
+                    &[HookStep::PostToolUse {
+                        tool_name: "Bash".to_string(),
+                        tool_input: json!({"command": "ls"}),
+                        tool_response: json!("file1.rs\nfile2.rs"),
+                    }],
+                    HookAgent::OpenCode,
+                )
+                .await?;
+
+            // PostToolUse hooks are not configured for Bash in this fixture,
+            // so there should be no context. This verifies the pipeline doesn't
+            // error out for OpenCode PostToolUse events.
+            assert!(
+                !result.has_context_containing("output"),
+                "no PostToolUse hooks configured for Bash, got: {:#?}",
+                result.outputs_for(HookEvent::PostToolUse),
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
