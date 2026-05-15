@@ -34,4 +34,4 @@ For more information, visit the [Symposium documentation](https://symposium-dev.
 
 ## Community
 
-Symposium is open source. We welcome [contributors](https://symposium-dev.github.io/symposium/contribute.html) and maintain a [code of conduct](https://github.com/symposium-dev/symposium/blob/main/CODE_OF_CONDUCT.md).
+Symposium is open source. We welcome [contributors](https://symposium-dev.github.io/design/welcome.html) and maintain a [code of conduct](https://github.com/symposium-dev/symposium/blob/main/CODE_OF_CONDUCT.md).
