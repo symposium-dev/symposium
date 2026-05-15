@@ -34,6 +34,10 @@ Defines `Source` (the `source = "..."`-tagged enum: `cargo`, `github`, `binary`)
 
 Validates skill group source constraints at parse time: mutual exclusivity of `source.path`/`source.git`/`source.crate_path`, and the requirement that `source.crate_path` has at least one non-wildcard predicate.
 
+### `shell_predicate.rs` — shell-command gating
+
+Defines `ShellPredicateSet`, a list of shell commands evaluated with AND semantics. Each command runs via `sh -c <cmd>`; exit 0 means the predicate holds, any other exit (including spawn failure) means it fails. Shell predicates can be set at the plugin, skill group, skill, hook, or MCP server level. Plugin/group/skill/MCP predicates are evaluated at sync time; hook predicates are evaluated per dispatch so they observe live state. See the [shell predicates reference](../reference/shell-predicates.md).
+
 ### `skills.rs` — skill resolution and matching
 
 Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates crate predicates at each level (plugin, group, skill) to determine which skills apply. For `source.crate_path` groups, resolves predicates to a matched crate set and fetches each crate's source via `RustCrateFetch`.

@@ -22,6 +22,13 @@ pub type McpServerEntry = McpServer;
 pub struct PluginMcpServer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crates: Option<crate::predicate::PredicateSet>,
+    /// Shell predicates that must all pass for this server to be registered.
+    /// ANDed with plugin-level `shell_predicates`.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::shell_predicate::ShellPredicateSet::is_empty"
+    )]
+    pub shell_predicates: crate::shell_predicate::ShellPredicateSet,
     #[serde(flatten)]
     pub server: McpServerEntry,
 }
@@ -208,6 +215,13 @@ pub struct SkillGroup {
     /// Crate predicates this group advises on (e.g., `["serde", "serde_json>=1.0"]`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crates: Option<crate::predicate::PredicateSet>,
+    /// Shell predicates that must all pass for this group's skills to install.
+    /// ANDed with plugin-level `shell_predicates` and skill-level frontmatter.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::shell_predicate::ShellPredicateSet::is_empty"
+    )]
+    pub shell_predicates: crate::shell_predicate::ShellPredicateSet,
     /// Remote source for skills.
     #[serde(default)]
     pub source: PluginSource,
@@ -301,6 +315,13 @@ pub struct Plugin {
     pub name: String,
     /// Crate predicates this plugin applies to. `["*"]` for all crates.
     pub crates: crate::predicate::PredicateSet,
+    /// Shell predicates that must all pass for this plugin to apply at all.
+    /// Evaluated at sync time (for skills/MCP) and at hook dispatch time.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::shell_predicate::ShellPredicateSet::is_empty"
+    )]
+    pub shell_predicates: crate::shell_predicate::ShellPredicateSet,
     /// Named installation entries available to hooks in this plugin.
     /// Order matches declaration order in the manifest.
     pub installations: Vec<Installation>,
@@ -317,10 +338,17 @@ impl Plugin {
         self.crates.matches(workspace_crates)
     }
 
+    /// Check if this plugin's `shell_predicates` all hold.
+    /// Vacuously true when the list is empty.
+    pub fn shell_predicates_hold(&self) -> bool {
+        self.shell_predicates.evaluate()
+    }
+
     /// Return MCP servers applicable to the given workspace crates.
     ///
     /// A server matches if its own `crates` predicates match (or are absent,
-    /// meaning it inherits from the plugin level which is already checked).
+    /// meaning it inherits from the plugin level which is already checked)
+    /// AND its own `shell_predicates` all hold.
     pub fn applicable_mcp_servers(
         &self,
         workspace_crates: &[(String, semver::Version)],
@@ -331,7 +359,7 @@ impl Plugin {
                 let Some(ref pred_set) = s.crates else {
                     return true;
                 };
-                pred_set.matches(workspace_crates)
+                pred_set.matches(workspace_crates) && s.shell_predicates.evaluate()
             })
             .map(|s| s.server.clone())
             .collect()
@@ -364,6 +392,13 @@ pub struct Hook {
     /// (hook `args`, installation `args`) is non-empty.
     pub args: Vec<String>,
     pub format: HookFormat,
+    /// Shell predicates that must all pass for this hook to dispatch.
+    /// Evaluated at dispatch time, ANDed with the plugin's predicates.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::shell_predicate::ShellPredicateSet::is_empty"
+    )]
+    pub shell_predicates: crate::shell_predicate::ShellPredicateSet,
 }
 
 /// Resolve a `RawInstallationRef`. If named, validate against the existing
@@ -444,6 +479,7 @@ fn validate_hook(
         script: hook_script,
         args: hook_args,
         format,
+        shell_predicates,
     } = raw;
 
     let command = resolve_or_promote(
@@ -533,6 +569,7 @@ fn validate_hook(
         script: hook_script,
         args: final_args,
         format,
+        shell_predicates,
     })
 }
 
@@ -658,6 +695,8 @@ struct RawPluginManifest {
     name: String,
     crates: crate::predicate::PredicateSet,
     #[serde(default)]
+    shell_predicates: crate::shell_predicate::ShellPredicateSet,
+    #[serde(default)]
     installations: Vec<RawNamedInstallation>,
     #[serde(default)]
     hooks: Vec<RawHook>,
@@ -709,6 +748,8 @@ struct RawHook {
     args: Vec<String>,
     #[serde(default)]
     format: HookFormat,
+    #[serde(default)]
+    shell_predicates: crate::shell_predicate::ShellPredicateSet,
 }
 
 /// Fetch/update git-based plugin sources.
@@ -1333,6 +1374,7 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
     Ok(Plugin {
         name: manifest.name,
         crates: manifest.crates,
+        shell_predicates: manifest.shell_predicates,
         installations,
         hooks,
         skills: manifest.skills,
@@ -1449,6 +1491,58 @@ mod tests {
             "expected Git source, got {:?}",
             group.source
         );
+    }
+
+    #[test]
+    fn parse_shell_predicates_top_level() {
+        let toml = indoc! {r#"
+            name = "shell-pred-plugin"
+            crates = ["*"]
+            shell_predicates = ["command -v rg", "test -f Cargo.toml"]
+
+            [[skills]]
+            crates = ["serde"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.shell_predicates.commands.len(), 2);
+        assert_eq!(plugin.shell_predicates.commands[0], "command -v rg");
+    }
+
+    #[test]
+    fn parse_shell_predicates_on_skill_group() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[skills]]
+            crates = ["serde"]
+            shell_predicates = ["command -v jq"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.skills[0].shell_predicates.commands.len(), 1);
+    }
+
+    #[test]
+    fn parse_shell_predicates_on_hook() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = { script = "scripts/x.sh" }
+            shell_predicates = ["test -d .git"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.hooks[0].shell_predicates.commands.len(), 1);
+    }
+
+    #[test]
+    fn shell_predicates_default_empty() {
+        let plugin = from_str(SAMPLE).expect("parse");
+        assert!(plugin.shell_predicates.is_empty());
+        assert!(plugin.hooks[0].shell_predicates.is_empty());
     }
 
     #[test]
@@ -1872,6 +1966,7 @@ mod tests {
         let plugin_wildcard = Plugin {
             name: "wildcard".to_string(),
             crates: pred_set("*"),
+            shell_predicates: Default::default(),
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
@@ -1883,6 +1978,7 @@ mod tests {
         let plugin_serde = Plugin {
             name: "serde-plugin".to_string(),
             crates: pred_set("serde"),
+            shell_predicates: Default::default(),
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
@@ -1894,6 +1990,7 @@ mod tests {
         let plugin_other = Plugin {
             name: "other-plugin".to_string(),
             crates: pred_set("other-crate"),
+            shell_predicates: Default::default(),
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
@@ -1905,6 +2002,7 @@ mod tests {
         let plugin_version = Plugin {
             name: "version-plugin".to_string(),
             crates: pred_set("tokio>=2.0"),
+            shell_predicates: Default::default(),
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],

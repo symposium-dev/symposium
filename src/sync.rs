@@ -212,7 +212,7 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     let mcp_servers: Vec<sacp::schema::McpServer> = registry
         .plugins
         .iter()
-        .filter(|p| p.plugin.applies_to_crates(&semver_pairs))
+        .filter(|p| p.plugin.applies_to_crates(&semver_pairs) && p.plugin.shell_predicates_hold())
         .flat_map(|p| p.plugin.applicable_mcp_servers(&semver_pairs))
         .collect();
 
