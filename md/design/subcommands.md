@@ -80,6 +80,8 @@ This boundary keeps the manifest small, keeps plugins authoritative about their 
 
 Argument forwarding uses a structured `Vec`, not `sh -c`. User-supplied argv is preserved exactly — spaces, quotes, and shell metacharacters in args are not re-tokenized. This matters more for subcommands than for hooks (whose input arrives over stdin as JSON).
 
+Script-mode installations (`script = "..."`) are still invoked through `sh <path>`, mirroring hook dispatch. That path is not cross-platform on Windows and is tracked as a follow-up for both hooks and subcommands; in the meantime, plugin authors who need Windows support should use `executable = "..."` instead.
+
 If no plugin matches the typed name, dispatch fails with a clear error pointing to `cargo agents --help`. If a matching subcommand exists but installation fails, the installation layer's error is propagated as-is.
 
 ## Workspace filtering
@@ -111,13 +113,9 @@ The renderer reads the active plugin registry filtered by workspace, so the help
 
 ## Conflict resolution
 
-Two plugins may, in principle, declare the same subcommand name. Symposium applies a deterministic precedence:
+Two plugins may declare the same subcommand name. Rather than silently picking one, dispatch fails with an error listing every plugin that defined the name, leaving the user to disambiguate (typically by tightening one of the plugin's `crates` predicates or removing one of the plugin sources).
 
-1. Local (filesystem-path) plugin sources beat git-fetched sources.
-2. Within a tier, sources are ordered alphabetically by their configured name.
-3. Within a source, plugins are ordered alphabetically by plugin name.
-
-The last-loaded matching subcommand wins; the earlier one is overwritten in the resolved map and a warning is logged. This is rare in practice (subcommand names tend to mirror crate names, which are unique on crates.io), but the rule is documented so the behavior is never surprising.
+The strict-error stance trades silence for clarity: subcommand names tend to mirror crate names (which are unique on crates.io), so a collision usually signals a real configuration mistake rather than an intended override.
 
 Namespacing (`cargo agents <plugin>:<name>`) is not implemented; it can be revisited if a real conflict pattern emerges.
 

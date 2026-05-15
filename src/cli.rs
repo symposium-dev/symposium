@@ -3,9 +3,10 @@
 //! This module defines the argument types and the core `run()` function
 //! so that both the binary and the test harness can invoke commands.
 
+use std::ffi::OsString;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 
 use crate::config::Symposium;
@@ -14,6 +15,7 @@ use crate::hook;
 use crate::init::{self, InitOpts};
 use crate::output::Output;
 use crate::self_update;
+use crate::subcommand_dispatch::dispatch_external;
 use crate::sync;
 
 /// Parsed CLI arguments.
@@ -22,7 +24,8 @@ use crate::sync;
     name = "cargo-agents",
     bin_name = "cargo agents",
     version,
-    about = "AI the Rust Way"
+    about = "AI the Rust Way",
+    allow_external_subcommands = true
 )]
 pub struct Cli {
     /// Control plugin source update behavior (none, check, fetch)
@@ -87,6 +90,10 @@ pub enum Commands {
         #[arg(long)]
         version: Option<String>,
     },
+
+    /// Plugin-vended subcommand. `argv[0]` is the name; the rest forwards to the child.
+    #[command(external_subcommand)]
+    External(Vec<OsString>),
 }
 
 #[derive(Debug, Subcommand)]
@@ -160,6 +167,10 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
             }
         }
 
+        Commands::External(argv) => match dispatch_external(sym, cwd, argv).await? {
+            0 => Ok(()),
+            code => bail!("subcommand exited with status: {code}"),
+        },
         // These commands can't easily be extracted since they do I/O
         // (stdin/stdout for hooks). The binary handles them directly.
         Commands::Hook { .. } | Commands::Plugin { .. } => {

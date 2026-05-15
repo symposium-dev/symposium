@@ -45,6 +45,10 @@ Each applicable skill carries a `SkillOrigin` describing *where its bytes live*,
 
 `sync` prefers the plain `<agent-skills-dir>/<skill-name>/` and only falls back to `<skill-name>-<origin-disambiguator>/` when needed: when more than one origin claims the same skill name, or when the unsuffixed slot is already occupied by a user-managed directory (one without the `.symposium` marker). The disambiguator is human-readable for `Crate` (`<crate-name>-<version>`) and an 8-hex SHA-256 prefix for the other variants. The `.symposium` marker, wildcard `.gitignore`, and stale-cleanup walk all key on the marker file rather than directory name shape, so transitions between unsuffixed and suffixed names self-heal across syncs.
 
+### `subcommand_dispatch.rs` — plugin-vended subcommands
+
+Routes the `Commands::External` arm of clap's `allow_external_subcommands`. `find_subcommand` walks the `PluginRegistry`, applying plugin-level and subcommand-level crate predicates against the workspace, and returns the matched `(Plugin, Subcommand)` (or an error if more than one plugin claims the name). `dispatch_external` then looks up the named `Installation`, resolves it via `installation::resolve_runnable`, and spawns the child with stdio inherited — propagating the exit code as a `u8` so callers can convert to `ExitCode` (binary) or treat non-zero as an error (library).
+
 ### `hook.rs` — hook handling
 
 Handles the hook pipeline: parse agent wire-format input → auto-sync → builtin dispatch → plugin hook dispatch → serialize output. The dispatch path matches plugin `Hook`s against the event, builds a `ResolvedHook` per match (looking up the named installations on the plugin), then for each `ResolvedHook`: acquires its `requirements` (best-effort), runs `install_commands` after the source step, picks a `Runnable` from (hook-or-install) `executable`/`script`, and spawns it (binary directly for `Exec`, via `sh <path>` for `Script`). Format routing converts hook output between agent wire formats and the symposium canonical format.
