@@ -9,6 +9,7 @@ pub mod output;
 pub mod plugins;
 pub mod self_update;
 pub mod state;
+pub mod subcommand_dispatch;
 pub mod sync;
 
 pub(crate) mod crate_sources;

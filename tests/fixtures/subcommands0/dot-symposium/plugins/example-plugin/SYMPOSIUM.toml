@@ -1,0 +1,13 @@
+name = "example-plugin"
+crates = ["*"]
+
+# A subcommand whose installation runs a known cross-platform binary
+# (`rustc` is always on PATH inside `cargo test`). The test invokes
+# `greet --version` to exercise both dispatch and argument forwarding.
+[[installations]]
+name = "greet-install"
+executable = "rustc"
+
+[subcommand.greet]
+description = "Print rustc version"
+command = "greet-install"

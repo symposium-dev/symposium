@@ -8,6 +8,7 @@ use symposium::output::Output;
 use symposium::plugins;
 use symposium::self_update;
 use symposium::state;
+use symposium::subcommand_dispatch::dispatch_external;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -39,6 +40,9 @@ async fn main() -> ExitCode {
         Some(Commands::SelfUpdate) => tracing::info!("cargo agents self-update"),
         Some(Commands::CrateInfo { name, version }) => {
             tracing::debug!(%name, version = ?version, "cargo agents crate-info");
+        }
+        Some(Commands::External(argv)) => {
+            tracing::info!(argv = ?argv, "cargo agents <external>");
         }
         None => {}
     }
@@ -79,6 +83,13 @@ async fn main() -> ExitCode {
 
         Some(Commands::Plugin { command }) => handle_plugin_command(&sym, command).await,
 
+        Some(Commands::External(argv)) => match dispatch_external(&sym, &cwd, argv).await {
+            Ok(code) => ExitCode::from(code),
+            Err(err) => {
+                eprintln!("Error: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
         None => {
             use clap::CommandFactory;
             Cli::command().print_help().ok();
