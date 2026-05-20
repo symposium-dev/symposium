@@ -494,7 +494,7 @@ async fn sync_installs_wildcard_plugin_skill() {
 ///
 /// Fixture layout:
 /// - `crate-y` depends on `crate-x` and `crate-z` (path deps)
-/// - `crate-x` ships `.symposium/skills/x-guidance/SKILL.md` (default path via `source = "crate"`)
+/// - `crate-x` ships `skills/x-guidance/SKILL.md` (default path via `source = "crate"`)
 /// - `crate-z` ships `guidance/z-guidance/SKILL.md` (custom path via `source.crate_path`)
 #[tokio::test]
 async fn sync_installs_skill_from_crate_path() {
