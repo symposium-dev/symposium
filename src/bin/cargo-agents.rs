@@ -1,8 +1,10 @@
 use clap::Parser;
+use std::env;
 use std::process::ExitCode;
 
 use symposium::cli::{Cli, Commands, PluginCommand};
 use symposium::config;
+use symposium::help_render;
 use symposium::hook;
 use symposium::output::Output;
 use symposium::plugins;
@@ -25,7 +27,30 @@ async fn main() -> ExitCode {
     } else {
         args
     };
-    let cli = Cli::parse_from(filtered);
+
+    let cwd = env::current_dir().expect("failed to get current directory");
+
+    // Parse without exiting on error: a help request on a built-in with required args
+    // (`crate-info --help`, `plugin --help`) surfaces a parse error that `help_text` recovers.
+    // `args_str` feeds the subcommand-name walk.
+    let args_str = filtered
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let parse = Cli::try_parse_from(filtered);
+
+    // `--help` / `-h` / `help` / no subcommand -> audience-grouped top-level help (or clap's
+    // per-command help for `<built-in> --help`).
+    // Plugin `<name> --help` returns `None` here and is forwarded to the child by dispatch below.
+    if let Some(text) = help_render::help_text(parse.as_ref(), &args_str, &sym, &cwd) {
+        print!("{text}");
+        return ExitCode::SUCCESS;
+    }
+
+    let cli = match parse {
+        Ok(cli) => cli,
+        Err(err) => err.exit(),
+    };
 
     // Log the command being invoked
     match &cli.command {
@@ -75,8 +100,6 @@ async fn main() -> ExitCode {
         }
     }
 
-    let cwd = std::env::current_dir().expect("failed to get current directory");
-
     match cli.command {
         // Commands that need direct I/O (stdin/stdout) stay in the binary
         Some(Commands::Hook { agent, event }) => hook::run(&sym, agent, event).await,
@@ -90,12 +113,9 @@ async fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
-        None => {
-            use clap::CommandFactory;
-            Cli::command().print_help().ok();
-            println!();
-            ExitCode::SUCCESS
-        }
+        // No-subcommand and the `help` keyword are handled by the help branch
+        // right after parsing, above.
+        None => unreachable!("no-subcommand routes to the help renderer above"),
 
         // Everything else delegates to the library
         Some(cmd) => match symposium::cli::run(&mut sym, cmd, &cwd, &out).await {

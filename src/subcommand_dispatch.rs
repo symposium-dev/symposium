@@ -16,7 +16,34 @@ use crate::{
 };
 use symposium_install::Runnable;
 use anyhow::{Context, Result, bail};
+use semver::Version;
 use tokio::process::Command;
+
+/// Iterate every plugin subcommand whose plugin-level and subcommand-level crate predicate
+/// apply to `deps`. Shared between dispatch (name lookup) and help rendering (audience grouping).
+pub fn applicable_subcommands<'a, 'd>(
+    registry: &'a PluginRegistry,
+    deps: &'d [(String, Version)],
+) -> impl Iterator<Item = (&'a Plugin, &'a str, &'a Subcommand)> + 'd
+where
+    'a: 'd,
+{
+    registry
+        .plugins
+        .iter()
+        .filter(|ParsedPlugin { plugin, .. }| plugin.applies_to_crates(deps))
+        .flat_map(|ParsedPlugin { plugin, .. }| {
+            plugin
+                .subcommands
+                .iter()
+                .filter(|(_, sub)| {
+                    sub.crates
+                        .as_ref()
+                        .is_none_or(|predset| predset.matches(deps))
+                })
+                .map(move |(name, subcommand)| (plugin, name.as_str(), subcommand))
+        })
+}
 
 /// Look up a subcommand by name across all plugins, filtered by workspace crates at a plugin
 ///  and subcommand levels.
@@ -34,19 +61,9 @@ pub fn find_subcommand<'a>(
         .map(|crt| (crt.name.clone(), crt.version.clone()))
         .collect::<Vec<_>>();
 
-    let matches = registry
-        .plugins
-        .iter()
-        .filter_map(|ParsedPlugin { plugin, .. }| {
-            if !plugin.applies_to_crates(&deps) {
-                return None;
-            }
-            let sub = plugin.subcommands.get(name)?;
-            match &sub.crates {
-                Some(pred_set) if !pred_set.matches(&deps) => None,
-                _ => Some((plugin, sub)),
-            }
-        })
+    let matches = applicable_subcommands(registry, &deps)
+        .filter(|(_, n, _)| *n == name)
+        .map(|(plugin, _, subcmd)| (plugin, subcmd))
         .collect::<Vec<_>>();
 
     match matches.as_slice() {

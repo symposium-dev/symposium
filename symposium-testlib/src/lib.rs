@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::anyhow;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
@@ -225,14 +226,26 @@ impl TestContext {
         let mut full_args = vec!["cargo-agents"];
         full_args.extend_from_slice(args);
 
-        let cli = Cli::try_parse_from(&full_args).map_err(|e| anyhow::anyhow!("{e}"))?;
-
         let out = symposium::output::Output::capturing();
         let cwd = self
             .workspace_root
             .clone()
             .unwrap_or_else(|| self.sym.config_dir().to_path_buf());
 
+        let args_str = full_args
+            .iter()
+            .map(|fs| fs.to_string())
+            .collect::<Vec<_>>();
+
+        let parse = Cli::try_parse_from(&full_args);
+        if let Some(text) =
+            symposium::help_render::help_text(parse.as_ref(), &args_str, &self.sym, &cwd)
+        {
+            out.println(text);
+            return Ok(out.captured().join("\n"));
+        }
+
+        let cli = parse.map_err(|err| anyhow!("{err}"))?;
         if let Some(cmd) = cli.command {
             symposium::cli::run(&mut self.sym, cmd, &cwd, &out).await?;
         }

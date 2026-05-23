@@ -2,6 +2,7 @@ pub mod agents;
 pub mod cli;
 pub mod config;
 pub mod crate_command;
+pub mod help_render;
 pub mod hook;
 pub mod hook_schema;
 pub(crate) mod installation;
