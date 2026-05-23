@@ -51,7 +51,15 @@ Each applicable skill carries a `SkillOrigin` describing *where its bytes live*,
 
 ### `subcommand_dispatch.rs` — plugin-vended subcommands
 
-Routes the `Commands::External` arm of clap's `allow_external_subcommands`. `find_subcommand` walks the `PluginRegistry`, applying plugin-level and subcommand-level crate predicates against the workspace, and returns the matched `(Plugin, Subcommand)` (or an error if more than one plugin claims the name). `dispatch_external` then looks up the named `Installation`, resolves it via `installation::resolve_runnable`, and spawns the child with stdio inherited — propagating the exit code as a `u8` so callers can convert to `ExitCode` (binary) or treat non-zero as an error (library).
+Routes the `Commands::External` arm of clap's `allow_external_subcommands`. `find_subcommand` walks the `PluginRegistry`, applying plugin-level and subcommand-level crate predicates against the workspace, and returns the matched `(Plugin, Subcommand)` (or an error if more than one plugin claims the name). `dispatch_external` then looks up the named `Installation`, resolves it via `installation::resolve_runnable`, and spawns the child with stdio inherited — propagating the exit code as a `u8` so callers can convert to `ExitCode` (binary) or treat non-zero as an error (library). `applicable_subcommands` is the shared iterator over workspace-applicable plugin subcommands, reused by help rendering.
+
+### `help_render.rs` — `--help` rendering
+
+Renders `cargo agents --help` as two audience-grouped sections, "Commands for humans" and "Commands for agents", mixing built-in subcommands with plugin-vended ones filtered by the active workspace. Built-in audience comes from `cli::builtin_audience`; plugin subcommands come from `subcommand_dispatch::applicable_subcommands`.
+
+`help_text` is the single help decision, shared by the binary and the test harness. clap's own help flag and help subcommand are disabled (in `cli::Cli`), `--help`/`-h` is a manual `global` bool, and the entry points parse with `try_parse_from` — so help is decided *after* parsing and argument order (`--help --quiet`) is irrelevant. It returns the top-level grouped help for no subcommand / `--help` / `-h` / the bare `help` keyword; for `<built-in> --help` it re-renders clap's own per-command help by walking clap's command tree (so required-arg commands like `crate-info`, required-subcommand groups like `plugin`, and nested commands like `plugin list` all work); a plugin `<name> --help` returns `None` so dispatch forwards `--help` to the child.
+
+`render` builds the grouped text by slicing clap's rendered help — keeping the header (before `Commands:`) and the options block (from `Options:` on) and hand-rendering only the two section headings between them. If a slice marker is missing (clap format drift), it falls back to clap's unmodified help rather than panicking.
 
 ### `hook.rs` — hook handling
 

@@ -98,7 +98,7 @@ This rule keeps `cargo agents --help` outside a workspace limited to globally-ap
 
 `cargo agents --help` is rendered in two sections:
 
-- **Commands for humans** — operational commands a user runs themselves: `init`, `sync`, `plugin`, `help`, plus any plugin-vended subcommand with `audience = "humans"`.
+- **Commands for humans** — operational commands a user runs themselves: `init`, `plugin`, `self-update`, `sync`, plus any plugin-vended subcommand with `audience = "humans"`.
 - **Commands for agents** — discovery and analysis tools for the agent to invoke: `crate-info` and plugin-vended subcommands with `audience = "agents"` (the default).
 
 The default of `audience = "agents"` reflects the expected shape of plugin-vended commands: most are analysis or context-fetching tools surfaced to agents, not workflows for humans. The exceptional case explicitly opts in.
@@ -106,6 +106,8 @@ The default of `audience = "agents"` reflects the expected shape of plugin-vende
 For this grouping to be useful, `crate-info` is no longer hidden — it's a discoverable agent tool. `hook` remains hidden; it's an internal protocol entry point, not an end-user surface.
 
 The renderer reads the active plugin registry filtered by workspace, so the help output adapts to the project the user is standing in.
+
+`--help`, `-h`, the bare `help` keyword, and an empty invocation are intercepted after clap parses and routed to this renderer; `help` is never listed as its own command. A `<built-in> --help` instead shows that command's own help (re-rendered from clap), and a plugin-vended `<name> --help` is forwarded to the plugin's binary, which owns its `--help`.
 
 ## Audience as metadata, not enforcement
 

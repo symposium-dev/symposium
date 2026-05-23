@@ -10,6 +10,7 @@
 | [`cargo agents sync`](./cargo-agents-sync.md) | Synchronize skills with workspace dependencies |
 | [`cargo agents plugin`](./cargo-agents-plugin.md) | Manage plugin sources |
 | [`cargo agents self-update`](./cargo-agents-self-update.md) | Update symposium to the latest version |
+| [`cargo agents crate-info`](./cargo-agents-crate-info.md) | Find crate sources (agent-facing) |
 
 ## Global options
 
