@@ -1,6 +1,7 @@
 use std::{
+    env,
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, ExitCode, Stdio},
 };
 
@@ -10,6 +11,12 @@ use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
     plugins::ParsedPlugin,
+};
+use crate::{
+    crate_sources::workspace_crates,
+    hook_schema::symposium::{OutputEvent, SessionStartInput},
+    plugins::load_registry,
+    subcommand_dispatch::applicable_subcommands,
 };
 use symposium_install::Runnable;
 
@@ -285,33 +292,65 @@ pub async fn dispatch_builtin(
     }
 }
 
-/// Handle SessionStart: check for updates and nudge the user via context.
-fn handle_session_start(
-    sym: &Symposium,
-    _payload: &symposium::SessionStartInput,
-) -> symposium::OutputEvent {
+/// Handle SessionStart: orient the agent toward crate-aware tooling and, when due, nudge the
+/// user to update. The two fragments are computed independently -- the discovery hint is never gated
+/// behind the update-check throttle -- then joined into a single context block.
+fn handle_session_start(sym: &Symposium, payload: &SessionStartInput) -> OutputEvent {
+    let cwd = payload
+        .cwd
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env::current_dir().unwrap_or_default());
+
+    let fragments = [discovery_hint(sym, &cwd), update_nudge(sym)]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<String>>();
+
+    if fragments.is_empty() {
+        OutputEvent::empty_for(HookEvent::SessionStart)
+    } else {
+        OutputEvent::with_context(HookEvent::SessionStart, fragments.join("\n\n"))
+    }
+}
+
+/// Suggest `cargo agents --help` when the active workspace exposes crate-aware plugin subcommands.
+/// Reuses the help renderer's `applicable_subcommands`, so the hint fires only when there is actually something to discover; `None` otherwise.
+fn discovery_hint(sym: &Symposium, cwd: &Path) -> Option<String> {
+    let registry = load_registry(sym);
+    let deps = workspace_crates(cwd)
+        .into_iter()
+        .map(|wcrt| (wcrt.name, wcrt.version))
+        .collect::<Vec<_>>();
+
+    let any_subcommand = applicable_subcommands(&registry, &deps).next().is_some();
+
+    any_subcommand.then(|| {
+    "This project has crate-aware tools available via `cargo agents`.\
+    Run `cargo agents --help` to list them before working with the Rust code.
+    You are only allowed to use tools that are under 'Commands for agents' section,  unless explicitly asked to run those under 'Commands for humans' section".to_string()
+  })
+}
+
+/// Nudge the user to update. Gated by `auto-update = \"warn\"`, the 24h throttle,
+/// and a newer published version on the registry; `None` otherwise.
+fn update_nudge(sym: &Symposium) -> Option<String> {
     use crate::config::AutoUpdate;
-    use crate::self_update;
-    use crate::state;
     use crate::state::CURRENT_VERSION;
 
     if sym.config.auto_update != AutoUpdate::Warn {
-        return symposium::OutputEvent::empty_for(HookEvent::SessionStart);
+        return None;
     }
-    if !state::should_check_for_update(sym.config_dir()) {
-        return symposium::OutputEvent::empty_for(HookEvent::SessionStart);
+    if !crate::state::should_check_for_update(sym.config_dir()) {
+        return None;
     }
-    state::record_update_check(sym.config_dir());
+    crate::state::record_update_check(sym.config_dir());
 
-    if let Ok(Some(latest)) = self_update::check_upgrade(sym) {
-        let msg = format!(
-            "symposium {latest} is available (current: {CURRENT_VERSION}). \
-             Run `cargo agents self-update` to upgrade."
-        );
-        symposium::OutputEvent::with_context(HookEvent::SessionStart, msg)
-    } else {
-        symposium::OutputEvent::empty_for(HookEvent::SessionStart)
-    }
+    let latest = crate::self_update::check_upgrade(sym).ok()??;
+    Some(format!(
+        "symposium {latest} is available (current: {CURRENT_VERSION}). \
+         Run `cargo agents self-update` to upgrade."
+    ))
 }
 
 /// Handle PostToolUse: no-op for now.
