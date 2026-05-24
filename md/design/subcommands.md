@@ -109,6 +109,12 @@ The renderer reads the active plugin registry filtered by workspace, so the help
 
 `--help`, `-h`, the bare `help` keyword, and an empty invocation are intercepted after clap parses and routed to this renderer; `help` is never listed as its own command. A `<built-in> --help` instead shows that command's own help (re-rendered from clap), and a plugin-vended `<name> --help` is forwarded to the plugin's binary, which owns its `--help`.
 
+## Agent discovery
+
+`cargo agents --help` is a *pull* surface — an agent only sees the crate-aware subcommands if it already knows to run it. To *push* that affordance, the built-in `SessionStart` hook injects a one-line hint suggesting `cargo agents --help` whenever the active workspace exposes at least one applicable plugin-vended subcommand. The trigger reuses the same workspace-filtered set as the help renderer (`applicable_subcommands`), so the hint stays silent in projects with nothing to discover.
+
+The hint shares `SessionStart`'s `additionalContext` with the [update nudge](./hook-flow.md); each fragment is computed independently, and the discovery hint is not gated behind the update-check throttle. Agents without hook registration (OpenCode, Goose) don't receive it; for them `cargo agents --help` is the only discovery surface.
+
 ## Audience as metadata, not enforcement
 
 `audience` controls help-text grouping only. It does not gate dispatch. A user can type `cargo agents <agent-audience-subcommand>` directly and it will run. The intent is to keep the discovery surface uncluttered for humans, not to lock anyone out.
@@ -138,8 +144,3 @@ Namespacing (`cargo agents <plugin>:<name>`) is not implemented; it can be revis
 | `cargo agents --help` rendering | Symposium |
 | Conflict resolution | Symposium |
 
-## Out of scope
-
-- **Argument-completion shell scripts.** `cargo agents <Tab>` does not yet complete plugin-vended subcommands.
-- **In-process dispatch.** Every plugin subcommand runs as a subprocess. A future iteration may register Rust callbacks for first-party plugins.
-- **Conflict diagnostics.** No dedicated `cargo agents plugin doctor` command; conflicts surface only as warnings in logs.
