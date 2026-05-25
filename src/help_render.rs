@@ -19,6 +19,12 @@ use crate::{
     subcommand_dispatch::applicable_subcommands,
 };
 
+/// Section headings for the audience-grouped help. Referenced by the
+/// SessionStart discovery hint (`crate::hook`) too, so the rendered help and
+/// the prompt that points agents at it can't drift apart.
+pub const HUMANS_HEADING: &str = "Commands for humans";
+pub const AGENTS_HEADING: &str = "Commands for agents";
+
 /// If this invocation is a help request, return the help text to print.
 ///
 /// Returns `None` when the user wants to actually run something.
@@ -121,14 +127,14 @@ fn render(registry: &PluginRegistry, workspace: &[WorkspaceCrate]) -> String {
     writeln!(out).unwrap();
 
     // Commands for Humans
-    writeln!(out, "Commands for humans:").unwrap();
+    writeln!(out, "{HUMANS_HEADING}:").unwrap();
     for (name, desc) in &humans {
         writeln!(out, "{name:<col_width$}{desc}").unwrap();
     }
     writeln!(out).unwrap();
 
     // Commands for Agents
-    writeln!(out, "Commands for agents:").unwrap();
+    writeln!(out, "{AGENTS_HEADING}:").unwrap();
     for (name, desc) in &agents {
         writeln!(out, "{name:<col_width$}{desc}").unwrap();
     }
@@ -232,7 +238,7 @@ mod tests {
         }
     }
 
-    /// Extract a named section's body(between heading and next blan line).
+    /// Extract a named section's body(between heading and next blank line).
     fn extract_section<'a>(out: &'a str, heading: &str) -> &'a str {
         let start = out
             .find(heading)

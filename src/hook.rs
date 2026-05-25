@@ -14,6 +14,7 @@ use crate::{
 };
 use crate::{
     crate_sources::workspace_crates,
+    help_render::{AGENTS_HEADING, HUMANS_HEADING},
     hook_schema::symposium::{OutputEvent, SessionStartInput},
     plugins::load_registry,
     subcommand_dispatch::applicable_subcommands,
@@ -326,11 +327,12 @@ fn discovery_hint(sym: &Symposium, cwd: &Path) -> Option<String> {
     let any_subcommand = applicable_subcommands(&registry, &deps).next().is_some();
 
     any_subcommand.then(|| {
-        "This project has crate-aware tools available via `cargo agents`. \
-         Run `cargo agents --help` to list them before working with the Rust code. \
-         Only use tools under the 'Commands for agents' section unless the user \
-         explicitly asks you to run one from 'Commands for humans'."
-            .to_string()
+        format!(
+            "This project has crate-aware tools available via `cargo agents`. \
+             Run `cargo agents --help` to list them before working with the Rust code. \
+             Only use tools under the '{AGENTS_HEADING}' section unless the user \
+             explicitly asks you to run one from '{HUMANS_HEADING}'."
+        )
     })
 }
 
