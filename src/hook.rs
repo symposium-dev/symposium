@@ -326,13 +326,15 @@ fn discovery_hint(sym: &Symposium, cwd: &Path) -> Option<String> {
     let any_subcommand = applicable_subcommands(&registry, &deps).next().is_some();
 
     any_subcommand.then(|| {
-    "This project has crate-aware tools available via `cargo agents`.\
-    Run `cargo agents --help` to list them before working with the Rust code.
-    You are only allowed to use tools that are under 'Commands for agents' section,  unless explicitly asked to run those under 'Commands for humans' section".to_string()
-  })
+        "This project has crate-aware tools available via `cargo agents`. \
+         Run `cargo agents --help` to list them before working with the Rust code. \
+         Only use tools under the 'Commands for agents' section unless the user \
+         explicitly asks you to run one from 'Commands for humans'."
+            .to_string()
+    })
 }
 
-/// Nudge the user to update. Gated by `auto-update = \"warn\"`, the 24h throttle,
+/// Nudge the user to update. Gated by `auto-update = \"warn\"`, the 25h throttle,
 /// and a newer published version on the registry; `None` otherwise.
 fn update_nudge(sym: &Symposium) -> Option<String> {
     use crate::config::AutoUpdate;
