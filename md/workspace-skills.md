@@ -9,11 +9,11 @@ The default skill location therefore varies depending on the intended audience:
 | Skills intended for... | Go into... |
 | --- | --- |
 | Maintaining your crate | `.agents/skills` |
-| [Using your crate](./crate-authors/supporting-your-crate.md) | `.symposium/skills` |
+| [Using your crate](./crate-authors/supporting-your-crate.md) | `skills/` |
 
 ## Recommended git setup
 
-We recommend you commit your `.agents/skills` or `.symposium/skills` into the repository. Symposium installs a `.gitignore` file into every skill that it creates, so automatically copied and installed skills should not dirty your git status.
+We recommend you commit your `.agents/skills` or `skills/` into the repository. Symposium installs a `.gitignore` file into every skill that it creates, so automatically copied and installed skills should not dirty your git status.
 
 ## Pre-existing files
 

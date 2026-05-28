@@ -41,12 +41,12 @@ pub enum UpdateLevel {
 ///
 /// Accepts a table with at most one of `path`, `git`, or `crate_path` set,
 /// or the shorthand string `source = "crate"` (equivalent to
-/// `source.crate_path = ".symposium/skills"`).
+/// `source.crate_path = "skills"`).
 ///
 /// The shorthand and explicit forms are *preserved* through parse/serialize
 /// round-trips: `source = "crate"` deserializes to a `CratePath` with
 /// `explicit_path: None` and serializes back as `"crate"`;
-/// `source.crate_path = ".symposium/skills"` deserializes to
+/// `source.crate_path = "skills"` deserializes to
 /// `explicit_path: Some(...)` and serializes back as the table form, even
 /// though both resolve to the same on-disk path.
 #[derive(Debug, Clone, Default)]
@@ -78,7 +78,7 @@ pub struct CratePathSource {
 
 impl CratePathSource {
     /// Default subdirectory used when the user writes `source = "crate"`.
-    pub const DEFAULT_PATH: &'static str = ".symposium/skills";
+    pub const DEFAULT_PATH: &'static str = "skills";
 
     /// The shorthand form (`source = "crate"`) — no explicit path recorded.
     pub fn shorthand() -> Self {
@@ -2999,19 +2999,19 @@ mod tests {
             crates = ["serde"]
 
             [[skills]]
-            source.crate_path = ".symposium/skills"
+            source.crate_path = "docs/skills"
         "#})
         .unwrap();
         // Parsed value is the explicit variant.
         assert!(matches!(
             &plugin.skills[0].source,
-            PluginSource::CratePath(s) if !s.is_shorthand() && s.as_str() == ".symposium/skills"
+            PluginSource::CratePath(s) if !s.is_shorthand() && s.as_str() == "docs/skills"
         ));
         // Serialized form keeps the table, does NOT collapse to "crate".
         let toml_str = toml::to_string_pretty(&plugin).expect("serialize");
         assert!(
             !toml_str.contains(r#"source = "crate""#),
-            "explicit `source.crate_path = \".symposium/skills\"` should NOT collapse to shorthand, got:\n{toml_str}"
+            "explicit `source.crate_path = \"docs/skills\"` should NOT collapse to shorthand, got:\n{toml_str}"
         );
         assert!(
             toml_str.contains("crate_path"),
@@ -3022,8 +3022,8 @@ mod tests {
     /// The `source = "crate"` shorthand resolves to the default subpath.
     #[test]
     fn shorthand_resolves_to_default_path() {
-        assert_eq!(CratePathSource::shorthand().as_str(), ".symposium/skills");
-        assert_eq!(CratePathSource::DEFAULT_PATH, ".symposium/skills");
+        assert_eq!(CratePathSource::shorthand().as_str(), "skills");
+        assert_eq!(CratePathSource::DEFAULT_PATH, "skills");
     }
 
     #[test]
@@ -3201,14 +3201,14 @@ mod tests {
             crates = ["serde"]
 
             [[skills]]
-            source.crate_path = ".symposium/skills"
+            source.crate_path = "docs/skills"
         "#})
         .unwrap();
         let rt = roundtrip(&plugin);
         assert!(
             matches!(
                 &rt.skills[0].source,
-                PluginSource::CratePath(s) if s.explicit_path.as_deref() == Some(".symposium/skills")
+                PluginSource::CratePath(s) if s.explicit_path.as_deref() == Some("docs/skills")
             ),
             r#"explicit crate_path should round-trip preserving the explicit path, got {:?}"#,
             rt.skills[0].source,
@@ -3299,7 +3299,7 @@ mod tests {
             crates = ["serde"]
 
             [[skills]]
-            source.crate_path = ".symposium/skills"
+            source.crate_path = "docs/skills"
         "#})
         .unwrap();
         let toml_str = toml::to_string_pretty(&plugin).expect("serialize");
