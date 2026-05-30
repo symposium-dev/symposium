@@ -279,6 +279,10 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, output: &[u
 }
 
 /// Run sync if we're in a workspace directory and auto-sync is enabled. Non-fatal.
+///
+/// Uses per-workspace state to skip sync when `Cargo.lock` hasn't changed
+/// since the last successful sync, avoiding expensive `cargo metadata` calls
+/// on every hook invocation.
 async fn run_auto_sync(
     sym: &Symposium,
     input: &symposium::InputEvent,
@@ -288,14 +292,40 @@ async fn run_auto_sync(
         tracing::debug!("auto-sync disabled, skipping");
         return;
     }
-    tracing::debug!("auto-sync enabled, running");
+
     let cwd = match input.cwd() {
         Some(s) => std::path::PathBuf::from(s),
         None => fallback_cwd.to_path_buf(),
     };
+
+    // Find workspace root via `cargo locate-project` (fast, no dep resolution).
+    // If we can't find one, fall through to full sync which will
+    // use cargo metadata.
+    let workspace_root = crate::workspace_state::find_workspace_root(sym, &cwd);
+
+    if let Some(ref root) = workspace_root {
+        let state = crate::workspace_state::WorkspaceState::load(sym, root);
+        if state.sync_is_fresh(root) {
+            tracing::debug!("auto-sync skipped: Cargo.lock unchanged since last sync");
+            return;
+        }
+    }
+
+    tracing::debug!("auto-sync running");
     let out = crate::output::Output::quiet();
     if let Err(e) = crate::sync::sync(sym, &cwd, &out).await {
         tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
+        return;
+    }
+
+    // Record successful sync. If we didn't find the root earlier,
+    // try again now (sync may have created Cargo.lock).
+    let root = workspace_root.or_else(|| crate::workspace_state::find_workspace_root(sym, &cwd));
+    if let Some(ref root) = root {
+        let mut state = crate::workspace_state::WorkspaceState::load(sym, root);
+        state.record_sync(root);
+        state.workspace_root = Some(root.clone());
+        state.save(sym, root);
     }
 }
 

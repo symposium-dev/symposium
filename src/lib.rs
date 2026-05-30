@@ -10,6 +10,7 @@ pub mod plugins;
 pub mod self_update;
 pub mod state;
 pub mod sync;
+pub mod workspace_state;
 
 pub(crate) mod crate_sources;
 pub(crate) mod installation;
