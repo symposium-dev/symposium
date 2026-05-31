@@ -130,7 +130,12 @@ impl PreToolUseInput {
         session_id: Option<String>,
         cwd: Option<String>,
     ) -> Self {
-        Self { tool_name, tool_input, session_id, cwd }
+        Self {
+            tool_name,
+            tool_input,
+            session_id,
+            cwd,
+        }
     }
 }
 
@@ -157,7 +162,13 @@ impl PostToolUseInput {
         session_id: Option<String>,
         cwd: Option<String>,
     ) -> Self {
-        Self { tool_name, tool_input, tool_response, session_id, cwd }
+        Self {
+            tool_name,
+            tool_input,
+            tool_response,
+            session_id,
+            cwd,
+        }
     }
 }
 
@@ -175,7 +186,11 @@ pub struct UserPromptSubmitInput {
 
 impl UserPromptSubmitInput {
     pub fn new(prompt: String, session_id: Option<String>, cwd: Option<String>) -> Self {
-        Self { prompt, session_id, cwd }
+        Self {
+            prompt,
+            session_id,
+            cwd,
+        }
     }
 }
 

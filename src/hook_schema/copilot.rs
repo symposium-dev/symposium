@@ -58,7 +58,9 @@ macro_rules! copilot_output_impl {
     ($ty:ident, PreToolUse, PreToolUseOutput { $($extra:tt)* }) => {
         impl AgentHookOutput for $ty {
             fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
-                if output.is_empty() { return Ok(Self::default()); }
+                if output.is_empty() {
+                    return Ok(Self::default());
+                }
                 Ok(serde_json::from_slice(output)?)
             }
             fn from_symposium(event: &symposium::OutputEvent) -> Self {
@@ -77,14 +79,20 @@ macro_rules! copilot_output_impl {
                     None,
                 ))
             }
-            fn to_hook_output(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
-            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> { self }
+            fn to_hook_output(&self) -> serde_json::Value {
+                serde_json::to_value(self).unwrap()
+            }
+            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+                self
+            }
         }
     };
     ($ty:ident, $variant:ident, $struct:ident { }) => {
         impl AgentHookOutput for $ty {
             fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
-                if output.is_empty() { return Ok(Self::default()); }
+                if output.is_empty() {
+                    return Ok(Self::default());
+                }
                 Ok(serde_json::from_slice(output)?)
             }
             fn from_symposium(event: &symposium::OutputEvent) -> Self {
@@ -97,8 +105,12 @@ macro_rules! copilot_output_impl {
                     self.additional_context.clone(),
                 ))
             }
-            fn to_hook_output(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
-            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> { self }
+            fn to_hook_output(&self) -> serde_json::Value {
+                serde_json::to_value(self).unwrap()
+            }
+            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+                self
+            }
         }
     };
 }

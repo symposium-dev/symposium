@@ -63,12 +63,20 @@ macro_rules! kiro_output_impl {
     ($ty:ident, PreToolUse, PreToolUseOutput { $($extra:tt)* }) => {
         impl AgentHookOutput for $ty {
             fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
-                if output.is_empty() { return Ok(Self::default()); }
+                if output.is_empty() {
+                    return Ok(Self::default());
+                }
                 let text = String::from_utf8_lossy(output);
-                Ok(Self { additional_context: Some(text.into_owned()), rest: serde_json::Map::new() })
+                Ok(Self {
+                    additional_context: Some(text.into_owned()),
+                    rest: serde_json::Map::new(),
+                })
             }
             fn from_symposium(event: &symposium::OutputEvent) -> Self {
-                Self { additional_context: event.additional_context().map(String::from), rest: serde_json::Map::new() }
+                Self {
+                    additional_context: event.additional_context().map(String::from),
+                    rest: serde_json::Map::new(),
+                }
             }
             fn to_symposium(&self) -> symposium::OutputEvent {
                 symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
@@ -77,27 +85,43 @@ macro_rules! kiro_output_impl {
                     None,
                 ))
             }
-            fn to_hook_output(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
-            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> { self }
+            fn to_hook_output(&self) -> serde_json::Value {
+                serde_json::to_value(self).unwrap()
+            }
+            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+                self
+            }
         }
     };
     ($ty:ident, $variant:ident, $struct:ident { }) => {
         impl AgentHookOutput for $ty {
             fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
-                if output.is_empty() { return Ok(Self::default()); }
+                if output.is_empty() {
+                    return Ok(Self::default());
+                }
                 let text = String::from_utf8_lossy(output);
-                Ok(Self { additional_context: Some(text.into_owned()), rest: serde_json::Map::new() })
+                Ok(Self {
+                    additional_context: Some(text.into_owned()),
+                    rest: serde_json::Map::new(),
+                })
             }
             fn from_symposium(event: &symposium::OutputEvent) -> Self {
-                Self { additional_context: event.additional_context().map(String::from), rest: serde_json::Map::new() }
+                Self {
+                    additional_context: event.additional_context().map(String::from),
+                    rest: serde_json::Map::new(),
+                }
             }
             fn to_symposium(&self) -> symposium::OutputEvent {
                 symposium::OutputEvent::$variant(symposium::$struct::new(
                     self.additional_context.clone(),
                 ))
             }
-            fn to_hook_output(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
-            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> { self }
+            fn to_hook_output(&self) -> serde_json::Value {
+                serde_json::to_value(self).unwrap()
+            }
+            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+                self
+            }
         }
     };
 }

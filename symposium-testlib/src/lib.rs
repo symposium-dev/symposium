@@ -118,19 +118,12 @@ impl HookStep {
         let session_id = Some("test-session-id".to_string());
         let cwd = Some(cwd.to_string());
         match self {
-            Self::SessionStart => {
-                sym_types::InputEvent::SessionStart(sym_types::SessionStartInput::new(
-                    session_id,
-                    cwd,
-                ))
-            }
-            Self::UserPromptSubmit { prompt } => {
-                sym_types::InputEvent::UserPromptSubmit(sym_types::UserPromptSubmitInput::new(
-                    prompt.clone(),
-                    session_id,
-                    cwd,
-                ))
-            }
+            Self::SessionStart => sym_types::InputEvent::SessionStart(
+                sym_types::SessionStartInput::new(session_id, cwd),
+            ),
+            Self::UserPromptSubmit { prompt } => sym_types::InputEvent::UserPromptSubmit(
+                sym_types::UserPromptSubmitInput::new(prompt.clone(), session_id, cwd),
+            ),
             Self::PreToolUse {
                 tool_name,
                 tool_input,

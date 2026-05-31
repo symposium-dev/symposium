@@ -69,10 +69,7 @@ mod tests {
 
     #[test]
     fn wildcard_matches_everything() {
-        let input = InputEvent::SessionStart(SessionStartInput::new(
-            None,
-            None,
-        ));
+        let input = InputEvent::SessionStart(SessionStartInput::new(None, None));
 
         assert!(input.matches_matcher("*"));
     }
