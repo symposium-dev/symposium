@@ -169,7 +169,7 @@ install_commands = [
 
 ## `[[hooks]]`
 
-Each `[[hooks]]` entry declares a hook that responds to agent events.
+Each `[[hooks]]` entry declares a hook that responds to agent events. For the JSON schemas that symposium-format hooks receive and produce, see [Symposium hook events](./hook-events.md).
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -182,7 +182,7 @@ Each `[[hooks]]` entry declares a hook that responds to agent events.
 | `args` | array (optional) | Invocation arguments. Forbidden when the installation also declares `args`. |
 | `requirements` | array (optional) | Installations to acquire before running. Same shape as `command` (string name or inline declaration). |
 | `agent` | string (optional) | Restrict the hook to a specific agent (`claude`, `copilot`, `gemini`, `kiro`, …). |
-| `format` | string | Wire format for hook input/output. One of: `symposium` (default), `claude`, `codex`, `copilot`, `gemini`, `kiro`. |
+| `format` | string | Wire format the handler expects on stdin. `symposium` (default): symposium converts the agent's event to its canonical format before delivering. Any agent name (`claude`, `codex`, `copilot`, `gemini`, `kiro`): the handler receives that agent's native wire format. Symposium always intermediates — it never registers plugin hooks directly into agent configs. See [Hooks](../crate-authors/authoring-a-plugin.md#hooks). |
 
 ### Examples
 
@@ -260,6 +260,29 @@ event = "PreToolUse"
 command = "rtk"
 args = ["rewrite"]
 ```
+
+### Agent-specific hooks
+
+An agent-specific hook expects a particular agent's native wire format on stdin. Use this when you need full access to an agent's event schema. Symposium still intermediates — it delivers the input in the declared format (passing through unmodified when the current agent matches, or converting when it doesn't).
+
+A plugin with a Claude-specific hook and a symposium fallback:
+
+```toml
+[[hooks]]
+name = "check-claude"
+event = "PreToolUse"
+format = "claude"
+command = "my-hook-binary"
+
+[[hooks]]
+name = "check-portable"
+event = "PreToolUse"
+format = "symposium"
+command = "my-hook-binary"
+args = ["--symposium"]
+```
+
+On Claude, `check-claude` fires (receives Claude's native JSON). On other agents, `check-portable` fires (receives symposium canonical JSON). Only one hook per plugin fires for a given event — symposium picks the best match by format priority.
 
 ### Requirements
 

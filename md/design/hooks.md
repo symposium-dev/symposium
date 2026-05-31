@@ -39,3 +39,25 @@ Symposium converts the hook's output back to the current agent's wire format bef
 
 - Native format matching the host agent → pass through directly.
 - Symposium format → convert to host agent's wire format.
+
+## Alternatives considered
+
+### Registering agent-specific hooks directly
+
+An earlier design had symposium write plugin hook commands directly into agent configuration files (e.g., `.claude/settings.json`, `.github/hooks/*.json`) at sync time. The agent would invoke them natively, and symposium's global handler would skip delivery for those plugins.
+
+We rejected this because it violates the [Unobtrusive](./tenets.md#unobtrusive) tenet:
+
+- Agent config files are often git-tracked. Writing plugin hooks into them creates unexpected diffs that pollute pull requests and cause merge conflicts.
+- Users would need to `.gitignore` symposium-managed entries, or accept noise in their version history.
+- It couples symposium's state to files the user considers "theirs," making it harder to adopt or remove symposium cleanly.
+
+The current design avoids these problems by keeping symposium as the sole registered hook handler. Plugin hooks are dispatched internally — the agent's config only ever contains one symposium entry, registered at init time.
+
+### Cross-agent format conversion
+
+We also considered converting between agent-specific formats (e.g., delivering a `format = "claude"` hook on Copilot by translating Copilot's input into Claude's format). We rejected this because:
+
+- The conversion is lossy — agents have different fields, semantics, and capabilities.
+- It creates surprising behavior: a hook author declares `format = "claude"` expecting Claude's schema, but receives a synthetic approximation on other agents.
+- It's simpler and more predictable to require a symposium-format fallback for cross-agent coverage.
