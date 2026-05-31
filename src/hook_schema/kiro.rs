@@ -7,12 +7,15 @@ use crate::hook_schema::{
 pub struct Kiro;
 impl Agent for Kiro {
     fn event(&self, event: super::HookEvent) -> Option<Box<dyn super::ErasedAgentHookEvent>> {
-        Some(match event {
-            super::HookEvent::PreToolUse => erase_agent_hook_event(KiroPreToolUseEvent),
-            super::HookEvent::PostToolUse => erase_agent_hook_event(KiroPostToolUseEvent),
-            super::HookEvent::UserPromptSubmit => erase_agent_hook_event(KiroUserPromptSubmitEvent),
-            super::HookEvent::SessionStart => erase_agent_hook_event(KiroSessionStartEvent),
-        })
+        match event {
+            super::HookEvent::PreToolUse => Some(erase_agent_hook_event(KiroPreToolUseEvent)),
+            super::HookEvent::PostToolUse => Some(erase_agent_hook_event(KiroPostToolUseEvent)),
+            super::HookEvent::UserPromptSubmit => {
+                Some(erase_agent_hook_event(KiroUserPromptSubmitEvent))
+            }
+            super::HookEvent::SessionStart => Some(erase_agent_hook_event(KiroSessionStartEvent)),
+            _ => None,
+        }
     }
 }
 
@@ -57,24 +60,68 @@ kiro_event!(
 
 // Kiro output: plain text stdout → additionalContext
 macro_rules! kiro_output_impl {
-    ($ty:ident, $variant:ident, $struct:ident { $($extra:tt)* }) => {
+    ($ty:ident, PreToolUse, PreToolUseOutput { $($extra:tt)* }) => {
         impl AgentHookOutput for $ty {
             fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
-                if output.is_empty() { return Ok(Self::default()); }
+                if output.is_empty() {
+                    return Ok(Self::default());
+                }
                 let text = String::from_utf8_lossy(output);
-                Ok(Self { additional_context: Some(text.into_owned()), rest: serde_json::Map::new() })
-            }
-            fn from_symposium(event: &symposium::OutputEvent) -> Self {
-                Self { additional_context: event.additional_context().map(String::from), rest: serde_json::Map::new() }
-            }
-            fn to_symposium(&self) -> symposium::OutputEvent {
-                symposium::OutputEvent::$variant(symposium::$struct {
-                    additional_context: self.additional_context.clone(),
-                    $($extra)*
+                Ok(Self {
+                    additional_context: Some(text.into_owned()),
+                    rest: serde_json::Map::new(),
                 })
             }
-            fn to_hook_output(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
-            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> { self }
+            fn from_symposium(event: &symposium::OutputEvent) -> Self {
+                Self {
+                    additional_context: event.additional_context().map(String::from),
+                    rest: serde_json::Map::new(),
+                }
+            }
+            fn to_symposium(&self) -> symposium::OutputEvent {
+                symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
+                    Default::default(),
+                    self.additional_context.clone(),
+                    None,
+                ))
+            }
+            fn to_hook_output(&self) -> serde_json::Value {
+                serde_json::to_value(self).unwrap()
+            }
+            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+                self
+            }
+        }
+    };
+    ($ty:ident, $variant:ident, $struct:ident { }) => {
+        impl AgentHookOutput for $ty {
+            fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
+                if output.is_empty() {
+                    return Ok(Self::default());
+                }
+                let text = String::from_utf8_lossy(output);
+                Ok(Self {
+                    additional_context: Some(text.into_owned()),
+                    rest: serde_json::Map::new(),
+                })
+            }
+            fn from_symposium(event: &symposium::OutputEvent) -> Self {
+                Self {
+                    additional_context: event.additional_context().map(String::from),
+                    rest: serde_json::Map::new(),
+                }
+            }
+            fn to_symposium(&self) -> symposium::OutputEvent {
+                symposium::OutputEvent::$variant(symposium::$struct::new(
+                    self.additional_context.clone(),
+                ))
+            }
+            fn to_hook_output(&self) -> serde_json::Value {
+                serde_json::to_value(self).unwrap()
+            }
+            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+                self
+            }
         }
     };
 }
@@ -108,12 +155,12 @@ impl AgentHookInput for KiroPreToolUseInput {
         Ok(serde_json::from_str(payload)?)
     }
     fn to_symposium(&self) -> symposium::InputEvent {
-        symposium::InputEvent::PreToolUse(symposium::PreToolUseInput {
-            tool_name: self.tool_name.clone(),
-            tool_input: self.tool_input.clone(),
-            session_id: self.session_id.clone(),
-            cwd: self.cwd.clone(),
-        })
+        symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
+            self.tool_name.clone(),
+            self.tool_input.clone(),
+            self.session_id.clone(),
+            self.cwd.clone(),
+        ))
     }
     fn from_symposium(event: &symposium::InputEvent) -> Self {
         let symposium::InputEvent::PreToolUse(p) = event else {
@@ -175,13 +222,13 @@ impl AgentHookInput for KiroPostToolUseInput {
         Ok(serde_json::from_str(payload)?)
     }
     fn to_symposium(&self) -> symposium::InputEvent {
-        symposium::InputEvent::PostToolUse(symposium::PostToolUseInput {
-            tool_name: self.tool_name.clone(),
-            tool_input: self.tool_input.clone(),
-            tool_response: self.tool_response.clone(),
-            session_id: self.session_id.clone(),
-            cwd: self.cwd.clone(),
-        })
+        symposium::InputEvent::PostToolUse(symposium::PostToolUseInput::new(
+            self.tool_name.clone(),
+            self.tool_input.clone(),
+            self.tool_response.clone(),
+            self.session_id.clone(),
+            self.cwd.clone(),
+        ))
     }
     fn from_symposium(event: &symposium::InputEvent) -> Self {
         let symposium::InputEvent::PostToolUse(p) = event else {
@@ -235,11 +282,11 @@ impl AgentHookInput for KiroUserPromptSubmitInput {
         Ok(serde_json::from_str(payload)?)
     }
     fn to_symposium(&self) -> symposium::InputEvent {
-        symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput {
-            prompt: self.prompt.clone(),
-            session_id: self.session_id.clone(),
-            cwd: self.cwd.clone(),
-        })
+        symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput::new(
+            self.prompt.clone(),
+            self.session_id.clone(),
+            self.cwd.clone(),
+        ))
     }
     fn from_symposium(event: &symposium::InputEvent) -> Self {
         let symposium::InputEvent::UserPromptSubmit(p) = event else {
@@ -293,10 +340,10 @@ impl AgentHookInput for KiroSessionStartInput {
         Ok(serde_json::from_str(payload)?)
     }
     fn to_symposium(&self) -> symposium::InputEvent {
-        symposium::InputEvent::SessionStart(symposium::SessionStartInput {
-            session_id: self.session_id.clone(),
-            cwd: self.cwd.clone(),
-        })
+        symposium::InputEvent::SessionStart(symposium::SessionStartInput::new(
+            self.session_id.clone(),
+            self.cwd.clone(),
+        ))
     }
     fn from_symposium(event: &symposium::InputEvent) -> Self {
         let symposium::InputEvent::SessionStart(p) = event else {

@@ -25,6 +25,7 @@
 
 - [Supporting your crate](./crate-authors/supporting-your-crate.md)
 - [Authoring a plugin](./crate-authors/authoring-a-plugin.md)
+- [Writing a hook handler](./crate-authors/writing-a-hook-handler.md)
 
 # Appendices
 
@@ -48,9 +49,11 @@
   - [Configuration](./reference/configuration.md)
   - [Plugin sources](./reference/plugin-source.md)
   - [Plugin definition](./reference/plugin-definition.md)
+  - [Symposium hook events](./reference/hook-events.md)
   - [Skill definition](./reference/skill-definition.md)
   - [Crate predicates](./reference/crate-predicates.md)
 - [Contribution guide](./design/welcome.md)
+  - [Tenets](./design/tenets.md)
   - [Key repositories](./design/repositories.md)
   - [Key modules](./design/module-structure.md)
   - [Configuration loading](./design/configuration-loading.md)

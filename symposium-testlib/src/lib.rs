@@ -118,39 +118,32 @@ impl HookStep {
         let session_id = Some("test-session-id".to_string());
         let cwd = Some(cwd.to_string());
         match self {
-            Self::SessionStart => {
-                sym_types::InputEvent::SessionStart(sym_types::SessionStartInput {
-                    session_id,
-                    cwd,
-                })
-            }
-            Self::UserPromptSubmit { prompt } => {
-                sym_types::InputEvent::UserPromptSubmit(sym_types::UserPromptSubmitInput {
-                    prompt: prompt.clone(),
-                    session_id,
-                    cwd,
-                })
-            }
+            Self::SessionStart => sym_types::InputEvent::SessionStart(
+                sym_types::SessionStartInput::new(session_id, cwd),
+            ),
+            Self::UserPromptSubmit { prompt } => sym_types::InputEvent::UserPromptSubmit(
+                sym_types::UserPromptSubmitInput::new(prompt.clone(), session_id, cwd),
+            ),
             Self::PreToolUse {
                 tool_name,
                 tool_input,
-            } => sym_types::InputEvent::PreToolUse(sym_types::PreToolUseInput {
-                tool_name: tool_name.clone(),
-                tool_input: tool_input.clone(),
+            } => sym_types::InputEvent::PreToolUse(sym_types::PreToolUseInput::new(
+                tool_name.clone(),
+                tool_input.clone(),
                 session_id,
                 cwd,
-            }),
+            )),
             Self::PostToolUse {
                 tool_name,
                 tool_input,
                 tool_response,
-            } => sym_types::InputEvent::PostToolUse(sym_types::PostToolUseInput {
-                tool_name: tool_name.clone(),
-                tool_input: tool_input.clone(),
-                tool_response: tool_response.clone(),
+            } => sym_types::InputEvent::PostToolUse(sym_types::PostToolUseInput::new(
+                tool_name.clone(),
+                tool_input.clone(),
+                tool_response.clone(),
                 session_id,
                 cwd,
-            }),
+            )),
         }
     }
 }

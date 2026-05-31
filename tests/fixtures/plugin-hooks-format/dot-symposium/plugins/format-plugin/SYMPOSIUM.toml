@@ -1,0 +1,18 @@
+name = "format-plugin"
+crates = ["*"]
+
+# Claude-specific hook — should fire on Claude, be skipped on other agents.
+[[hooks]]
+name = "claude-specific"
+event = "PreToolUse"
+matcher = "Bash"
+format = "claude"
+command = { script = "$TEST_DIR/dot-symposium/plugins/format-plugin/scripts/claude-hook.sh" }
+
+# Symposium fallback — should fire on non-Claude agents.
+[[hooks]]
+name = "symposium-fallback"
+event = "PreToolUse"
+matcher = "Bash"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/format-plugin/scripts/symposium-hook.sh" }

@@ -1,0 +1,12 @@
+name = "claude-only-plugin"
+crates = ["*"]
+
+# Only a Claude hook — no symposium fallback.
+# Should fire on Claude, should NOT fire on other agents.
+# Uses matcher "Read" to avoid conflict with format-plugin's "Bash" hooks.
+[[hooks]]
+name = "claude-only"
+event = "PreToolUse"
+matcher = "Read"
+format = "claude"
+command = { script = "$TEST_DIR/dot-symposium/plugins/claude-only-plugin/scripts/claude-only.sh" }

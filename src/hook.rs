@@ -313,6 +313,7 @@ pub async fn dispatch_builtin(
             handle_user_prompt_submit(sym, prompt).await
         }
         symposium::InputEvent::SessionStart(session) => handle_session_start(sym, session),
+        _ => symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
     }
 }
 
@@ -384,7 +385,7 @@ pub async fn dispatch_plugin_hooks(
     prior_output: serde_json::Value,
 ) -> Result<serde_json::Value, Vec<u8>> {
     let plugins = crate::plugins::load_all_plugins(sym);
-    let hooks = dispatched_hooks_for_payload(&plugins, sym_input);
+    let hooks = dispatched_hooks_for_payload(&plugins, sym_input, host_agent);
 
     let mut output = prior_output;
 
@@ -403,24 +404,14 @@ pub async fn dispatch_plugin_hooks(
             }
         }
 
-        // Determine stdin for the plugin based on its declared format
+        // Determine stdin for the plugin based on its declared format.
+        // After format selection, the only two cases are:
+        // - native (matches host agent) → pass through original input
+        // - symposium → deliver canonical format
         let hook_agent = hook.format.as_agent();
-        let temp_input: Box<dyn AgentHookInput>;
         let hook_input: &dyn AgentHookInput = if hook_agent == Some(host_agent) {
-            // Same format as host — pass through original input
             original_input
-        } else if let Some(target) = hook_agent {
-            // Different agent format — convert symposium → target
-            let handler = target.event(event);
-            match handler {
-                Some(h) => {
-                    temp_input = h.translate_input(sym_input);
-                    &*temp_input
-                }
-                None => continue, // target agent doesn't support this event
-            }
         } else {
-            // Symposium format
             sym_input
         };
         let stdin_str = match hook_input.to_string() {
@@ -459,12 +450,13 @@ pub async fn dispatch_plugin_hooks(
                     None | Some(2) => return Err(child_out.stderr),
                     Some(0) if child_out.stdout.is_empty() => continue,
                     Some(0) => {
-                        // Parse output and convert to host agent format
+                        // Parse output and convert to host agent format.
+                        // Two cases: native (same as host) or symposium.
                         let host_handler = host_agent.event(event);
                         let Some(host_h) = host_handler else { continue };
 
                         let host_json = if hook_agent == Some(host_agent) {
-                            // Same format — parse as host agent, serialize to Value
+                            // Native format — parse as host agent output
                             match host_h.parse_output(&child_out.stdout) {
                                 Ok(o) => o.to_hook_output(),
                                 Err(e) => {
@@ -472,35 +464,17 @@ pub async fn dispatch_plugin_hooks(
                                     continue;
                                 }
                             }
-                        } else if let Some(target) = hook_agent {
-                            // Different agent — parse as hook agent → symposium → host agent
-                            let target_handler = target.event(event);
-                            let Some(target_h) = target_handler else {
-                                continue;
-                            };
-                            match target_h.parse_output(&child_out.stdout) {
-                                Ok(hook_out) => {
-                                    let sym_out = hook_out.to_symposium();
-                                    let host_out = host_h.translate_output(&sym_out);
-                                    host_out.to_hook_output()
-                                }
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "failed to parse hook output");
-                                    continue;
-                                }
-                            }
                         } else {
-                            // Symposium format — parse as symposium → host agent
+                            // Symposium format — parse and convert to host agent
                             match serde_json::from_slice::<serde_json::Value>(&child_out.stdout) {
                                 Ok(v) => {
-                                    // Try to parse as symposium OutputEvent
                                     if let Ok(sym_out) =
                                         serde_json::from_value::<symposium::OutputEvent>(v.clone())
                                     {
                                         let host_out = host_h.translate_output(&sym_out);
                                         host_out.to_hook_output()
                                     } else {
-                                        v // fallback: use raw JSON
+                                        v
                                     }
                                 }
                                 Err(e) => {
@@ -548,34 +522,53 @@ pub fn merge(a: &mut serde_json::Value, b: serde_json::Value) {
     *a = b;
 }
 
-/// Match plugin hooks against the incoming event, then resolve every
-/// `InstallationRef` (named or inline) on the matched hooks into a concrete
-/// `InstallationKind`. The resulting `ResolvedHook`s are ready to dispatch
-/// without further plugin lookups.
+/// Match plugin hooks against the incoming event, selecting at most one hook
+/// per plugin based on format priority:
+/// 1. A hook whose format matches the host agent (native fidelity).
+/// 2. A symposium-format hook (portable fallback).
+/// 3. Otherwise, nothing fires for that plugin.
+///
+/// The resulting `ResolvedHook`s are ready to dispatch without further plugin
+/// lookups.
 fn dispatched_hooks_for_payload(
     plugins: &[ParsedPlugin],
     input: &symposium::InputEvent,
+    host_agent: HookAgent,
 ) -> Vec<ResolvedHook> {
     tracing::trace!(?input, "matching hooks for payload");
 
     let mut out = Vec::new();
 
     for parsed_plugin in plugins {
+        let mut native_match: Option<&crate::plugins::Hook> = None;
+        let mut symposium_match: Option<&crate::plugins::Hook> = None;
+
         for hook in &parsed_plugin.plugin.hooks {
-            tracing::trace!(?hook);
             if hook.event != input.event() {
                 continue;
             }
             if let Some(matcher) = &hook.matcher
                 && !input.matches_matcher(matcher)
             {
-                tracing::debug!(
-                    ?input,
-                    ?matcher,
-                    "skipping hook due to non-matching matcher"
-                );
                 continue;
             }
+
+            match hook.format.as_agent() {
+                Some(agent) if agent == host_agent => {
+                    native_match = Some(hook);
+                }
+                None => {
+                    // format = "symposium"
+                    symposium_match = Some(hook);
+                }
+                Some(_) => {
+                    // Different agent format — does not fire on this agent.
+                }
+            }
+        }
+
+        let selected = native_match.or(symposium_match);
+        if let Some(hook) = selected {
             match ResolvedHook::build(parsed_plugin, hook) {
                 Ok(dispatched) => out.push(dispatched),
                 Err(e) => {
@@ -601,12 +594,12 @@ mod tests {
     async fn builtin_pre_tool_use_returns_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        let input = symposium::InputEvent::PreToolUse(symposium::PreToolUseInput {
-            tool_name: "Bash".to_string(),
-            tool_input: serde_json::Value::default(),
-            session_id: None,
-            cwd: None,
-        });
+        let input = symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
+            "Bash".to_string(),
+            serde_json::Value::default(),
+            None,
+            None,
+        ));
         let output = dispatch_builtin(&sym, &input).await;
         assert!(output.additional_context().is_none());
     }
@@ -615,13 +608,13 @@ mod tests {
     async fn builtin_post_tool_use_returns_empty_for_now() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        let input = symposium::InputEvent::PostToolUse(symposium::PostToolUseInput {
-            tool_name: "Bash".to_string(),
-            tool_input: serde_json::json!({"command": "ls"}),
-            tool_response: serde_json::json!({"stdout": "file.rs"}),
-            session_id: Some("test-session".to_string()),
-            cwd: Some("/tmp".to_string()),
-        });
+        let input = symposium::InputEvent::PostToolUse(symposium::PostToolUseInput::new(
+            "Bash".to_string(),
+            serde_json::json!({"command": "ls"}),
+            serde_json::json!({"stdout": "file.rs"}),
+            Some("test-session".to_string()),
+            Some("/tmp".to_string()),
+        ));
         let output = dispatch_builtin(&sym, &input).await;
         assert!(output.additional_context().is_none());
     }
@@ -630,11 +623,11 @@ mod tests {
     async fn builtin_user_prompt_submit_returns_empty_for_now() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        let input = symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput {
-            prompt: "Use tokio for async".to_string(),
-            session_id: Some("test-session".to_string()),
-            cwd: Some("/tmp".to_string()),
-        });
+        let input = symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput::new(
+            "Use tokio for async".to_string(),
+            Some("test-session".to_string()),
+            Some("/tmp".to_string()),
+        ));
         let output = dispatch_builtin(&sym, &input).await;
         assert!(output.additional_context().is_none());
     }

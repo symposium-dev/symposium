@@ -2447,6 +2447,7 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "sha2",
+ "symposium-hook",
  "symposium-testlib",
  "tar",
  "tempfile",
@@ -2456,6 +2457,17 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+]
+
+[[package]]
+name = "symposium-hook"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "regex",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
