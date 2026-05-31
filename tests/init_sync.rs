@@ -1699,20 +1699,15 @@ async fn auto_sync_skips_when_cargo_lock_unchanged() {
 
             // First hook call: should trigger sync and install skills.
             let steps = [symposium_testlib::HookStep::PreToolUse {
-                    tool_name: "Bash".to_string(),
-                    tool_input: serde_json::json!({}),
-                }];
-            ctx.prompt_or_hook(
-                "test",
-                &steps,
-                symposium::hook_schema::HookAgent::Claude,
-            )
-            .await?;
+                tool_name: "Bash".to_string(),
+                tool_input: serde_json::json!({}),
+            }];
+            ctx.prompt_or_hook("test", &steps, symposium::hook_schema::HookAgent::Claude)
+                .await?;
 
             // Verify workspace state was recorded (Cargo.lock should exist
             // after cargo metadata runs during sync).
-            let state =
-                symposium::workspace_state::WorkspaceState::load(&ctx.sym, &workspace_root);
+            let state = symposium::workspace_state::WorkspaceState::load(&ctx.sym, &workspace_root);
             assert!(
                 state.last_sync_lock_mtime.is_some(),
                 "workspace state should have recorded lock mtime after first sync"
@@ -1728,12 +1723,8 @@ async fn auto_sync_skips_when_cargo_lock_unchanged() {
             tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
             // Second hook call: should skip sync (Cargo.lock unchanged).
-            ctx.prompt_or_hook(
-                "test",
-                &steps,
-                symposium::hook_schema::HookAgent::Claude,
-            )
-            .await?;
+            ctx.prompt_or_hook("test", &steps, symposium::hook_schema::HookAgent::Claude)
+                .await?;
 
             // The skills directory mtime should be unchanged (sync was skipped).
             let mtime_after = std::fs::metadata(&skill_dir)
@@ -1763,18 +1754,13 @@ async fn auto_sync_reruns_when_cargo_lock_changes() {
 
             // First hook call: triggers sync.
             let steps = [symposium_testlib::HookStep::PreToolUse {
-                    tool_name: "Bash".to_string(),
-                    tool_input: serde_json::json!({}),
-                }];
-            ctx.prompt_or_hook(
-                "test",
-                &steps,
-                symposium::hook_schema::HookAgent::Claude,
-            )
-            .await?;
+                tool_name: "Bash".to_string(),
+                tool_input: serde_json::json!({}),
+            }];
+            ctx.prompt_or_hook("test", &steps, symposium::hook_schema::HookAgent::Claude)
+                .await?;
 
-            let state =
-                symposium::workspace_state::WorkspaceState::load(&ctx.sym, &workspace_root);
+            let state = symposium::workspace_state::WorkspaceState::load(&ctx.sym, &workspace_root);
             assert!(state.last_sync_lock_mtime.is_some());
 
             // Simulate a dependency change by faking a stale mtime in the
@@ -1784,12 +1770,8 @@ async fn auto_sync_reruns_when_cargo_lock_changes() {
             stale_state.save(&ctx.sym, &workspace_root);
 
             // Second hook call: should re-sync because Cargo.lock changed.
-            ctx.prompt_or_hook(
-                "test",
-                &steps,
-                symposium::hook_schema::HookAgent::Claude,
-            )
-            .await?;
+            ctx.prompt_or_hook("test", &steps, symposium::hook_schema::HookAgent::Claude)
+                .await?;
 
             // Workspace state should be updated with real mtime (not 0).
             let state2 =
