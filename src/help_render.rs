@@ -261,21 +261,23 @@ mod tests {
         let ws: Vec<WorkspaceCrate> = vec![];
         expect![[r#"
              AI the Rust Way
- 
+
              Usage: cargo agents [OPTIONS] [COMMAND]
- 
+
              Commands for humans:
              init         Set up user-wide configuration
              plugin       Manage plugins
              self-update  Update symposium to the latest version
              sync         Synchronize skills with workspace dependencies
- 
+
              Commands for agents:
              crate-info   Find crate sources
- 
+
              Options:
                    --update <UPDATE>  Control plugin source update behavior (none, check, fetch) [default: none] [possible values: none, check, fetch]
                -q, --quiet            Suppress status output
+               -v, --verbose          Print detailed information about decisions made
+                   --json             Output structured JSON report
                -h, --help             Print help
                -V, --version          Print version
          "#]]

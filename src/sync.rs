@@ -134,19 +134,21 @@ fn propagate_user_skill(
     source_dir: &Path,
     dest_dir: &Path,
     project_root: &Path,
-    out: &Output,
 ) -> Result<bool> {
     if dest_dir == source_dir {
-        // Agent reads from the same directory as the source — nothing to do.
         return Ok(false);
     }
 
     let target_is_managed = has_symposium_marker(dest_dir);
     if dest_dir.exists() && !target_is_managed {
-        out.warn(format!(
-            "skipping propagation to {}: user-managed skill already present",
-            display_path(dest_dir)
-        ));
+        tracing::info!(
+            report = %crate::report::ReportEvent::Warning {
+                message: format!(
+                    "skipping propagation to {}: user-managed skill already present",
+                    display_path(dest_dir)
+                ),
+            },
+        );
         return Ok(false);
     }
 
@@ -168,7 +170,8 @@ fn propagate_user_skill(
 
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
-pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
+pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
+    let out = &Output::quiet();
     let project_root = crate::init::find_workspace_root(sym, cwd)?;
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
@@ -177,17 +180,18 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     let workspace = crate::crate_sources::workspace_crates(&project_root);
 
     for warning in &registry.warnings {
-        out.warn(format!(
-            "skipping {}: {}",
-            display_path(&warning.path),
-            warning.message
-        ));
+        tracing::info!(
+            report = %crate::report::ReportEvent::Warning {
+                message: format!("skipping {}: {}", display_path(&warning.path), warning.message),
+            },
+        );
     }
 
-    out.info(format!(
-        "scanning {} workspace dependencies",
-        workspace.len()
-    ));
+    tracing::info!(
+        report = %crate::report::ReportEvent::Info {
+            message: format!("scanning {} workspace dependencies", workspace.len()),
+        },
+    );
 
     // Find all applicable skills
     let applicable = skills::skills_applicable_to(sym, &registry, &workspace).await;
@@ -244,7 +248,11 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     );
 
     if agent_names.is_empty() {
-        out.info("no agents configured, run `cargo agents init` to add one");
+        tracing::info!(
+            report = %crate::report::ReportEvent::Info {
+                message: "no agents configured, run `cargo agents init` to add one".into(),
+            },
+        );
         return Ok(());
     }
 
@@ -289,27 +297,38 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
             // Create the destination (and any missing parents) with a `*` gitignore
             // in each new directory.
             if let Err(e) = create_managed_dir_all(&dest_dir, &project_root) {
-                out.warn(format!("failed to create {}: {e}", display_path(&dest_dir)));
+                tracing::info!(
+                    report = %crate::report::ReportEvent::Warning {
+                        message: format!("failed to create {}: {e}", display_path(&dest_dir)),
+                    },
+                );
                 continue;
             }
 
             match agent.install_skill(skill_source, &dest_dir) {
                 Ok(()) => {
-                    // Mark the directory as symposium-managed (marker +
-                    // wildcard .gitignore). Kept as a warning on failure so
-                    // a broken install doesn't halt the whole sync.
                     if let Err(e) = mark_generated_skill_directory(&dest_dir) {
-                        out.warn(format!("failed to mark {}: {e}", display_path(&dest_dir)));
+                        tracing::info!(
+                            report = %crate::report::ReportEvent::Warning {
+                                message: format!("failed to mark {}: {e}", display_path(&dest_dir)),
+                            },
+                        );
                     }
                     installed_dirs.insert(dest_dir.clone());
-                    tracing::info!(skill = %dir_name, agent = %agent_name, dest = %dest_dir.display(), "installed skill");
-                    out.done(format!(
-                        "installed skill {dir_name} → {}",
-                        display_path(&dest_dir)
-                    ));
+                    tracing::info!(
+                        report = %crate::report::ReportEvent::SkillInstalled {
+                            skill: dir_name.clone(),
+                            agent: agent_name.clone(),
+                            dest: display_path(&dest_dir),
+                        },
+                    );
                 }
                 Err(e) => {
-                    out.warn(format!("failed to install skill {dir_name}: {e}"));
+                    tracing::info!(
+                        report = %crate::report::ReportEvent::Warning {
+                            message: format!("failed to install skill {dir_name}: {e}"),
+                        },
+                    );
                 }
             }
         }
@@ -335,26 +354,24 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
                         None => continue,
                     };
                     let dest_dir = agent.project_skill_dir(&project_root, name);
-                    match propagate_user_skill(source_dir, &dest_dir, &project_root, out) {
+                    match propagate_user_skill(source_dir, &dest_dir, &project_root) {
                         Ok(true) => {
                             installed_dirs.insert(dest_dir.clone());
                             tracing::info!(
-                                skill = %name,
-                                agent = %agent_name,
-                                dest = %dest_dir.display(),
-                                "propagated skill from .agents/skills/"
+                                report = %crate::report::ReportEvent::SkillPropagated {
+                                    skill: name.to_string(),
+                                    agent: agent_name.clone(),
+                                    dest: display_path(&dest_dir),
+                                },
                             );
-                            out.done(format!(
-                                "propagated skill {name} → {}",
-                                display_path(&dest_dir)
-                            ));
                         }
                         Ok(false) => {}
                         Err(e) => {
-                            out.warn(format!(
-                                "failed to propagate skill {name} to {}: {e}",
-                                display_path(&dest_dir)
-                            ));
+                            tracing::info!(
+                                report = %crate::report::ReportEvent::Warning {
+                                    message: format!("failed to propagate skill {name} to {}: {e}", display_path(&dest_dir)),
+                                },
+                            );
                         }
                     }
                 }
@@ -384,14 +401,18 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
             }
             match fs::remove_dir_all(&path) {
                 Ok(()) => {
-                    tracing::info!(path = %path.display(), "removed stale skill");
-                    out.removed(format!("removed {}", display_path(&path)));
+                    tracing::info!(
+                        report = %crate::report::ReportEvent::SkillRemoved {
+                            path: display_path(&path),
+                        },
+                    );
                 }
                 Err(e) => {
-                    out.warn(format!(
-                        "failed to remove stale {}: {e}",
-                        display_path(&path)
-                    ));
+                    tracing::info!(
+                        report = %crate::report::ReportEvent::Warning {
+                            message: format!("failed to remove stale {}: {e}", display_path(&path)),
+                        },
+                    );
                 }
             }
         }
@@ -406,8 +427,11 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     }
 
     if to_install.is_empty() {
-        tracing::debug!("no applicable skills for workspace dependencies");
-        out.info("no applicable skills found for workspace dependencies");
+        tracing::info!(
+            report = %crate::report::ReportEvent::Info {
+                message: "no applicable skills found for workspace dependencies".into(),
+            },
+        );
     }
 
     Ok(())

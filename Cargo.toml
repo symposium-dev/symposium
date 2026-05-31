@@ -47,7 +47,7 @@ symposium-hook = { path = "symposium-hook", features = ["clap"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 toml = "0.8"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "registry"] }
 bytes = "1.11.1"
 dialoguer = "0.12.0"
 toml_edit = "0.25.11"

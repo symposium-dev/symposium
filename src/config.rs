@@ -285,11 +285,18 @@ impl Symposium {
         self.cargo_override = Some(path);
     }
 
-    /// Initialize logging. Call once at startup.
-    pub fn init_logging(&self) {
+    /// Initialize logging with an optional report layer. Call once at startup.
+    ///
+    /// When `report_layer` is `Some`, the layer is composed into the
+    /// subscriber so it receives events alongside the file logger.
+    /// Per-layer filtering ensures the report layer can receive debug
+    /// events even when the file log level is set higher.
+    pub fn init_logging(&self, report_layer: Option<crate::report::ReportLayer>) {
         use std::fs::OpenOptions;
         use tracing_subscriber::EnvFilter;
-        use tracing_subscriber::fmt;
+        use tracing_subscriber::Layer as _;
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
 
         let logs = self.logs_dir();
         let now = chrono::Local::now();
@@ -303,12 +310,21 @@ impl Symposium {
             .expect("failed to open log file");
 
         let level = self.log_level();
-        let filter = EnvFilter::new(level.as_str());
+        let file_filter = EnvFilter::new(level.as_str());
 
-        fmt()
-            .with_env_filter(filter)
+        let file_layer = tracing_subscriber::fmt::layer()
             .with_writer(file)
             .with_ansi(false)
+            .with_filter(file_filter);
+
+        // The report layer does its own level filtering internally, so
+        // give it a permissive filter that lets all events through.
+        let report_filter = EnvFilter::new("trace");
+        let report_layer = report_layer.map(|l| l.with_filter(report_filter));
+
+        tracing_subscriber::registry()
+            .with(file_layer)
+            .with(report_layer)
             .init();
 
         tracing::debug!(

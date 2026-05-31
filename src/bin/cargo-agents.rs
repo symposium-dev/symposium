@@ -8,6 +8,7 @@ use symposium::help_render;
 use symposium::hook;
 use symposium::output::Output;
 use symposium::plugins;
+use symposium::report;
 use symposium::self_update;
 use symposium::state;
 use symposium::subcommand_dispatch::dispatch_external;
@@ -15,7 +16,6 @@ use symposium::subcommand_dispatch::dispatch_external;
 #[tokio::main]
 async fn main() -> ExitCode {
     let mut sym = config::Symposium::from_environment();
-    sym.init_logging();
 
     // When invoked as `cargo agents`, cargo passes "agents" as the first arg.
     // Strip it so clap sees the real arguments.
@@ -52,6 +52,23 @@ async fn main() -> ExitCode {
         Err(err) => err.exit(),
     };
 
+    // Always install the report layer. Mode determines output format:
+    // --json → accumulate JSON array; -v → stderr trace; default → stdout.
+    let (mode, level) = if cli.json {
+        let level = if cli.verbose {
+            tracing::Level::DEBUG
+        } else {
+            tracing::Level::INFO
+        };
+        (report::ReportMode::Json, level)
+    } else if cli.verbose {
+        (report::ReportMode::Verbose, tracing::Level::DEBUG)
+    } else {
+        (report::ReportMode::Normal, tracing::Level::INFO)
+    };
+    let (report_layer, report_handle) = report::ReportLayer::new(mode, level);
+    sym.init_logging(Some(report_layer));
+
     // Log the command being invoked
     match &cli.command {
         Some(Commands::Init { .. }) => tracing::info!("cargo agents init"),
@@ -75,9 +92,10 @@ async fn main() -> ExitCode {
     // Stamp state.toml with the running binary version (silently updates on mismatch).
     state::ensure_current(sym.config_dir());
 
-    // Hook commands are quiet by default (they're invoked by the agent, not the user)
+    // Hook commands are quiet by default (they're invoked by the agent, not the user).
+    // JSON mode also suppresses human output (only JSON goes to stdout).
     let is_hook = matches!(cli.command, Some(Commands::Hook { .. }));
-    let out = if cli.quiet || is_hook {
+    let out = if cli.quiet || is_hook || cli.json {
         Output::quiet()
     } else {
         Output::normal()
@@ -104,7 +122,14 @@ async fn main() -> ExitCode {
         // Commands that need direct I/O (stdin/stdout) stay in the binary
         Some(Commands::Hook { agent, event }) => hook::run(&sym, agent, event).await,
 
-        Some(Commands::Plugin { command }) => handle_plugin_command(&sym, command).await,
+        Some(Commands::Plugin { command }) => {
+            let code = handle_plugin_command(&sym, command).await;
+            let events = report_handle.drain();
+            if !events.is_empty() {
+                println!("{}", serde_json::to_string_pretty(&events).unwrap());
+            }
+            code
+        }
 
         Some(Commands::External(argv)) => match dispatch_external(&sym, &cwd, argv).await {
             Ok(result) => {
@@ -124,7 +149,13 @@ async fn main() -> ExitCode {
 
         // Everything else delegates to the library
         Some(cmd) => match symposium::cli::run(&mut sym, cmd, &cwd, &out).await {
-            Ok(()) => ExitCode::SUCCESS,
+            Ok(()) => {
+                let events = report_handle.drain();
+                if !events.is_empty() {
+                    println!("{}", serde_json::to_string_pretty(&events).unwrap());
+                }
+                ExitCode::SUCCESS
+            }
             Err(e) => {
                 eprintln!("Error: {e:#}");
                 ExitCode::FAILURE
@@ -160,25 +191,15 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
         PluginCommand::List => {
             let providers = plugins::list_plugins(sym);
             for provider in &providers {
-                println!("Provider: {}", provider.name);
-                println!("  Type: {}", provider.source_type);
-                if let Some(ref url) = provider.git_url {
-                    println!("  URL: {url}");
-                }
-                if let Some(ref path) = provider.path {
-                    println!("  Path: {path}");
-                }
-                if provider.plugins.is_empty() {
-                    println!("  (no plugins)");
-                } else {
-                    for plugin in &provider.plugins {
-                        println!(
-                            "  - {} ({} hooks, {} skill groups)",
-                            plugin.name, plugin.hooks_count, plugin.skill_groups_count
-                        );
-                    }
-                }
-                println!();
+                tracing::info!(
+                    report = %report::ReportEvent::ProviderListed {
+                        name: provider.name.clone(),
+                        source_type: provider.source_type.to_string(),
+                        url: provider.git_url.clone(),
+                        path: provider.path.clone(),
+                        plugins: provider.plugins.iter().map(|p| p.name.clone()).collect(),
+                    },
+                );
             }
             ExitCode::SUCCESS
         }
@@ -196,11 +217,8 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                             return ExitCode::FAILURE;
                         }
                         for r in &results {
-                            errors += print_validation_result(r, "  ");
+                            errors += emit_validation_results(r);
                         }
-                        let total = count_results(&results);
-                        let passed = total - errors;
-                        println!("\n  {passed}/{total} valid");
                     }
                     Err(e) => {
                         eprintln!("✗ {}: {e}", path.display());
@@ -211,23 +229,32 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                 if !no_check_crates {
                     match plugins::collect_crate_names_in_source_dir(&path) {
                         Ok(crate_names) => {
-                            if !crate_names.is_empty() {
-                                println!(
-                                    "\n📦 Checking {} crate name(s) on crates.io...",
-                                    crate_names.len()
+                            for name in &crate_names {
+                                let exists = plugins::check_crate_exists(name).await;
+                                tracing::info!(
+                                    report = %report::ReportEvent::Validated {
+                                        path: name.clone(),
+                                        item_kind: "crate".into(),
+                                        valid: exists,
+                                        error: if exists { None } else { Some("not found on crates.io".into()) },
+                                        warning: None,
+                                    },
                                 );
-                                for name in &crate_names {
-                                    if plugins::check_crate_exists(name).await {
-                                        println!("  ✅ {name}");
-                                    } else {
-                                        eprintln!("  ✗ {name} — not found on crates.io");
-                                        errors += 1;
-                                    }
+                                if !exists {
+                                    errors += 1;
                                 }
                             }
                         }
                         Err(e) => {
-                            eprintln!("✗ failed to collect crate names: {e}");
+                            tracing::info!(
+                                report = %report::ReportEvent::Validated {
+                                    path: path.display().to_string(),
+                                    item_kind: "crate-check".into(),
+                                    valid: false,
+                                    error: Some(format!("failed to collect crate names: {e}")),
+                                    warning: None,
+                                },
+                            );
                             errors += 1;
                         }
                     }
@@ -267,28 +294,35 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
     }
 }
 
-fn print_validation_result(r: &plugins::ValidationResult, indent: &str) -> usize {
+fn emit_validation_results(r: &plugins::ValidationResult) -> usize {
     let mut errors = 0;
     match &r.result {
         Ok(()) => {
-            if let Some(ref w) = r.warning {
-                println!("{indent}⚠️  {} ({}): {w}", r.path.display(), r.kind);
-            } else {
-                println!("{indent}✅ {} ({})", r.path.display(), r.kind);
-            }
+            tracing::info!(
+                report = %report::ReportEvent::Validated {
+                    path: r.path.display().to_string(),
+                    item_kind: r.kind.to_string(),
+                    valid: true,
+                    error: None,
+                    warning: r.warning.clone(),
+                },
+            );
         }
         Err(e) => {
-            eprintln!("{indent}✗ {} ({}): {e}", r.path.display(), r.kind);
+            tracing::info!(
+                report = %report::ReportEvent::Validated {
+                    path: r.path.display().to_string(),
+                    item_kind: r.kind.to_string(),
+                    valid: false,
+                    error: Some(e.to_string()),
+                    warning: None,
+                },
+            );
             errors += 1;
         }
     }
-    let child_indent = format!("{indent}    ");
     for child in &r.children {
-        errors += print_validation_result(child, &child_indent);
+        errors += emit_validation_results(child);
     }
     errors
-}
-
-fn count_results(results: &[plugins::ValidationResult]) -> usize {
-    results.iter().map(|r| 1 + count_results(&r.children)).sum()
 }
