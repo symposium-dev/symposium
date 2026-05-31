@@ -73,6 +73,10 @@ Manages `state.toml` in the config directory. Tracks the semver of the binary th
 
 Implements `cargo agents self-update`. Queries the registry for the latest published version via `cargo search`, then installs it via `cargo install symposium --force`. Also provides `re_exec()` which replaces the current process with the newly installed binary (Unix `exec`, spawn-and-exit on Windows) — used by the `auto-update = "on"` startup path. Contains `maybe_warn_for_update()` (sync, for the `warn` library path) and `maybe_check_for_update()` (async, for the binary `on` + re-exec path).
 
+### `crate_sources/` — workspace dependency discovery and fetching
+
+Houses `WorkspaceCrate` (the representation of a crate in the workspace graph) and the `RustCrateFetch` builder for downloading crate sources. `workspace_crates()` runs `cargo metadata` to collect direct dependencies. `discover_battery_packs()` is the async companion: it acquires the `cargo-bp` binary into symposium's binary cache (via `acquire_source`), then runs `cargo bp status --json` (using the `cargo-bp-script` crate) to find installed battery packs. Battery pack crates (names ending in `-battery-pack`) aren't normal Cargo dependencies — they're managed by the `cargo bp` tool — but plugin predicates reference them by name, so `sync` merges them into the workspace crate list for matching purposes. If acquisition or execution fails, battery pack discovery is silently skipped.
+
 ### `crate_command.rs` — crate source lookup
 
 Contains `dispatch_crate()`, which resolves a crate's version and fetches its source code. Called by the CLI's `crate-info` command. Path dependencies are resolved to their local source directory via `WorkspaceCrate.path`.

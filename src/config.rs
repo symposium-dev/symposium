@@ -202,6 +202,7 @@ pub struct Symposium {
     cache_dir: PathBuf,
     home_dir: PathBuf,
     cargo_override: Option<PathBuf>,
+    cargo_bp_override: Option<PathBuf>,
 }
 
 impl Symposium {
@@ -225,6 +226,7 @@ impl Symposium {
         // init_logging() is called after construction.
 
         let cargo_override = env::var("SYMPOSIUM_CARGO").ok().map(PathBuf::from);
+        let cargo_bp_override = env::var("SYMPOSIUM_CARGO_BP").ok().map(PathBuf::from);
 
         Self {
             config,
@@ -232,6 +234,7 @@ impl Symposium {
             cache_dir,
             home_dir,
             cargo_override,
+            cargo_bp_override,
         }
     }
 
@@ -257,6 +260,7 @@ impl Symposium {
             cache_dir,
             home_dir,
             cargo_override: None,
+            cargo_bp_override: None,
         }
     }
 
@@ -283,6 +287,17 @@ impl Symposium {
     #[doc(hidden)]
     pub fn set_cargo_override(&mut self, path: PathBuf) {
         self.cargo_override = Some(path);
+    }
+
+    /// Return the `cargo-bp` binary override path, if configured.
+    pub fn cargo_bp_override(&self) -> Option<&Path> {
+        self.cargo_bp_override.as_deref()
+    }
+
+    /// Override the `cargo-bp` binary path (test-only).
+    #[doc(hidden)]
+    pub fn set_cargo_bp_override(&mut self, path: PathBuf) {
+        self.cargo_bp_override = Some(path);
     }
 
     /// Initialize logging. Call once at startup.

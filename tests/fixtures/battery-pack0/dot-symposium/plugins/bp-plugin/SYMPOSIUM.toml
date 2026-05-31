@@ -1,0 +1,5 @@
+name = "bp-plugin"
+crates = ["cli-battery-pack"]
+
+[[skills]]
+source.path = "."

@@ -9,9 +9,11 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 
+mod battery_pack;
 mod list;
 mod probe;
 
+pub use battery_pack::discover_battery_packs;
 pub use list::{WorkspaceCrate, workspace_crates};
 
 /// Normalize a crate name for hyphen/underscore-insensitive comparison.

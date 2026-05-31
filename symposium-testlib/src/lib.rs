@@ -452,6 +452,32 @@ impl TestContext {
         self.sym.set_cargo_override(script_path);
     }
 
+    /// Point `cargo-bp` invocations at a mock script for the duration of this test.
+    ///
+    /// Writes the given shell script into the tempdir and configures `Symposium`
+    /// to use it instead of acquiring the real `cargo-bp`.
+    pub fn set_mock_cargo_bp(&mut self, script: &str) {
+        let script_path = self.tempdir.join("mock-cargo-bp");
+        std::fs::write(&script_path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        self.sym.set_cargo_bp_override(script_path);
+    }
+
+    /// Configure a typed mock for `cargo bp status --json`.
+    ///
+    /// Serializes the given `StatusReport` to JSON and writes a shell script
+    /// that outputs it. This ensures the mock produces output that matches
+    /// the `cargo-bp-script` serialization format exactly.
+    pub fn set_mock_cargo_bp_status(&mut self, report: &cargo_bp_script::StatusReport) {
+        let json = serde_json::to_string(report).expect("StatusReport serializes");
+        let script = format!("#!/bin/sh\nprintf '%s' '{}'\n", json.replace('\'', "'\\''"));
+        self.set_mock_cargo_bp(&script);
+    }
+
     /// Replace variable content with stable placeholders for snapshot tests.
     pub fn normalize_paths(&self, output: &str) -> String {
         let config_dir = self.sym.config_dir().to_string_lossy().to_string();

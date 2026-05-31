@@ -1687,6 +1687,7 @@ async fn session_start_hook_warns_about_update_in_context() {
     .unwrap();
 }
 
+
 #[tokio::test]
 async fn auto_sync_skips_when_cargo_lock_unchanged() {
     with_fixture(
@@ -2088,6 +2089,72 @@ async fn sync_crate_metadata_missing_path_dir() {
             assert!(
                 entries.is_empty(),
                 "nonexistent path entry should produce zero skills, found: {entries:?}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `sync` installs skills for battery packs discovered via `cargo bp status`.
+///
+/// The battery pack crate is not a normal Cargo dependency — it's reported
+/// by a mock `cargo-bp` binary, and the plugin's `crates` predicate matches
+/// against that.
+#[tokio::test]
+async fn sync_installs_skill_for_battery_pack() {
+    use cargo_bp_script::{InstalledPackStatus, ProjectInfo, StatusReport};
+
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["battery-pack0"],
+        async |mut ctx| {
+            let report = StatusReport::new(ProjectInfo::new("Cargo.toml")).with_pack(
+                InstalledPackStatus::new("cli", "cli-battery-pack", "0.3.0"),
+            );
+            ctx.set_mock_cargo_bp_status(&report);
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skill_dir =
+                find_installed_skill(&workspace_root.join(".claude/skills"), "cli-bp-guidance");
+            let content = std::fs::read_to_string(skill_dir.join("SKILL.md"))?;
+            assert!(content.contains("CLI battery pack"));
+            assert!(skill_dir.join(".symposium").exists());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `sync` does NOT install battery-pack skills when `cargo bp` reports
+/// the pack is not installed.
+#[tokio::test]
+async fn sync_skips_skill_when_battery_pack_not_installed() {
+    use cargo_bp_script::{ProjectInfo, StatusReport};
+
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["battery-pack0"],
+        async |mut ctx| {
+            let report = StatusReport::new(ProjectInfo::new("Cargo.toml"));
+            ctx.set_mock_cargo_bp_status(&report);
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills = find_installed_skills(
+                &workspace_root.join(".claude/skills"),
+                "cli-bp-guidance",
+            );
+            assert!(
+                skills.is_empty(),
+                "skill should NOT be installed when battery pack is not present"
             );
             Ok(())
         },

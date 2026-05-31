@@ -174,7 +174,17 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
 
     // Load plugin registry and workspace deps
     let registry = plugins::load_registry(sym);
-    let workspace = crate::crate_sources::workspace_crates(&project_root);
+    let mut workspace = crate::crate_sources::workspace_crates(&project_root);
+
+    // Augment with installed battery packs.
+    let battery_packs =
+        crate::crate_sources::discover_battery_packs(sym, &project_root).await;
+    for bp in battery_packs {
+        if !workspace.iter().any(|c| c.name == bp.name) {
+            workspace.push(bp);
+        }
+    }
+    workspace.sort_by(|a, b| a.name.cmp(&b.name));
 
     for warning in &registry.warnings {
         out.warn(format!(
