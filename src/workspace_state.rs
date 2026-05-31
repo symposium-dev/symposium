@@ -18,6 +18,9 @@ pub struct WorkspaceState {
     #[serde(default, rename = "last-sync-lock-mtime")]
     pub last_sync_lock_mtime: Option<u64>,
 
+    #[serde(default, rename = "last-sync-battery-pack-mtime")]
+    pub last_sync_battery_pack_mtime: Option<u64>,
+
     #[serde(default, rename = "workspace-root")]
     pub workspace_root: Option<PathBuf>,
 }
@@ -42,17 +45,29 @@ impl WorkspaceState {
     }
 
     pub fn sync_is_fresh(&self, workspace_root: &Path) -> bool {
-        let Some(cached_mtime) = self.last_sync_lock_mtime else {
+        // Cargo.lock must have been seen at least once — if we've never
+        // synced, the cache is unconditionally stale.
+        if self.last_sync_lock_mtime.is_none() {
             return false;
-        };
-        let Some(current_mtime) = cargo_lock_mtime(workspace_root) else {
+        }
+        if !mtime_matches(
+            self.last_sync_lock_mtime,
+            &workspace_root.join("Cargo.lock"),
+        ) {
             return false;
-        };
-        cached_mtime == current_mtime
+        }
+        if !mtime_matches(
+            self.last_sync_battery_pack_mtime,
+            &workspace_root.join("battery-pack.toml"),
+        ) {
+            return false;
+        }
+        true
     }
 
     pub fn record_sync(&mut self, workspace_root: &Path) {
-        self.last_sync_lock_mtime = cargo_lock_mtime(workspace_root);
+        self.last_sync_lock_mtime = file_mtime(&workspace_root.join("Cargo.lock"));
+        self.last_sync_battery_pack_mtime = file_mtime(&workspace_root.join("battery-pack.toml"));
     }
 }
 
@@ -76,9 +91,8 @@ pub fn find_workspace_root(sym: &Symposium, cwd: &Path) -> Option<PathBuf> {
     Path::new(manifest.trim()).parent().map(|p| p.to_path_buf())
 }
 
-fn cargo_lock_mtime(workspace_root: &Path) -> Option<u64> {
-    let lock_path = workspace_root.join("Cargo.lock");
-    let meta = fs::metadata(&lock_path).ok()?;
+fn file_mtime(path: &Path) -> Option<u64> {
+    let meta = fs::metadata(path).ok()?;
     let mtime = meta.modified().ok()?;
     Some(
         mtime
@@ -86,6 +100,14 @@ fn cargo_lock_mtime(workspace_root: &Path) -> Option<u64> {
             .unwrap_or_default()
             .as_secs(),
     )
+}
+
+/// Check whether the cached mtime matches the current file state.
+/// A missing file matches a `None` cached mtime (both absent = fresh).
+/// A missing file with a `Some` cached mtime means the file was deleted = stale.
+fn mtime_matches(cached: Option<u64>, path: &Path) -> bool {
+    let current = file_mtime(path);
+    cached == current
 }
 
 fn workspace_dir_name(workspace_root: &Path) -> String {
@@ -142,11 +164,13 @@ mod tests {
 
         let mut state = WorkspaceState::default();
         state.last_sync_lock_mtime = Some(1234567890);
+        state.last_sync_battery_pack_mtime = Some(9876543210);
         state.workspace_root = Some(workspace.clone());
         state.save(&sym, &workspace);
 
         let loaded = WorkspaceState::load(&sym, &workspace);
         assert_eq!(loaded.last_sync_lock_mtime, Some(1234567890));
+        assert_eq!(loaded.last_sync_battery_pack_mtime, Some(9876543210));
         assert_eq!(loaded.workspace_root, Some(workspace));
     }
 
@@ -157,16 +181,35 @@ mod tests {
         fs::create_dir_all(&workspace).unwrap();
         fs::write(workspace.join("Cargo.lock"), "# lock").unwrap();
 
-        let mtime = cargo_lock_mtime(&workspace).unwrap();
+        let lock_mtime = file_mtime(&workspace.join("Cargo.lock")).unwrap();
         let state = WorkspaceState {
-            last_sync_lock_mtime: Some(mtime),
+            last_sync_lock_mtime: Some(lock_mtime),
+            last_sync_battery_pack_mtime: None,
             workspace_root: None,
         };
         assert!(state.sync_is_fresh(&workspace));
     }
 
     #[test]
-    fn sync_is_stale_when_mtime_differs() {
+    fn sync_is_fresh_with_both_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("Cargo.lock"), "# lock").unwrap();
+        fs::write(workspace.join("battery-pack.toml"), "# bp").unwrap();
+
+        let lock_mtime = file_mtime(&workspace.join("Cargo.lock")).unwrap();
+        let bp_mtime = file_mtime(&workspace.join("battery-pack.toml")).unwrap();
+        let state = WorkspaceState {
+            last_sync_lock_mtime: Some(lock_mtime),
+            last_sync_battery_pack_mtime: Some(bp_mtime),
+            workspace_root: None,
+        };
+        assert!(state.sync_is_fresh(&workspace));
+    }
+
+    #[test]
+    fn sync_is_stale_when_lock_mtime_differs() {
         let tmp = tempfile::tempdir().unwrap();
         let workspace = tmp.path().join("project");
         fs::create_dir_all(&workspace).unwrap();
@@ -174,6 +217,42 @@ mod tests {
 
         let state = WorkspaceState {
             last_sync_lock_mtime: Some(0),
+            last_sync_battery_pack_mtime: None,
+            workspace_root: None,
+        };
+        assert!(!state.sync_is_fresh(&workspace));
+    }
+
+    #[test]
+    fn sync_is_stale_when_battery_pack_added() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("Cargo.lock"), "# lock").unwrap();
+        fs::write(workspace.join("battery-pack.toml"), "# bp").unwrap();
+
+        let lock_mtime = file_mtime(&workspace.join("Cargo.lock")).unwrap();
+        // Cached state doesn't know about battery-pack.toml yet
+        let state = WorkspaceState {
+            last_sync_lock_mtime: Some(lock_mtime),
+            last_sync_battery_pack_mtime: None,
+            workspace_root: None,
+        };
+        assert!(!state.sync_is_fresh(&workspace));
+    }
+
+    #[test]
+    fn sync_is_stale_when_battery_pack_mtime_differs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let workspace = tmp.path().join("project");
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("Cargo.lock"), "# lock").unwrap();
+        fs::write(workspace.join("battery-pack.toml"), "# bp").unwrap();
+
+        let lock_mtime = file_mtime(&workspace.join("Cargo.lock")).unwrap();
+        let state = WorkspaceState {
+            last_sync_lock_mtime: Some(lock_mtime),
+            last_sync_battery_pack_mtime: Some(0),
             workspace_root: None,
         };
         assert!(!state.sync_is_fresh(&workspace));
@@ -187,6 +266,7 @@ mod tests {
 
         let state = WorkspaceState {
             last_sync_lock_mtime: Some(1234567890),
+            last_sync_battery_pack_mtime: None,
             workspace_root: None,
         };
         assert!(!state.sync_is_fresh(&workspace));
