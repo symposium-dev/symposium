@@ -7,14 +7,15 @@ use crate::hook_schema::{
 pub struct ClaudeCode;
 impl Agent for ClaudeCode {
     fn event(&self, event: super::HookEvent) -> Option<Box<dyn super::ErasedAgentHookEvent>> {
-        Some(match event {
-            super::HookEvent::PreToolUse => erase_agent_hook_event(ClaudePreToolUseEvent),
-            super::HookEvent::PostToolUse => erase_agent_hook_event(ClaudePostToolUseEvent),
+        match event {
+            super::HookEvent::PreToolUse => Some(erase_agent_hook_event(ClaudePreToolUseEvent)),
+            super::HookEvent::PostToolUse => Some(erase_agent_hook_event(ClaudePostToolUseEvent)),
             super::HookEvent::UserPromptSubmit => {
-                erase_agent_hook_event(ClaudeUserPromptSubmitEvent)
+                Some(erase_agent_hook_event(ClaudeUserPromptSubmitEvent))
             }
-            super::HookEvent::SessionStart => erase_agent_hook_event(ClaudeSessionStartEvent),
-        })
+            super::HookEvent::SessionStart => Some(erase_agent_hook_event(ClaudeSessionStartEvent)),
+            _ => None,
+        }
     }
 }
 
@@ -114,20 +115,18 @@ impl AgentHookInput for ClaudePreToolUseInput {
         Ok(serde_json::from_str(payload)?)
     }
     fn to_symposium(&self) -> symposium::InputEvent {
-        symposium::InputEvent::PreToolUse(symposium::PreToolUseInput {
-            tool_name: self.tool_name.clone(),
-            tool_input: self.rest.get("tool_input").cloned().unwrap_or_default(),
-            session_id: self
-                .rest
+        symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
+            self.tool_name.clone(),
+            self.rest.get("tool_input").cloned().unwrap_or_default(),
+            self.rest
                 .get("session_id")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            cwd: self
-                .rest
+            self.rest
                 .get("cwd")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-        })
+        ))
     }
     fn from_symposium(event: &symposium::InputEvent) -> Self {
         let symposium::InputEvent::PreToolUse(p) = event else {
@@ -170,10 +169,15 @@ impl AgentHookOutput for ClaudePreToolUseOutput {
     }
     fn to_symposium(&self) -> symposium::OutputEvent {
         let h = self.hook_specific_output.as_ref();
-        symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput {
-            additional_context: h.and_then(|h| h.additional_context.clone()),
-            updated_input: h.and_then(|h| h.updated_input.clone()),
-        })
+        let decision = match h.and_then(|h| h.permission_decision.as_deref()) {
+            Some("deny") => symposium_hook::Decision::Deny,
+            _ => symposium_hook::Decision::Allow,
+        };
+        symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
+            decision,
+            h.and_then(|h| h.additional_context.clone()),
+            h.and_then(|h| h.updated_input.clone()),
+        ))
     }
     fn to_hook_output(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap()
@@ -258,21 +262,19 @@ impl AgentHookInput for ClaudePostToolUseInput {
         Ok(serde_json::from_str(payload)?)
     }
     fn to_symposium(&self) -> symposium::InputEvent {
-        symposium::InputEvent::PostToolUse(symposium::PostToolUseInput {
-            tool_name: self.tool_name.clone(),
-            tool_input: self.tool_input.clone(),
-            tool_response: self.tool_response.clone(),
-            session_id: self
-                .rest
+        symposium::InputEvent::PostToolUse(symposium::PostToolUseInput::new(
+            self.tool_name.clone(),
+            self.tool_input.clone(),
+            self.tool_response.clone(),
+            self.rest
                 .get("session_id")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            cwd: self
-                .rest
+            self.rest
                 .get("cwd")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-        })
+        ))
     }
     fn from_symposium(event: &symposium::InputEvent) -> Self {
         let symposium::InputEvent::PostToolUse(p) = event else {
@@ -315,12 +317,11 @@ impl AgentHookOutput for ClaudePostToolUseOutput {
         }
     }
     fn to_symposium(&self) -> symposium::OutputEvent {
-        symposium::OutputEvent::PostToolUse(symposium::PostToolUseOutput {
-            additional_context: self
-                .hook_specific_output
+        symposium::OutputEvent::PostToolUse(symposium::PostToolUseOutput::new(
+            self.hook_specific_output
                 .as_ref()
                 .and_then(|h| h.additional_context.clone()),
-        })
+        ))
     }
     fn to_hook_output(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap()
@@ -372,19 +373,17 @@ impl AgentHookInput for ClaudeUserPromptSubmitInput {
         Ok(serde_json::from_str(payload)?)
     }
     fn to_symposium(&self) -> symposium::InputEvent {
-        symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput {
-            prompt: self.prompt.clone(),
-            session_id: self
-                .rest
+        symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput::new(
+            self.prompt.clone(),
+            self.rest
                 .get("session_id")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            cwd: self
-                .rest
+            self.rest
                 .get("cwd")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-        })
+        ))
     }
     fn from_symposium(event: &symposium::InputEvent) -> Self {
         let symposium::InputEvent::UserPromptSubmit(p) = event else {
@@ -425,12 +424,11 @@ impl AgentHookOutput for ClaudeUserPromptSubmitOutput {
         }
     }
     fn to_symposium(&self) -> symposium::OutputEvent {
-        symposium::OutputEvent::UserPromptSubmit(symposium::UserPromptSubmitOutput {
-            additional_context: self
-                .hook_specific_output
+        symposium::OutputEvent::UserPromptSubmit(symposium::UserPromptSubmitOutput::new(
+            self.hook_specific_output
                 .as_ref()
                 .and_then(|h| h.additional_context.clone()),
-        })
+        ))
     }
     fn to_hook_output(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap()
@@ -480,18 +478,16 @@ impl AgentHookInput for ClaudeSessionStartInput {
         Ok(serde_json::from_str(payload)?)
     }
     fn to_symposium(&self) -> symposium::InputEvent {
-        symposium::InputEvent::SessionStart(symposium::SessionStartInput {
-            session_id: self
-                .rest
+        symposium::InputEvent::SessionStart(symposium::SessionStartInput::new(
+            self.rest
                 .get("session_id")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-            cwd: self
-                .rest
+            self.rest
                 .get("cwd")
                 .and_then(|v| v.as_str())
                 .map(String::from),
-        })
+        ))
     }
     fn from_symposium(event: &symposium::InputEvent) -> Self {
         let symposium::InputEvent::SessionStart(p) = event else {
@@ -531,12 +527,11 @@ impl AgentHookOutput for ClaudeSessionStartOutput {
         }
     }
     fn to_symposium(&self) -> symposium::OutputEvent {
-        symposium::OutputEvent::SessionStart(symposium::SessionStartOutput {
-            additional_context: self
-                .hook_specific_output
+        symposium::OutputEvent::SessionStart(symposium::SessionStartOutput::new(
+            self.hook_specific_output
                 .as_ref()
                 .and_then(|h| h.additional_context.clone()),
-        })
+        ))
     }
     fn to_hook_output(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap()

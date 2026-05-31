@@ -7,14 +7,17 @@ use crate::hook_schema::{
 pub struct Copilot;
 impl Agent for Copilot {
     fn event(&self, event: super::HookEvent) -> Option<Box<dyn super::ErasedAgentHookEvent>> {
-        Some(match event {
-            super::HookEvent::PreToolUse => erase_agent_hook_event(CopilotPreToolUseEvent),
-            super::HookEvent::PostToolUse => erase_agent_hook_event(CopilotPostToolUseEvent),
+        match event {
+            super::HookEvent::PreToolUse => Some(erase_agent_hook_event(CopilotPreToolUseEvent)),
+            super::HookEvent::PostToolUse => Some(erase_agent_hook_event(CopilotPostToolUseEvent)),
             super::HookEvent::UserPromptSubmit => {
-                erase_agent_hook_event(CopilotUserPromptSubmitEvent)
+                Some(erase_agent_hook_event(CopilotUserPromptSubmitEvent))
             }
-            super::HookEvent::SessionStart => erase_agent_hook_event(CopilotSessionStartEvent),
-        })
+            super::HookEvent::SessionStart => {
+                Some(erase_agent_hook_event(CopilotSessionStartEvent))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -52,7 +55,7 @@ copilot_event!(
 // Copilot output is flat (additionalContext at top level, no hookSpecificOutput).
 
 macro_rules! copilot_output_impl {
-    ($ty:ident, $variant:ident, $struct:ident { $($extra:tt)* }) => {
+    ($ty:ident, PreToolUse, PreToolUseOutput { $($extra:tt)* }) => {
         impl AgentHookOutput for $ty {
             fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
                 if output.is_empty() { return Ok(Self::default()); }
@@ -64,10 +67,35 @@ macro_rules! copilot_output_impl {
                 out
             }
             fn to_symposium(&self) -> symposium::OutputEvent {
-                symposium::OutputEvent::$variant(symposium::$struct {
-                    additional_context: self.additional_context.clone(),
-                    $($extra)*
-                })
+                let decision = match self.permission_decision.as_deref() {
+                    Some("deny") => symposium_hook::Decision::Deny,
+                    _ => symposium_hook::Decision::Allow,
+                };
+                symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
+                    decision,
+                    self.additional_context.clone(),
+                    None,
+                ))
+            }
+            fn to_hook_output(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
+            fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> { self }
+        }
+    };
+    ($ty:ident, $variant:ident, $struct:ident { }) => {
+        impl AgentHookOutput for $ty {
+            fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
+                if output.is_empty() { return Ok(Self::default()); }
+                Ok(serde_json::from_slice(output)?)
+            }
+            fn from_symposium(event: &symposium::OutputEvent) -> Self {
+                let mut out = Self::default();
+                out.additional_context = event.additional_context().map(String::from);
+                out
+            }
+            fn to_symposium(&self) -> symposium::OutputEvent {
+                symposium::OutputEvent::$variant(symposium::$struct::new(
+                    self.additional_context.clone(),
+                ))
             }
             fn to_hook_output(&self) -> serde_json::Value { serde_json::to_value(self).unwrap() }
             fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> { self }
@@ -115,12 +143,12 @@ impl AgentHookInput for CopilotPreToolUseInput {
         Ok(serde_json::from_str(payload)?)
     }
     fn to_symposium(&self) -> symposium::InputEvent {
-        symposium::InputEvent::PreToolUse(symposium::PreToolUseInput {
-            tool_name: self.tool_name.clone(),
-            tool_input: self.tool_args.clone(),
-            session_id: None,
-            cwd: self.cwd.clone(),
-        })
+        symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
+            self.tool_name.clone(),
+            self.tool_args.clone(),
+            None,
+            self.cwd.clone(),
+        ))
     }
     fn from_symposium(event: &symposium::InputEvent) -> Self {
         let symposium::InputEvent::PreToolUse(p) = event else {
@@ -181,13 +209,13 @@ impl AgentHookInput for CopilotPostToolUseInput {
         Ok(serde_json::from_str(payload)?)
     }
     fn to_symposium(&self) -> symposium::InputEvent {
-        symposium::InputEvent::PostToolUse(symposium::PostToolUseInput {
-            tool_name: self.tool_name.clone(),
-            tool_input: self.tool_args.clone(),
-            tool_response: self.tool_response.clone(),
-            session_id: None,
-            cwd: self.cwd.clone(),
-        })
+        symposium::InputEvent::PostToolUse(symposium::PostToolUseInput::new(
+            self.tool_name.clone(),
+            self.tool_args.clone(),
+            self.tool_response.clone(),
+            None,
+            self.cwd.clone(),
+        ))
     }
     fn from_symposium(event: &symposium::InputEvent) -> Self {
         let symposium::InputEvent::PostToolUse(p) = event else {
@@ -239,11 +267,11 @@ impl AgentHookInput for CopilotUserPromptSubmitInput {
         Ok(serde_json::from_str(payload)?)
     }
     fn to_symposium(&self) -> symposium::InputEvent {
-        symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput {
-            prompt: self.prompt.clone(),
-            session_id: None,
-            cwd: self.cwd.clone(),
-        })
+        symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput::new(
+            self.prompt.clone(),
+            None,
+            self.cwd.clone(),
+        ))
     }
     fn from_symposium(event: &symposium::InputEvent) -> Self {
         let symposium::InputEvent::UserPromptSubmit(p) = event else {
@@ -295,10 +323,10 @@ impl AgentHookInput for CopilotSessionStartInput {
         Ok(serde_json::from_str(payload)?)
     }
     fn to_symposium(&self) -> symposium::InputEvent {
-        symposium::InputEvent::SessionStart(symposium::SessionStartInput {
-            session_id: None,
-            cwd: self.cwd.clone(),
-        })
+        symposium::InputEvent::SessionStart(symposium::SessionStartInput::new(
+            None,
+            self.cwd.clone(),
+        ))
     }
     fn from_symposium(event: &symposium::InputEvent) -> Self {
         let symposium::InputEvent::SessionStart(p) = event else {
