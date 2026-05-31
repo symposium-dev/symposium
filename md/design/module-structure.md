@@ -69,6 +69,18 @@ Handles the hook pipeline: parse agent wire-format input → auto-sync → built
 
 Manages `state.toml` in the config directory. Tracks the semver of the binary that last touched the directory (for future migration hooks) and the timestamp of the last update check (to throttle crates.io queries to once per 24 hours). `ensure_current()` is called on startup to silently stamp the current version. `should_check_for_update()` / `record_update_check()` gate the auto-update flow.
 
+### `report.rs` — structured report layer
+
+Provides user-facing output for all commands via a custom tracing layer. Commands emit `tracing::info!` or `tracing::debug!` events with a `report = %ReportEvent::Variant { ... }` field; the `ReportLayer` intercepts these and renders them based on mode:
+
+- `Normal` — prints `format_human()` to stdout (default for most commands)
+- `Verbose` (`-v`) — prints all events (info + debug) to stderr
+- `Json` (`--json`) — accumulates events in a buffer, drained as a JSON array at the end
+
+The `ReportEvent` enum is the stable schema — `#[derive(Serialize, Deserialize)]` with `#[serde(tag = "kind")]`. Each variant carries the fields needed to render both human and JSON forms. The `Display` impl serializes to JSON (for passing through tracing's `%` formatter), and `format_human()` renders the pretty-printed form.
+
+The layer is always installed by the binary. Commands that want output simply emit report events at the appropriate tracing level (info for actions, debug for decision trace). The `--json` flag also suppresses the `Output`-based messages and drains the JSON buffer at exit.
+
 ### `self_update.rs` — self-update
 
 Implements `cargo agents self-update`. Queries the registry for the latest published version via `cargo search`, then installs it via `cargo install symposium --force`. Also provides `re_exec()` which replaces the current process with the newly installed binary (Unix `exec`, spawn-and-exit on Windows) — used by the `auto-update = "on"` startup path. Contains `maybe_warn_for_update()` (sync, for the `warn` library path) and `maybe_check_for_update()` (async, for the binary `on` + re-exec path).

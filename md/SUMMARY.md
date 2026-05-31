@@ -62,6 +62,7 @@
     - [Session state](./design/session-state.md)
   - [Hooks](./design/hooks.md)
   - [Subcommands](./design/subcommands.md)
+  - [Report layer](./design/report-layer.md)
   - [Important flows](./design/important-flows.md)
     - [`init`](./design/init-user-flow.md)
     - [`sync`](./design/sync-agent-flow.md)

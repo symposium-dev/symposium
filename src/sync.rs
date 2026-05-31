@@ -130,11 +130,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 ///
 /// Leaves `dest_dir` alone if it exists and lacks the `.symposium` marker —
 /// the user put something there by hand and we must not clobber it.
-fn propagate_user_skill(
-    source_dir: &Path,
-    dest_dir: &Path,
-    project_root: &Path,
-) -> Result<bool> {
+fn propagate_user_skill(source_dir: &Path, dest_dir: &Path, project_root: &Path) -> Result<bool> {
     if dest_dir == source_dir {
         return Ok(false);
     }
