@@ -95,11 +95,7 @@ mod tests {
         use cargo_bp_script::{InstalledPackStatus, ProjectInfo, StatusReport};
 
         let report = StatusReport::new(ProjectInfo::new("/tmp/Cargo.toml"))
-            .with_pack(InstalledPackStatus::new(
-                "cli",
-                "cli-battery-pack",
-                "0.3.0",
-            ))
+            .with_pack(InstalledPackStatus::new("cli", "cli-battery-pack", "0.3.0"))
             .with_pack(InstalledPackStatus::new(
                 "error",
                 "error-battery-pack",

@@ -82,4 +82,3 @@ fn load_workspace_crates(cwd: &Path) -> Result<Vec<WorkspaceCrate>> {
 
     Ok(crates)
 }
-

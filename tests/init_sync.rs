@@ -2110,9 +2110,8 @@ async fn sync_installs_skill_for_battery_pack() {
         TestMode::SimulationOnly,
         &["battery-pack0"],
         async |mut ctx| {
-            let report = StatusReport::new(ProjectInfo::new("Cargo.toml")).with_pack(
-                InstalledPackStatus::new("cli", "cli-battery-pack", "0.3.0"),
-            );
+            let report = StatusReport::new(ProjectInfo::new("Cargo.toml"))
+                .with_pack(InstalledPackStatus::new("cli", "cli-battery-pack", "0.3.0"));
             ctx.set_mock_cargo_bp_status(&report);
 
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
@@ -2148,10 +2147,8 @@ async fn sync_skips_skill_when_battery_pack_not_installed() {
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-            let skills = find_installed_skills(
-                &workspace_root.join(".claude/skills"),
-                "cli-bp-guidance",
-            );
+            let skills =
+                find_installed_skills(&workspace_root.join(".claude/skills"), "cli-bp-guidance");
             assert!(
                 skills.is_empty(),
                 "skill should NOT be installed when battery pack is not present"

@@ -177,8 +177,7 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     let mut workspace = crate::crate_sources::workspace_crates(&project_root);
 
     // Augment with installed battery packs.
-    let battery_packs =
-        crate::crate_sources::discover_battery_packs(sym, &project_root).await;
+    let battery_packs = crate::crate_sources::discover_battery_packs(sym, &project_root).await;
     for bp in battery_packs {
         if !workspace.iter().any(|c| c.name == bp.name) {
             workspace.push(bp);
