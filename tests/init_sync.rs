@@ -1686,3 +1686,105 @@ async fn session_start_hook_warns_about_update_in_context() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn auto_sync_skips_when_cargo_lock_unchanged() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+
+            // First hook call: should trigger sync and install skills.
+            let steps = [symposium_testlib::HookStep::PreToolUse {
+                tool_name: "Bash".to_string(),
+                tool_input: serde_json::json!({}),
+            }];
+            ctx.prompt_or_hook("test", &steps, symposium::hook_schema::HookAgent::Claude)
+                .await?;
+
+            // Verify workspace state was recorded (Cargo.lock should exist
+            // after cargo metadata runs during sync).
+            let state = symposium::workspace_state::WorkspaceState::load(&ctx.sym, &workspace_root);
+            assert!(
+                state.last_sync_lock_mtime.is_some(),
+                "workspace state should have recorded lock mtime after first sync"
+            );
+
+            // Record the skill directory's mtime to detect if sync runs again.
+            let skill_dir = workspace_root.join(".claude").join("skills");
+            let mtime_before = std::fs::metadata(&skill_dir)
+                .and_then(|m| m.modified())
+                .ok();
+
+            // Small sleep to ensure mtime would differ if dir were rewritten.
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            // Second hook call: should skip sync (Cargo.lock unchanged).
+            ctx.prompt_or_hook("test", &steps, symposium::hook_schema::HookAgent::Claude)
+                .await?;
+
+            // The skills directory mtime should be unchanged (sync was skipped).
+            let mtime_after = std::fs::metadata(&skill_dir)
+                .and_then(|m| m.modified())
+                .ok();
+            assert_eq!(
+                mtime_before, mtime_after,
+                "skills directory should not be modified on second hook (sync should be skipped)"
+            );
+
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn auto_sync_reruns_when_cargo_lock_changes() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+
+            // First hook call: triggers sync.
+            let steps = [symposium_testlib::HookStep::PreToolUse {
+                tool_name: "Bash".to_string(),
+                tool_input: serde_json::json!({}),
+            }];
+            ctx.prompt_or_hook("test", &steps, symposium::hook_schema::HookAgent::Claude)
+                .await?;
+
+            let state = symposium::workspace_state::WorkspaceState::load(&ctx.sym, &workspace_root);
+            assert!(state.last_sync_lock_mtime.is_some());
+
+            // Simulate a dependency change by faking a stale mtime in the
+            // workspace state (avoids needing filesystem mtime granularity).
+            let mut stale_state = state.clone();
+            stale_state.last_sync_lock_mtime = Some(0);
+            stale_state.save(&ctx.sym, &workspace_root);
+
+            // Second hook call: should re-sync because Cargo.lock changed.
+            ctx.prompt_or_hook("test", &steps, symposium::hook_schema::HookAgent::Claude)
+                .await?;
+
+            // Workspace state should be updated with real mtime (not 0).
+            let state2 =
+                symposium::workspace_state::WorkspaceState::load(&ctx.sym, &workspace_root);
+            assert_ne!(
+                state2.last_sync_lock_mtime,
+                Some(0),
+                "workspace state mtime should be refreshed after stale cache triggers re-sync"
+            );
+
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
