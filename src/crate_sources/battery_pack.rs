@@ -35,14 +35,22 @@ pub async fn discover_battery_packs(sym: &Symposium, cwd: &Path) -> Vec<Workspac
         }
     };
 
-    let report = match cargo_bp_script::StatusCommand::new()
-        .program(&binary_path)
-        .cwd(cwd)
-        .run()
+    let cwd = cwd.to_path_buf();
+    let report = match tokio::task::spawn_blocking(move || {
+        cargo_bp_script::StatusCommand::new()
+            .program(&binary_path)
+            .cwd(&cwd)
+            .run()
+    })
+    .await
     {
-        Ok(r) => r,
-        Err(e) => {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
             tracing::debug!(error = %e, "cargo bp status failed, skipping battery pack discovery");
+            return Vec::new();
+        }
+        Err(e) => {
+            tracing::debug!(error = %e, "cargo bp status task panicked, skipping battery pack discovery");
             return Vec::new();
         }
     };
@@ -59,13 +67,15 @@ async fn acquire_cargo_bp(sym: &Symposium) -> anyhow::Result<std::path::PathBuf>
         git: None,
     };
 
-    let (cache_dir, resolved) =
+    let acquired =
         installation::acquire_source(sym, &installation::Source::Cargo(source), Some("cargo-bp"))
-            .await
-            .map(|acquired| (acquired.base, acquired.resolved_executable))?;
+            .await?;
 
-    let binary_name = resolved.unwrap_or_else(|| "cargo-bp".to_string());
-    Ok(cache_dir
+    let binary_name = acquired
+        .resolved_executable
+        .unwrap_or_else(|| "cargo-bp".to_string());
+    Ok(acquired
+        .base
         .join("bin")
         .join(installation::platform_binary_exe(&binary_name)))
 }

@@ -2159,3 +2159,31 @@ async fn sync_skips_skill_when_battery_pack_not_installed() {
     .await
     .unwrap();
 }
+
+/// `sync` proceeds gracefully when `cargo-bp` is unavailable (e.g. network
+/// down, binary not found). Battery-pack skills are simply skipped.
+#[tokio::test]
+async fn sync_graceful_when_cargo_bp_unavailable() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["battery-pack0"],
+        async |mut ctx| {
+            // Point at a nonexistent binary to simulate acquisition failure.
+            ctx.set_mock_cargo_bp("#!/bin/sh\nexit 1\n");
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills =
+                find_installed_skills(&workspace_root.join(".claude/skills"), "cli-bp-guidance");
+            assert!(
+                skills.is_empty(),
+                "skill should NOT be installed when cargo-bp fails"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}

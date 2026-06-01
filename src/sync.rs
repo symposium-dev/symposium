@@ -179,7 +179,11 @@ pub async fn sync(sym: &Symposium, cwd: &Path, out: &Output) -> Result<()> {
     // Augment with installed battery packs.
     let battery_packs = crate::crate_sources::discover_battery_packs(sym, &project_root).await;
     for bp in battery_packs {
-        if !workspace.iter().any(|c| c.name == bp.name) {
+        let normalized = crate::crate_sources::normalize_crate_name(&bp.name);
+        if !workspace
+            .iter()
+            .any(|c| crate::crate_sources::normalize_crate_name(&c.name) == normalized)
+        {
             workspace.push(bp);
         }
     }
