@@ -64,11 +64,11 @@ Each `[[skills]]` entry declares a group of skills.
 | `crates` | string or array | Which crates this group advises on. Accepts a single string (`"serde"`) or array (`["serde", "tokio>=1.0"]`). See [Crate predicates](./crate-predicates.md) for syntax. |
 | `source.path` | string | Local directory containing skill subdirectories. Resolved relative to the manifest file. |
 | `source.git` | string | GitHub URL pointing to a directory in a repository (e.g., `https://github.com/org/repo/tree/main/skills`). Symposium downloads the tarball, extracts the subdirectory, and caches it. |
-| `source = "crate"` | string | Look for skills inside the matched crates' published source, in the default `skills/` directory. See [Crate-sourced skills](#crate-sourced-skills). |
-| `source.crate_path` | string | Like `source = "crate"`, but with a custom directory path (e.g., `source.crate_path = "docs/skills"`). |
-| `source.crate` | string | Fetch skills from a specific named crate regardless of predicate resolution. Can be combined with `source.crate_path` to set the directory. See [Named crate source](#named-crate-source). |
+| `source = "crate"` | string | Shorthand for `source.crate = {}`. Look for skills inside the matched crates' source, in the default `skills/` directory. See [Crate-sourced skills](#crate-sourced-skills). |
+| `source.crate` | table | Crate source configuration. Fields: `name` (specific crate to fetch from), `path` (subdirectory, defaults to `"skills"`), `version` (version constraint). See [Crate-sourced skills](#crate-sourced-skills). |
+| `source.crate_path` | string | Legacy shorthand for `source.crate.path`. |
 
-A skill group must have exactly one of `source.path`, `source.git`, `source = "crate"`, `source.crate_path`, or `source.crate`.
+A skill group must have exactly one of `source.path`, `source.git`, or `source.crate` (including the `source = "crate"` shorthand).
 
 ### Crate-sourced skills
 
@@ -88,7 +88,12 @@ At least one non-wildcard crate predicate must be present (at either the plugin 
 
 #### Customized crate path
 
-The default with `source = "crate"` is to source skills from the `skills/` directory of your crate source. If you prefer a different path, you can use `source.crate_path = "my-skills-directory"` to specify a different path.
+The default with `source = "crate"` is to source skills from the `skills/` directory of your crate source. If you prefer a different path, use `source.crate.path`:
+
+```toml
+[[skills]]
+source.crate.path = "my-skills-directory"
+```
 
 #### Semantics when matching against multiple crates
 
@@ -106,17 +111,22 @@ Once activated, `source = "crate"` will cause Symposium to look for skills in wh
 
 ### Fetching from a specific crate
 
-Sometimes you want to fetch the skills from a crate other than the one which appears in the dependencies. For example, the `dial9` profiler adds a crate `dial9-tokio-telemtry` into the dependencies but the skills are located in `dial9-viewer`. To specify the crate where skills are sources, set `source.crate`:
+Sometimes you want to fetch the skills from a crate other than the one which appears in the dependencies. For example, the `dial9` profiler adds a crate `dial9-tokio-telemetry` into the dependencies but the skills are located in `dial9-viewer`. Use `source.crate.name` to specify the fetch target:
 
 ```toml
 name = "dial9"
 crates = ["dial9-tokio-telemetry", "dial9", "dial9-viewer"]
 
 [[skills]]
-source.crate = "dial9-viewer"
+source.crate.name = "dial9-viewer"
 ```
 
-(You can also use `source.crate_path` to specify a custom directory within that crate.)
+You can also set `source.crate.path` to specify a custom directory and `source.crate.version` to pin a version constraint:
+
+```toml
+[[skills]]
+source.crate = { name = "dial9-viewer", path = "agent/skills", version = ">=2.0" }
+```
 
 #### Semantics of `crates` predicates at mutiple levels
 
@@ -134,7 +144,7 @@ source = "crate" # ...which get their skills from their sources
 
 [[skills]]
 crates = ["baz"] # ... this block applies to "baz"
-source.crate = "foo" # ...which get its skills from "foo"
+source.crate.name = "foo" # ...which gets its skills from "foo"
 ```
 
 ## Installations

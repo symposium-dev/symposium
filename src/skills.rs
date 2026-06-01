@@ -242,7 +242,7 @@ async fn load_skills_for_group(
     }
 
     let skills = match &group.source {
-        PluginSource::CratePath(source) => {
+        PluginSource::Crate(source) => {
             load_crate_path_skills(
                 source,
                 &plugin.crates,
@@ -269,28 +269,29 @@ async fn load_skills_for_group(
     (group_crates, skills)
 }
 
-/// Resolve crate-path predicates, fetch each matched crate, and discover
-/// skills inside the configured `crate_path`. One `SkillOrigin::Crate`
-/// per matched crate.
+/// Resolve crate source predicates, fetch each matched crate, and discover
+/// skills inside the configured path. One `SkillOrigin::Crate` per matched crate.
 ///
-/// When `source.crate_name` is set, fetches that specific crate directly
-/// instead of resolving from predicates.
+/// When `source.name` is set, fetches that specific crate directly instead
+/// of resolving from predicates.
 async fn load_crate_path_skills(
-    source: &crate::plugins::CratePathSource,
+    source: &crate::plugins::CrateSource,
     plugin_crates: &PredicateSet,
     group_crates: &PredicateSet,
     group: &SkillGroup,
     workspace_crates: &[crate::crate_sources::WorkspaceCrate],
     for_crates: &[(String, semver::Version)],
 ) -> Vec<(Skill, SkillOrigin)> {
-    let crate_path = source.as_str();
-    let matched = if let Some(name) = &source.crate_name {
-        // Explicit crate name — fetch exactly this crate, find its version
-        // from the workspace (or use a placeholder for registry-only crates).
+    let crate_path = source.path();
+    let matched = if let Some(name) = &source.name {
         if let Some(wc) = workspace_crates.iter().find(|wc| &wc.name == name) {
             vec![(wc.name.clone(), wc.version.clone())]
         } else {
-            vec![(name.clone(), semver::Version::new(0, 0, 0))]
+            tracing::warn!(
+                crate_name = %name,
+                "source.crate.name refers to a crate not in the workspace; skipping"
+            );
+            return Vec::new();
         }
     } else {
         predicate::union_matched_crates(&[plugin_crates, group_crates], for_crates)

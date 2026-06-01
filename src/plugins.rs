@@ -39,16 +39,15 @@ pub enum UpdateLevel {
 
 /// Source declaration for a skill group.
 ///
-/// Accepts a table with at most one of `path`, `git`, or `crate_path` set,
-/// or the shorthand string `source = "crate"` (equivalent to
-/// `source.crate_path = "skills"`).
+/// Accepts one of:
+/// - `source.path = "..."` — local path
+/// - `source.git = "..."` — GitHub URL
+/// - `source = "crate"` — shorthand for `source.crate = {}`
+/// - `source.crate = { name?, path?, version? }` — crate source
+/// - `source.crate_path = "..."` — legacy form (equivalent to `source.crate.path`)
 ///
-/// The shorthand and explicit forms are *preserved* through parse/serialize
-/// round-trips: `source = "crate"` deserializes to a `CratePath` with
-/// `explicit_path: None` and serializes back as `"crate"`;
-/// `source.crate_path = "skills"` deserializes to
-/// `explicit_path: Some(...)` and serializes back as the table form, even
-/// though both resolve to the same on-disk path.
+/// `source = "crate"` round-trips as the string shorthand; any form with
+/// fields set serializes as `source.crate = { ... }`.
 #[derive(Debug, Clone, Default)]
 pub enum PluginSource {
     /// No source specified (skills discovered in the plugin directory itself).
@@ -58,68 +57,55 @@ pub enum PluginSource {
     Path(PathBuf),
     /// GitHub URL pointing to a directory in a repository.
     Git(String),
-    /// Relative subpath inside a fetched crate's source tree.
-    CratePath(CratePathSource),
+    /// Crate source — fetch skills from one or more crates' source trees.
+    Crate(CrateSource),
 }
 
-/// Payload for [`PluginSource::CratePath`].
+/// Payload for [`PluginSource::Crate`].
 ///
-/// Captures whether the user wrote the shorthand (`source = "crate"`) or the
-/// explicit form (`source.crate_path = "<p>"`) so that serialization can
-/// reproduce the original input faithfully. Use [`CratePathSource::as_str`]
-/// to get the effective subdirectory (with the default substituted for
-/// shorthand).
+/// Represents the `source.crate` field in a skill group. Accepts three forms:
 ///
-/// When `crate_name` is set (via `source = { crate = "foo", crate_path = "..." }`),
-/// skills are fetched from that specific crate regardless of predicate resolution.
-/// This decouples "which crate to fetch from" from "which crates activate the plugin."
+/// 1. `source = "crate"` — shorthand for `source.crate = {}` (resolve from
+///    predicates, default `skills/` subdir).
+/// 2. `source.crate.path = "guidance"` — resolve from predicates, custom subdir.
+/// 3. `source.crate = { name = "foo", path = "skills", version = ">=1.0" }` —
+///    fetch a specific crate by name, optionally pinning a version.
+///
+/// When `name` is set, skills are fetched from that specific crate regardless
+/// of predicate resolution. This decouples "which crate to fetch from" from
+/// "which crates activate the plugin." When `name` is absent, predicates
+/// (plugin-level + group-level) determine which crates to fetch.
 #[derive(Debug, Clone, Default)]
-pub struct CratePathSource {
-    /// `None` captures the shorthand form (use the default subdir).
-    /// `Some(p)` captures explicit `source.crate_path = "<p>"`.
-    pub explicit_path: Option<String>,
-    /// Explicit crate to fetch skills from (via `source.crate = "name"`).
+pub struct CrateSource {
+    /// Explicit crate to fetch skills from (via `source.crate.name`).
     /// When set, predicates control only activation, not which crate is fetched.
-    pub crate_name: Option<String>,
+    pub name: Option<String>,
+    /// Subdirectory within the crate source to look for skills.
+    /// Defaults to `"skills"` when absent.
+    pub path: Option<String>,
+    /// Version constraint for the crate (e.g. `">=1.0"`, `"=2.3.4"`).
+    /// Only meaningful when `name` is set.
+    pub version: Option<String>,
 }
 
-impl CratePathSource {
-    /// Default subdirectory used when the user writes `source = "crate"`.
+impl CrateSource {
+    /// Default subdirectory used when no explicit path is set.
     pub const DEFAULT_PATH: &'static str = "skills";
 
-    /// The shorthand form (`source = "crate"`) — no explicit path recorded.
+    /// The shorthand form (`source = "crate"` or `source.crate = {}`).
     pub fn shorthand() -> Self {
-        Self {
-            explicit_path: None,
-            crate_name: None,
-        }
-    }
-
-    /// The explicit form (`source.crate_path = "<p>"`).
-    pub fn explicit(path: impl Into<String>) -> Self {
-        Self {
-            explicit_path: Some(path.into()),
-            crate_name: None,
-        }
-    }
-
-    /// Named crate form (`source = { crate = "foo" }` or
-    /// `source = { crate = "foo", crate_path = "bar" }`).
-    pub fn with_crate(name: impl Into<String>, path: Option<String>) -> Self {
-        Self {
-            explicit_path: path,
-            crate_name: Some(name.into()),
-        }
+        Self::default()
     }
 
     /// Resolved subpath: the explicit path if present, otherwise the default.
-    pub fn as_str(&self) -> &str {
-        self.explicit_path.as_deref().unwrap_or(Self::DEFAULT_PATH)
+    pub fn path(&self) -> &str {
+        self.path.as_deref().unwrap_or(Self::DEFAULT_PATH)
     }
 
-    /// True if the user wrote the `source = "crate"` shorthand.
+    /// True if this was the bare shorthand (`source = "crate"` / `source.crate = {}`)
+    /// with no fields set.
     pub fn is_shorthand(&self) -> bool {
-        self.explicit_path.is_none() && self.crate_name.is_none()
+        self.name.is_none() && self.path.is_none() && self.version.is_none()
     }
 }
 
@@ -139,42 +125,40 @@ impl serde::Serialize for PluginSource {
                 map.end()
             }
             // Shorthand form — user wrote `source = "crate"`.
-            PluginSource::CratePath(CratePathSource {
-                explicit_path: None,
-                crate_name: None,
-            }) => serializer.serialize_str("crate"),
-            // Named crate form — `source = { crate = "foo" }` or
-            // `source = { crate = "foo", crate_path = "bar" }`.
-            PluginSource::CratePath(CratePathSource {
-                explicit_path,
-                crate_name: Some(name),
-            }) => {
-                let entries = 1 + explicit_path.is_some() as usize;
-                let mut map = serializer.serialize_map(Some(entries))?;
-                map.serialize_entry("crate", name)?;
-                if let Some(p) = explicit_path {
-                    map.serialize_entry("crate_path", p)?;
-                }
-                map.end()
-            }
-            // Explicit path form — user wrote `source.crate_path = "<p>"`.
-            PluginSource::CratePath(CratePathSource {
-                explicit_path: Some(p),
-                crate_name: None,
-            }) => {
-                let mut map = serializer.serialize_map(Some(1))?;
-                map.serialize_entry("crate_path", p)?;
-                map.end()
+            PluginSource::Crate(s) if s.is_shorthand() => serializer.serialize_str("crate"),
+            // Table form — `source.crate = { ... }`.
+            PluginSource::Crate(s) => {
+                // Serialize as `{ crate = { name?, path?, version? } }`.
+                let mut outer = serializer.serialize_map(Some(1))?;
+                outer.serialize_entry(
+                    "crate",
+                    &CrateSourceSerHelper {
+                        name: s.name.as_deref(),
+                        path: s.path.as_deref(),
+                        version: s.version.as_deref(),
+                    },
+                )?;
+                outer.end()
             }
         }
     }
+}
+
+#[derive(serde::Serialize)]
+struct CrateSourceSerHelper<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<&'a str>,
 }
 
 impl<'de> serde::Deserialize<'de> for PluginSource {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de;
 
-        /// Helper for table-form deserialization.
+        /// Top-level fields of the `source` table.
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct PluginSourceFields {
@@ -182,10 +166,25 @@ impl<'de> serde::Deserialize<'de> for PluginSource {
             path: Option<PathBuf>,
             #[serde(default)]
             git: Option<String>,
+            /// New form: `source.crate = { name?, path?, version? }` or
+            /// `source.crate = {}`.
+            #[serde(default, rename = "crate")]
+            crate_field: Option<CrateSourceRaw>,
+            /// Legacy form: `source.crate_path = "..."`.
             #[serde(default)]
             crate_path: Option<String>,
-            #[serde(default, rename = "crate")]
-            crate_name: Option<String>,
+        }
+
+        /// Inner deserialization helper for `source.crate`.
+        #[derive(Deserialize, Default)]
+        #[serde(deny_unknown_fields)]
+        struct CrateSourceRaw {
+            #[serde(default)]
+            name: Option<String>,
+            #[serde(default)]
+            path: Option<String>,
+            #[serde(default)]
+            version: Option<String>,
         }
 
         struct PluginSourceVisitor;
@@ -194,12 +193,12 @@ impl<'de> serde::Deserialize<'de> for PluginSource {
             type Value = PluginSource;
 
             fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(r#""crate" or a table with path/git/crate_path/crate"#)
+                f.write_str(r#""crate" or a table with path/git/crate"#)
             }
 
             fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
                 match v {
-                    "crate" => Ok(PluginSource::CratePath(CratePathSource::shorthand())),
+                    "crate" => Ok(PluginSource::Crate(CrateSource::shorthand())),
                     other => Err(de::Error::custom(format!(
                         "unknown source shorthand \"{other}\"; only \"crate\" is supported"
                     ))),
@@ -209,34 +208,42 @@ impl<'de> serde::Deserialize<'de> for PluginSource {
             fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
                 let fields =
                     PluginSourceFields::deserialize(de::value::MapAccessDeserializer::new(map))?;
-                // `crate` and `crate_path` can combine with each other, but
-                // are mutually exclusive with `path` and `git`.
-                let exclusive_count = fields.path.is_some() as u8
-                    + fields.git.is_some() as u8
-                    + (fields.crate_path.is_some() || fields.crate_name.is_some()) as u8;
+
+                let has_crate = fields.crate_field.is_some() || fields.crate_path.is_some();
+                let exclusive_count =
+                    fields.path.is_some() as u8 + fields.git.is_some() as u8 + has_crate as u8;
                 if exclusive_count > 1 {
                     return Err(de::Error::custom(
-                        "source.path and source.git are mutually exclusive with source.crate and source.crate_path",
+                        "source.path, source.git, and source.crate are mutually exclusive",
                     ));
                 }
+                if fields.crate_field.is_some() && fields.crate_path.is_some() {
+                    return Err(de::Error::custom(
+                        "source.crate and source.crate_path cannot both be set; \
+                         use source.crate.path instead",
+                    ));
+                }
+
                 Ok(
                     match (
                         fields.path,
                         fields.git,
-                        fields.crate_name,
+                        fields.crate_field,
                         fields.crate_path,
                     ) {
                         (Some(p), None, None, None) => PluginSource::Path(p),
                         (None, Some(url), None, None) => PluginSource::Git(url),
-                        // `source = { crate = "foo" }` or
-                        // `source = { crate = "foo", crate_path = "bar" }`
-                        (None, None, Some(name), cp) => {
-                            PluginSource::CratePath(CratePathSource::with_crate(name, cp))
-                        }
-                        // `source.crate_path = "bar"` (no explicit crate name)
-                        (None, None, None, Some(cp)) => {
-                            PluginSource::CratePath(CratePathSource::explicit(cp))
-                        }
+                        (None, None, Some(raw), None) => PluginSource::Crate(CrateSource {
+                            name: raw.name,
+                            path: raw.path,
+                            version: raw.version,
+                        }),
+                        // Legacy: `source.crate_path = "..."` → path-only CrateSource
+                        (None, None, None, Some(cp)) => PluginSource::Crate(CrateSource {
+                            name: None,
+                            path: Some(cp),
+                            version: None,
+                        }),
                         (None, None, None, None) => PluginSource::None,
                         _ => unreachable!("exclusive_count > 1 guard"),
                     },
@@ -1485,13 +1492,13 @@ fn validate_skill_groups(
     skills: &[SkillGroup],
 ) -> Result<()> {
     for (i, group) in skills.iter().enumerate() {
-        if let PluginSource::CratePath(source) = &group.source {
+        if let PluginSource::Crate(source) = &group.source {
             // When `source.crate` names an explicit crate, no predicate
             // resolution is needed — the fetch target is already known.
-            if let Some(name) = &source.crate_name {
+            if let Some(name) = &source.name {
                 if name.is_empty() {
                     bail!(
-                        "skills group {i} has source.crate set to an empty string — \
+                        "skills group {i} has source.crate.name set to an empty string — \
                          a crate name is required"
                     );
                 }
@@ -3022,9 +3029,9 @@ mod tests {
         assert!(
             matches!(
                 &plugin.skills[0].source,
-                PluginSource::CratePath(s) if s.explicit_path.as_deref() == Some("skills")
+                PluginSource::Crate(s) if s.path.as_deref() == Some("skills")
             ),
-            r#"explicit source.crate_path = "skills" should be CratePath with explicit_path=Some("skills"), got {:?}"#,
+            r#"explicit source.crate_path = "skills" should be Crate with path=Some("skills"), got {:?}"#,
             plugin.skills[0].source,
         );
     }
@@ -3042,7 +3049,7 @@ mod tests {
         assert!(
             matches!(
                 &plugin.skills[0].source,
-                PluginSource::CratePath(s) if s.is_shorthand()
+                PluginSource::Crate(s) if s.is_shorthand()
             ),
             r#"source = "crate" shorthand should be a shorthand CratePath, got {:?}"#,
             plugin.skills[0].source,
@@ -3066,25 +3073,26 @@ mod tests {
         // Parsed value is the explicit variant.
         assert!(matches!(
             &plugin.skills[0].source,
-            PluginSource::CratePath(s) if !s.is_shorthand() && s.as_str() == "docs/skills"
+            PluginSource::Crate(s) if !s.is_shorthand() && s.path() == "docs/skills"
         ));
-        // Serialized form keeps the table, does NOT collapse to "crate".
+        // Serialized form uses the new `source.crate = { path = ... }` table,
+        // NOT the shorthand.
         let toml_str = toml::to_string_pretty(&plugin).expect("serialize");
         assert!(
             !toml_str.contains(r#"source = "crate""#),
-            "explicit `source.crate_path = \"docs/skills\"` should NOT collapse to shorthand, got:\n{toml_str}"
+            "explicit path should NOT collapse to shorthand, got:\n{toml_str}"
         );
         assert!(
-            toml_str.contains("crate_path"),
-            "explicit form should remain a table, got:\n{toml_str}"
+            toml_str.contains("path"),
+            "explicit form should serialize as a crate table with path, got:\n{toml_str}"
         );
     }
 
     /// The `source = "crate"` shorthand resolves to the default subpath.
     #[test]
     fn shorthand_resolves_to_default_path() {
-        assert_eq!(CratePathSource::shorthand().as_str(), "skills");
-        assert_eq!(CratePathSource::DEFAULT_PATH, "skills");
+        assert_eq!(CrateSource::shorthand().path(), "skills");
+        assert_eq!(CrateSource::DEFAULT_PATH, "skills");
     }
 
     #[test]
@@ -3248,7 +3256,7 @@ mod tests {
         assert!(
             matches!(
                 &rt.skills[0].source,
-                PluginSource::CratePath(s) if s.is_shorthand()
+                PluginSource::Crate(s) if s.is_shorthand()
             ),
             "shorthand should round-trip as a shorthand CratePath, got {:?}",
             rt.skills[0].source,
@@ -3269,7 +3277,7 @@ mod tests {
         assert!(
             matches!(
                 &rt.skills[0].source,
-                PluginSource::CratePath(s) if s.explicit_path.as_deref() == Some("docs/skills")
+                PluginSource::Crate(s) if s.path.as_deref() == Some("docs/skills")
             ),
             r#"explicit crate_path should round-trip preserving the explicit path, got {:?}"#,
             rt.skills[0].source,
@@ -3365,8 +3373,8 @@ mod tests {
         .unwrap();
         let toml_str = toml::to_string_pretty(&plugin).expect("serialize");
         assert!(
-            toml_str.contains("crate_path"),
-            "explicit crate_path should serialize as a table, got:\n{toml_str}"
+            toml_str.contains("path") && toml_str.contains("docs/skills"),
+            "explicit crate_path should serialize as source.crate table with path, got:\n{toml_str}"
         );
         assert!(
             !toml_str.contains(r#"source = "crate""#),
@@ -3383,16 +3391,16 @@ mod tests {
             crates = ["dial9-tokio-telemetry", "dial9", "dial9-viewer"]
 
             [[skills]]
-            source = { crate = "dial9-viewer", crate_path = "skills" }
+            source.crate = { name = "dial9-viewer", path = "skills" }
         "#};
         let plugin = from_str(toml).expect("parse");
         let group = &plugin.skills[0];
         match &group.source {
-            PluginSource::CratePath(s) => {
-                assert_eq!(s.crate_name.as_deref(), Some("dial9-viewer"));
-                assert_eq!(s.as_str(), "skills");
+            PluginSource::Crate(s) => {
+                assert_eq!(s.name.as_deref(), Some("dial9-viewer"));
+                assert_eq!(s.path(), "skills");
             }
-            other => panic!("expected CratePath, got {:?}", other),
+            other => panic!("expected Crate source, got {:?}", other),
         }
     }
 
@@ -3403,17 +3411,17 @@ mod tests {
             crates = ["dial9"]
 
             [[skills]]
-            source = { crate = "dial9-viewer" }
+            source.crate = { name = "dial9-viewer" }
         "#};
         let plugin = from_str(toml).expect("parse");
         let group = &plugin.skills[0];
         match &group.source {
-            PluginSource::CratePath(s) => {
-                assert_eq!(s.crate_name.as_deref(), Some("dial9-viewer"));
-                assert_eq!(s.as_str(), "skills");
+            PluginSource::Crate(s) => {
+                assert_eq!(s.name.as_deref(), Some("dial9-viewer"));
+                assert_eq!(s.path(), "skills");
                 assert!(!s.is_shorthand());
             }
-            other => panic!("expected CratePath, got {:?}", other),
+            other => panic!("expected Crate source, got {:?}", other),
         }
     }
 
@@ -3424,7 +3432,7 @@ mod tests {
             crates = ["*"]
 
             [[skills]]
-            source = { crate = "dial9-viewer", crate_path = "skills" }
+            source.crate = { name = "dial9-viewer", path = "skills" }
         "#};
         from_str(toml).expect("should pass validation — explicit crate name");
     }
@@ -3436,16 +3444,16 @@ mod tests {
             crates = ["dial9", "dial9-viewer"]
 
             [[skills]]
-            source = { crate = "dial9-viewer", crate_path = "skills" }
+            source.crate = { name = "dial9-viewer", path = "skills" }
         "#})
         .unwrap();
         let rt = roundtrip(&plugin);
         match &rt.skills[0].source {
-            PluginSource::CratePath(s) => {
-                assert_eq!(s.crate_name.as_deref(), Some("dial9-viewer"));
-                assert_eq!(s.as_str(), "skills");
+            PluginSource::Crate(s) => {
+                assert_eq!(s.name.as_deref(), Some("dial9-viewer"));
+                assert_eq!(s.path(), "skills");
             }
-            other => panic!("expected CratePath after roundtrip, got {:?}", other),
+            other => panic!("expected Crate source after roundtrip, got {:?}", other),
         }
     }
 
@@ -3456,17 +3464,17 @@ mod tests {
             crates = ["dial9"]
 
             [[skills]]
-            source = { crate = "dial9-viewer" }
+            source.crate = { name = "dial9-viewer" }
         "#})
         .unwrap();
         let rt = roundtrip(&plugin);
         match &rt.skills[0].source {
-            PluginSource::CratePath(s) => {
-                assert_eq!(s.crate_name.as_deref(), Some("dial9-viewer"));
-                assert_eq!(s.explicit_path, None);
-                assert_eq!(s.as_str(), "skills");
+            PluginSource::Crate(s) => {
+                assert_eq!(s.name.as_deref(), Some("dial9-viewer"));
+                assert_eq!(s.path, None);
+                assert_eq!(s.path(), "skills");
             }
-            other => panic!("expected CratePath after roundtrip, got {:?}", other),
+            other => panic!("expected Crate source after roundtrip, got {:?}", other),
         }
     }
 
@@ -3477,7 +3485,8 @@ mod tests {
             crates = ["serde"]
 
             [[skills]]
-            source = { crate = "serde", git = "https://github.com/org/repo" }
+            source.crate = { name = "serde" }
+            source.git = "https://github.com/org/repo"
         "#};
         let err = from_str(toml).unwrap_err();
         assert!(err.to_string().contains("mutually exclusive"), "{err}");
@@ -3490,7 +3499,8 @@ mod tests {
             crates = ["serde"]
 
             [[skills]]
-            source = { crate = "serde", path = "skills" }
+            source.crate = { name = "serde" }
+            source.path = "skills"
         "#};
         let err = from_str(toml).unwrap_err();
         assert!(err.to_string().contains("mutually exclusive"), "{err}");
@@ -3503,7 +3513,7 @@ mod tests {
             crates = ["serde"]
 
             [[skills]]
-            source = { crate = "" }
+            source.crate = { name = "" }
         "#};
         let err = from_str(toml).unwrap_err();
         assert!(
