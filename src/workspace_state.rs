@@ -131,7 +131,8 @@ fn workspace_dir_name(workspace_root: &Path) -> String {
 fn state_file_path(sym: &Symposium, workspace_root: &Path) -> PathBuf {
     // Canonicalize so that symlink variants (e.g. /var vs /private/var on
     // macOS) hash to the same cache directory.
-    let canonical = fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
+    let canonical =
+        fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
     sym.cache_dir()
         .join("workspaces")
         .join(workspace_dir_name(&canonical))
