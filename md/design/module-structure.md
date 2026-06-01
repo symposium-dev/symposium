@@ -36,7 +36,7 @@ Validates skill group source constraints at parse time: mutual exclusivity of `s
 
 ### `skills.rs` — skill resolution and matching
 
-Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates crate predicates at each level (plugin, group, skill) to determine which skills apply. For `source.crate_path` groups, resolves predicates to a matched crate set and fetches each crate's source via `RustCrateFetch`.
+Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates crate predicates at each level (plugin, group, skill) to determine which skills apply. For `source.crate_path` groups, resolves predicates to a matched crate set and fetches each crate's source via `RustCrateFetch`. When `source.crate` names a specific crate, that crate is fetched directly without predicate resolution.
 
 Each applicable skill carries a `SkillOrigin` describing *where its bytes live*, used at sync time for dedup and install-path disambiguation. What matters for identity is the on-disk location of the skill, not which plugin manifest pointed at it — two plugins in the same source pointing at the same skill bundle dedupe.
 - `Crate { name, version }` — from a crate-source resolution (`source = "crate"` / `source.crate_path`). Two `Crate` origins with the same `(name, version)` are the same logical skill, regardless of which plugin pointed at them.

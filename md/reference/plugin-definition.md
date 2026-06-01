@@ -66,8 +66,9 @@ Each `[[skills]]` entry declares a group of skills.
 | `source.git` | string | GitHub URL pointing to a directory in a repository (e.g., `https://github.com/org/repo/tree/main/skills`). Symposium downloads the tarball, extracts the subdirectory, and caches it. |
 | `source = "crate"` | string | Look for skills inside the matched crates' published source, in the default `skills/` directory. See [Crate-sourced skills](#crate-sourced-skills). |
 | `source.crate_path` | string | Like `source = "crate"`, but with a custom directory path (e.g., `source.crate_path = "docs/skills"`). |
+| `source.crate` | string | Fetch skills from a specific named crate regardless of predicate resolution. Can be combined with `source.crate_path` to set the directory. See [Named crate source](#named-crate-source). |
 
-A skill group must have exactly one of `source.path`, `source.git`, `source = "crate"`, or `source.crate_path`.
+A skill group must have exactly one of `source.path`, `source.git`, `source = "crate"`, `source.crate_path`, or `source.crate`.
 
 ### Crate-sourced skills
 
@@ -84,6 +85,30 @@ source = "crate"
 ```
 
 At least one non-wildcard crate predicate must be present (at either the plugin or group level) so that Symposium knows which crate sources to fetch. See [Matched crate set](./crate-predicates.md#matched-crate-set) for details.
+
+### Named crate source
+
+Use `source.crate` to fetch skills from a specific crate, independent of predicate resolution. This decouples "which crates activate the plugin" from "which crate contains the skills":
+
+```toml
+name = "dial9"
+crates = ["dial9-tokio-telemetry", "dial9", "dial9-viewer"]
+
+[[skills]]
+source = { crate = "dial9-viewer", crate_path = "skills" }
+```
+
+Here the plugin activates whenever the workspace uses any of the three dial9 crates, but skills are always fetched from `dial9-viewer`'s source tree. Without `source.crate`, you would need a group-level `crates = ["dial9-viewer"]` which would also narrow the activation condition (requiring `dial9-viewer` specifically to be present).
+
+`source.crate` can be combined with `crate_path` to specify a custom directory (defaults to `skills/` if omitted):
+
+```toml
+[[skills]]
+source = { crate = "my-crate" }              # looks in my-crate/skills/
+source = { crate = "my-crate", crate_path = "docs/agent" }  # looks in my-crate/docs/agent/
+```
+
+When `source.crate` is set, no non-wildcard predicate is required — the fetch target is explicit.
 
 ## Installations
 

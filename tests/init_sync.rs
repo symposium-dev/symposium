@@ -1687,6 +1687,7 @@ async fn session_start_hook_warns_about_update_in_context() {
     .unwrap();
 }
 
+
 #[tokio::test]
 async fn auto_sync_skips_when_cargo_lock_unchanged() {
     with_fixture(
@@ -1782,6 +1783,32 @@ async fn auto_sync_reruns_when_cargo_lock_changes() {
                 "workspace state mtime should be refreshed after stale cache triggers re-sync"
             );
 
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `source = { crate = "crate-b", crate_path = "skills" }` fetches skills
+/// from a named crate without requiring it to match a predicate. The plugin
+/// activates based on plugin-level `crates = ["crate-a"]`.
+#[tokio::test]
+async fn sync_installs_skill_from_named_crate_source() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-path-named0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            let b_dir = find_installed_skill(&skills_dir, "b-guidance");
+            let content = std::fs::read_to_string(b_dir.join("SKILL.md"))?;
+            assert!(content.contains("Use crate-b like this"));
+            assert!(b_dir.join(".symposium").exists());
             Ok(())
         },
     )
