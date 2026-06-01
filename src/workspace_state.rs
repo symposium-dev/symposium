@@ -129,9 +129,12 @@ fn workspace_dir_name(workspace_root: &Path) -> String {
 }
 
 fn state_file_path(sym: &Symposium, workspace_root: &Path) -> PathBuf {
+    // Canonicalize so that symlink variants (e.g. /var vs /private/var on
+    // macOS) hash to the same cache directory.
+    let canonical = fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
     sym.cache_dir()
         .join("workspaces")
-        .join(workspace_dir_name(workspace_root))
+        .join(workspace_dir_name(&canonical))
         .join("state.json")
 }
 
@@ -298,7 +301,9 @@ mod tests {
 
         let sym = Symposium::from_dir(tmp.path());
         let found = find_workspace_root(&sym, &src);
-        assert_eq!(found, Some(root));
+        // Canonicalize expected path to handle macOS /var → /private/var symlink.
+        let expected = fs::canonicalize(&root).unwrap();
+        assert_eq!(found, Some(expected));
     }
 
     #[test]
