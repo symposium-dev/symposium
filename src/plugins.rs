@@ -209,19 +209,14 @@ impl<'de> serde::Deserialize<'de> for PluginSource {
             fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
                 let fields =
                     PluginSourceFields::deserialize(de::value::MapAccessDeserializer::new(map))?;
-                // `crate` can combine with `crate_path`, but is mutually
-                // exclusive with `path` and `git`.
+                // `crate` and `crate_path` can combine with each other, but
+                // are mutually exclusive with `path` and `git`.
                 let exclusive_count = fields.path.is_some() as u8
                     + fields.git.is_some() as u8
                     + (fields.crate_path.is_some() || fields.crate_name.is_some()) as u8;
                 if exclusive_count > 1 {
                     return Err(de::Error::custom(
-                        "source.path, source.git, and source.crate/source.crate_path are mutually exclusive",
-                    ));
-                }
-                if fields.crate_path.is_some() && fields.path.is_some() {
-                    return Err(de::Error::custom(
-                        "source.path and source.crate_path are mutually exclusive",
+                        "source.path and source.git are mutually exclusive with source.crate and source.crate_path",
                     ));
                 }
                 Ok(
@@ -1493,7 +1488,13 @@ fn validate_skill_groups(
         if let PluginSource::CratePath(source) = &group.source {
             // When `source.crate` names an explicit crate, no predicate
             // resolution is needed — the fetch target is already known.
-            if source.crate_name.is_some() {
+            if let Some(name) = &source.crate_name {
+                if name.is_empty() {
+                    bail!(
+                        "skills group {i} has source.crate set to an empty string — \
+                         a crate name is required"
+                    );
+                }
                 continue;
             }
             let has_non_wildcard = plugin_crates
@@ -3493,5 +3494,21 @@ mod tests {
         "#};
         let err = from_str(toml).unwrap_err();
         assert!(err.to_string().contains("mutually exclusive"), "{err}");
+    }
+
+    #[test]
+    fn reject_source_crate_empty_name() {
+        let toml = indoc! {r#"
+            name = "bad"
+            crates = ["serde"]
+
+            [[skills]]
+            source = { crate = "" }
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("empty string"),
+            "expected empty-string error, got: {err}"
+        );
     }
 }
