@@ -1,10 +1,73 @@
-use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
+//! Acquisition and caching of tool binaries for symposium plugins.
+//!
+//! This crate provides the machinery to install cargo binaries and clone GitHub
+//! repositories into a local cache. It is used by both the main `symposium`
+//! binary and by hook handlers that need to invoke external tools.
+#![deny(missing_docs)]
+
 use std::path::{Path, PathBuf};
 
-use crate::config::Symposium;
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 
-pub(crate) mod git;
+pub mod git;
+
+/// Minimal context needed for acquisition.
+///
+/// Replaces the full `Symposium` config struct — hook handlers construct this
+/// directly from environment or hardcoded paths.
+#[derive(Debug, Clone)]
+pub struct InstallContext {
+    cache_dir: PathBuf,
+    cargo_bin: Option<PathBuf>,
+}
+
+impl InstallContext {
+    /// Create a new context rooted at the given cache directory.
+    ///
+    /// Acquired binaries and cloned repositories are stored under this path.
+    pub fn new(cache_dir: PathBuf) -> Self {
+        Self {
+            cache_dir,
+            cargo_bin: None,
+        }
+    }
+
+    /// Override the cargo binary used for `cargo install` / `cargo binstall`.
+    ///
+    /// If not set, the plain `"cargo"` from `$PATH` is used.
+    pub fn with_cargo_bin(mut self, path: PathBuf) -> Self {
+        self.cargo_bin = Some(path);
+        self
+    }
+
+    /// The root directory where cached artifacts are stored.
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache_dir
+    }
+
+    /// Build a [`Command`](std::process::Command) for the configured cargo binary.
+    pub fn cargo_command(&self) -> std::process::Command {
+        match &self.cargo_bin {
+            Some(path) => std::process::Command::new(path),
+            None => std::process::Command::new("cargo"),
+        }
+    }
+}
+
+/// Controls how aggressively cached sources are updated.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
+pub enum UpdateLevel {
+    /// Debounced: skip the API check if fetched recently.
+    #[default]
+    None,
+    /// Always check freshness via API, but only download if stale.
+    Check,
+    /// Always re-download regardless of staleness.
+    Fetch,
+}
 
 /// How to acquire bits onto disk.
 ///
@@ -13,14 +76,18 @@ pub(crate) mod git;
 /// `script` (which resolve relative to the acquired source). An installation
 /// can omit `Source` entirely — in that case `executable` / `script` are
 /// taken as paths on disk and `install_commands` does any setup.
+#[non_exhaustive]
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "source", rename_all = "lowercase")]
 pub enum Source {
+    /// Install via `cargo install` or `cargo binstall`.
     Cargo(CargoSource),
+    /// Clone from a GitHub repository.
     Github(GithubSource),
 }
 
 /// A binary obtained by `cargo install` (with optional binstall fast-path).
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct CargoSource {
@@ -38,17 +105,53 @@ pub struct CargoSource {
     pub git: Option<String>,
 }
 
+impl CargoSource {
+    /// Create a source for the given crate name, defaulting to the latest
+    /// stable version from crates.io.
+    pub fn new(crate_name: impl Into<String>) -> Self {
+        Self {
+            crate_name: crate_name.into(),
+            version: None,
+            git: None,
+        }
+    }
+
+    /// Pin to a specific version (e.g. `"1.2.3"`).
+    pub fn with_version(mut self, version: impl Into<String>) -> Self {
+        self.version = Some(version.into());
+        self
+    }
+
+    /// Install from a git repository URL instead of crates.io.
+    ///
+    /// When set, an `executable` hint is required since crates.io is not
+    /// consulted to discover binary names.
+    pub fn with_git(mut self, git_url: impl Into<String>) -> Self {
+        self.git = Some(git_url.into());
+        self
+    }
+}
+
 /// A directory of files acquired from a GitHub repository (or subtree).
 /// The file to run inside the cloned tree is picked by `executable` /
 /// `script` on the installation or hook.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GithubSource {
+    /// The GitHub URL to clone.
     #[serde(alias = "git")]
     pub url: String,
 }
 
-pub(crate) fn platform_binary_exe(binary_name: &str) -> String {
+impl GithubSource {
+    /// Create a source for the given GitHub URL.
+    pub fn new(url: impl Into<String>) -> Self {
+        Self { url: url.into() }
+    }
+}
+
+fn platform_binary_exe(binary_name: &str) -> String {
     if cfg!(windows) {
         format!("{}.exe", binary_name)
     } else {
@@ -81,7 +184,7 @@ struct CratesIoCrate {
 }
 
 /// Query crates.io for binary names of a crate
-pub async fn query_crate_binaries(
+async fn query_crate_binaries(
     crate_name: &str,
     version: Option<&str>,
 ) -> Result<(String, Vec<String>)> {
@@ -142,27 +245,27 @@ pub async fn query_crate_binaries(
 }
 
 /// Install a crate using cargo binstall (fast) or cargo install (fallback).
-pub(crate) async fn install_cargo_crate(
-    sym: &crate::config::Symposium,
+async fn install_cargo_crate(
+    ctx: &InstallContext,
     crate_name: &str,
     version: &str,
     binary_name: Option<String>,
     cache_dir: PathBuf,
     git: Option<String>,
 ) -> Result<()> {
-    let sym = sym.clone();
+    let ctx = ctx.clone();
     let crate_name = crate_name.to_string();
     let version = version.to_string();
 
     tokio::task::spawn_blocking(move || {
-        install_cargo_crate_sync(&sym, &crate_name, &version, binary_name, &cache_dir, git)
+        install_cargo_crate_sync(&ctx, &crate_name, &version, binary_name, &cache_dir, git)
     })
     .await
     .context("Cargo install task panicked")?
 }
 
 fn install_cargo_crate_sync(
-    sym: &crate::config::Symposium,
+    ctx: &InstallContext,
     crate_name: &str,
     version: &str,
     binary_name: Option<String>,
@@ -195,7 +298,7 @@ fn install_cargo_crate_sync(
         binstall_args.push(git);
     }
     binstall_args.extend([cache_dir.to_str().unwrap(), &crate_spec]);
-    let binstall_result = sym.cargo_command().args(binstall_args).output();
+    let binstall_result = ctx.cargo_command().args(binstall_args).output();
 
     let binary_path = binary_name
         .as_ref()
@@ -231,7 +334,7 @@ fn install_cargo_crate_sync(
         args.push(git);
     }
     args.extend([cache_dir.to_str().unwrap(), &crate_spec]);
-    let install_result = sym
+    let install_result = ctx
         .cargo_command()
         .args(args)
         .output()
@@ -249,8 +352,8 @@ fn install_cargo_crate_sync(
     Ok(())
 }
 
-pub fn get_binary_cache_dir(sym: &Symposium, krate: &str, version: &str) -> Result<PathBuf> {
-    let path = sym.cache_dir().join("binaries").join(krate).join(version);
+fn get_binary_cache_dir(ctx: &InstallContext, krate: &str, version: &str) -> Result<PathBuf> {
+    let path = ctx.cache_dir().join("binaries").join(krate).join(version);
     Ok(path)
 }
 
@@ -269,13 +372,10 @@ fn git_cache_version(git_url: &str, version: Option<&str>) -> String {
 /// Acquire a cargo installation: install if missing, return the cache dir
 /// plus the resolved binary name (when discoverable from crates.io).
 async fn acquire_cargo(
-    sym: &Symposium,
+    ctx: &InstallContext,
     cargo: &CargoSource,
     executable_hint: Option<&str>,
 ) -> Result<(PathBuf, Option<String>)> {
-    // For git sources, we don't consult crates.io. Cache key folds in the URL
-    // and the user's version (if any). The user must specify `executable`
-    // since we have no other way to pick a binary.
     if let Some(git_url) = cargo.git.as_deref() {
         let resolved = match executable_hint {
             Some(name) => name.to_string(),
@@ -286,11 +386,11 @@ async fn acquire_cargo(
             ),
         };
         let cache_version = git_cache_version(git_url, cargo.version.as_deref());
-        let cache_dir = get_binary_cache_dir(sym, &cargo.crate_name, &cache_version)?;
+        let cache_dir = get_binary_cache_dir(ctx, &cargo.crate_name, &cache_version)?;
         let probe = cache_dir.join("bin").join(platform_binary_exe(&resolved));
         if !probe.exists() {
             install_cargo_crate(
-                sym,
+                ctx,
                 &cargo.crate_name,
                 cargo.version.as_deref().unwrap_or(""),
                 Some(resolved.clone()),
@@ -318,15 +418,15 @@ async fn acquire_cargo(
         },
     };
 
-    let cache_dir = get_binary_cache_dir(sym, &cargo.crate_name, &version)?;
+    let cache_dir = get_binary_cache_dir(ctx, &cargo.crate_name, &version)?;
     let probe_path = resolved
         .as_ref()
         .map(|n| cache_dir.join("bin").join(platform_binary_exe(n)));
 
-    let already = probe_path.as_ref().map_or(false, |p| p.exists());
+    let already = probe_path.as_ref().is_some_and(|p| p.exists());
     if !already {
         install_cargo_crate(
-            sym,
+            ctx,
             &cargo.crate_name,
             &version,
             resolved.clone(),
@@ -341,20 +441,19 @@ async fn acquire_cargo(
 
 /// Acquire a github source: returns the cache directory containing the repo
 /// (or its requested subtree).
-pub(crate) async fn acquire_github(sym: &Symposium, git: &GithubSource) -> Result<PathBuf> {
-    let git_url = &git.url;
-    let source = crate::installation::git::parse_github_url(git_url)?;
-    let cache_mgr = crate::installation::git::GitCacheManager::new(sym, "plugins");
-    cache_mgr
-        .get_or_fetch(&source, git_url, crate::plugins::UpdateLevel::Check)
-        .await
+async fn acquire_github(ctx: &InstallContext, git: &GithubSource) -> Result<PathBuf> {
+    let cache_mgr = crate::git::GitCacheManager::new(ctx, "plugins");
+    cache_mgr.fetch_url(&git.url, UpdateLevel::Check).await
 }
 
 /// Acquired source — where files ended up on disk, plus the kind so
 /// `executable` / `script` can be resolved correctly relative to it.
+#[non_exhaustive]
 #[derive(Debug)]
 pub struct AcquiredSource {
+    /// Root directory where the acquired files reside.
     pub base: PathBuf,
+    /// How the source was acquired (affects path resolution).
     pub kind: AcquiredKind,
     /// For cargo, the binary name we ended up with (from `executable_hint`
     /// or by inferring the crate's sole binary). Used as the fallback when
@@ -362,15 +461,29 @@ pub struct AcquiredSource {
     pub resolved_executable: Option<String>,
 }
 
+/// How an [`AcquiredSource`] was obtained.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AcquiredKind {
+    /// Installed via `cargo install` / `cargo binstall`.
     Cargo,
+    /// Cloned from a GitHub repository.
     Github,
 }
 
 impl AcquiredSource {
+    /// Path to the executable, using `resolved_executable` as the name.
+    /// Use [`Self::executable_named`] to specify the executable name from the outside.
+    ///
+    /// Returns `None` if no executable name was resolved (e.g., a GitHub
+    /// source with no hint).
+    pub fn executable(&self) -> Option<PathBuf> {
+        let name = self.resolved_executable.as_deref()?;
+        Some(self.executable_named(name))
+    }
+
     /// Path of an `executable` declared on installation/hook.
-    pub fn resolve_executable(&self, name: &str) -> PathBuf {
+    pub fn executable_named(&self, name: &str) -> PathBuf {
         match self.kind {
             AcquiredKind::Cargo => self.base.join("bin").join(platform_binary_exe(name)),
             AcquiredKind::Github => self.base.join(name.trim_start_matches("./")),
@@ -378,7 +491,7 @@ impl AcquiredSource {
     }
 
     /// Path of a `script` declared on installation/hook.
-    pub fn resolve_script(&self, name: &str) -> PathBuf {
+    pub fn script_named(&self, name: &str) -> PathBuf {
         match self.kind {
             AcquiredKind::Cargo => self.base.join("bin").join(name.trim_start_matches("./")),
             AcquiredKind::Github => self.base.join(name.trim_start_matches("./")),
@@ -392,13 +505,13 @@ impl AcquiredSource {
 /// `executable_hint` is only used for cargo (to pick which binary to install
 /// for multi-binary crates, or as the binary name when using a git source).
 pub async fn acquire_source(
-    sym: &Symposium,
+    ctx: &InstallContext,
     source: &Source,
     executable_hint: Option<&str>,
 ) -> Result<AcquiredSource> {
     match source {
         Source::Cargo(c) => {
-            let (base, resolved) = acquire_cargo(sym, c, executable_hint).await?;
+            let (base, resolved) = acquire_cargo(ctx, c, executable_hint).await?;
             Ok(AcquiredSource {
                 base,
                 kind: AcquiredKind::Cargo,
@@ -406,7 +519,7 @@ pub async fn acquire_source(
             })
         }
         Source::Github(g) => Ok(AcquiredSource {
-            base: acquire_github(sym, g).await?,
+            base: acquire_github(ctx, g).await?,
             kind: AcquiredKind::Github,
             resolved_executable: None,
         }),
@@ -414,6 +527,7 @@ pub async fn acquire_source(
 }
 
 /// What an installation resolves to once acquired.
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum Runnable {
     /// Run as a binary: `path args...`.

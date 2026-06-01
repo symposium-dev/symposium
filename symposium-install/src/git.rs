@@ -4,15 +4,18 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 
-use crate::plugins::UpdateLevel;
+use crate::{InstallContext, UpdateLevel};
 
 /// Minimum interval between freshness checks for cached sources.
 const DEBOUNCE_DURATION: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// A parsed GitHub repository reference.
+#[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
 pub struct GitHubSource {
+    /// Repository owner (e.g. `"symposium-dev"`).
     pub owner: String,
+    /// Repository name (e.g. `"symposium"`).
     pub repo: String,
     /// Branch, tag, or commit ref. Empty string means default branch.
     pub git_ref: String,
@@ -60,9 +63,9 @@ pub fn parse_github_url(url: &str) -> Result<GitHubSource> {
         }),
         // owner/repo/tree/ref[/path...]
         n if n >= 4 && parts[2] == "tree" => {
-            let rest = parts[3];
             // rest is "branch/path/to/dir" — first segment is the ref, rest is path
             // But branches can contain slashes... we take the first segment as the ref.
+            let rest = parts[3];
             let (git_ref, path) = match rest.split_once('/') {
                 Some((r, p)) => (r.to_string(), p.to_string()),
                 None => (rest.to_string(), String::new()),
@@ -81,12 +84,12 @@ pub fn parse_github_url(url: &str) -> Result<GitHubSource> {
 // --- GitHub API client ---
 
 /// Client for GitHub REST API operations.
-pub struct GitHubClient {
+struct GitHubClient {
     client: reqwest::Client,
 }
 
 impl GitHubClient {
-    pub fn new() -> Self {
+    fn new() -> Self {
         let client = reqwest::Client::builder()
             .user_agent("cargo-agents")
             .build()
@@ -95,7 +98,7 @@ impl GitHubClient {
     }
 
     /// Resolve the commit SHA for a given ref (branch, tag, or "HEAD").
-    pub async fn resolve_commit_sha(&self, source: &GitHubSource) -> Result<String> {
+    async fn resolve_commit_sha(&self, source: &GitHubSource) -> Result<String> {
         let git_ref = if source.git_ref.is_empty() {
             "HEAD"
         } else {
@@ -128,7 +131,7 @@ impl GitHubClient {
     }
 
     /// Download the repository tarball for a given ref.
-    pub async fn download_tarball(&self, source: &GitHubSource) -> Result<bytes::Bytes> {
+    async fn download_tarball(&self, source: &GitHubSource) -> Result<bytes::Bytes> {
         let git_ref = if source.git_ref.is_empty() {
             "HEAD"
         } else {
@@ -167,10 +170,14 @@ impl GitHubClient {
 // --- Plugin cache manager ---
 
 /// Metadata stored alongside cached plugin artifacts.
+#[non_exhaustive]
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct PluginCacheMeta {
+    /// The resolved commit SHA that was fetched.
     pub commit_sha: String,
+    /// RFC 3339 timestamp of when this cache entry was last fetched.
     pub fetched_at: String,
+    /// The original URL that produced this cache entry.
     pub source_url: String,
 }
 
@@ -187,12 +194,21 @@ impl GitCacheManager {
     ///
     /// Use `"plugins"` for individual skill git sources,
     /// `"plugin-sources"` for plugin source repositories.
-    pub fn new(sym: &crate::config::Symposium, subdir: &str) -> Self {
-        let cache_dir = sym.cache_dir().join(subdir);
+    pub fn new(ctx: &InstallContext, subdir: &str) -> Self {
+        let cache_dir = ctx.cache_dir().join(subdir);
         Self {
             cache_dir,
             client: GitHubClient::new(),
         }
+    }
+
+    /// Parse a GitHub URL and fetch/cache the repository.
+    ///
+    /// This is the primary entry point — it parses the URL into a
+    /// [`GitHubSource`] internally and delegates to the cache logic.
+    pub async fn fetch_url(&self, url: &str, update: UpdateLevel) -> Result<PathBuf> {
+        let source = parse_github_url(url)?;
+        self.get_or_fetch(&source, url, update).await
     }
 
     /// Get the cached plugin directory, downloading or updating as needed.

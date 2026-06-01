@@ -13,7 +13,7 @@
 //! struct MyHook;
 //!
 //! impl HookHandler for MyHook {
-//!     fn pre_tool_use(&self, event: &PreToolUseInput) -> anyhow::Result<PreToolUseOutput> {
+//!     async fn pre_tool_use(&self, event: &PreToolUseInput) -> anyhow::Result<PreToolUseOutput> {
 //!         if event.tool_name == "Bash" {
 //!             Ok(PreToolUseOutput::context("Remember: prefer non-destructive commands"))
 //!         } else {
@@ -106,7 +106,7 @@ impl Input {
             Input::UserPromptSubmit(_) | Input::SessionStart(_) => return true,
         };
 
-        regex::Regex::new(matcher).map_or(false, |re| re.is_match(tool_name))
+        regex::Regex::new(matcher).is_ok_and(|re| re.is_match(tool_name))
     }
 }
 
@@ -413,17 +413,17 @@ impl SessionStartOutput {
 /// Default dispatch logic: matches on the event variant and calls the
 /// corresponding method on the handler, wrapping the result in the appropriate
 /// `Output` variant.
-pub fn default_handle_event(
+pub async fn default_handle_event(
     handler: &(impl HookHandler + ?Sized),
     input: &Input,
 ) -> anyhow::Result<Output> {
     match input {
-        Input::PreToolUse(event) => Ok(Output::PreToolUse(handler.pre_tool_use(event)?)),
-        Input::PostToolUse(event) => Ok(Output::PostToolUse(handler.post_tool_use(event)?)),
-        Input::UserPromptSubmit(event) => {
-            Ok(Output::UserPromptSubmit(handler.user_prompt_submit(event)?))
-        }
-        Input::SessionStart(event) => Ok(Output::SessionStart(handler.session_start(event)?)),
+        Input::PreToolUse(event) => Ok(Output::PreToolUse(handler.pre_tool_use(event).await?)),
+        Input::PostToolUse(event) => Ok(Output::PostToolUse(handler.post_tool_use(event).await?)),
+        Input::UserPromptSubmit(event) => Ok(Output::UserPromptSubmit(
+            handler.user_prompt_submit(event).await?,
+        )),
+        Input::SessionStart(event) => Ok(Output::SessionStart(handler.session_start(event).await?)),
     }
 }
 
@@ -431,28 +431,29 @@ pub fn default_handle_event(
 ///
 /// Override the methods for the events you care about. The defaults return
 /// the default (empty) output for each event type.
+#[allow(async_fn_in_trait)] // Hook handlers run on a single-threaded runtime; Send is not needed.
 pub trait HookHandler {
     /// Dispatch an input event to the appropriate handler method.
     ///
     /// The default implementation calls [`default_handle_event`], which matches
     /// on the event variant, calls the corresponding method, and wraps the
     /// result in the appropriate `Output` variant.
-    fn handle_event(&self, input: &Input) -> anyhow::Result<Output> {
-        default_handle_event(self, input)
+    async fn handle_event(&self, input: &Input) -> anyhow::Result<Output> {
+        default_handle_event(self, input).await
     }
 
     /// Called before the agent invokes a tool.
-    fn pre_tool_use(&self, _event: &PreToolUseInput) -> anyhow::Result<PreToolUseOutput> {
+    async fn pre_tool_use(&self, _event: &PreToolUseInput) -> anyhow::Result<PreToolUseOutput> {
         Ok(PreToolUseOutput::default())
     }
 
     /// Called after a tool completes.
-    fn post_tool_use(&self, _event: &PostToolUseInput) -> anyhow::Result<PostToolUseOutput> {
+    async fn post_tool_use(&self, _event: &PostToolUseInput) -> anyhow::Result<PostToolUseOutput> {
         Ok(PostToolUseOutput::default())
     }
 
     /// Called when the user submits a prompt.
-    fn user_prompt_submit(
+    async fn user_prompt_submit(
         &self,
         _event: &UserPromptSubmitInput,
     ) -> anyhow::Result<UserPromptSubmitOutput> {
@@ -460,7 +461,10 @@ pub trait HookHandler {
     }
 
     /// Called when an agent session begins.
-    fn session_start(&self, _event: &SessionStartInput) -> anyhow::Result<SessionStartOutput> {
+    async fn session_start(
+        &self,
+        _event: &SessionStartInput,
+    ) -> anyhow::Result<SessionStartOutput> {
         Ok(SessionStartOutput::default())
     }
 }
@@ -474,6 +478,14 @@ pub trait HookHandler {
 /// - Non-empty output → exit 0, JSON on stdout.
 /// - `Err(...)` → exit 1, error message on stderr.
 pub fn run(handler: impl HookHandler) -> ExitCode {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("failed to create tokio runtime");
+    rt.block_on(run_async(handler))
+}
+
+async fn run_async(handler: impl HookHandler) -> ExitCode {
     let mut input_str = String::new();
     if std::io::stdin().read_to_string(&mut input_str).is_err() {
         return ExitCode::FAILURE;
@@ -487,7 +499,7 @@ pub fn run(handler: impl HookHandler) -> ExitCode {
         }
     };
 
-    let output = match handler.handle_event(&input) {
+    let output = match handler.handle_event(&input).await {
         Ok(o) => o,
         Err(e) => {
             eprintln!("symposium-hook: handler error: {e}");

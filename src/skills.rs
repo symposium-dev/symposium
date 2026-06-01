@@ -440,17 +440,17 @@ fn skill_path_within_repo(cache_dir: &Path, skill_md: &Path, source_subpath: &st
 async fn fetch_git_skill_source(
     sym: &Symposium,
     git_url: &str,
-) -> Option<(crate::installation::git::GitHubSource, PathBuf, String)> {
-    let gh = match crate::installation::git::parse_github_url(git_url) {
+) -> Option<(symposium_install::git::GitHubSource, PathBuf, String)> {
+    let gh = match symposium_install::git::parse_github_url(git_url) {
         Ok(gh) => gh,
         Err(e) => {
             tracing::warn!(git = %git_url, error = %e, "failed to parse git URL");
             return None;
         }
     };
-    let cache_mgr = crate::installation::git::GitCacheManager::new(sym, "plugins");
+    let cache_mgr = symposium_install::git::GitCacheManager::new(&sym.install_context(), "plugins");
     let cache_dir = match cache_mgr
-        .get_or_fetch(&gh, git_url, crate::plugins::UpdateLevel::None)
+        .get_or_fetch(&gh, git_url, symposium_install::UpdateLevel::None)
         .await
     {
         Ok(p) => p,

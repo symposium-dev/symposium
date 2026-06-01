@@ -270,6 +270,15 @@ impl Symposium {
         }
     }
 
+    /// Create an [`InstallContext`] for use with `symposium-install` functions.
+    pub fn install_context(&self) -> symposium_install::InstallContext {
+        let ctx = symposium_install::InstallContext::new(self.cache_dir.clone());
+        match &self.cargo_override {
+            Some(path) => ctx.with_cargo_bin(path.clone()),
+            None => ctx,
+        }
+    }
+
     /// Override the cargo binary path (test-only).
     #[doc(hidden)]
     pub fn set_cargo_override(&mut self, path: PathBuf) {
