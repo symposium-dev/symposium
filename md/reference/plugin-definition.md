@@ -86,29 +86,56 @@ source = "crate"
 
 At least one non-wildcard crate predicate must be present (at either the plugin or group level) so that Symposium knows which crate sources to fetch. See [Matched crate set](./crate-predicates.md#matched-crate-set) for details.
 
-### Named crate source
+#### Customized crate path
 
-Use `source.crate` to fetch skills from a specific crate, independent of predicate resolution. This decouples "which crates activate the plugin" from "which crate contains the skills":
+The default with `source = "crate"` is to source skills from the `skills/` directory of your crate source. If you prefer a different path, you can use `source.crate_path = "my-skills-directory"` to specify a different path.
+
+#### Semantics when matching against multiple crates
+
+If your plugin lists multiple crates, then skills will be loaded from whichever crates are present. For example, the following plugin will activate if `foo`, `bar`, or `baz` are present in the dependencies:
+
+```toml
+name = "my-plugin"
+crates = ["foo", "bar", "baz"]
+
+[[skills]]
+source = "crate"
+```
+
+Once activated, `source = "crate"` will cause Symposium to look for skills in whichever crates are present. So if the project has `foo` and `bar` (but not `baz`), we would look at the sources for `foo` and `bar` (but not `baz`).
+
+### Fetching from a specific crate
+
+Sometimes you want to fetch the skills from a crate other than the one which appears in the dependencies. For example, the `dial9` profiler adds a crate `dial9-tokio-telemtry` into the dependencies but the skills are located in `dial9-viewer`. To specify the crate where skills are sources, set `source.crate`:
 
 ```toml
 name = "dial9"
 crates = ["dial9-tokio-telemetry", "dial9", "dial9-viewer"]
 
 [[skills]]
-source = { crate = "dial9-viewer", crate_path = "skills" }
+source.crate = "dial9-viewer"
 ```
 
-Here the plugin activates whenever the workspace uses any of the three dial9 crates, but skills are always fetched from `dial9-viewer`'s source tree. Without `source.crate`, you would need a group-level `crates = ["dial9-viewer"]` which would also narrow the activation condition (requiring `dial9-viewer` specifically to be present).
+(You can also use `source.crate_path` to specify a custom directory within that crate.)
 
-`source.crate` can be combined with `crate_path` to specify a custom directory (defaults to `skills/` if omitted):
+#### Semantics of `crates` predicates at mutiple levels
+
+When you apply the `crates` predicate at multiple levels, all levels must match. This can be used to narrow the set of crates that have skills versus the set that activates your plugin overall.
 
 ```toml
-[[skills]]
-source = { crate = "my-crate" }              # looks in my-crate/skills/
-source = { crate = "my-crate", crate_path = "docs/agent" }  # looks in my-crate/docs/agent/
-```
+name = "my-plugin"
 
-When `source.crate` is set, no non-wildcard predicate is required — the fetch target is explicit.
+# Any of these crates activates the plugin
+crates = ["foo", "bar", "baz"]
+
+[[skills]]
+crates = ["foo", "bar"] # ... but this block applies only to "foo" and "bar"
+source = "crate" # ...which get their skills from their sources
+
+[[skills]]
+crates = ["baz"] # ... this block applies to "baz"
+source.crate = "foo" # ...which get its skills from "foo"
+```
 
 ## Installations
 
