@@ -2,7 +2,7 @@ pub mod agents;
 pub mod cli;
 pub mod config;
 pub mod crate_command;
-pub mod crate_metadata;
+pub(crate) mod crate_metadata;
 pub mod hook;
 pub mod hook_schema;
 pub mod init;
