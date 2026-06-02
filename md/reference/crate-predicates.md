@@ -55,7 +55,7 @@ If there are multiple `crates` declarations in scope, all of them must match (AN
 
 ## Matched crate set
 
-When a skill group uses `source = "crate"` or `source.crate_path`, predicates serve a second purpose beyond filtering: they determine **which crate sources to fetch**.
+When a skill group uses `source = "crate"`, predicates serve a second purpose beyond filtering: they determine **which crate sources to fetch**.
 
 Each non-wildcard predicate that matches a workspace dependency contributes that dependency's name and version to the *matched crate set*. Symposium then fetches the source for each crate in the set and looks for skills inside it.
 

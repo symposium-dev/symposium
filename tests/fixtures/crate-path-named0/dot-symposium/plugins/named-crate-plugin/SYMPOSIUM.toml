@@ -2,4 +2,4 @@ name = "named-crate-plugin"
 crates = ["crate-a"]
 
 [[skills]]
-source.crate = { name = "crate-b", path = "skills" }
+source = "crate"

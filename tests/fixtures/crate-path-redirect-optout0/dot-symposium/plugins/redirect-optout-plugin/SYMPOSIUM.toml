@@ -1,0 +1,5 @@
+name = "redirect-optout-plugin"
+crates = ["crate-a"]
+
+[[skills]]
+source = "crate"

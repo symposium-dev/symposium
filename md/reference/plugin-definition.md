@@ -64,17 +64,15 @@ Each `[[skills]]` entry declares a group of skills.
 | `crates` | string or array | Which crates this group advises on. Accepts a single string (`"serde"`) or array (`["serde", "tokio>=1.0"]`). See [Crate predicates](./crate-predicates.md) for syntax. |
 | `source.path` | string | Local directory containing skill subdirectories. Resolved relative to the manifest file. |
 | `source.git` | string | GitHub URL pointing to a directory in a repository (e.g., `https://github.com/org/repo/tree/main/skills`). Symposium downloads the tarball, extracts the subdirectory, and caches it. |
-| `source = "crate"` | string | Shorthand for `source.crate = {}`. Look for skills inside the matched crates' source, in the default `skills/` directory. See [Crate-sourced skills](#crate-sourced-skills). |
-| `source.crate` | table | Crate source configuration. Fields: `name` (specific crate to fetch from), `path` (subdirectory, defaults to `"skills"`), `version` (version constraint). See [Crate-sourced skills](#crate-sourced-skills). |
-| `source.crate_path` | string | Legacy shorthand for `source.crate.path`. |
+| `source = "crate"` | string | Look for skills inside the matched crates' source trees. Layout is determined by `[package.metadata.symposium]` in each crate's `Cargo.toml`. See [Crate-sourced skills](#crate-sourced-skills). |
 
-A skill group must have exactly one of `source.path`, `source.git`, or `source.crate` (including the `source = "crate"` shorthand).
+A skill group must have exactly one of `source.path`, `source.git`, or `source = "crate"`.
 
 ### Crate-sourced skills
 
-When using `source = "crate"` or `source.crate_path`, Symposium resolves the crate predicates in scope (plugin-level and group-level) to determine which crate sources to fetch, then looks for skills inside each crate's source tree.
+When using `source = "crate"`, Symposium resolves the crate predicates in scope (plugin-level and group-level) to determine which crate sources to fetch, then reads each crate's `[package.metadata.symposium]` section to find skills.
 
-This is the recommended way for crate authors to ship skills alongside their crate. See [Authoring a plugin](../crate-authors/authoring-a-plugin.md) for details.
+This is the recommended way for crate authors to ship skills alongside their crate. See [Supporting your crate](../crate-authors/supporting-your-crate.md) for details on the metadata format.
 
 ```toml
 name = "serde-plugin"
@@ -86,14 +84,20 @@ source = "crate"
 
 At least one non-wildcard crate predicate must be present (at either the plugin or group level) so that Symposium knows which crate sources to fetch. See [Matched crate set](./crate-predicates.md#matched-crate-set) for details.
 
-#### Customized crate path
+#### Skill layout in crate source
 
-The default with `source = "crate"` is to source skills from the `skills/` directory of your crate source. If you prefer a different path, use `source.crate.path`:
+Symposium reads `[package.metadata.symposium]` from the crate's `Cargo.toml`:
 
-```toml
-[[skills]]
-source.crate.path = "my-skills-directory"
-```
+- **No metadata section** — fall back to the default `skills/` subdirectory.
+- **Malformed metadata** — logged as a warning, then fall back to the default `skills/` subdirectory.
+- **`skills = []`** — no skills from this crate (not a fallback to `skills/`). This is an explicit opt-out and is respected even when the crate is reached via a redirect.
+- **`[[skills]]` entries** — process each entry independently:
+  - `path = "..."` — look in that subdirectory of this crate's source. If the directory does not exist, zero skills are produced for that entry (no error).
+  - `crate = { name = "...", version = "..." }` — redirect to another crate and follow its metadata recursively.
+
+Redirects are followed with cycle detection (hyphen/underscore-insensitive) and a depth limit of 10. When multiple crates redirect to the same target, the target's skills are installed once (deduplication by crate name + version).
+
+See [Supporting your crate](../crate-authors/supporting-your-crate.md) for the full metadata schema.
 
 #### Semantics when matching against multiple crates
 
@@ -109,26 +113,19 @@ source = "crate"
 
 Once activated, `source = "crate"` will cause Symposium to look for skills in whichever crates are present. So if the project has `foo` and `bar` (but not `baz`), we would look at the sources for `foo` and `bar` (but not `baz`).
 
-### Fetching from a specific crate
+#### Redirects via crate metadata
 
-Sometimes you want to fetch the skills from a crate other than the one which appears in the dependencies. For example, the `dial9` profiler adds a crate `dial9-tokio-telemetry` into the dependencies but the skills are located in `dial9-viewer`. Use `source.crate.name` to specify the fetch target:
-
-```toml
-name = "dial9"
-crates = ["dial9-tokio-telemetry", "dial9", "dial9-viewer"]
-
-[[skills]]
-source.crate.name = "dial9-viewer"
-```
-
-You can also set `source.crate.path` to specify a custom directory and `source.crate.version` to pin a version constraint:
+Crate authors can redirect skill resolution to another crate using their `Cargo.toml` metadata. For example, `dial9-tokio-telemetry` could redirect to `dial9-viewer`:
 
 ```toml
-[[skills]]
-source.crate = { name = "dial9-viewer", path = "agent/skills", version = ">=2.0" }
+# In dial9-tokio-telemetry/Cargo.toml
+[[package.metadata.symposium.skills]]
+crate = { name = "dial9-viewer" }
 ```
 
-#### Semantics of `crates` predicates at mutiple levels
+This means the plugin just needs `source = "crate"` and the crate itself controls where skills are fetched from. Redirects are followed recursively (with cycle detection and a depth limit of 10).
+
+#### Semantics of `crates` predicates at multiple levels
 
 When you apply the `crates` predicate at multiple levels, all levels must match. This can be used to narrow the set of crates that have skills versus the set that activates your plugin overall.
 
@@ -144,7 +141,7 @@ source = "crate" # ...which get their skills from their sources
 
 [[skills]]
 crates = ["baz"] # ... this block applies to "baz"
-source.crate.name = "foo" # ...which gets its skills from "foo"
+source = "crate" # ... baz's Cargo.toml metadata controls where skills come from
 ```
 
 ## Installations

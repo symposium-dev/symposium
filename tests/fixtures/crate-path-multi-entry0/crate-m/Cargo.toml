@@ -1,0 +1,11 @@
+[package]
+name = "crate-m"
+version = "0.1.0"
+edition = "2021"
+
+# Two entries: a local path AND a redirect to crate-n
+[[package.metadata.symposium.skills]]
+path = "guidance"
+
+[[package.metadata.symposium.skills]]
+crate = { name = "crate-n" }

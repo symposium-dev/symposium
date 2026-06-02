@@ -1,0 +1,5 @@
+name = "multihop-plugin"
+crates = ["crate-a"]
+
+[[skills]]
+source = "crate"

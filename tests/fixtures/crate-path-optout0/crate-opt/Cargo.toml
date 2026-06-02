@@ -1,0 +1,7 @@
+[package]
+name = "crate-opt"
+version = "0.1.0"
+edition = "2021"
+
+[package.metadata.symposium]
+skills = []

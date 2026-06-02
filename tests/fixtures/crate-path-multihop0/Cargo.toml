@@ -1,0 +1,9 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crate-a = { path = "crate-a" }
+crate-b = { path = "crate-b" }
+crate-c = { path = "crate-c" }
