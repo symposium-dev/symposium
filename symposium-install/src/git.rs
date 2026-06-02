@@ -1,6 +1,6 @@
-//! Git-sourced plugin artifacts: GitHub URL parsing, API client, and cache management.
+//! Git-sourced plugin artifacts: URL parsing, API client, and cache management.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -9,44 +9,89 @@ use crate::{InstallContext, UpdateLevel};
 /// Minimum interval between freshness checks for cached sources.
 const DEBOUNCE_DURATION: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// A parsed GitHub repository reference.
+// ── Public parsed-URL type ──────────────────────────────────────────────
+
+/// A parsed git source URL.
+///
+/// Different URL forms that refer to the same logical repository (e.g.,
+/// `https://github.com/foo/bar` and `git@github.com:foo/bar.git`) parse
+/// to the same variant with the same fields, enabling deduplication.
 #[non_exhaustive]
-#[derive(Debug, Clone, PartialEq)]
-pub struct GitHubSource {
-    /// Repository owner (e.g. `"symposium-dev"`).
-    pub owner: String,
-    /// Repository name (e.g. `"symposium"`).
-    pub repo: String,
-    /// Branch, tag, or commit ref. Empty string means default branch.
-    pub git_ref: String,
-    /// Path within the repo. Empty string means repo root.
-    pub path: String,
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
+pub enum GitSource {
+    /// A GitHub-hosted repository.
+    GitHub {
+        /// Repository owner (e.g. `"symposium-dev"`).
+        owner: String,
+        /// Repository name (e.g. `"symposium"`).
+        repo: String,
+        /// Branch, tag, or commit ref. Empty string means default branch.
+        git_ref: String,
+        /// Path within the repo. Empty string means repo root.
+        subpath: String,
+    },
 }
 
-impl GitHubSource {
+impl GitSource {
+    /// A normalized identity string suitable for use in `SkillOrigin`.
+    ///
+    /// Two URLs that refer to the same logical repository produce the same
+    /// `repo_id`, regardless of URL form.
+    pub fn repo_id(&self) -> String {
+        match self {
+            GitSource::GitHub { owner, repo, .. } => format!("{owner}/{repo}"),
+        }
+    }
+
+    /// The intra-repo subpath (the portion after `tree/<ref>/` in a GitHub URL).
+    /// Empty string if the URL points at the repo root.
+    pub fn subpath(&self) -> &str {
+        match self {
+            GitSource::GitHub { subpath, .. } => subpath,
+        }
+    }
+
     /// Filesystem-safe cache directory name.
-    pub fn cache_key(&self) -> String {
-        let mut key = format!("{}--{}", self.owner, self.repo);
-        if !self.git_ref.is_empty() {
-            key.push_str(&format!("@{}", self.git_ref));
+    fn cache_key(&self) -> String {
+        match self {
+            GitSource::GitHub {
+                owner,
+                repo,
+                git_ref,
+                subpath,
+            } => {
+                let mut key = format!("{owner}--{repo}");
+                if !git_ref.is_empty() {
+                    key.push_str(&format!("@{git_ref}"));
+                }
+                if !subpath.is_empty() {
+                    let path_slug = subpath.replace('/', "--");
+                    key.push_str(&format!("--{path_slug}"));
+                }
+                key
+            }
         }
-        if !self.path.is_empty() {
-            let path_slug = self.path.replace('/', "--");
-            key.push_str(&format!("--{}", path_slug));
-        }
-        key
     }
 }
 
-/// Parse a GitHub URL into its components.
+/// Parse a git URL into a structured [`GitSource`].
 ///
-/// Accepts:
+/// Currently recognizes GitHub URLs:
 /// - `https://github.com/owner/repo`
 /// - `https://github.com/owner/repo/tree/branch/path/to/dir`
-pub fn parse_github_url(url: &str) -> Result<GitHubSource> {
-    let stripped = url
-        .strip_prefix("https://github.com/")
-        .with_context(|| format!("not a GitHub URL: {url}"))?;
+pub fn parse_git_url(url: &str) -> Result<GitSource> {
+    // Normalize: case-insensitive host matching
+    let lower = url.to_lowercase();
+    if lower.starts_with("https://github.com/") {
+        return parse_github_https(url);
+    }
+    bail!("unrecognized git URL: {url}")
+}
+
+/// Parse an `https://github.com/...` URL.
+fn parse_github_https(url: &str) -> Result<GitSource> {
+    // Strip the prefix case-insensitively
+    let stripped = &url["https://github.com/".len()..];
 
     // Remove trailing slash
     let stripped = stripped.trim_end_matches('/');
@@ -55,26 +100,26 @@ pub fn parse_github_url(url: &str) -> Result<GitHubSource> {
 
     match parts.len() {
         // owner/repo
-        2 => Ok(GitHubSource {
+        2 => Ok(GitSource::GitHub {
             owner: parts[0].to_string(),
             repo: parts[1].to_string(),
             git_ref: String::new(),
-            path: String::new(),
+            subpath: String::new(),
         }),
         // owner/repo/tree/ref[/path...]
         n if n >= 4 && parts[2] == "tree" => {
             // rest is "branch/path/to/dir" — first segment is the ref, rest is path
             // But branches can contain slashes... we take the first segment as the ref.
             let rest = parts[3];
-            let (git_ref, path) = match rest.split_once('/') {
+            let (git_ref, subpath) = match rest.split_once('/') {
                 Some((r, p)) => (r.to_string(), p.to_string()),
                 None => (rest.to_string(), String::new()),
             };
-            Ok(GitHubSource {
+            Ok(GitSource::GitHub {
                 owner: parts[0].to_string(),
                 repo: parts[1].to_string(),
                 git_ref,
-                path,
+                subpath,
             })
         }
         _ => bail!("cannot parse GitHub URL: {url}"),
@@ -98,15 +143,17 @@ impl GitHubClient {
     }
 
     /// Resolve the commit SHA for a given ref (branch, tag, or "HEAD").
-    async fn resolve_commit_sha(&self, source: &GitHubSource) -> Result<String> {
-        let git_ref = if source.git_ref.is_empty() {
-            "HEAD"
-        } else {
-            &source.git_ref
-        };
+    async fn resolve_commit_sha(&self, source: &GitSource) -> Result<String> {
+        let GitSource::GitHub {
+            owner,
+            repo,
+            git_ref,
+            ..
+        } = source;
+        let ref_str = if git_ref.is_empty() { "HEAD" } else { git_ref };
         let url = format!(
             "https://api.github.com/repos/{}/{}/commits/{}",
-            source.owner, source.repo, git_ref
+            owner, repo, ref_str
         );
 
         let resp = self
@@ -131,15 +178,17 @@ impl GitHubClient {
     }
 
     /// Download the repository tarball for a given ref.
-    async fn download_tarball(&self, source: &GitHubSource) -> Result<bytes::Bytes> {
-        let git_ref = if source.git_ref.is_empty() {
-            "HEAD"
-        } else {
-            &source.git_ref
-        };
+    async fn download_tarball(&self, source: &GitSource) -> Result<bytes::Bytes> {
+        let GitSource::GitHub {
+            owner,
+            repo,
+            git_ref,
+            ..
+        } = source;
+        let ref_str = if git_ref.is_empty() { "HEAD" } else { git_ref };
         let url = format!(
             "https://api.github.com/repos/{}/{}/tarball/{}",
-            source.owner, source.repo, git_ref
+            owner, repo, ref_str
         );
 
         let resp = self
@@ -195,20 +244,45 @@ impl GitCacheManager {
     /// Use `"plugins"` for individual skill git sources,
     /// `"plugin-sources"` for plugin source repositories.
     pub fn new(ctx: &InstallContext, subdir: &str) -> Self {
-        let cache_dir = ctx.cache_dir().join(subdir);
+        Self::from_cache_dir(&ctx.cache_dir().join(subdir))
+    }
+
+    /// Create a cache manager rooted at an already-resolved directory.
+    pub fn from_cache_dir(cache_dir: &Path) -> Self {
         Self {
-            cache_dir,
+            cache_dir: cache_dir.to_path_buf(),
             client: GitHubClient::new(),
         }
     }
 
-    /// Parse a GitHub URL and fetch/cache the repository.
+    /// Compute the expected cache directory for a URL without fetching.
+    ///
+    /// Returns `None` if the URL cannot be parsed.
+    pub fn cache_path_for_url(&self, url: &str) -> Option<PathBuf> {
+        let source = parse_git_url(url).ok()?;
+        Some(self.cache_dir.join(source.cache_key()))
+    }
+
+    /// Parse a git URL and fetch/cache the repository.
     ///
     /// This is the primary entry point — it parses the URL into a
-    /// [`GitHubSource`] internally and delegates to the cache logic.
+    /// [`GitSource`] internally and delegates to the cache logic.
     pub async fn fetch_url(&self, url: &str, update: UpdateLevel) -> Result<PathBuf> {
-        let source = parse_github_url(url)?;
-        self.get_or_fetch(&source, url, update).await
+        let source = parse_git_url(url)?;
+        self.fetch(&source, url, update).await
+    }
+
+    /// Like [`fetch_url`](Self::fetch_url), but also returns the parsed
+    /// [`GitSource`] for callers that need the structured representation
+    /// (e.g. to build a `SkillOrigin`).
+    pub async fn fetch_url_parsed(
+        &self,
+        url: &str,
+        update: UpdateLevel,
+    ) -> Result<(PathBuf, GitSource)> {
+        let source = parse_git_url(url)?;
+        let path = self.fetch(&source, url, update).await?;
+        Ok((path, source))
     }
 
     /// Get the cached plugin directory, downloading or updating as needed.
@@ -217,9 +291,9 @@ impl GitCacheManager {
     /// - `None`: skip API calls if cache was fetched within `DEBOUNCE_DURATION`
     /// - `Check`: always call the API to check freshness, download only if stale
     /// - `Fetch`: always re-download regardless of staleness
-    pub async fn get_or_fetch(
+    async fn fetch(
         &self,
-        source: &GitHubSource,
+        source: &GitSource,
         source_url: &str,
         update: UpdateLevel,
     ) -> Result<PathBuf> {
@@ -298,7 +372,7 @@ impl GitCacheManager {
 
     async fn fetch_and_cache_with_sha(
         &self,
-        source: &GitHubSource,
+        source: &GitSource,
         source_url: &str,
         plugin_dir: &std::path::Path,
         meta_path: &std::path::Path,
@@ -323,16 +397,16 @@ impl GitCacheManager {
         extract_tarball(&tarball, temp_dir.path())?;
 
         // If a subpath is specified, we need to find and move just that subtree
-        let source_dir = if source.path.is_empty() {
+        let subpath = source.subpath();
+        let source_dir = if subpath.is_empty() {
             temp_dir.path().to_path_buf()
         } else {
-            let sub = temp_dir.path().join(&source.path);
+            let sub = temp_dir.path().join(subpath);
             if !sub.is_dir() {
                 bail!(
-                    "path '{}' not found in repository {}/{}",
-                    source.path,
-                    source.owner,
-                    source.repo
+                    "path '{}' not found in repository {}",
+                    subpath,
+                    source.repo_id()
                 );
             }
             sub

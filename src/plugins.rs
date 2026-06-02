@@ -26,7 +26,7 @@ pub struct PluginMcpServer {
     pub server: McpServerEntry,
 }
 
-pub use symposium_install::UpdateLevel;
+use symposium_install::UpdateLevel;
 
 /// Source declaration for a skill group.
 ///
@@ -893,10 +893,11 @@ fn resolve_one_source(
             return Some(base_dir.join(p));
         }
     } else if let Some(ref git_url) = source.git {
-        match symposium_install::git::parse_github_url(git_url) {
-            Ok(gh) => return Some(cache_base.join(gh.cache_key())),
-            Err(e) => {
-                tracing::warn!(source = %source.name, error = %e, "bad plugin source URL");
+        let cache_mgr = symposium_install::git::GitCacheManager::from_cache_dir(cache_base);
+        match cache_mgr.cache_path_for_url(git_url) {
+            Some(path) => return Some(path),
+            None => {
+                tracing::warn!(source = %source.name, url = %git_url, "bad plugin source URL");
             }
         }
     }

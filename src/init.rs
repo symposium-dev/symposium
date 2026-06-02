@@ -108,6 +108,7 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
     let config_path = sym.config_dir().join("config.toml");
 
     if agents.is_empty() {
+        // Uninstall: unregister all hooks and MCP servers for every agent.
         crate::sync::register_hooks(sym, out).context("failed to unregister hooks")?;
         out.done(format!(
             "{}: wrote user config (no agents — symposium uninstalled)",

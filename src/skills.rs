@@ -51,15 +51,14 @@ impl Skill {
 ///   Identity is `(name, version)` only: two plugins targeting the same
 ///   crate version produce the same logical skills regardless of which
 ///   plugin pointed at them.
-/// - `Git { repo, commit_sha, skill_path }` — the skill came from a
-///   `source.git` group. Identity is the triple `(repo, commit_sha,
-///   skill_path)`: the repo is in `<owner>/<repo>` form (no `tree/<ref>`
-///   prefix), the commit SHA is the resolved hash that was actually
-///   fetched, and `skill_path` is the SKILL.md's path within the repo
-///   tree. Two plugins that pointed at the same repo via different URL
-///   forms (root URL vs. a `tree/<ref>/<subpath>` URL) collapse to one
-///   install if they end up loading the same SKILL.md from the same
-///   commit; different SKILL.md files within one repo stay distinct.
+/// - `Git { source, commit_sha, skill_path }` — the skill came from a
+///   `source.git` group. Identity is `(source, commit_sha, skill_path)`:
+///   `source` is the parsed [`GitSource`](symposium_install::git::GitSource)
+///   which normalizes equivalent URLs to the same value, the commit SHA
+///   is the resolved hash that was actually fetched, and `skill_path` is
+///   the SKILL.md's path within the repo tree. Two URLs that refer to
+///   the same repository normalize to the same `GitSource` and therefore
+///   deduplicate. Different SKILL.md files within one repo stay distinct.
 /// - `Source { source_name, skill_path }` — the skill came from a
 ///   plugin's `source.path` group, or from a standalone `SKILL.md` in
 ///   a registry source. `source_name` is the registry source's
@@ -74,9 +73,8 @@ pub enum SkillOrigin {
         version: semver::Version,
     },
     Git {
-        /// `<owner>/<repo>` — the repository identity, stripped of any
-        /// branch / subpath URL components.
-        repo: String,
+        /// The parsed git source (carries normalized repo identity).
+        source: symposium_install::git::GitSource,
         /// Commit SHA actually fetched (from the cache meta).
         commit_sha: String,
         /// SKILL.md's path within the repo tree, normalized to forward
@@ -215,7 +213,7 @@ pub async fn skills_applicable_to(
 ///
 /// - `CratePath` → `SkillOrigin::Crate { name, version }`, one per
 ///   matched crate (canonical name/version from the fetch result).
-/// - `Git` → `SkillOrigin::Git { repo, commit_sha, skill_path }`, one
+/// - `Git` → `SkillOrigin::Git { source, commit_sha, skill_path }`, one
 ///   per discovered SKILL.md (path varies per skill within the group).
 /// - `Path` → `SkillOrigin::Source { source_name, skill_path }`, with
 ///   `skill_path` computed per discovered SKILL.md relative to the
@@ -342,16 +340,16 @@ async fn load_git_skills(
     group: &SkillGroup,
     url: &str,
 ) -> Vec<(Skill, SkillOrigin)> {
-    let Some((gh, cache_dir, commit_sha)) = fetch_git_skill_source(sym, url).await else {
+    let Some((cache_dir, source, commit_sha)) = fetch_git_skill_source(sym, url).await else {
         return Vec::new();
     };
     let mut skills = Vec::new();
     for result in discover_skills(&cache_dir, group) {
         match result {
             Ok(skill) => {
-                let skill_path = skill_path_within_repo(&cache_dir, &skill.path, &gh.path);
+                let skill_path = skill_path_within_repo(&cache_dir, &skill.path, source.subpath());
                 let origin = SkillOrigin::Git {
-                    repo: format!("{}/{}", gh.owner, gh.repo),
+                    source: source.clone(),
                     commit_sha: commit_sha.clone(),
                     skill_path,
                 };
@@ -436,24 +434,18 @@ fn skill_path_within_repo(cache_dir: &Path, skill_md: &Path, source_subpath: &st
 }
 
 /// Fetch a `source.git` group's tarball and look up the resolved commit
-/// SHA from the cache meta. Returns `None` (with a warning) on failure.
+/// SHA from the cache meta. Returns `(cache_dir, parsed_source, commit_sha)`
+/// or `None` (with a warning) on failure.
 async fn fetch_git_skill_source(
     sym: &Symposium,
     git_url: &str,
-) -> Option<(symposium_install::git::GitHubSource, PathBuf, String)> {
-    let gh = match symposium_install::git::parse_github_url(git_url) {
-        Ok(gh) => gh,
-        Err(e) => {
-            tracing::warn!(git = %git_url, error = %e, "failed to parse git URL");
-            return None;
-        }
-    };
+) -> Option<(PathBuf, symposium_install::git::GitSource, String)> {
     let cache_mgr = symposium_install::git::GitCacheManager::new(&sym.install_context(), "plugins");
-    let cache_dir = match cache_mgr
-        .get_or_fetch(&gh, git_url, symposium_install::UpdateLevel::None)
+    let (cache_dir, source) = match cache_mgr
+        .fetch_url_parsed(git_url, symposium_install::UpdateLevel::None)
         .await
     {
-        Ok(p) => p,
+        Ok(r) => r,
         Err(e) => {
             tracing::warn!(git = %git_url, error = %e, "failed to fetch skill source");
             return None;
@@ -467,7 +459,7 @@ async fn fetch_git_skill_source(
         );
         return None;
     };
-    Some((gh, cache_dir, meta.commit_sha))
+    Some((cache_dir, source, meta.commit_sha))
 }
 
 /// Discover all skills found in a given directory.
@@ -735,12 +727,22 @@ mod tests {
         // *same* skill regardless of which URL form (or which plugin)
         // brought us there.
         let a = SkillOrigin::Git {
-            repo: "foo/bar".into(),
+            source: symposium_install::git::GitSource::GitHub {
+                owner: "foo".into(),
+                repo: "bar".into(),
+                git_ref: String::new(),
+                subpath: String::new(),
+            },
             commit_sha: "deadbeef".into(),
             skill_path: "skills/code-review".into(),
         };
         let b = SkillOrigin::Git {
-            repo: "foo/bar".into(),
+            source: symposium_install::git::GitSource::GitHub {
+                owner: "foo".into(),
+                repo: "bar".into(),
+                git_ref: String::new(),
+                subpath: String::new(),
+            },
             commit_sha: "deadbeef".into(),
             skill_path: "skills/code-review".into(),
         };
@@ -751,12 +753,22 @@ mod tests {
     #[test]
     fn skill_origin_git_distinct_paths_stay_distinct() {
         let a = SkillOrigin::Git {
-            repo: "foo/bar".into(),
+            source: symposium_install::git::GitSource::GitHub {
+                owner: "foo".into(),
+                repo: "bar".into(),
+                git_ref: String::new(),
+                subpath: String::new(),
+            },
             commit_sha: "deadbeef".into(),
             skill_path: "skills/a".into(),
         };
         let b = SkillOrigin::Git {
-            repo: "foo/bar".into(),
+            source: symposium_install::git::GitSource::GitHub {
+                owner: "foo".into(),
+                repo: "bar".into(),
+                git_ref: String::new(),
+                subpath: String::new(),
+            },
             commit_sha: "deadbeef".into(),
             skill_path: "skills/b".into(),
         };
@@ -775,7 +787,12 @@ mod tests {
             skill_path: "1.0.0".into(),
         };
         let g = SkillOrigin::Git {
-            repo: "foo/bar".into(),
+            source: symposium_install::git::GitSource::GitHub {
+                owner: "foo".into(),
+                repo: "bar".into(),
+                git_ref: String::new(),
+                subpath: String::new(),
+            },
             commit_sha: "deadbeef".into(),
             skill_path: "1.0.0".into(),
         };
