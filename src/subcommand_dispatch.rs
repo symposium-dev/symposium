@@ -88,7 +88,11 @@ pub struct ExternalOutput {
     pub stderr: Vec<u8>,
 }
 
-pub async fn dispatch_external(sym: &Symposium, cwd: &Path, argv: Vec<OsString>) -> Result<ExternalOutput> {
+pub async fn dispatch_external(
+    sym: &Symposium,
+    cwd: &Path,
+    argv: Vec<OsString>,
+) -> Result<ExternalOutput> {
     let mut argv = argv.into_iter();
     let raw_name = argv.next().context("missing subcommand name")?;
 
@@ -103,12 +107,14 @@ pub async fn dispatch_external(sym: &Symposium, cwd: &Path, argv: Vec<OsString>)
     let (plugin, subcommand) = find_subcommand(&registry, name, &workspace)?
         .with_context(|| format!("no plugin defines subcommand `{name}`"))?;
 
-    let installation = plugin.get_installation(&subcommand.command).with_context(|| {
-        format!(
-            "plugin `{}` references unknown installation `{}`",
-            plugin.name, subcommand.command
-        )
-    })?;
+    let installation = plugin
+        .get_installation(&subcommand.command)
+        .with_context(|| {
+            format!(
+                "plugin `{}` references unknown installation `{}`",
+                plugin.name, subcommand.command
+            )
+        })?;
 
     let runnable = resolve_runnable(
         sym,
@@ -122,7 +128,11 @@ pub async fn dispatch_external(sym: &Symposium, cwd: &Path, argv: Vec<OsString>)
     spawn(runnable, &installation.args, &forwarded).await
 }
 
-async fn spawn(runnable: Runnable, install_args: &[String], forwarded: &[OsString]) -> Result<ExternalOutput> {
+async fn spawn(
+    runnable: Runnable,
+    install_args: &[String],
+    forwarded: &[OsString],
+) -> Result<ExternalOutput> {
     let mut cmd = match runnable {
         Runnable::Exec(path_buf) => Command::new(path_buf),
         Runnable::Script(path_buf) => {
