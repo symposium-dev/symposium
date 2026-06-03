@@ -52,6 +52,7 @@ bytes = "1.11.1"
 dialoguer = "0.12.0"
 toml_edit = "0.25.11"
 url = "2.5.8"
+symposium-install = { version = "0.1.0", path = "symposium-install", features = ["clap"] }
 
 
 [dev-dependencies]
@@ -61,4 +62,4 @@ indoc = "2.0.7"
 symposium-testlib = { path = "symposium-testlib" }
 
 [workspace]
-members = [".", "symposium-testlib", "symposium-hook"]
+members = [".", "symposium-testlib", "symposium-hook", "symposium-install"]

@@ -27,7 +27,7 @@ use crate::sync;
 pub struct Cli {
     /// Control plugin source update behavior (none, check, fetch)
     #[arg(long, global = true, default_value = "none")]
-    pub update: crate::plugins::UpdateLevel,
+    pub update: symposium_install::UpdateLevel,
 
     /// Suppress status output
     #[arg(short, long, global = true)]

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::Symposium;
 use crate::hook::HookEvent;
 use crate::hook_schema::HookAgent;
-use crate::installation::Source;
+use symposium_install::Source;
 
 use sacp::schema::McpServer;
 
@@ -26,16 +26,7 @@ pub struct PluginMcpServer {
     pub server: McpServerEntry,
 }
 
-/// Controls how aggressively plugin sources are updated.
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-pub enum UpdateLevel {
-    /// Debounced: skip the API check if fetched recently.
-    None,
-    /// Always check freshness via API, but only download if stale.
-    Check,
-    /// Always re-download regardless of staleness.
-    Fetch,
-}
+use symposium_install::UpdateLevel;
 
 /// Source declaration for a skill group.
 ///
@@ -902,10 +893,11 @@ fn resolve_one_source(
             return Some(base_dir.join(p));
         }
     } else if let Some(ref git_url) = source.git {
-        match crate::installation::git::parse_github_url(git_url) {
-            Ok(gh) => return Some(cache_base.join(gh.cache_key())),
-            Err(e) => {
-                tracing::warn!(source = %source.name, error = %e, "bad plugin source URL");
+        let cache_mgr = symposium_install::git::GitCacheManager::from_cache_dir(cache_base);
+        match cache_mgr.cache_path_for_url(git_url) {
+            Some(path) => return Some(path),
+            None => {
+                tracing::warn!(source = %source.name, url = %git_url, "bad plugin source URL");
             }
         }
     }
@@ -950,11 +942,9 @@ async fn fetch_plugin_source(
     git_url: &str,
     update: UpdateLevel,
 ) -> Result<PathBuf> {
-    use crate::installation::git;
-
-    let source = git::parse_github_url(git_url)?;
-    let cache_mgr = git::GitCacheManager::new(sym, "plugin-sources");
-    cache_mgr.get_or_fetch(&source, git_url, update).await
+    let cache_mgr =
+        symposium_install::git::GitCacheManager::new(&sym.install_context(), "plugin-sources");
+    cache_mgr.fetch_url(git_url, update).await
 }
 
 /// Scan all configured plugin source directories and load the registry.

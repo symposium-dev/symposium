@@ -13,7 +13,6 @@ pub mod sync;
 pub mod workspace_state;
 
 pub(crate) mod crate_sources;
-pub(crate) mod installation;
 pub(crate) mod predicate;
 pub(crate) mod skills;
 

@@ -4,13 +4,13 @@ use std::{
     process::{Command, ExitCode, Stdio},
 };
 
-use crate::installation::{Runnable, acquire_source, make_executable};
 use crate::plugins::{HookFormat, Installation};
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
     plugins::ParsedPlugin,
 };
+use symposium_install::{Runnable, acquire_source, make_executable};
 
 /// A hook prepared for dispatch — installation names looked up to concrete
 /// `Installation` entries, so the dispatch loop never has to scan the plugin's
@@ -65,7 +65,12 @@ impl ResolvedHook {
 /// a runnable — requirements are only ever "ensure on disk".
 async fn install(sym: &Symposium, install: &Installation) -> anyhow::Result<()> {
     if let Some(source) = &install.source {
-        acquire_source(sym, source, install.executable.as_deref()).await?;
+        acquire_source(
+            &sym.install_context(),
+            source,
+            install.executable.as_deref(),
+        )
+        .await?;
     }
     run_install_commands(&install.install_commands).await
 }
@@ -105,7 +110,7 @@ async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Resul
 
     // Acquire the source if any.
     let acquired = match &installation.source {
-        Some(source) => Some(acquire_source(sym, source, exec_choice).await?),
+        Some(source) => Some(acquire_source(&sym.install_context(), source, exec_choice).await?),
         None => None,
     };
 
@@ -113,13 +118,13 @@ async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Resul
     run_install_commands(&installation.install_commands).await?;
 
     let runnable = match (acquired, exec_choice, script_choice) {
-        (Some(a), Some(name), None) => Runnable::Exec(a.resolve_executable(name)),
-        (Some(a), None, Some(name)) => Runnable::Script(a.resolve_script(name)),
+        (Some(a), Some(name), None) => Runnable::Exec(a.executable_named(name)),
+        (Some(a), None, Some(name)) => Runnable::Script(a.script_named(name)),
         (Some(a), None, None) => {
             // Cargo single-binary fallback: use the binary name resolved at
             // acquisition time (from crates.io or the explicit hint).
             if let Some(name) = a.resolved_executable.as_deref() {
-                Runnable::Exec(a.resolve_executable(name))
+                Runnable::Exec(a.executable_named(name))
             } else {
                 anyhow::bail!(
                     "hook `{}`: command resolved to no executable or script",
@@ -149,6 +154,7 @@ async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Resul
             path,
             args: hook.args.clone(),
         }),
+        _ => anyhow::bail!("hook `{}`: unsupported runnable kind", hook.hook_name),
     }
 }
 
