@@ -285,6 +285,11 @@ impl Plugin {
         self.crates.matches(workspace_crates)
     }
 
+    /// Look up a named installation on this plugin.
+    pub fn get_installation(&self, name: &str) -> Option<&Installation> {
+        self.installations.iter().find(|i| i.name == name)
+    }
+
     /// Return MCP servers applicable to the given workspace crates.
     ///
     /// A server matches if its own `crates` predicates match (or are absent,

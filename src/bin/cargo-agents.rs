@@ -107,7 +107,12 @@ async fn main() -> ExitCode {
         Some(Commands::Plugin { command }) => handle_plugin_command(&sym, command).await,
 
         Some(Commands::External(argv)) => match dispatch_external(&sym, &cwd, argv).await {
-            Ok(code) => ExitCode::from(code),
+            Ok(result) => {
+                use std::io::Write;
+                std::io::stdout().write_all(&result.stdout).ok();
+                std::io::stderr().write_all(&result.stderr).ok();
+                ExitCode::from(result.exit_code)
+            }
             Err(err) => {
                 eprintln!("Error: {err:#}");
                 ExitCode::FAILURE

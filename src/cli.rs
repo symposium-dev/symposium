@@ -186,10 +186,19 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
             }
         }
 
-        Commands::External(argv) => match dispatch_external(sym, cwd, argv).await? {
-            0 => Ok(()),
-            code => bail!("subcommand exited with status: {code}"),
-        },
+        Commands::External(argv) => {
+            let result = dispatch_external(sym, cwd, argv).await?;
+            if !result.stdout.is_empty() {
+                out.println(String::from_utf8_lossy(&result.stdout).trim_end());
+            }
+            if !result.stderr.is_empty() {
+                eprint!("{}", String::from_utf8_lossy(&result.stderr));
+            }
+            match result.exit_code {
+                0 => Ok(()),
+                code => bail!("subcommand exited with status: {code}"),
+            }
+        }
         // These commands can't easily be extracted since they do I/O
         // (stdin/stdout for hooks). The binary handles them directly.
         Commands::Hook { .. } | Commands::Plugin { .. } => {

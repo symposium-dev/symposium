@@ -40,11 +40,10 @@ struct ResolvedHook {
 
 impl ResolvedHook {
     fn build(parsed_plugin: &ParsedPlugin, hook: &crate::plugins::Hook) -> anyhow::Result<Self> {
-        let installations = &parsed_plugin.plugin.installations;
+        let plugin = &parsed_plugin.plugin;
         let lookup = |name: &str| -> anyhow::Result<Installation> {
-            installations
-                .iter()
-                .find(|i| i.name == name)
+            plugin
+                .get_installation(name)
                 .cloned()
                 .ok_or_else(|| anyhow::anyhow!("installation `{name}` not found in plugin"))
         };

@@ -12,7 +12,7 @@ use crate::{
     config::Symposium,
     crate_sources::{WorkspaceCrate, workspace_crates},
     installation::resolve_runnable,
-    plugins::{self, Installation, ParsedPlugin, Plugin, PluginRegistry, Subcommand},
+    plugins::{self, ParsedPlugin, Plugin, PluginRegistry, Subcommand},
 };
 use anyhow::{Context, Result, bail};
 use semver::Version;
@@ -81,7 +81,14 @@ pub fn find_subcommand<'a>(
     }
 }
 
-pub async fn dispatch_external(sym: &Symposium, cwd: &Path, argv: Vec<OsString>) -> Result<u8> {
+/// Result of running an external subcommand.
+pub struct ExternalOutput {
+    pub exit_code: u8,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+pub async fn dispatch_external(sym: &Symposium, cwd: &Path, argv: Vec<OsString>) -> Result<ExternalOutput> {
     let mut argv = argv.into_iter();
     let raw_name = argv.next().context("missing subcommand name")?;
 
@@ -96,7 +103,12 @@ pub async fn dispatch_external(sym: &Symposium, cwd: &Path, argv: Vec<OsString>)
     let (plugin, subcommand) = find_subcommand(&registry, name, &workspace)?
         .with_context(|| format!("no plugin defines subcommand `{name}`"))?;
 
-    let installation = lookup_installation(plugin, &subcommand.command)?;
+    let installation = plugin.get_installation(&subcommand.command).with_context(|| {
+        format!(
+            "plugin `{}` references unknown installation `{}`",
+            plugin.name, subcommand.command
+        )
+    })?;
 
     let runnable = resolve_runnable(
         sym,
@@ -110,20 +122,7 @@ pub async fn dispatch_external(sym: &Symposium, cwd: &Path, argv: Vec<OsString>)
     spawn(runnable, &installation.args, &forwarded).await
 }
 
-fn lookup_installation<'a>(plugin: &'a Plugin, name: &str) -> Result<&'a Installation> {
-    plugin
-        .installations
-        .iter()
-        .find(|inst| inst.name == name)
-        .with_context(|| {
-            format!(
-                "plugin `{}` references unknown installation `{name}`",
-                plugin.name
-            )
-        })
-}
-
-async fn spawn(runnable: Runnable, install_args: &[String], forwarded: &[OsString]) -> Result<u8> {
+async fn spawn(runnable: Runnable, install_args: &[String], forwarded: &[OsString]) -> Result<ExternalOutput> {
     let mut cmd = match runnable {
         Runnable::Exec(path_buf) => Command::new(path_buf),
         Runnable::Script(path_buf) => {
@@ -136,12 +135,16 @@ async fn spawn(runnable: Runnable, install_args: &[String], forwarded: &[OsStrin
 
     cmd.args(install_args).args(forwarded);
 
-    let status = cmd
-        .status()
+    let output = cmd
+        .output()
         .await
         .context("failed to spawn subcommand process")?;
 
-    Ok(exit_byte_from(status))
+    Ok(ExternalOutput {
+        exit_code: exit_byte_from(output.status),
+        stdout: output.stdout,
+        stderr: output.stderr,
+    })
 }
 
 fn exit_byte_from(status: ExitStatus) -> u8 {
