@@ -33,7 +33,12 @@ pub async fn run_install_commands(commands: &[String]) -> Result<()> {
 /// a runnable — requirements are only ever "ensure on disk".
 pub async fn install_requirement(sym: &Symposium, install: &Installation) -> Result<()> {
     if let Some(source) = &install.source {
-        acquire_source(&sym.install_context(), source, install.executable.as_deref()).await?;
+        acquire_source(
+            &sym.install_context(),
+            source,
+            install.executable.as_deref(),
+        )
+        .await?;
     }
     run_install_commands(&install.install_commands).await
 }

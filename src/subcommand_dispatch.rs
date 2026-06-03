@@ -14,9 +14,9 @@ use crate::{
     installation::resolve_runnable,
     plugins::{self, Installation, ParsedPlugin, Plugin, PluginRegistry, Subcommand},
 };
-use symposium_install::Runnable;
 use anyhow::{Context, Result, bail};
 use semver::Version;
+use symposium_install::Runnable;
 use tokio::process::Command;
 
 /// Iterate every plugin subcommand whose plugin-level and subcommand-level crate predicate
