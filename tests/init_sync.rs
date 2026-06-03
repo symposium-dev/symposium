@@ -490,12 +490,12 @@ async fn sync_installs_wildcard_plugin_skill() {
     .unwrap();
 }
 
-/// `sync` installs skills from a crate source via `source.crate_path`.
+/// `sync` installs skills from a crate source via `source = "crate"`.
 ///
 /// Fixture layout:
 /// - `crate-y` depends on `crate-x` and `crate-z` (path deps)
-/// - `crate-x` ships `skills/x-guidance/SKILL.md` (default path via `source = "crate"`)
-/// - `crate-z` ships `guidance/z-guidance/SKILL.md` (custom path via `source.crate_path`)
+/// - `crate-x` ships `skills/x-guidance/SKILL.md` (default path, no metadata)
+/// - `crate-z` ships `guidance/z-guidance/SKILL.md` (custom path via metadata)
 #[tokio::test]
 async fn sync_installs_skill_from_crate_path() {
     with_fixture(
@@ -514,7 +514,7 @@ async fn sync_installs_skill_from_crate_path() {
             assert!(content.contains("Use crate-x like this"));
             assert!(x_dir.join(".symposium").exists());
 
-            // crate-z: custom path via source.crate_path = "guidance"
+            // crate-z: custom path via [package.metadata.symposium]
             let z_dir = find_installed_skill(&skills_dir, "z-guidance");
             let content = std::fs::read_to_string(z_dir.join("SKILL.md"))?;
             assert!(content.contains("Use crate-z like this"));
@@ -1782,6 +1782,313 @@ async fn auto_sync_reruns_when_cargo_lock_changes() {
                 "workspace state mtime should be refreshed after stale cache triggers re-sync"
             );
 
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Crate metadata redirects: `crate-a` declares a redirect to `crate-b` via
+/// `[package.metadata.symposium]`. The plugin activates based on plugin-level
+/// `crates = ["crate-a"]` and discovers `crate-b`'s skills via redirect.
+#[tokio::test]
+async fn sync_installs_skill_from_named_crate_source() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-path-named0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            let b_dir = find_installed_skill(&skills_dir, "b-guidance");
+            let content = std::fs::read_to_string(b_dir.join("SKILL.md"))?;
+            assert!(content.contains("Use crate-b like this"));
+            assert!(b_dir.join(".symposium").exists());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Cycle detection: `crate-a` redirects to `crate-b`, `crate-b` has a path
+/// entry (with skills) AND redirects back to `crate-a`. The cycle is detected
+/// and skipped, but skills from the path entry survive.
+#[tokio::test]
+async fn sync_crate_metadata_cycle_detection() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-path-cycle0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            // Should not hang or crash.
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            // crate-b's path entry should succeed despite the cycle redirect.
+            let b_dir = find_installed_skill(&skills_dir, "b-guidance");
+            let content = std::fs::read_to_string(b_dir.join("SKILL.md"))?;
+            assert!(
+                content.contains("despite A→B→A cycle"),
+                "skill from non-cycling entry should be installed"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Multi-hop redirect: `crate-a` → `crate-b` → `crate-c` (which has skills).
+/// Verifies that redirect chains are followed transitively.
+#[tokio::test]
+async fn sync_crate_metadata_multihop_redirect() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-path-multihop0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            let c_dir = find_installed_skill(&skills_dir, "c-guidance");
+            let content = std::fs::read_to_string(c_dir.join("SKILL.md"))?;
+            assert!(
+                content.contains("A → B → C redirect chain"),
+                "skill from end of multi-hop chain should be installed"
+            );
+            assert!(c_dir.join(".symposium").exists());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Explicit opt-out: crate has `[package.metadata.symposium] skills = []` even
+/// though a `skills/` directory exists. Nothing should be installed.
+#[tokio::test]
+async fn sync_crate_metadata_explicit_optout() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-path-optout0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            // The crate has skills/ on disk but metadata says skills = [],
+            // so nothing should be installed.
+            let hits = find_installed_skills(&skills_dir, "should-not-appear");
+            assert!(
+                hits.is_empty(),
+                "skills = [] should suppress fallback to skills/ dir, found: {hits:?}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Multiple metadata entries: `crate-m` has both a `path` entry and a `crate`
+/// redirect. Skills from both sources should be installed.
+#[tokio::test]
+async fn sync_crate_metadata_multiple_entries() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-path-multi-entry0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            // From the local path entry
+            let m_dir = find_installed_skill(&skills_dir, "m-guidance");
+            let m_content = std::fs::read_to_string(m_dir.join("SKILL.md"))?;
+            assert!(
+                m_content.contains("from local path entry"),
+                "skill from path entry should be installed"
+            );
+
+            // From the redirect to crate-n
+            let n_dir = find_installed_skill(&skills_dir, "n-guidance");
+            let n_content = std::fs::read_to_string(n_dir.join("SKILL.md"))?;
+            assert!(
+                n_content.contains("via redirect from crate-m"),
+                "skill from redirect entry should be installed"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Hyphen/underscore normalization in cycle detection: `crate-foo` has a path
+/// entry and also redirects to `crate_foo` (same crate, different spelling).
+/// The cycle should be detected via normalized name, not loop.
+#[tokio::test]
+async fn sync_crate_metadata_hyphen_underscore_cycle() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-path-hyphen-cycle0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            // The path entry's skill should be installed.
+            let foo_dir = find_installed_skill(&skills_dir, "foo-guidance");
+            let content = std::fs::read_to_string(foo_dir.join("SKILL.md"))?;
+            assert!(
+                content.contains("hyphen variant"),
+                "skill from path entry should be installed despite underscore redirect"
+            );
+
+            // Should be exactly one skill (no duplicates from the self-redirect).
+            let all_skills: Vec<_> = std::fs::read_dir(&skills_dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.path().is_dir() && e.path().join("SKILL.md").is_file())
+                .collect();
+            assert_eq!(
+                all_skills.len(),
+                1,
+                "self-redirect via underscore spelling should not produce duplicates: {all_skills:?}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Redirect target that opts out: A redirects to B, B has `skills = []` even
+/// though it has a `skills/` directory on disk. Nothing should be installed.
+#[tokio::test]
+async fn sync_crate_metadata_redirect_target_optout() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-path-redirect-optout0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            let hits = find_installed_skills(&skills_dir, "hidden-skill");
+            assert!(
+                hits.is_empty(),
+                "redirect target with skills = [] must not expose skills/ dir: {hits:?}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Diamond redirect: both crate-a and crate-b redirect to crate-c. The shared
+/// skill should be installed exactly once (dedup via SkillOrigin).
+#[tokio::test]
+async fn sync_crate_metadata_diamond_dedup() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-path-diamond0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            // Should be installed exactly once (not two copies with hash suffixes).
+            let hits = find_installed_skills(&skills_dir, "shared-guidance");
+            assert_eq!(
+                hits.len(),
+                1,
+                "diamond redirect to same crate should dedup to one install: {hits:?}"
+            );
+
+            let content = std::fs::read_to_string(hits[0].join("SKILL.md"))?;
+            assert!(content.contains("should dedup to one install"));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Malformed metadata falls back to `skills/`: if `[package.metadata.symposium]`
+/// is present but unparseable, the error is logged and Symposium falls back to
+/// scanning the default `skills/` directory.
+#[tokio::test]
+async fn sync_crate_metadata_malformed_falls_back() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-path-bad-metadata0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            // Malformed metadata → fallback to skills/ → skill is installed.
+            let dir = find_installed_skill(&skills_dir, "fallback-skill");
+            let content = std::fs::read_to_string(dir.join("SKILL.md"))?;
+            assert!(
+                content.contains("malformed metadata falls back"),
+                "malformed metadata should fall back to skills/"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Missing directory in path entry: metadata says `path = "nonexistent-directory"`
+/// but that dir doesn't exist. Sync completes without error, zero skills installed.
+#[tokio::test]
+async fn sync_crate_metadata_missing_path_dir() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-path-missing-dir0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            let entries: Vec<_> = std::fs::read_dir(&skills_dir)
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.path().is_dir() && e.path().join("SKILL.md").is_file())
+                .collect();
+            assert!(
+                entries.is_empty(),
+                "nonexistent path entry should produce zero skills, found: {entries:?}"
+            );
             Ok(())
         },
     )

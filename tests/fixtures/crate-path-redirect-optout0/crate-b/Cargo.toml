@@ -1,0 +1,8 @@
+[package]
+name = "crate-b"
+version = "0.1.0"
+edition = "2021"
+
+# Explicit opt-out — even though skills/ exists on disk
+[package.metadata.symposium]
+skills = []

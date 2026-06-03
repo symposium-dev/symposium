@@ -47,7 +47,7 @@ impl Skill {
 /// source that both reference the same on-disk skill therefore dedupe.
 ///
 /// - `Crate { name, version }` — the skill came from walking the source tree
-///   of a specific crate version (`source = "crate"` / `source.crate_path`).
+///   of a specific crate version (`source = "crate"`).
 ///   Identity is `(name, version)` only: two plugins targeting the same
 ///   crate version produce the same logical skills regardless of which
 ///   plugin pointed at them.
@@ -240,9 +240,8 @@ async fn load_skills_for_group(
     }
 
     let skills = match &group.source {
-        PluginSource::CratePath(source) => {
-            load_crate_path_skills(
-                source.as_str(),
+        PluginSource::Crate => {
+            load_crate_skills(
                 &plugin.crates,
                 &group_crates,
                 group,
@@ -267,11 +266,10 @@ async fn load_skills_for_group(
     (group_crates, skills)
 }
 
-/// Resolve crate-path predicates, fetch each matched crate, and discover
-/// skills inside the configured `crate_path`. One `SkillOrigin::Crate`
-/// per matched crate.
-async fn load_crate_path_skills(
-    crate_path: &str,
+/// Resolve crate source predicates, fetch each matched crate, read its
+/// `[package.metadata.symposium]`, and discover skills. Follows redirects
+/// recursively with cycle detection.
+async fn load_crate_skills(
     plugin_crates: &PredicateSet,
     group_crates: &PredicateSet,
     group: &SkillGroup,
@@ -281,54 +279,151 @@ async fn load_crate_path_skills(
     let matched = predicate::union_matched_crates(&[plugin_crates, group_crates], for_crates);
     let mut skills = Vec::new();
     for (name, _version) in &matched {
-        match crate::crate_sources::RustCrateFetch::new(name, workspace_crates)
-            .fetch()
-            .await
-        {
-            Ok(result) => {
-                // The fetch result holds the canonical name/version
-                // (hyphen/underscore normalized for path deps, exact
-                // version from cargo metadata for registry deps), so
-                // two plugins resolving the same crate produce the
-                // same `SkillOrigin::Crate` and dedupe at sync time.
-                let version = match semver::Version::parse(&result.version) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::warn!(
-                            crate_name = %name,
-                            version = %result.version,
-                            error = %e,
-                            "skipping crate-source skills: unparseable version"
-                        );
-                        continue;
+        let mut visited = std::collections::HashSet::new();
+        fetch_and_resolve_skills(
+            name,
+            None,
+            workspace_crates,
+            group,
+            &mut visited,
+            &mut skills,
+            0,
+        )
+        .await;
+    }
+    skills
+}
+
+const MAX_REDIRECT_DEPTH: usize = 10;
+
+/// Recursively fetch a crate and resolve its skills via metadata.
+async fn fetch_and_resolve_skills(
+    crate_name: &str,
+    version_spec: Option<&str>,
+    workspace_crates: &[crate::crate_sources::WorkspaceCrate],
+    group: &SkillGroup,
+    visited: &mut std::collections::HashSet<String>,
+    skills: &mut Vec<(Skill, SkillOrigin)>,
+    depth: usize,
+) {
+    if depth >= MAX_REDIRECT_DEPTH {
+        tracing::warn!(
+            crate_name = %crate_name,
+            "redirect chain exceeded depth limit ({MAX_REDIRECT_DEPTH}); stopping"
+        );
+        return;
+    }
+
+    let normalized = crate::crate_sources::normalize_crate_name(crate_name);
+    let visit_key = format!("{normalized}@{}", version_spec.unwrap_or("*"));
+    if !visited.insert(visit_key) {
+        tracing::warn!(
+            crate_name = %crate_name,
+            "cycle detected in crate skill metadata redirects; skipping"
+        );
+        return;
+    }
+
+    let mut fetcher = crate::crate_sources::RustCrateFetch::new(crate_name, workspace_crates);
+    if let Some(vs) = version_spec {
+        fetcher = fetcher.version(vs);
+    }
+
+    let result = match fetcher.fetch().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                crate_name = %crate_name,
+                error = %e,
+                "failed to fetch crate source for skills"
+            );
+            return;
+        }
+    };
+
+    let version = match semver::Version::parse(&result.version) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(
+                crate_name = %crate_name,
+                version = %result.version,
+                error = %e,
+                "skipping crate-source skills: unparseable version"
+            );
+            return;
+        }
+    };
+
+    let origin = SkillOrigin::Crate {
+        name: result.name.clone(),
+        version,
+    };
+
+    let cargo_toml_path = result.path.join("Cargo.toml");
+    let metadata = match crate::crate_metadata::parse_crate_metadata(&cargo_toml_path) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(
+                crate_name = %crate_name,
+                error = %e,
+                "failed to parse crate metadata; falling back to default skills/ path"
+            );
+            None
+        }
+    };
+
+    match metadata {
+        None => {
+            // No metadata section → fall back to default `skills/` subdirectory.
+            let dir = result.path.join(crate::plugins::CRATE_DEFAULT_SKILLS_PATH);
+            for skill_result in discover_skills(&dir, group) {
+                match skill_result {
+                    Ok(skill) => skills.push((skill, origin.clone())),
+                    Err(e) => tracing::warn!(
+                        crate_name = %crate_name,
+                        error = %e,
+                        "failed to load skill from crate source"
+                    ),
+                }
+            }
+        }
+        Some(meta) => {
+            // Metadata present — process each entry.
+            for source in &meta.skills {
+                match source {
+                    crate::crate_metadata::SkillSource::Path(p) => {
+                        let dir = result.path.join(p);
+                        for skill_result in discover_skills(&dir, group) {
+                            match skill_result {
+                                Ok(skill) => skills.push((skill, origin.clone())),
+                                Err(e) => tracing::warn!(
+                                    crate_name = %crate_name,
+                                    path = %p,
+                                    error = %e,
+                                    "failed to load skill from crate source"
+                                ),
+                            }
+                        }
                     }
-                };
-                let origin = SkillOrigin::Crate {
-                    name: result.name.clone(),
-                    version,
-                };
-                let dir = result.path.join(crate_path);
-                for skill_result in discover_skills(&dir, group) {
-                    match skill_result {
-                        Ok(skill) => skills.push((skill, origin.clone())),
-                        Err(e) => tracing::warn!(
-                            crate_name = %name,
-                            error = %e,
-                            "failed to load skill from crate source"
-                        ),
+                    crate::crate_metadata::SkillSource::Crate {
+                        name: target_name,
+                        version: target_version,
+                    } => {
+                        Box::pin(fetch_and_resolve_skills(
+                            target_name,
+                            target_version.as_deref(),
+                            workspace_crates,
+                            group,
+                            visited,
+                            skills,
+                            depth + 1,
+                        ))
+                        .await;
                     }
                 }
             }
-            Err(e) => {
-                tracing::warn!(
-                    crate_name = %name,
-                    error = %e,
-                    "failed to fetch crate source for skills"
-                );
-            }
         }
     }
-    skills
 }
 
 /// Fetch a `source.git` group's tree and build a per-skill `Git` origin

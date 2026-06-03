@@ -32,14 +32,18 @@ Also discovers standalone `SKILL.md` files not wrapped in a plugin. Returns a `P
 
 Defines `Source` (the `source = "..."`-tagged enum: `cargo`, `github`, `binary`) and `acquire_source`, which downloads / installs / clones the source and returns an `AcquiredSource` whose `resolve_executable` / `resolve_script` methods turn a relative `executable`/`script` name into a concrete path. The `Runnable` enum (`Exec(PathBuf)` or `Script(PathBuf)`) is the final form a hook command resolves to. The `git` submodule handles GitHub tarball acquisition and caching.
 
-Validates skill group source constraints at parse time: mutual exclusivity of `source.path`/`source.git`/`source.crate_path`, and the requirement that `source.crate_path` has at least one non-wildcard predicate.
+Validates skill group source constraints at parse time: mutual exclusivity of `source.path`/`source.git`/`source = "crate"`, and the requirement that `source = "crate"` has at least one non-wildcard predicate.
+
+### `crate_metadata.rs` — parse Cargo.toml metadata
+
+Parses `[package.metadata.symposium]` from crate `Cargo.toml` files. Crate authors embed skill layout metadata so Symposium knows where to find skills (or which other crate to redirect to). Returns `SkillSource::Path(subdir)` or `SkillSource::Crate { name, version }` for redirects.
 
 ### `skills.rs` — skill resolution and matching
 
-Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates crate predicates at each level (plugin, group, skill) to determine which skills apply. For `source.crate_path` groups, resolves predicates to a matched crate set and fetches each crate's source via `RustCrateFetch`.
+Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates crate predicates at each level (plugin, group, skill) to determine which skills apply. For `source = "crate"` groups, resolves predicates to a matched crate set, fetches each crate's source via `RustCrateFetch`, reads `[package.metadata.symposium]` to determine skill paths, and follows redirects recursively with cycle detection and a depth limit of 10.
 
 Each applicable skill carries a `SkillOrigin` describing *where its bytes live*, used at sync time for dedup and install-path disambiguation. What matters for identity is the on-disk location of the skill, not which plugin manifest pointed at it — two plugins in the same source pointing at the same skill bundle dedupe.
-- `Crate { name, version }` — from a crate-source resolution (`source = "crate"` / `source.crate_path`). Two `Crate` origins with the same `(name, version)` are the same logical skill, regardless of which plugin pointed at them.
+- `Crate { name, version }` — from a crate-source resolution (`source = "crate"`). Two `Crate` origins with the same `(name, version)` are the same logical skill, regardless of which plugin pointed at them.
 - `Git { repo, commit_sha, skill_path }` — from a `source.git` group. Identity is the triple `(owner/repo, resolved commit SHA, SKILL.md path within the repo tree)`. Two plugins that pointed at the same repo via different URL forms (root URL vs. `tree/<ref>/<subpath>`) collapse to one install when they end up loading the same SKILL.md from the same commit; different SKILL.md files within one repo stay distinct.
 - `Source { source_name, skill_path }` — from a plugin's `source.path` group, or from a standalone `SKILL.md` discovered in a registry source. `source_name` is the registry source's display name (e.g. `"user-plugins"`); `skill_path` is the SKILL.md's parent directory relative to the source root (canonicalized first, so `../`-laden joins collapse to the same string as a direct standalone walk).
 

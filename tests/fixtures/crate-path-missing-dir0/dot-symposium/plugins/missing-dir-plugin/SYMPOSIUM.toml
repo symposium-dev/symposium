@@ -1,0 +1,5 @@
+name = "missing-dir-plugin"
+crates = ["crate-miss"]
+
+[[skills]]
+source = "crate"

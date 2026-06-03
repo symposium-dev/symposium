@@ -1,0 +1,5 @@
+name = "cycle-plugin"
+crates = ["crate-a"]
+
+[[skills]]
+source = "crate"

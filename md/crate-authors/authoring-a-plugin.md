@@ -73,12 +73,15 @@ Symposium fetches the crate source (from the local cargo cache or crates.io) and
 
 ##### Prefer a directory other than `skills/`?
 
-Use `source.crate_path` to specify a custom path:
+Add `[package.metadata.symposium]` to your crate's `Cargo.toml` to specify a custom path:
 
 ```toml
-[[skills]]
-source.crate_path = "docs/agent-skills"
+# In your crate's Cargo.toml
+[[package.metadata.symposium.skills]]
+path = "docs/agent-skills"
 ```
+
+When no metadata section is present, Symposium defaults to the `skills/` directory. See [Supporting your crate](./supporting-your-crate.md) for the full metadata schema including redirects to other crates.
 
 #### Standalone skills (on the recommendations repo)
 

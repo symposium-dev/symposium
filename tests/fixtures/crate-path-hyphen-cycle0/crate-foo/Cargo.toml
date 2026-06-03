@@ -1,0 +1,11 @@
+[package]
+name = "crate-foo"
+version = "0.1.0"
+edition = "2021"
+
+# Redirect to same crate with underscore spelling — cycle detection must normalize
+[[package.metadata.symposium.skills]]
+path = "skills"
+
+[[package.metadata.symposium.skills]]
+crate = { name = "crate_foo" }
