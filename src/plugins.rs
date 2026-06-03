@@ -1424,7 +1424,7 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
 /// Names a plugin subcommand cannot use because they collide with built-in
 /// `cargo agents` commands.
 const RESERVED_SUBCOMMAND_NAMES: &[&str] =
-    &["init", "sync", "hook", "plugin", "crate-info", "help"];
+    &["init", "sync", "hook", "plugin", "crate-info", "self-update", "help"];
 
 /// Maximum length (bytes) of a subcommand's `description` field.
 const MAX_SUBCOMMAND_DESCRIPTION_LEN: usize = 1024;

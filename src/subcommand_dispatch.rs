@@ -2,7 +2,7 @@
 //!
 //! The top-level CLI declares `allow_external_subcommands = true`, any
 //! unknown subcommand is routed here. This module looks up the name across configured plugins
-//! (filtered by workspace crates at the plugin and subcommand levels), resolves it's `Installation` to a `Runnable`, and
+//! (filtered by workspace crates at the plugin and subcommand levels), resolves its `Installation` to a `Runnable`, and
 //! spawns it with inherited stdio, propagating the child's exit code.
 //!
 
