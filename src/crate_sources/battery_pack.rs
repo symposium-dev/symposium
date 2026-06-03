@@ -8,7 +8,6 @@
 use std::path::Path;
 
 use crate::config::Symposium;
-use crate::installation::{self, CargoSource};
 
 use super::list::WorkspaceCrate;
 
@@ -61,23 +60,24 @@ pub async fn discover_battery_packs(sym: &Symposium, cwd: &Path) -> Vec<Workspac
 /// Ensure `cargo-bp` is installed in symposium's binary cache and return the
 /// path to the binary.
 async fn acquire_cargo_bp(sym: &Symposium) -> anyhow::Result<std::path::PathBuf> {
-    let source = CargoSource {
-        crate_name: "cargo-bp".to_string(),
-        version: None,
-        git: None,
-    };
+    let source = symposium_install::CargoSource::new("cargo-bp");
 
-    let acquired =
-        installation::acquire_source(sym, &installation::Source::Cargo(source), Some("cargo-bp"))
-            .await?;
+    let acquired = symposium_install::acquire_source(
+        &sym.install_context(),
+        &symposium_install::Source::Cargo(source),
+        Some("cargo-bp"),
+    )
+    .await?;
 
     let binary_name = acquired
         .resolved_executable
         .unwrap_or_else(|| "cargo-bp".to_string());
-    Ok(acquired
-        .base
-        .join("bin")
-        .join(installation::platform_binary_exe(&binary_name)))
+    let exe_name = if cfg!(windows) {
+        format!("{binary_name}.exe")
+    } else {
+        binary_name
+    };
+    Ok(acquired.base.join("bin").join(exe_name))
 }
 
 fn battery_packs_from_report(report: cargo_bp_script::StatusReport) -> Vec<WorkspaceCrate> {
