@@ -1,0 +1,10 @@
+name = "example-plugin"
+crates = ["*"]
+
+[[installations]]
+name = "example-tool-install"
+executable = "rustc"
+
+[subcommand.example-tool]
+description = "Analyze the example crate"
+command = "example-tool-install"

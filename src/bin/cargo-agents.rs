@@ -1,13 +1,16 @@
 use clap::Parser;
+use std::env;
 use std::process::ExitCode;
 
 use symposium::cli::{Cli, Commands, PluginCommand};
 use symposium::config;
+use symposium::help_render;
 use symposium::hook;
 use symposium::output::Output;
 use symposium::plugins;
 use symposium::self_update;
 use symposium::state;
+use symposium::subcommand_dispatch::dispatch_external;
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -24,7 +27,30 @@ async fn main() -> ExitCode {
     } else {
         args
     };
-    let cli = Cli::parse_from(filtered);
+
+    let cwd = env::current_dir().expect("failed to get current directory");
+
+    // Parse without exiting on error: a help request on a built-in with required args
+    // (`crate-info --help`, `plugin --help`) surfaces a parse error that `help_text` recovers.
+    // `args_str` feeds the subcommand-name walk.
+    let args_str = filtered
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let parse = Cli::try_parse_from(filtered);
+
+    // `--help` / `-h` / `help` / no subcommand -> audience-grouped top-level help (or clap's
+    // per-command help for `<built-in> --help`).
+    // Plugin `<name> --help` returns `None` here and is forwarded to the child by dispatch below.
+    if let Some(text) = help_render::help_text(parse.as_ref(), &args_str, &sym, &cwd) {
+        print!("{text}");
+        return ExitCode::SUCCESS;
+    }
+
+    let cli = match parse {
+        Ok(cli) => cli,
+        Err(err) => err.exit(),
+    };
 
     // Log the command being invoked
     match &cli.command {
@@ -39,6 +65,9 @@ async fn main() -> ExitCode {
         Some(Commands::SelfUpdate) => tracing::info!("cargo agents self-update"),
         Some(Commands::CrateInfo { name, version }) => {
             tracing::debug!(%name, version = ?version, "cargo agents crate-info");
+        }
+        Some(Commands::External(argv)) => {
+            tracing::info!(argv = ?argv, "cargo agents <external>");
         }
         None => {}
     }
@@ -71,20 +100,27 @@ async fn main() -> ExitCode {
         }
     }
 
-    let cwd = std::env::current_dir().expect("failed to get current directory");
-
     match cli.command {
         // Commands that need direct I/O (stdin/stdout) stay in the binary
         Some(Commands::Hook { agent, event }) => hook::run(&sym, agent, event).await,
 
         Some(Commands::Plugin { command }) => handle_plugin_command(&sym, command).await,
 
-        None => {
-            use clap::CommandFactory;
-            Cli::command().print_help().ok();
-            println!();
-            ExitCode::SUCCESS
-        }
+        Some(Commands::External(argv)) => match dispatch_external(&sym, &cwd, argv).await {
+            Ok(result) => {
+                use std::io::Write;
+                std::io::stdout().write_all(&result.stdout).ok();
+                std::io::stderr().write_all(&result.stderr).ok();
+                ExitCode::from(result.exit_code)
+            }
+            Err(err) => {
+                eprintln!("Error: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
+        // No-subcommand and the `help` keyword are handled by the help branch
+        // right after parsing, above.
+        None => unreachable!("no-subcommand routes to the help renderer above"),
 
         // Everything else delegates to the library
         Some(cmd) => match symposium::cli::run(&mut sym, cmd, &cwd, &out).await {

@@ -29,6 +29,45 @@ async fn session_start_returns_plugin_context() {
     .unwrap();
 }
 
+/// In a workspace with crate-aware plugin subcommands, SessionStart nudges the
+/// agent to discover them via `cargo agents --help`.
+#[tokio::test]
+async fn session_start_hints_discovery_when_subcommands_apply() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["help_render0"],
+        async |mut ctx| {
+            // Keep the update path dormant so only the discovery hint is asserted.
+            ctx.sym.config.auto_update = symposium::config::AutoUpdate::Off;
+
+            let result = ctx
+                .prompt_or_hook("hello", &[HookStep::session_start()], HookAgent::Claude)
+                .await?;
+
+            let context = result
+                .hooks
+                .iter()
+                .filter_map(|h| {
+                    let top = h.output.get("additionalContext").and_then(|v| v.as_str());
+                    let nested = h
+                        .output
+                        .get("hookSpecificOutput")
+                        .and_then(|o| o.get("additionalContext"))
+                        .and_then(|v| v.as_str());
+                    top.or(nested)
+                })
+                .next()
+                .expect("session-start should produce additionalContext");
+
+            expect_test::expect![[r#"This project has crate-aware tools available via `cargo agents`. Run `cargo agents --help` to list them before working with the Rust code. Only use tools under the 'Commands for agents' section unless the user explicitly asks you to run one from 'Commands for humans'."#]]
+                .assert_eq(context);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// Agent reads a tokio skill after `cargo add tokio` and responds with its content.
 #[tokio::test]
 async fn agent_reads_tokio_skill_after_cargo_add() {

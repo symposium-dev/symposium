@@ -6,7 +6,13 @@ Entry point invoked by the agent's hook system on session events.
 
 1. **Auto-sync** (if enabled) — when `auto-sync = true` in the user config, runs [`cargo agents sync`](./sync-agent-flow.md) to ensure skills are current. The workspace root is resolved from the payload's `cwd` field; if the payload does not include a working directory, the process's current working directory is used as a fallback. Runs quietly and non-fatally — failures are logged but don't block hook dispatch.
 
-2. **Dispatch to plugin hooks** — for each enabled plugin that defines a hook handler for the incoming event:
+2. **Built-in dispatch** — symposium's own handling, before plugin hooks. Currently only `SessionStart` produces output; `PreToolUse`, `PostToolUse`, and `UserPromptSubmit` are no-ops. On `SessionStart` two fragments are computed independently and, when present, joined into one `additionalContext`:
+   - **Discovery hint** — when the active workspace exposes plugin-vended subcommands (the same workspace-filtered set listed by [`cargo agents --help`](./subcommands.md#help-text-grouping)), a line suggesting the agent run `cargo agents --help` to find them. Computed independently of the update-check throttle, so it fires whenever there is something to discover.
+   - **Update nudge** — when `auto-update = "warn"`, the 24-hour check throttle has elapsed, and the registry reports a newer version: a line suggesting `cargo agents self-update`.
+
+   Agents without hook registration (OpenCode, Goose) never receive this; for them the only discovery surface is `cargo agents --help` itself.
+
+3. **Dispatch to plugin hooks** — for each enabled plugin that defines a hook handler for the incoming event:
    - **Select format**: for each plugin, pick the best hook to deliver (see [Hooks](./hooks.md) for priority rules). If the plugin has a hook matching the current agent's format, deliver the input unmodified. Otherwise deliver in symposium canonical format (or convert to the declared format if only one non-symposium hook exists).
    - **Acquire and run**:
      - Ensure any `requirements` for the hook are acquired (on-demand, best-effort).

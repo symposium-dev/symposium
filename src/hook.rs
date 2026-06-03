@@ -1,16 +1,25 @@
 use std::{
+    env,
     io::{Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, ExitCode, Stdio},
 };
 
+use crate::installation::{install_requirement, resolve_runnable};
 use crate::plugins::{HookFormat, Installation};
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
     plugins::ParsedPlugin,
 };
-use symposium_install::{Runnable, acquire_source, make_executable};
+use crate::{
+    crate_sources::workspace_crates,
+    help_render::{AGENTS_HEADING, HUMANS_HEADING},
+    hook_schema::symposium::{OutputEvent, SessionStartInput},
+    plugins::load_registry,
+    subcommand_dispatch::applicable_subcommands,
+};
+use symposium_install::Runnable;
 
 /// A hook prepared for dispatch — installation names looked up to concrete
 /// `Installation` entries, so the dispatch loop never has to scan the plugin's
@@ -31,11 +40,10 @@ struct ResolvedHook {
 
 impl ResolvedHook {
     fn build(parsed_plugin: &ParsedPlugin, hook: &crate::plugins::Hook) -> anyhow::Result<Self> {
-        let installations = &parsed_plugin.plugin.installations;
+        let plugin = &parsed_plugin.plugin;
         let lookup = |name: &str| -> anyhow::Result<Installation> {
-            installations
-                .iter()
-                .find(|i| i.name == name)
+            plugin
+                .get_installation(name)
                 .cloned()
                 .ok_or_else(|| anyhow::anyhow!("installation `{name}` not found in plugin"))
         };
@@ -60,102 +68,33 @@ impl ResolvedHook {
     }
 }
 
-/// Acquire an installation as a requirement: run its kind-specific source
-/// step (if any), then any declared `install_commands`. Does NOT resolve to
-/// a runnable — requirements are only ever "ensure on disk".
-async fn install(sym: &Symposium, install: &Installation) -> anyhow::Result<()> {
-    if let Some(source) = &install.source {
-        acquire_source(
-            &sym.install_context(),
-            source,
-            install.executable.as_deref(),
-        )
-        .await?;
-    }
-    run_install_commands(&install.install_commands).await
-}
-
-/// Run a list of post-install shell commands sequentially. Stops at the first
-/// failure.
-async fn run_install_commands(commands: &[String]) -> anyhow::Result<()> {
-    for cmd in commands {
-        let status = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .status()
-            .await?;
-        if !status.success() {
-            anyhow::bail!("install command `{cmd}` exited with {status}");
-        }
-    }
-    Ok(())
-}
-
 enum SpawnSpec {
     Exec { path: PathBuf, args: Vec<String> },
     Script { path: PathBuf, args: Vec<String> },
 }
 
 async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Result<SpawnSpec> {
-    let installation = &hook.command;
-    // Validation guarantees only one slot is set across hook + installation.
-    let exec_choice = installation
-        .executable
-        .as_deref()
-        .or(hook.hook_executable.as_deref());
-    let script_choice = installation
-        .script
-        .as_deref()
-        .or(hook.hook_script.as_deref());
+    let label = format!("hook `{}`", hook.hook_name);
+    let runnable = resolve_runnable(
+        sym,
+        &hook.command,
+        hook.hook_executable.as_deref(),
+        hook.hook_script.as_deref(),
+        &label,
+    )
+    .await?;
 
-    // Acquire the source if any.
-    let acquired = match &installation.source {
-        Some(source) => Some(acquire_source(&sym.install_context(), source, exec_choice).await?),
-        None => None,
-    };
-
-    // install_commands run after source acquisition.
-    run_install_commands(&installation.install_commands).await?;
-
-    let runnable = match (acquired, exec_choice, script_choice) {
-        (Some(a), Some(name), None) => Runnable::Exec(a.executable_named(name)),
-        (Some(a), None, Some(name)) => Runnable::Script(a.script_named(name)),
-        (Some(a), None, None) => {
-            // Cargo single-binary fallback: use the binary name resolved at
-            // acquisition time (from crates.io or the explicit hint).
-            if let Some(name) = a.resolved_executable.as_deref() {
-                Runnable::Exec(a.executable_named(name))
-            } else {
-                anyhow::bail!(
-                    "hook `{}`: command resolved to no executable or script",
-                    hook.hook_name
-                );
-            }
-        }
-        (None, Some(name), None) => Runnable::Exec(PathBuf::from(name)),
-        (None, None, Some(name)) => Runnable::Script(PathBuf::from(name)),
-        (None, None, None) => anyhow::bail!(
-            "hook `{}`: command resolved to no executable or script",
-            hook.hook_name
-        ),
-        // Unreachable: validation rejects executable+script set together.
-        (_, Some(_), Some(_)) => unreachable!("validation forbids both executable and script"),
-    };
-
-    match runnable {
-        Runnable::Exec(path) => {
-            make_executable(&path).ok();
-            Ok(SpawnSpec::Exec {
-                path,
-                args: hook.args.clone(),
-            })
-        }
-        Runnable::Script(path) => Ok(SpawnSpec::Script {
+    Ok(match runnable {
+        Runnable::Exec(path) => SpawnSpec::Exec {
             path,
             args: hook.args.clone(),
-        }),
+        },
+        Runnable::Script(path) => SpawnSpec::Script {
+            path,
+            args: hook.args.clone(),
+        },
         _ => anyhow::bail!("hook `{}`: unsupported runnable kind", hook.hook_name),
-    }
+    })
 }
 
 fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
@@ -353,33 +292,68 @@ pub async fn dispatch_builtin(
     }
 }
 
-/// Handle SessionStart: check for updates and nudge the user via context.
-fn handle_session_start(
-    sym: &Symposium,
-    _payload: &symposium::SessionStartInput,
-) -> symposium::OutputEvent {
+/// Handle SessionStart: orient the agent toward crate-aware tooling and, when due, nudge the
+/// user to update. The two fragments are computed independently -- the discovery hint is never gated
+/// behind the update-check throttle -- then joined into a single context block.
+fn handle_session_start(sym: &Symposium, payload: &SessionStartInput) -> OutputEvent {
+    let cwd = payload
+        .cwd
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| env::current_dir().unwrap_or_default());
+
+    let fragments = [discovery_hint(sym, &cwd), update_nudge(sym)]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<String>>();
+
+    if fragments.is_empty() {
+        OutputEvent::empty_for(HookEvent::SessionStart)
+    } else {
+        OutputEvent::with_context(HookEvent::SessionStart, fragments.join("\n\n"))
+    }
+}
+
+/// Suggest `cargo agents --help` when the active workspace exposes crate-aware plugin subcommands.
+/// Reuses the help renderer's `applicable_subcommands`, so the hint fires only when there is actually something to discover; `None` otherwise.
+fn discovery_hint(sym: &Symposium, cwd: &Path) -> Option<String> {
+    let registry = load_registry(sym);
+    let deps = workspace_crates(cwd)
+        .into_iter()
+        .map(|wcrt| (wcrt.name, wcrt.version))
+        .collect::<Vec<_>>();
+
+    let any_subcommand = applicable_subcommands(&registry, &deps).next().is_some();
+
+    any_subcommand.then(|| {
+        format!(
+            "This project has crate-aware tools available via `cargo agents`. \
+             Run `cargo agents --help` to list them before working with the Rust code. \
+             Only use tools under the '{AGENTS_HEADING}' section unless the user \
+             explicitly asks you to run one from '{HUMANS_HEADING}'."
+        )
+    })
+}
+
+/// Nudge the user to update. Gated by `auto-update = \"warn\"`, the 25h throttle,
+/// and a newer published version on the registry; `None` otherwise.
+fn update_nudge(sym: &Symposium) -> Option<String> {
     use crate::config::AutoUpdate;
-    use crate::self_update;
-    use crate::state;
     use crate::state::CURRENT_VERSION;
 
     if sym.config.auto_update != AutoUpdate::Warn {
-        return symposium::OutputEvent::empty_for(HookEvent::SessionStart);
+        return None;
     }
-    if !state::should_check_for_update(sym.config_dir()) {
-        return symposium::OutputEvent::empty_for(HookEvent::SessionStart);
+    if !crate::state::should_check_for_update(sym.config_dir()) {
+        return None;
     }
-    state::record_update_check(sym.config_dir());
+    crate::state::record_update_check(sym.config_dir());
 
-    if let Ok(Some(latest)) = self_update::check_upgrade(sym) {
-        let msg = format!(
-            "symposium {latest} is available (current: {CURRENT_VERSION}). \
-             Run `cargo agents self-update` to upgrade."
-        );
-        symposium::OutputEvent::with_context(HookEvent::SessionStart, msg)
-    } else {
-        symposium::OutputEvent::empty_for(HookEvent::SessionStart)
-    }
+    let latest = crate::self_update::check_upgrade(sym).ok()??;
+    Some(format!(
+        "symposium {latest} is available (current: {CURRENT_VERSION}). \
+         Run `cargo agents self-update` to upgrade."
+    ))
 }
 
 /// Handle PostToolUse: no-op for now.
@@ -435,7 +409,7 @@ pub async fn dispatch_plugin_hooks(
 
         // Acquire each requirement (best-effort).
         for requirement in &hook.requirements {
-            if let Err(e) = install(sym, requirement).await {
+            if let Err(e) = install_requirement(sym, requirement).await {
                 tracing::error!(name = %requirement.name, error = %e, "failed to install hook requirement");
             }
         }

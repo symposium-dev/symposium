@@ -2,12 +2,15 @@ pub mod agents;
 pub mod cli;
 pub mod config;
 pub mod crate_command;
+pub mod help_render;
 pub mod hook;
 pub mod hook_schema;
+pub(crate) mod installation;
 pub mod output;
 pub mod plugins;
 pub mod self_update;
 pub mod state;
+pub mod subcommand_dispatch;
 pub mod workspace_state;
 
 pub(crate) mod crate_metadata;

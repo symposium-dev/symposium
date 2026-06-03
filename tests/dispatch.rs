@@ -3,12 +3,14 @@ use symposium_testlib::TestMode;
 #[tokio::test]
 async fn help() {
     symposium_testlib::with_fixture(TestMode::SimulationOnly, &["plugins0"], async |mut ctx| {
-        let result = ctx.symposium(&["help"]).await;
-        assert!(result.is_err());
-        let err = format!("{}", result.unwrap_err());
+        let out = ctx.symposium(&["help"]).await?;
         assert!(
-            err.contains("cargo"),
-            "help should mention cargo agents: {err}"
+            out.contains("Commands for humans:"),
+            "help should render audience-grouped sections: {out}"
+        );
+        assert!(
+            out.contains("Commands for agents:"),
+            "help should render audience-grouped sections: {out}"
         );
         Ok(())
     })

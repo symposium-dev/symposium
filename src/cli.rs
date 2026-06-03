@@ -3,9 +3,10 @@
 //! This module defines the argument types and the core `run()` function
 //! so that both the binary and the test harness can invoke commands.
 
+use std::ffi::OsString;
 use std::path::Path;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::{Parser, Subcommand};
 
 use crate::config::Symposium;
@@ -13,7 +14,9 @@ use crate::crate_command::{self, DispatchResult};
 use crate::hook;
 use crate::init::{self, InitOpts};
 use crate::output::Output;
+use crate::plugins::Audience;
 use crate::self_update;
+use crate::subcommand_dispatch::dispatch_external;
 use crate::sync;
 
 /// Parsed CLI arguments.
@@ -22,7 +25,10 @@ use crate::sync;
     name = "cargo-agents",
     bin_name = "cargo agents",
     version,
-    about = "AI the Rust Way"
+    about = "AI the Rust Way",
+    allow_external_subcommands = true,
+    disable_help_flag = true,
+    disable_help_subcommand = true
 )]
 pub struct Cli {
     /// Control plugin source update behavior (none, check, fetch)
@@ -32,6 +38,10 @@ pub struct Cli {
     /// Suppress status output
     #[arg(short, long, global = true)]
     pub quiet: bool,
+
+    /// Print help
+    #[arg(short = 'h', long = "help", global = true)]
+    pub help: bool,
 
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -78,7 +88,6 @@ pub enum Commands {
     SelfUpdate,
 
     /// Find crate sources
-    #[command(hide = true)]
     CrateInfo {
         /// Crate name
         name: String,
@@ -87,6 +96,23 @@ pub enum Commands {
         #[arg(long)]
         version: Option<String>,
     },
+
+    /// Plugin-vended subcommand. `argv[0]` is the name; the rest forwards to the child.
+    #[command(external_subcommand)]
+    External(Vec<OsString>),
+}
+
+/// Audience section a built-in subcommand belongs to in `--help`.
+///
+/// `None` means the subcommand is hidden (omitted from help entirely).
+/// Plugin-vended subcommands carry their own audience on the manifest;
+/// this only covers the static `Commands` variants above.
+pub fn builtin_audience(name: &str) -> Option<Audience> {
+    match name {
+        "init" | "sync" | "self-update" | "plugin" => Some(Audience::Humans),
+        "crate-info" => Some(Audience::Agents),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -160,6 +186,19 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
             }
         }
 
+        Commands::External(argv) => {
+            let result = dispatch_external(sym, cwd, argv).await?;
+            if !result.stdout.is_empty() {
+                out.println(String::from_utf8_lossy(&result.stdout).trim_end());
+            }
+            if !result.stderr.is_empty() {
+                eprint!("{}", String::from_utf8_lossy(&result.stderr));
+            }
+            match result.exit_code {
+                0 => Ok(()),
+                code => bail!("subcommand exited with status: {code}"),
+            }
+        }
         // These commands can't easily be extracted since they do I/O
         // (stdin/stdout for hooks). The binary handles them directly.
         Commands::Hook { .. } | Commands::Plugin { .. } => {
