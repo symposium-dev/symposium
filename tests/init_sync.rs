@@ -1687,7 +1687,6 @@ async fn session_start_hook_warns_about_update_in_context() {
     .unwrap();
 }
 
-
 #[tokio::test]
 async fn auto_sync_skips_when_cargo_lock_unchanged() {
     with_fixture(
