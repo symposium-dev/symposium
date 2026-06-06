@@ -5,7 +5,11 @@ use std::{
     process::{Command, ExitCode, Stdio},
 };
 
-use crate::installation::{install_requirement, resolve_runnable};
+use symposium_install::Runnable;
+
+use crate::installation::{
+    AcquiredInstallation, AcquiredRunnable, acquire_installation, resolve_runnable,
+};
 use crate::plugins::{HookFormat, Installation};
 use crate::{
     config::Symposium,
@@ -19,7 +23,6 @@ use crate::{
     plugins::load_registry,
     subcommand_dispatch::applicable_subcommands,
 };
-use symposium_install::Runnable;
 
 /// A hook prepared for dispatch — installation names looked up to concrete
 /// `Installation` entries, so the dispatch loop never has to scan the plugin's
@@ -68,50 +71,141 @@ impl ResolvedHook {
     }
 }
 
+/// Sanitize an installation name for use as part of an env var name.
+/// Replaces non-alphanumeric chars with underscore.
+fn env_safe(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+/// Build the env vars (including augmented PATH) for the spawn.
+///
+/// Iterates `acquired` in order; the parent directory of each absolute
+/// `runnable` is prepended to `$PATH` so later entries take precedence over
+/// earlier ones (the command's own parent ends up first since it's pushed
+/// last and prepended).
+fn build_env(acquired: &[AcquiredInstallation]) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    let mut path_prefix: Vec<String> = Vec::new();
+
+    for a in acquired {
+        let key = env_safe(&a.name);
+        if let Some(base) = &a.base {
+            env.push((format!("SYMPOSIUM_DIR_{key}"), base.display().to_string()));
+        }
+        if let Some(
+            AcquiredRunnable::ResolvedScript { path, .. } | AcquiredRunnable::ResolvedExec { path },
+        ) = &a.runnable
+        {
+            env.push((format!("SYMPOSIUM_{key}"), path.display().to_string()));
+            if let Some(parent) = path.parent() {
+                let parent_str = parent.display().to_string();
+                if !parent_str.is_empty() {
+                    path_prefix.push(parent_str);
+                }
+            }
+        }
+    }
+
+    // Command was pushed last into `acquired`; reverse so its bin dir wins
+    // PATH lookup over requirements' bin dirs.
+    path_prefix.reverse();
+
+    if !path_prefix.is_empty() {
+        let existing = std::env::var("PATH").unwrap_or_default();
+        let joined = if existing.is_empty() {
+            path_prefix.join(":")
+        } else {
+            format!("{}:{}", path_prefix.join(":"), existing)
+        };
+        env.push(("PATH".to_string(), joined));
+    }
+
+    env
+}
+
 enum SpawnSpec {
-    Exec { path: PathBuf, args: Vec<String> },
-    Script { path: PathBuf, args: Vec<String> },
+    Exec {
+        path: PathBuf,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+    },
+    Script {
+        path: PathBuf,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+    },
 }
 
 async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Result<SpawnSpec> {
-    let label = format!("hook `{}`", hook.hook_name);
-    let runnable = resolve_runnable(
+    // Acquire requirements first so the command's PATH sees them.
+    let mut acquired: Vec<AcquiredInstallation> = Vec::new();
+    for requirement in &hook.requirements {
+        match acquire_installation(sym, requirement, None, None).await {
+            Ok(a) => acquired.push(a),
+            Err(e) => {
+                tracing::error!(
+                    name = %requirement.name,
+                    error = %e,
+                    "failed to install hook requirement"
+                );
+            }
+        }
+    }
+
+    let command_acquired = acquire_installation(
         sym,
         &hook.command,
         hook.hook_executable.as_deref(),
         hook.hook_script.as_deref(),
-        &label,
     )
     .await?;
 
+    acquired.push(command_acquired.clone());
+    let env = build_env(&acquired);
+
+    let label = format!("hook `{}`", hook.hook_name);
+    let runnable = resolve_runnable(command_acquired, &label)?;
+
     Ok(match runnable {
-        Runnable::Exec(path) => SpawnSpec::Exec {
-            path,
-            args: hook.args.clone(),
-        },
         Runnable::Script(path) => SpawnSpec::Script {
             path,
             args: hook.args.clone(),
+            env,
         },
-        _ => anyhow::bail!("hook `{}`: unsupported runnable kind", hook.hook_name),
+        Runnable::Exec(path) => SpawnSpec::Exec {
+            path,
+            args: hook.args.clone(),
+            env,
+        },
     })
 }
 
 fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
     match spec {
-        SpawnSpec::Script { path, args } => Command::new("sh")
-            .arg(path)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn(),
-        SpawnSpec::Exec { path, args } => Command::new(path)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn(),
+        SpawnSpec::Script { path, args, env } => {
+            let mut cmd = Command::new("sh");
+            cmd.arg(path).args(args);
+            for (k, v) in env {
+                cmd.env(k, v);
+            }
+            cmd.stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        }
+        SpawnSpec::Exec { path, args, env } => {
+            let mut cmd = Command::new(path);
+            cmd.args(args);
+            for (k, v) in env {
+                cmd.env(k, v);
+            }
+            cmd.stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        }
     }
 }
 
@@ -407,13 +501,6 @@ pub async fn dispatch_plugin_hooks(
             "running plugin hook"
         );
 
-        // Acquire each requirement (best-effort).
-        for requirement in &hook.requirements {
-            if let Err(e) = install_requirement(sym, requirement).await {
-                tracing::error!(name = %requirement.name, error = %e, "failed to install hook requirement");
-            }
-        }
-
         // Determine stdin for the plugin based on its declared format.
         // After format selection, the only two cases are:
         // - native (matches host agent) → pass through original input
@@ -599,6 +686,90 @@ fn dispatched_hooks_for_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn env_safe_sanitizes_punctuation() {
+        assert_eq!(env_safe("rtk"), "rtk");
+        assert_eq!(env_safe("rtk-hooks"), "rtk_hooks");
+        assert_eq!(env_safe("a.b-c"), "a_b_c");
+        assert_eq!(env_safe("name__req_0"), "name__req_0");
+    }
+
+    #[test]
+    fn build_env_sets_dir_and_name_vars() {
+        // [req (rtk), command (no-source)] order — command was pushed last,
+        // so PATH should put its bin dir first.
+        let acquired = vec![
+            AcquiredInstallation {
+                name: "rtk".to_string(),
+                base: Some(PathBuf::from("/cache/rtk/1.0")),
+                runnable: Some(AcquiredRunnable::ResolvedExec {
+                    path: PathBuf::from("/cache/rtk/1.0/bin/rtk"),
+                }),
+            },
+            AcquiredInstallation {
+                name: "no-source".to_string(),
+                base: None,
+                runnable: Some(AcquiredRunnable::ResolvedExec {
+                    path: PathBuf::from("/usr/local/bin/tool"),
+                }),
+            },
+        ];
+        let env: std::collections::HashMap<_, _> = build_env(&acquired).into_iter().collect();
+        assert_eq!(
+            env.get("SYMPOSIUM_DIR_rtk").map(String::as_str),
+            Some("/cache/rtk/1.0")
+        );
+        assert_eq!(
+            env.get("SYMPOSIUM_rtk").map(String::as_str),
+            Some("/cache/rtk/1.0/bin/rtk")
+        );
+        // No source means no _DIR, but absolute runnable path → SYMPOSIUM_<name> set.
+        assert_eq!(env.get("SYMPOSIUM_DIR_no_source"), None);
+        assert_eq!(
+            env.get("SYMPOSIUM_no_source").map(String::as_str),
+            Some("/usr/local/bin/tool")
+        );
+        // Command (pushed last) wins PATH lookup, so its parent comes first.
+        let path = env.get("PATH").expect("PATH set");
+        assert!(path.starts_with("/usr/local/bin"), "PATH = {path}");
+        assert!(path.contains("/cache/rtk/1.0/bin"), "PATH = {path}");
+    }
+
+    #[test]
+    fn build_env_no_runnable_no_vars() {
+        // Pure-setup installation: no runnable means no SYMPOSIUM_<name>
+        // and no PATH contribution. SYMPOSIUM_DIR_<name> still gets set
+        // when there's a managed base dir.
+        let acquired = vec![AcquiredInstallation {
+            name: "setup".to_string(),
+            base: Some(PathBuf::from("/cache/setup")),
+            runnable: None,
+        }];
+        let env: std::collections::HashMap<_, _> = build_env(&acquired).into_iter().collect();
+        assert_eq!(
+            env.get("SYMPOSIUM_DIR_setup").map(String::as_str),
+            Some("/cache/setup")
+        );
+        assert!(env.get("SYMPOSIUM_setup").is_none());
+        assert!(env.get("PATH").is_none());
+    }
+
+    #[test]
+    fn build_env_global_cargo_skips_env_and_path() {
+        // Global cargo: PathLookup runnable. Nothing exposed.
+        let acquired = vec![AcquiredInstallation {
+            name: "rg".to_string(),
+            base: None,
+            runnable: Some(AcquiredRunnable::GlobalExec {
+                path: PathBuf::from("rg".to_string()),
+            }),
+        }];
+        let env: std::collections::HashMap<_, _> = build_env(&acquired).into_iter().collect();
+        assert!(env.get("SYMPOSIUM_DIR_rg").is_none());
+        assert!(env.get("SYMPOSIUM_rg").is_none());
+        assert!(env.get("PATH").is_none());
+    }
 
     #[tokio::test]
     async fn builtin_pre_tool_use_returns_empty() {

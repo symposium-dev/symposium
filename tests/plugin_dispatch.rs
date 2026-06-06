@@ -222,6 +222,43 @@ async fn hook_supplies_script_against_bare_installation() {
     .unwrap();
 }
 
+/// `$SYMPOSIUM_<name>` is set in the hook's environment, pointing at the
+/// requirement's resolved executable. The script echoes the env var; the
+/// expected value is the absolute path the fixture's `executable` resolves to.
+#[tokio::test(flavor = "multi_thread")]
+async fn helper_env_var_is_set_for_hook() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hooks0"],
+        async |mut ctx| {
+            let result = ctx
+                .prompt_or_hook(
+                    "ignored",
+                    &[HookStep::PreToolUse {
+                        tool_name: "TodoWrite".to_string(),
+                        tool_input: json!({"todos": []}),
+                    }],
+                    HookAgent::Claude,
+                )
+                .await?;
+
+            // The fixture's `helper` installation has `executable = "$TEST_DIR/helper-bin"`,
+            // expanded to an absolute path before the script runs. We assert the
+            // env var made it through with the `/helper-bin` suffix.
+            assert!(
+                result.has_context_containing("helper-env:")
+                    && result.has_context_containing("/helper-bin"),
+                "expected hook env to contain `$SYMPOSIUM_helper` ending in /helper-bin, \
+                 got: {:#?}",
+                result.outputs_for(HookEvent::PreToolUse),
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// The `matcher` field filters hooks by tool name. Firing a tool no hook
 /// matches produces no `additionalContext` in the merged output.
 #[tokio::test(flavor = "multi_thread")]
