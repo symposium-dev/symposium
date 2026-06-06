@@ -38,9 +38,9 @@ Validates skill group source constraints at parse time: mutual exclusivity of `s
 
 Parses `[package.metadata.symposium]` from crate `Cargo.toml` files. Crate authors embed skill layout metadata so Symposium knows where to find skills (or which other crate to redirect to). Returns `SkillSource::Path(subdir)` or `SkillSource::Crate { name, version }` for redirects.
 
-### `shell_predicate.rs` — shell-command gating
+### `runtime_predicate.rs` — runtime-based gating
 
-Defines `ShellPredicateSet`, a list of shell commands evaluated with AND semantics. Each command runs via `sh -c <cmd>`; exit 0 means the predicate holds, any other exit (including spawn failure) means it fails. Shell predicates can be set at the plugin, skill group, skill, hook, or MCP server level. Plugin/group/skill/MCP predicates are evaluated at sync time; hook predicates are evaluated per dispatch so they observe live state. See the [shell predicates reference](../reference/shell-predicates.md).
+Defines `RuntimePredicateSet`, a list of `RuntimePredicate`s evaluated with AND semantics. Each predicate is a function-call expression. Leaf predicates take their argument verbatim between the parentheses (unquoted): `shell(<cmd>)` runs `<cmd>` via `sh -c` (exit 0 holds, any other exit including spawn failure fails), `path_exists(<arg>)` holds when `<arg>` exists on disk (separator-bearing args are filesystem-only; bare names also fall back to a `$PATH` lookup), and `env(<name>)` / `env(<name>=<value>)` test environment-variable presence/equality. The combinators `not(<predicate>)` and `any(<p>, …)` parse their arguments as nested predicates, giving negation and OR (the list itself is AND). Predicates can be set at the plugin, skill group, skill, hook, or MCP server level via the `predicates` field. Plugin/group/skill/MCP predicates are evaluated at sync time; hook predicates are evaluated per dispatch so they observe live state. See the [predicates reference](../reference/predicates.md).
 
 ### `skills.rs` — skill resolution and matching
 

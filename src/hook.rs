@@ -655,12 +655,12 @@ fn dispatched_hooks_for_payload(
     let mut out = Vec::new();
 
     for parsed_plugin in plugins {
-        // Plugin-level shell predicates gate every hook in the plugin.
+        // Plugin-level runtime predicates gate every hook in the plugin.
         // Evaluated once per plugin per dispatch — cheap commands only.
-        if !parsed_plugin.plugin.shell_predicates_hold() {
+        if !parsed_plugin.plugin.predicates_hold() {
             tracing::debug!(
                 plugin = %parsed_plugin.plugin.name,
-                "plugin shell_predicates failed, skipping hooks"
+                "plugin predicates failed, skipping hooks"
             );
             continue;
         }
@@ -694,9 +694,9 @@ fn dispatched_hooks_for_payload(
 
         let selected = native_match.or(symposium_match);
         if let Some(hook) = selected {
-            // Hook-level shell predicates are evaluated at dispatch so they
+            // Hook-level runtime predicates are evaluated at dispatch so they
             // pick up live state (file present, tool installed, …).
-            if !hook.shell_predicates.evaluate() {
+            if !hook.predicates.evaluate() {
                 tracing::debug!(
                     report = %crate::report::ReportEvent::HookConsidered {
                         plugin: parsed_plugin.plugin.name.clone(),
@@ -704,7 +704,7 @@ fn dispatched_hooks_for_payload(
                         event: format!("{:?}", input.event()),
                         selected: false,
                         format: Some(format!("{:?}", hook.format)),
-                        reason: Some("hook shell predicates not satisfied".into()),
+                        reason: Some("hook predicates not satisfied".into()),
                     },
                 );
                 continue;
@@ -928,15 +928,21 @@ mod tests {
             script: None,
             args: vec![],
             format: HookFormat::Symposium,
-            shell_predicates: crate::shell_predicate::ShellPredicateSet {
-                commands: hook_shell.into_iter().map(String::from).collect(),
+            predicates: crate::runtime_predicate::RuntimePredicateSet {
+                predicates: hook_shell
+                    .into_iter()
+                    .map(|c| crate::runtime_predicate::RuntimePredicate::Shell(c.into()))
+                    .collect(),
             },
         };
         let plugin = Plugin {
             name: "test-plugin".into(),
             crates: crate::predicate::PredicateSet::parse("*").unwrap(),
-            shell_predicates: crate::shell_predicate::ShellPredicateSet {
-                commands: plugin_shell.into_iter().map(String::from).collect(),
+            predicates: crate::runtime_predicate::RuntimePredicateSet {
+                predicates: plugin_shell
+                    .into_iter()
+                    .map(|c| crate::runtime_predicate::RuntimePredicate::Shell(c.into()))
+                    .collect(),
             },
             installations: vec![install],
             hooks: vec![hook],
@@ -962,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_skips_when_plugin_shell_predicate_fails() {
+    fn dispatch_skips_when_plugin_predicate_fails() {
         let plugin = plugin_with_hook(vec!["false"], vec![]);
         let hooks =
             dispatched_hooks_for_payload(&[plugin], &pre_tool_use_input(), HookAgent::Claude);
@@ -970,7 +976,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_skips_when_hook_shell_predicate_fails() {
+    fn dispatch_skips_when_hook_predicate_fails() {
         let plugin = plugin_with_hook(vec![], vec!["false"]);
         let hooks =
             dispatched_hooks_for_payload(&[plugin], &pre_tool_use_input(), HookAgent::Claude);
@@ -978,7 +984,7 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_includes_when_shell_predicates_pass() {
+    fn dispatch_includes_when_predicates_pass() {
         let plugin = plugin_with_hook(vec!["true"], vec!["true"]);
         let hooks =
             dispatched_hooks_for_payload(&[plugin], &pre_tool_use_input(), HookAgent::Claude);

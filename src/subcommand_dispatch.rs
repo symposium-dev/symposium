@@ -188,7 +188,7 @@ mod tests {
             plugin: Plugin {
                 name: name.into(),
                 crates: parse_predicates(crates),
-                shell_predicates: Default::default(),
+                predicates: Default::default(),
                 installations: vec![],
                 hooks: vec![],
                 skills: vec![],

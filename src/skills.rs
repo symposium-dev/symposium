@@ -28,8 +28,8 @@ pub struct Skill {
     pub frontmatter: BTreeMap<String, String>,
     /// Crate predicates this skill advises on (skill-level; ANDed with group-level).
     pub crates: Vec<Predicate>,
-    /// Shell predicates from skill frontmatter; ANDed with plugin and group levels.
-    pub shell_predicates: crate::shell_predicate::ShellPredicateSet,
+    /// Runtime predicates from skill frontmatter; ANDed with plugin and group levels.
+    pub predicates: crate::runtime_predicate::RuntimePredicateSet,
     /// The body content (everything after frontmatter).
     pub body: String,
     /// Path to the SKILL.md file on disk.
@@ -135,8 +135,8 @@ impl SkillOrigin {
 /// any predicate matching suffices (OR within a set). An empty
 /// `predicate_sets` vec means "always matches".
 ///
-/// Shell predicates aren't stored here — callers gate on plugin- and
-/// group-level shell predicates upstream, and the skill-level set is
+/// Runtime predicates aren't stored here — callers gate on plugin- and
+/// group-level runtime predicates upstream, and the skill-level set is
 /// evaluated once during collection.
 pub struct SkillWithGroupContext {
     pub skill: Skill,
@@ -193,14 +193,14 @@ pub async fn skills_applicable_to(
             continue;
         }
 
-        // Shell predicates at the plugin level gate everything below.
+        // Runtime predicates at the plugin level gate everything below.
         // Evaluated before group fetching to avoid wasted work.
-        if !plugin.shell_predicates_hold() {
+        if !plugin.predicates_hold() {
             tracing::debug!(
                 report = %crate::report::ReportEvent::PluginConsidered {
                     plugin: plugin.name.clone(),
                     matched: false,
-                    reason: Some("plugin-level shell predicates not satisfied".into()),
+                    reason: Some("plugin-level predicates not satisfied".into()),
                 },
             );
             continue;
@@ -309,11 +309,11 @@ async fn load_skills_for_group(
         return (group_crates, Vec::new());
     }
 
-    // Pre-fetch filtering: skip groups whose shell predicates don't hold.
+    // Pre-fetch filtering: skip groups whose runtime predicates don't hold.
     // Done before any git/crates fetch so we don't pay network cost when a
     // tool the group depends on isn't installed.
-    if !group.shell_predicates.evaluate() {
-        tracing::debug!(plugin = %plugin_path.display(), "skill group shell_predicates failed, skipping");
+    if !group.predicates.evaluate() {
+        tracing::debug!(plugin = %plugin_path.display(), "skill group predicates failed, skipping");
         return (group_crates, Vec::new());
     }
 
@@ -803,12 +803,11 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
         Vec::new()
     };
 
-    let shell_predicates = crate::shell_predicate::ShellPredicateSet {
-        commands: fm
-            .shell_predicates
-            .as_deref()
-            .map(crate::shell_predicate::parse_comma_separated)
-            .unwrap_or_default(),
+    let predicates = match fm.predicates.as_deref() {
+        Some(s) => crate::runtime_predicate::RuntimePredicateSet {
+            predicates: crate::runtime_predicate::parse_comma_separated(s)?,
+        },
+        None => crate::runtime_predicate::RuntimePredicateSet::default(),
     };
 
     // Warn if no crates at either level — the skill won't match anything,
@@ -823,7 +822,7 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
     let skill = Skill {
         frontmatter,
         crates,
-        shell_predicates,
+        predicates,
         body: fm.body,
         path: skill_md_path.to_path_buf(),
     };
@@ -831,10 +830,10 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
     Ok(skill)
 }
 
-/// Filter skills by crate + shell predicate constraints, collecting matches
+/// Filter skills by crate + runtime predicate constraints, collecting matches
 /// with group context.
 ///
-/// Plugin- and group-level shell predicates have already been evaluated by
+/// Plugin- and group-level runtime predicates have already been evaluated by
 /// callers as a pre-filter, so we only evaluate the skill-level set here.
 fn collect_skill_applicable_to(
     skill: &Skill,
@@ -875,13 +874,13 @@ fn collect_skill_applicable_to(
         );
         return;
     }
-    if !entry.skill.shell_predicates.evaluate() {
+    if !entry.skill.predicates.evaluate() {
         tracing::debug!(
             report = %crate::report::ReportEvent::SkillConsidered {
                 skill: skill.name().to_string(),
                 plugin: plugin_name.to_string(),
                 matched: false,
-                reason: Some("skill-level shell predicates not satisfied".into()),
+                reason: Some("skill-level predicates not satisfied".into()),
             },
         );
         return;
@@ -905,8 +904,8 @@ struct RawFrontmatter {
     fields: BTreeMap<String, String>,
     /// Raw `crates` value (comma-separated predicate string).
     crates: Option<String>,
-    /// Raw `shell_predicates` value (comma-separated shell command string).
-    shell_predicates: Option<String>,
+    /// Raw `predicates` value (comma-separated predicate expressions).
+    predicates: Option<String>,
     body: String,
 }
 
@@ -942,7 +941,7 @@ fn parse_frontmatter(content: &str) -> Result<RawFrontmatter> {
 
     let mut fields = BTreeMap::new();
     let mut crates = None;
-    let mut shell_predicates = None;
+    let mut predicates = None;
 
     for (key, value) in mapping {
         let Some(key) = key.as_str() else {
@@ -955,7 +954,7 @@ fn parse_frontmatter(content: &str) -> Result<RawFrontmatter> {
 
         match key {
             "crates" => crates = Some(value.to_string()),
-            "shell_predicates" => shell_predicates = Some(value.to_string()),
+            "predicates" => predicates = Some(value.to_string()),
             _ => {
                 fields.insert(key.to_string(), value.to_string());
             }
@@ -965,7 +964,7 @@ fn parse_frontmatter(content: &str) -> Result<RawFrontmatter> {
     Ok(RawFrontmatter {
         fields,
         crates,
-        shell_predicates,
+        predicates,
         body: body.to_string(),
     })
 }
@@ -1386,7 +1385,7 @@ mod tests {
         let plugin = Plugin {
             name: "other-crate-plugin".to_string(),
             crates: pred_set("other-crate"),
-            shell_predicates: Default::default(),
+            predicates: Default::default(),
             hooks: vec![],
             skills: vec![SkillGroup {
                 crates: Some(pred_set("serde")), // Group targets serde
@@ -1435,7 +1434,7 @@ mod tests {
         let plugin = Plugin {
             name: "wildcard-plugin".to_string(),
             crates: pred_set("*"), // Plugin applies to all
-            shell_predicates: Default::default(),
+            predicates: Default::default(),
             hooks: vec![],
             skills: vec![SkillGroup {
                 crates: Some(pred_set("other-crate")), // But group targets other-crate
@@ -1502,7 +1501,7 @@ mod tests {
         let plugin = Plugin {
             name: "serde-plugin".to_string(),
             crates: pred_set("serde"), // Plugin targets serde
-            shell_predicates: Default::default(),
+            predicates: Default::default(),
             hooks: vec![],
             skills: vec![SkillGroup {
                 crates: Some(pred_set("serde")), // Group also targets serde
@@ -1541,7 +1540,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn shell_predicate_failure_filters_skill() {
+    async fn predicate_failure_filters_skill() {
         use crate::plugins::{ParsedPlugin, Plugin, PluginRegistry, PluginSource, SkillGroup};
         use std::fs;
         use tempfile::TempDir;
@@ -1565,12 +1564,14 @@ mod tests {
         )
         .unwrap();
 
-        // Plugin matches by crates, but shell_predicate fails.
+        // Plugin matches by crates, but the runtime predicate fails.
         let plugin = Plugin {
             name: "p".into(),
             crates: pred_set("serde"),
-            shell_predicates: crate::shell_predicate::ShellPredicateSet {
-                commands: vec!["false".into()],
+            predicates: crate::runtime_predicate::RuntimePredicateSet {
+                predicates: vec![crate::runtime_predicate::RuntimePredicate::Shell(
+                    "false".into(),
+                )],
             },
             hooks: vec![],
             skills: vec![SkillGroup {
@@ -1602,12 +1603,12 @@ mod tests {
         let skills = skills_applicable_to(&sym, &registry, &workspace).await;
         assert!(
             skills.is_empty(),
-            "plugin shell_predicate=false should filter out skills"
+            "plugin predicate=false should filter out skills"
         );
     }
 
     #[tokio::test]
-    async fn shell_predicate_pass_allows_skill() {
+    async fn predicate_pass_allows_skill() {
         use crate::plugins::{ParsedPlugin, Plugin, PluginRegistry, PluginSource, SkillGroup};
         use std::fs;
         use tempfile::TempDir;
@@ -1634,15 +1635,19 @@ mod tests {
         let plugin = Plugin {
             name: "p".into(),
             crates: pred_set("serde"),
-            shell_predicates: crate::shell_predicate::ShellPredicateSet {
-                commands: vec!["true".into()],
+            predicates: crate::runtime_predicate::RuntimePredicateSet {
+                predicates: vec![crate::runtime_predicate::RuntimePredicate::Shell(
+                    "true".into(),
+                )],
             },
             hooks: vec![],
             skills: vec![SkillGroup {
                 crates: Some(pred_set("serde")),
                 source: PluginSource::Path(skill_dir.to_path_buf()),
-                shell_predicates: crate::shell_predicate::ShellPredicateSet {
-                    commands: vec!["true".into()],
+                predicates: crate::runtime_predicate::RuntimePredicateSet {
+                    predicates: vec![crate::runtime_predicate::RuntimePredicate::Shell(
+                        "true".into(),
+                    )],
                 },
                 ..Default::default()
             }],
@@ -1672,17 +1677,17 @@ mod tests {
     }
 
     #[test]
-    fn skill_frontmatter_parses_shell_predicates() {
+    fn skill_frontmatter_parses_predicates() {
         let tmp = tempfile::tempdir().unwrap();
         let skill_md = tmp.path().join("SKILL.md");
         std::fs::write(
             &skill_md,
             indoc! {"
                 ---
-                name: with-shell
-                description: A skill with shell predicates
+                name: with-env
+                description: A skill with runtime predicates
                 crates: serde
-                shell_predicates: command -v rg, test -f Cargo.toml
+                predicates: shell(command -v rg), path_exists(Cargo.toml)
                 ---
 
                 Body.
@@ -1691,8 +1696,15 @@ mod tests {
         .unwrap();
 
         let skill = load_skill(&skill_md, &SkillGroup::default()).unwrap();
-        assert_eq!(skill.shell_predicates.commands.len(), 2);
-        assert_eq!(skill.shell_predicates.commands[0], "command -v rg");
+        assert_eq!(skill.predicates.predicates.len(), 2);
+        assert_eq!(
+            skill.predicates.predicates[0],
+            crate::runtime_predicate::RuntimePredicate::Shell("command -v rg".into())
+        );
+        assert_eq!(
+            skill.predicates.predicates[1],
+            crate::runtime_predicate::RuntimePredicate::PathExists("Cargo.toml".into())
+        );
     }
 
     #[test]
@@ -1951,7 +1963,7 @@ mod tests {
             skill: Skill {
                 frontmatter: BTreeMap::new(),
                 crates: vec![],
-                shell_predicates: Default::default(),
+                predicates: Default::default(),
                 body: String::new(),
                 path: PathBuf::new(),
             },

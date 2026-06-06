@@ -35,7 +35,7 @@ Prefer deriving `Serialize` and `Deserialize` on data types.
 | `name` | string | yes | Skill identifier. |
 | `description` | string | yes | Short description shown in skill listings. |
 | `crates` | string | no | Comma-separated crate atoms this skill is about (e.g., `crates: serde, tokio>=1.0`). Narrows the enclosing `[[skills]]` group scope — cannot widen it. |
-| `shell_predicates` | string | no | Comma-separated shell commands; all must exit 0 for the skill to activate. ANDed with plugin- and group-level shell predicates. See [Shell predicates](./shell-predicates.md). |
+| `predicates` | string | no | Comma-separated runtime predicates (`shell(...)` / `path_exists(...)`); all must hold for the skill to activate. ANDed with plugin- and group-level predicates. See [Predicates](./predicates.md). |
 
 ## Crate atoms
 
