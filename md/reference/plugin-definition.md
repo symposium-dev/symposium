@@ -191,7 +191,7 @@ git = "https://github.com/example/tool"
 executable = "tool"   # required for git sources (crates.io is not consulted)
 ```
 
-To install into the user's global cargo location (`~/.cargo/bin`) instead of a symposium-managed cache, set `global = true`. No `--root` is passed; `$PATH` is not augmented (the binary is expected to already be on `$PATH`).
+To install into the user's global cargo location (`~/.cargo/bin`) instead of a symposium-managed cache, set `global = true`. No `--root` is passed; `$PATH` is not augmented (the binary is expected to already be on `$PATH`). This can be useful if you are using scripts which require globally-installed programs, or if you want to use tools separately in a CLI.
 
 ```toml
 [[installations]]
