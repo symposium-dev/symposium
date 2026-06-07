@@ -1592,31 +1592,36 @@ fn validate_subcommand(
 
 /// Validate skill-group source constraints that serde alone cannot express.
 ///
-/// When a group uses `source = "crate"`, at least one non-wildcard predicate
-/// must be reachable (plugin-level or group-level) so Symposium can resolve
-/// concrete crates to fetch.
+/// When a group uses `source = "crate"`, a concrete crate must be named in a
+/// *fetchable* (non-negated) position (plugin-level or group-level) so
+/// Symposium has a crate whose source tree to fetch skills from. A crate named
+/// only under `not(...)` doesn't count: negation gates the group but never
+/// contributes a crate to fetch (its witness is always empty).
 ///
 /// Valid:
 ///   crates = ["serde"]              + source = "crate"  → fetch serde
 ///   crates = ["*"], group ["serde"] + source = "crate"  → fetch serde
 ///   crates = ["*", "serde"]         + source = "crate"  → fetch serde
+///   predicates = ["any(crate(a), crate(b))"]            → fetch a and/or b
 ///
 /// Invalid:
 ///   crates = ["*"]                  + source = "crate"  → no concrete crate
 ///   crates = ["*"], group ["*"]     + source = "crate"  → no concrete crate
+///   predicates = ["not(crate(legacy))"]                 → no fetchable crate
 fn validate_skill_groups(
     plugin_predicates: &crate::predicate::PredicateSet,
     skills: &[SkillGroup],
 ) -> Result<()> {
     for (i, group) in skills.iter().enumerate() {
         if group.source == PluginSource::Crate {
-            let has_concrete_crate =
-                plugin_predicates.has_concrete_crate() || group.predicates.has_concrete_crate();
-            if !has_concrete_crate {
+            let has_fetchable_crate =
+                plugin_predicates.has_fetchable_crate() || group.predicates.has_fetchable_crate();
+            if !has_fetchable_crate {
                 bail!(
                     "skills group {i} uses source = \"crate\" but no concrete `crate(...)` \
-                     predicate is reachable (plugin-level or group-level) — \
-                     at least one is required to resolve concrete crates"
+                     predicate is reachable in a fetchable position (plugin-level or \
+                     group-level, not under `not(...)`) — at least one is required to \
+                     resolve a crate to fetch skills from"
                 );
             }
         }
@@ -3408,6 +3413,36 @@ mod tests {
         "#};
         let err = from_str(toml).unwrap_err();
         assert!(err.to_string().contains("concrete"), "{err}");
+    }
+
+    #[test]
+    fn crate_reject_negated_only() {
+        // A `source = "crate"` group whose only crate reference sits under
+        // `not(...)` has nothing to fetch (the witness of a negation is always
+        // empty), so it is rejected even though a crate is "mentioned".
+        let toml = indoc! {r#"
+            name = "bad"
+
+            [[skills]]
+            source = "crate"
+            predicates = ["not(crate(legacy))"]
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("fetchable"), "{err}");
+    }
+
+    #[test]
+    fn crate_valid_with_positive_inside_any() {
+        // A concrete crate in a fetchable (non-negated) position anchors the
+        // group, even when nested in combinators and sitting beside a `not`.
+        let toml = indoc! {r#"
+            name = "ok"
+
+            [[skills]]
+            source = "crate"
+            predicates = ["any(crate(serde), not(crate(legacy)))"]
+        "#};
+        from_str(toml).expect("should be valid");
     }
 
     // --- TOML serialization round-trip tests ---

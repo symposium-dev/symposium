@@ -169,6 +169,20 @@ impl Predicate {
         }
     }
 
+    /// True if this predicate names a concrete crate in a position that can
+    /// appear in a [`witness`](Self::witness) — i.e. a `crate(serde)` not under
+    /// any `not(...)`. A crate beneath a negation never contributes a crate to
+    /// fetch from (the `Not` arm of `witness` discards its inner witness), so
+    /// it cannot anchor a `source = "crate"` group.
+    pub fn has_fetchable_crate(&self) -> bool {
+        match self {
+            Predicate::Crate(..) => true,
+            Predicate::Not(_) => false,
+            Predicate::Any(v) | Predicate::All(v) => v.iter().any(Predicate::has_fetchable_crate),
+            _ => false,
+        }
+    }
+
     /// Collect every crate name referenced anywhere in this predicate.
     ///
     /// Used for crates.io existence validation, so it ignores tree position
@@ -254,6 +268,13 @@ impl PredicateSet {
     /// True if any `crate(...)` predicate (non-wildcard) appears anywhere.
     pub fn has_concrete_crate(&self) -> bool {
         self.predicates.iter().any(Predicate::has_concrete_crate)
+    }
+
+    /// True if a concrete crate appears in a fetchable (non-negated) position.
+    /// Gates `source = "crate"` validation: such a group must name at least one
+    /// crate it can actually fetch skills from.
+    pub fn has_fetchable_crate(&self) -> bool {
+        self.predicates.iter().any(Predicate::has_fetchable_crate)
     }
 
     /// True if any crate predicate (including `crate(*)`) appears anywhere.
@@ -882,6 +903,33 @@ mod tests {
                 .unwrap()
                 .has_concrete_crate()
         );
+    }
+
+    #[test]
+    fn has_fetchable_crate() {
+        let fetchable = |s: &str| PredicateSet::parse(s).unwrap().has_fetchable_crate();
+        // A crate in a positive position is fetchable...
+        assert!(fetchable("crate(serde)"));
+        assert!(fetchable("any(crate(serde), not(crate(legacy)))"));
+        assert!(fetchable("all(crate(serde), env(USE_SERDE))"));
+        assert!(
+            PredicateSet::from_crates("serde")
+                .unwrap()
+                .has_fetchable_crate()
+        );
+        // ...but a crate only under `not(...)` is not (its witness is empty).
+        assert!(!fetchable("not(crate(legacy))"));
+        assert!(!fetchable("all(not(crate(a)), env(X))"));
+        // `not(not(crate(a)))` still cannot fetch: `Not` always yields an empty
+        // witness regardless of nesting depth.
+        assert!(!fetchable("not(not(crate(a)))"));
+        // Wildcards and non-crate leaves are never fetchable.
+        assert!(
+            !PredicateSet::from_crates("*")
+                .unwrap()
+                .has_fetchable_crate()
+        );
+        assert!(!fetchable("shell(true)"));
     }
 
     // --- Display round-trip ---

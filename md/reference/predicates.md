@@ -27,7 +27,9 @@ The argument of a leaf predicate (`crate`, `shell`, `path_exists`, `env`) is tak
 
 ## Crate-sourced skills and the witness
 
-For a `[[skills]]` group with `source = "crate"`, the `crate(...)` predicates do double duty: they gate the group **and** name which crates' source trees to fetch skills from. The fetch set is the predicate's **witness** — the crates that participate in a *satisfying* evaluation: `crate(c)` contributes `c` when present, `any` contributes its true branches, `all` contributes all branches when it holds, and `not(...)` contributes nothing. So `all(crate(serde), env(USE_SERDE))` only fetches `serde` when `USE_SERDE` is set, while `any(crate(fd), crate(fdfind))` fetches whichever are present. A group using `source = "crate"` must name at least one concrete crate somewhere (plugin- or group-level); `crate(*)` alone is rejected since there is nothing concrete to fetch.
+For a `[[skills]]` group with `source = "crate"`, the `crate(...)` predicates do double duty: they gate the group **and** name which crates' source trees to fetch skills from. The fetch set is the predicate's **witness** — the crates that participate in a *satisfying* evaluation: `crate(c)` contributes `c` when present, `any` contributes its true branches, `all` contributes all branches when it holds, and `not(...)` contributes nothing. So `all(crate(serde), env(USE_SERDE))` only fetches `serde` when `USE_SERDE` is set, while `any(crate(fd), crate(fdfind))` fetches whichever are present.
+
+A group using `source = "crate"` must name at least one concrete crate in a **fetchable position** — somewhere (plugin- or group-level) that can appear in a witness. `crate(*)` alone is rejected since there is nothing concrete to fetch, and a crate named *only* under `not(...)` is rejected too: `not(crate(legacy))` gates the group but, having an empty witness, names no crate to fetch from. Put the crate positively (e.g. `crate(serde)`, or `any(crate(serde), not(crate(legacy)))`).
 
 ## When predicates are evaluated
 
