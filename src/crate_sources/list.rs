@@ -24,6 +24,15 @@ pub fn workspace_crates(cwd: &Path) -> Vec<WorkspaceCrate> {
     load_workspace_crates(cwd).unwrap_or_default()
 }
 
+/// The workspace crates as `(name, version)` pairs — the form predicate
+/// evaluation consumes (see [`crate::predicate::PredicateContext`]).
+pub fn crate_pairs(crates: &[WorkspaceCrate]) -> Vec<(String, semver::Version)> {
+    crates
+        .iter()
+        .map(|c| (c.name.clone(), c.version.clone()))
+        .collect()
+}
+
 fn load_workspace_crates(cwd: &Path) -> Result<Vec<WorkspaceCrate>> {
     let metadata = MetadataCommand::new()
         .features(CargoOpt::AllFeatures)

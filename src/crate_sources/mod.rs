@@ -12,7 +12,7 @@ use anyhow::Result;
 mod list;
 mod probe;
 
-pub use list::{WorkspaceCrate, workspace_crates};
+pub use list::{WorkspaceCrate, crate_pairs, workspace_crates};
 
 /// Normalize a crate name for hyphen/underscore-insensitive comparison.
 ///

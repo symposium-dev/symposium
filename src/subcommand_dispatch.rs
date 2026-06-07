@@ -28,19 +28,16 @@ pub fn applicable_subcommands<'a, 'd>(
 where
     'a: 'd,
 {
+    let ctx = crate::predicate::PredicateContext::new(deps);
     registry
         .plugins
         .iter()
-        .filter(|ParsedPlugin { plugin, .. }| plugin.applies_to_crates(deps))
-        .flat_map(|ParsedPlugin { plugin, .. }| {
+        .filter(move |ParsedPlugin { plugin, .. }| plugin.applies(&ctx))
+        .flat_map(move |ParsedPlugin { plugin, .. }| {
             plugin
                 .subcommands
                 .iter()
-                .filter(|(_, sub)| {
-                    sub.crates
-                        .as_ref()
-                        .is_none_or(|predset| predset.matches(deps))
-                })
+                .filter(move |(_, sub)| sub.predicates.evaluate(&ctx))
                 .map(move |(name, subcommand)| (plugin, name.as_str(), subcommand))
         })
 }
@@ -56,10 +53,7 @@ pub fn find_subcommand<'a>(
     name: &str,
     workspace: &[WorkspaceCrate],
 ) -> Result<Option<(&'a Plugin, &'a Subcommand)>> {
-    let deps = workspace
-        .iter()
-        .map(|crt| (crt.name.clone(), crt.version.clone()))
-        .collect::<Vec<_>>();
+    let deps = crate::crate_sources::crate_pairs(workspace);
 
     let matches = applicable_subcommands(registry, &deps)
         .filter(|(_, n, _)| *n == name)
@@ -174,8 +168,8 @@ mod tests {
         }
     }
 
-    fn parse_predicates(spec: &str) -> PredicateSet {
-        PredicateSet::parse(spec).unwrap()
+    fn crate_set(spec: &str) -> PredicateSet {
+        PredicateSet::from_crates(spec).unwrap()
     }
 
     fn plugin_with(
@@ -187,8 +181,7 @@ mod tests {
             path: PathBuf::from(format!("/test/{name}.toml")),
             plugin: Plugin {
                 name: name.into(),
-                crates: parse_predicates(crates),
-                predicates: Default::default(),
+                predicates: crate_set(crates),
                 installations: vec![],
                 hooks: vec![],
                 skills: vec![],
@@ -205,7 +198,7 @@ mod tests {
             description: "test".into(),
             audience: Audience::default(),
             command: command.into(),
-            crates: crates.map(parse_predicates),
+            predicates: crates.map(crate_set).unwrap_or_default(),
         }
     }
 

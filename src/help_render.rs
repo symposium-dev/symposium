@@ -106,10 +106,7 @@ fn render(registry: &PluginRegistry, workspace: &[WorkspaceCrate]) -> String {
     let header = &full[..commands_idx];
     let options = &full[options_idx..];
 
-    let deps = workspace
-        .iter()
-        .map(|crt| (crt.name.clone(), crt.version.clone()))
-        .collect::<Vec<_>>();
+    let deps = crate::crate_sources::crate_pairs(workspace);
 
     let humans = collect_section(&cmd, registry, &deps, Audience::Humans);
     let agents = collect_section(&cmd, registry, &deps, Audience::Agents);
@@ -196,8 +193,8 @@ mod tests {
         }
     }
 
-    fn parse_predicates(spec: &str) -> PredicateSet {
-        PredicateSet::parse(spec).unwrap()
+    fn crate_set(spec: &str) -> PredicateSet {
+        PredicateSet::from_crates(spec).unwrap()
     }
 
     fn plugin_with(
@@ -210,8 +207,7 @@ mod tests {
             plugin: Plugin {
                 name: name.into(),
                 hooks: vec![],
-                crates: parse_predicates(crates),
-                predicates: Default::default(),
+                predicates: crate_set(crates),
                 skills: vec![],
                 mcp_servers: vec![],
                 subcommands,
@@ -227,7 +223,7 @@ mod tests {
             description: description.into(),
             audience,
             command: "ignored".into(),
-            crates: crates.map(parse_predicates),
+            predicates: crates.map(crate_set).unwrap_or_default(),
         }
     }
 

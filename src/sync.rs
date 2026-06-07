@@ -212,15 +212,13 @@ pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
     }
 
     // Collect MCP servers from applicable plugins, filtered by workspace deps
-    let semver_pairs: Vec<(String, semver::Version)> = workspace
-        .iter()
-        .map(|wc| (wc.name.clone(), wc.version.clone()))
-        .collect();
+    let semver_pairs = crate::crate_sources::crate_pairs(&workspace);
+    let ctx = crate::predicate::PredicateContext::new(&semver_pairs);
     let mcp_servers: Vec<sacp::schema::McpServer> = registry
         .plugins
         .iter()
-        .filter(|p| p.plugin.applies_to_crates(&semver_pairs) && p.plugin.predicates_hold())
-        .flat_map(|p| p.plugin.applicable_mcp_servers(&semver_pairs))
+        .filter(|p| p.plugin.applies(&ctx))
+        .flat_map(|p| p.plugin.applicable_mcp_servers(&ctx))
         .collect();
 
     let server_names: Vec<&str> = mcp_servers
