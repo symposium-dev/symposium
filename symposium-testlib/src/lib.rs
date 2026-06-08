@@ -253,6 +253,32 @@ impl TestContext {
         Ok(out.captured().join("\n"))
     }
 
+    /// Run `cargo agents sync` with a report layer and return the captured
+    /// report events as JSON values. The `level` controls verbosity:
+    /// `tracing::Level::INFO` for install/remove only, `tracing::Level::DEBUG`
+    /// for the full decision trace.
+    pub async fn sync_with_report(
+        &mut self,
+        level: tracing::Level,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        use symposium::report::{ReportLayer, ReportMode};
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let (layer, handle) = ReportLayer::new(ReportMode::Json, level);
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let cwd = self
+            .workspace_root
+            .clone()
+            .unwrap_or_else(|| self.sym.config_dir().to_path_buf());
+
+        symposium::sync::sync(&self.sym, &cwd).await?;
+
+        drop(_guard);
+        Ok(handle.drain())
+    }
+
     /// Run the full hook pipeline: parse → builtin → plugins → serialize.
     ///
     /// This is what `symposium hook <agent> <event>` does, minus stdin/stdout.

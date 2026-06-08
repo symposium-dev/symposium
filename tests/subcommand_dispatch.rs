@@ -57,6 +57,8 @@ async fn help_shows_plugin_subcommand() {
                 Options:
                       --update <UPDATE>  Control plugin source update behavior (none, check, fetch) [default: none] [possible values: none, check, fetch]
                   -q, --quiet            Suppress status output
+                  -v, --verbose          Print detailed information about decisions made
+                      --json             Output structured JSON report
                   -h, --help             Print help
                   -V, --version          Print version
             "#]]

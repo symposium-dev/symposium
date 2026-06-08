@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
+use serde_json::Value;
 use symposium_testlib::{TestMode, with_fixture};
 
 /// Read the user config file from the test context.
@@ -2089,6 +2090,135 @@ async fn sync_crate_metadata_missing_path_dir() {
                 entries.is_empty(),
                 "nonexistent path entry should produce zero skills, found: {entries:?}"
             );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+// ── Report / verbose output tests ────────────────────────────────────
+
+/// `sync_with_report` at INFO level emits SkillInstalled events.
+#[tokio::test]
+async fn report_json_info_emits_installed_events() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let events = ctx.sync_with_report(tracing::Level::INFO).await?;
+
+            assert!(!events.is_empty(), "expected at least one report event");
+
+            let installed: Vec<&Value> = events
+                .iter()
+                .filter(|e| e["kind"] == "skill_installed")
+                .collect();
+
+            assert!(
+                !installed.is_empty(),
+                "expected at least one skill_installed event, got: {events:?}"
+            );
+            assert_eq!(installed[0]["skill"], "serde-guidance");
+            assert_eq!(installed[0]["agent"], "claude");
+            assert!(
+                installed[0]["dest"]
+                    .as_str()
+                    .unwrap()
+                    .contains("serde-guidance")
+            );
+
+            // At INFO level, no plugin_considered or skill_considered events
+            let considered: Vec<&Value> = events
+                .iter()
+                .filter(|e| e["kind"] == "plugin_considered" || e["kind"] == "skill_considered")
+                .collect();
+            assert!(
+                considered.is_empty(),
+                "INFO level should not include considered events, got: {considered:?}"
+            );
+
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `sync_with_report` at DEBUG level includes decision-trace events.
+#[tokio::test]
+async fn report_json_debug_emits_decision_events() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let events = ctx.sync_with_report(tracing::Level::DEBUG).await?;
+
+            // Should have skill_considered for serde-guidance (matched)
+            let skill_matched: Vec<&Value> = events
+                .iter()
+                .filter(|e| {
+                    e["kind"] == "skill_considered"
+                        && e["matched"] == true
+                        && e["skill"] == "serde-guidance"
+                })
+                .collect();
+            assert!(
+                !skill_matched.is_empty(),
+                "expected skill_considered matched event for serde-guidance, got: {events:#?}"
+            );
+
+            // Should also have skill_installed
+            let installed: Vec<&Value> = events
+                .iter()
+                .filter(|e| e["kind"] == "skill_installed")
+                .collect();
+            assert!(
+                !installed.is_empty(),
+                "expected skill_installed events at DEBUG level too"
+            );
+
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// When workspace doesn't satisfy a skill's predicates, debug report shows
+/// that skill as skipped.
+#[tokio::test]
+async fn report_json_shows_skipped_skills() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace-empty0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let events = ctx.sync_with_report(tracing::Level::DEBUG).await?;
+
+            // The plugins0 fixture has a serde-guidance skill that requires `serde`.
+            // workspace-empty0 has no deps, so it should be skipped.
+            let skipped: Vec<&Value> = events
+                .iter()
+                .filter(|e| e["kind"] == "skill_considered" && e["matched"] == false)
+                .collect();
+            assert!(
+                !skipped.is_empty(),
+                "expected at least one skill to be skipped when workspace has no deps"
+            );
+
+            // No skill_installed events should appear
+            let installed: Vec<&Value> = events
+                .iter()
+                .filter(|e| e["kind"] == "skill_installed")
+                .collect();
+            assert!(
+                installed.is_empty(),
+                "expected no skill_installed events for empty workspace, got: {installed:?}"
+            );
+
             Ok(())
         },
     )

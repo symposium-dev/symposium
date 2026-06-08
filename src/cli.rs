@@ -36,8 +36,16 @@ pub struct Cli {
     pub update: symposium_install::UpdateLevel,
 
     /// Suppress status output
-    #[arg(short, long, global = true)]
+    #[arg(short = 'q', long, global = true)]
     pub quiet: bool,
+
+    /// Print detailed information about decisions made
+    #[arg(short, long, global = true)]
+    pub verbose: bool,
+
+    /// Output structured JSON report
+    #[arg(long, global = true)]
+    pub json: bool,
 
     /// Print help
     #[arg(short = 'h', long = "help", global = true)]
@@ -170,7 +178,7 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
             init::init(sym, out, &opts).await
         }
 
-        Commands::Sync => sync::sync(sym, cwd, out).await,
+        Commands::Sync => sync::sync(sym, cwd).await,
 
         Commands::SelfUpdate => self_update::self_update(sym, out),
 

@@ -351,8 +351,7 @@ async fn run_auto_sync(
     }
 
     tracing::debug!("auto-sync running");
-    let out = crate::output::Output::quiet();
-    if let Err(e) = crate::sync::sync(sym, &cwd, &out).await {
+    if let Err(e) = crate::sync::sync(sym, &cwd).await {
         tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
         return;
     }
@@ -543,7 +542,16 @@ pub async fn dispatch_plugin_hooks(
 
                 tracing::trace!(?child_out, "hook finished");
 
-                match child_out.status.code() {
+                let exit_code = child_out.status.code();
+                tracing::debug!(
+                    report = %crate::report::ReportEvent::HookDispatched {
+                        plugin: hook.plugin_name.clone(),
+                        hook: hook.hook_name.clone(),
+                        exit_code,
+                        error: None,
+                    },
+                );
+                match exit_code {
                     None | Some(2) => return Err(child_out.stderr),
                     Some(0) if child_out.stdout.is_empty() => continue,
                     Some(0) => {
@@ -591,7 +599,17 @@ pub async fn dispatch_plugin_hooks(
                     }
                 }
             }
-            Err(e) => tracing::warn!(error = %e, "failed to spawn hook command"),
+            Err(e) => {
+                tracing::debug!(
+                    report = %crate::report::ReportEvent::HookDispatched {
+                        plugin: hook.plugin_name.clone(),
+                        hook: hook.hook_name.clone(),
+                        exit_code: None,
+                        error: Some(e.to_string()),
+                    },
+                );
+                tracing::warn!(error = %e, "failed to spawn hook command");
+            }
         }
     }
 
@@ -666,6 +684,16 @@ fn dispatched_hooks_for_payload(
 
         let selected = native_match.or(symposium_match);
         if let Some(hook) = selected {
+            tracing::debug!(
+                report = %crate::report::ReportEvent::HookConsidered {
+                    plugin: parsed_plugin.plugin.name.clone(),
+                    hook: hook.name.clone(),
+                    event: format!("{:?}", input.event()),
+                    selected: true,
+                    format: Some(format!("{:?}", hook.format)),
+                    reason: None,
+                },
+            );
             match ResolvedHook::build(parsed_plugin, hook) {
                 Ok(dispatched) => out.push(dispatched),
                 Err(e) => {
@@ -677,6 +705,22 @@ fn dispatched_hooks_for_payload(
                     );
                 }
             }
+        } else if parsed_plugin
+            .plugin
+            .hooks
+            .iter()
+            .any(|h| h.event == input.event())
+        {
+            tracing::debug!(
+                report = %crate::report::ReportEvent::HookConsidered {
+                    plugin: parsed_plugin.plugin.name.clone(),
+                    hook: "(none)".into(),
+                    event: format!("{:?}", input.event()),
+                    selected: false,
+                    format: None,
+                    reason: Some("no matching format for this agent".into()),
+                },
+            );
         }
     }
 

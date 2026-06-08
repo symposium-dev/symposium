@@ -8,6 +8,8 @@ Synchronize skills with workspace dependencies.
 cargo agents sync
 ```
 
+With the global `-v` flag, sync additionally shows each plugin, skill group, and skill that was evaluated and why each was included or skipped. With `--json`, stdout receives a JSON array of structured event objects (see [global options](./cargo-agents.md#global-options)).
+
 ## Behavior
 
 Must be run from within a Rust workspace. Performs the following steps:
