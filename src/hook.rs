@@ -411,10 +411,7 @@ fn handle_session_start(sym: &Symposium, payload: &SessionStartInput) -> OutputE
 /// Reuses the help renderer's `applicable_subcommands`, so the hint fires only when there is actually something to discover; `None` otherwise.
 fn discovery_hint(sym: &Symposium, cwd: &Path) -> Option<String> {
     let registry = load_registry(sym);
-    let deps = workspace_crates(cwd)
-        .into_iter()
-        .map(|wcrt| (wcrt.name, wcrt.version))
-        .collect::<Vec<_>>();
+    let deps = crate::crate_sources::crate_pairs(&workspace_crates(cwd));
 
     let any_subcommand = applicable_subcommands(&registry, &deps).next().is_some();
 
@@ -488,7 +485,24 @@ pub async fn dispatch_plugin_hooks(
     prior_output: serde_json::Value,
 ) -> Result<serde_json::Value, Vec<u8>> {
     let plugins = crate::plugins::load_all_plugins(sym);
-    let hooks = dispatched_hooks_for_payload(&plugins, sym_input, host_agent);
+
+    // Resolving the workspace means running cargo, so only do it when some
+    // plugin's hook gating actually references a concrete crate (a `crate(*)`
+    // wildcard or env/shell/path predicate never needs the crate graph).
+    let deps = if plugins
+        .iter()
+        .any(|p| p.plugin.hooks_need_crate_resolution())
+    {
+        let cwd = match sym_input.cwd() {
+            Some(s) => std::path::PathBuf::from(s),
+            None => std::env::current_dir().unwrap_or_default(),
+        };
+        crate::crate_sources::crate_pairs(&workspace_crates(&cwd))
+    } else {
+        Vec::new()
+    };
+    let ctx = crate::predicate::PredicateContext::new(&deps);
+    let hooks = dispatched_hooks_for_payload(&plugins, sym_input, host_agent, &ctx);
 
     let mut output = prior_output;
 
@@ -649,12 +663,23 @@ fn dispatched_hooks_for_payload(
     plugins: &[ParsedPlugin],
     input: &symposium::InputEvent,
     host_agent: HookAgent,
+    ctx: &crate::predicate::PredicateContext,
 ) -> Vec<ResolvedHook> {
     tracing::trace!(?input, "matching hooks for payload");
 
     let mut out = Vec::new();
 
     for parsed_plugin in plugins {
+        // Plugin-level predicates gate every hook in the plugin. Evaluated once
+        // per plugin per dispatch — keep them cheap.
+        if !parsed_plugin.plugin.applies(ctx) {
+            tracing::debug!(
+                plugin = %parsed_plugin.plugin.name,
+                "plugin predicates failed, skipping hooks"
+            );
+            continue;
+        }
+
         let mut native_match: Option<&crate::plugins::Hook> = None;
         let mut symposium_match: Option<&crate::plugins::Hook> = None;
 
@@ -684,6 +709,21 @@ fn dispatched_hooks_for_payload(
 
         let selected = native_match.or(symposium_match);
         if let Some(hook) = selected {
+            // Hook-level predicates are evaluated at dispatch so they pick up
+            // live state (file present, tool installed, crate present, …).
+            if !hook.predicates.evaluate(ctx) {
+                tracing::debug!(
+                    report = %crate::report::ReportEvent::HookConsidered {
+                        plugin: parsed_plugin.plugin.name.clone(),
+                        hook: hook.name.clone(),
+                        event: format!("{:?}", input.event()),
+                        selected: false,
+                        format: Some(format!("{:?}", hook.format)),
+                        reason: Some("hook predicates not satisfied".into()),
+                    },
+                );
+                continue;
+            }
             tracing::debug!(
                 report = %crate::report::ReportEvent::HookConsidered {
                     plugin: parsed_plugin.plugin.name.clone(),
@@ -729,6 +769,8 @@ fn dispatched_hooks_for_payload(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
 
     #[test]
@@ -871,5 +913,150 @@ mod tests {
     fn symposium_output_empty_has_no_context() {
         let output = symposium::OutputEvent::empty_for(HookEvent::PreToolUse);
         assert!(output.additional_context().is_none());
+    }
+
+    /// Helper: build a minimal plugin with a single PreToolUse hook backed
+    /// by a no-op script installation (no `source`, just an on-disk script).
+    fn plugin_with_hook(
+        plugin_shell: Vec<&str>,
+        hook_shell: Vec<&str>,
+    ) -> crate::plugins::ParsedPlugin {
+        use crate::plugins::{Hook, HookFormat, Installation, Plugin};
+
+        let install = Installation {
+            name: "no-op".into(),
+            requirements: vec![],
+            install_commands: vec![],
+            source: None,
+            executable: None,
+            script: Some("/bin/true".into()),
+            args: vec![],
+        };
+        let hook = Hook {
+            name: "h".into(),
+            event: HookEvent::PreToolUse,
+            agent: None,
+            matcher: None,
+            requirements: vec![],
+            command: "no-op".into(),
+            executable: None,
+            script: None,
+            args: vec![],
+            format: HookFormat::Symposium,
+            predicates: crate::predicate::PredicateSet {
+                predicates: hook_shell
+                    .into_iter()
+                    .map(|c| crate::predicate::Predicate::Shell(c.into()))
+                    .collect(),
+            },
+        };
+        // Plugin gate: `crate(*)` (always applies) plus the shell predicates.
+        let plugin_predicates = std::iter::once(crate::predicate::Predicate::CrateWildcard)
+            .chain(
+                plugin_shell
+                    .into_iter()
+                    .map(|c| crate::predicate::Predicate::Shell(c.into())),
+            )
+            .collect();
+        let plugin = Plugin {
+            name: "test-plugin".into(),
+            predicates: crate::predicate::PredicateSet {
+                predicates: plugin_predicates,
+            },
+            installations: vec![install],
+            hooks: vec![hook],
+            skills: vec![],
+            mcp_servers: vec![],
+            subcommands: BTreeMap::new(),
+        };
+        crate::plugins::ParsedPlugin {
+            path: std::path::PathBuf::from("test.toml"),
+            plugin,
+            source_name: "test-source".to_string(),
+            source_dir: PathBuf::from(".".to_string()),
+        }
+    }
+
+    fn pre_tool_use_input() -> symposium::InputEvent {
+        symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
+            "Bash".into(),
+            serde_json::json!({}),
+            None,
+            None,
+        ))
+    }
+
+    #[test]
+    fn dispatch_skips_when_plugin_predicate_fails() {
+        let plugin = plugin_with_hook(vec!["false"], vec![]);
+        let hooks = dispatched_hooks_for_payload(
+            &[plugin],
+            &pre_tool_use_input(),
+            HookAgent::Claude,
+            &crate::predicate::PredicateContext::new(&[]),
+        );
+        assert!(hooks.is_empty(), "plugin-level false should drop all hooks");
+    }
+
+    #[test]
+    fn dispatch_skips_when_hook_predicate_fails() {
+        let plugin = plugin_with_hook(vec![], vec!["false"]);
+        let hooks = dispatched_hooks_for_payload(
+            &[plugin],
+            &pre_tool_use_input(),
+            HookAgent::Claude,
+            &crate::predicate::PredicateContext::new(&[]),
+        );
+        assert!(hooks.is_empty(), "hook-level false should drop the hook");
+    }
+
+    #[test]
+    fn dispatch_includes_when_predicates_pass() {
+        let plugin = plugin_with_hook(vec!["true"], vec!["true"]);
+        let hooks = dispatched_hooks_for_payload(
+            &[plugin],
+            &pre_tool_use_input(),
+            HookAgent::Claude,
+            &crate::predicate::PredicateContext::new(&[]),
+        );
+        assert_eq!(hooks.len(), 1);
+    }
+
+    /// A plugin gated on a concrete crate must not dispatch its hooks in a
+    /// workspace that lacks the crate (regression: hooks used to fire for every
+    /// plugin regardless of its `crates`).
+    #[test]
+    fn dispatch_respects_plugin_crate_gate() {
+        // Replace the wildcard plugin gate with a concrete `crate(serde)`.
+        let mut plugin = plugin_with_hook(vec![], vec![]);
+        plugin.plugin.predicates = crate::predicate::PredicateSet {
+            predicates: vec![crate::predicate::Predicate::Crate("serde".into(), None)],
+        };
+
+        // No serde in the workspace → the hook is skipped.
+        let empty = dispatched_hooks_for_payload(
+            &[plugin.clone()],
+            &pre_tool_use_input(),
+            HookAgent::Claude,
+            &crate::predicate::PredicateContext::new(&[]),
+        );
+        assert!(
+            empty.is_empty(),
+            "crate-gated hook should not fire without the crate"
+        );
+
+        // serde present → the hook fires.
+        let deps = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let matched = dispatched_hooks_for_payload(
+            &[plugin],
+            &pre_tool_use_input(),
+            HookAgent::Claude,
+            &crate::predicate::PredicateContext::new(&deps),
+        );
+        assert_eq!(
+            matched.len(),
+            1,
+            "crate-gated hook should fire when the crate is present"
+        );
     }
 }

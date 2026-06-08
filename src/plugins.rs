@@ -14,16 +14,39 @@ use sacp::schema::McpServer;
 /// An MCP server entry in a plugin manifest.
 pub type McpServerEntry = McpServer;
 
-/// An MCP server entry with optional crate filtering.
+/// An MCP server entry with optional activation predicates.
 ///
-/// When `crates` is present, the server is only registered if the workspace
-/// matches those predicates (ANDed with plugin-level `crates`).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// The server's `crates` and `predicates` fields are merged into one
+/// [`PredicateSet`](crate::predicate::PredicateSet); the server is only
+/// registered when that set holds (ANDed with the plugin-level set).
+#[derive(Debug, Clone, Serialize)]
 pub struct PluginMcpServer {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crates: Option<crate::predicate::PredicateSet>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::predicate::PredicateSet::is_empty"
+    )]
+    pub predicates: crate::predicate::PredicateSet,
     #[serde(flatten)]
     pub server: McpServerEntry,
+}
+
+impl<'de> Deserialize<'de> for PluginMcpServer {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            #[serde(default)]
+            crates: Option<crate::predicate::CrateList>,
+            #[serde(default)]
+            predicates: crate::predicate::PredicateSet,
+            #[serde(flatten)]
+            server: McpServerEntry,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(PluginMcpServer {
+            predicates: crate::predicate::PredicateSet::merged(raw.crates, raw.predicates),
+            server: raw.server,
+        })
+    }
 }
 
 use symposium_install::UpdateLevel;
@@ -153,17 +176,39 @@ impl<'de> serde::Deserialize<'de> for PluginSource {
 
 /// A `[[skills]]` entry from a plugin manifest.
 ///
-/// Each group declares which crates it advises on (`crates`) and
-/// optionally a remote source for the skill files.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// The group's `crates` and `predicates` fields are merged into one
+/// [`PredicateSet`](crate::predicate::PredicateSet) that gates the group and,
+/// for `source = "crate"`, locates the crate sources to fetch from.
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct SkillGroup {
-    /// Crate predicates this group advises on (e.g., `["serde", "serde_json>=1.0"]`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crates: Option<crate::predicate::PredicateSet>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::predicate::PredicateSet::is_empty"
+    )]
+    pub predicates: crate::predicate::PredicateSet,
     /// Remote source for skills.
     #[serde(default)]
     pub source: PluginSource,
+}
+
+impl<'de> Deserialize<'de> for SkillGroup {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            #[serde(default)]
+            crates: Option<crate::predicate::CrateList>,
+            #[serde(default)]
+            predicates: crate::predicate::PredicateSet,
+            #[serde(default)]
+            source: PluginSource,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(SkillGroup {
+            predicates: crate::predicate::PredicateSet::merged(raw.crates, raw.predicates),
+            source: raw.source,
+        })
+    }
 }
 
 /// Raw command reference as it appears in TOML: a string (named installation
@@ -263,8 +308,11 @@ pub struct ParsedPlugin {
 #[derive(Debug, Clone, Serialize)]
 pub struct Plugin {
     pub name: String,
-    /// Crate predicates this plugin applies to. `["*"]` for all crates.
-    pub crates: crate::predicate::PredicateSet,
+    /// Activation predicates for this plugin — the plugin's `crates` (lowered to
+    /// `any(crate(...))`) merged with its `predicates`. Holds when every entry
+    /// holds. Evaluated at sync time (for skills/MCP), at subcommand lookup, and
+    /// at hook dispatch.
+    pub predicates: crate::predicate::PredicateSet,
     /// Named installation entries available to hooks in this plugin.
     /// Order matches declaration order in the manifest.
     pub installations: Vec<Installation>,
@@ -279,10 +327,9 @@ pub struct Plugin {
 }
 
 impl Plugin {
-    /// Check if this plugin applies to the given workspace crates.
-    /// Returns true if any predicate matches.
-    pub fn applies_to_crates(&self, workspace_crates: &[(String, semver::Version)]) -> bool {
-        self.crates.matches(workspace_crates)
+    /// Check if this plugin's activation predicates hold in `ctx`.
+    pub fn applies(&self, ctx: &crate::predicate::PredicateContext) -> bool {
+        self.predicates.evaluate(ctx)
     }
 
     /// Look up a named installation on this plugin.
@@ -290,22 +337,26 @@ impl Plugin {
         self.installations.iter().find(|i| i.name == name)
     }
 
-    /// Return MCP servers applicable to the given workspace crates.
+    /// True if gating this plugin's hooks (plugin-level plus hook-level
+    /// predicates) needs the workspace crate graph — i.e. some predicate names a
+    /// concrete crate, not just `crate(*)`. Lets hook dispatch skip the cargo
+    /// query when no crate is actually referenced.
+    pub fn hooks_need_crate_resolution(&self) -> bool {
+        self.predicates.has_concrete_crate()
+            || self.hooks.iter().any(|h| h.predicates.has_concrete_crate())
+    }
+
+    /// Return MCP servers whose own predicates hold in `ctx`.
     ///
-    /// A server matches if its own `crates` predicates match (or are absent,
-    /// meaning it inherits from the plugin level which is already checked).
+    /// ANDed with the plugin-level predicates, which the caller checks
+    /// separately.
     pub fn applicable_mcp_servers(
         &self,
-        workspace_crates: &[(String, semver::Version)],
+        ctx: &crate::predicate::PredicateContext,
     ) -> Vec<McpServerEntry> {
         self.mcp_servers
             .iter()
-            .filter(|s| {
-                let Some(ref pred_set) = s.crates else {
-                    return true;
-                };
-                pred_set.matches(workspace_crates)
-            })
+            .filter(|s| s.predicates.evaluate(ctx))
             .map(|s| s.server.clone())
             .collect()
     }
@@ -332,8 +383,13 @@ pub struct Subcommand {
     pub description: String,
     pub audience: Audience,
     pub command: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crates: Option<crate::predicate::PredicateSet>,
+    /// Activation predicates for this subcommand (its `crates` lowered and
+    /// merged with its `predicates`). ANDed with the plugin-level set.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::predicate::PredicateSet::is_empty"
+    )]
+    pub predicates: crate::predicate::PredicateSet,
 }
 
 /// A validated hook definition.
@@ -362,6 +418,13 @@ pub struct Hook {
     /// (hook `args`, installation `args`) is non-empty.
     pub args: Vec<String>,
     pub format: HookFormat,
+    /// Activation predicates that must all hold for this hook to dispatch.
+    /// Evaluated at dispatch time, ANDed with the plugin's predicates.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::predicate::PredicateSet::is_empty"
+    )]
+    pub predicates: crate::predicate::PredicateSet,
 }
 
 /// Resolve a `RawInstallationRef`. If named, validate against the existing
@@ -442,6 +505,7 @@ fn validate_hook(
         script: hook_script,
         args: hook_args,
         format,
+        predicates,
     } = raw;
 
     let command = resolve_or_promote(
@@ -531,6 +595,7 @@ fn validate_hook(
         script: hook_script,
         args: final_args,
         format,
+        predicates,
     })
 }
 
@@ -664,7 +729,10 @@ struct SourceDirContents {
 #[serde(deny_unknown_fields)]
 struct RawPluginManifest {
     name: String,
-    crates: crate::predicate::PredicateSet,
+    #[serde(default)]
+    crates: crate::predicate::CrateList,
+    #[serde(default)]
+    predicates: crate::predicate::PredicateSet,
     #[serde(default)]
     installations: Vec<RawNamedInstallation>,
     #[serde(default)]
@@ -709,7 +777,9 @@ struct RawSubcommand {
     /// same shape as `RawHook.command`.
     command: RawInstallationRef,
     #[serde(default)]
-    crates: Option<crate::predicate::PredicateSet>,
+    crates: Option<crate::predicate::CrateList>,
+    #[serde(default)]
+    predicates: crate::predicate::PredicateSet,
 }
 
 #[derive(Debug, Deserialize)]
@@ -736,6 +806,8 @@ struct RawHook {
     args: Vec<String>,
     #[serde(default)]
     format: HookFormat,
+    #[serde(default)]
+    predicates: crate::predicate::PredicateSet,
 }
 
 /// Fetch/update git-based plugin sources.
@@ -1284,30 +1356,21 @@ pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
     let mut names = std::collections::BTreeSet::new();
 
     for plugin_result in contents.plugins.into_iter().flatten() {
-        for pred in &plugin_result.plugin.crates.predicates {
-            pred.collect_crate_names(&mut names);
-        }
+        plugin_result
+            .plugin
+            .predicates
+            .collect_crate_names(&mut names);
         for group in &plugin_result.plugin.skills {
-            if let Some(pred_set) = &group.crates {
-                for pred in &pred_set.predicates {
-                    pred.collect_crate_names(&mut names);
-                }
-            }
+            group.predicates.collect_crate_names(&mut names);
         }
         for mcp in &plugin_result.plugin.mcp_servers {
-            if let Some(pred_set) = &mcp.crates {
-                for pred in &pred_set.predicates {
-                    pred.collect_crate_names(&mut names);
-                }
-            }
+            mcp.predicates.collect_crate_names(&mut names);
         }
     }
 
     for skill_md in contents.skill_files {
         if let Ok(skill) = crate::skills::load_standalone_skill(&skill_md) {
-            for pred in &skill.crates {
-                pred.collect_crate_names(&mut names);
-            }
+            skill.predicates.collect_crate_names(&mut names);
         }
     }
 
@@ -1420,11 +1483,35 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
         subcommands.insert(name, sub);
     }
 
-    validate_skill_groups(&manifest.crates, &manifest.skills)?;
+    let predicates =
+        crate::predicate::PredicateSet::merged(Some(manifest.crates), manifest.predicates);
+
+    // Every plugin must reference at least one crate somewhere — at the plugin,
+    // skill-group, hook, or MCP-server level — via `crates` or a `crate(...)`
+    // predicate. Otherwise it would never apply to any project.
+    let mentions_crate = predicates.mentions_crate()
+        || manifest
+            .skills
+            .iter()
+            .any(|g| g.predicates.mentions_crate())
+        || hooks.iter().any(|h| h.predicates.mentions_crate())
+        || manifest
+            .mcp_servers
+            .iter()
+            .any(|m| m.predicates.mentions_crate());
+    if !mentions_crate {
+        bail!(
+            "plugin `{}` references no crate — add `crates = [...]` or a `crate(...)` predicate \
+             at the plugin, `[[skills]]`, or `[[mcp_servers]]` level",
+            manifest.name
+        );
+    }
+
+    validate_skill_groups(&predicates, &manifest.skills)?;
 
     Ok(Plugin {
         name: manifest.name,
-        crates: manifest.crates,
+        predicates,
         installations,
         hooks,
         skills: manifest.skills,
@@ -1480,6 +1567,7 @@ fn validate_subcommand(
         audience,
         command: raw_command,
         crates,
+        predicates,
     } = raw;
 
     if description.len() > MAX_SUBCOMMAND_DESCRIPTION_LEN {
@@ -1498,46 +1586,42 @@ fn validate_subcommand(
         description,
         audience,
         command,
-        crates,
+        predicates: crate::predicate::PredicateSet::merged(crates, predicates),
     })
 }
 
 /// Validate skill-group source constraints that serde alone cannot express.
 ///
-/// When a group uses `source = "crate"`, at least one non-wildcard predicate
-/// must be reachable (plugin-level or group-level) so Symposium can resolve
-/// concrete crates to fetch.
+/// When a group uses `source = "crate"`, a concrete crate must be named in a
+/// *fetchable* (non-negated) position (plugin-level or group-level) so
+/// Symposium has a crate whose source tree to fetch skills from. A crate named
+/// only under `not(...)` doesn't count: negation gates the group but never
+/// contributes a crate to fetch (its witness is always empty).
 ///
 /// Valid:
 ///   crates = ["serde"]              + source = "crate"  → fetch serde
 ///   crates = ["*"], group ["serde"] + source = "crate"  → fetch serde
 ///   crates = ["*", "serde"]         + source = "crate"  → fetch serde
+///   predicates = ["any(crate(a), crate(b))"]            → fetch a and/or b
 ///
 /// Invalid:
 ///   crates = ["*"]                  + source = "crate"  → no concrete crate
 ///   crates = ["*"], group ["*"]     + source = "crate"  → no concrete crate
+///   predicates = ["not(crate(legacy))"]                 → no fetchable crate
 fn validate_skill_groups(
-    plugin_crates: &crate::predicate::PredicateSet,
+    plugin_predicates: &crate::predicate::PredicateSet,
     skills: &[SkillGroup],
 ) -> Result<()> {
     for (i, group) in skills.iter().enumerate() {
         if group.source == PluginSource::Crate {
-            let has_non_wildcard = plugin_crates
-                .predicates
-                .iter()
-                .chain(
-                    group
-                        .crates
-                        .as_ref()
-                        .map(|ps| ps.predicates.as_slice())
-                        .unwrap_or_default(),
-                )
-                .any(|p| !matches!(p, crate::predicate::Predicate::Wildcard));
-            if !has_non_wildcard {
+            let has_fetchable_crate =
+                plugin_predicates.has_fetchable_crate() || group.predicates.has_fetchable_crate();
+            if !has_fetchable_crate {
                 bail!(
-                    "skills group {i} uses source = \"crate\" but all predicates \
-                     (plugin-level and group-level) are wildcards or absent — \
-                     at least one non-wildcard predicate is required to resolve concrete crates"
+                    "skills group {i} uses source = \"crate\" but no concrete `crate(...)` \
+                     predicate is reachable in a fetchable position (plugin-level or \
+                     group-level, not under `not(...)`) — at least one is required to \
+                     resolve a crate to fetch skills from"
                 );
             }
         }
@@ -1554,7 +1638,11 @@ mod tests {
     use crate::predicate::PredicateSet;
 
     fn pred_set(s: &str) -> PredicateSet {
-        PredicateSet::parse(s).unwrap()
+        PredicateSet::from_crates(s).unwrap()
+    }
+
+    fn ctx(crates: &[(String, semver::Version)]) -> crate::predicate::PredicateContext<'_> {
+        crate::predicate::PredicateContext::new(crates)
     }
 
     fn from_str(s: &str) -> Result<Plugin> {
@@ -1599,9 +1687,7 @@ mod tests {
         assert_eq!(plugin.name, "remote-plugin");
         assert_eq!(plugin.skills.len(), 1);
         let group = &plugin.skills[0];
-        let cr = group.crates.as_ref().unwrap();
-        assert_eq!(cr.predicates.len(), 1);
-        assert!(cr.predicates[0].references_crate("serde"));
+        assert!(group.predicates.references_crate("serde"));
         assert!(
             matches!(
                 &group.source,
@@ -1610,6 +1696,80 @@ mod tests {
             "expected Git source, got {:?}",
             group.source
         );
+    }
+
+    #[test]
+    fn parse_predicates_top_level() {
+        let toml = indoc! {r#"
+            name = "env-pred-plugin"
+            crates = ["*"]
+            predicates = ["shell(command -v rg)", "path_exists(Cargo.toml)"]
+
+            [[skills]]
+            crates = ["serde"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        // `crates = ["*"]` lowers to a leading `crate(*)`, then the two
+        // function-call predicates.
+        use crate::predicate::Predicate;
+        assert_eq!(
+            plugin.predicates.predicates,
+            vec![
+                Predicate::CrateWildcard,
+                Predicate::Shell("command -v rg".into()),
+                Predicate::PathExists("Cargo.toml".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_predicates_on_skill_group() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[skills]]
+            crates = ["serde"]
+            predicates = ["shell(command -v jq)"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        // group `crates = ["serde"]` lowers to `crate(serde)`, plus the shell predicate.
+        use crate::predicate::Predicate;
+        assert_eq!(
+            plugin.skills[0].predicates.predicates,
+            vec![
+                Predicate::Crate("serde".into(), None),
+                Predicate::Shell("command -v jq".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_predicates_on_hook() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = { script = "scripts/x.sh" }
+            predicates = ["path_exists(.git)"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.hooks[0].predicates.predicates.len(), 1);
+    }
+
+    #[test]
+    fn predicates_default_empty() {
+        // With no `predicates`, the plugin gate is just the lowered `crates`
+        // (here `crate(*)`), and hooks default to no predicates.
+        let plugin = from_str(SAMPLE).expect("parse");
+        assert_eq!(
+            plugin.predicates.predicates,
+            vec![crate::predicate::Predicate::CrateWildcard]
+        );
+        assert!(plugin.hooks[0].predicates.is_empty());
     }
 
     #[test]
@@ -1623,9 +1783,7 @@ mod tests {
         "#};
         let plugin = from_str(toml).expect("parse");
         let group = &plugin.skills[0];
-        let cr = group.crates.as_ref().unwrap();
-        assert_eq!(cr.predicates.len(), 1);
-        assert!(cr.predicates[0].references_crate("serde"));
+        assert!(group.predicates.predicates[0].references_crate("serde"));
     }
 
     #[test]
@@ -2018,8 +2176,8 @@ mod tests {
         let plugin = from_str(toml).expect("parse");
         assert_eq!(plugin.name, "multi-group");
         assert_eq!(plugin.skills.len(), 2);
-        assert!(plugin.skills[0].crates.as_ref().unwrap().predicates[0].references_crate("serde"));
-        assert!(plugin.skills[1].crates.as_ref().unwrap().predicates[0].references_crate("tokio"));
+        assert!(plugin.skills[0].predicates.predicates[0].references_crate("serde"));
+        assert!(plugin.skills[1].predicates.predicates[0].references_crate("tokio"));
     }
 
     #[test]
@@ -2032,50 +2190,50 @@ mod tests {
         // Plugin with wildcard - should apply to all
         let plugin_wildcard = Plugin {
             name: "wildcard".to_string(),
-            crates: pred_set("*"),
+            predicates: pred_set("*"),
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
         };
-        assert!(plugin_wildcard.applies_to_crates(&workspace_crates));
+        assert!(plugin_wildcard.applies(&ctx(&workspace_crates)));
 
         // Plugin targeting serde - should apply
         let plugin_serde = Plugin {
             name: "serde-plugin".to_string(),
-            crates: pred_set("serde"),
+            predicates: pred_set("serde"),
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
         };
-        assert!(plugin_serde.applies_to_crates(&workspace_crates));
+        assert!(plugin_serde.applies(&ctx(&workspace_crates)));
 
         // Plugin targeting non-existent crate - should not apply
         let plugin_other = Plugin {
             name: "other-plugin".to_string(),
-            crates: pred_set("other-crate"),
+            predicates: pred_set("other-crate"),
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
         };
-        assert!(!plugin_other.applies_to_crates(&workspace_crates));
+        assert!(!plugin_other.applies(&ctx(&workspace_crates)));
 
         // Plugin with version predicate - should reject wrong version
         let plugin_version = Plugin {
             name: "version-plugin".to_string(),
-            crates: pred_set("tokio>=2.0"),
+            predicates: pred_set("tokio>=2.0"),
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
         };
-        assert!(!plugin_version.applies_to_crates(&workspace_crates));
+        assert!(!plugin_version.applies(&ctx(&workspace_crates)));
     }
 
     #[test]
@@ -3188,6 +3346,24 @@ mod tests {
     }
 
     #[test]
+    fn crate_reference_on_hook_satisfies_requirement() {
+        // A plugin whose only crate reference is a `crate(...)` predicate on a
+        // hook is valid — the hook is crate-gated even with no plugin-level
+        // `crates`.
+        let toml = indoc! {r#"
+            name = "hook-crate"
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = { script = "scripts/x.sh" }
+            predicates = ["crate(serde)"]
+        "#};
+        let plugin = from_str(toml).expect("should be valid");
+        assert!(plugin.hooks[0].predicates.references_crate("serde"));
+    }
+
+    #[test]
     fn crate_valid_with_group_non_wildcard() {
         let toml = indoc! {r#"
             name = "ok"
@@ -3223,7 +3399,7 @@ mod tests {
             source = "crate"
         "#};
         let err = from_str(toml).unwrap_err();
-        assert!(err.to_string().contains("non-wildcard"), "{err}");
+        assert!(err.to_string().contains("concrete"), "{err}");
     }
 
     #[test]
@@ -3236,7 +3412,37 @@ mod tests {
             source = "crate"
         "#};
         let err = from_str(toml).unwrap_err();
-        assert!(err.to_string().contains("non-wildcard"), "{err}");
+        assert!(err.to_string().contains("concrete"), "{err}");
+    }
+
+    #[test]
+    fn crate_reject_negated_only() {
+        // A `source = "crate"` group whose only crate reference sits under
+        // `not(...)` has nothing to fetch (the witness of a negation is always
+        // empty), so it is rejected even though a crate is "mentioned".
+        let toml = indoc! {r#"
+            name = "bad"
+
+            [[skills]]
+            source = "crate"
+            predicates = ["not(crate(legacy))"]
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("fetchable"), "{err}");
+    }
+
+    #[test]
+    fn crate_valid_with_positive_inside_any() {
+        // A concrete crate in a fetchable (non-negated) position anchors the
+        // group, even when nested in combinators and sitting beside a `not`.
+        let toml = indoc! {r#"
+            name = "ok"
+
+            [[skills]]
+            source = "crate"
+            predicates = ["any(crate(serde), not(crate(legacy)))"]
+        "#};
+        from_str(toml).expect("should be valid");
     }
 
     // --- TOML serialization round-trip tests ---
@@ -3555,8 +3761,6 @@ mod tests {
         "#};
         let plugin = from_str(toml).expect("parse");
         let sub = &plugin.subcommands["foo"];
-        let cr = sub.crates.as_ref().expect("crates predicate present");
-        assert_eq!(cr.predicates.len(), 1);
-        assert!(cr.predicates[0].references_crate("serde"));
+        assert!(sub.predicates.references_crate("serde"));
     }
 }

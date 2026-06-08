@@ -38,6 +38,15 @@ Validates skill group source constraints at parse time: mutual exclusivity of `s
 
 Parses `[package.metadata.symposium]` from crate `Cargo.toml` files. Crate authors embed skill layout metadata so Symposium knows where to find skills (or which other crate to redirect to). Returns `SkillSource::Path(subdir)` or `SkillSource::Crate { name, version }` for redirects.
 
+### `predicate.rs` — unified activation predicates
+
+Defines one `Predicate` enum covering both crate-graph matching and runtime/environment gating, plus `PredicateSet` (a list ANDed together) and `PredicateContext` (the workspace crate list it evaluates against). Two surface syntaxes lower to the same tree:
+
+- The **`crates`** field uses crate-atom syntax (`serde`, `serde>=1.0`, `*`) and lowers, via `CrateList`, to `crate(...)` / `crate(*)` predicates OR-combined into a single `any(...)` that is appended to the same list. So `crates` is sugar — there is no separate crate-predicate type.
+- The **`predicates`** field uses function-call syntax: `crate(<atom>)`, `shell(<cmd>)` (verbatim arg, `sh -c`, exit 0 holds), `path_exists(<arg>)` (disk, then `$PATH` for bare names), `env(<name>[=<value>])`, and the combinators `not(<p>)`, `any(<p>, …)`, `all(<p>, …)`.
+
+Each gated struct (plugin, skill group, skill, hook, MCP server, subcommand) stores a single merged `predicates: PredicateSet`. Evaluation is `PredicateSet::evaluate(ctx) -> bool`. For `source = "crate"`, `witness` / `union_matched_crates` return the concrete crates that participate in a *satisfying* evaluation (the fetch set): `crate(c)` contributes `c` when present, `any` unions its true children, `all` unions all children when all hold, and `not` contributes nothing. `collect_crate_names` (crates.io validation) walks all positions regardless. Plugin/group/skill/MCP predicates are evaluated at sync time; hook dispatch evaluates the plugin-level set (so a plugin's `crates` now gate its hooks) plus the hook-level set. Hook dispatch threads in the workspace crate list, but resolves it (running cargo) only when some plugin- or hook-level predicate references a *concrete* `crate(...)` — wildcard and env/shell/path predicates dispatch without a cargo query. See the [predicates reference](../reference/predicates.md).
+
 ### `skills.rs` — skill resolution and matching
 
 Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates crate predicates at each level (plugin, group, skill) to determine which skills apply. For `source = "crate"` groups, resolves predicates to a matched crate set, fetches each crate's source via `RustCrateFetch`, reads `[package.metadata.symposium]` to determine skill paths, and follows redirects recursively with cycle detection and a depth limit of 10.

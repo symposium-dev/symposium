@@ -2,6 +2,8 @@
 
 Crate predicates control when plugins, skill groups, and individual skills are active. A predicate matches against a **workspace's direct dependency set** — not against individual crates in isolation.
 
+The `crates` field is shorthand: `crates = ["serde", "tokio"]` lowers to a single `any(crate(serde), crate(tokio))` predicate and is merged into the same list as the [`predicates`](./predicates.md) field (ANDed together). Everything below describes the crate-atom syntax `crates` accepts; the equivalent `crate(<atom>)` predicate is also usable directly in `predicates`.
+
 ## Predicate syntax
 
 A crate predicate is a crate name with an optional version requirement.
@@ -67,3 +69,5 @@ Each non-wildcard predicate that matches a workspace dependency contributes that
 Predicates from both the plugin level and the group level are unioned together to form the matched set.
 
 Because wildcards contribute no concrete crates, **at least one non-wildcard predicate must be present** (at either the plugin or group level) when using crate-sourced skills. A manifest with only wildcards and `source = "crate"` is rejected at parse time.
+
+When the gate uses combinators (`any`, `all`, `not`) or mixes `crate(...)` with non-crate predicates, the matched set generalizes to the predicate's **witness** — the concrete crates that participate in a satisfying evaluation. See [Crate-sourced skills and the witness](./predicates.md#crate-sourced-skills-and-the-witness).
