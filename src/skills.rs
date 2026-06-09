@@ -150,11 +150,12 @@ pub async fn skills_applicable_to(
     sym: &Symposium,
     registry: &PluginRegistry,
     workspace_crates: &[crate::crate_sources::WorkspaceCrate],
+    custom_predicate_entries: std::collections::HashMap<String, predicate::ResolvedPredicateEntry>,
 ) -> Vec<SkillWithGroupContext> {
     let mut results = Vec::new();
 
     let for_crates = crate::crate_sources::crate_pairs(workspace_crates);
-    let ctx = PredicateContext::new(&for_crates);
+    let mut ctx = PredicateContext::with_custom_predicates(&for_crates, custom_predicate_entries);
 
     // Skills from plugin manifests. We iterate these separately
     // because we lazily load skill groups, so there
@@ -163,7 +164,7 @@ pub async fn skills_applicable_to(
         let plugin = &parsed.plugin;
         // Plugin-level predicates gate everything below. Evaluated before
         // group fetching to avoid wasted work.
-        if !plugin.applies(&ctx) {
+        if !plugin.predicates.evaluate(&mut ctx) {
             tracing::debug!(
                 report = %crate::report::ReportEvent::PluginConsidered {
                     plugin: plugin.name.clone(),
@@ -183,9 +184,10 @@ pub async fn skills_applicable_to(
         );
 
         for group in &plugin.skills {
-            let skills = load_skills_for_group(sym, parsed, group, workspace_crates, &ctx).await;
+            let skills =
+                load_skills_for_group(sym, parsed, group, workspace_crates, &mut ctx).await;
             for (skill, origin) in skills {
-                collect_skill_applicable_to(skill, origin, &plugin.name, &ctx, &mut results);
+                collect_skill_applicable_to(skill, origin, &plugin.name, &mut ctx, &mut results);
             }
         }
     }
@@ -206,84 +208,7 @@ pub async fn skills_applicable_to(
             entry.skill.clone(),
             entry.origin.clone(),
             "(standalone skills)",
-            &ctx,
-            &mut results,
-        );
-    }
-
-    results
-}
-
-/// Like [`skills_applicable_to`], but with a custom predicate evaluator.
-pub async fn skills_applicable_to_with_evaluator(
-    sym: &Symposium,
-    registry: &PluginRegistry,
-    workspace_crates: &[crate::crate_sources::WorkspaceCrate],
-    evaluator: &mut predicate::CustomPredicateEvaluator,
-) -> Vec<SkillWithGroupContext> {
-    let mut results = Vec::new();
-
-    let for_crates = crate::crate_sources::crate_pairs(workspace_crates);
-    let ctx = PredicateContext::new(&for_crates);
-
-    // Skills from plugin manifests. We iterate these separately
-    // because we lazily load skill groups, so there
-    // is extra logic.
-    for parsed in &registry.plugins {
-        let plugin = &parsed.plugin;
-        // Plugin-level predicates gate everything below. Evaluated before
-        // group fetching to avoid wasted work.
-        if !predicate::evaluate_predicate_set(&plugin.predicates, &ctx, evaluator) {
-            tracing::debug!(
-                report = %crate::report::ReportEvent::PluginConsidered {
-                    plugin: plugin.name.clone(),
-                    matched: false,
-                    reason: Some("plugin-level predicates not satisfied".into()),
-                },
-            );
-            continue;
-        }
-
-        tracing::debug!(
-            report = %crate::report::ReportEvent::PluginConsidered {
-                plugin: plugin.name.clone(),
-                matched: true,
-                reason: None,
-            },
-        );
-
-        for group in &plugin.skills {
-            let skills = load_skills_for_group(sym, parsed, group, workspace_crates, &ctx).await;
-            for (skill, origin) in skills {
-                collect_skill_applicable_to_with_evaluator(
-                    skill,
-                    origin,
-                    &plugin.name,
-                    &ctx,
-                    evaluator,
-                    &mut results,
-                );
-            }
-        }
-    }
-
-    // Standalone skills already carry their own `SkillOrigin`.
-    if !registry.standalone_skills.is_empty() {
-        tracing::debug!(
-            report = %crate::report::ReportEvent::PluginConsidered {
-                plugin: "(standalone skills)".into(),
-                matched: true,
-                reason: None,
-            },
-        );
-    }
-    for entry in &registry.standalone_skills {
-        collect_skill_applicable_to_with_evaluator(
-            entry.skill.clone(),
-            entry.origin.clone(),
-            "(standalone skills)",
-            &ctx,
-            evaluator,
+            &mut ctx,
             &mut results,
         );
     }
@@ -310,7 +235,7 @@ async fn load_skills_for_group(
     parsed: &ParsedPlugin,
     group: &SkillGroup,
     workspace_crates: &[crate::crate_sources::WorkspaceCrate],
-    ctx: &PredicateContext<'_>,
+    ctx: &mut PredicateContext<'_>,
 ) -> Vec<(Skill, SkillOrigin)> {
     let plugin = &parsed.plugin;
     let plugin_path = parsed.path.as_path();
@@ -382,7 +307,7 @@ async fn load_crate_skills(
     plugin: &crate::plugins::Plugin,
     group: &SkillGroup,
     workspace_crates: &[crate::crate_sources::WorkspaceCrate],
-    ctx: &PredicateContext<'_>,
+    ctx: &mut PredicateContext<'_>,
 ) -> Vec<(Skill, SkillOrigin)> {
     let matched = predicate::union_matched_crates(&[&plugin.predicates, &group.predicates], ctx);
     let mut skills = Vec::new();
@@ -853,43 +778,10 @@ fn collect_skill_applicable_to(
     skill: Skill,
     origin: SkillOrigin,
     plugin_name: &str,
-    ctx: &PredicateContext,
+    ctx: &mut PredicateContext,
     results: &mut Vec<SkillWithGroupContext>,
 ) {
     if !skill.predicates.evaluate(ctx) {
-        tracing::debug!(
-            report = %crate::report::ReportEvent::SkillConsidered {
-                skill: skill.name().to_string(),
-                plugin: plugin_name.to_string(),
-                matched: false,
-                reason: Some("skill-level predicates not satisfied".into()),
-            },
-        );
-        return;
-    }
-
-    tracing::debug!(
-        report = %crate::report::ReportEvent::SkillConsidered {
-            skill: skill.name().to_string(),
-            plugin: plugin_name.to_string(),
-            matched: true,
-            reason: None,
-        },
-    );
-    results.push(SkillWithGroupContext { skill, origin });
-}
-
-/// Like [`collect_skill_applicable_to`] but uses the custom predicate evaluator
-/// for skill-level predicate evaluation.
-fn collect_skill_applicable_to_with_evaluator(
-    skill: Skill,
-    origin: SkillOrigin,
-    plugin_name: &str,
-    ctx: &PredicateContext,
-    evaluator: &mut predicate::CustomPredicateEvaluator,
-    results: &mut Vec<SkillWithGroupContext>,
-) {
-    if !predicate::evaluate_predicate_set(&skill.predicates, ctx, evaluator) {
         tracing::debug!(
             report = %crate::report::ReportEvent::SkillConsidered {
                 skill: skill.name().to_string(),
@@ -1428,7 +1320,13 @@ mod tests {
             version: semver::Version::new(1, 0, 0),
             path: None,
         }];
-        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
+        let skills = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace_crates,
+            std::collections::HashMap::new(),
+        )
+        .await;
 
         assert!(
             skills.is_empty(),
@@ -1477,7 +1375,13 @@ mod tests {
             version: semver::Version::new(1, 0, 0),
             path: None,
         }];
-        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
+        let skills = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace_crates,
+            std::collections::HashMap::new(),
+        )
+        .await;
 
         assert!(
             skills.is_empty(),
@@ -1543,7 +1447,13 @@ mod tests {
             version: semver::Version::new(1, 0, 0),
             path: None,
         }];
-        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
+        let skills = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace_crates,
+            std::collections::HashMap::new(),
+        )
+        .await;
 
         assert_eq!(
             skills.len(),
@@ -1615,7 +1525,13 @@ mod tests {
             version: semver::Version::new(1, 0, 0),
             path: None,
         }];
-        let skills = skills_applicable_to(&sym, &registry, &workspace).await;
+        let skills = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace,
+            std::collections::HashMap::new(),
+        )
+        .await;
         assert!(
             skills.is_empty(),
             "plugin predicate=false should filter out skills"
@@ -1688,7 +1604,13 @@ mod tests {
             version: semver::Version::new(1, 0, 0),
             path: None,
         }];
-        let skills = skills_applicable_to(&sym, &registry, &workspace).await;
+        let skills = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace,
+            std::collections::HashMap::new(),
+        )
+        .await;
         assert_eq!(skills.len(), 1);
     }
 
@@ -1814,7 +1736,13 @@ mod tests {
             version: semver::Version::new(1, 0, 0),
             path: None,
         }];
-        let results = skills_applicable_to(&sym, &registry, &workspace).await;
+        let results = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace,
+            std::collections::HashMap::new(),
+        )
+        .await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].skill.name(), "standalone-serde");
         assert!(results[0].skill.predicates.references_crate("serde"));
@@ -1969,7 +1897,9 @@ mod tests {
     /// Each level's `crates` lowers to one predicate set; the skill applies when
     /// every level's set holds (AND across levels).
     fn applies(levels: &[&str], ws: &[(String, semver::Version)]) -> bool {
-        levels.iter().all(|spec| pred_set(spec).evaluate(&ctx(ws)))
+        levels
+            .iter()
+            .all(|spec| pred_set(spec).evaluate(&mut ctx(ws)))
     }
 
     #[test]

@@ -343,7 +343,7 @@ pub struct Plugin {
 
 impl Plugin {
     /// Check if this plugin's activation predicates hold in `ctx`.
-    pub fn applies(&self, ctx: &crate::predicate::PredicateContext) -> bool {
+    pub fn applies(&self, ctx: &mut crate::predicate::PredicateContext) -> bool {
         self.predicates.evaluate(ctx)
     }
 
@@ -367,7 +367,7 @@ impl Plugin {
     /// separately.
     pub fn applicable_mcp_servers(
         &self,
-        ctx: &crate::predicate::PredicateContext,
+        ctx: &mut crate::predicate::PredicateContext,
     ) -> Vec<McpServerEntry> {
         self.mcp_servers
             .iter()
@@ -2346,7 +2346,7 @@ mod tests {
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
         };
-        assert!(plugin_wildcard.applies(&ctx(&workspace_crates)));
+        assert!(plugin_wildcard.applies(&mut ctx(&workspace_crates)));
 
         // Plugin targeting serde - should apply
         let plugin_serde = Plugin {
@@ -2359,7 +2359,7 @@ mod tests {
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
         };
-        assert!(plugin_serde.applies(&ctx(&workspace_crates)));
+        assert!(plugin_serde.applies(&mut ctx(&workspace_crates)));
 
         // Plugin targeting non-existent crate - should not apply
         let plugin_other = Plugin {
@@ -2372,7 +2372,7 @@ mod tests {
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
         };
-        assert!(!plugin_other.applies(&ctx(&workspace_crates)));
+        assert!(!plugin_other.applies(&mut ctx(&workspace_crates)));
 
         // Plugin with version predicate - should reject wrong version
         let plugin_version = Plugin {
@@ -2385,7 +2385,7 @@ mod tests {
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
         };
-        assert!(!plugin_version.applies(&ctx(&workspace_crates)));
+        assert!(!plugin_version.applies(&mut ctx(&workspace_crates)));
     }
 
     #[test]

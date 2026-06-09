@@ -164,18 +164,13 @@ fn propagate_user_skill(source_dir: &Path, dest_dir: &Path, project_root: &Path)
     Ok(true)
 }
 
-/// Resolve custom predicate installations from the registry into a
-/// `CustomPredicateEvaluator`. Acquisition failures are logged as warnings
-/// and the corresponding predicate is marked non-functional (evaluates false).
-async fn resolve_custom_predicates(
+/// Resolve custom predicate installations from the registry into entries
+/// suitable for [`PredicateContext::with_custom_predicates`].
+async fn resolve_custom_predicate_entries(
     sym: &Symposium,
     registry: &plugins::PluginRegistry,
-) -> crate::predicate::CustomPredicateEvaluator {
-    use crate::predicate::{CustomPredicateEvaluator, ResolvedPredicateEntry};
-
-    if registry.custom_predicates.is_empty() {
-        return CustomPredicateEvaluator::empty();
-    }
+) -> std::collections::HashMap<String, crate::predicate::ResolvedPredicateEntry> {
+    use crate::predicate::ResolvedPredicateEntry;
 
     let mut entries = std::collections::HashMap::new();
 
@@ -225,7 +220,7 @@ async fn resolve_custom_predicates(
         );
     }
 
-    CustomPredicateEvaluator::new(entries)
+    entries
 }
 
 /// Run the full sync: discover applicable skills, install into agent dirs,
@@ -253,13 +248,11 @@ pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
         },
     );
 
-    // Resolve custom predicate installations and build the evaluator.
-    let mut evaluator = resolve_custom_predicates(sym, &registry).await;
+    // Resolve custom predicate installations.
+    let custom_entries = resolve_custom_predicate_entries(sym, &registry).await;
 
     // Find all applicable skills
-    let applicable =
-        skills::skills_applicable_to_with_evaluator(sym, &registry, &workspace, &mut evaluator)
-            .await;
+    let applicable = skills::skills_applicable_to(sym, &registry, &workspace, custom_entries).await;
 
     // Dedup by `(skill_name, SkillOrigin)`: two `Crate` origins with the
     // same (name, version) collapse (the skills are the same logical bytes
@@ -282,13 +275,13 @@ pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
 
     // Collect MCP servers from applicable plugins, filtered by workspace deps
     let semver_pairs = crate::crate_sources::crate_pairs(&workspace);
-    let ctx = crate::predicate::PredicateContext::new(&semver_pairs);
-    let mcp_servers: Vec<sacp::schema::McpServer> = registry
-        .plugins
-        .iter()
-        .filter(|p| p.plugin.applies(&ctx))
-        .flat_map(|p| p.plugin.applicable_mcp_servers(&ctx))
-        .collect();
+    let mut ctx = crate::predicate::PredicateContext::new(&semver_pairs);
+    let mut mcp_servers: Vec<sacp::schema::McpServer> = Vec::new();
+    for p in &registry.plugins {
+        if p.plugin.applies(&mut ctx) {
+            mcp_servers.extend(p.plugin.applicable_mcp_servers(&mut ctx));
+        }
+    }
 
     let server_names: Vec<&str> = mcp_servers
         .iter()

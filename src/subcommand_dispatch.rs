@@ -19,27 +19,25 @@ use semver::Version;
 use symposium_install::Runnable;
 use tokio::process::Command;
 
-/// Iterate every plugin subcommand whose plugin-level and subcommand-level crate predicate
+/// Collect every plugin subcommand whose plugin-level and subcommand-level predicates
 /// apply to `deps`. Shared between dispatch (name lookup) and help rendering (audience grouping).
-pub fn applicable_subcommands<'a, 'd>(
+pub fn applicable_subcommands<'a>(
     registry: &'a PluginRegistry,
-    deps: &'d [(String, Version)],
-) -> impl Iterator<Item = (&'a Plugin, &'a str, &'a Subcommand)> + 'd
-where
-    'a: 'd,
-{
-    let ctx = crate::predicate::PredicateContext::new(deps);
-    registry
-        .plugins
-        .iter()
-        .filter(move |ParsedPlugin { plugin, .. }| plugin.applies(&ctx))
-        .flat_map(move |ParsedPlugin { plugin, .. }| {
-            plugin
-                .subcommands
-                .iter()
-                .filter(move |(_, sub)| sub.predicates.evaluate(&ctx))
-                .map(move |(name, subcommand)| (plugin, name.as_str(), subcommand))
-        })
+    deps: &[(String, Version)],
+) -> Vec<(&'a Plugin, &'a str, &'a Subcommand)> {
+    let mut ctx = crate::predicate::PredicateContext::new(deps);
+    let mut results = Vec::new();
+    for ParsedPlugin { plugin, .. } in &registry.plugins {
+        if !plugin.applies(&mut ctx) {
+            continue;
+        }
+        for (name, subcommand) in &plugin.subcommands {
+            if subcommand.predicates.evaluate(&mut ctx) {
+                results.push((plugin, name.as_str(), subcommand));
+            }
+        }
+    }
+    results
 }
 
 /// Look up a subcommand by name across all plugins, filtered by workspace crates at a plugin
@@ -55,10 +53,11 @@ pub fn find_subcommand<'a>(
 ) -> Result<Option<(&'a Plugin, &'a Subcommand)>> {
     let deps = crate::crate_sources::crate_pairs(workspace);
 
-    let matches = applicable_subcommands(registry, &deps)
+    let matches: Vec<_> = applicable_subcommands(registry, &deps)
+        .into_iter()
         .filter(|(_, n, _)| *n == name)
         .map(|(plugin, _, subcmd)| (plugin, subcmd))
-        .collect::<Vec<_>>();
+        .collect();
 
     match matches.as_slice() {
         [] => Ok(None),

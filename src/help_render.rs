@@ -161,6 +161,7 @@ fn collect_section(
     builtins.sort();
 
     let mut plugins = applicable_subcommands(registry, deps)
+        .into_iter()
         .filter(|(_, _, subcommand)| subcommand.audience == target)
         .map(|(_, name, subcommand)| (name.to_string(), subcommand.description.clone()))
         .collect::<Vec<_>>();
