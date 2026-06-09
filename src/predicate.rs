@@ -1377,18 +1377,27 @@ mod tests {
 
     // --- Custom predicate evaluation tests ---
 
-    fn ctx_with_custom(entries: Vec<(&str, &str)>) -> PredicateContext<'static> {
+    /// Create a context with custom predicate entries using shell scripts.
+    /// Each entry is `(name, exit_code)` — the script does `exit <code>`.
+    fn ctx_with_exit_codes(
+        entries: Vec<(&str, u8)>,
+    ) -> (PredicateContext<'static>, Vec<tempfile::NamedTempFile>) {
+        use std::io::Write;
         let mut map = std::collections::HashMap::new();
-        for (name, path) in entries {
+        let mut scripts = Vec::new();
+        for (name, code) in entries {
+            let script = tempfile::Builder::new().suffix(".sh").tempfile().unwrap();
+            writeln!(script.as_file(), "#!/bin/sh\nexit {code}").unwrap();
             map.insert(
                 name.to_string(),
                 ResolvedPredicateEntry {
-                    runnable: symposium_install::Runnable::Exec(std::path::PathBuf::from(path)),
+                    runnable: symposium_install::Runnable::Script(script.path().to_path_buf()),
                     args: vec![],
                 },
             );
+            scripts.push(script);
         }
-        PredicateContext::with_custom_predicates(&[], map)
+        (PredicateContext::with_custom_predicates(&[], map), scripts)
     }
 
     fn ctx_with_script_entry(
@@ -1414,7 +1423,7 @@ mod tests {
 
     #[test]
     fn evaluate_custom_predicate_pass() {
-        let mut ctx = ctx_with_custom(vec![("foo", "/bin/true")]);
+        let (mut ctx, _scripts) = ctx_with_exit_codes(vec![("foo", 0)]);
         let pred = Predicate::Custom {
             name: "foo".into(),
             arg: "x".into(),
@@ -1424,7 +1433,7 @@ mod tests {
 
     #[test]
     fn evaluate_custom_predicate_fail() {
-        let mut ctx = ctx_with_custom(vec![("foo", "/bin/false")]);
+        let (mut ctx, _scripts) = ctx_with_exit_codes(vec![("foo", 1)]);
         let pred = Predicate::Custom {
             name: "foo".into(),
             arg: "x".into(),
@@ -1444,7 +1453,18 @@ mod tests {
 
     #[test]
     fn evaluate_custom_predicate_spawn_failure() {
-        let mut ctx = ctx_with_custom(vec![("foo", "/nonexistent/binary/zzz")]);
+        use std::collections::HashMap;
+        let mut entries = HashMap::new();
+        entries.insert(
+            "foo".to_string(),
+            ResolvedPredicateEntry {
+                runnable: symposium_install::Runnable::Exec(std::path::PathBuf::from(
+                    "/nonexistent/binary/zzz",
+                )),
+                args: vec![],
+            },
+        );
+        let mut ctx = PredicateContext::with_custom_predicates(&[], entries);
         let pred = Predicate::Custom {
             name: "foo".into(),
             arg: "x".into(),
@@ -1541,7 +1561,7 @@ mod tests {
 
     #[test]
     fn witness_custom_empty_stdout() {
-        let mut ctx = ctx_with_custom(vec![("foo", "/bin/true")]);
+        let (mut ctx, _scripts) = ctx_with_exit_codes(vec![("foo", 0)]);
         let pred = Predicate::Custom {
             name: "foo".into(),
             arg: "x".into(),
@@ -1552,7 +1572,7 @@ mod tests {
 
     #[test]
     fn witness_custom_exit_nonzero() {
-        let mut ctx = ctx_with_custom(vec![("foo", "/bin/false")]);
+        let (mut ctx, _scripts) = ctx_with_exit_codes(vec![("foo", 1)]);
         let pred = Predicate::Custom {
             name: "foo".into(),
             arg: "x".into(),
