@@ -174,7 +174,7 @@ async fn resolve_custom_predicate_entries(
 
     let mut entries = std::collections::HashMap::new();
 
-    for (name, resolved) in &registry.custom_predicates {
+    for (name, resolved) in registry.custom_predicates.iter() {
         let plugin = &registry.plugins[resolved.plugin_index];
         let Some(install) = plugin.plugin.get_installation(&resolved.command) else {
             tracing::warn!(

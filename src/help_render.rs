@@ -234,7 +234,7 @@ mod tests {
             plugins,
             standalone_skills: vec![],
             warnings: vec![],
-            custom_predicates: std::collections::HashMap::new(),
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         }
     }
 

@@ -723,6 +723,38 @@ pub struct ResolvedCustomPredicate {
     pub args: Vec<String>,
 }
 
+/// Global registry of custom predicates collected from all plugins.
+///
+/// Built unconditionally from every plugin's `[[predicate]]` entries (regardless
+/// of whether the plugin is "active" in the current workspace). Collisions
+/// (same name from two plugins) are excluded and warned at load time.
+#[derive(Debug, Default)]
+pub struct CustomPredicateRegistry {
+    entries: std::collections::HashMap<String, ResolvedCustomPredicate>,
+}
+
+impl CustomPredicateRegistry {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn get(&self, name: &str) -> Option<&ResolvedCustomPredicate> {
+        self.entries.get(name)
+    }
+
+    pub fn contains_key(&self, name: &str) -> bool {
+        self.entries.contains_key(name)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &ResolvedCustomPredicate)> {
+        self.entries.iter()
+    }
+}
+
 /// Loaded plugin registry: plugins from TOML manifests and standalone skills
 /// discovered directly in plugin source directories.
 #[derive(Debug)]
@@ -735,8 +767,7 @@ pub struct PluginRegistry {
     /// Non-fatal load warnings for plugins or standalone skills that were skipped.
     pub warnings: Vec<LoadWarning>,
     /// Global custom predicate registry. Built from all plugins' `custom_predicates`.
-    /// Collisions (same name from two plugins) are excluded and warned.
-    pub custom_predicates: std::collections::HashMap<String, ResolvedCustomPredicate>,
+    pub custom_predicates: CustomPredicateRegistry,
 }
 
 /// A non-fatal plugin source load failure.
@@ -1681,10 +1712,8 @@ fn validate_custom_predicate(
 fn build_custom_predicate_registry(
     plugins: &[ParsedPlugin],
     warnings: &mut Vec<LoadWarning>,
-) -> std::collections::HashMap<String, ResolvedCustomPredicate> {
-    use std::collections::HashMap;
-
-    let mut registry: HashMap<String, ResolvedCustomPredicate> = HashMap::new();
+) -> CustomPredicateRegistry {
+    let mut entries = std::collections::HashMap::new();
     let mut collisions: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (plugin_idx, parsed) in plugins.iter().enumerate() {
@@ -1692,9 +1721,8 @@ fn build_custom_predicate_registry(
             if collisions.contains(&cp.name) {
                 continue;
             }
-            if let Some(existing) = registry.get(&cp.name) {
-                // Collision: two different plugins define the same name.
-                // Skip both and warn.
+            if let Some(existing) = entries.get(&cp.name) {
+                let existing: &ResolvedCustomPredicate = existing;
                 let existing_plugin_name = &plugins[existing.plugin_index].plugin.name;
                 warnings.push(LoadWarning {
                     path: parsed.path.clone(),
@@ -1703,10 +1731,10 @@ fn build_custom_predicate_registry(
                         cp.name, existing_plugin_name, parsed.plugin.name
                     ),
                 });
-                registry.remove(&cp.name);
+                entries.remove(&cp.name);
                 collisions.insert(cp.name.clone());
             } else {
-                registry.insert(
+                entries.insert(
                     cp.name.clone(),
                     ResolvedCustomPredicate {
                         plugin_index: plugin_idx,
@@ -1718,7 +1746,7 @@ fn build_custom_predicate_registry(
         }
     }
 
-    registry
+    CustomPredicateRegistry { entries }
 }
 
 /// Validate skill-group source constraints that serde alone cannot express.

@@ -1311,7 +1311,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
-            custom_predicates: std::collections::HashMap::new(),
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
         // Query for serde - should find no skills because plugin doesn't apply
@@ -1366,7 +1366,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
-            custom_predicates: std::collections::HashMap::new(),
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
         // Query for serde - should find no skills because group doesn't match
@@ -1439,7 +1439,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
-            custom_predicates: std::collections::HashMap::new(),
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
         let workspace_crates = vec![crate::crate_sources::WorkspaceCrate {
@@ -1517,7 +1517,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
-            custom_predicates: std::collections::HashMap::new(),
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
         let workspace = vec![crate::crate_sources::WorkspaceCrate {
@@ -1596,7 +1596,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
-            custom_predicates: std::collections::HashMap::new(),
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
         let workspace = vec![crate::crate_sources::WorkspaceCrate {
@@ -1727,7 +1727,7 @@ mod tests {
                 },
             }],
             warnings: vec![],
-            custom_predicates: std::collections::HashMap::new(),
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
         let sym = crate::config::Symposium::from_dir(tmp.path());
