@@ -21,7 +21,6 @@ async fn sync_custom_predicate_installs_skill() {
         TestMode::SimulationOnly,
         &["custom-predicate0"],
         async |mut ctx| {
-            // Write a passing predicate script
             let script_path = ctx.tempdir.join("bp-checker.sh");
             write_script(&script_path, "exit 0");
 
@@ -57,7 +56,6 @@ async fn sync_custom_predicate_fails_skips_skill() {
         TestMode::SimulationOnly,
         &["custom-predicate0"],
         async |mut ctx| {
-            // Write a failing predicate script
             let script_path = ctx.tempdir.join("bp-checker.sh");
             write_script(&script_path, "exit 1");
 
@@ -70,7 +68,6 @@ async fn sync_custom_predicate_fails_skips_skill() {
                 .unwrap()
                 .join(".claude")
                 .join("skills");
-            // The skill should NOT be installed
             let entries: Vec<_> = std::fs::read_dir(&skills_dir)
                 .ok()
                 .map(|d| {
@@ -84,6 +81,123 @@ async fn sync_custom_predicate_fails_skips_skill() {
                 entries.is_empty(),
                 "no skills should be installed when predicate fails; got: {:?}",
                 entries.iter().map(|e| e.path()).collect::<Vec<_>>(),
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// The raw argument from the predicate expression is passed to the script.
+/// `predicates = ["battery_pack(cli)"]` should pass "cli" as the last arg.
+#[tokio::test]
+async fn sync_custom_predicate_receives_correct_argument() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["custom-predicate0"],
+        async |mut ctx| {
+            let script_path = ctx.tempdir.join("bp-checker.sh");
+            // Only pass if the argument is exactly "cli"
+            write_script(
+                &script_path,
+                r#"if [ "$1" = "cli" ]; then exit 0; else exit 1; fi"#,
+            );
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let skills_dir = ctx
+                .workspace_root
+                .as_ref()
+                .unwrap()
+                .join(".claude")
+                .join("skills");
+            assert!(
+                skills_dir.join("bp-skill").join("SKILL.md").exists(),
+                "skill should be installed when argument matches 'cli'"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// When the argument doesn't match, the predicate fails.
+#[tokio::test]
+async fn sync_custom_predicate_wrong_argument_fails() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["custom-predicate0"],
+        async |mut ctx| {
+            let script_path = ctx.tempdir.join("bp-checker.sh");
+            // Only pass if the argument is "web" — but the fixture uses "cli"
+            write_script(
+                &script_path,
+                r#"if [ "$1" = "web" ]; then exit 0; else exit 1; fi"#,
+            );
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let skills_dir = ctx
+                .workspace_root
+                .as_ref()
+                .unwrap()
+                .join(".claude")
+                .join("skills");
+            let entries: Vec<_> = std::fs::read_dir(&skills_dir)
+                .ok()
+                .map(|d| {
+                    d.flatten()
+                        .filter(|e| e.path().is_dir())
+                        .filter(|e| e.path().join("SKILL.md").exists())
+                        .collect()
+                })
+                .unwrap_or_default();
+            assert!(
+                entries.is_empty(),
+                "skill should NOT be installed when argument doesn't match"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// A custom predicate that returns witness JSON drives `source = "crate"` resolution.
+/// The predicate script outputs `{"selectedCrates": [...]}` naming bp-crate,
+/// and the skill from that crate's skills/ directory gets installed.
+#[tokio::test]
+async fn sync_custom_predicate_witness_drives_crate_source() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["custom-predicate-witness0"],
+        async |mut ctx| {
+            let script_path = ctx.tempdir.join("bp-checker.sh");
+            write_script(
+                &script_path,
+                r#"printf '{"selectedCrates":[{"crate":"bp-crate","version":"0.2.0"}]}'"#,
+            );
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let skills_dir = ctx
+                .workspace_root
+                .as_ref()
+                .unwrap()
+                .join(".claude")
+                .join("skills");
+            assert!(
+                skills_dir.join("bp-guidance").join("SKILL.md").exists(),
+                "skill from witness crate should be installed; skills_dir={}, contents={:?}",
+                skills_dir.display(),
+                std::fs::read_dir(&skills_dir)
+                    .ok()
+                    .map(|d| d.flatten().map(|e| e.path()).collect::<Vec<_>>()),
             );
             Ok(())
         },
