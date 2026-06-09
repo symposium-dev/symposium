@@ -165,18 +165,23 @@ async fn sync_installs_skills() {
                 "skill dir should contain .symposium marker"
             );
 
-            // Skill dirs symposium creates get a wildcard gitignore so the
-            // marker, SKILL.md, and gitignore itself stay out of version control.
-            for gi in [skills_dir.join(".gitignore"), skill_dir.join(".gitignore")] {
-                assert!(gi.exists(), "missing .gitignore at {}", gi.display());
-                let contents = std::fs::read_to_string(&gi).unwrap();
-                assert_eq!(
-                    contents.trim(),
-                    "*",
-                    "unexpected .gitignore at {}",
-                    gi.display()
-                );
-            }
+            // Each skill directory gets a wildcard gitignore so the marker,
+            // SKILL.md, and gitignore itself stay out of version control.
+            let gi = skill_dir.join(".gitignore");
+            assert!(gi.exists(), "missing .gitignore at {}", gi.display());
+            let contents = std::fs::read_to_string(&gi).unwrap();
+            assert_eq!(
+                contents.trim(),
+                "*",
+                "unexpected .gitignore content at {}",
+                gi.display()
+            );
+            // Parent directories (e.g. `.claude/skills/`) should NOT get a
+            // gitignore — they are shared namespace directories.
+            assert!(
+                !skills_dir.join(".gitignore").exists(),
+                "parent skills dir should not have .gitignore"
+            );
             Ok(())
         },
     )
