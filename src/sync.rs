@@ -98,7 +98,7 @@ fn discover_user_authored_skills(project_root: &Path) -> Vec<PathBuf> {
 }
 
 /// How long after a successful sync we skip re-checking a skill directory.
-const SYNC_DEBOUNCE: Duration = Duration::from_secs(60);
+const SYNC_DEBOUNCE: Duration = Duration::from_secs(5);
 
 /// Recursively copy the contents of `src` into `dst`. Creates `dst` if
 /// missing. Regular files are copied with `fs::copy`; subdirectories are
