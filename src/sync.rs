@@ -164,6 +164,70 @@ fn propagate_user_skill(source_dir: &Path, dest_dir: &Path, project_root: &Path)
     Ok(true)
 }
 
+/// Resolve custom predicate installations from the registry into a
+/// `CustomPredicateEvaluator`. Acquisition failures are logged as warnings
+/// and the corresponding predicate is marked non-functional (evaluates false).
+async fn resolve_custom_predicates(
+    sym: &Symposium,
+    registry: &plugins::PluginRegistry,
+) -> crate::predicate::CustomPredicateEvaluator {
+    use crate::predicate::{CustomPredicateEvaluator, ResolvedPredicateEntry};
+
+    if registry.custom_predicates.is_empty() {
+        return CustomPredicateEvaluator::empty();
+    }
+
+    let mut entries = std::collections::HashMap::new();
+
+    for (name, resolved) in &registry.custom_predicates {
+        let plugin = &registry.plugins[resolved.plugin_index];
+        let Some(install) = plugin.plugin.get_installation(&resolved.command) else {
+            tracing::warn!(
+                predicate = name,
+                command = &resolved.command,
+                "custom predicate references unknown installation"
+            );
+            continue;
+        };
+
+        let acquired =
+            match crate::installation::acquire_installation(sym, install, None, None).await {
+                Ok(a) => a,
+                Err(e) => {
+                    tracing::warn!(
+                        predicate = name,
+                        error = %e,
+                        "failed to acquire custom predicate installation"
+                    );
+                    continue;
+                }
+            };
+
+        let runnable =
+            match crate::installation::resolve_runnable(acquired, &format!("predicate `{name}`")) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(
+                        predicate = name,
+                        error = %e,
+                        "failed to resolve custom predicate runnable"
+                    );
+                    continue;
+                }
+            };
+
+        entries.insert(
+            name.clone(),
+            ResolvedPredicateEntry {
+                runnable,
+                args: resolved.args.clone(),
+            },
+        );
+    }
+
+    CustomPredicateEvaluator::new(entries)
+}
+
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
 pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
@@ -189,8 +253,13 @@ pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
         },
     );
 
+    // Resolve custom predicate installations and build the evaluator.
+    let mut evaluator = resolve_custom_predicates(sym, &registry).await;
+
     // Find all applicable skills
-    let applicable = skills::skills_applicable_to(sym, &registry, &workspace).await;
+    let applicable =
+        skills::skills_applicable_to_with_evaluator(sym, &registry, &workspace, &mut evaluator)
+            .await;
 
     // Dedup by `(skill_name, SkillOrigin)`: two `Crate` origins with the
     // same (name, version) collapse (the skills are the same logical bytes

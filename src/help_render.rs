@@ -212,6 +212,7 @@ mod tests {
                 mcp_servers: vec![],
                 subcommands,
                 installations: vec![],
+                custom_predicates: vec![],
             },
             source_name: "test".into(),
             source_dir: PathBuf::from("/test"),
@@ -232,6 +233,7 @@ mod tests {
             plugins,
             standalone_skills: vec![],
             warnings: vec![],
+            custom_predicates: std::collections::HashMap::new(),
         }
     }
 

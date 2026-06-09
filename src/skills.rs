@@ -214,6 +214,83 @@ pub async fn skills_applicable_to(
     results
 }
 
+/// Like [`skills_applicable_to`], but with a custom predicate evaluator.
+pub async fn skills_applicable_to_with_evaluator(
+    sym: &Symposium,
+    registry: &PluginRegistry,
+    workspace_crates: &[crate::crate_sources::WorkspaceCrate],
+    evaluator: &mut predicate::CustomPredicateEvaluator,
+) -> Vec<SkillWithGroupContext> {
+    let mut results = Vec::new();
+
+    let for_crates = crate::crate_sources::crate_pairs(workspace_crates);
+    let ctx = PredicateContext::new(&for_crates);
+
+    // Skills from plugin manifests. We iterate these separately
+    // because we lazily load skill groups, so there
+    // is extra logic.
+    for parsed in &registry.plugins {
+        let plugin = &parsed.plugin;
+        // Plugin-level predicates gate everything below. Evaluated before
+        // group fetching to avoid wasted work.
+        if !predicate::evaluate_predicate_set(&plugin.predicates, &ctx, evaluator) {
+            tracing::debug!(
+                report = %crate::report::ReportEvent::PluginConsidered {
+                    plugin: plugin.name.clone(),
+                    matched: false,
+                    reason: Some("plugin-level predicates not satisfied".into()),
+                },
+            );
+            continue;
+        }
+
+        tracing::debug!(
+            report = %crate::report::ReportEvent::PluginConsidered {
+                plugin: plugin.name.clone(),
+                matched: true,
+                reason: None,
+            },
+        );
+
+        for group in &plugin.skills {
+            let skills = load_skills_for_group(sym, parsed, group, workspace_crates, &ctx).await;
+            for (skill, origin) in skills {
+                collect_skill_applicable_to_with_evaluator(
+                    skill,
+                    origin,
+                    &plugin.name,
+                    &ctx,
+                    evaluator,
+                    &mut results,
+                );
+            }
+        }
+    }
+
+    // Standalone skills already carry their own `SkillOrigin`.
+    if !registry.standalone_skills.is_empty() {
+        tracing::debug!(
+            report = %crate::report::ReportEvent::PluginConsidered {
+                plugin: "(standalone skills)".into(),
+                matched: true,
+                reason: None,
+            },
+        );
+    }
+    for entry in &registry.standalone_skills {
+        collect_skill_applicable_to_with_evaluator(
+            entry.skill.clone(),
+            entry.origin.clone(),
+            "(standalone skills)",
+            &ctx,
+            evaluator,
+            &mut results,
+        );
+    }
+
+    results
+}
+
 /// Discover and load skills for a group, applying pre-fetch filtering.
 ///
 /// Checks group-level `crates` predicates against `for_crates` before
@@ -802,6 +879,39 @@ fn collect_skill_applicable_to(
     results.push(SkillWithGroupContext { skill, origin });
 }
 
+/// Like [`collect_skill_applicable_to`] but uses the custom predicate evaluator
+/// for skill-level predicate evaluation.
+fn collect_skill_applicable_to_with_evaluator(
+    skill: Skill,
+    origin: SkillOrigin,
+    plugin_name: &str,
+    ctx: &PredicateContext,
+    evaluator: &mut predicate::CustomPredicateEvaluator,
+    results: &mut Vec<SkillWithGroupContext>,
+) {
+    if !predicate::evaluate_predicate_set(&skill.predicates, ctx, evaluator) {
+        tracing::debug!(
+            report = %crate::report::ReportEvent::SkillConsidered {
+                skill: skill.name().to_string(),
+                plugin: plugin_name.to_string(),
+                matched: false,
+                reason: Some("skill-level predicates not satisfied".into()),
+            },
+        );
+        return;
+    }
+
+    tracing::debug!(
+        report = %crate::report::ReportEvent::SkillConsidered {
+            skill: skill.name().to_string(),
+            plugin: plugin_name.to_string(),
+            matched: true,
+            reason: None,
+        },
+    );
+    results.push(SkillWithGroupContext { skill, origin });
+}
+
 /// Raw frontmatter fields extracted from a SKILL.md file.
 /// `crates` is comma-separated on a single line.
 #[derive(Debug)]
@@ -1297,6 +1407,7 @@ mod tests {
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
 
         let registry = PluginRegistry {
@@ -1308,6 +1419,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
+            custom_predicates: std::collections::HashMap::new(),
         };
 
         // Query for serde - should find no skills because plugin doesn't apply
@@ -1344,6 +1456,7 @@ mod tests {
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
 
         let registry = PluginRegistry {
@@ -1355,6 +1468,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
+            custom_predicates: std::collections::HashMap::new(),
         };
 
         // Query for serde - should find no skills because group doesn't match
@@ -1409,6 +1523,7 @@ mod tests {
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
 
         let registry = PluginRegistry {
@@ -1420,6 +1535,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
+            custom_predicates: std::collections::HashMap::new(),
         };
 
         let workspace_crates = vec![crate::crate_sources::WorkspaceCrate {
@@ -1479,6 +1595,7 @@ mod tests {
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: Default::default(),
+            custom_predicates: vec![],
         };
 
         let registry = PluginRegistry {
@@ -1490,6 +1607,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
+            custom_predicates: std::collections::HashMap::new(),
         };
 
         let workspace = vec![crate::crate_sources::WorkspaceCrate {
@@ -1550,6 +1668,7 @@ mod tests {
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: Default::default(),
+            custom_predicates: vec![],
         };
 
         let registry = PluginRegistry {
@@ -1561,6 +1680,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
+            custom_predicates: std::collections::HashMap::new(),
         };
 
         let workspace = vec![crate::crate_sources::WorkspaceCrate {
@@ -1685,6 +1805,7 @@ mod tests {
                 },
             }],
             warnings: vec![],
+            custom_predicates: std::collections::HashMap::new(),
         };
 
         let sym = crate::config::Symposium::from_dir(tmp.path());

@@ -187,6 +187,7 @@ mod tests {
                 skills: vec![],
                 mcp_servers: vec![],
                 subcommands,
+                custom_predicates: vec![],
             },
             source_name: "test".into(),
             source_dir: PathBuf::from("/test"),
@@ -207,6 +208,7 @@ mod tests {
             plugins,
             standalone_skills: vec![],
             warnings: vec![],
+            custom_predicates: std::collections::HashMap::new(),
         }
     }
 

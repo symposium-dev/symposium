@@ -1,0 +1,13 @@
+name = "bp-plugin"
+crates = ["battery_pack(cli)"]
+
+[[installations]]
+name = "bp-checker"
+executable = "$TEST_DIR/bp-checker.sh"
+
+[[predicate]]
+name = "battery_pack"
+command = "bp-checker"
+
+[[skills]]
+source.path = "skills"

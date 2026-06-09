@@ -38,6 +38,7 @@ source.path = "skills"
 | `installations` | array of tables | no | Named installation declarations (`[[installations]]`). Hooks reference these by name. See [Installations](#installations). |
 | `skills` | array of tables | no | Skill groups (`[[skills]]`). |
 | `hooks` | array of tables | no | Hooks (`[[hooks]]`). |
+| `predicate` | array of tables | no | Custom predicate definitions (`[[predicate]]`). See [Custom predicates](#predicate). |
 | `mcp_servers` | array of tables | no | MCP server registrations (`[[mcp_servers]]`). |
 
 **Note**: Every plugin must reference at least one crate somewhere — at the plugin level, in `[[skills]]` groups, or in `[[mcp_servers]]` entries — via a `crates` list or a `crate(...)` [predicate](./predicates.md). Plugins without any crate targeting will fail validation.
@@ -443,6 +444,69 @@ echo '{"tool": "Bash", "input": "cargo test"}' | cargo agents hook claude pre-to
 ```
 
 You can also use `copilot`, `gemini`, `codex`, or `kiro` as the agent name.
+
+## `[[predicate]]`
+
+Each `[[predicate]]` entry defines a custom predicate function that can be used in `predicates` expressions anywhere a predicate is accepted. Custom predicates extend the built-in predicate language with plugin-specific checks.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | The predicate name. Must be a valid identifier (`[a-zA-Z][a-zA-Z0-9_]*`) and must not collide with builtins (`crate`, `shell`, `path_exists`, `env`, `not`, `any`, `all`). |
+| `command` | string or table | The installation to run. Same shape as hook `command` (a string naming a `[[installations]]` entry or an inline table). |
+| `args` | array of strings | Optional. Static arguments passed to the command before the dynamic argument. |
+
+### How custom predicates work
+
+When a predicate expression uses a function name that isn't a builtin, Symposium looks it up in the custom predicate registry. If found, it spawns the declared command with the static `args` followed by the raw argument text from the expression.
+
+```toml
+[[installations]]
+name = "cargo-bp-install"
+source = "cargo"
+crate = "cargo-bp"
+executable = "cargo-bp"
+
+[[predicate]]
+name = "battery_pack"
+command = "cargo-bp-install"
+args = ["bp", "status", "--check"]
+```
+
+Usage in a `predicates` expression:
+
+```toml
+predicates = ["battery_pack(cli>=0.3)"]
+```
+
+This evaluates as:
+
+```
+cargo-bp bp status --check cli>=0.3
+```
+
+Exit 0 means the predicate passes; non-zero means it fails.
+
+### Witness output (stdout JSON)
+
+On success (exit 0), the command may write a JSON object to stdout. If present and valid, the `selectedCrates` field drives `source = "crate"` skill resolution — the named crates are fetched for skills, just as if they'd been matched by a `crate(...)` predicate.
+
+```json
+{
+    "selectedCrates": [
+        { "crate": "cli-battery-pack", "version": "0.3.1" }
+    ]
+}
+```
+
+If stdout is empty or non-JSON, the predicate still passes but contributes no witness crates. Invalid JSON or bad semver in `version` fields produce a warning but don't fail the predicate.
+
+### Collisions
+
+If two plugins define the same predicate name, both definitions are skipped and a warning is emitted. Skills referencing the collided name evaluate as false.
+
+### Caching
+
+Results are cached by `(predicate_name, raw_arg)` for the duration of a single sync run. The same predicate called with the same argument is only spawned once.
 
 ## `[[mcp_servers]]`
 

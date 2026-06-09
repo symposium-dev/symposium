@@ -631,6 +631,21 @@ pub enum Runnable {
     Script(PathBuf),
 }
 
+impl Runnable {
+    /// Spawn this runnable with the given arguments, wait for it to finish,
+    /// and return the captured output.
+    pub fn spawn(
+        &self,
+        args: &[impl AsRef<std::ffi::OsStr>],
+    ) -> std::io::Result<std::process::Output> {
+        use std::process::Command;
+        match self {
+            Runnable::Exec(path) => Command::new(path).args(args).output(),
+            Runnable::Script(path) => Command::new("sh").arg(path).args(args).output(),
+        }
+    }
+}
+
 /// Ensure a path is executable on Unix. No-op on other platforms.
 pub fn make_executable(path: &Path) -> Result<()> {
     #[cfg(unix)]
