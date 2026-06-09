@@ -486,6 +486,8 @@ cargo-bp bp status --check cli>=0.3
 
 Exit 0 means the predicate passes; non-zero means it fails.
 
+The argument is trimmed of leading/trailing whitespace before being passed. An empty argument — `battery_pack()` or `battery_pack( )` — does not append anything to the command (only the static `args` are passed).
+
 ### Witness output (stdout JSON)
 
 On success (exit 0), the command may write a JSON object to stdout. If present and valid, the `selectedCrates` field drives `source = "crate"` skill resolution — the named crates are fetched for skills, just as if they'd been matched by a `crate(...)` predicate.

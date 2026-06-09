@@ -1557,6 +1557,71 @@ mod tests {
         assert_eq!(content.trim(), "--static arg dynamic-arg");
     }
 
+    #[test]
+    fn evaluate_custom_predicate_empty_arg_not_passed() {
+        use std::io::Write;
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+        let output_path = output_file.path().to_path_buf();
+
+        let script = tempfile::Builder::new().suffix(".sh").tempfile().unwrap();
+        writeln!(
+            script.as_file(),
+            "#!/bin/sh\necho \"$@\" > {}",
+            output_path.display()
+        )
+        .unwrap();
+
+        let mut entries = std::collections::HashMap::new();
+        entries.insert(
+            "checker".to_string(),
+            ResolvedPredicateEntry {
+                runnable: symposium_install::Runnable::Script(script.path().to_path_buf()),
+                args: vec!["--static".into()],
+            },
+        );
+        let mut ctx = PredicateContext::with_custom_predicates(&[], entries);
+
+        // Empty arg (from `foo()`) — should not be appended.
+        let pred = Predicate::Custom {
+            name: "checker".into(),
+            arg: "".into(),
+        };
+        assert!(pred.evaluate(&mut ctx));
+        let content = std::fs::read_to_string(&output_path).unwrap();
+        assert_eq!(content.trim(), "--static");
+    }
+
+    #[test]
+    fn parse_custom_predicate_whitespace_arg_is_empty() {
+        // `foo( )` parses to empty arg after trimming.
+        let p = parse("foo( )").unwrap();
+        assert_eq!(
+            p,
+            Predicate::Custom {
+                name: "foo".into(),
+                arg: "".into()
+            }
+        );
+        // `foo(  \t  )` also trims to empty.
+        let p2 = parse("foo(  \t  )").unwrap();
+        assert_eq!(
+            p2,
+            Predicate::Custom {
+                name: "foo".into(),
+                arg: "".into()
+            }
+        );
+        // Leading/trailing whitespace is stripped from the argument.
+        let p3 = parse("foo(  hello  )").unwrap();
+        assert_eq!(
+            p3,
+            Predicate::Custom {
+                name: "foo".into(),
+                arg: "hello".into()
+            }
+        );
+    }
+
     // --- Witness tests ---
 
     #[test]
