@@ -498,7 +498,7 @@ On success (exit 0), the command may write a JSON object to stdout. If present a
 }
 ```
 
-If stdout is empty or non-JSON, the predicate still passes but contributes no witness crates. Invalid JSON or bad semver in `version` fields produce a warning but don't fail the predicate.
+If stdout is empty, the predicate passes but contributes no witness crates. If stdout is non-empty but not valid witness JSON, the predicate **fails** (treated as exit non-zero) and a warning is emitted. Individual entries with bad semver in `version` fields are skipped with a warning but don't fail the whole predicate.
 
 ### Collisions
 

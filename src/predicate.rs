@@ -863,13 +863,22 @@ fn run_custom_predicate(
                     "custom predicate stderr"
                 );
             }
-            let passed = output.status.success();
-            let witness = if passed {
-                parse_witness_stdout(name, &output.stdout)
-            } else {
-                Vec::new()
-            };
-            CustomPredicateResult { passed, witness }
+            if !output.status.success() {
+                return CustomPredicateResult {
+                    passed: false,
+                    witness: Vec::new(),
+                };
+            }
+            match parse_witness_stdout(name, &output.stdout) {
+                Some(witness) => CustomPredicateResult {
+                    passed: true,
+                    witness,
+                },
+                None => CustomPredicateResult {
+                    passed: false,
+                    witness: Vec::new(),
+                },
+            }
         }
         Err(e) => {
             tracing::warn!(
@@ -886,9 +895,13 @@ fn run_custom_predicate(
 }
 
 /// Parse witness JSON from custom predicate stdout.
-fn parse_witness_stdout(predicate_name: &str, stdout: &[u8]) -> Vec<WitnessCrate> {
+///
+/// Returns `None` if stdout is non-empty but not valid witness JSON (the
+/// predicate should be treated as failed). Returns `Some(vec![])` for empty
+/// stdout (pass, no witness crates). Returns `Some(crates)` on valid JSON.
+fn parse_witness_stdout(predicate_name: &str, stdout: &[u8]) -> Option<Vec<WitnessCrate>> {
     if stdout.is_empty() {
-        return Vec::new();
+        return Some(Vec::new());
     }
 
     #[derive(serde::Deserialize)]
@@ -903,9 +916,9 @@ fn parse_witness_stdout(predicate_name: &str, stdout: &[u8]) -> Vec<WitnessCrate
             tracing::warn!(
                 predicate = predicate_name,
                 error = %e,
-                "custom predicate stdout is not valid witness JSON"
+                "custom predicate stdout is not valid witness JSON — treating as failed"
             );
-            return Vec::new();
+            return None;
         }
     };
 
@@ -922,7 +935,7 @@ fn parse_witness_stdout(predicate_name: &str, stdout: &[u8]) -> Vec<WitnessCrate
             }
         }
     }
-    crates
+    Some(crates)
 }
 
 #[cfg(test)]
@@ -1582,14 +1595,14 @@ mod tests {
     }
 
     #[test]
-    fn witness_custom_invalid_json() {
+    fn witness_custom_invalid_json_fails_predicate() {
         let (mut ctx, _script) = ctx_with_script_entry("bp", "printf 'not json at all'");
         let pred = Predicate::Custom {
             name: "bp".into(),
             arg: "x".into(),
         };
-        let witness = pred.witness(&mut ctx).unwrap();
-        assert!(witness.is_empty());
+        // Invalid JSON on stdout causes the predicate to fail.
+        assert!(!pred.evaluate(&mut ctx));
     }
 
     #[test]
