@@ -1654,30 +1654,13 @@ fn validate_subcommand(
     })
 }
 
-fn validate_custom_predicate_name(name: &str) -> Result<()> {
-    if name.is_empty() {
-        bail!("predicate name is empty");
-    }
-    let first = name.as_bytes()[0];
-    if !first.is_ascii_alphabetic() {
-        bail!("predicate `{name}` must start with a letter");
-    }
-    if !name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
-        bail!("predicate `{name}` has invalid characters (allow ASCII alphanumeric and `_`)");
-    }
-    if crate::predicate::BUILTIN_PREDICATE_NAMES.contains(&name) {
-        bail!("predicate `{name}` collides with a builtin predicate name");
-    }
-    Ok(())
-}
-
 /// Validate a `[[predicate]]` entry, promoting inline `command` if needed.
 fn validate_custom_predicate(
     raw: RawCustomPredicate,
     installations: &mut Vec<Installation>,
     names: &mut std::collections::BTreeSet<String>,
 ) -> Result<CustomPredicate> {
-    validate_custom_predicate_name(&raw.name)?;
+    crate::predicate::validate_custom_predicate_name(&raw.name)?;
 
     let command = resolve_or_promote(
         raw.command,
@@ -3914,5 +3897,87 @@ mod tests {
         let plugin = from_str(toml).expect("parse");
         let sub = &plugin.subcommands["foo"];
         assert!(sub.predicates.references_crate("serde"));
+    }
+
+    // --- custom predicate collision tests ---
+
+    fn make_plugin_with_predicate(plugin_name: &str, predicate_name: &str) -> ParsedPlugin {
+        ParsedPlugin {
+            path: std::path::PathBuf::from(format!("{plugin_name}.toml")),
+            plugin: Plugin {
+                name: plugin_name.to_string(),
+                predicates: pred_set("*"),
+                installations: vec![Installation {
+                    name: "checker".to_string(),
+                    source: None,
+                    executable: Some("/bin/true".to_string()),
+                    script: None,
+                    args: vec![],
+                    requirements: vec![],
+                    install_commands: vec![],
+                }],
+                hooks: vec![],
+                skills: vec![],
+                mcp_servers: vec![],
+                subcommands: BTreeMap::new(),
+                custom_predicates: vec![CustomPredicate {
+                    name: predicate_name.to_string(),
+                    command: "checker".to_string(),
+                    args: vec![],
+                }],
+            },
+            source_name: "test".into(),
+            source_dir: std::path::PathBuf::from("/test"),
+        }
+    }
+
+    #[test]
+    fn custom_predicate_registry_no_collision() {
+        let plugins = vec![
+            make_plugin_with_predicate("alpha", "foo"),
+            make_plugin_with_predicate("beta", "bar"),
+        ];
+        let mut warnings = vec![];
+        let registry = build_custom_predicate_registry(&plugins, &mut warnings);
+        assert!(warnings.is_empty());
+        assert_eq!(registry.len(), 2);
+        assert!(registry.contains_key("foo"));
+        assert!(registry.contains_key("bar"));
+    }
+
+    #[test]
+    fn custom_predicate_registry_two_way_collision() {
+        let plugins = vec![
+            make_plugin_with_predicate("alpha", "shared"),
+            make_plugin_with_predicate("beta", "shared"),
+        ];
+        let mut warnings = vec![];
+        let registry = build_custom_predicate_registry(&plugins, &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("shared"));
+        assert!(warnings[0].message.contains("alpha"));
+        assert!(warnings[0].message.contains("beta"));
+        assert!(
+            !registry.contains_key("shared"),
+            "collided predicate must be removed"
+        );
+    }
+
+    #[test]
+    fn custom_predicate_registry_three_way_collision() {
+        let plugins = vec![
+            make_plugin_with_predicate("alpha", "shared"),
+            make_plugin_with_predicate("beta", "shared"),
+            make_plugin_with_predicate("gamma", "shared"),
+        ];
+        let mut warnings = vec![];
+        let registry = build_custom_predicate_registry(&plugins, &mut warnings);
+        // Warning is emitted only on the second occurrence (alpha vs beta);
+        // the third (gamma) sees the name in the collision set and skips.
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            !registry.contains_key("shared"),
+            "collided predicate must be removed"
+        );
     }
 }

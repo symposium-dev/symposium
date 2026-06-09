@@ -400,10 +400,13 @@ pub struct CrateList(pub Vec<Predicate>);
 
 impl CrateList {
     /// Parse comma-separated crate atoms (`serde, tokio>=1.0, *`).
+    ///
+    /// Commas inside balanced parentheses are preserved so that custom
+    /// predicates like `battery_pack(a, b)` are not split incorrectly.
     pub fn parse(input: &str) -> Result<Self> {
-        let atoms = input
-            .split(',')
-            .map(str::trim)
+        let atoms = split_top_level(input)
+            .iter()
+            .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .map(|s| {
                 parse_crate_atom(s)
@@ -449,16 +452,27 @@ impl<'de> serde::Deserialize<'de> for CrateList {
 
 // --- function-call predicate parsing ---
 
-/// Validate that a custom predicate name uses only `[a-zA-Z][a-zA-Z0-9_]*`.
-/// Hyphens are intentionally rejected to keep the namespace aligned with
-/// `[[predicate]]` definition validation.
-fn validate_custom_predicate_name_at_parse(name: &str) -> Result<()> {
+/// Validate that `name` is a legal custom predicate identifier:
+/// `[a-zA-Z][a-zA-Z0-9_]*`, must not collide with a builtin name.
+///
+/// Shared by both the expression parser (encountering an unknown function
+/// name) and the `[[predicate]]` definition validator in `plugins.rs`.
+pub fn validate_custom_predicate_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        bail!("predicate name is empty");
+    }
+    if !name.as_bytes()[0].is_ascii_alphabetic() {
+        bail!("predicate `{name}` must start with a letter");
+    }
     if let Some(pos) = name.find(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
         bail!(
-            "custom predicate name `{name}` contains invalid character '{}' at position {pos} \
+            "predicate `{name}` contains invalid character '{}' at position {pos} \
              (only ASCII alphanumeric and `_` allowed)",
             name.as_bytes()[pos] as char,
         );
+    }
+    if BUILTIN_PREDICATE_NAMES.contains(&name) {
+        bail!("predicate `{name}` collides with a builtin predicate name");
     }
     Ok(())
 }
@@ -498,7 +512,7 @@ fn parse(input: &str) -> Result<Predicate> {
             Ok(Predicate::All(preds))
         }
         other => {
-            validate_custom_predicate_name_at_parse(other)?;
+            validate_custom_predicate_name(other)?;
             Ok(Predicate::Custom {
                 name: other.to_string(),
                 arg: arg.to_string(),
@@ -635,7 +649,7 @@ impl<'a> AtomParser<'a> {
                 parse_crate_atom(&arg)
                     .with_context(|| format!("inside `crate(...)`: failed to parse `{arg}`"))
             } else {
-                validate_custom_predicate_name_at_parse(name)?;
+                validate_custom_predicate_name(name)?;
                 Ok(Predicate::Custom {
                     name: name.to_string(),
                     arg,
@@ -994,6 +1008,28 @@ mod tests {
                 Predicate::Crate("tokio".into(), None),
             ]))
         );
+        // Commas inside balanced parens are preserved (custom predicates).
+        assert_eq!(
+            CrateList::parse("bp(cli, web)").unwrap().into_predicate(),
+            Some(Predicate::Custom {
+                name: "bp".into(),
+                arg: "cli, web".into(),
+            })
+        );
+        // Mixed: normal atom + custom predicate with inner comma
+        let mixed = CrateList::parse("serde, bp(a, b)")
+            .unwrap()
+            .into_predicate();
+        assert_eq!(
+            mixed,
+            Some(Predicate::Any(vec![
+                Predicate::Crate("serde".into(), None),
+                Predicate::Custom {
+                    name: "bp".into(),
+                    arg: "a, b".into(),
+                },
+            ]))
+        );
     }
 
     // --- function-call parsing ---
@@ -1274,9 +1310,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_custom_predicate_rejects_hyphens() {
+    fn parse_custom_predicate_rejects_invalid_names() {
+        // Hyphens not allowed
         assert!(parse("battery-pack(cli>=0.3)").is_err());
         assert!(parse("my-pred()").is_err());
+        // Must start with a letter
+        assert!(parse("0foo(x)").is_err());
+        assert!(parse("_foo(x)").is_err());
+        // Builtin names cannot be redefined (they're matched first anyway,
+        // but the validator rejects them if somehow reached)
+        assert!(validate_custom_predicate_name("crate").is_err());
+        assert!(validate_custom_predicate_name("shell").is_err());
+        assert!(validate_custom_predicate_name("not").is_err());
     }
 
     #[test]
