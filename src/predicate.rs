@@ -640,21 +640,15 @@ impl<'a> AtomParser<'a> {
             );
         }
 
-        // Function-call syntax: name(arg) — either `crate(...)` or a custom predicate.
+        // Function-call syntax is NOT valid in crate-atom position. The
+        // `crates` field accepts only bare names + optional version constraints.
+        // Full predicate expressions (including custom predicates) belong in the
+        // `predicates` field.
         if self.pos < self.input.len() && self.input.as_bytes()[self.pos] == b'(' {
-            self.pos += 1; // consume '('
-            let arg = self.consume_balanced_parens()?;
-            return if name == "crate" {
-                // `crate(serde)` or `crate(serde>=1.0)` — parse inner as a crate atom
-                parse_crate_atom(&arg)
-                    .with_context(|| format!("inside `crate(...)`: failed to parse `{arg}`"))
-            } else {
-                validate_custom_predicate_name(name)?;
-                Ok(Predicate::Custom {
-                    name: name.to_string(),
-                    arg,
-                })
-            };
+            bail!(
+                "function-call syntax `{name}(...)` is not valid in the `crates` field; \
+                 use the `predicates` field instead"
+            );
         }
 
         // Version constraint (starts with >=, <=, >, <, =, ^, ~). Bare `=` is
@@ -687,32 +681,6 @@ impl<'a> AtomParser<'a> {
         };
 
         Ok(Predicate::Crate(name.to_string(), version_req))
-    }
-
-    /// Consume content between balanced parentheses. The opening `(` has
-    /// already been consumed. Returns the content up to the matching `)`.
-    fn consume_balanced_parens(&mut self) -> Result<String> {
-        let start = self.pos;
-        let mut depth: u32 = 1;
-        while self.pos < self.input.len() {
-            match self.input.as_bytes()[self.pos] {
-                b'(' => depth += 1,
-                b')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        let content = self.input[start..self.pos].to_string();
-                        self.pos += 1; // consume closing ')'
-                        return Ok(content);
-                    }
-                }
-                _ => {}
-            }
-            self.pos += 1;
-        }
-        bail!(
-            "unmatched `(` at position {} — no closing `)` found",
-            start.saturating_sub(1)
-        );
     }
 }
 
@@ -1008,28 +976,9 @@ mod tests {
                 Predicate::Crate("tokio".into(), None),
             ]))
         );
-        // Commas inside balanced parens are preserved (custom predicates).
-        assert_eq!(
-            CrateList::parse("bp(cli, web)").unwrap().into_predicate(),
-            Some(Predicate::Custom {
-                name: "bp".into(),
-                arg: "cli, web".into(),
-            })
-        );
-        // Mixed: normal atom + custom predicate with inner comma
-        let mixed = CrateList::parse("serde, bp(a, b)")
-            .unwrap()
-            .into_predicate();
-        assert_eq!(
-            mixed,
-            Some(Predicate::Any(vec![
-                Predicate::Crate("serde".into(), None),
-                Predicate::Custom {
-                    name: "bp".into(),
-                    arg: "a, b".into(),
-                },
-            ]))
-        );
+        // Function-call syntax is rejected in the `crates` field.
+        assert!(CrateList::parse("bp(cli, web)").is_err());
+        assert!(CrateList::parse("serde, bp(a, b)").is_err());
     }
 
     // --- function-call parsing ---

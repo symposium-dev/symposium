@@ -1,5 +1,5 @@
 name = "bp-plugin"
-crates = ["battery_pack(cli)"]
+predicates = ["battery_pack(cli)"]
 
 [[installations]]
 name = "bp-checker"
