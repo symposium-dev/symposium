@@ -161,6 +161,7 @@ fn collect_section(
     builtins.sort();
 
     let mut plugins = applicable_subcommands(registry, deps)
+        .into_iter()
         .filter(|(_, _, subcommand)| subcommand.audience == target)
         .map(|(_, name, subcommand)| (name.to_string(), subcommand.description.clone()))
         .collect::<Vec<_>>();
@@ -212,6 +213,7 @@ mod tests {
                 mcp_servers: vec![],
                 subcommands,
                 installations: vec![],
+                custom_predicates: vec![],
             },
             source_name: "test".into(),
             source_dir: PathBuf::from("/test"),
@@ -232,6 +234,7 @@ mod tests {
             plugins,
             standalone_skills: vec![],
             warnings: vec![],
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         }
     }
 

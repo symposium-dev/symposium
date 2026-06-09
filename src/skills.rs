@@ -150,11 +150,12 @@ pub async fn skills_applicable_to(
     sym: &Symposium,
     registry: &PluginRegistry,
     workspace_crates: &[crate::crate_sources::WorkspaceCrate],
+    custom_predicate_entries: std::collections::HashMap<String, predicate::ResolvedPredicateEntry>,
 ) -> Vec<SkillWithGroupContext> {
     let mut results = Vec::new();
 
     let for_crates = crate::crate_sources::crate_pairs(workspace_crates);
-    let ctx = PredicateContext::new(&for_crates);
+    let mut ctx = PredicateContext::with_custom_predicates(&for_crates, custom_predicate_entries);
 
     // Skills from plugin manifests. We iterate these separately
     // because we lazily load skill groups, so there
@@ -163,7 +164,7 @@ pub async fn skills_applicable_to(
         let plugin = &parsed.plugin;
         // Plugin-level predicates gate everything below. Evaluated before
         // group fetching to avoid wasted work.
-        if !plugin.applies(&ctx) {
+        if !plugin.predicates.evaluate(&mut ctx) {
             tracing::debug!(
                 report = %crate::report::ReportEvent::PluginConsidered {
                     plugin: plugin.name.clone(),
@@ -183,9 +184,10 @@ pub async fn skills_applicable_to(
         );
 
         for group in &plugin.skills {
-            let skills = load_skills_for_group(sym, parsed, group, workspace_crates, &ctx).await;
+            let skills =
+                load_skills_for_group(sym, parsed, group, workspace_crates, &mut ctx).await;
             for (skill, origin) in skills {
-                collect_skill_applicable_to(skill, origin, &plugin.name, &ctx, &mut results);
+                collect_skill_applicable_to(skill, origin, &plugin.name, &mut ctx, &mut results);
             }
         }
     }
@@ -206,7 +208,7 @@ pub async fn skills_applicable_to(
             entry.skill.clone(),
             entry.origin.clone(),
             "(standalone skills)",
-            &ctx,
+            &mut ctx,
             &mut results,
         );
     }
@@ -233,7 +235,7 @@ async fn load_skills_for_group(
     parsed: &ParsedPlugin,
     group: &SkillGroup,
     workspace_crates: &[crate::crate_sources::WorkspaceCrate],
-    ctx: &PredicateContext<'_>,
+    ctx: &mut PredicateContext<'_>,
 ) -> Vec<(Skill, SkillOrigin)> {
     let plugin = &parsed.plugin;
     let plugin_path = parsed.path.as_path();
@@ -305,7 +307,7 @@ async fn load_crate_skills(
     plugin: &crate::plugins::Plugin,
     group: &SkillGroup,
     workspace_crates: &[crate::crate_sources::WorkspaceCrate],
-    ctx: &PredicateContext<'_>,
+    ctx: &mut PredicateContext<'_>,
 ) -> Vec<(Skill, SkillOrigin)> {
     let matched = predicate::union_matched_crates(&[&plugin.predicates, &group.predicates], ctx);
     let mut skills = Vec::new();
@@ -776,7 +778,7 @@ fn collect_skill_applicable_to(
     skill: Skill,
     origin: SkillOrigin,
     plugin_name: &str,
-    ctx: &PredicateContext,
+    ctx: &mut PredicateContext,
     results: &mut Vec<SkillWithGroupContext>,
 ) {
     if !skill.predicates.evaluate(ctx) {
@@ -1297,6 +1299,7 @@ mod tests {
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
 
         let registry = PluginRegistry {
@@ -1308,6 +1311,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
         // Query for serde - should find no skills because plugin doesn't apply
@@ -1316,7 +1320,13 @@ mod tests {
             version: semver::Version::new(1, 0, 0),
             path: None,
         }];
-        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
+        let skills = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace_crates,
+            std::collections::HashMap::new(),
+        )
+        .await;
 
         assert!(
             skills.is_empty(),
@@ -1344,6 +1354,7 @@ mod tests {
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
 
         let registry = PluginRegistry {
@@ -1355,6 +1366,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
         // Query for serde - should find no skills because group doesn't match
@@ -1363,7 +1375,13 @@ mod tests {
             version: semver::Version::new(1, 0, 0),
             path: None,
         }];
-        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
+        let skills = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace_crates,
+            std::collections::HashMap::new(),
+        )
+        .await;
 
         assert!(
             skills.is_empty(),
@@ -1409,6 +1427,7 @@ mod tests {
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
 
         let registry = PluginRegistry {
@@ -1420,6 +1439,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
         let workspace_crates = vec![crate::crate_sources::WorkspaceCrate {
@@ -1427,7 +1447,13 @@ mod tests {
             version: semver::Version::new(1, 0, 0),
             path: None,
         }];
-        let skills = skills_applicable_to(&sym, &registry, &workspace_crates).await;
+        let skills = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace_crates,
+            std::collections::HashMap::new(),
+        )
+        .await;
 
         assert_eq!(
             skills.len(),
@@ -1479,6 +1505,7 @@ mod tests {
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: Default::default(),
+            custom_predicates: vec![],
         };
 
         let registry = PluginRegistry {
@@ -1490,6 +1517,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
         let workspace = vec![crate::crate_sources::WorkspaceCrate {
@@ -1497,7 +1525,13 @@ mod tests {
             version: semver::Version::new(1, 0, 0),
             path: None,
         }];
-        let skills = skills_applicable_to(&sym, &registry, &workspace).await;
+        let skills = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace,
+            std::collections::HashMap::new(),
+        )
+        .await;
         assert!(
             skills.is_empty(),
             "plugin predicate=false should filter out skills"
@@ -1550,6 +1584,7 @@ mod tests {
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: Default::default(),
+            custom_predicates: vec![],
         };
 
         let registry = PluginRegistry {
@@ -1561,6 +1596,7 @@ mod tests {
             }],
             standalone_skills: vec![],
             warnings: vec![],
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
         let workspace = vec![crate::crate_sources::WorkspaceCrate {
@@ -1568,7 +1604,13 @@ mod tests {
             version: semver::Version::new(1, 0, 0),
             path: None,
         }];
-        let skills = skills_applicable_to(&sym, &registry, &workspace).await;
+        let skills = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace,
+            std::collections::HashMap::new(),
+        )
+        .await;
         assert_eq!(skills.len(), 1);
     }
 
@@ -1685,6 +1727,7 @@ mod tests {
                 },
             }],
             warnings: vec![],
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
         let sym = crate::config::Symposium::from_dir(tmp.path());
@@ -1693,7 +1736,13 @@ mod tests {
             version: semver::Version::new(1, 0, 0),
             path: None,
         }];
-        let results = skills_applicable_to(&sym, &registry, &workspace).await;
+        let results = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace,
+            std::collections::HashMap::new(),
+        )
+        .await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].skill.name(), "standalone-serde");
         assert!(results[0].skill.predicates.references_crate("serde"));
@@ -1848,7 +1897,9 @@ mod tests {
     /// Each level's `crates` lowers to one predicate set; the skill applies when
     /// every level's set holds (AND across levels).
     fn applies(levels: &[&str], ws: &[(String, semver::Version)]) -> bool {
-        levels.iter().all(|spec| pred_set(spec).evaluate(&ctx(ws)))
+        levels
+            .iter()
+            .all(|spec| pred_set(spec).evaluate(&mut ctx(ws)))
     }
 
     #[test]

@@ -1,0 +1,10 @@
+name = "provider-plugin"
+crates = ["*"]
+
+[[installations]]
+name = "my-checker"
+executable = "$TEST_DIR/cross-checker.sh"
+
+[[predicate]]
+name = "my_check"
+command = "my-checker"

@@ -1,0 +1,5 @@
+name = "consumer-plugin"
+predicates = ["my_check(hello)"]
+
+[[skills]]
+source.path = "skills"

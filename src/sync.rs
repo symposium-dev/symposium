@@ -164,6 +164,65 @@ fn propagate_user_skill(source_dir: &Path, dest_dir: &Path, project_root: &Path)
     Ok(true)
 }
 
+/// Resolve custom predicate installations from the registry into entries
+/// suitable for [`PredicateContext::with_custom_predicates`].
+async fn resolve_custom_predicate_entries(
+    sym: &Symposium,
+    registry: &plugins::PluginRegistry,
+) -> std::collections::HashMap<String, crate::predicate::ResolvedPredicateEntry> {
+    use crate::predicate::ResolvedPredicateEntry;
+
+    let mut entries = std::collections::HashMap::new();
+
+    for (name, resolved) in registry.custom_predicates.iter() {
+        let plugin = &registry.plugins[resolved.plugin_index];
+        let Some(install) = plugin.plugin.get_installation(&resolved.command) else {
+            tracing::warn!(
+                predicate = name,
+                command = &resolved.command,
+                "custom predicate references unknown installation"
+            );
+            continue;
+        };
+
+        let acquired =
+            match crate::installation::acquire_installation(sym, install, None, None).await {
+                Ok(a) => a,
+                Err(e) => {
+                    tracing::warn!(
+                        predicate = name,
+                        error = %e,
+                        "failed to acquire custom predicate installation"
+                    );
+                    continue;
+                }
+            };
+
+        let runnable =
+            match crate::installation::resolve_runnable(acquired, &format!("predicate `{name}`")) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!(
+                        predicate = name,
+                        error = %e,
+                        "failed to resolve custom predicate runnable"
+                    );
+                    continue;
+                }
+            };
+
+        entries.insert(
+            name.clone(),
+            ResolvedPredicateEntry {
+                runnable,
+                args: resolved.args.clone(),
+            },
+        );
+    }
+
+    entries
+}
+
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
 pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
@@ -189,8 +248,11 @@ pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
         },
     );
 
+    // Resolve custom predicate installations.
+    let custom_entries = resolve_custom_predicate_entries(sym, &registry).await;
+
     // Find all applicable skills
-    let applicable = skills::skills_applicable_to(sym, &registry, &workspace).await;
+    let applicable = skills::skills_applicable_to(sym, &registry, &workspace, custom_entries).await;
 
     // Dedup by `(skill_name, SkillOrigin)`: two `Crate` origins with the
     // same (name, version) collapse (the skills are the same logical bytes
@@ -213,13 +275,13 @@ pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
 
     // Collect MCP servers from applicable plugins, filtered by workspace deps
     let semver_pairs = crate::crate_sources::crate_pairs(&workspace);
-    let ctx = crate::predicate::PredicateContext::new(&semver_pairs);
-    let mcp_servers: Vec<sacp::schema::McpServer> = registry
-        .plugins
-        .iter()
-        .filter(|p| p.plugin.applies(&ctx))
-        .flat_map(|p| p.plugin.applicable_mcp_servers(&ctx))
-        .collect();
+    let mut ctx = crate::predicate::PredicateContext::new(&semver_pairs);
+    let mut mcp_servers: Vec<sacp::schema::McpServer> = Vec::new();
+    for p in &registry.plugins {
+        if p.plugin.applies(&mut ctx) {
+            mcp_servers.extend(p.plugin.applicable_mcp_servers(&mut ctx));
+        }
+    }
 
     let server_names: Vec<&str> = mcp_servers
         .iter()

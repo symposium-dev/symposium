@@ -413,7 +413,7 @@ fn discovery_hint(sym: &Symposium, cwd: &Path) -> Option<String> {
     let registry = load_registry(sym);
     let deps = crate::crate_sources::crate_pairs(&workspace_crates(cwd));
 
-    let any_subcommand = applicable_subcommands(&registry, &deps).next().is_some();
+    let any_subcommand = !applicable_subcommands(&registry, &deps).is_empty();
 
     any_subcommand.then(|| {
         format!(
@@ -501,8 +501,8 @@ pub async fn dispatch_plugin_hooks(
     } else {
         Vec::new()
     };
-    let ctx = crate::predicate::PredicateContext::new(&deps);
-    let hooks = dispatched_hooks_for_payload(&plugins, sym_input, host_agent, &ctx);
+    let mut ctx = crate::predicate::PredicateContext::new(&deps);
+    let hooks = dispatched_hooks_for_payload(&plugins, sym_input, host_agent, &mut ctx);
 
     let mut output = prior_output;
 
@@ -663,7 +663,7 @@ fn dispatched_hooks_for_payload(
     plugins: &[ParsedPlugin],
     input: &symposium::InputEvent,
     host_agent: HookAgent,
-    ctx: &crate::predicate::PredicateContext,
+    ctx: &mut crate::predicate::PredicateContext,
 ) -> Vec<ResolvedHook> {
     tracing::trace!(?input, "matching hooks for payload");
 
@@ -968,6 +968,7 @@ mod tests {
             skills: vec![],
             mcp_servers: vec![],
             subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
         crate::plugins::ParsedPlugin {
             path: std::path::PathBuf::from("test.toml"),
@@ -993,7 +994,7 @@ mod tests {
             &[plugin],
             &pre_tool_use_input(),
             HookAgent::Claude,
-            &crate::predicate::PredicateContext::new(&[]),
+            &mut crate::predicate::PredicateContext::new(&[]),
         );
         assert!(hooks.is_empty(), "plugin-level false should drop all hooks");
     }
@@ -1005,7 +1006,7 @@ mod tests {
             &[plugin],
             &pre_tool_use_input(),
             HookAgent::Claude,
-            &crate::predicate::PredicateContext::new(&[]),
+            &mut crate::predicate::PredicateContext::new(&[]),
         );
         assert!(hooks.is_empty(), "hook-level false should drop the hook");
     }
@@ -1017,7 +1018,7 @@ mod tests {
             &[plugin],
             &pre_tool_use_input(),
             HookAgent::Claude,
-            &crate::predicate::PredicateContext::new(&[]),
+            &mut crate::predicate::PredicateContext::new(&[]),
         );
         assert_eq!(hooks.len(), 1);
     }
@@ -1038,7 +1039,7 @@ mod tests {
             &[plugin.clone()],
             &pre_tool_use_input(),
             HookAgent::Claude,
-            &crate::predicate::PredicateContext::new(&[]),
+            &mut crate::predicate::PredicateContext::new(&[]),
         );
         assert!(
             empty.is_empty(),
@@ -1051,7 +1052,7 @@ mod tests {
             &[plugin],
             &pre_tool_use_input(),
             HookAgent::Claude,
-            &crate::predicate::PredicateContext::new(&deps),
+            &mut crate::predicate::PredicateContext::new(&deps),
         );
         assert_eq!(
             matched.len(),

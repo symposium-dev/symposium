@@ -30,18 +30,72 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
+/// Names reserved for builtin predicates. Custom predicates must not use these.
+pub const BUILTIN_PREDICATE_NAMES: &[&str] =
+    &["crate", "shell", "path_exists", "env", "not", "any", "all"];
+
 /// The evaluation environment a predicate is checked against.
 ///
 /// The crate graph is passed explicitly; the OS environment (`shell`,
-/// `path_exists`, `env`) is read ambiently at evaluation time.
-#[derive(Debug, Clone, Copy)]
+/// `path_exists`, `env`) is read ambiently at evaluation time. Custom
+/// (plugin-defined) predicates are resolved entries whose results are cached
+/// for the lifetime of the context.
+#[derive(Debug)]
 pub struct PredicateContext<'a> {
     pub crates: &'a [(String, semver::Version)],
+    custom_entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
+    custom_cache: std::collections::HashMap<(String, String), CustomPredicateResult>,
 }
 
 impl<'a> PredicateContext<'a> {
     pub fn new(crates: &'a [(String, semver::Version)]) -> Self {
-        Self { crates }
+        Self {
+            crates,
+            custom_entries: std::collections::HashMap::new(),
+            custom_cache: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn with_custom_predicates(
+        crates: &'a [(String, semver::Version)],
+        entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
+    ) -> Self {
+        Self {
+            crates,
+            custom_entries: entries,
+            custom_cache: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Evaluate a custom predicate by name and argument, returning the cached
+    /// result if already computed.
+    fn evaluate_custom(&mut self, name: &str, arg: &str) -> bool {
+        let key = (name.to_string(), arg.to_string());
+        if let Some(result) = self.custom_cache.get(&key) {
+            return result.passed;
+        }
+        let result = run_custom_predicate(&self.custom_entries, name, arg);
+        let passed = result.passed;
+        self.custom_cache.insert(key, result);
+        passed
+    }
+
+    /// Get witness crates from a custom predicate's cached result.
+    ///
+    /// Returns `None` if the predicate failed or hasn't been evaluated.
+    /// Returns `Some(&[])` if it passed but had no witness crates.
+    pub fn custom_witness(&mut self, name: &str, arg: &str) -> Option<&[WitnessCrate]> {
+        let key = (name.to_string(), arg.to_string());
+        if !self.custom_cache.contains_key(&key) {
+            let result = run_custom_predicate(&self.custom_entries, name, arg);
+            self.custom_cache.insert(key.clone(), result);
+        }
+        let result = self.custom_cache.get(&key).unwrap();
+        if result.passed {
+            Some(&result.witness)
+        } else {
+            None
+        }
     }
 }
 
@@ -64,15 +118,18 @@ pub enum Predicate {
     Any(Vec<Predicate>),
     /// `all(<p>, …)` — passes when every inner predicate does.
     All(Vec<Predicate>),
+    /// A plugin-defined predicate evaluated by spawning an external command.
+    /// Evaluated via the custom predicate entries in [`PredicateContext`].
+    Custom { name: String, arg: String },
 }
 
 impl Predicate {
     /// True if this predicate holds in `ctx`.
     ///
     /// Short-circuits (`any` stops at the first true child, `all` at the first
-    /// false) and allocates nothing — this is the gating hot path. Use
-    /// [`Predicate::witness`] when the satisfying crate set is also needed.
-    pub fn evaluate(&self, ctx: &PredicateContext) -> bool {
+    /// false). Use [`Predicate::witness`] when the satisfying crate set is also
+    /// needed.
+    pub fn evaluate(&self, ctx: &mut PredicateContext) -> bool {
         match self {
             Predicate::Crate(name, version_req) => ctx.crates.iter().any(|(dep_name, dep_ver)| {
                 dep_name == name && version_req.as_ref().is_none_or(|req| req.matches(dep_ver))
@@ -84,6 +141,7 @@ impl Predicate {
             Predicate::Not(inner) => !inner.evaluate(ctx),
             Predicate::Any(children) => children.iter().any(|p| p.evaluate(ctx)),
             Predicate::All(children) => children.iter().all(|p| p.evaluate(ctx)),
+            Predicate::Custom { name, arg } => ctx.evaluate_custom(name, arg),
         }
     }
 
@@ -94,7 +152,7 @@ impl Predicate {
     /// unions the witnesses of its *true* children, `all` unions all children's
     /// witnesses (when all hold), and `not` contributes nothing (negation is
     /// about absence). Non-crate leaves contribute an empty witness.
-    pub fn witness(&self, ctx: &PredicateContext) -> Option<Vec<(String, semver::Version)>> {
+    pub fn witness(&self, ctx: &mut PredicateContext) -> Option<Vec<(String, semver::Version)>> {
         match self {
             Predicate::Crate(name, version_req) => {
                 let hits: Vec<_> = ctx
@@ -134,6 +192,14 @@ impl Predicate {
                 }
                 Some(crates)
             }
+            Predicate::Custom { name, arg } => {
+                let witness = ctx.custom_witness(name, arg)?;
+                let pairs = witness
+                    .iter()
+                    .map(|wc| (wc.name.clone(), wc.version.clone()))
+                    .collect();
+                Some(pairs)
+            }
         }
     }
 
@@ -144,6 +210,7 @@ impl Predicate {
             Predicate::Crate(n, _) => n == name,
             Predicate::Not(p) => p.references_crate(name),
             Predicate::Any(v) | Predicate::All(v) => v.iter().any(|p| p.references_crate(name)),
+            Predicate::Custom { .. } => false,
             _ => false,
         }
     }
@@ -154,6 +221,7 @@ impl Predicate {
             Predicate::Crate(..) | Predicate::CrateWildcard => true,
             Predicate::Not(p) => p.mentions_crate(),
             Predicate::Any(v) | Predicate::All(v) => v.iter().any(Predicate::mentions_crate),
+            Predicate::Custom { .. } => false,
             _ => false,
         }
     }
@@ -165,6 +233,7 @@ impl Predicate {
             Predicate::Crate(..) => true,
             Predicate::Not(p) => p.has_concrete_crate(),
             Predicate::Any(v) | Predicate::All(v) => v.iter().any(Predicate::has_concrete_crate),
+            Predicate::Custom { .. } => false,
             _ => false,
         }
     }
@@ -173,10 +242,12 @@ impl Predicate {
     /// appear in a [`witness`](Self::witness) — i.e. a `crate(serde)` not under
     /// any `not(...)`. A crate beneath a negation never contributes a crate to
     /// fetch from (the `Not` arm of `witness` discards its inner witness), so
-    /// it cannot anchor a `source = "crate"` group.
+    /// it cannot anchor a `source = "crate"` group. Custom predicates may
+    /// produce witnesses at runtime, so they count as fetchable.
     pub fn has_fetchable_crate(&self) -> bool {
         match self {
             Predicate::Crate(..) => true,
+            Predicate::Custom { .. } => true,
             Predicate::Not(_) => false,
             Predicate::Any(v) | Predicate::All(v) => v.iter().any(Predicate::has_fetchable_crate),
             _ => false,
@@ -186,7 +257,8 @@ impl Predicate {
     /// Collect every crate name referenced anywhere in this predicate.
     ///
     /// Used for crates.io existence validation, so it ignores tree position
-    /// (a crate named under `not(...)` is still validated).
+    /// (a crate named under `not(...)` is still validated). Custom predicates
+    /// are a no-op — their crate names are dynamic.
     pub fn collect_crate_names(&self, out: &mut std::collections::BTreeSet<String>) {
         match self {
             Predicate::Crate(name, _) => {
@@ -198,6 +270,7 @@ impl Predicate {
                     p.collect_crate_names(out);
                 }
             }
+            Predicate::Custom { .. } => {}
             _ => {}
         }
     }
@@ -241,13 +314,13 @@ impl PredicateSet {
     }
 
     /// True if every predicate holds (or the set is empty).
-    pub fn evaluate(&self, ctx: &PredicateContext) -> bool {
+    pub fn evaluate(&self, ctx: &mut PredicateContext) -> bool {
         self.predicates.iter().all(|p| p.evaluate(ctx))
     }
 
     /// Witness for the whole set (treated as one big `all(...)`): `None` if any
     /// predicate is false, otherwise the deduplicated union of witnesses.
-    pub fn witness(&self, ctx: &PredicateContext) -> Option<Vec<(String, semver::Version)>> {
+    pub fn witness(&self, ctx: &mut PredicateContext) -> Option<Vec<(String, semver::Version)>> {
         let mut crates = Vec::new();
         for p in &self.predicates {
             crates.extend(p.witness(ctx)?);
@@ -294,7 +367,7 @@ impl PredicateSet {
 /// resolution: the concrete crates whose source trees to fetch skills from.
 pub fn union_matched_crates(
     sets: &[&PredicateSet],
-    ctx: &PredicateContext,
+    ctx: &mut PredicateContext,
 ) -> Vec<(String, semver::Version)> {
     let mut seen = std::collections::HashSet::new();
     let mut result = Vec::new();
@@ -327,10 +400,13 @@ pub struct CrateList(pub Vec<Predicate>);
 
 impl CrateList {
     /// Parse comma-separated crate atoms (`serde, tokio>=1.0, *`).
+    ///
+    /// Commas inside balanced parentheses are preserved so that custom
+    /// predicates like `battery_pack(a, b)` are not split incorrectly.
     pub fn parse(input: &str) -> Result<Self> {
-        let atoms = input
-            .split(',')
-            .map(str::trim)
+        let atoms = split_top_level(input)
+            .iter()
+            .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .map(|s| {
                 parse_crate_atom(s)
@@ -376,8 +452,33 @@ impl<'de> serde::Deserialize<'de> for CrateList {
 
 // --- function-call predicate parsing ---
 
+/// Validate that `name` is a legal custom predicate identifier:
+/// `[a-zA-Z][a-zA-Z0-9_]*`, must not collide with a builtin name.
+///
+/// Shared by both the expression parser (encountering an unknown function
+/// name) and the `[[predicate]]` definition validator in `plugins.rs`.
+pub fn validate_custom_predicate_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        bail!("predicate name is empty");
+    }
+    if !name.as_bytes()[0].is_ascii_alphabetic() {
+        bail!("predicate `{name}` must start with a letter");
+    }
+    if let Some(pos) = name.find(|c: char| !c.is_ascii_alphanumeric() && c != '_') {
+        bail!(
+            "predicate `{name}` contains invalid character '{}' at position {pos} \
+             (only ASCII alphanumeric and `_` allowed)",
+            name.as_bytes()[pos] as char,
+        );
+    }
+    if BUILTIN_PREDICATE_NAMES.contains(&name) {
+        bail!("predicate `{name}` collides with a builtin predicate name");
+    }
+    Ok(())
+}
+
 /// Parse a single function-call predicate expression.
-pub fn parse(input: &str) -> Result<Predicate> {
+fn parse(input: &str) -> Result<Predicate> {
     let trimmed = input.trim();
     let Some(open) = trimmed.find('(') else {
         bail!("predicate {trimmed:?} is not a function call (expected `name(arg)`)");
@@ -410,10 +511,13 @@ pub fn parse(input: &str) -> Result<Predicate> {
             }
             Ok(Predicate::All(preds))
         }
-        other => bail!(
-            "unknown predicate `{other}` \
-             (expected `crate`, `shell`, `path_exists`, `env`, `not`, `any`, or `all`)"
-        ),
+        other => {
+            validate_custom_predicate_name(other)?;
+            Ok(Predicate::Custom {
+                name: other.to_string(),
+                arg: arg.to_string(),
+            })
+        }
     }
 }
 
@@ -533,6 +637,17 @@ impl<'a> AtomParser<'a> {
                 "expected crate name at position {}: {:?}",
                 start,
                 self.remaining()
+            );
+        }
+
+        // Function-call syntax is NOT valid in crate-atom position. The
+        // `crates` field accepts only bare names + optional version constraints.
+        // Full predicate expressions (including custom predicates) belong in the
+        // `predicates` field.
+        if self.pos < self.input.len() && self.input.as_bytes()[self.pos] == b'(' {
+            bail!(
+                "function-call syntax `{name}(...)` is not valid in the `crates` field; \
+                 use the `predicates` field instead"
             );
         }
 
@@ -657,6 +772,7 @@ impl std::fmt::Display for Predicate {
             Predicate::Not(inner) => write!(f, "not({inner})"),
             Predicate::Any(preds) => write!(f, "any({})", join(preds)),
             Predicate::All(preds) => write!(f, "all({})", join(preds)),
+            Predicate::Custom { name, arg } => write!(f, "{name}({arg})"),
         }
     }
 }
@@ -667,6 +783,160 @@ fn join(preds: &[Predicate]) -> String {
         .map(|p| p.to_string())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+// --- custom predicate evaluation infrastructure ---
+
+/// A crate reported by a custom predicate's witness output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WitnessCrate {
+    pub name: String,
+    pub version: semver::Version,
+}
+
+impl<'de> serde::Deserialize<'de> for WitnessCrate {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct Raw {
+            #[serde(rename = "crate")]
+            crate_name: String,
+            version: String,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let version = semver::Version::parse(&raw.version).map_err(serde::de::Error::custom)?;
+        Ok(WitnessCrate {
+            name: raw.crate_name,
+            version,
+        })
+    }
+}
+
+/// Cached result of a custom predicate invocation.
+#[derive(Debug, Clone)]
+pub struct CustomPredicateResult {
+    /// Whether the predicate passed (exit 0).
+    pub passed: bool,
+    /// Parsed witness crates from stdout (empty if stdout was absent/invalid).
+    pub witness: Vec<WitnessCrate>,
+}
+
+/// A resolved custom predicate entry ready for invocation.
+#[derive(Debug)]
+pub struct ResolvedPredicateEntry {
+    pub runnable: symposium_install::Runnable,
+    pub args: Vec<String>,
+}
+
+/// Spawn a custom predicate command and return the result.
+fn run_custom_predicate(
+    entries: &std::collections::HashMap<String, ResolvedPredicateEntry>,
+    name: &str,
+    arg: &str,
+) -> CustomPredicateResult {
+    let Some(entry) = entries.get(name) else {
+        tracing::warn!(predicate = name, "custom predicate not found in registry");
+        return CustomPredicateResult {
+            passed: false,
+            witness: Vec::new(),
+        };
+    };
+
+    let mut full_args: Vec<&str> = entry.args.iter().map(|s| s.as_str()).collect();
+    if !arg.is_empty() {
+        full_args.push(arg);
+    }
+
+    tracing::debug!(
+        predicate = name,
+        args = ?full_args,
+        "spawning custom predicate"
+    );
+
+    match entry.runnable.spawn(&full_args) {
+        Ok(output) => {
+            if !output.stderr.is_empty() {
+                tracing::debug!(
+                    predicate = name,
+                    stderr = %String::from_utf8_lossy(&output.stderr),
+                    "custom predicate stderr"
+                );
+            }
+            if !output.status.success() {
+                return CustomPredicateResult {
+                    passed: false,
+                    witness: Vec::new(),
+                };
+            }
+            match parse_witness_stdout(name, &output.stdout) {
+                Some(witness) => CustomPredicateResult {
+                    passed: true,
+                    witness,
+                },
+                None => CustomPredicateResult {
+                    passed: false,
+                    witness: Vec::new(),
+                },
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                predicate = name,
+                error = %e,
+                "failed to spawn custom predicate"
+            );
+            CustomPredicateResult {
+                passed: false,
+                witness: Vec::new(),
+            }
+        }
+    }
+}
+
+/// Parse witness JSON from custom predicate stdout.
+///
+/// Returns `None` if stdout is non-empty but not valid witness JSON (the
+/// predicate should be treated as failed). Returns `Some(vec![])` for empty
+/// stdout (pass, no witness crates). Returns `Some(crates)` on valid JSON.
+fn parse_witness_stdout(predicate_name: &str, stdout: &[u8]) -> Option<Vec<WitnessCrate>> {
+    if stdout.is_empty() {
+        return Some(Vec::new());
+    }
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct WitnessOutput {
+        selected_crates: Vec<serde_json::Value>,
+    }
+
+    let output: WitnessOutput = match serde_json::from_slice(stdout) {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::warn!(
+                predicate = predicate_name,
+                error = %e,
+                "custom predicate stdout is not valid witness JSON — treating as failed"
+            );
+            return None;
+        }
+    };
+
+    let mut crates = Vec::new();
+    for value in output.selected_crates {
+        match serde_json::from_value::<WitnessCrate>(value) {
+            Ok(wc) => crates.push(wc),
+            Err(e) => {
+                tracing::warn!(
+                    predicate = predicate_name,
+                    error = %e,
+                    "witness crate has invalid format — treating predicate as failed"
+                );
+                return None;
+            }
+        }
+    }
+    Some(crates)
 }
 
 #[cfg(test)]
@@ -720,9 +990,24 @@ mod tests {
                 Predicate::Crate("tokio".into(), None),
             ]))
         );
+        // Function-call syntax is rejected in the `crates` field.
+        assert!(CrateList::parse("bp(cli, web)").is_err());
+        assert!(CrateList::parse("serde, bp(a, b)").is_err());
+        assert!(CrateList::parse("all()").is_err());
+        assert!(CrateList::parse("crate(serde)").is_err());
+        assert!(CrateList::parse("not(serde)").is_err());
+        assert!(CrateList::parse("shell(true)").is_err());
     }
 
     // --- function-call parsing ---
+
+    #[test]
+    fn predicates_field_rejects_bare_names() {
+        // The `predicates` field requires function-call syntax.
+        assert!(parse("serde").is_err());
+        assert!(parse("tokio>=1.0").is_err());
+        assert!(parse("*").is_err());
+    }
 
     #[test]
     fn parse_function_calls() {
@@ -748,7 +1033,14 @@ mod tests {
             ])
         );
         assert!(parse("all()").is_err());
-        assert!(parse("bogus(x)").is_err());
+        // Unknown function names now parse as Custom predicates
+        assert_eq!(
+            parse("bogus(x)").unwrap(),
+            Predicate::Custom {
+                name: "bogus".into(),
+                arg: "x".into()
+            }
+        );
     }
 
     // --- evaluation ---
@@ -756,24 +1048,24 @@ mod tests {
     #[test]
     fn evaluate_crate_and_wildcard() {
         let w = ws(&[("serde", "1.0.0")]);
-        assert!(parse("crate(serde)").unwrap().evaluate(&ctx(&w)));
-        assert!(!parse("crate(tokio)").unwrap().evaluate(&ctx(&w)));
-        assert!(parse("crate(*)").unwrap().evaluate(&ctx(&[])));
+        assert!(parse("crate(serde)").unwrap().evaluate(&mut ctx(&w)));
+        assert!(!parse("crate(tokio)").unwrap().evaluate(&mut ctx(&w)));
+        assert!(parse("crate(*)").unwrap().evaluate(&mut ctx(&[])));
     }
 
     #[test]
     fn evaluate_combinators() {
         let w = ws(&[("serde", "1.0.0")]);
-        assert!(parse("not(crate(tokio))").unwrap().evaluate(&ctx(&w)));
+        assert!(parse("not(crate(tokio))").unwrap().evaluate(&mut ctx(&w)));
         assert!(
             parse("any(crate(tokio), crate(serde))")
                 .unwrap()
-                .evaluate(&ctx(&w))
+                .evaluate(&mut ctx(&w))
         );
         assert!(
             !parse("all(crate(serde), crate(tokio))")
                 .unwrap()
-                .evaluate(&ctx(&w))
+                .evaluate(&mut ctx(&w))
         );
     }
 
@@ -794,8 +1086,8 @@ mod tests {
         ] {
             let p = parse(input).unwrap();
             assert_eq!(
-                p.evaluate(&ctx(&w)),
-                p.witness(&ctx(&w)).is_some(),
+                p.evaluate(&mut ctx(&w)),
+                p.witness(&mut ctx(&w)).is_some(),
                 "evaluate/witness disagree: {input}"
             );
         }
@@ -804,7 +1096,7 @@ mod tests {
     #[test]
     fn path_exists_empty_is_false() {
         // `path_exists()` must not resolve to a `$PATH` dir via `dir.join("")`.
-        assert!(!Predicate::PathExists(String::new()).evaluate(&ctx(&[])));
+        assert!(!Predicate::PathExists(String::new()).evaluate(&mut ctx(&[])));
     }
 
     // --- witness: the source="crate" fetch set ---
@@ -816,7 +1108,7 @@ mod tests {
         let w = ws(&[("c1", "1.0.0"), ("c2", "1.0.0")]);
         // env unset -> all(...) is a dead branch -> only c1
         let names: Vec<_> = p
-            .witness(&ctx(&w))
+            .witness(&mut ctx(&w))
             .unwrap()
             .into_iter()
             .map(|(n, _)| n)
@@ -833,7 +1125,7 @@ mod tests {
         let w = ws(&[("c1", "1.0.0"), ("c2", "1.0.0")]);
         // PATH is set -> not(env(PATH)) false -> all dead -> only c1
         let names: Vec<_> = p
-            .witness(&ctx(&w))
+            .witness(&mut ctx(&w))
             .unwrap()
             .into_iter()
             .map(|(n, _)| n)
@@ -848,7 +1140,7 @@ mod tests {
         let p = parse("any(crate(c1), any(env(PATH), crate(c2)))").unwrap();
         let w = ws(&[("c1", "1.0.0"), ("c2", "1.0.0")]);
         let mut names: Vec<_> = p
-            .witness(&ctx(&w))
+            .witness(&mut ctx(&w))
             .unwrap()
             .into_iter()
             .map(|(n, _)| n)
@@ -860,7 +1152,7 @@ mod tests {
     #[test]
     fn witness_false_gate_is_none() {
         let p = parse("crate(absent)").unwrap();
-        assert!(p.witness(&ctx(&[])).is_none());
+        assert!(p.witness(&mut ctx(&[])).is_none());
     }
 
     #[test]
@@ -868,7 +1160,7 @@ mod tests {
         let plugin = PredicateSet::from_crates("serde").unwrap();
         let group = PredicateSet::from_crates("serde, tokio").unwrap();
         let w = ws(&[("serde", "1.0.0"), ("tokio", "1.0.0")]);
-        let result = union_matched_crates(&[&plugin, &group], &ctx(&w));
+        let result = union_matched_crates(&[&plugin, &group], &mut ctx(&w));
         let mut names: Vec<_> = result.into_iter().map(|(n, _)| n).collect();
         names.sort();
         assert_eq!(names, vec!["serde", "tokio"]);
@@ -976,5 +1268,433 @@ mod tests {
         // single-string crates form
         let c2: Container = toml::from_str(r#"crates = "serde""#).unwrap();
         assert_eq!(c2.crates.0, vec![Predicate::Crate("serde".into(), None)]);
+    }
+
+    // --- Custom predicate parsing tests ---
+
+    #[test]
+    fn parse_custom_predicate_expression() {
+        let p = parse("battery_pack(cli>=0.3)").unwrap();
+        assert_eq!(
+            p,
+            Predicate::Custom {
+                name: "battery_pack".into(),
+                arg: "cli>=0.3".into()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_custom_predicate_rejects_invalid_names() {
+        // Hyphens not allowed
+        assert!(parse("battery-pack(cli>=0.3)").is_err());
+        assert!(parse("my-pred()").is_err());
+        // Must start with a letter
+        assert!(parse("0foo(x)").is_err());
+        assert!(parse("_foo(x)").is_err());
+        // Builtin names cannot be redefined (they're matched first anyway,
+        // but the validator rejects them if somehow reached)
+        assert!(validate_custom_predicate_name("crate").is_err());
+        assert!(validate_custom_predicate_name("shell").is_err());
+        assert!(validate_custom_predicate_name("not").is_err());
+    }
+
+    #[test]
+    fn parse_custom_predicate_empty_arg() {
+        let p = parse("my_pred()").unwrap();
+        assert_eq!(
+            p,
+            Predicate::Custom {
+                name: "my_pred".into(),
+                arg: "".into()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_custom_predicate_arg_with_parens() {
+        let p = parse("foo(bar(baz))").unwrap();
+        assert_eq!(
+            p,
+            Predicate::Custom {
+                name: "foo".into(),
+                arg: "bar(baz)".into()
+            }
+        );
+    }
+
+    #[test]
+    fn display_roundtrip_custom() {
+        let p = Predicate::Custom {
+            name: "battery_pack".into(),
+            arg: "cli>=0.3".into(),
+        };
+        let displayed = p.to_string();
+        assert_eq!(displayed, "battery_pack(cli>=0.3)");
+        let reparsed = parse(&displayed).unwrap();
+        assert_eq!(p, reparsed);
+    }
+
+    #[test]
+    fn custom_not_confused_with_builtin() {
+        let p = parse("crate(serde)").unwrap();
+        assert_eq!(p, Predicate::Crate("serde".into(), None));
+    }
+
+    #[test]
+    fn has_concrete_crate_custom_is_false() {
+        let p = Predicate::Custom {
+            name: "foo".into(),
+            arg: "x".into(),
+        };
+        assert!(!p.has_concrete_crate());
+    }
+
+    #[test]
+    fn has_fetchable_crate_custom_is_true() {
+        let p = Predicate::Custom {
+            name: "foo".into(),
+            arg: "x".into(),
+        };
+        assert!(p.has_fetchable_crate());
+    }
+
+    #[test]
+    fn mentions_crate_custom_is_false() {
+        let p = Predicate::Custom {
+            name: "foo".into(),
+            arg: "x".into(),
+        };
+        assert!(!p.mentions_crate());
+    }
+
+    #[test]
+    fn references_crate_custom_is_false() {
+        let p = Predicate::Custom {
+            name: "foo".into(),
+            arg: "x".into(),
+        };
+        assert!(!p.references_crate("foo"));
+        assert!(!p.references_crate("x"));
+    }
+
+    #[test]
+    fn collect_crate_names_custom_is_noop() {
+        let p = Predicate::Custom {
+            name: "foo".into(),
+            arg: "x".into(),
+        };
+        let mut names = std::collections::BTreeSet::new();
+        p.collect_crate_names(&mut names);
+        assert!(names.is_empty());
+    }
+
+    // --- Custom predicate evaluation tests ---
+
+    /// Create a context with custom predicate entries using shell scripts.
+    /// Each entry is `(name, exit_code)` — the script does `exit <code>`.
+    fn ctx_with_exit_codes(
+        entries: Vec<(&str, u8)>,
+    ) -> (PredicateContext<'static>, Vec<tempfile::NamedTempFile>) {
+        use std::io::Write;
+        let mut map = std::collections::HashMap::new();
+        let mut scripts = Vec::new();
+        for (name, code) in entries {
+            let script = tempfile::Builder::new().suffix(".sh").tempfile().unwrap();
+            writeln!(script.as_file(), "#!/bin/sh\nexit {code}").unwrap();
+            map.insert(
+                name.to_string(),
+                ResolvedPredicateEntry {
+                    runnable: symposium_install::Runnable::Script(script.path().to_path_buf()),
+                    args: vec![],
+                },
+            );
+            scripts.push(script);
+        }
+        (PredicateContext::with_custom_predicates(&[], map), scripts)
+    }
+
+    fn ctx_with_script_entry(
+        name: &str,
+        script_content: &str,
+    ) -> (PredicateContext<'static>, tempfile::NamedTempFile) {
+        use std::io::Write;
+        let script = tempfile::Builder::new().suffix(".sh").tempfile().unwrap();
+        writeln!(script.as_file(), "#!/bin/sh\n{script_content}").unwrap();
+        let mut entries = std::collections::HashMap::new();
+        entries.insert(
+            name.to_string(),
+            ResolvedPredicateEntry {
+                runnable: symposium_install::Runnable::Script(script.path().to_path_buf()),
+                args: vec![],
+            },
+        );
+        (
+            PredicateContext::with_custom_predicates(&[], entries),
+            script,
+        )
+    }
+
+    #[test]
+    fn evaluate_custom_predicate_pass() {
+        let (mut ctx, _scripts) = ctx_with_exit_codes(vec![("foo", 0)]);
+        let pred = Predicate::Custom {
+            name: "foo".into(),
+            arg: "x".into(),
+        };
+        assert!(pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn evaluate_custom_predicate_fail() {
+        let (mut ctx, _scripts) = ctx_with_exit_codes(vec![("foo", 1)]);
+        let pred = Predicate::Custom {
+            name: "foo".into(),
+            arg: "x".into(),
+        };
+        assert!(!pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn evaluate_custom_predicate_missing_from_registry() {
+        let mut ctx = PredicateContext::new(&[]);
+        let pred = Predicate::Custom {
+            name: "nonexistent".into(),
+            arg: "x".into(),
+        };
+        assert!(!pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn evaluate_custom_predicate_spawn_failure() {
+        use std::collections::HashMap;
+        let mut entries = HashMap::new();
+        entries.insert(
+            "foo".to_string(),
+            ResolvedPredicateEntry {
+                runnable: symposium_install::Runnable::Exec(std::path::PathBuf::from(
+                    "/nonexistent/binary/zzz",
+                )),
+                args: vec![],
+            },
+        );
+        let mut ctx = PredicateContext::with_custom_predicates(&[], entries);
+        let pred = Predicate::Custom {
+            name: "foo".into(),
+            arg: "x".into(),
+        };
+        assert!(!pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn evaluate_custom_predicate_cached() {
+        use std::io::Write;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let counter_path = tmp.path().to_path_buf();
+
+        let script = tempfile::Builder::new().suffix(".sh").tempfile().unwrap();
+        writeln!(
+            script.as_file(),
+            "#!/bin/sh\necho x >> {}\nexit 0",
+            counter_path.display()
+        )
+        .unwrap();
+
+        let mut entries = std::collections::HashMap::new();
+        entries.insert(
+            "counter".to_string(),
+            ResolvedPredicateEntry {
+                runnable: symposium_install::Runnable::Script(script.path().to_path_buf()),
+                args: vec![],
+            },
+        );
+        let mut ctx = PredicateContext::with_custom_predicates(&[], entries);
+        let pred = Predicate::Custom {
+            name: "counter".into(),
+            arg: "a".into(),
+        };
+
+        // Evaluate twice with same (name, arg)
+        assert!(pred.evaluate(&mut ctx));
+        assert!(pred.evaluate(&mut ctx));
+
+        // Script should have been called only once
+        let content = std::fs::read_to_string(&counter_path).unwrap();
+        assert_eq!(content.lines().count(), 1);
+    }
+
+    #[test]
+    fn evaluate_custom_predicate_args_appended() {
+        use std::io::Write;
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+        let output_path = output_file.path().to_path_buf();
+
+        let script = tempfile::Builder::new().suffix(".sh").tempfile().unwrap();
+        writeln!(
+            script.as_file(),
+            "#!/bin/sh\necho \"$@\" > {}",
+            output_path.display()
+        )
+        .unwrap();
+
+        let mut entries = std::collections::HashMap::new();
+        entries.insert(
+            "checker".to_string(),
+            ResolvedPredicateEntry {
+                runnable: symposium_install::Runnable::Script(script.path().to_path_buf()),
+                args: vec!["--static".into(), "arg".into()],
+            },
+        );
+        let mut ctx = PredicateContext::with_custom_predicates(&[], entries);
+        let pred = Predicate::Custom {
+            name: "checker".into(),
+            arg: "dynamic-arg".into(),
+        };
+
+        assert!(pred.evaluate(&mut ctx));
+
+        let content = std::fs::read_to_string(&output_path).unwrap();
+        assert_eq!(content.trim(), "--static arg dynamic-arg");
+    }
+
+    #[test]
+    fn evaluate_custom_predicate_empty_arg_not_passed() {
+        use std::io::Write;
+        let output_file = tempfile::NamedTempFile::new().unwrap();
+        let output_path = output_file.path().to_path_buf();
+
+        let script = tempfile::Builder::new().suffix(".sh").tempfile().unwrap();
+        writeln!(
+            script.as_file(),
+            "#!/bin/sh\necho \"$@\" > {}",
+            output_path.display()
+        )
+        .unwrap();
+
+        let mut entries = std::collections::HashMap::new();
+        entries.insert(
+            "checker".to_string(),
+            ResolvedPredicateEntry {
+                runnable: symposium_install::Runnable::Script(script.path().to_path_buf()),
+                args: vec!["--static".into()],
+            },
+        );
+        let mut ctx = PredicateContext::with_custom_predicates(&[], entries);
+
+        // Empty arg (from `foo()`) — should not be appended.
+        let pred = Predicate::Custom {
+            name: "checker".into(),
+            arg: "".into(),
+        };
+        assert!(pred.evaluate(&mut ctx));
+        let content = std::fs::read_to_string(&output_path).unwrap();
+        assert_eq!(content.trim(), "--static");
+    }
+
+    #[test]
+    fn parse_custom_predicate_whitespace_arg_is_empty() {
+        // `foo( )` parses to empty arg after trimming.
+        let p = parse("foo( )").unwrap();
+        assert_eq!(
+            p,
+            Predicate::Custom {
+                name: "foo".into(),
+                arg: "".into()
+            }
+        );
+        // `foo(  \t  )` also trims to empty.
+        let p2 = parse("foo(  \t  )").unwrap();
+        assert_eq!(
+            p2,
+            Predicate::Custom {
+                name: "foo".into(),
+                arg: "".into()
+            }
+        );
+        // Leading/trailing whitespace is stripped from the argument.
+        let p3 = parse("foo(  hello  )").unwrap();
+        assert_eq!(
+            p3,
+            Predicate::Custom {
+                name: "foo".into(),
+                arg: "hello".into()
+            }
+        );
+    }
+
+    // --- Witness tests ---
+
+    #[test]
+    fn witness_custom_with_selected_crates() {
+        let json = r#"{"selectedCrates":[{"crate":"cli-battery-pack","version":"0.3.1"}]}"#;
+        let (mut ctx, _script) = ctx_with_script_entry("bp", &format!("printf '{json}'"));
+        let pred = Predicate::Custom {
+            name: "bp".into(),
+            arg: "cli".into(),
+        };
+        let witness = pred.witness(&mut ctx).unwrap();
+        assert_eq!(witness.len(), 1);
+        assert_eq!(witness[0].0, "cli-battery-pack");
+        assert_eq!(witness[0].1, semver::Version::parse("0.3.1").unwrap());
+    }
+
+    #[test]
+    fn witness_custom_empty_stdout() {
+        let (mut ctx, _scripts) = ctx_with_exit_codes(vec![("foo", 0)]);
+        let pred = Predicate::Custom {
+            name: "foo".into(),
+            arg: "x".into(),
+        };
+        let witness = pred.witness(&mut ctx).unwrap();
+        assert!(witness.is_empty());
+    }
+
+    #[test]
+    fn witness_custom_exit_nonzero() {
+        let (mut ctx, _scripts) = ctx_with_exit_codes(vec![("foo", 1)]);
+        let pred = Predicate::Custom {
+            name: "foo".into(),
+            arg: "x".into(),
+        };
+        let witness = pred.witness(&mut ctx);
+        assert!(witness.is_none());
+    }
+
+    #[test]
+    fn witness_custom_invalid_json_fails_predicate() {
+        let (mut ctx, _script) = ctx_with_script_entry("bp", "printf 'not json at all'");
+        let pred = Predicate::Custom {
+            name: "bp".into(),
+            arg: "x".into(),
+        };
+        // Invalid JSON on stdout causes the predicate to fail.
+        assert!(!pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn witness_custom_invalid_version_fails_predicate() {
+        let json = r#"{"selectedCrates":[{"crate":"good","version":"1.0.0"},{"crate":"bad","version":"not-semver"}]}"#;
+        let (mut ctx, _script) = ctx_with_script_entry("bp", &format!("printf '{json}'"));
+        let pred = Predicate::Custom {
+            name: "bp".into(),
+            arg: "x".into(),
+        };
+        // Any malformed entry fails the whole predicate.
+        assert!(!pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn witness_custom_multiple_crates() {
+        let json = r#"{"selectedCrates":[{"crate":"a","version":"1.0.0"},{"crate":"b","version":"2.0.0"},{"crate":"c","version":"3.0.0"}]}"#;
+        let (mut ctx, _script) = ctx_with_script_entry("bp", &format!("printf '{json}'"));
+        let pred = Predicate::Custom {
+            name: "bp".into(),
+            arg: "x".into(),
+        };
+        let witness = pred.witness(&mut ctx).unwrap();
+        assert_eq!(witness.len(), 3);
+        assert_eq!(witness[0].0, "a");
+        assert_eq!(witness[1].0, "b");
+        assert_eq!(witness[2].0, "c");
     }
 }

@@ -279,6 +279,18 @@ pub struct Installation {
     pub args: Vec<String>,
 }
 
+/// A validated custom predicate definition from a `[[predicate]]` entry.
+#[derive(Debug, Clone, Serialize)]
+pub struct CustomPredicate {
+    /// The predicate name (valid identifier, not a builtin).
+    pub name: String,
+    /// Name of the installation whose binary/script implements this predicate.
+    pub command: String,
+    /// Static arguments passed before the dynamic raw-arg.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+}
+
 /// A parsed plugin with its path and manifest.
 #[derive(Debug, Clone)]
 pub struct ParsedPlugin {
@@ -324,11 +336,14 @@ pub struct Plugin {
     /// after `cargo agents`. Empty for plugins that vend no subcommands.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub subcommands: std::collections::BTreeMap<String, Subcommand>,
+    /// Custom predicate definitions vended by this plugin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_predicates: Vec<CustomPredicate>,
 }
 
 impl Plugin {
     /// Check if this plugin's activation predicates hold in `ctx`.
-    pub fn applies(&self, ctx: &crate::predicate::PredicateContext) -> bool {
+    pub fn applies(&self, ctx: &mut crate::predicate::PredicateContext) -> bool {
         self.predicates.evaluate(ctx)
     }
 
@@ -352,7 +367,7 @@ impl Plugin {
     /// separately.
     pub fn applicable_mcp_servers(
         &self,
-        ctx: &crate::predicate::PredicateContext,
+        ctx: &mut crate::predicate::PredicateContext,
     ) -> Vec<McpServerEntry> {
         self.mcp_servers
             .iter()
@@ -694,6 +709,52 @@ pub struct StandaloneSkill {
     pub origin: crate::skills::SkillOrigin,
 }
 
+/// A resolved custom predicate definition in the registry.
+///
+/// Stores the plugin index and predicate index within that plugin so that
+/// acquisition can look up the `Installation` later.
+#[derive(Debug, Clone)]
+pub struct ResolvedCustomPredicate {
+    /// Index into `PluginRegistry.plugins` for the owning plugin.
+    pub plugin_index: usize,
+    /// The command installation name on the owning plugin.
+    pub command: String,
+    /// Static args passed before the dynamic raw-arg.
+    pub args: Vec<String>,
+}
+
+/// Global registry of custom predicates collected from all plugins.
+///
+/// Built unconditionally from every plugin's `[[predicate]]` entries (regardless
+/// of whether the plugin is "active" in the current workspace). Collisions
+/// (same name from two plugins) are excluded and warned at load time.
+#[derive(Debug, Default)]
+pub struct CustomPredicateRegistry {
+    entries: std::collections::HashMap<String, ResolvedCustomPredicate>,
+}
+
+impl CustomPredicateRegistry {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn get(&self, name: &str) -> Option<&ResolvedCustomPredicate> {
+        self.entries.get(name)
+    }
+
+    pub fn contains_key(&self, name: &str) -> bool {
+        self.entries.contains_key(name)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &ResolvedCustomPredicate)> {
+        self.entries.iter()
+    }
+}
+
 /// Loaded plugin registry: plugins from TOML manifests and standalone skills
 /// discovered directly in plugin source directories.
 #[derive(Debug)]
@@ -705,6 +766,8 @@ pub struct PluginRegistry {
     pub standalone_skills: Vec<StandaloneSkill>,
     /// Non-fatal load warnings for plugins or standalone skills that were skipped.
     pub warnings: Vec<LoadWarning>,
+    /// Global custom predicate registry. Built from all plugins' `custom_predicates`.
+    pub custom_predicates: CustomPredicateRegistry,
 }
 
 /// A non-fatal plugin source load failure.
@@ -722,6 +785,17 @@ struct SourceDirContents {
     plugins: Vec<Result<ParsedPlugin>>,
     /// Paths to discovered `SKILL.md` files (after recursive search and pruning).
     skill_files: Vec<PathBuf>,
+}
+
+/// A `[[predicate]]` entry in the raw TOML manifest.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCustomPredicate {
+    name: String,
+    /// Named installation or inline installation table.
+    command: RawInstallationRef,
+    #[serde(default)]
+    args: Vec<String>,
 }
 
 /// Raw TOML manifest deserialized from a plugin `.toml` file.
@@ -745,6 +819,8 @@ struct RawPluginManifest {
     /// `Plugin` is plural (`subcommands`).
     #[serde(default)]
     subcommand: std::collections::BTreeMap<String, RawSubcommand>,
+    #[serde(default)]
+    predicate: Vec<RawCustomPredicate>,
 }
 
 /// `[[installations]]` entry: a name plus the same fields as a `RawInlineInstallation`.
@@ -1102,10 +1178,13 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
         "plugin registry loaded"
     );
 
+    let custom_predicates = build_custom_predicate_registry(&plugins, &mut warnings);
+
     PluginRegistry {
         plugins,
         standalone_skills,
         warnings,
+        custom_predicates,
     }
 }
 
@@ -1483,13 +1562,28 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
         subcommands.insert(name, sub);
     }
 
+    let mut custom_predicates = Vec::with_capacity(manifest.predicate.len());
+    for raw in manifest.predicate {
+        custom_predicates.push(validate_custom_predicate(
+            raw,
+            &mut installations,
+            &mut names,
+        )?);
+    }
+
     let predicates =
         crate::predicate::PredicateSet::merged(Some(manifest.crates), manifest.predicates);
 
-    // Every plugin must reference at least one crate somewhere — at the plugin,
-    // skill-group, hook, or MCP-server level — via `crates` or a `crate(...)`
-    // predicate. Otherwise it would never apply to any project.
-    let mentions_crate = predicates.mentions_crate()
+    // Every plugin must reference at least one crate (or custom predicate)
+    // somewhere — at the plugin, skill-group, hook, or MCP-server level — via
+    // `crates`, a `crate(...)` predicate, or a custom predicate. Otherwise it
+    // would never apply to any project.
+    let has_custom_predicate = predicates
+        .predicates
+        .iter()
+        .any(|p| matches!(p, crate::predicate::Predicate::Custom { .. }));
+    let mentions_crate = has_custom_predicate
+        || predicates.mentions_crate()
         || manifest
             .skills
             .iter()
@@ -1517,6 +1611,7 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
         skills: manifest.skills,
         mcp_servers: manifest.mcp_servers,
         subcommands,
+        custom_predicates,
     })
 }
 
@@ -1588,6 +1683,70 @@ fn validate_subcommand(
         command,
         predicates: crate::predicate::PredicateSet::merged(crates, predicates),
     })
+}
+
+/// Validate a `[[predicate]]` entry, promoting inline `command` if needed.
+fn validate_custom_predicate(
+    raw: RawCustomPredicate,
+    installations: &mut Vec<Installation>,
+    names: &mut std::collections::BTreeSet<String>,
+) -> Result<CustomPredicate> {
+    crate::predicate::validate_custom_predicate_name(&raw.name)?;
+
+    let command = resolve_or_promote(
+        raw.command,
+        installations,
+        names,
+        &mut || format!("__pred_{}", raw.name),
+        &format!("predicate `{}`", raw.name),
+    )?;
+
+    Ok(CustomPredicate {
+        name: raw.name,
+        command,
+        args: raw.args,
+    })
+}
+
+/// Collect custom predicates from all plugins, detecting collisions.
+fn build_custom_predicate_registry(
+    plugins: &[ParsedPlugin],
+    warnings: &mut Vec<LoadWarning>,
+) -> CustomPredicateRegistry {
+    let mut entries = std::collections::HashMap::new();
+    let mut collisions: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (plugin_idx, parsed) in plugins.iter().enumerate() {
+        for cp in &parsed.plugin.custom_predicates {
+            if collisions.contains(&cp.name) {
+                continue;
+            }
+            if let Some(existing) = entries.get(&cp.name) {
+                let existing: &ResolvedCustomPredicate = existing;
+                let existing_plugin_name = &plugins[existing.plugin_index].plugin.name;
+                warnings.push(LoadWarning {
+                    path: parsed.path.clone(),
+                    message: format!(
+                        "custom predicate `{}` defined by both `{}` and `{}` — skipping both",
+                        cp.name, existing_plugin_name, parsed.plugin.name
+                    ),
+                });
+                entries.remove(&cp.name);
+                collisions.insert(cp.name.clone());
+            } else {
+                entries.insert(
+                    cp.name.clone(),
+                    ResolvedCustomPredicate {
+                        plugin_index: plugin_idx,
+                        command: cp.command.clone(),
+                        args: cp.args.clone(),
+                    },
+                );
+            }
+        }
+    }
+
+    CustomPredicateRegistry { entries }
 }
 
 /// Validate skill-group source constraints that serde alone cannot express.
@@ -2196,8 +2355,9 @@ mod tests {
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
-        assert!(plugin_wildcard.applies(&ctx(&workspace_crates)));
+        assert!(plugin_wildcard.applies(&mut ctx(&workspace_crates)));
 
         // Plugin targeting serde - should apply
         let plugin_serde = Plugin {
@@ -2208,8 +2368,9 @@ mod tests {
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
-        assert!(plugin_serde.applies(&ctx(&workspace_crates)));
+        assert!(plugin_serde.applies(&mut ctx(&workspace_crates)));
 
         // Plugin targeting non-existent crate - should not apply
         let plugin_other = Plugin {
@@ -2220,8 +2381,9 @@ mod tests {
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
-        assert!(!plugin_other.applies(&ctx(&workspace_crates)));
+        assert!(!plugin_other.applies(&mut ctx(&workspace_crates)));
 
         // Plugin with version predicate - should reject wrong version
         let plugin_version = Plugin {
@@ -2232,8 +2394,9 @@ mod tests {
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
-        assert!(!plugin_version.applies(&ctx(&workspace_crates)));
+        assert!(!plugin_version.applies(&mut ctx(&workspace_crates)));
     }
 
     #[test]
@@ -3762,5 +3925,87 @@ mod tests {
         let plugin = from_str(toml).expect("parse");
         let sub = &plugin.subcommands["foo"];
         assert!(sub.predicates.references_crate("serde"));
+    }
+
+    // --- custom predicate collision tests ---
+
+    fn make_plugin_with_predicate(plugin_name: &str, predicate_name: &str) -> ParsedPlugin {
+        ParsedPlugin {
+            path: std::path::PathBuf::from(format!("{plugin_name}.toml")),
+            plugin: Plugin {
+                name: plugin_name.to_string(),
+                predicates: pred_set("*"),
+                installations: vec![Installation {
+                    name: "checker".to_string(),
+                    source: None,
+                    executable: Some("/bin/true".to_string()),
+                    script: None,
+                    args: vec![],
+                    requirements: vec![],
+                    install_commands: vec![],
+                }],
+                hooks: vec![],
+                skills: vec![],
+                mcp_servers: vec![],
+                subcommands: BTreeMap::new(),
+                custom_predicates: vec![CustomPredicate {
+                    name: predicate_name.to_string(),
+                    command: "checker".to_string(),
+                    args: vec![],
+                }],
+            },
+            source_name: "test".into(),
+            source_dir: std::path::PathBuf::from("/test"),
+        }
+    }
+
+    #[test]
+    fn custom_predicate_registry_no_collision() {
+        let plugins = vec![
+            make_plugin_with_predicate("alpha", "foo"),
+            make_plugin_with_predicate("beta", "bar"),
+        ];
+        let mut warnings = vec![];
+        let registry = build_custom_predicate_registry(&plugins, &mut warnings);
+        assert!(warnings.is_empty());
+        assert_eq!(registry.len(), 2);
+        assert!(registry.contains_key("foo"));
+        assert!(registry.contains_key("bar"));
+    }
+
+    #[test]
+    fn custom_predicate_registry_two_way_collision() {
+        let plugins = vec![
+            make_plugin_with_predicate("alpha", "shared"),
+            make_plugin_with_predicate("beta", "shared"),
+        ];
+        let mut warnings = vec![];
+        let registry = build_custom_predicate_registry(&plugins, &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("shared"));
+        assert!(warnings[0].message.contains("alpha"));
+        assert!(warnings[0].message.contains("beta"));
+        assert!(
+            !registry.contains_key("shared"),
+            "collided predicate must be removed"
+        );
+    }
+
+    #[test]
+    fn custom_predicate_registry_three_way_collision() {
+        let plugins = vec![
+            make_plugin_with_predicate("alpha", "shared"),
+            make_plugin_with_predicate("beta", "shared"),
+            make_plugin_with_predicate("gamma", "shared"),
+        ];
+        let mut warnings = vec![];
+        let registry = build_custom_predicate_registry(&plugins, &mut warnings);
+        // Warning is emitted only on the second occurrence (alpha vs beta);
+        // the third (gamma) sees the name in the collision set and skips.
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            !registry.contains_key("shared"),
+            "collided predicate must be removed"
+        );
     }
 }
