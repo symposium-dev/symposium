@@ -457,6 +457,8 @@ Each `[[predicate]]` entry defines a custom predicate function that can be used 
 
 ### How custom predicates work
 
+Custom predicates are registered globally — a predicate defined in one plugin can be used by any other plugin's `predicates` expressions. Registration is unconditional: even if the defining plugin's own crate predicates don't match the current workspace, its `[[predicate]]` entries are still available.
+
 When a predicate expression uses a function name that isn't a builtin, Symposium looks it up in the custom predicate registry. If found, it spawns the declared command with the static `args` followed by the raw argument text from the expression.
 
 ```toml
