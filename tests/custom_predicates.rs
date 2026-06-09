@@ -167,6 +167,82 @@ async fn sync_custom_predicate_wrong_argument_fails() {
     .unwrap();
 }
 
+/// A predicate defined by one plugin can be used by a different plugin.
+/// The provider-plugin defines `my_check`; the consumer-plugin uses it.
+#[tokio::test]
+async fn sync_custom_predicate_cross_plugin() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["custom-predicate-cross0"],
+        async |mut ctx| {
+            let script_path = ctx.tempdir.join("cross-checker.sh");
+            write_script(&script_path, "exit 0");
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let skills_dir = ctx
+                .workspace_root
+                .as_ref()
+                .unwrap()
+                .join(".claude")
+                .join("skills");
+            assert!(
+                skills_dir.join("consumer-skill").join("SKILL.md").exists(),
+                "consumer plugin skill should install when provider's predicate passes; \
+                 skills_dir={}, contents={:?}",
+                skills_dir.display(),
+                std::fs::read_dir(&skills_dir)
+                    .ok()
+                    .map(|d| d.flatten().map(|e| e.path()).collect::<Vec<_>>()),
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Cross-plugin predicate: when the provider's predicate fails, the consumer's
+/// skill is not installed.
+#[tokio::test]
+async fn sync_custom_predicate_cross_plugin_fails() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["custom-predicate-cross0"],
+        async |mut ctx| {
+            let script_path = ctx.tempdir.join("cross-checker.sh");
+            write_script(&script_path, "exit 1");
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let skills_dir = ctx
+                .workspace_root
+                .as_ref()
+                .unwrap()
+                .join(".claude")
+                .join("skills");
+            let entries: Vec<_> = std::fs::read_dir(&skills_dir)
+                .ok()
+                .map(|d| {
+                    d.flatten()
+                        .filter(|e| e.path().is_dir())
+                        .filter(|e| e.path().join("SKILL.md").exists())
+                        .collect()
+                })
+                .unwrap_or_default();
+            assert!(
+                entries.is_empty(),
+                "consumer skill should NOT install when provider's predicate fails"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// A custom predicate that returns witness JSON drives `source = "crate"` resolution.
 /// The predicate script outputs `{"selectedCrates": [...]}` naming bp-crate,
 /// and the skill from that crate's skills/ directory gets installed.
