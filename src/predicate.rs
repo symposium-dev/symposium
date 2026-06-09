@@ -979,9 +979,21 @@ mod tests {
         // Function-call syntax is rejected in the `crates` field.
         assert!(CrateList::parse("bp(cli, web)").is_err());
         assert!(CrateList::parse("serde, bp(a, b)").is_err());
+        assert!(CrateList::parse("all()").is_err());
+        assert!(CrateList::parse("crate(serde)").is_err());
+        assert!(CrateList::parse("not(serde)").is_err());
+        assert!(CrateList::parse("shell(true)").is_err());
     }
 
     // --- function-call parsing ---
+
+    #[test]
+    fn predicates_field_rejects_bare_names() {
+        // The `predicates` field requires function-call syntax.
+        assert!(parse("serde").is_err());
+        assert!(parse("tokio>=1.0").is_err());
+        assert!(parse("*").is_err());
+    }
 
     #[test]
     fn parse_function_calls() {
