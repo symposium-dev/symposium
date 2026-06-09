@@ -930,8 +930,9 @@ fn parse_witness_stdout(predicate_name: &str, stdout: &[u8]) -> Option<Vec<Witne
                 tracing::warn!(
                     predicate = predicate_name,
                     error = %e,
-                    "skipping witness crate with invalid format"
+                    "witness crate has invalid format — treating predicate as failed"
                 );
+                return None;
             }
         }
     }
@@ -1606,16 +1607,15 @@ mod tests {
     }
 
     #[test]
-    fn witness_custom_invalid_version() {
+    fn witness_custom_invalid_version_fails_predicate() {
         let json = r#"{"selectedCrates":[{"crate":"good","version":"1.0.0"},{"crate":"bad","version":"not-semver"}]}"#;
         let (mut ctx, _script) = ctx_with_script_entry("bp", &format!("printf '{json}'"));
         let pred = Predicate::Custom {
             name: "bp".into(),
             arg: "x".into(),
         };
-        let witness = pred.witness(&mut ctx).unwrap();
-        assert_eq!(witness.len(), 1);
-        assert_eq!(witness[0].0, "good");
+        // Any malformed entry fails the whole predicate.
+        assert!(!pred.evaluate(&mut ctx));
     }
 
     #[test]
