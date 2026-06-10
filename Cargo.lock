@@ -2449,6 +2449,7 @@ dependencies = [
  "sha2",
  "symposium-hook",
  "symposium-install",
+ "symposium-sdk",
  "symposium-testlib",
  "tar",
  "tempfile",
@@ -2490,6 +2491,16 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "symposium-sdk"
+version = "0.1.0"
+dependencies = [
+ "semver",
+ "serde",
+ "serde_json",
+ "symposium-hook",
 ]
 
 [[package]]

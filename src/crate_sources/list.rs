@@ -5,15 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use cargo_metadata::{CargoOpt, MetadataCommand};
 
-/// A crate in the workspace's dependency graph.
-#[derive(Debug, Clone)]
-pub struct WorkspaceCrate {
-    pub name: String,
-    pub version: semver::Version,
-    /// Local source path for path dependencies (from `cargo metadata`).
-    /// `None` for registry crates.
-    pub path: Option<PathBuf>,
-}
+pub use symposium_sdk::workspace::WorkspaceCrate;
 
 /// Load workspace crates with parsed versions and local path overrides.
 ///
