@@ -50,7 +50,7 @@ struct DiskCache {
 /// Subsequent in-process calls return the cached Arc directly.
 pub struct WorkspaceDeps {
     cwd: PathBuf,
-    dirs: Option<crate::dirs::SymposiumDirs>,
+    dirs: crate::dirs::SymposiumDirs,
     /// Lazily resolved workspace-specific cache dir. `Some(Some(..))` = resolved,
     /// `Some(None)` = resolved to "not in a workspace", `None` = not yet resolved.
     resolved_cache_dir: Option<Option<PathBuf>>,
@@ -58,21 +58,10 @@ pub struct WorkspaceDeps {
 }
 
 impl WorkspaceDeps {
-    /// Create without directory context (no disk caching, default cargo binary).
-    pub fn new(cwd: impl Into<PathBuf>) -> Self {
+    pub fn new(cwd: impl Into<PathBuf>, dirs: &crate::dirs::SymposiumDirs) -> Self {
         Self {
             cwd: cwd.into(),
-            dirs: None,
-            resolved_cache_dir: None,
-            cached: None,
-        }
-    }
-
-    /// Create with full directory context (enables disk caching and cargo override).
-    pub fn with_dirs(cwd: impl Into<PathBuf>, dirs: &crate::dirs::SymposiumDirs) -> Self {
-        Self {
-            cwd: cwd.into(),
-            dirs: Some(dirs.clone()),
+            dirs: dirs.clone(),
             resolved_cache_dir: None,
             cached: None,
         }
@@ -92,8 +81,7 @@ impl WorkspaceDeps {
         }
 
         // Cache miss: run cargo metadata.
-        let cargo_path = self.dirs.as_ref().and_then(|d| d.cargo_override.as_deref());
-        let loaded = load_workspace(&self.cwd, cargo_path)?;
+        let loaded = load_workspace(&self.cwd, self.dirs.cargo_override.as_deref())?;
 
         // Write through to disk cache.
         self.write_disk_cache(&loaded);
@@ -125,12 +113,11 @@ impl WorkspaceDeps {
     }
 
     fn compute_workspace_cache_dir(&self) -> Option<PathBuf> {
-        let dirs = self.dirs.as_ref()?;
-        let cargo_path = dirs.cargo_override.as_deref();
-        let root = locate_workspace_root(&self.cwd, cargo_path)?;
+        let root = locate_workspace_root(&self.cwd, self.dirs.cargo_override.as_deref())?;
         let canonical = fs::canonicalize(&root).unwrap_or(root);
         Some(
-            dirs.cache_dir
+            self.dirs
+                .cache_dir
                 .join("workspaces")
                 .join(workspace_dir_name(&canonical)),
         )

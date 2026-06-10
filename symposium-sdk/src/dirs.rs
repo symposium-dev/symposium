@@ -56,7 +56,7 @@ impl SymposiumDirs {
     /// Create a [`WorkspaceDeps`] with disk caching enabled and the
     /// correct cargo override.
     pub fn workspace_deps(&self, cwd: &Path) -> WorkspaceDeps {
-        WorkspaceDeps::with_dirs(cwd, self)
+        WorkspaceDeps::new(cwd, self)
     }
 }
 

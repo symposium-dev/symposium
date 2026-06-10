@@ -863,7 +863,7 @@ mod tests {
     async fn builtin_pre_tool_use_returns_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        let mut deps = WorkspaceDeps::new(tmp.path());
+        let mut deps = sym.workspace_deps(tmp.path());
         let input = symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
             "Bash".to_string(),
             serde_json::Value::default(),
@@ -878,7 +878,7 @@ mod tests {
     async fn builtin_post_tool_use_returns_empty_for_now() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        let mut deps = WorkspaceDeps::new(tmp.path());
+        let mut deps = sym.workspace_deps(tmp.path());
         let input = symposium::InputEvent::PostToolUse(symposium::PostToolUseInput::new(
             "Bash".to_string(),
             serde_json::json!({"command": "ls"}),
@@ -894,7 +894,7 @@ mod tests {
     async fn builtin_user_prompt_submit_returns_empty_for_now() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        let mut deps = WorkspaceDeps::new(tmp.path());
+        let mut deps = sym.workspace_deps(tmp.path());
         let input = symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput::new(
             "Use tokio for async".to_string(),
             Some("test-session".to_string()),
