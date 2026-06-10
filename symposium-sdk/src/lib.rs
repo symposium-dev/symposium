@@ -48,5 +48,6 @@
 
 pub use symposium_hook as hook;
 
+pub mod dirs;
 pub mod predicate;
 pub mod workspace;

@@ -8,6 +8,7 @@ repository = "https://github.com/symposium-dev/symposium"
 
 [dependencies]
 cargo_metadata = "0.18"
+dirs = "6.0.0"
 semver = { version = "1.0", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

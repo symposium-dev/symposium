@@ -2498,6 +2498,7 @@ name = "symposium-sdk"
 version = "0.1.0"
 dependencies = [
  "cargo_metadata",
+ "dirs",
  "semver",
  "serde",
  "serde_json",
