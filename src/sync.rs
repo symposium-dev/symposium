@@ -7,6 +7,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
 
@@ -23,13 +24,9 @@ use crate::skills;
 /// user-managed skill directories (which lack the marker) untouched.
 const MARKER_FILE: &str = ".symposium";
 
-/// Create `path` (and any missing ancestors up to `boundary`), writing a
-/// `.gitignore` file containing `*` into each directory we newly create.
+/// Create `path` and any missing ancestors up to `boundary`.
 ///
-/// `boundary` is the workspace root — we never walk above it, and we do not
-/// write a `.gitignore` there (it already exists and isn't ours to manage).
-/// If `path` or an ancestor already exists, no `.gitignore` is added — we
-/// only annotate directories we actually create.
+/// `boundary` is the workspace root — we never walk above it.
 pub(crate) fn create_managed_dir_all(path: &Path, boundary: &Path) -> Result<()> {
     if path.exists() {
         return Ok(());
@@ -42,10 +39,6 @@ pub(crate) fn create_managed_dir_all(path: &Path, boundary: &Path) -> Result<()>
         create_managed_dir_all(parent, boundary)?;
     }
     fs::create_dir(path).with_context(|| format!("create {}", path.display()))?;
-    let gi = path.join(".gitignore");
-    if !gi.exists() {
-        fs::write(&gi, "*\n").with_context(|| format!("write {}", gi.display()))?;
-    }
     Ok(())
 }
 
@@ -124,44 +117,116 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Propagate a user-authored skill from `.agents/skills/<name>/` to
-/// `dest_dir`, returning `Ok(true)` if propagation happened (so the caller
-/// should record `dest_dir` as installed).
+/// Collect all regular files in `dir` recursively, returning paths relative
+/// to `dir` paired with their contents. Skips the `.symposium` marker and
+/// `.gitignore` since those are managed metadata, not skill content.
+fn collect_dir_contents(dir: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>> {
+    let mut result = Vec::new();
+    collect_dir_contents_inner(dir, dir, &mut result)?;
+    result.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(result)
+}
+
+fn collect_dir_contents_inner(
+    base: &Path,
+    dir: &Path,
+    out: &mut Vec<(PathBuf, Vec<u8>)>,
+) -> Result<()> {
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e).with_context(|| format!("read {}", dir.display())),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            collect_dir_contents_inner(base, &path, out)?;
+        } else if file_type.is_file() {
+            let rel = path.strip_prefix(base).unwrap_or(&path).to_path_buf();
+            let name = rel.to_string_lossy();
+            if name == MARKER_FILE || name == ".gitignore" {
+                continue;
+            }
+            let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+            out.push((rel, bytes));
+        }
+    }
+    Ok(())
+}
+
+/// Returns true if the source directory's content differs from the
+/// destination's content (ignoring managed metadata files).
+fn dir_contents_differ(source_dir: &Path, dest_dir: &Path) -> Result<bool> {
+    let src = collect_dir_contents(source_dir)?;
+    let dst = collect_dir_contents(dest_dir)?;
+    Ok(src != dst)
+}
+
+/// Synchronize a skill directory from `source_dir` into `dest_dir`.
 ///
-/// Leaves `dest_dir` alone if it exists and lacks the `.symposium` marker —
-/// the user put something there by hand and we must not clobber it.
-fn propagate_user_skill(source_dir: &Path, dest_dir: &Path, project_root: &Path) -> Result<bool> {
+/// This is the single function used by both the plugin-skill and
+/// user-authored-skill code paths. It:
+/// 1. Checks whether `dest_dir` is debounce-fresh (marker mtime < `debounce`)
+///    — if so, skips entirely.
+/// 2. Compares source and dest content — if identical, touches the marker
+///    to reset the debounce window and returns without modifying content.
+/// 3. Otherwise removes `dest_dir`, re-creates it with the source content,
+///    and writes the marker + gitignore.
+///
+/// Returns `Ok(true)` if the destination was created or updated (callers
+/// record it as installed). Returns `Ok(false)` if skipped (no-op).
+fn sync_skill_dir(
+    source_dir: &Path,
+    dest_dir: &Path,
+    project_root: &Path,
+    debounce: Duration,
+) -> Result<bool> {
     if dest_dir == source_dir {
         return Ok(false);
     }
 
-    let target_is_managed = has_symposium_marker(dest_dir);
-    if dest_dir.exists() && !target_is_managed {
-        tracing::info!(
-            report = %crate::report::ReportEvent::Warning {
-                message: format!(
-                    "skipping propagation to {}: user-managed skill already present",
-                    display_path(dest_dir)
-                ),
-            },
-        );
+    // If the destination doesn't exist yet, do a fresh install.
+    if !dest_dir.exists() {
+        create_managed_dir_all(dest_dir, project_root)?;
+        copy_dir_recursive(source_dir, dest_dir)?;
+        mark_generated_skill_directory(dest_dir)?;
+        return Ok(true);
+    }
+
+    // Debounce: if we synced recently, skip the content comparison.
+    let marker_path = dest_dir.join(MARKER_FILE);
+    if !debounce.is_zero()
+        && let Ok(meta) = fs::metadata(&marker_path)
+        && let Ok(mtime) = meta.modified()
+        && let Ok(elapsed) = SystemTime::now().duration_since(mtime)
+        && elapsed < debounce
+    {
+        tracing::debug!(dest = %dest_dir.display(), "skill sync debounced");
         return Ok(false);
     }
 
-    // Clear any prior symposium-managed copy so removed files don't linger.
-    if dest_dir.exists() {
-        fs::remove_dir_all(dest_dir).with_context(|| format!("remove {}", dest_dir.display()))?;
+    // Compare content (excluding managed metadata).
+    if !dir_contents_differ(source_dir, dest_dir)? {
+        // Content is identical — just touch the marker to reset debounce.
+        touch_marker(&marker_path)?;
+        return Ok(false);
     }
 
+    // Content changed: replace entirely.
+    fs::remove_dir_all(dest_dir).with_context(|| format!("remove {}", dest_dir.display()))?;
     create_managed_dir_all(dest_dir, project_root)?;
     copy_dir_recursive(source_dir, dest_dir)?;
-
-    // The copy may have clobbered any marker or `.gitignore` written by
-    // `create_managed_dir_all`, so re-apply them. This also guarantees a
-    // uniform "symposium-managed" shape regardless of what the source
-    // skill directory happened to contain.
     mark_generated_skill_directory(dest_dir)?;
     Ok(true)
+}
+
+/// Update the marker file's mtime to now without changing content.
+fn touch_marker(marker_path: &Path) -> Result<()> {
+    fs::write(marker_path, "")
+        .with_context(|| format!("touch marker {}", marker_path.display()))?;
+    Ok(())
 }
 
 /// Resolve custom predicate installations from the registry into entries
@@ -228,6 +293,7 @@ async fn resolve_custom_predicate_entries(
 pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
     let out = &Output::quiet();
     let project_root = crate::init::find_workspace_root(sym, cwd)?;
+    let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
     // Load plugin registry and workspace deps
@@ -333,6 +399,18 @@ pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
             .context("failed to register MCP servers")?;
 
         for (skill_name, origin, skill_source) in &to_install {
+            // `skill_source` is the path to the SKILL.md file; the skill
+            // directory is its parent.
+            let source_dir = match skill_source.parent() {
+                Some(p) => p,
+                None => {
+                    out.warn(format!(
+                        "skill {skill_name}: cannot determine source directory"
+                    ));
+                    continue;
+                }
+            };
+
             // Pick the install dir name for this skill on *this* agent:
             // - If exactly one origin claims the name and the un-suffixed
             //   slot is "available" (nonexistent or symposium-managed),
@@ -350,26 +428,21 @@ pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
             };
             let dest_dir = agent.project_skill_dir(&project_root, &dir_name);
 
-            // Create the destination (and any missing parents) with a `*` gitignore
-            // in each new directory.
-            if let Err(e) = create_managed_dir_all(&dest_dir, &project_root) {
+            // If the dest exists but is user-managed, skip it.
+            if dest_dir.exists() && !has_symposium_marker(&dest_dir) {
                 tracing::info!(
                     report = %crate::report::ReportEvent::Warning {
-                        message: format!("failed to create {}: {e}", display_path(&dest_dir)),
+                        message: format!(
+                            "skipping {}: user-managed skill already present",
+                            display_path(&dest_dir)
+                        ),
                     },
                 );
                 continue;
             }
 
-            match agent.install_skill(skill_source, &dest_dir) {
-                Ok(()) => {
-                    if let Err(e) = mark_generated_skill_directory(&dest_dir) {
-                        tracing::info!(
-                            report = %crate::report::ReportEvent::Warning {
-                                message: format!("failed to mark {}: {e}", display_path(&dest_dir)),
-                            },
-                        );
-                    }
+            match sync_skill_dir(source_dir, &dest_dir, &project_root, debounce) {
+                Ok(true) => {
                     installed_dirs.insert(dest_dir.clone());
                     tracing::info!(
                         report = %crate::report::ReportEvent::SkillInstalled {
@@ -378,6 +451,11 @@ pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
                             dest: display_path(&dest_dir),
                         },
                     );
+                }
+                Ok(false) => {
+                    // Debounced or unchanged — still record as installed
+                    // so stale-cleanup doesn't remove it.
+                    installed_dirs.insert(dest_dir.clone());
                 }
                 Err(e) => {
                     tracing::info!(
@@ -410,7 +488,23 @@ pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
                         None => continue,
                     };
                     let dest_dir = agent.project_skill_dir(&project_root, name);
-                    match propagate_user_skill(source_dir, &dest_dir, &project_root) {
+
+                    if dest_dir == *source_dir {
+                        continue;
+                    }
+                    if dest_dir.exists() && !has_symposium_marker(&dest_dir) {
+                        tracing::info!(
+                            report = %crate::report::ReportEvent::Warning {
+                                message: format!(
+                                    "skipping propagation to {}: user-managed skill already present",
+                                    display_path(&dest_dir)
+                                ),
+                            },
+                        );
+                        continue;
+                    }
+
+                    match sync_skill_dir(source_dir, &dest_dir, &project_root, debounce) {
                         Ok(true) => {
                             installed_dirs.insert(dest_dir.clone());
                             tracing::info!(
@@ -421,7 +515,13 @@ pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
                                 },
                             );
                         }
-                        Ok(false) => {}
+                        Ok(false) => {
+                            // Debounced or unchanged — still record as
+                            // installed so stale-cleanup doesn't remove it.
+                            if dest_dir.exists() {
+                                installed_dirs.insert(dest_dir.clone());
+                            }
+                        }
                         Err(e) => {
                             tracing::info!(
                                 report = %crate::report::ReportEvent::Warning {
