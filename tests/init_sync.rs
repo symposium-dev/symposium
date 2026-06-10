@@ -1301,6 +1301,51 @@ async fn agents_syncing_does_not_overwrite_user_managed_target() {
     .unwrap();
 }
 
+/// Modifying a user-authored skill in `.agents/skills/` is detected on the
+/// next sync and propagated to the destination (e.g. `.claude/skills/`).
+#[tokio::test]
+async fn agents_syncing_detects_modified_source_skill() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0", "user-skills0"],
+        async |mut ctx| {
+            ctx.sym.config.sync_debounce_secs = 0;
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let source = workspace_root.join(".agents/skills/user-authored-skill/SKILL.md");
+            let dest = workspace_root.join(".claude/skills/user-authored-skill/SKILL.md");
+
+            // Sanity: initial propagation worked.
+            assert!(dest.exists(), "skill should be propagated on first sync");
+            let original = std::fs::read_to_string(&dest)?;
+
+            // Modify the source skill.
+            std::fs::write(
+                &source,
+                "---\nname: user-authored-skill\n---\n\n# Updated content\n",
+            )?;
+
+            // Re-sync — should detect the change and update the destination.
+            ctx.symposium(&["sync"]).await?;
+
+            let updated = std::fs::read_to_string(&dest)?;
+            assert_ne!(
+                updated, original,
+                "destination should reflect updated source"
+            );
+            assert!(
+                updated.contains("Updated content"),
+                "destination should contain new content"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 // ---------------------------------------------------------------------------
 // Self-update / state integration tests
 // ---------------------------------------------------------------------------

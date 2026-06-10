@@ -97,9 +97,6 @@ fn discover_user_authored_skills(project_root: &Path) -> Vec<PathBuf> {
     skills
 }
 
-/// How long after a successful sync we skip re-checking a skill directory.
-const SYNC_DEBOUNCE: Duration = Duration::from_secs(5);
-
 /// Recursively copy the contents of `src` into `dst`. Creates `dst` if
 /// missing. Regular files are copied with `fs::copy`; subdirectories are
 /// walked. Symlinks and other special files are ignored.
@@ -171,8 +168,8 @@ fn dir_contents_differ(source_dir: &Path, dest_dir: &Path) -> Result<bool> {
 ///
 /// This is the single function used by both the plugin-skill and
 /// user-authored-skill code paths. It:
-/// 1. Checks whether `dest_dir` is debounce-fresh (marker mtime < 60s) — if
-///    so, skips entirely.
+/// 1. Checks whether `dest_dir` is debounce-fresh (marker mtime < `debounce`)
+///    — if so, skips entirely.
 /// 2. Compares source and dest content — if identical, touches the marker
 ///    to reset the debounce window and returns without modifying content.
 /// 3. Otherwise removes `dest_dir`, re-creates it with the source content,
@@ -180,7 +177,12 @@ fn dir_contents_differ(source_dir: &Path, dest_dir: &Path) -> Result<bool> {
 ///
 /// Returns `Ok(true)` if the destination was created or updated (callers
 /// record it as installed). Returns `Ok(false)` if skipped (no-op).
-fn sync_skill_dir(source_dir: &Path, dest_dir: &Path, project_root: &Path) -> Result<bool> {
+fn sync_skill_dir(
+    source_dir: &Path,
+    dest_dir: &Path,
+    project_root: &Path,
+    debounce: Duration,
+) -> Result<bool> {
     if dest_dir == source_dir {
         return Ok(false);
     }
@@ -195,10 +197,11 @@ fn sync_skill_dir(source_dir: &Path, dest_dir: &Path, project_root: &Path) -> Re
 
     // Debounce: if we synced recently, skip the content comparison.
     let marker_path = dest_dir.join(MARKER_FILE);
-    if let Ok(meta) = fs::metadata(&marker_path)
+    if !debounce.is_zero()
+        && let Ok(meta) = fs::metadata(&marker_path)
         && let Ok(mtime) = meta.modified()
         && let Ok(elapsed) = SystemTime::now().duration_since(mtime)
-        && elapsed < SYNC_DEBOUNCE
+        && elapsed < debounce
     {
         tracing::debug!(dest = %dest_dir.display(), "skill sync debounced");
         return Ok(false);
@@ -290,6 +293,7 @@ async fn resolve_custom_predicate_entries(
 pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
     let out = &Output::quiet();
     let project_root = crate::init::find_workspace_root(sym, cwd)?;
+    let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
     // Load plugin registry and workspace deps
@@ -437,7 +441,7 @@ pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
                 continue;
             }
 
-            match sync_skill_dir(source_dir, &dest_dir, &project_root) {
+            match sync_skill_dir(source_dir, &dest_dir, &project_root, debounce) {
                 Ok(true) => {
                     installed_dirs.insert(dest_dir.clone());
                     tracing::info!(
@@ -500,7 +504,7 @@ pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
                         continue;
                     }
 
-                    match sync_skill_dir(source_dir, &dest_dir, &project_root) {
+                    match sync_skill_dir(source_dir, &dest_dir, &project_root, debounce) {
                         Ok(true) => {
                             installed_dirs.insert(dest_dir.clone());
                             tracing::info!(

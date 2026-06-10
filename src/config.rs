@@ -67,6 +67,11 @@ pub struct Config {
     #[serde(default = "default_true", rename = "agents-syncing")]
     pub agents_syncing: bool,
 
+    /// How many seconds after a successful sync we skip re-checking a skill
+    /// directory. Set to 0 to disable debouncing (useful in tests).
+    #[serde(default = "default_sync_debounce_secs", rename = "sync-debounce-secs")]
+    pub sync_debounce_secs: u64,
+
     /// Where to install agent hooks.
     #[serde(
         default,
@@ -125,6 +130,7 @@ impl Default for Config {
         Self {
             auto_sync: true,
             agents_syncing: true,
+            sync_debounce_secs: default_sync_debounce_secs(),
             hook_scope: HookScope::default(),
             auto_update: AutoUpdate::default(),
             agents: Vec::new(),
@@ -479,6 +485,10 @@ fn default_home() -> PathBuf {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_sync_debounce_secs() -> u64 {
+    5
 }
 
 fn default_level() -> String {
