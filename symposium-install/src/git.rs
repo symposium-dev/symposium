@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use crate::{InstallContext, UpdateLevel};
 
 /// Minimum interval between freshness checks for cached sources.
-const DEBOUNCE_DURATION: std::time::Duration = std::time::Duration::from_secs(60);
+const DEBOUNCE_DURATION: std::time::Duration = std::time::Duration::from_secs(5);
 
 // ── Public parsed-URL type ──────────────────────────────────────────────
 

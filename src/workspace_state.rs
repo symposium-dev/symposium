@@ -7,7 +7,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -92,14 +91,7 @@ pub fn find_workspace_root(sym: &Symposium, cwd: &Path) -> Option<PathBuf> {
 }
 
 fn file_mtime(path: &Path) -> Option<u64> {
-    let meta = fs::metadata(path).ok()?;
-    let mtime = meta.modified().ok()?;
-    Some(
-        mtime
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
-    )
+    symposium_sdk::workspace::file_mtime(path)
 }
 
 /// Check whether the cached mtime matches the current file state.
@@ -111,21 +103,7 @@ fn mtime_matches(cached: Option<u64>, path: &Path) -> bool {
 }
 
 fn workspace_dir_name(workspace_root: &Path) -> String {
-    use sha2::{Digest, Sha256};
-    use std::fmt::Write;
-
-    let tail = workspace_root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("workspace");
-
-    let digest = Sha256::digest(workspace_root.as_os_str().as_encoded_bytes());
-    let mut hash = String::with_capacity(8);
-    for byte in &digest[..4] {
-        write!(hash, "{byte:02x}").unwrap();
-    }
-
-    format!("{tail}-{hash}")
+    symposium_sdk::workspace::workspace_dir_name(workspace_root)
 }
 
 fn state_file_path(sym: &Symposium, workspace_root: &Path) -> PathBuf {

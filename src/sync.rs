@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 
 use crate::agents::Agent;
 use crate::config::Symposium;
+use crate::crate_sources::WorkspaceDeps;
 use crate::output::{Output, display_path};
 use crate::plugins;
 use crate::skills;
@@ -291,14 +292,25 @@ async fn resolve_custom_predicate_entries(
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
 pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
+    let mut deps = sym.workspace_deps(cwd);
+    sync_with_deps(sym, &mut deps).await
+}
+
+/// Sync variant that shares a `WorkspaceDeps` cache with the caller.
+/// Used by `execute_hook` so that the auto-sync load is reused by later
+/// hook stages.
+pub async fn sync_with_deps(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
     let out = &Output::quiet();
-    let project_root = crate::init::find_workspace_root(sym, cwd)?;
+    let loaded = deps
+        .load()
+        .ok_or_else(|| anyhow::anyhow!("not in a Rust workspace"))?;
+    let project_root = loaded.root.clone();
+    let workspace: Vec<_> = loaded.crates.clone();
     let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
-    // Load plugin registry and workspace deps
+    // Load plugin registry
     let registry = plugins::load_registry(sym);
-    let workspace = crate::crate_sources::workspace_crates(&project_root);
 
     for warning in &registry.warnings {
         tracing::info!(

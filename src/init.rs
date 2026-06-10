@@ -1,9 +1,8 @@
 //! Init command: `cargo agents init`.
 
 use std::io::IsTerminal;
-use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use dialoguer::MultiSelect;
 
 use crate::agents::Agent;
@@ -199,32 +198,4 @@ fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {
         .interact()?;
 
     Ok(selections.into_iter().map(|i| agents[i]).collect())
-}
-
-// ---------------------------------------------------------------------------
-// Workspace detection
-// ---------------------------------------------------------------------------
-
-/// Find the workspace root using `cargo metadata`, run from the given directory.
-pub fn find_workspace_root(sym: &Symposium, cwd: &std::path::Path) -> Result<PathBuf> {
-    let output = sym
-        .cargo_command()
-        .args(["metadata", "--no-deps", "--format-version=1"])
-        .current_dir(cwd)
-        .output()
-        .context("failed to run cargo metadata")?;
-
-    if !output.status.success() {
-        bail!("not in a Rust workspace (cargo metadata failed)");
-    }
-
-    let metadata: serde_json::Value =
-        serde_json::from_slice(&output.stdout).context("failed to parse cargo metadata output")?;
-
-    let workspace_root = metadata
-        .get("workspace_root")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("cargo metadata missing workspace_root"))?;
-
-    Ok(PathBuf::from(workspace_root))
 }

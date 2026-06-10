@@ -7,7 +7,9 @@ description = "SDK for writing symposium plugins (hooks, custom predicates, subc
 repository = "https://github.com/symposium-dev/symposium"
 
 [dependencies]
+cargo_metadata = "0.18"
 semver = { version = "1.0", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 symposium-hook = { path = "../symposium-hook" }

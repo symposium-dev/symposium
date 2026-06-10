@@ -10,7 +10,7 @@ use std::{ffi::OsString, path::Path, process::ExitStatus};
 
 use crate::{
     config::Symposium,
-    crate_sources::{WorkspaceCrate, workspace_crates},
+    crate_sources::WorkspaceCrate,
     installation::{acquire_installation, resolve_runnable},
     plugins::{self, ParsedPlugin, Plugin, PluginRegistry, Subcommand},
 };
@@ -95,9 +95,10 @@ pub async fn dispatch_external(
     let forwarded = argv.collect::<Vec<_>>();
 
     let registry = plugins::load_registry(sym);
-    let workspace = workspace_crates(cwd);
+    let mut deps = sym.workspace_deps(cwd);
+    let workspace = deps.crates();
 
-    let (plugin, subcommand) = find_subcommand(&registry, name, &workspace)?
+    let (plugin, subcommand) = find_subcommand(&registry, name, workspace)?
         .with_context(|| format!("no plugin defines subcommand `{name}`"))?;
 
     let installation = plugin

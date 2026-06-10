@@ -266,6 +266,18 @@ impl Symposium {
         }
     }
 
+    /// The cargo binary override, if set via `SYMPOSIUM_CARGO`.
+    pub fn cargo_override(&self) -> Option<&Path> {
+        self.cargo_override.as_deref()
+    }
+
+    /// Create a `WorkspaceDeps` with disk caching enabled.
+    pub fn workspace_deps(&self, cwd: &Path) -> crate::crate_sources::WorkspaceDeps {
+        crate::crate_sources::WorkspaceDeps::new(cwd)
+            .cargo_path(self.cargo_override())
+            .cache_dir(Some(self.cache_dir.clone()))
+    }
+
     /// Build a `Command` for the cargo binary.
     ///
     /// Uses the test override if set, otherwise plain `"cargo"`.

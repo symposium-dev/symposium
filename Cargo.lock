@@ -2497,9 +2497,11 @@ dependencies = [
 name = "symposium-sdk"
 version = "0.1.0"
 dependencies = [
+ "cargo_metadata",
  "semver",
  "serde",
  "serde_json",
+ "sha2",
  "symposium-hook",
 ]
 

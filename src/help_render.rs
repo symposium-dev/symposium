@@ -14,7 +14,7 @@ use semver::Version;
 use crate::{
     cli::{Cli, Commands, builtin_audience},
     config::Symposium,
-    crate_sources::{WorkspaceCrate, workspace_crates},
+    crate_sources::WorkspaceCrate,
     plugins::{Audience, PluginRegistry, load_registry},
     subcommand_dispatch::applicable_subcommands,
 };
@@ -89,8 +89,9 @@ pub fn subcommand_help(args: &[String]) -> Option<String> {
 
 pub fn render_help(sym: &Symposium, cwd: &Path) -> String {
     let registry = load_registry(sym);
-    let workspace = workspace_crates(cwd);
-    render(&registry, &workspace)
+    let mut deps = sym.workspace_deps(cwd);
+    let workspace = deps.crates();
+    render(&registry, workspace)
 }
 
 fn render(registry: &PluginRegistry, workspace: &[WorkspaceCrate]) -> String {

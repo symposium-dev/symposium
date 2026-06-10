@@ -12,7 +12,8 @@ use anyhow::Result;
 mod list;
 mod probe;
 
-pub use list::{WorkspaceCrate, crate_pairs, workspace_crates};
+pub use list::{WorkspaceCrate, crate_pairs};
+pub use symposium_sdk::workspace::WorkspaceDeps;
 
 /// Normalize a crate name for hyphen/underscore-insensitive comparison.
 ///
