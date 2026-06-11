@@ -13,10 +13,10 @@ use anyhow::{Context, Result};
 
 use crate::agents::Agent;
 use crate::config::Symposium;
-use crate::crate_sources::WorkspaceDeps;
 use crate::output::{Output, display_path};
 use crate::plugins;
 use crate::skills;
+use symposium_sdk::workspace::WorkspaceDeps;
 
 /// Marker file written into every skill directory symposium installs.
 ///

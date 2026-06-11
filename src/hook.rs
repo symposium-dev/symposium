@@ -16,12 +16,12 @@ use crate::{
     plugins::ParsedPlugin,
 };
 use crate::{
-    crate_sources::WorkspaceDeps,
     help_render::{AGENTS_HEADING, HUMANS_HEADING},
     hook_schema::symposium::{OutputEvent, SessionStartInput},
     plugins::load_registry,
     subcommand_dispatch::applicable_subcommands,
 };
+use symposium_sdk::workspace::WorkspaceDeps;
 
 /// A hook prepared for dispatch — installation names looked up to concrete
 /// `Installation` entries, so the dispatch loop never has to scan the plugin's

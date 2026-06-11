@@ -84,7 +84,7 @@ impl<'a> PredicateContext<'a> {
     ///
     /// Returns `None` if the predicate failed or hasn't been evaluated.
     /// Returns `Some(&[])` if it passed but had no witness crates.
-    pub fn custom_witness(&mut self, name: &str, arg: &str) -> Option<&[WitnessCrate]> {
+    pub fn custom_witness(&mut self, name: &str, arg: &str) -> Option<&[SelectedCrate]> {
         let key = (name.to_string(), arg.to_string());
         if !self.custom_cache.contains_key(&key) {
             let result = run_custom_predicate(&self.custom_entries, name, arg);
@@ -787,11 +787,7 @@ fn join(preds: &[Predicate]) -> String {
 
 // --- custom predicate evaluation infrastructure ---
 
-/// A crate reported by a custom predicate's witness output.
-///
-/// This is a re-export of [`symposium_sdk::predicate::SelectedCrate`] — the
-/// same type plugin authors serialize on stdout.
-pub use symposium_sdk::predicate::SelectedCrate as WitnessCrate;
+use symposium_sdk::predicate::SelectedCrate;
 
 /// Cached result of a custom predicate invocation.
 #[derive(Debug, Clone)]
@@ -799,7 +795,7 @@ pub struct CustomPredicateResult {
     /// Whether the predicate passed (exit 0).
     pub passed: bool,
     /// Parsed witness crates from stdout (empty if stdout was absent/invalid).
-    pub witness: Vec<WitnessCrate>,
+    pub witness: Vec<SelectedCrate>,
 }
 
 /// A resolved custom predicate entry ready for invocation.
@@ -879,7 +875,7 @@ fn run_custom_predicate(
 /// Returns `None` if stdout is non-empty but not valid witness JSON (the
 /// predicate should be treated as failed). Returns `Some(vec![])` for empty
 /// stdout (pass, no witness crates). Returns `Some(crates)` on valid JSON.
-fn parse_witness_stdout(predicate_name: &str, stdout: &[u8]) -> Option<Vec<WitnessCrate>> {
+fn parse_witness_stdout(predicate_name: &str, stdout: &[u8]) -> Option<Vec<SelectedCrate>> {
     use symposium_sdk::predicate::PredicateOutput;
 
     if stdout.is_empty() {

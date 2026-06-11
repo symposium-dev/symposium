@@ -1,6 +1,6 @@
 //! List workspace crates with available guidance
 
-pub use symposium_sdk::workspace::WorkspaceCrate;
+use symposium_sdk::workspace::WorkspaceCrate;
 
 /// The workspace crates as `(name, version)` pairs — the form predicate
 /// evaluation consumes (see [`crate::predicate::PredicateContext`]).

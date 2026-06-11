@@ -149,7 +149,7 @@ pub struct SkillWithGroupContext {
 pub async fn skills_applicable_to(
     sym: &Symposium,
     registry: &PluginRegistry,
-    workspace_crates: &[crate::crate_sources::WorkspaceCrate],
+    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
     custom_predicate_entries: std::collections::HashMap<String, predicate::ResolvedPredicateEntry>,
 ) -> Vec<SkillWithGroupContext> {
     let mut results = Vec::new();
@@ -234,7 +234,7 @@ async fn load_skills_for_group(
     sym: &Symposium,
     parsed: &ParsedPlugin,
     group: &SkillGroup,
-    workspace_crates: &[crate::crate_sources::WorkspaceCrate],
+    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
     ctx: &mut PredicateContext<'_>,
 ) -> Vec<(Skill, SkillOrigin)> {
     let plugin = &parsed.plugin;
@@ -306,7 +306,7 @@ async fn load_skills_for_group(
 async fn load_crate_skills(
     plugin: &crate::plugins::Plugin,
     group: &SkillGroup,
-    workspace_crates: &[crate::crate_sources::WorkspaceCrate],
+    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
     ctx: &mut PredicateContext<'_>,
 ) -> Vec<(Skill, SkillOrigin)> {
     let matched = predicate::union_matched_crates(&[&plugin.predicates, &group.predicates], ctx);
@@ -333,7 +333,7 @@ const MAX_REDIRECT_DEPTH: usize = 10;
 async fn fetch_and_resolve_skills(
     crate_name: &str,
     version_spec: Option<&str>,
-    workspace_crates: &[crate::crate_sources::WorkspaceCrate],
+    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
     group: &SkillGroup,
     visited: &mut std::collections::HashSet<String>,
     skills: &mut Vec<(Skill, SkillOrigin)>,
@@ -1315,7 +1315,7 @@ mod tests {
         };
 
         // Query for serde - should find no skills because plugin doesn't apply
-        let workspace_crates = vec![crate::crate_sources::WorkspaceCrate {
+        let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate {
             name: "serde".to_string(),
             version: semver::Version::new(1, 0, 0),
             path: None,
@@ -1370,7 +1370,7 @@ mod tests {
         };
 
         // Query for serde - should find no skills because group doesn't match
-        let workspace_crates = vec![crate::crate_sources::WorkspaceCrate {
+        let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate {
             name: "serde".to_string(),
             version: semver::Version::new(1, 0, 0),
             path: None,
@@ -1442,7 +1442,7 @@ mod tests {
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
-        let workspace_crates = vec![crate::crate_sources::WorkspaceCrate {
+        let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate {
             name: "serde".to_string(),
             version: semver::Version::new(1, 0, 0),
             path: None,
@@ -1520,7 +1520,7 @@ mod tests {
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
-        let workspace = vec![crate::crate_sources::WorkspaceCrate {
+        let workspace = vec![symposium_sdk::workspace::WorkspaceCrate {
             name: "serde".into(),
             version: semver::Version::new(1, 0, 0),
             path: None,
@@ -1599,7 +1599,7 @@ mod tests {
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
-        let workspace = vec![crate::crate_sources::WorkspaceCrate {
+        let workspace = vec![symposium_sdk::workspace::WorkspaceCrate {
             name: "serde".into(),
             version: semver::Version::new(1, 0, 0),
             path: None,
@@ -1731,7 +1731,7 @@ mod tests {
         };
 
         let sym = crate::config::Symposium::from_dir(tmp.path());
-        let workspace = vec![crate::crate_sources::WorkspaceCrate {
+        let workspace = vec![symposium_sdk::workspace::WorkspaceCrate {
             name: "serde".to_string(),
             version: semver::Version::new(1, 0, 0),
             path: None,

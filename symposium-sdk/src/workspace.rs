@@ -1,8 +1,8 @@
 //! Workspace dependency types and resolution.
 //!
-//! These types represent the crates in a workspace's dependency graph. They
-//! mirror what symposium resolves internally via `cargo metadata` and may be
-//! passed to plugin binaries in the future (e.g. on stdin).
+//! [`WorkspaceDeps`] resolves and caches the crate dependency graph for a Cargo
+//! workspace. Plugin binaries obtain one via
+//! [`SymposiumDirs::workspace_deps`](crate::dirs::SymposiumDirs::workspace_deps).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

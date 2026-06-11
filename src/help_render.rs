@@ -11,10 +11,11 @@ use std::{fmt::Write as _, path::Path};
 use clap::{Command, CommandFactory};
 use semver::Version;
 
+use symposium_sdk::workspace::WorkspaceCrate;
+
 use crate::{
     cli::{Cli, Commands, builtin_audience},
     config::Symposium,
-    crate_sources::WorkspaceCrate,
     plugins::{Audience, PluginRegistry, load_registry},
     subcommand_dispatch::applicable_subcommands,
 };

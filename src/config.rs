@@ -269,7 +269,7 @@ impl Symposium {
     }
 
     /// Create a `WorkspaceDeps` with disk caching enabled.
-    pub fn workspace_deps(&self, cwd: &Path) -> crate::crate_sources::WorkspaceDeps {
+    pub fn workspace_deps(&self, cwd: &Path) -> symposium_sdk::workspace::WorkspaceDeps {
         self.dirs.workspace_deps(cwd)
     }
 

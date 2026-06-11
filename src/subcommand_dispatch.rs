@@ -8,9 +8,10 @@
 
 use std::{ffi::OsString, path::Path, process::ExitStatus};
 
+use symposium_sdk::workspace::WorkspaceCrate;
+
 use crate::{
     config::Symposium,
-    crate_sources::WorkspaceCrate,
     installation::{acquire_installation, resolve_runnable},
     plugins::{self, ParsedPlugin, Plugin, PluginRegistry, Subcommand},
 };
