@@ -6,7 +6,7 @@ Symposium is a Rust crate with both a library (`src/lib.rs`) and a binary (`src/
 
 Everything hangs off the `Symposium` struct, which wraps the parsed `Config` with resolved paths for config, cache, and log directories. Two constructors: `from_environment()` for production and `from_dir()` for tests.
 
-Defines the user-wide `Config` (stored at `~/.symposium/config.toml`) with `[[agent]]` entries, logging, plugin sources, defaults, and `auto-update` (off/warn/on, default warn). Provides `plugin_sources()` to resolve the effective list of plugin source directories.
+Defines the user-wide `Config` (stored at `~/.symposium/config.toml`) with `[[agent]]` entries, logging, plugin sources, defaults, and `auto-update` (off/warn/on, default warn). Provides `plugin_sources()` to resolve the effective list of plugin source directories. The `workspace_deps(cwd)` factory is the standard way to create a `WorkspaceDeps` — it wires in `cargo_override` and `cache_dir` so callers get both the `SYMPOSIUM_CARGO` override and cross-invocation disk caching.
 
 ### `agents.rs` — agent abstraction
 
@@ -19,6 +19,8 @@ Implements `cargo agents init`. Prompts for agents (or accepts `--add-agent`/`--
 ### `sync.rs` — synchronization command
 
 Implements `cargo agents sync`. Scans workspace dependencies, finds applicable skills from plugin sources, and synchronizes them into each configured agent's skill directory. The core primitive is `sync_skill_dir(source_dir, dest_dir, project_root)`, shared by both the plugin-skill and user-authored-skill code paths. It copies the entire source directory (not just `SKILL.md`) and is change-aware: it compares source and destination content, only performing the delete-and-recopy when files actually differ, so the disk shows no modifications when nothing changed. A configurable debounce (`sync-debounce-secs`, default 5s, keyed on the `.symposium` marker's mtime) skips even the comparison for recently-synced skills. On each sync, scans every agent's skills parent directory and reaps any marker-bearing subdirectory it didn't install this time, leaving user-managed skills (which lack the marker) untouched. Writes a `.gitignore` with `*` only into individual skill directories (not parent directories like `.claude/` or `.claude/skills/`). Also provides `register_hooks()` for use by `init`, which registers only symposium's own global hook handler — individual plugin hooks are never written into agent configs.
+
+Two entry points: `sync(sym, cwd)` for standalone CLI use (creates its own `WorkspaceDeps`) and `sync_with_deps(sym, deps)` for the hook pipeline (shares the cached workspace resolution with other hook stages).
 
 ### `plugins.rs` — plugin registry
 
@@ -72,7 +74,9 @@ Renders `cargo agents --help` as two audience-grouped sections, "Commands for hu
 
 ### `hook.rs` — hook handling
 
-Handles the hook pipeline: parse agent wire-format input → auto-sync → builtin dispatch → plugin hook dispatch → serialize output. Builtin dispatch currently only acts on `SessionStart`, where `handle_session_start` composes two independently-computed `additionalContext` fragments: a `discovery_hint` (suggests `cargo agents --help` when the workspace exposes applicable plugin subcommands, reusing `subcommand_dispatch::applicable_subcommands`) and an `update_nudge` (the throttled self-update warning); the discovery hint is not gated behind the update-check throttle. The plugin dispatch path matches plugin `Hook`s against the event, selects the best format for each plugin (native match > symposium > single-other-agent fallback), builds a `ResolvedHook` per match (looking up the named installations on the plugin), then for each `ResolvedHook`: acquires its `requirements` (best-effort), runs `install_commands` after the source step, picks a `Runnable` from (hook-or-install) `executable`/`script`, and spawns it (binary directly for `Exec`, via `sh <path>` for `Script`). Input is delivered in the selected format; output is converted back to the agent's wire format before returning.
+Handles the hook pipeline: parse agent wire-format input → auto-sync → builtin dispatch → plugin hook dispatch → serialize output. A single `WorkspaceDeps` (created via `sym.workspace_deps(cwd)`) is threaded through all stages — `run_auto_sync`, `dispatch_builtin`, and `dispatch_plugin_hooks`. In-process, at most one `cargo metadata` invocation occurs per hook call (down from up to three previously). Across invocations, the disk cache means zero `cargo metadata` calls when `Cargo.lock` hasn't changed — the common case for `PreToolUse` hooks.
+
+Builtin dispatch currently only acts on `SessionStart`, where `handle_session_start` composes two independently-computed `additionalContext` fragments: a `discovery_hint` (suggests `cargo agents --help` when the workspace exposes applicable plugin subcommands, reusing `subcommand_dispatch::applicable_subcommands`) and an `update_nudge` (the throttled self-update warning); the discovery hint is not gated behind the update-check throttle. The plugin dispatch path matches plugin `Hook`s against the event, selects the best format for each plugin (native match > symposium > single-other-agent fallback), builds a `ResolvedHook` per match (looking up the named installations on the plugin), then for each `ResolvedHook`: acquires its `requirements` (best-effort), runs `install_commands` after the source step, picks a `Runnable` from (hook-or-install) `executable`/`script`, and spawns it (binary directly for `Exec`, via `sh <path>` for `Script`). Input is delivered in the selected format; output is converted back to the agent's wire format before returning.
 
 ### `state.rs` — persistent state
 

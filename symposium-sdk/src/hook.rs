@@ -8,7 +8,7 @@
 //!
 //! ```no_run
 //! use std::process::ExitCode;
-//! use symposium_hook::{HookHandler, PreToolUseInput, PreToolUseOutput, run};
+//! use symposium_sdk::hook::{HookHandler, PreToolUseInput, PreToolUseOutput, run};
 //!
 //! struct MyHook;
 //!

@@ -16,6 +16,7 @@ use crate::config::Symposium;
 use crate::output::{Output, display_path};
 use crate::plugins;
 use crate::skills;
+use symposium_sdk::workspace::WorkspaceDeps;
 
 /// Marker file written into every skill directory symposium installs.
 ///
@@ -290,15 +291,18 @@ async fn resolve_custom_predicate_entries(
 
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
-pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
+pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
     let out = &Output::quiet();
-    let project_root = crate::init::find_workspace_root(sym, cwd)?;
+    let loaded = deps
+        .load()
+        .ok_or_else(|| anyhow::anyhow!("not in a Rust workspace"))?;
+    let project_root = loaded.root.clone();
+    let workspace: Vec<_> = loaded.crates.clone();
     let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
-    // Load plugin registry and workspace deps
+    // Load plugin registry
     let registry = plugins::load_registry(sym);
-    let workspace = crate::crate_sources::workspace_crates(&project_root);
 
     for warning in &registry.warnings {
         tracing::info!(

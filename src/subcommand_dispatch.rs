@@ -8,9 +8,10 @@
 
 use std::{ffi::OsString, path::Path, process::ExitStatus};
 
+use symposium_sdk::workspace::WorkspaceCrate;
+
 use crate::{
     config::Symposium,
-    crate_sources::{WorkspaceCrate, workspace_crates},
     installation::{acquire_installation, resolve_runnable},
     plugins::{self, ParsedPlugin, Plugin, PluginRegistry, Subcommand},
 };
@@ -95,9 +96,10 @@ pub async fn dispatch_external(
     let forwarded = argv.collect::<Vec<_>>();
 
     let registry = plugins::load_registry(sym);
-    let workspace = workspace_crates(cwd);
+    let mut deps = sym.workspace_deps(cwd);
+    let workspace = deps.crates();
 
-    let (plugin, subcommand) = find_subcommand(&registry, name, &workspace)?
+    let (plugin, subcommand) = find_subcommand(&registry, name, workspace)?
         .with_context(|| format!("no plugin defines subcommand `{name}`"))?;
 
     let installation = plugin
@@ -160,11 +162,7 @@ mod tests {
     use std::{collections::BTreeMap, path::PathBuf};
 
     fn ws_crate(name: &str, version: &str) -> WorkspaceCrate {
-        WorkspaceCrate {
-            name: name.into(),
-            version: semver::Version::parse(version).unwrap(),
-            path: None,
-        }
+        WorkspaceCrate::new(name.into(), semver::Version::parse(version).unwrap(), None)
     }
 
     fn crate_set(spec: &str) -> PredicateSet {

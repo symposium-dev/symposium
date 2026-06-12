@@ -1,9 +1,9 @@
 [package]
-name = "symposium-hook"
+name = "symposium-sdk"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "SDK for writing symposium hook handlers in Rust"
+description = "SDK for writing symposium plugins (hooks, custom predicates, subcommands)"
 repository = "https://github.com/symposium-dev/symposium"
 
 [features]
@@ -11,13 +11,12 @@ clap = ["dep:clap"]
 
 [dependencies]
 anyhow = "1"
+cargo_metadata = "0.18"
 clap = { version = "4", features = ["derive"], optional = true }
+dirs = "6.0.0"
 regex = "1"
+semver = { version = "1.0", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1.52.3", features = ["macros", "rt"] }
-
-[dev-dependencies]
-dirs = "6"
-symposium-install = { path = "../symposium-install" }
-tokio = { version = "1.52.3", features = ["process"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt"] }

@@ -112,10 +112,11 @@ async fn main() -> ExitCode {
         if self_update::maybe_check_for_update(&sym, &out).await {
             self_update::re_exec();
         }
-    } else if is_hook && sym.config.auto_update == config::AutoUpdate::On {
-        if self_update::maybe_check_for_update(&sym, &Output::quiet()).await {
-            self_update::re_exec();
-        }
+    } else if is_hook
+        && sym.config.auto_update == config::AutoUpdate::On
+        && self_update::maybe_check_for_update(&sym, &Output::quiet()).await
+    {
+        self_update::re_exec();
     }
 
     match cli.command {

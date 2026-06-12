@@ -70,8 +70,8 @@ macro_rules! copilot_output_impl {
             }
             fn to_symposium(&self) -> symposium::OutputEvent {
                 let decision = match self.permission_decision.as_deref() {
-                    Some("deny") => symposium_hook::Decision::Deny,
-                    _ => symposium_hook::Decision::Allow,
+                    Some("deny") => symposium_sdk::hook::Decision::Deny,
+                    _ => symposium_sdk::hook::Decision::Allow,
                 };
                 symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
                     decision,

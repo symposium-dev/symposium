@@ -11,10 +11,11 @@ use std::{fmt::Write as _, path::Path};
 use clap::{Command, CommandFactory};
 use semver::Version;
 
+use symposium_sdk::workspace::WorkspaceCrate;
+
 use crate::{
     cli::{Cli, Commands, builtin_audience},
     config::Symposium,
-    crate_sources::{WorkspaceCrate, workspace_crates},
     plugins::{Audience, PluginRegistry, load_registry},
     subcommand_dispatch::applicable_subcommands,
 };
@@ -89,8 +90,9 @@ pub fn subcommand_help(args: &[String]) -> Option<String> {
 
 pub fn render_help(sym: &Symposium, cwd: &Path) -> String {
     let registry = load_registry(sym);
-    let workspace = workspace_crates(cwd);
-    render(&registry, &workspace)
+    let mut deps = sym.workspace_deps(cwd);
+    let workspace = deps.crates();
+    render(&registry, workspace)
 }
 
 fn render(registry: &PluginRegistry, workspace: &[WorkspaceCrate]) -> String {
@@ -187,11 +189,7 @@ mod tests {
     use super::*;
 
     fn workspace_crate(name: &str, version: &str) -> WorkspaceCrate {
-        WorkspaceCrate {
-            name: name.into(),
-            version: semver::Version::parse(version).unwrap(),
-            path: None,
-        }
+        WorkspaceCrate::new(name.into(), semver::Version::parse(version).unwrap(), None)
     }
 
     fn crate_set(spec: &str) -> PredicateSet {

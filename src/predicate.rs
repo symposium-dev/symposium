@@ -84,7 +84,7 @@ impl<'a> PredicateContext<'a> {
     ///
     /// Returns `None` if the predicate failed or hasn't been evaluated.
     /// Returns `Some(&[])` if it passed but had no witness crates.
-    pub fn custom_witness(&mut self, name: &str, arg: &str) -> Option<&[WitnessCrate]> {
+    pub fn custom_witness(&mut self, name: &str, arg: &str) -> Option<&[SelectedCrate]> {
         let key = (name.to_string(), arg.to_string());
         if !self.custom_cache.contains_key(&key) {
             let result = run_custom_predicate(&self.custom_entries, name, arg);
@@ -196,7 +196,7 @@ impl Predicate {
                 let witness = ctx.custom_witness(name, arg)?;
                 let pairs = witness
                     .iter()
-                    .map(|wc| (wc.name.clone(), wc.version.clone()))
+                    .map(|wc| (wc.crate_name.clone(), wc.version.clone()))
                     .collect();
                 Some(pairs)
             }
@@ -787,31 +787,7 @@ fn join(preds: &[Predicate]) -> String {
 
 // --- custom predicate evaluation infrastructure ---
 
-/// A crate reported by a custom predicate's witness output.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WitnessCrate {
-    pub name: String,
-    pub version: semver::Version,
-}
-
-impl<'de> serde::Deserialize<'de> for WitnessCrate {
-    fn deserialize<D: serde::Deserializer<'de>>(
-        deserializer: D,
-    ) -> std::result::Result<Self, D::Error> {
-        #[derive(serde::Deserialize)]
-        struct Raw {
-            #[serde(rename = "crate")]
-            crate_name: String,
-            version: String,
-        }
-        let raw = Raw::deserialize(deserializer)?;
-        let version = semver::Version::parse(&raw.version).map_err(serde::de::Error::custom)?;
-        Ok(WitnessCrate {
-            name: raw.crate_name,
-            version,
-        })
-    }
-}
+use symposium_sdk::predicate::SelectedCrate;
 
 /// Cached result of a custom predicate invocation.
 #[derive(Debug, Clone)]
@@ -819,7 +795,7 @@ pub struct CustomPredicateResult {
     /// Whether the predicate passed (exit 0).
     pub passed: bool,
     /// Parsed witness crates from stdout (empty if stdout was absent/invalid).
-    pub witness: Vec<WitnessCrate>,
+    pub witness: Vec<SelectedCrate>,
 }
 
 /// A resolved custom predicate entry ready for invocation.
@@ -899,18 +875,14 @@ fn run_custom_predicate(
 /// Returns `None` if stdout is non-empty but not valid witness JSON (the
 /// predicate should be treated as failed). Returns `Some(vec![])` for empty
 /// stdout (pass, no witness crates). Returns `Some(crates)` on valid JSON.
-fn parse_witness_stdout(predicate_name: &str, stdout: &[u8]) -> Option<Vec<WitnessCrate>> {
+fn parse_witness_stdout(predicate_name: &str, stdout: &[u8]) -> Option<Vec<SelectedCrate>> {
+    use symposium_sdk::predicate::PredicateOutput;
+
     if stdout.is_empty() {
         return Some(Vec::new());
     }
 
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct WitnessOutput {
-        selected_crates: Vec<serde_json::Value>,
-    }
-
-    let output: WitnessOutput = match serde_json::from_slice(stdout) {
+    let output: PredicateOutput = match serde_json::from_slice(stdout) {
         Ok(o) => o,
         Err(e) => {
             tracing::warn!(
@@ -922,21 +894,7 @@ fn parse_witness_stdout(predicate_name: &str, stdout: &[u8]) -> Option<Vec<Witne
         }
     };
 
-    let mut crates = Vec::new();
-    for value in output.selected_crates {
-        match serde_json::from_value::<WitnessCrate>(value) {
-            Ok(wc) => crates.push(wc),
-            Err(e) => {
-                tracing::warn!(
-                    predicate = predicate_name,
-                    error = %e,
-                    "witness crate has invalid format — treating predicate as failed"
-                );
-                return None;
-            }
-        }
-    }
-    Some(crates)
+    Some(output.selected_crates)
 }
 
 #[cfg(test)]

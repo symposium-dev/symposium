@@ -8,11 +8,12 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
+use symposium_sdk::workspace::WorkspaceCrate;
 
 mod list;
 mod probe;
 
-pub use list::{WorkspaceCrate, crate_pairs, workspace_crates};
+pub use list::crate_pairs;
 
 /// Normalize a crate name for hyphen/underscore-insensitive comparison.
 ///
@@ -123,11 +124,7 @@ mod tests {
     }
 
     fn wc(name: &str, version: &str, path: Option<PathBuf>) -> WorkspaceCrate {
-        WorkspaceCrate {
-            name: name.to_string(),
-            version: v(version),
-            path,
-        }
+        WorkspaceCrate::new(name.to_string(), v(version), path)
     }
 
     // -- Path override behaviour ---------------------------------------

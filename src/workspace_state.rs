@@ -7,7 +7,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
@@ -66,8 +65,10 @@ impl WorkspaceState {
     }
 
     pub fn record_sync(&mut self, workspace_root: &Path) {
-        self.last_sync_lock_mtime = file_mtime(&workspace_root.join("Cargo.lock"));
-        self.last_sync_battery_pack_mtime = file_mtime(&workspace_root.join("battery-pack.toml"));
+        self.last_sync_lock_mtime =
+            symposium_sdk::workspace::file_mtime(&workspace_root.join("Cargo.lock"));
+        self.last_sync_battery_pack_mtime =
+            symposium_sdk::workspace::file_mtime(&workspace_root.join("battery-pack.toml"));
     }
 }
 
@@ -91,41 +92,12 @@ pub fn find_workspace_root(sym: &Symposium, cwd: &Path) -> Option<PathBuf> {
     Path::new(manifest.trim()).parent().map(|p| p.to_path_buf())
 }
 
-fn file_mtime(path: &Path) -> Option<u64> {
-    let meta = fs::metadata(path).ok()?;
-    let mtime = meta.modified().ok()?;
-    Some(
-        mtime
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs(),
-    )
-}
-
 /// Check whether the cached mtime matches the current file state.
 /// A missing file matches a `None` cached mtime (both absent = fresh).
 /// A missing file with a `Some` cached mtime means the file was deleted = stale.
 fn mtime_matches(cached: Option<u64>, path: &Path) -> bool {
-    let current = file_mtime(path);
+    let current = symposium_sdk::workspace::file_mtime(path);
     cached == current
-}
-
-fn workspace_dir_name(workspace_root: &Path) -> String {
-    use sha2::{Digest, Sha256};
-    use std::fmt::Write;
-
-    let tail = workspace_root
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("workspace");
-
-    let digest = Sha256::digest(workspace_root.as_os_str().as_encoded_bytes());
-    let mut hash = String::with_capacity(8);
-    for byte in &digest[..4] {
-        write!(hash, "{byte:02x}").unwrap();
-    }
-
-    format!("{tail}-{hash}")
 }
 
 fn state_file_path(sym: &Symposium, workspace_root: &Path) -> PathBuf {
@@ -135,13 +107,14 @@ fn state_file_path(sym: &Symposium, workspace_root: &Path) -> PathBuf {
         fs::canonicalize(workspace_root).unwrap_or_else(|_| workspace_root.to_path_buf());
     sym.cache_dir()
         .join("workspaces")
-        .join(workspace_dir_name(&canonical))
+        .join(symposium_sdk::workspace::workspace_dir_name(&canonical))
         .join("state.json")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use symposium_sdk::workspace::{file_mtime, workspace_dir_name};
 
     #[test]
     fn workspace_dir_name_uses_tail_and_hash() {

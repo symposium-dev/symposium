@@ -204,10 +204,8 @@ const BUILTIN_RECOMMENDATIONS_URL: &str = "https://github.com/symposium-dev/reco
 #[derive(Clone)]
 pub struct Symposium {
     pub config: Config,
-    config_dir: PathBuf,
-    cache_dir: PathBuf,
+    dirs: symposium_sdk::dirs::SymposiumDirs,
     home_dir: PathBuf,
-    cargo_override: Option<PathBuf>,
 }
 
 impl Symposium {
@@ -219,25 +217,19 @@ impl Symposium {
     /// 3. `~/.symposium`
     pub fn from_environment() -> Self {
         let home_dir = dirs::home_dir().expect("could not determine home directory");
-        let config_dir = resolve_config_dir_from_env();
-        let _ = fs::create_dir_all(&config_dir);
+        let dirs = symposium_sdk::dirs::SymposiumDirs::from_environment();
+        let _ = fs::create_dir_all(&dirs.config_dir);
+        let _ = fs::create_dir_all(&dirs.cache_dir);
 
-        let config = load_config_from(&config_dir);
-
-        let cache_dir = resolve_cache_dir(&config_dir);
-        let _ = fs::create_dir_all(&cache_dir);
+        let config = load_config_from(&dirs.config_dir);
 
         // Note: can't use tracing here — logging isn't initialized yet.
         // init_logging() is called after construction.
 
-        let cargo_override = env::var("SYMPOSIUM_CARGO").ok().map(PathBuf::from);
-
         Self {
             config,
-            config_dir,
-            cache_dir,
+            dirs,
             home_dir,
-            cargo_override,
         }
     }
 
@@ -257,20 +249,35 @@ impl Symposium {
         // global hook registration writes into the tempdir.
         let home_dir = root.to_path_buf();
 
+        let dirs = symposium_sdk::dirs::SymposiumDirs::new(config_dir, cache_dir, None);
+
         Self {
             config,
-            config_dir,
-            cache_dir,
+            dirs,
             home_dir,
-            cargo_override: None,
         }
+    }
+
+    /// The resolved directory paths.
+    pub fn dirs(&self) -> &symposium_sdk::dirs::SymposiumDirs {
+        &self.dirs
+    }
+
+    /// The cargo binary override, if set via `SYMPOSIUM_CARGO`.
+    pub fn cargo_override(&self) -> Option<&Path> {
+        self.dirs.cargo_override.as_deref()
+    }
+
+    /// Create a `WorkspaceDeps` with disk caching enabled.
+    pub fn workspace_deps(&self, cwd: &Path) -> symposium_sdk::workspace::WorkspaceDeps {
+        self.dirs.workspace_deps(cwd)
     }
 
     /// Build a `Command` for the cargo binary.
     ///
     /// Uses the test override if set, otherwise plain `"cargo"`.
     pub fn cargo_command(&self) -> std::process::Command {
-        match &self.cargo_override {
+        match &self.dirs.cargo_override {
             Some(path) => std::process::Command::new(path),
             None => std::process::Command::new("cargo"),
         }
@@ -278,8 +285,8 @@ impl Symposium {
 
     /// Create an [`InstallContext`] for use with `symposium-install` functions.
     pub fn install_context(&self) -> symposium_install::InstallContext {
-        let ctx = symposium_install::InstallContext::new(self.cache_dir.clone());
-        match &self.cargo_override {
+        let ctx = symposium_install::InstallContext::new(self.dirs.cache_dir.clone());
+        match &self.dirs.cargo_override {
             Some(path) => ctx.with_cargo_bin(path.clone()),
             None => ctx,
         }
@@ -288,7 +295,7 @@ impl Symposium {
     /// Override the cargo binary path (test-only).
     #[doc(hidden)]
     pub fn set_cargo_override(&mut self, path: PathBuf) {
-        self.cargo_override = Some(path);
+        self.dirs.cargo_override = Some(path);
     }
 
     /// Initialize logging with an optional report layer. Call once at startup.
@@ -334,8 +341,8 @@ impl Symposium {
             .init();
 
         tracing::debug!(
-            config_dir = %self.config_dir.display(),
-            cache_dir = %self.cache_dir.display(),
+            config_dir = %self.dirs.config_dir.display(),
+            cache_dir = %self.dirs.cache_dir.display(),
             log_level = %level,
             log_file = %log_path.display(),
             "logging initialized"
@@ -344,11 +351,11 @@ impl Symposium {
     }
 
     pub fn config_dir(&self) -> &Path {
-        &self.config_dir
+        &self.dirs.config_dir
     }
 
     pub fn cache_dir(&self) -> &Path {
-        &self.cache_dir
+        &self.dirs.cache_dir
     }
 
     pub fn home_dir(&self) -> &Path {
@@ -367,7 +374,7 @@ impl Symposium {
                     path: None,
                     auto_update: true,
                 },
-                base_dir: self.config_dir.clone(),
+                base_dir: self.dirs.config_dir.clone(),
             });
         }
 
@@ -379,14 +386,14 @@ impl Symposium {
                     path: Some("plugins".to_string()),
                     auto_update: true,
                 },
-                base_dir: self.config_dir.clone(),
+                base_dir: self.dirs.config_dir.clone(),
             });
         }
 
         for s in &self.config.plugin_source {
             sources.push(ResolvedPluginSource {
                 source: s.clone(),
-                base_dir: self.config_dir.clone(),
+                base_dir: self.dirs.config_dir.clone(),
             });
         }
 
@@ -395,7 +402,7 @@ impl Symposium {
 
     /// Write the user config to disk.
     pub fn save_config(&self) -> anyhow::Result<()> {
-        let path = self.config_dir.join("config.toml");
+        let path = self.dirs.config_dir.join("config.toml");
         let contents = toml::to_string_pretty(&self.config)?;
         fs::write(&path, contents)?;
         Ok(())
@@ -403,13 +410,13 @@ impl Symposium {
 
     #[cfg(test)]
     pub fn plugins_dir(&self) -> PathBuf {
-        let dir = self.config_dir.join("plugins");
+        let dir = self.dirs.config_dir.join("plugins");
         let _ = fs::create_dir_all(&dir);
         dir
     }
 
     fn logs_dir(&self) -> PathBuf {
-        let dir = resolve_logs_dir(&self.config_dir);
+        let dir = resolve_logs_dir(&self.dirs.config_dir);
         let _ = fs::create_dir_all(&dir);
         dir
     }
@@ -429,17 +436,6 @@ impl Symposium {
     }
 }
 
-/// Resolve config dir from environment variables.
-fn resolve_config_dir_from_env() -> PathBuf {
-    if let Ok(home) = env::var("SYMPOSIUM_HOME") {
-        PathBuf::from(home)
-    } else if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
-        PathBuf::from(xdg).join("symposium")
-    } else {
-        default_home()
-    }
-}
-
 /// Resolve logs dir from environment.
 ///
 /// Resolution: SYMPOSIUM_HOME/logs → XDG_STATE_HOME/symposium/logs → config_dir/logs.
@@ -453,17 +449,6 @@ fn resolve_logs_dir(config_dir: &Path) -> PathBuf {
     config_dir.join("logs")
 }
 
-/// Resolve cache dir from environment.
-fn resolve_cache_dir(config_dir: &Path) -> PathBuf {
-    if let Ok(home) = env::var("SYMPOSIUM_HOME") {
-        return PathBuf::from(home).join("cache");
-    }
-    if let Ok(xdg) = env::var("XDG_CACHE_HOME") {
-        return PathBuf::from(xdg).join("symposium");
-    }
-    config_dir.join("cache")
-}
-
 /// Load config from a config directory.
 fn load_config_from(config_dir: &Path) -> Config {
     let path = config_dir.join("config.toml");
@@ -474,13 +459,6 @@ fn load_config_from(config_dir: &Path) -> Config {
         }),
         Err(_) => Config::default(),
     }
-}
-
-/// Returns the default symposium home directory (~/.symposium).
-fn default_home() -> PathBuf {
-    dirs::home_dir()
-        .expect("could not determine home directory")
-        .join(".symposium")
 }
 
 fn default_true() -> bool {

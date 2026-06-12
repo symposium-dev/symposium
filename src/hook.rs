@@ -1,7 +1,6 @@
 use std::{
-    env,
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Command, ExitCode, Stdio},
 };
 
@@ -17,12 +16,12 @@ use crate::{
     plugins::ParsedPlugin,
 };
 use crate::{
-    crate_sources::workspace_crates,
     help_render::{AGENTS_HEADING, HUMANS_HEADING},
     hook_schema::symposium::{OutputEvent, SessionStartInput},
     plugins::load_registry,
     subcommand_dispatch::applicable_subcommands,
 };
+use symposium_sdk::workspace::WorkspaceDeps;
 
 /// A hook prepared for dispatch — installation names looked up to concrete
 /// `Installation` entries, so the dispatch loop never has to scan the plugin's
@@ -227,12 +226,20 @@ pub async fn execute_hook(
         let payload = handler.parse_input(input)?;
         let sym_input = payload.to_symposium();
 
-        // Auto-sync: install applicable skills into agent dirs (non-fatal).
+        // Create a shared WorkspaceDeps for the entire hook invocation.
+        // Auto-sync populates it if it runs; later stages reuse the cached result.
         let fallback_cwd = std::env::current_dir().unwrap_or_default();
-        run_auto_sync(sym, &sym_input, &fallback_cwd).await;
+        let cwd = match sym_input.cwd() {
+            Some(s) => PathBuf::from(s),
+            None => fallback_cwd,
+        };
+        let mut deps = sym.workspace_deps(&cwd);
+
+        // Auto-sync: install applicable skills into agent dirs (non-fatal).
+        run_auto_sync(sym, &mut deps).await;
 
         // Builtin dispatch → symposium output → host agent output as Value
-        let builtin_sym_output = dispatch_builtin(sym, &sym_input).await;
+        let builtin_sym_output = dispatch_builtin(sym, &sym_input, &mut deps).await;
         let builtin_agent_output = handler.translate_output(&builtin_sym_output);
         let prior_output = builtin_agent_output.to_hook_output();
 
@@ -244,6 +251,7 @@ pub async fn execute_hook(
             &sym_input,
             payload.as_ref(),
             prior_output,
+            &mut deps,
         )
         .await
         .map_err(|stderr| {
@@ -322,20 +330,15 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, output: &[u
 /// Uses per-workspace state to skip sync when `Cargo.lock` hasn't changed
 /// since the last successful sync, avoiding expensive `cargo metadata` calls
 /// on every hook invocation.
-async fn run_auto_sync(
-    sym: &Symposium,
-    input: &symposium::InputEvent,
-    fallback_cwd: &std::path::Path,
-) {
+///
+/// If sync runs, `deps` gets populated — later hook stages reuse the result.
+async fn run_auto_sync(sym: &Symposium, deps: &mut WorkspaceDeps) {
     if !sym.config.auto_sync {
         tracing::debug!("auto-sync disabled, skipping");
         return;
     }
 
-    let cwd = match input.cwd() {
-        Some(s) => std::path::PathBuf::from(s),
-        None => fallback_cwd.to_path_buf(),
-    };
+    let cwd = deps.cwd().to_path_buf();
 
     // Find workspace root via `cargo locate-project` (fast, no dep resolution).
     // If we can't find one, fall through to full sync which will
@@ -351,7 +354,7 @@ async fn run_auto_sync(
     }
 
     tracing::debug!("auto-sync running");
-    if let Err(e) = crate::sync::sync(sym, &cwd).await {
+    if let Err(e) = crate::sync::sync(sym, deps).await {
         tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
         return;
     }
@@ -371,6 +374,7 @@ async fn run_auto_sync(
 pub async fn dispatch_builtin(
     sym: &Symposium,
     input: &symposium::InputEvent,
+    deps: &mut WorkspaceDeps,
 ) -> symposium::OutputEvent {
     match input {
         symposium::InputEvent::PreToolUse(_) => {
@@ -380,7 +384,7 @@ pub async fn dispatch_builtin(
         symposium::InputEvent::UserPromptSubmit(prompt) => {
             handle_user_prompt_submit(sym, prompt).await
         }
-        symposium::InputEvent::SessionStart(session) => handle_session_start(sym, session),
+        symposium::InputEvent::SessionStart(session) => handle_session_start(sym, session, deps),
         _ => symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
     }
 }
@@ -388,14 +392,12 @@ pub async fn dispatch_builtin(
 /// Handle SessionStart: orient the agent toward crate-aware tooling and, when due, nudge the
 /// user to update. The two fragments are computed independently -- the discovery hint is never gated
 /// behind the update-check throttle -- then joined into a single context block.
-fn handle_session_start(sym: &Symposium, payload: &SessionStartInput) -> OutputEvent {
-    let cwd = payload
-        .cwd
-        .as_deref()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| env::current_dir().unwrap_or_default());
-
-    let fragments = [discovery_hint(sym, &cwd), update_nudge(sym)]
+fn handle_session_start(
+    sym: &Symposium,
+    _payload: &SessionStartInput,
+    deps: &mut WorkspaceDeps,
+) -> OutputEvent {
+    let fragments = [discovery_hint(sym, deps), update_nudge(sym)]
         .into_iter()
         .flatten()
         .collect::<Vec<String>>();
@@ -409,11 +411,11 @@ fn handle_session_start(sym: &Symposium, payload: &SessionStartInput) -> OutputE
 
 /// Suggest `cargo agents --help` when the active workspace exposes crate-aware plugin subcommands.
 /// Reuses the help renderer's `applicable_subcommands`, so the hint fires only when there is actually something to discover; `None` otherwise.
-fn discovery_hint(sym: &Symposium, cwd: &Path) -> Option<String> {
+fn discovery_hint(sym: &Symposium, deps: &mut WorkspaceDeps) -> Option<String> {
     let registry = load_registry(sym);
-    let deps = crate::crate_sources::crate_pairs(&workspace_crates(cwd));
+    let pairs = crate::crate_sources::crate_pairs(deps.crates());
 
-    let any_subcommand = !applicable_subcommands(&registry, &deps).is_empty();
+    let any_subcommand = !applicable_subcommands(&registry, &pairs).is_empty();
 
     any_subcommand.then(|| {
         format!(
@@ -483,25 +485,22 @@ pub async fn dispatch_plugin_hooks(
     sym_input: &symposium::InputEvent,
     original_input: &dyn AgentHookInput,
     prior_output: serde_json::Value,
+    deps: &mut WorkspaceDeps,
 ) -> Result<serde_json::Value, Vec<u8>> {
     let plugins = crate::plugins::load_all_plugins(sym);
 
     // Resolving the workspace means running cargo, so only do it when some
     // plugin's hook gating actually references a concrete crate (a `crate(*)`
     // wildcard or env/shell/path predicate never needs the crate graph).
-    let deps = if plugins
+    let pairs = if plugins
         .iter()
         .any(|p| p.plugin.hooks_need_crate_resolution())
     {
-        let cwd = match sym_input.cwd() {
-            Some(s) => std::path::PathBuf::from(s),
-            None => std::env::current_dir().unwrap_or_default(),
-        };
-        crate::crate_sources::crate_pairs(&workspace_crates(&cwd))
+        crate::crate_sources::crate_pairs(deps.crates())
     } else {
         Vec::new()
     };
-    let mut ctx = crate::predicate::PredicateContext::new(&deps);
+    let mut ctx = crate::predicate::PredicateContext::new(&pairs);
     let hooks = dispatched_hooks_for_payload(&plugins, sym_input, host_agent, &mut ctx);
 
     let mut output = prior_output;
@@ -861,13 +860,14 @@ mod tests {
     async fn builtin_pre_tool_use_returns_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
+        let mut deps = sym.workspace_deps(tmp.path());
         let input = symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
             "Bash".to_string(),
             serde_json::Value::default(),
             None,
             None,
         ));
-        let output = dispatch_builtin(&sym, &input).await;
+        let output = dispatch_builtin(&sym, &input, &mut deps).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -875,6 +875,7 @@ mod tests {
     async fn builtin_post_tool_use_returns_empty_for_now() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
+        let mut deps = sym.workspace_deps(tmp.path());
         let input = symposium::InputEvent::PostToolUse(symposium::PostToolUseInput::new(
             "Bash".to_string(),
             serde_json::json!({"command": "ls"}),
@@ -882,7 +883,7 @@ mod tests {
             Some("test-session".to_string()),
             Some("/tmp".to_string()),
         ));
-        let output = dispatch_builtin(&sym, &input).await;
+        let output = dispatch_builtin(&sym, &input, &mut deps).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -890,12 +891,13 @@ mod tests {
     async fn builtin_user_prompt_submit_returns_empty_for_now() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
+        let mut deps = sym.workspace_deps(tmp.path());
         let input = symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput::new(
             "Use tokio for async".to_string(),
             Some("test-session".to_string()),
             Some("/tmp".to_string()),
         ));
-        let output = dispatch_builtin(&sym, &input).await;
+        let output = dispatch_builtin(&sym, &input, &mut deps).await;
         assert!(output.additional_context().is_none());
     }
 
