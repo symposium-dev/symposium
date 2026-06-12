@@ -14,6 +14,7 @@ use cargo_metadata::{CargoOpt, MetadataCommand};
 use serde::{Deserialize, Serialize};
 
 /// A crate in the workspace's direct dependency graph.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkspaceCrate {
     /// The crate name as published (e.g. `"serde"`, `"tokio"`).
@@ -26,7 +27,18 @@ pub struct WorkspaceCrate {
     pub path: Option<PathBuf>,
 }
 
+impl WorkspaceCrate {
+    pub fn new(name: String, version: semver::Version, path: Option<PathBuf>) -> Self {
+        Self {
+            name,
+            version,
+            path,
+        }
+    }
+}
+
 /// The resolved workspace: root path + dependency list.
+#[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadedWorkspace {
     /// Workspace root directory.

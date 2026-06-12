@@ -189,11 +189,7 @@ mod tests {
     use super::*;
 
     fn workspace_crate(name: &str, version: &str) -> WorkspaceCrate {
-        WorkspaceCrate {
-            name: name.into(),
-            version: semver::Version::parse(version).unwrap(),
-            path: None,
-        }
+        WorkspaceCrate::new(name.into(), semver::Version::parse(version).unwrap(), None)
     }
 
     fn crate_set(spec: &str) -> PredicateSet {

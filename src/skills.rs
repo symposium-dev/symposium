@@ -1315,11 +1315,11 @@ mod tests {
         };
 
         // Query for serde - should find no skills because plugin doesn't apply
-        let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate {
-            name: "serde".to_string(),
-            version: semver::Version::new(1, 0, 0),
-            path: None,
-        }];
+        let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate::new(
+            "serde".to_string(),
+            semver::Version::new(1, 0, 0),
+            None,
+        )];
         let skills = skills_applicable_to(
             &sym,
             &registry,
@@ -1370,11 +1370,11 @@ mod tests {
         };
 
         // Query for serde - should find no skills because group doesn't match
-        let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate {
-            name: "serde".to_string(),
-            version: semver::Version::new(1, 0, 0),
-            path: None,
-        }];
+        let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate::new(
+            "serde".to_string(),
+            semver::Version::new(1, 0, 0),
+            None,
+        )];
         let skills = skills_applicable_to(
             &sym,
             &registry,
@@ -1442,11 +1442,11 @@ mod tests {
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
-        let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate {
-            name: "serde".to_string(),
-            version: semver::Version::new(1, 0, 0),
-            path: None,
-        }];
+        let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate::new(
+            "serde".to_string(),
+            semver::Version::new(1, 0, 0),
+            None,
+        )];
         let skills = skills_applicable_to(
             &sym,
             &registry,
@@ -1520,11 +1520,11 @@ mod tests {
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
-        let workspace = vec![symposium_sdk::workspace::WorkspaceCrate {
-            name: "serde".into(),
-            version: semver::Version::new(1, 0, 0),
-            path: None,
-        }];
+        let workspace = vec![symposium_sdk::workspace::WorkspaceCrate::new(
+            "serde".into(),
+            semver::Version::new(1, 0, 0),
+            None,
+        )];
         let skills = skills_applicable_to(
             &sym,
             &registry,
@@ -1599,11 +1599,11 @@ mod tests {
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
-        let workspace = vec![symposium_sdk::workspace::WorkspaceCrate {
-            name: "serde".into(),
-            version: semver::Version::new(1, 0, 0),
-            path: None,
-        }];
+        let workspace = vec![symposium_sdk::workspace::WorkspaceCrate::new(
+            "serde".into(),
+            semver::Version::new(1, 0, 0),
+            None,
+        )];
         let skills = skills_applicable_to(
             &sym,
             &registry,
@@ -1731,11 +1731,11 @@ mod tests {
         };
 
         let sym = crate::config::Symposium::from_dir(tmp.path());
-        let workspace = vec![symposium_sdk::workspace::WorkspaceCrate {
-            name: "serde".to_string(),
-            version: semver::Version::new(1, 0, 0),
-            path: None,
-        }];
+        let workspace = vec![symposium_sdk::workspace::WorkspaceCrate::new(
+            "serde".to_string(),
+            semver::Version::new(1, 0, 0),
+            None,
+        )];
         let results = skills_applicable_to(
             &sym,
             &registry,

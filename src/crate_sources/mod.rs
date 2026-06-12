@@ -124,11 +124,7 @@ mod tests {
     }
 
     fn wc(name: &str, version: &str, path: Option<PathBuf>) -> WorkspaceCrate {
-        WorkspaceCrate {
-            name: name.to_string(),
-            version: v(version),
-            path,
-        }
+        WorkspaceCrate::new(name.to_string(), v(version), path)
     }
 
     // -- Path override behaviour ---------------------------------------
