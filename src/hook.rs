@@ -236,7 +236,7 @@ pub async fn execute_hook(
         let mut deps = sym.workspace_deps(&cwd);
 
         // Auto-sync: install applicable skills into agent dirs (non-fatal).
-        run_auto_sync(sym, &sym_input, &mut deps).await;
+        run_auto_sync(sym, &mut deps).await;
 
         // Builtin dispatch → symposium output → host agent output as Value
         let builtin_sym_output = dispatch_builtin(sym, &sym_input, &mut deps).await;
@@ -332,16 +332,13 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, output: &[u
 /// on every hook invocation.
 ///
 /// If sync runs, `deps` gets populated — later hook stages reuse the result.
-async fn run_auto_sync(sym: &Symposium, input: &symposium::InputEvent, deps: &mut WorkspaceDeps) {
+async fn run_auto_sync(sym: &Symposium, deps: &mut WorkspaceDeps) {
     if !sym.config.auto_sync {
         tracing::debug!("auto-sync disabled, skipping");
         return;
     }
 
-    let cwd = match input.cwd() {
-        Some(s) => std::path::PathBuf::from(s),
-        None => std::env::current_dir().unwrap_or_default(),
-    };
+    let cwd = deps.cwd().to_path_buf();
 
     // Find workspace root via `cargo locate-project` (fast, no dep resolution).
     // If we can't find one, fall through to full sync which will
@@ -357,7 +354,7 @@ async fn run_auto_sync(sym: &Symposium, input: &symposium::InputEvent, deps: &mu
     }
 
     tracing::debug!("auto-sync running");
-    if let Err(e) = crate::sync::sync_with_deps(sym, deps).await {
+    if let Err(e) = crate::sync::sync(sym, deps).await {
         tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
         return;
     }

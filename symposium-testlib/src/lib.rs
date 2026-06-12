@@ -273,7 +273,7 @@ impl TestContext {
             .clone()
             .unwrap_or_else(|| self.sym.config_dir().to_path_buf());
 
-        symposium::sync::sync(&self.sym, &cwd).await?;
+        symposium::sync::sync(&self.sym, &mut self.sym.workspace_deps(&cwd)).await?;
 
         drop(_guard);
         Ok(handle.drain())

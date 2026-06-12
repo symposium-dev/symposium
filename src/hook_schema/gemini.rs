@@ -172,8 +172,8 @@ impl AgentHookOutput for GeminiPreToolUseOutput {
     fn to_symposium(&self) -> symposium::OutputEvent {
         let h = self.hook_specific_output.as_ref();
         let decision = match self.decision.as_deref() {
-            Some("deny") | Some("block") => symposium_hook::Decision::Deny,
-            _ => symposium_hook::Decision::Allow,
+            Some("deny") | Some("block") => symposium_sdk::hook::Decision::Deny,
+            _ => symposium_sdk::hook::Decision::Allow,
         };
         symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
             decision,

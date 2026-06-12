@@ -291,15 +291,7 @@ async fn resolve_custom_predicate_entries(
 
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
-pub async fn sync(sym: &Symposium, cwd: &Path) -> Result<()> {
-    let mut deps = sym.workspace_deps(cwd);
-    sync_with_deps(sym, &mut deps).await
-}
-
-/// Sync variant that shares a `WorkspaceDeps` cache with the caller.
-/// Used by `execute_hook` so that the auto-sync load is reused by later
-/// hook stages.
-pub async fn sync_with_deps(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
+pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
     let out = &Output::quiet();
     let loaded = deps
         .load()

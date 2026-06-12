@@ -164,8 +164,8 @@ impl AgentHookOutput for CodexPreToolUseOutput {
     }
     fn to_symposium(&self) -> symposium::OutputEvent {
         let decision = match self.decision.as_deref() {
-            Some("block") | Some("deny") => symposium_hook::Decision::Deny,
-            _ => symposium_hook::Decision::Allow,
+            Some("block") | Some("deny") => symposium_sdk::hook::Decision::Deny,
+            _ => symposium_sdk::hook::Decision::Allow,
         };
         symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
             decision,

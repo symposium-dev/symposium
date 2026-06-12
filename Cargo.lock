@@ -2447,7 +2447,6 @@ dependencies = [
  "serde_json",
  "serde_yaml_ng",
  "sha2",
- "symposium-hook",
  "symposium-install",
  "symposium-sdk",
  "symposium-testlib",
@@ -2459,20 +2458,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
-]
-
-[[package]]
-name = "symposium-hook"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "dirs",
- "regex",
- "serde",
- "serde_json",
- "symposium-install",
- "tokio",
 ]
 
 [[package]]
@@ -2497,13 +2482,16 @@ dependencies = [
 name = "symposium-sdk"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "cargo_metadata",
+ "clap",
  "dirs",
+ "regex",
  "semver",
  "serde",
  "serde_json",
  "sha2",
- "symposium-hook",
+ "tokio",
 ]
 
 [[package]]

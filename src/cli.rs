@@ -178,7 +178,7 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
             init::init(sym, out, &opts).await
         }
 
-        Commands::Sync => sync::sync(sym, cwd).await,
+        Commands::Sync => sync::sync(sym, &mut sym.workspace_deps(cwd)).await,
 
         Commands::SelfUpdate => self_update::self_update(sym, out),
 

@@ -54,7 +54,7 @@ impl HookAgent {
     }
 }
 
-pub use symposium_hook::HookEvent;
+pub use symposium_sdk::hook::HookEvent;
 
 /// Represents the data sent *from* an agent *to* a hook.
 pub trait AgentHookInput: Debug {

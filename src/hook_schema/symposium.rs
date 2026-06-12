@@ -3,12 +3,12 @@
 //! Each agent module converts to/from these types. Builtin dispatch
 //! operates entirely on these types.
 //!
-//! Type definitions are owned by the `symposium-hook` crate so that hook
-//! authors can depend on them without pulling in the full symposium binary.
-//! This module re-exports those types.
+//! Type definitions are owned by `symposium-sdk` so that hook authors can
+//! depend on them without pulling in the full symposium binary. This module
+//! re-exports those types.
 
 // Re-export wire types from the SDK crate.
-pub use symposium_hook::{
+pub use symposium_sdk::hook::{
     Input as InputEvent, Output as OutputEvent, PostToolUseInput, PostToolUseOutput,
     PreToolUseInput, PreToolUseOutput, SessionStartInput, SessionStartOutput,
     UserPromptSubmitInput, UserPromptSubmitOutput,

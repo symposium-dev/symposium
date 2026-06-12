@@ -67,6 +67,11 @@ impl WorkspaceDeps {
         }
     }
 
+    /// The working directory this was constructed with.
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
+    }
+
     /// Load (or return cached) workspace metadata.
     /// Returns `None` if not inside a Cargo workspace.
     pub fn load(&mut self) -> Option<&Arc<LoadedWorkspace>> {

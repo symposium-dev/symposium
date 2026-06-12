@@ -46,8 +46,7 @@
 //! println!("{}", serde_json::to_string(&output).unwrap());
 //! ```
 
-pub use symposium_hook as hook;
-
 pub mod dirs;
+pub mod hook;
 pub mod predicate;
 pub mod workspace;
