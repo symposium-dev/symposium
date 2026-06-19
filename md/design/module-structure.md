@@ -22,6 +22,8 @@ Implements `cargo agents sync`. Scans workspace dependencies, finds applicable s
 
 Two entry points: `sync(sym, cwd)` for standalone CLI use (creates its own `WorkspaceDeps`) and `sync_with_deps(sym, deps)` for the hook pipeline (shares the cached workspace resolution with other hook stages).
 
+`sync` takes an `UpdateLevel` that it threads into skill resolution (`skills_applicable_to`), controlling how aggressively `source.git` skill groups are re-fetched. Callers choose: the auto-sync path passes `Check` on `SessionStart` (refresh) and `None` otherwise (debounced); the binary's global `--update` flag feeds manual `cargo agents sync`.
+
 ### `plugins.rs` — plugin registry
 
 Scans configured plugin source directories for TOML manifests and parses them into `Plugin` structs. Validation here turns the raw TOML into:
@@ -32,7 +34,13 @@ Also discovers standalone `SKILL.md` files not wrapped in a plugin. Returns a `P
 
 ### `installation.rs` — sources and acquisition
 
-Defines `Source` (the `source = "..."`-tagged enum: `cargo`, `github`, `binary`) and `acquire_source`, which downloads / installs / clones the source and returns an `AcquiredSource` whose `resolve_executable` / `resolve_script` methods turn a relative `executable`/`script` name into a concrete path. The `Runnable` enum (`Exec(PathBuf)` or `Script(PathBuf)`) is the final form a hook command resolves to. The `git` submodule handles GitHub tarball acquisition and caching.
+Defines `Source` (the `source = "..."`-tagged enum: `cargo`, `github`) and `acquire_source`, which downloads / installs / clones the source and returns an `AcquiredSource` whose `resolve_executable` / `resolve_script` methods turn a relative `executable`/`script` name into a concrete path. The `Runnable` enum (`Exec(PathBuf)` or `Script(PathBuf)`) is the final form a hook command resolves to. The `git` submodule handles GitHub tarball acquisition and caching.
+
+`acquire_source` (and the main-crate `acquire_installation` wrapper) take an `UpdateLevel`. `None` serves the cache without touching the network; `Check`/`Fetch` re-resolve. Hook dispatch acquires with `None`; the `SessionStart` prewarm uses `Check`. The three source kinds:
+
+- **crates.io cargo**: the resolved version is recorded in a `current` pointer (`<cache>/binaries/<crate>/current`). `None` reads the pointer and serves that version with **no crates.io query** — so a per-event dispatch never hits the registry. `Check`/`Fetch` query for the newest matching version, install into its version-keyed dir, and rewrite the pointer (so newly published versions are picked up at session start, not on every event). Only `Fetch` forces a same-version reinstall.
+- **`cargo + git`**: the cache key folds in only the URL + user version, never the resolved commit, so a moved branch never invalidates it on its own. `Check`/`Fetch` resolve the remote `HEAD` with a cheap `git ls-remote` and compare against the commit recorded in a `.commit-sha` file in the cache dir; the binary is reinstalled (`cargo install --force`) **only when the SHA changed** (or `Fetch`, or the binary is missing). `None` never resolves the remote.
+- **github** (script/subtree sources): honors the level directly via the git cache manager (freshness checks debounced to a 60s window under `None`).
 
 Validates skill group source constraints at parse time: mutual exclusivity of `source.path`/`source.git`/`source = "crate"`, and the requirement that `source = "crate"` has at least one non-wildcard predicate.
 
@@ -74,7 +82,9 @@ Renders `cargo agents --help` as two audience-grouped sections, "Commands for hu
 
 ### `hook.rs` — hook handling
 
-Handles the hook pipeline: parse agent wire-format input → auto-sync → builtin dispatch → plugin hook dispatch → serialize output. A single `WorkspaceDeps` (created via `sym.workspace_deps(cwd)`) is threaded through all stages — `run_auto_sync`, `dispatch_builtin`, and `dispatch_plugin_hooks`. In-process, at most one `cargo metadata` invocation occurs per hook call (down from up to three previously). Across invocations, the disk cache means zero `cargo metadata` calls when `Cargo.lock` hasn't changed — the common case for `PreToolUse` hooks.
+Handles the hook pipeline: parse agent wire-format input → auto-sync → builtin dispatch → plugin hook dispatch → serialize output. A single `WorkspaceDeps` (created via `sym.workspace_deps(cwd)`) is threaded through all stages — `run_auto_sync`, `dispatch_builtin`, `dispatch_plugin_hooks`, and the `SessionStart` prewarm. In-process, at most one `cargo metadata` invocation occurs per hook call (down from up to three previously). Across invocations, the disk cache means zero `cargo metadata` calls when `Cargo.lock` hasn't changed — the common case for `PreToolUse` hooks.
+
+`run_auto_sync` takes a `session_start` flag: on `SessionStart` it skips the `Cargo.lock` freshness gate and syncs with `UpdateLevel::Check` (so upstream skill/source changes land once per session); every other event keeps the gated, `UpdateLevel::None` path. The matching `ensure_plugin_sources` refresh level is decided in the binary entry point from the same event. `SessionStart` additionally runs `prewarm_hook_sources` (best-effort, gated by `auto-sync`): it walks every applicable plugin's hooks and *refreshes* each installation's already-cached source via `refresh_installation_if_present` (`UpdateLevel::Check`). This is what keeps hook *binaries/scripts* (not just manifests) current once per session — in particular the only path that re-pulls a `cargo + git` hook binary whose branch moved — so the dispatch path can keep acquiring with `None` (cache/debounced) and pay no per-event network cost. It is **refresh-only**: a source that was never acquired is left alone (it installs lazily on first dispatch), so `SessionStart` never eagerly installs a tool a hook may never use.
 
 Builtin dispatch currently only acts on `SessionStart`, where `handle_session_start` composes two independently-computed `additionalContext` fragments: a `discovery_hint` (suggests `cargo agents --help` when the workspace exposes applicable plugin subcommands, reusing `subcommand_dispatch::applicable_subcommands`) and an `update_nudge` (the throttled self-update warning); the discovery hint is not gated behind the update-check throttle. The plugin dispatch path matches plugin `Hook`s against the event, selects the best format for each plugin (native match > symposium > single-other-agent fallback), builds a `ResolvedHook` per match (looking up the named installations on the plugin), then for each `ResolvedHook`: acquires its `requirements` (best-effort), runs `install_commands` after the source step, picks a `Runnable` from (hook-or-install) `executable`/`script`, and spawns it (binary directly for `Exec`, via `sh <path>` for `Script`). Input is delivered in the selected format; output is converted back to the agent's wire format before returning.
 

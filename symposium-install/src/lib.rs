@@ -12,6 +12,16 @@ use serde::{Deserialize, Serialize};
 
 pub mod git;
 
+/// Records the crates.io version resolved by the last freshness check, so a
+/// `None` acquire can reuse it without re-querying. Lives at
+/// `<cache>/binaries/<crate>/current`.
+const CURRENT_VERSION_FILENAME: &str = "current";
+
+/// Records the git commit a `cargo + git` binary was last installed from, so a
+/// freshness check can skip the reinstall when the branch hasn't moved. Lives
+/// inside the binary's version-keyed cache dir.
+const COMMIT_SHA_FILENAME: &str = ".commit-sha";
+
 /// Minimal context needed for acquisition.
 ///
 /// Replaces the full `Symposium` config struct — hook handlers construct this
@@ -267,6 +277,7 @@ async fn install_cargo_crate(
     binary_name: Option<String>,
     cache_dir: Option<PathBuf>,
     git: Option<String>,
+    force: bool,
 ) -> Result<()> {
     let ctx = ctx.clone();
     let crate_name = crate_name.to_string();
@@ -280,6 +291,7 @@ async fn install_cargo_crate(
             binary_name,
             cache_dir.as_deref(),
             git,
+            force,
         )
     })
     .await
@@ -293,6 +305,7 @@ fn install_cargo_crate_sync(
     binary_name: Option<String>,
     cache_dir: Option<&Path>,
     git: Option<String>,
+    force: bool,
 ) -> Result<()> {
     use std::fs;
 
@@ -323,6 +336,9 @@ fn install_cargo_crate_sync(
     // Try cargo binstall first (faster, uses prebuilt binaries).
     tracing::info!("Attempting cargo binstall for {}", crate_spec);
     let mut binstall_args: Vec<&str> = vec!["binstall", "--no-confirm"];
+    if force {
+        binstall_args.push("--force");
+    }
     if let Some(dir) = cache_dir_str.as_deref() {
         binstall_args.push("--root");
         binstall_args.push(dir);
@@ -364,6 +380,9 @@ fn install_cargo_crate_sync(
 
     tracing::info!("Falling back to cargo install for {}", crate_spec);
     let mut args: Vec<&str> = vec!["install"];
+    if force {
+        args.push("--force");
+    }
     if let Some(dir) = cache_dir_str.as_deref() {
         args.push("--root");
         args.push(dir);
@@ -431,6 +450,7 @@ async fn acquire_cargo(
     ctx: &InstallContext,
     cargo: &CargoSource,
     executable_hint: Option<&str>,
+    update: UpdateLevel,
 ) -> Result<AcquiredCargo> {
     if cargo.global {
         // Validation requires `executable` for global cargo.
@@ -444,6 +464,7 @@ async fn acquire_cargo(
             Some(resolved.clone()),
             None,
             cargo.git.clone(),
+            false,
         )
         .await?;
         return Ok(AcquiredCargo {
@@ -464,7 +485,33 @@ async fn acquire_cargo(
         let cache_version = git_cache_version(git_url, cargo.version.as_deref());
         let cache_dir = get_binary_cache_dir(ctx, &cargo.crate_name, &cache_version)?;
         let probe = cache_dir.join("bin").join(platform_binary_exe(&resolved));
-        if !probe.exists() {
+        let sha_file = cache_dir.join(COMMIT_SHA_FILENAME);
+
+        // The cache key folds in only the URL + user version, not the resolved
+        // commit, so a moved branch never invalidates it on its own. Under
+        // `Check`/`Fetch` we resolve the remote `HEAD` with a cheap `git
+        // ls-remote` and reinstall only when it differs from the commit we last
+        // installed; under `None` we never touch the network.
+        let remote_sha = if matches!(update, UpdateLevel::Check | UpdateLevel::Fetch) {
+            remote_git_head_sha(git_url).await
+        } else {
+            None
+        };
+        let stored_sha = std::fs::read_to_string(&sha_file)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
+        let sha_changed = match (&remote_sha, &stored_sha) {
+            (Some(remote), Some(stored)) => remote != stored,
+            // Remote resolved but nothing recorded yet → (re)install to capture it.
+            (Some(_), None) => true,
+            // Couldn't resolve the remote → don't reinstall on SHA grounds.
+            (None, _) => false,
+        };
+
+        if !probe.exists() || matches!(update, UpdateLevel::Fetch) || sha_changed {
+            // `--force` only needed to overwrite an existing install.
+            let overwrite = probe.exists();
             install_cargo_crate(
                 ctx,
                 &cargo.crate_name,
@@ -472,12 +519,37 @@ async fn acquire_cargo(
                 Some(resolved.clone()),
                 Some(cache_dir.clone()),
                 Some(git_url.to_string()),
+                overwrite,
             )
             .await?;
+            // Record the commit we just installed so the next check can compare.
+            let installed_sha = match remote_sha {
+                Some(sha) => Some(sha),
+                None => remote_git_head_sha(git_url).await,
+            };
+            if let Some(sha) = installed_sha {
+                let _ = std::fs::write(&sha_file, sha);
+            }
         }
         return Ok(AcquiredCargo {
             cache_dir: Some(cache_dir),
             resolved_executable: Some(resolved),
+        });
+    }
+
+    // Plain crates.io. Resolving the version means a crates.io query, so under
+    // `None` we serve the version recorded by the last freshness check instead
+    // — a dispatch never hits the network. `Check`/`Fetch` always re-resolve
+    // (picking up newly published versions) and refresh the pointer.
+    let registry_dir = ctx.cache_dir().join("binaries").join(&cargo.crate_name);
+    let pointer = registry_dir.join(CURRENT_VERSION_FILENAME);
+    if matches!(update, UpdateLevel::None)
+        && let Some((cache_dir, resolved)) =
+            cached_cargo_version(&registry_dir, &pointer, executable_hint)
+    {
+        return Ok(AcquiredCargo {
+            cache_dir: Some(cache_dir),
+            resolved_executable: resolved,
         });
     }
 
@@ -502,8 +574,12 @@ async fn acquire_cargo(
         .as_ref()
         .map(|n| cache_dir.join("bin").join(platform_binary_exe(n)));
 
+    // The cache dir is keyed on the resolved version, so a newer published
+    // version installs into a fresh dir on its own. Only `Fetch` forces a
+    // reinstall of the same version.
+    let force = matches!(update, UpdateLevel::Fetch);
     let already = probe_path.as_ref().is_some_and(|p| p.exists());
-    if !already {
+    if !already || force {
         install_cargo_crate(
             ctx,
             &cargo.crate_name,
@@ -511,8 +587,16 @@ async fn acquire_cargo(
             resolved.clone(),
             Some(cache_dir.clone()),
             None,
+            force,
         )
         .await?;
+    }
+
+    // Record the resolved version so future `None` acquires can skip the query.
+    if let Err(e) =
+        std::fs::create_dir_all(&registry_dir).and_then(|()| std::fs::write(&pointer, &version))
+    {
+        tracing::debug!(error = %e, "failed to record current cargo version pointer");
     }
 
     Ok(AcquiredCargo {
@@ -521,11 +605,95 @@ async fn acquire_cargo(
     })
 }
 
+/// Resolve a cargo binary cache from the recorded `current` version pointer,
+/// without consulting crates.io. Returns the version's cache dir and the binary
+/// name to run, or `None` when there's no usable cached version (so the caller
+/// falls back to a registry query).
+fn cached_cargo_version(
+    registry_dir: &Path,
+    pointer: &Path,
+    executable_hint: Option<&str>,
+) -> Option<(PathBuf, Option<String>)> {
+    let version = std::fs::read_to_string(pointer).ok()?;
+    let version = version.trim();
+    if version.is_empty() {
+        return None;
+    }
+    let cache_dir = registry_dir.join(version);
+    let bin_dir = cache_dir.join("bin");
+    let resolved = match executable_hint {
+        Some(name) => {
+            if !bin_dir.join(platform_binary_exe(name)).exists() {
+                return None;
+            }
+            Some(name.to_string())
+        }
+        // No hint: only safe to serve from cache when there's exactly one binary.
+        None => Some(single_cached_binary(&bin_dir)?),
+    };
+    Some((cache_dir, resolved))
+}
+
+/// The sole binary name (platform extension stripped) in `bin_dir`, or `None`
+/// when there are zero or several — in which case the caller re-queries to
+/// disambiguate.
+fn single_cached_binary(bin_dir: &Path) -> Option<String> {
+    let mut found: Option<String> = None;
+    for entry in std::fs::read_dir(bin_dir).ok()?.flatten() {
+        if !entry.path().is_file() {
+            continue;
+        }
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if found.is_some() {
+            return None;
+        }
+        let name = name
+            .strip_suffix(".exe")
+            .map(str::to_string)
+            .unwrap_or(name);
+        found = Some(name);
+    }
+    found
+}
+
+/// Resolve the remote default-branch (`HEAD`) commit of a git URL via `git
+/// ls-remote` — cheap, no clone. `None` on any failure, leaving the caller to
+/// fall back to a force reinstall.
+async fn remote_git_head_sha(url: &str) -> Option<String> {
+    let url = url.to_string();
+    tokio::task::spawn_blocking(move || {
+        let output = std::process::Command::new("git")
+            .args(["ls-remote", &url, "HEAD"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        parse_ls_remote_sha(&String::from_utf8_lossy(&output.stdout))
+    })
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Parse the commit SHA from `git ls-remote <url> HEAD` output, whose first
+/// field is the hash (`<sha>\tHEAD`).
+fn parse_ls_remote_sha(output: &str) -> Option<String> {
+    let sha = output.split_whitespace().next()?;
+    (sha.len() >= 7 && sha.chars().all(|c| c.is_ascii_hexdigit())).then(|| sha.to_string())
+}
+
 /// Acquire a github source: returns the cache directory containing the repo
 /// (or its requested subtree).
-async fn acquire_github(ctx: &InstallContext, git: &GithubSource) -> Result<PathBuf> {
+async fn acquire_github(
+    ctx: &InstallContext,
+    git: &GithubSource,
+    update: UpdateLevel,
+) -> Result<PathBuf> {
     let cache_mgr = crate::git::GitCacheManager::new(ctx, "plugins");
-    cache_mgr.fetch_url(&git.url, UpdateLevel::Check).await
+    cache_mgr.fetch_url(&git.url, update).await
 }
 
 /// Intermediate result of acquiring a `Source`: where the bits landed and
@@ -600,14 +768,20 @@ impl AcquiredSource {
 ///
 /// `executable_hint` is only used for cargo (to pick which binary to install
 /// for multi-binary crates, or as the binary name when using a git source).
+///
+/// `update` controls freshness: `None` serves the cache (git checks debounced),
+/// while `Check`/`Fetch` force a re-pull. It's the lever that lets `SessionStart`
+/// refresh a `cargo + git` binary whose branch moved (the version-keyed cache
+/// otherwise never re-installs on its own).
 pub async fn acquire_source(
     ctx: &InstallContext,
     source: &Source,
     executable_hint: Option<&str>,
+    update: UpdateLevel,
 ) -> Result<AcquiredSource> {
     match source {
         Source::Cargo(c) => {
-            let acquired = acquire_cargo(ctx, c, executable_hint).await?;
+            let acquired = acquire_cargo(ctx, c, executable_hint, update).await?;
             Ok(AcquiredSource {
                 base: acquired.cache_dir,
                 resolved_executable: acquired.resolved_executable,
@@ -615,10 +789,63 @@ pub async fn acquire_source(
             })
         }
         Source::Github(g) => Ok(AcquiredSource {
-            base: Some(acquire_github(ctx, g).await?),
+            base: Some(acquire_github(ctx, g, update).await?),
             resolved_executable: None,
             kind: AcquiredKind::Github,
         }),
+    }
+}
+
+/// Refresh an already-acquired source in place, leaving an un-acquired source
+/// untouched. Unlike [`acquire_source`], this never installs a missing source:
+/// it only *updates* what is already cached (with `UpdateLevel::Check`).
+/// Returns `true` when a refresh ran.
+///
+/// This is for the once-per-session `SessionStart` warm-up, which should keep
+/// already-installed tools current but must not eagerly install a tool a hook
+/// may never use — that install happens lazily on first dispatch.
+pub async fn refresh_source_if_present(
+    ctx: &InstallContext,
+    source: &Source,
+    executable_hint: Option<&str>,
+) -> Result<bool> {
+    if !source_is_cached(ctx, source, executable_hint) {
+        return Ok(false);
+    }
+    acquire_source(ctx, source, executable_hint, UpdateLevel::Check).await?;
+    Ok(true)
+}
+
+/// Whether a source's bits are already on disk, computed from cache paths
+/// without acquiring anything. Drives [`refresh_source_if_present`].
+fn source_is_cached(ctx: &InstallContext, source: &Source, executable_hint: Option<&str>) -> bool {
+    match source {
+        // Global cargo lives in the user's `~/.cargo/bin`, outside our cache;
+        // we don't manage it, so the prewarm leaves it alone.
+        Source::Cargo(c) if c.global => false,
+        Source::Cargo(c) => match c.git.as_deref() {
+            Some(git_url) => {
+                let Some(exe) = executable_hint else {
+                    return false;
+                };
+                let cache_version = git_cache_version(git_url, c.version.as_deref());
+                let Ok(cache_dir) = get_binary_cache_dir(ctx, &c.crate_name, &cache_version) else {
+                    return false;
+                };
+                cache_dir
+                    .join("bin")
+                    .join(platform_binary_exe(exe))
+                    .exists()
+            }
+            None => {
+                let registry_dir = ctx.cache_dir().join("binaries").join(&c.crate_name);
+                let pointer = registry_dir.join(CURRENT_VERSION_FILENAME);
+                cached_cargo_version(&registry_dir, &pointer, executable_hint).is_some()
+            }
+        },
+        Source::Github(g) => crate::git::GitCacheManager::new(ctx, "plugins")
+            .cache_path_for_url(&g.url)
+            .is_some_and(|p| p.exists()),
     }
 }
 
@@ -660,4 +887,163 @@ pub fn make_executable(path: &Path) -> Result<()> {
     }
     let _ = path;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ls_remote_typical() {
+        let out = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678\tHEAD\n";
+        assert_eq!(
+            parse_ls_remote_sha(out).as_deref(),
+            Some("a1b2c3d4e5f60718293a4b5c6d7e8f9012345678")
+        );
+    }
+
+    #[test]
+    fn parse_ls_remote_takes_first_field() {
+        // ls-remote separates the sha from the ref with a tab.
+        let out = "deadbeefcafe1234\trefs/heads/main\n";
+        assert_eq!(
+            parse_ls_remote_sha(out).as_deref(),
+            Some("deadbeefcafe1234")
+        );
+    }
+
+    #[test]
+    fn parse_ls_remote_rejects_empty_and_nonhex() {
+        assert_eq!(parse_ls_remote_sha(""), None);
+        assert_eq!(parse_ls_remote_sha("not-a-sha\tHEAD"), None);
+        // Too short to be a real object id.
+        assert_eq!(parse_ls_remote_sha("abc\tHEAD"), None);
+    }
+
+    fn write_cached_binary(registry_dir: &Path, version: &str, bin: &str) {
+        let bin_dir = registry_dir.join(version).join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(bin_dir.join(platform_binary_exe(bin)), b"").unwrap();
+    }
+
+    #[test]
+    fn cached_cargo_version_serves_pointer_with_hint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry_dir = tmp.path().join("ripgrep");
+        write_cached_binary(&registry_dir, "14.1.0", "rg");
+        let pointer = registry_dir.join(CURRENT_VERSION_FILENAME);
+        std::fs::write(&pointer, "14.1.0").unwrap();
+
+        let (cache_dir, resolved) =
+            cached_cargo_version(&registry_dir, &pointer, Some("rg")).unwrap();
+        assert_eq!(cache_dir, registry_dir.join("14.1.0"));
+        assert_eq!(resolved.as_deref(), Some("rg"));
+    }
+
+    #[test]
+    fn cached_cargo_version_infers_single_binary_without_hint() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry_dir = tmp.path().join("ripgrep");
+        write_cached_binary(&registry_dir, "14.1.0", "rg");
+        let pointer = registry_dir.join(CURRENT_VERSION_FILENAME);
+        std::fs::write(&pointer, "14.1.0\n").unwrap();
+
+        let (_, resolved) = cached_cargo_version(&registry_dir, &pointer, None).unwrap();
+        assert_eq!(resolved.as_deref(), Some("rg"));
+    }
+
+    #[test]
+    fn cached_cargo_version_none_without_pointer() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry_dir = tmp.path().join("ripgrep");
+        write_cached_binary(&registry_dir, "14.1.0", "rg");
+        let pointer = registry_dir.join(CURRENT_VERSION_FILENAME);
+        // No pointer written → must fall back to a query.
+        assert!(cached_cargo_version(&registry_dir, &pointer, Some("rg")).is_none());
+    }
+
+    #[test]
+    fn cached_cargo_version_none_when_binary_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry_dir = tmp.path().join("ripgrep");
+        write_cached_binary(&registry_dir, "14.1.0", "rg");
+        let pointer = registry_dir.join(CURRENT_VERSION_FILENAME);
+        std::fs::write(&pointer, "14.1.0").unwrap();
+
+        // Pointer is valid but the requested binary isn't there.
+        assert!(cached_cargo_version(&registry_dir, &pointer, Some("other")).is_none());
+    }
+
+    #[test]
+    fn cached_cargo_version_ambiguous_without_hint_is_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry_dir = tmp.path().join("multi");
+        write_cached_binary(&registry_dir, "1.0.0", "a");
+        write_cached_binary(&registry_dir, "1.0.0", "b");
+        let pointer = registry_dir.join(CURRENT_VERSION_FILENAME);
+        std::fs::write(&pointer, "1.0.0").unwrap();
+
+        // Two binaries and no hint → can't disambiguate from cache.
+        assert!(cached_cargo_version(&registry_dir, &pointer, None).is_none());
+    }
+
+    #[test]
+    fn source_is_cached_crates_io_present_and_absent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(tmp.path().to_path_buf());
+        let src = Source::Cargo(CargoSource::new("ripgrep"));
+
+        // Absent → false: the prewarm must not eagerly install.
+        assert!(!source_is_cached(&ctx, &src, Some("rg")));
+
+        let registry_dir = ctx.cache_dir().join("binaries").join("ripgrep");
+        write_cached_binary(&registry_dir, "14.1.0", "rg");
+        std::fs::write(registry_dir.join(CURRENT_VERSION_FILENAME), "14.1.0").unwrap();
+        assert!(source_is_cached(&ctx, &src, Some("rg")));
+    }
+
+    #[test]
+    fn source_is_cached_global_is_never_managed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(tmp.path().to_path_buf());
+        let mut cargo = CargoSource::new("ripgrep");
+        cargo.global = true;
+        assert!(!source_is_cached(&ctx, &Source::Cargo(cargo), Some("rg")));
+    }
+
+    #[test]
+    fn source_is_cached_cargo_git_probes_commit_keyed_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(tmp.path().to_path_buf());
+        let cargo = CargoSource::new("tool").with_git("https://example.com/o/r");
+        let src = Source::Cargo(cargo.clone());
+
+        assert!(!source_is_cached(&ctx, &src, Some("tool")));
+
+        let cache_version =
+            git_cache_version(cargo.git.as_deref().unwrap(), cargo.version.as_deref());
+        let bin_dir = get_binary_cache_dir(&ctx, &cargo.crate_name, &cache_version)
+            .unwrap()
+            .join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        std::fs::write(bin_dir.join(platform_binary_exe("tool")), b"").unwrap();
+        assert!(source_is_cached(&ctx, &src, Some("tool")));
+
+        // A git source can't be probed without knowing the binary name.
+        assert!(!source_is_cached(&ctx, &src, None));
+    }
+
+    #[tokio::test]
+    async fn refresh_source_if_present_skips_absent_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ctx = InstallContext::new(tmp.path().to_path_buf());
+        let src = Source::Cargo(CargoSource::new("ripgrep"));
+
+        // Nothing cached → no refresh runs and nothing is installed (no network).
+        let refreshed = refresh_source_if_present(&ctx, &src, Some("rg"))
+            .await
+            .unwrap();
+        assert!(!refreshed);
+        assert!(!ctx.cache_dir().join("binaries").join("ripgrep").exists());
+    }
 }

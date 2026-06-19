@@ -17,7 +17,7 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 use semver::Version;
-use symposium_install::Runnable;
+use symposium_install::{Runnable, UpdateLevel};
 use tokio::process::Command;
 
 /// Collect every plugin subcommand whose plugin-level and subcommand-level predicates
@@ -112,7 +112,7 @@ pub async fn dispatch_external(
         })?;
 
     let runnable = resolve_runnable(
-        acquire_installation(sym, installation, None, None).await?,
+        acquire_installation(sym, installation, None, None, UpdateLevel::None).await?,
         &format!("subcommand `{name}`"),
     )?;
 
