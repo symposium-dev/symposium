@@ -18,15 +18,21 @@ Must be run from within a Rust workspace. Performs the following steps:
 
 2. **Scan dependencies** — reads the full dependency graph from the workspace.
 
-3. **Discover applicable skills** — loads plugin sources (from user config) and matches skill predicates against workspace dependencies.
+3. **Load installed crates** — fetches each `[[installed-crate]]` from the user config (from crates.io, git, or path). Checks for updates based on source type: crates.io and git check on a throttled cadence (at most once per 24 hours); path sources always check mtime.
 
-4. **Install skills** — for each configured agent, copies applicable `SKILL.md` files into the agent's expected skill directory (e.g., `.claude/skills/` for Claude Code, `.agents/skills/` for Copilot/Gemini/Codex). A `.gitignore` containing `*` is written into every new skill directory (and its `skills/` parent if new), and an empty `.symposium` marker file is dropped into each installed skill directory.
+4. **Resolve dependency allow list** — collects `dependency-allow-list` entries from both the user config and all installed plugin crates. Checks workspace deps against the combined list and fetches any matching crates as additional plugin sources.
 
-5. **Mirror workspace skills** — if `agents-syncing` is enabled (default), user-authored skills in `<workspace>/.agents/skills/` are propagated into the skill directories of any configured agent that doesn't natively use `.agents/skills/` (e.g., `.claude/skills/`, `.kiro/skills/`). See [Workspace skills](../workspace-skills.md).
+5. **Resolve auto-installs** — follows `[[auto-install]]` entries from all loaded plugins (recursively, with predicate evaluation).
 
-6. **Clean up stale skills** — scans every agent's skills parent directory and removes any subdirectory containing the `.symposium` marker that wasn't installed (or propagated) this sync. Directories without the marker (user-managed) are left untouched.
+6. **Discover applicable skills** — scans each plugin source crate for `SYMPOSIUM.toml` files (or falls back to `$ROOT/skills/`), then matches skill predicates against workspace dependencies.
 
-7. **Register hooks** — ensures hooks and MCP servers are registered for all configured agents. Registers both global hooks (for all projects) and project-specific hooks (for the current project). Unregisters hooks for agents no longer in the config.
+7. **Install skills** — for each configured agent, copies applicable `SKILL.md` files into the agent's expected skill directory (e.g., `.claude/skills/` for Claude Code, `.agents/skills/` for Copilot/Gemini/Codex). A `.gitignore` containing `*` is written into every new skill directory (and its `skills/` parent if new), and an empty `.symposium` marker file is dropped into each installed skill directory.
+
+8. **Mirror workspace skills** — if `agents-syncing` is enabled (default), user-authored skills in `<workspace>/.agents/skills/` are propagated into the skill directories of any configured agent that doesn't natively use `.agents/skills/` (e.g., `.claude/skills/`, `.kiro/skills/`). See [Workspace plugins](../workspace.md).
+
+9. **Clean up stale skills** — scans every agent's skills parent directory and removes any subdirectory containing the `.symposium` marker that wasn't installed (or propagated) this sync. Directories without the marker (user-managed) are left untouched.
+
+10. **Register hooks** — ensures hooks and MCP servers are registered for all configured agents. Registers both global hooks (for all projects) and project-specific hooks (for the current project). Unregisters hooks for agents no longer in the config.
 
 ## Automatic sync
 

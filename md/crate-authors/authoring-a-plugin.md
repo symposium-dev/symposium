@@ -4,21 +4,17 @@ Symposium lets you ship skills, hooks, and MCP servers that are automatically lo
 
 ## Step 1. Create a `SYMPOSIUM.toml` manifest
 
-Every plugin starts with a `SYMPOSIUM.toml` manifest uploaded to the [central recommendations repository][rr]. The manifest declares your plugin's name, which crates it applies to, and what extensions it provides.
+Every plugin starts with a `SYMPOSIUM.toml` manifest in your crate. The manifest declares your plugin's name, which crates it applies to, and what extensions it provides.
 
 ```toml
-# `my-crate/SYMPOSIUM.toml` on the symposium-dev/recommendations repository
+# SYMPOSIUM.toml at your crate root
 name = "my-crate"
 crates = ["my-crate"]
 ```
 
-The `crates` field controls when the plugin is active — it will only load for projects that depend on the listed crates. Use `["*"]` to apply to all projects.
+The `crates` field controls when the plugin is active — it will only load for projects that depend on the listed crates. Use `["*"]` to apply to all projects. Both fields are optional: `name` defaults to the crate name and `crates` defaults to `["*"]`.
 
 See the [plugin definition reference](../reference/plugin-definition.md) for the full manifest schema.
-
-### Why is the central repository required?
-
-We currently require an entry in our central [recommendations repository][rr] before Symposium will install a plugin. This protects against malicious plugins (e.g., from typosquatting crates) and lets us centrally yank a plugin that proves problematic. Once Symposium has reached a steady state and we have established security protocols we are comfortable with, we expect to lift this requirement.
 
 ## Step 2. Add skills, hooks, and/or MCP servers
 
@@ -42,13 +38,14 @@ See the [Skill definition reference](../reference/skill-definition.md) for the f
 
 #### Embedding skills in your crate (recommended)
 
-If you maintain the crate, we recommend shipping skills directly in your source tree. This way users always get skills matching the exact version they have installed.
+If you maintain the crate, ship skills directly in your source tree. Users always get skills matching the exact version they have installed.
 
 ##### 1. Put skills in your crate sources under `skills/`
 
 ```
 my-crate/
     Cargo.toml
+    SYMPOSIUM.toml
     src/
         lib.rs
     skills/
@@ -58,67 +55,44 @@ my-crate/
             SKILL.md
 ```
 
-##### 2. Add `source = "crate"` to your manifest
+##### 2. Point your manifest at the skills directory
 
 ```toml
-# `my-crate/SYMPOSIUM.toml` on the symposium-dev/recommendations repository
-name = "my-crate"
-crates = ["my-crate"]
-
+# SYMPOSIUM.toml
 [[skills]]
-source = "crate"
+source.path = "skills"
 ```
 
-Symposium fetches the crate source (from the local cargo cache or crates.io) and discovers skills in the `skills/` directory.
+Symposium discovers all `SKILL.md` files within the specified directory.
 
-##### Prefer a directory other than `skills/`?
+#### Skills without a manifest
 
-Add `[package.metadata.symposium]` to your crate's `Cargo.toml` to specify a custom path:
-
-```toml
-# In your crate's Cargo.toml
-[[package.metadata.symposium.skills]]
-path = "docs/agent-skills"
-```
-
-When no metadata section is present, Symposium defaults to the `skills/` directory. See [Supporting your crate](./supporting-your-crate.md) for the full metadata schema including redirects to other crates.
-
-#### Standalone skills (on the recommendations repo)
-
-You can also upload skills directly to the [recommendations repo][rr] — without embedding them in the crate source. This is the right approach when you're writing skills for a crate you don't maintain.
-
-Place skill directories alongside your `SYMPOSIUM.toml`:
+If your crate has no `SYMPOSIUM.toml` at all, Symposium falls back to scanning `skills/` automatically. This is the simplest path — just add skills and you're done:
 
 ```
 my-crate/
-    SYMPOSIUM.toml
-    basics/
-        SKILL.md
-    advanced-patterns/
-        SKILL.md
+    Cargo.toml
+    src/
+        lib.rs
+    skills/
+        basics/
+            SKILL.md
 ```
 
-And point the manifest at the local directory:
+#### Writing skills for someone else's crate
+
+You can publish a standalone plugin crate that provides skills for a crate you don't maintain. Create a new crate with a `SYMPOSIUM.toml`:
 
 ```toml
-name = "my-crate"
-crates = ["my-crate"]
+# symposium-serde/SYMPOSIUM.toml
+name = "serde-guidance"
+crates = ["serde"]
 
 [[skills]]
-source.path = "."
+source.path = "skills"
 ```
 
-Standalone skills **must** include `crates` in their frontmatter so Symposium knows which crate they apply to:
-
-```markdown
----
-name: widgetlib-basics
-description: Basic guidance for widgetlib usage
-crates: widgetlib=1.0
----
-
-Guidance body here.
-```
+Then publish to crates.io and submit it for inclusion in the `symposium-recommendations` allow list.
 
 #### Skills from a git repository
 
@@ -129,11 +103,11 @@ Symposium also supports fetching skills from a GitHub URL:
 source.git = "https://github.com/org/my-crate/tree/main/symposium/skills"
 ```
 
-This is useful for hosting skills in a dedicated repository or a subdirectory of a monorepo. Note that the central recommendations repository does not currently accept `source.git` entries by policy — use `source = "crate"` or `source.path` for submissions there.
+This is useful for hosting skills in a dedicated repository or a subdirectory of a monorepo.
 
 ### Installing auxiliary tools
 
-An **installation** tells symposium how to obtain a binary that your hooks or MCP servers will run. The recommended approach is a `cargo` installation, which installs a crate binary from crates.io:
+An **installation** tells Symposium how to obtain a binary that your hooks or MCP servers will run. The recommended approach is a `cargo` installation, which installs a crate binary from crates.io:
 
 ```toml
 [[installations]]
@@ -144,6 +118,18 @@ executable = "my-crate-hooks"
 ```
 
 Symposium caches the binary under `~/.symposium/cache/`. Binaries are updated automatically when new versions are available on [crates.io](https://crates.io/).
+
+#### Implicit installations from binary targets
+
+If your plugin crate itself has binary targets, they're automatically available as installations — no `[[installations]]` section needed. Just reference the binary target name directly:
+
+```toml
+# If your crate has `[[bin]] name = "my-checker"` in Cargo.toml:
+[[hooks]]
+name = "check"
+event = "PreToolUse"
+command = "my-checker"   # uses the binary target directly
+```
 
 See the [plugin definition reference](../reference/plugin-definition.md#installations) for other installation sources (GitHub repositories, local paths) and advanced options like `install_commands`.
 
@@ -165,7 +151,7 @@ matcher = "Bash"
 command = "my-crate-hook-command"
 ```
 
-The `command` field references the name of an installation defined in [the `[[installations]]` section](#installations) described previously. For example:
+The `command` field references the name of an installation defined in [the `[[installations]]` section](#installing-auxiliary-tools), or an implicit binary target from the crate. For example:
 
 ```toml
 [[installations]]
@@ -213,19 +199,34 @@ args = ["--stdio"]
 
 See the [plugin definition reference](../reference/plugin-definition.md#mcp_servers) for HTTP and SSE transports, crate filtering, and registration details.
 
-## Step 3. Validate your plugin
+## Step 3. Publish and distribute
 
-Before submitting a PR, validate your plugin or skill directory to catch errors early — missing fields, bad crate predicates, unreachable skill paths, and crate names that don't exist on crates.io. You can run this on your local checkout of the recommendations repo once you've prepared your changes:
+### For your own crate
+
+If you maintain the crate, just publish to crates.io with the `SYMPOSIUM.toml` included in the package. Then submit your crate name for inclusion in the `symposium-recommendations` allow list so users get your skills automatically.
+
+### For someone else's crate
+
+Publish a standalone plugin crate (e.g., `symposium-serde`) and submit it for inclusion in the `symposium-recommendations` allow list.
+
+### For private/internal use
+
+Install directly without going through the allow list:
+
+```bash
+cargo agents install my-company-plugin
+# or from git:
+cargo agents install --git https://github.com/my-org/my-plugin
+```
+
+## Step 4. Validate your plugin
+
+Before publishing, validate your plugin to catch errors early — missing fields, bad crate predicates, unreachable skill paths, and crate names that don't exist on crates.io:
 
 ```bash
 # Validate a plugin manifest
 cargo agents plugin validate path/to/SYMPOSIUM.toml
 
-# Validate a directory of standalone skills
-cargo agents plugin validate path/to/skill-directory/
-
 # Skip the crates.io name check (e.g., for private crates)
 cargo agents plugin validate path/to/SYMPOSIUM.toml --no-check-crates
 ```
-
-[rr]: https://github.com/symposium-dev/recommendations

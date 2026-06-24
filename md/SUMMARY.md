@@ -18,8 +18,14 @@
 # User's guide
 
 - [Installing Symposium](./install.md)
-- [Workspace skills](./workspace-skills.md)
-- [Custom plugin sources](./custom-plugin-source.md)
+- [Plugins via Crates](./installing-plugins.md)
+- [Auto-discovery from dependencies](./auto-discovery.md)
+- [Workspace plugins](./workspace.md)
+
+# Symposium patterns
+
+- [Company-wide plugins](./patterns/company-plugins.md)
+- [Local plugin development](./patterns/local-development.md)
 
 # For crate authors
 
@@ -33,6 +39,9 @@
   - [The `cargo agents` command](./reference/cargo-agents.md)
     - [`cargo agents init`](./reference/cargo-agents-init.md)
     - [`cargo agents sync`](./reference/cargo-agents-sync.md)
+    - [`cargo agents install`](./reference/cargo-agents-install.md)
+    - [`cargo agents uninstall`](./reference/cargo-agents-uninstall.md)
+    - [`cargo agents status`](./reference/cargo-agents-status.md)
     - [`cargo agents self-update`](./reference/cargo-agents-self-update.md)
     - [`cargo agents plugin`](./reference/cargo-agents-plugin.md)
     - [`cargo agents crate-info`](./reference/cargo-agents-crate-info.md)

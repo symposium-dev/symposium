@@ -6,7 +6,7 @@ Symposium is a Rust crate with both a library (`src/lib.rs`) and a binary (`src/
 
 Everything hangs off the `Symposium` struct, which wraps the parsed `Config` with resolved paths for config, cache, and log directories. Two constructors: `from_environment()` for production and `from_dir()` for tests.
 
-Defines the user-wide `Config` (stored at `~/.symposium/config.toml`) with `[[agent]]` entries, logging, plugin sources, defaults, and `auto-update` (off/warn/on, default warn). Provides `plugin_sources()` to resolve the effective list of plugin source directories. The `workspace_deps(cwd)` factory is the standard way to create a `WorkspaceDeps` — it wires in `cargo_override` and `cache_dir` so callers get both the `SYMPOSIUM_CARGO` override and cross-invocation disk caching.
+Defines the user-wide `Config` (stored at `~/.symposium/config.toml`) with `[[agent]]` entries, logging, `[[installed-crate]]` entries, `dependency-allow-list`, and `auto-update` (off/warn/on, default warn). Provides `installed_crates()` to resolve the effective list of plugin source crates. The `workspace_deps(cwd)` factory is the standard way to create a `WorkspaceDeps` — it wires in `cargo_override` and `cache_dir` so callers get both the `SYMPOSIUM_CARGO` override and cross-invocation disk caching.
 
 ### `agents.rs` — agent abstraction
 
@@ -14,31 +14,37 @@ Centralizes agent-specific knowledge: hook registration file paths, skill instal
 
 ### `init.rs` — initialization command
 
-Implements `cargo agents init`. Prompts for agents (or accepts `--add-agent`/`--remove-agent` flags), writes user config, and registers global hooks.
+Implements `cargo agents init`. Prompts for agents (or accepts `--add-agent`/`--remove-agent` flags), writes user config (including the default `symposium-recommendations` installed crate), and registers global hooks.
+
+### `install.rs` — install/uninstall commands
+
+Implements `cargo agents install` and `cargo agents uninstall`. Parses the `<CRATE>[@<VERSION>]`, `--git`, and `--path` forms, validates the source, and adds/removes `[[installed-crate]]` entries in the user config.
+
+### `status.rs` — status command
+
+Implements `cargo agents status`. Loads installed crates and workspace deps, evaluates predicates, and reports which plugins/skills are active or inactive and why.
 
 ### `sync.rs` — synchronization command
 
-Implements `cargo agents sync`. Scans workspace dependencies, finds applicable skills from plugin sources, and synchronizes them into each configured agent's skill directory. The core primitive is `sync_skill_dir(source_dir, dest_dir, project_root)`, shared by both the plugin-skill and user-authored-skill code paths. It copies the entire source directory (not just `SKILL.md`) and is change-aware: it compares source and destination content, only performing the delete-and-recopy when files actually differ, so the disk shows no modifications when nothing changed. A configurable debounce (`sync-debounce-secs`, default 5s, keyed on the `.symposium` marker's mtime) skips even the comparison for recently-synced skills. On each sync, scans every agent's skills parent directory and reaps any marker-bearing subdirectory it didn't install this time, leaving user-managed skills (which lack the marker) untouched. Writes a `.gitignore` with `*` only into individual skill directories (not parent directories like `.claude/` or `.claude/skills/`). Also provides `register_hooks()` for use by `init`, which registers only symposium's own global hook handler — individual plugin hooks are never written into agent configs.
+Implements `cargo agents sync`. Fetches installed plugin crates, resolves allow lists and auto-installs, discovers plugins, finds applicable skills, and synchronizes them into each configured agent's skill directory. The core primitive is `sync_skill_dir(source_dir, dest_dir, project_root)`, shared by both the plugin-skill and user-authored-skill code paths. It copies the entire source directory (not just `SKILL.md`) and is change-aware: it compares source and destination content, only performing the delete-and-recopy when files actually differ, so the disk shows no modifications when nothing changed. A configurable debounce (`sync-debounce-secs`, default 5s, keyed on the `.symposium` marker's mtime) skips even the comparison for recently-synced skills. On each sync, scans every agent's skills parent directory and reaps any marker-bearing subdirectory it didn't install this time, leaving user-managed skills (which lack the marker) untouched. Writes a `.gitignore` with `*` only into individual skill directories (not parent directories like `.claude/` or `.claude/skills/`). Also provides `register_hooks()` for use by `init`, which registers only symposium's own global hook handler — individual plugin hooks are never written into agent configs.
 
 Two entry points: `sync(sym, cwd)` for standalone CLI use (creates its own `WorkspaceDeps`) and `sync_with_deps(sym, deps)` for the hook pipeline (shares the cached workspace resolution with other hook stages).
 
 ### `plugins.rs` — plugin registry
 
-Scans configured plugin source directories for TOML manifests and parses them into `Plugin` structs. Validation here turns the raw TOML into:
-- `Installation` entries (optional `source`, optional `executable`/`script`, optional `args`, plus `requirements` and `install_commands`) collected on `Plugin.installations`. Inline installation references on hooks or other installations are *promoted* into synthetic `Installation` entries with derived names (`<hook>` for an inline `command`, `<owner>__req_<i>` for an inline requirement), so all references in the validated form are plain names.
+Scans plugin source crates for `SYMPOSIUM.toml` manifests and parses them into `Plugin` structs. Discovery walks from each crate root looking for `SYMPOSIUM.toml` files (pruning subtrees when found). If no manifests are found in a crate, falls back to scanning `$ROOT/skills/` for standalone `SKILL.md` files. Also reads crate `Cargo.toml` binary targets to register implicit installations.
+
+Validation turns the raw TOML into:
+- `Installation` entries (optional `source`, optional `executable`/`script`, optional `args`, plus `requirements` and `install_commands`) collected on `Plugin.installations`. Inline installation references on hooks or other installations are *promoted* into synthetic `Installation` entries with derived names (`<hook>` for an inline `command`, `<owner>__req_<i>` for an inline requirement), so all references in the validated form are plain names. Implicit installations from binary targets are merged in.
 - `Hook` entries with `command: String` (the name of an `Installation`) plus optional hook-level `executable` / `script` / `args`. Validation guarantees at most one of `executable`/`script` is set across hook + installation, and at most one layer sets `args`.
 
-Also discovers standalone `SKILL.md` files not wrapped in a plugin. Returns a `PluginRegistry` — a table of contents that doesn't load skill content.
+Returns a `PluginRegistry` — a table of contents that doesn't load skill content.
 
 ### `installation.rs` — sources and acquisition
 
 Defines `Source` (the `source = "..."`-tagged enum: `cargo`, `github`, `binary`) and `acquire_source`, which downloads / installs / clones the source and returns an `AcquiredSource` whose `resolve_executable` / `resolve_script` methods turn a relative `executable`/`script` name into a concrete path. The `Runnable` enum (`Exec(PathBuf)` or `Script(PathBuf)`) is the final form a hook command resolves to. The `git` submodule handles GitHub tarball acquisition and caching.
 
-Validates skill group source constraints at parse time: mutual exclusivity of `source.path`/`source.git`/`source = "crate"`, and the requirement that `source = "crate"` has at least one non-wildcard predicate.
-
-### `crate_metadata.rs` — parse Cargo.toml metadata
-
-Parses `[package.metadata.symposium]` from crate `Cargo.toml` files. Crate authors embed skill layout metadata so Symposium knows where to find skills (or which other crate to redirect to). Returns `SkillSource::Path(subdir)` or `SkillSource::Crate { name, version }` for redirects.
+Validates skill group source constraints at parse time: mutual exclusivity of `source.path`/`source.git`.
 
 ### `predicate.rs` — unified activation predicates
 
@@ -47,22 +53,22 @@ Defines one `Predicate` enum covering both crate-graph matching and runtime/envi
 - The **`crates`** field uses crate-atom syntax (`serde`, `serde>=1.0`, `*`) and lowers, via `CrateList`, to `crate(...)` / `crate(*)` predicates OR-combined into a single `any(...)` that is appended to the same list. So `crates` is sugar — there is no separate crate-predicate type.
 - The **`predicates`** field uses function-call syntax: `crate(<atom>)`, `shell(<cmd>)` (verbatim arg, `sh -c`, exit 0 holds), `path_exists(<arg>)` (disk, then `$PATH` for bare names), `env(<name>[=<value>])`, and the combinators `not(<p>)`, `any(<p>, …)`, `all(<p>, …)`.
 
-Each gated struct (plugin, skill group, skill, hook, MCP server, subcommand) stores a single merged `predicates: PredicateSet`. Evaluation is `PredicateSet::evaluate(ctx) -> bool`. For `source = "crate"`, `witness` / `union_matched_crates` return the concrete crates that participate in a *satisfying* evaluation (the fetch set): `crate(c)` contributes `c` when present, `any` unions its true children, `all` unions all children when all hold, and `not` contributes nothing. `collect_crate_names` (crates.io validation) walks all positions regardless. Plugin/group/skill/MCP predicates are evaluated at sync time; hook dispatch evaluates the plugin-level set (so a plugin's `crates` now gate its hooks) plus the hook-level set. Hook dispatch threads in the workspace crate list, but resolves it (running cargo) only when some plugin- or hook-level predicate references a *concrete* `crate(...)` — wildcard and env/shell/path predicates dispatch without a cargo query. See the [predicates reference](../reference/predicates.md).
+Each gated struct (plugin, skill group, skill, hook, MCP server, subcommand) stores a single merged `predicates: PredicateSet`. Evaluation is `PredicateSet::evaluate(ctx) -> bool`. `collect_crate_names` (crates.io validation) walks all positions regardless. Plugin/group/skill/MCP predicates are evaluated at sync time; hook dispatch evaluates the plugin-level set (so a plugin's `crates` now gate its hooks) plus the hook-level set. Hook dispatch threads in the workspace crate list, but resolves it (running cargo) only when some plugin- or hook-level predicate references a *concrete* `crate(...)` — wildcard and env/shell/path predicates dispatch without a cargo query. See the [predicates reference](../reference/predicates.md).
 
 ### `skills.rs` — skill resolution and matching
 
-Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates crate predicates at each level (plugin, group, skill) to determine which skills apply. For `source = "crate"` groups, resolves predicates to a matched crate set, fetches each crate's source via `RustCrateFetch`, reads `[package.metadata.symposium]` to determine skill paths, and follows redirects recursively with cycle detection and a depth limit of 10.
+Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates crate predicates at each level (plugin, group, skill) to determine which skills apply.
 
 Each applicable skill carries a `SkillOrigin` describing *where its bytes live*, used at sync time for dedup and install-path disambiguation. What matters for identity is the on-disk location of the skill, not which plugin manifest pointed at it — two plugins in the same source pointing at the same skill bundle dedupe.
-- `Crate { name, version }` — from a crate-source resolution (`source = "crate"`). Two `Crate` origins with the same `(name, version)` are the same logical skill, regardless of which plugin pointed at them.
+- `Crate { name, version }` — from a plugin within an installed crate. Two `Crate` origins with the same `(name, version)` are the same logical skill, regardless of which plugin pointed at them.
 - `Git { repo, commit_sha, skill_path }` — from a `source.git` group. Identity is the triple `(owner/repo, resolved commit SHA, SKILL.md path within the repo tree)`. Two plugins that pointed at the same repo via different URL forms (root URL vs. `tree/<ref>/<subpath>`) collapse to one install when they end up loading the same SKILL.md from the same commit; different SKILL.md files within one repo stay distinct.
-- `Source { source_name, skill_path }` — from a plugin's `source.path` group, or from a standalone `SKILL.md` discovered in a registry source. `source_name` is the registry source's display name (e.g. `"user-plugins"`); `skill_path` is the SKILL.md's parent directory relative to the source root (canonicalized first, so `../`-laden joins collapse to the same string as a direct standalone walk).
+- `Source { source_name, skill_path }` — from a plugin's `source.path` group. `source_name` is the crate's display name; `skill_path` is the SKILL.md's parent directory relative to the crate root (canonicalized first, so `../`-laden joins collapse to the same string).
 
 `sync` prefers the plain `<agent-skills-dir>/<skill-name>/` and only falls back to `<skill-name>-<origin-disambiguator>/` when needed: when more than one origin claims the same skill name, or when the unsuffixed slot is already occupied by a user-managed directory (one without the `.symposium` marker). The disambiguator is human-readable for `Crate` (`<crate-name>-<version>`) and an 8-hex SHA-256 prefix for the other variants. The `.symposium` marker, wildcard `.gitignore`, and stale-cleanup walk all key on the marker file rather than directory name shape, so transitions between unsuffixed and suffixed names self-heal across syncs.
 
 ### `subcommand_dispatch.rs` — plugin-vended subcommands
 
-Routes the `Commands::External` arm of clap's `allow_external_subcommands`. `find_subcommand` walks the `PluginRegistry`, applying plugin-level and subcommand-level crate predicates against the workspace, and returns the matched `(Plugin, Subcommand)` (or an error if more than one plugin claims the name). `dispatch_external` then looks up the named `Installation`, resolves it via `installation::resolve_runnable`, and spawns the child with stdio inherited — propagating the exit code as a `u8` so callers can convert to `ExitCode` (binary) or treat non-zero as an error (library). `applicable_subcommands` is the shared iterator over workspace-applicable plugin subcommands, reused by help rendering.
+Routes the `Commands::External` arm of clap's `allow_external_subcommands`. `find_subcommand` walks the `PluginRegistry`, applying plugin-level and subcommand-level crate predicates against the workspace, and returns the matched `(Plugin, Subcommand)` (or an error if more than one plugin claims the name). `dispatch_external` then looks up the named `Installation` (including implicit installations from binary targets), resolves it via `installation::resolve_runnable`, and spawns the child with stdio inherited — propagating the exit code as a `u8` so callers can convert to `ExitCode` (binary) or treat non-zero as an error (library). `applicable_subcommands` is the shared iterator over workspace-applicable plugin subcommands, reused by help rendering.
 
 ### `help_render.rs` — `--help` rendering
 

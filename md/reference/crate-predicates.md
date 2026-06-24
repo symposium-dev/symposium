@@ -36,7 +36,7 @@ The `crates` field accepts an array of predicate strings:
 
 - `crates = ["serde"]`
 - `crates = ["serde", "tokio>=1.40"]`
-- `crates = ["*"]` (wildcard — always active)
+- `crates = ["*"]` (wildcard — always active; this is the default if `crates` is omitted)
 
 ### Skill frontmatter (YAML)
 
@@ -54,20 +54,3 @@ If there are multiple `crates` declarations in scope, all of them must match (AN
 * If a [plugin](./plugin-definition.md) defines `crates` at the top-level, it must match before any other plugin contents will be considered.
 * If a skill-group within a plugin defines `crates`, that predicate must match before the skills themselves will be fetched.
 * If the skills define `crates` in their front-matter, those crates must match before the skills will be added to the project.
-
-## Matched crate set
-
-When a skill group uses `source = "crate"`, predicates serve a second purpose beyond filtering: they determine **which crate sources to fetch**.
-
-Each non-wildcard predicate that matches a workspace dependency contributes that dependency's name and version to the *matched crate set*. Symposium then fetches the source for each crate in the set and looks for skills inside it.
-
-- `"serde"` against a workspace with `serde 1.0.210` → matched set: `{serde@1.0.210}`
-- `"serde"` against a workspace without serde → no match, plugin skipped
-- `"*"` → matches, but contributes no concrete crates to the set
-- `["serde", "tokio"]` with both in workspace → `{serde@1.0.210, tokio@1.38.0}`
-
-Predicates from both the plugin level and the group level are unioned together to form the matched set.
-
-Because wildcards contribute no concrete crates, **at least one non-wildcard predicate must be present** (at either the plugin or group level) when using crate-sourced skills. A manifest with only wildcards and `source = "crate"` is rejected at parse time.
-
-When the gate uses combinators (`any`, `all`, `not`) or mixes `crate(...)` with non-crate predicates, the matched set generalizes to the predicate's **witness** — the concrete crates that participate in a satisfying evaluation. See [Crate-sourced skills and the witness](./predicates.md#crate-sourced-skills-and-the-witness).

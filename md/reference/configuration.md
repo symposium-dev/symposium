@@ -19,17 +19,24 @@ name = "gemini"
 [logging]
 level = "info"
 
-[defaults]
-symposium-recommendations = true
-user-plugins = true
+# Installed plugin crates
+[[installed-crate]]
+name = "symposium-recommendations"
 
-[[plugin-source]]
-name = "my-org"
-git = "https://github.com/my-org/symposium-plugins"
+[[installed-crate]]
+name = "my-org-plugins"
+git = "https://github.com/my-org/my-org-plugins"
 
-[[plugin-source]]
+[[installed-crate]]
+name = "semver-tracked"
+version = "1"
+
+[[installed-crate]]
 name = "local-dev"
-path = "my-plugins"
+path = "/home/me/dev/my-plugins"
+
+# Allow any workspace dep with a SYMPOSIUM.toml to be auto-discovered
+dependency-allow-list = ["*"]
 ```
 
 ## Top-level keys
@@ -37,9 +44,10 @@ path = "my-plugins"
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `auto-sync` | bool | `true` | Automatically run `cargo agents sync` during hook invocations. When enabled, skills are kept in sync with workspace dependencies without manual intervention. |
-| `agents-syncing` | bool | `true` | Propagate user-authored skills from `.agents/skills/` into the per-agent skill directories of any configured agent that does not natively use `.agents/skills/` (such as `.claude/skills/` or `.kiro/skills/`). Skills that symposium itself installed — identified by the `.symposium` marker file — are not propagated. See [Workspace skills](../workspace-skills.md) for the user-guide overview, or [Agents syncing](#agents-syncing-mirror-user-authored-skills) below for details. |
+| `agents-syncing` | bool | `true` | Propagate user-authored skills from `.agents/skills/` into the per-agent skill directories of any configured agent that does not natively use `.agents/skills/` (such as `.claude/skills/` or `.kiro/skills/`). Skills that symposium itself installed — identified by the `.symposium` marker file — are not propagated. See [Workspace plugins](../workspace.md) for the user-guide overview, or [Agents syncing](#agents-syncing-mirror-user-authored-skills) below for details. |
 | `hook-scope` | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace. |
 | `auto-update` | string | `"on"` | Controls automatic update behavior. `"off"` disables update checks entirely. `"warn"` checks the registry (at most once per 24 hours) and prints a message when a newer version is available. `"on"` automatically installs the update via `cargo install` and re-executes the command with the new binary. |
+| `dependency-allow-list` | array of strings | `[]` | Workspace dependencies that are approved for automatic plugin discovery. When a workspace dep appears in this list and contains a `SYMPOSIUM.toml`, it is treated as an installed plugin crate. Use `["*"]` to approve all workspace deps. Combines with allow lists declared by installed plugin crates. |
 
 ### Agents syncing: mirror user-authored skills
 
@@ -76,25 +84,22 @@ Each `[[agent]]` entry identifies an agent you use. You can configure multiple a
 |-----|------|---------|-------------|
 | `level` | string | `"info"` | Minimum log level. One of: `trace`, `debug`, `info`, `warn`, `error`. |
 
-## `[defaults]`
+## `[[installed-crate]]`
 
-Controls the two built-in plugin sources. Both are enabled by default.
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `symposium-recommendations` | bool | `true` | Fetch plugins from the [symposium-dev/recommendations](https://github.com/symposium-dev/recommendations) repository. |
-| `user-plugins` | bool | `true` | Scan `~/.symposium/plugins/` for user-defined plugins. |
-
-## `[[plugin-source]]`
-
-Defines additional plugin sources. Each entry must have exactly one of `git` or `path`.
+Each `[[installed-crate]]` entry declares a plugin crate to load. Managed by `cargo agents install` / `cargo agents uninstall`, but can also be edited manually. Each entry must have exactly one of: a `name` only (crates.io), `git`, or `path`.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `name` | string | *(required)* | A name for this source (used in logs and cache paths). |
-| `git` | string | — | Repository URL. Fetched and cached under `~/.symposium/cache/plugin-sources/`. |
-| `path` | string | — | Local directory containing plugins. Relative paths are resolved from `~/.symposium/`. |
-| `auto-update` | bool | `true` | Check for updates on startup. Only applies to `git` sources. |
+| `name` | string | *(required)* | Crate name. |
+| `version` | string | — | Version requirement (Cargo semver syntax). `"1"` means `^1`, `"=1.2.3"` means exact pin. If omitted, tracks latest. |
+| `git` | string | — | Git repository URL. |
+| `path` | string | — | Local directory path. |
+
+### Source types
+
+- **crates.io** (name only) — Fetched via cargo. Checks for newer compatible versions on a throttled cadence (at most once per 24 hours). Exact-pinned crates (`=`) never upgrade.
+- **git** — Checks for new commits on a similar throttled cadence.
+- **path** — Always checks mtime; re-scans immediately if the source has changed.
 
 ## Directory resolution
 
@@ -114,6 +119,5 @@ User-wide data lives under `~/.symposium/` by default. Override with environment
 |------|---------|
 | `~/.symposium/config.toml` | User configuration |
 | `~/.symposium/state.toml` | Persistent state (binary version stamp, last update check) |
-| `~/.symposium/plugins/` | User-defined plugins |
-| `~/.symposium/cache/` | Cache directory (crate sources, plugin sources) |
+| `~/.symposium/cache/` | Cache directory (crate sources, binaries) |
 | `~/.symposium/logs/` | Log files (one per invocation, timestamped) |

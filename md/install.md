@@ -52,10 +52,10 @@ You may wish to browse the [configuration](./references/configuration.md) page t
 
 ## After setup
 
-Symposium will now install skills, MCP servers, and other extensions based on your dependencies automatically.
+Symposium discovers plugins from three sources:
 
-Currently all the plugins installed by Symposium can be found in the [central recommendations repository][rr]. We expect eventually to allow crates to define their own plugins without any central repository, but not yet. If you have a crate and would like to add a plugin for it to symposium, see the [Supporting your crate](./crate-authors/supporting-your-crate.md) page.
+1. **Your workspace** — plugins meant for use when developing crates in your workspace. Skills in `skills/` or `.agents/skills/`, plus any `SYMPOSIUM.toml` files you add. See [Workspace plugins](./workspace.md).
+2. **Your dependencies** — workspace deps scanned automatically for crates that contain plugins. See [Auto-discovery](./auto-discovery.md).
+3. **Explicit installs** — additional plugin crates you install with `cargo agents install`. See [Plugins via Crates](./installing-plugins.md). These crates can be hosted on crates.io but could also be hosted in a git repo or your local filesystem.
 
-[rr]: https://github.com/symposium-dev/recommendations
-
-If you have private crates or would like to install plugins for your own use, you can consider adding a [custom plugin source](./custom-plugin-source.md).
+If you maintain a crate and would like to add plugin support to your dependents, see [Supporting your crate](./crate-authors/supporting-your-crate.md).

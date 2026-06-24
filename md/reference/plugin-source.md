@@ -1,50 +1,92 @@
 # Plugin sources
 
-A **plugin source** is a directory or repository containing plugins and standalone skills that Symposium discovers automatically. Plugin sources can be local directories or remote Git repositories, and Symposium searches them recursively to find all available extensions.
+A **plugin source** is a crate that Symposium scans for plugins and standalone skills. Plugin sources can come from crates.io, a git repository, or a local path.
+
+## How crates become plugin sources
+
+There are four ways a crate (or directory) becomes a plugin source:
+
+1. **The workspace itself** — The workspace root and each member crate are always scanned. Gated by the `workspace()` predicate.
+2. **Explicit install** — `cargo agents install <crate>` adds it to your config. Gated by `installed()`.
+3. **Dependency allow list** — A workspace dependency matches an entry in the `dependency-allow-list` (configured in `config.toml` or declared by an installed plugin crate). Gated by `dependency()`.
+4. **Default** — `symposium-recommendations` is installed by default during `cargo agents init`.
 
 ## Discovery rules
 
-Symposium scans a plugin source recursively to find plugins and standalone skills:
+When Symposium loads a plugin source crate, it scans from the crate root:
 
-* A [plugin](./plugin-definition.md) is a directory that contains a `SYMPOSIUM.toml` file;
-* A [standalone skill](./skill-definition.md) is a directory that contains a `SKILL.md` and does not contain a `SYMPOSIUM.toml` file. Standalone skills must have `crates` metadata in their frontmatter.
+1. **Walk recursively for `SYMPOSIUM.toml`** — Each directory containing one is a [plugin](./plugin-definition.md). That subtree is not searched further.
 
-**We do not allow plugins or standalone skills to be nested within one another.** When we find a directory that is either a plugin or a skill, we do not search its contents any further.
+2. **If no `SYMPOSIUM.toml` found anywhere** — Fall back to scanning `$ROOT/skills/` recursively for `SKILL.md` files. These become an anonymous, skills-only plugin that installs unconditionally (for explicit installs) or requires frontmatter predicates (for allow-list discovery).
+
+We do not allow plugins or standalone skills to be nested within one another. When we find a directory that is either a plugin or a skill, we do not search its contents any further.
 
 ### Example structure
 
 ```text
-plugin-source/
-  my-plugin/
-    SYMPOSIUM.toml        # ✓ Plugin
-    skills/               # ✗ Not searched (parent claimed)
-      basic/
-        SKILL.md
-  serde-skill/
-    SKILL.md              # ✓ Standalone skill
-  nested/
-    deep/
-      tokio-skill/
-        SKILL.md          # ✓ Standalone skill (found recursively)
-  mixed/
-    SYMPOSIUM.toml        # ✓ Treated as plugin
-    SKILL.md              # ✗ Ignored (plugin takes precedence)
+my-plugin-crate/
+  Cargo.toml
+  SYMPOSIUM.toml            # ✓ Plugin (at crate root)
+  skills/                   # ✗ Not searched (parent claimed by SYMPOSIUM.toml)
+    basic/
+      SKILL.md
 ```
 
-## Configuration
+```text
+multi-plugin-crate/
+  Cargo.toml
+  serde/
+    SYMPOSIUM.toml          # ✓ Plugin
+    skills/
+      basics/
+        SKILL.md
+  tokio/
+    SYMPOSIUM.toml          # ✓ Plugin
+    skills/
+      async-patterns/
+        SKILL.md
+```
 
-Plugin sources are configured in your `config.toml` file. See the [Configuration reference](./configuration.md) for details on setting up local directories, Git repositories, and built-in sources.
+```text
+skills-only-crate/
+  Cargo.toml
+  skills/                   # ✓ Fallback: scanned because no SYMPOSIUM.toml exists
+    basics/
+      SKILL.md
+    advanced/
+      SKILL.md
+```
+
+## Managing plugin sources
+
+```bash
+# Install a plugin crate
+cargo agents install my-plugin
+
+# Install from git
+cargo agents install --git https://github.com/org/my-plugin
+
+# Install from a local path (for development)
+cargo agents install --path ./my-plugins
+
+# Uninstall
+cargo agents uninstall my-plugin
+
+# See what's installed and active
+cargo agents status
+```
 
 ## Validation
 
-You can validate a plugin source directory:
+You can validate a plugin source:
 
 ```bash
-# Validate all plugins and skills in a directory
-cargo agents plugin validate path/to/plugin-source/
+# Validate a single plugin manifest
+cargo agents plugin validate path/to/SYMPOSIUM.toml
 
-# Also verify that crate names exist on crates.io (on by default; use --no-check-crates to skip)
-cargo agents plugin validate path/to/plugin-source/ --no-check-crates
+# Validate a directory containing plugins
+cargo agents plugin validate path/to/crate-root/
+
+# Skip crates.io name checking (for private crates)
+cargo agents plugin validate path/to/SYMPOSIUM.toml --no-check-crates
 ```
-
-This scans the directory, attempts to load all plugins and skills, and reports any errors found.

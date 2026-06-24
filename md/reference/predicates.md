@@ -17,6 +17,9 @@ The available predicate functions are:
 | `path_exists(<arg>)` | `<arg>` resolves to an existing path. An argument with a path separator is checked on the filesystem (cwd-relative or absolute). A bare name with no separator is checked against the cwd and then searched on `$PATH`, so it matches either a local entry (`path_exists(.git)`) or an installed binary (`path_exists(rg)`). |
 | `env(<name>)` | The environment variable `<name>` is set (to any value). |
 | `env(<name>=<value>)` | `<name>` is set and equals `<value>` exactly. Only the first `=` separates name from value, so `env(KEY=a=b)` matches the value `a=b`. |
+| `workspace()` | The plugin was sourced from the current workspace (workspace root or a member crate). |
+| `dependency()` | The plugin was sourced via the dependency allow list (a workspace dep that matched). |
+| `installed()` | The plugin was sourced from an explicitly installed crate (`cargo agents install`). |
 | `not(<predicate>)` | The inner predicate does **not** hold. The only way to express absence. |
 | `any(<p>, <p>, …)` | At least one inner predicate holds (logical **OR**). |
 | `all(<p>, <p>, …)` | Every inner predicate holds (logical **AND**). |
@@ -25,12 +28,6 @@ Predicates compose with **AND** semantics within a list: every entry must hold. 
 
 The argument of a leaf predicate (`crate`, `shell`, `path_exists`, `env`) is taken **verbatim** between the parentheses — it is *not* quoted. `shell(command -v rg)` runs `command -v rg`; do not wrap the argument in quotes (they would become part of the command). An inner `)` is fine as long as parentheses balance, so `shell(echo $(date))` works. The combinators `not`, `any`, and `all` take nested predicates as their arguments and may be nested arbitrarily, e.g. `not(any(env(CI), path_exists(.skip)))`.
 
-## Crate-sourced skills and the witness
-
-For a `[[skills]]` group with `source = "crate"`, the `crate(...)` predicates do double duty: they gate the group **and** name which crates' source trees to fetch skills from. The fetch set is the predicate's **witness** — the crates that participate in a *satisfying* evaluation: `crate(c)` contributes `c` when present, `any` contributes its true branches, `all` contributes all branches when it holds, and `not(...)` contributes nothing. So `all(crate(serde), env(USE_SERDE))` only fetches `serde` when `USE_SERDE` is set, while `any(crate(fd), crate(fdfind))` fetches whichever are present.
-
-A group using `source = "crate"` must name at least one concrete crate in a **fetchable position** — somewhere (plugin- or group-level) that can appear in a witness. `crate(*)` alone is rejected since there is nothing concrete to fetch, and a crate named *only* under `not(...)` is rejected too: `not(crate(legacy))` gates the group but, having an empty witness, names no crate to fetch from. Put the crate positively (e.g. `crate(serde)`, or `any(crate(serde), not(crate(legacy)))`).
-
 ## When predicates are evaluated
 
 Predicates are evaluated at the same point the workspace's crate predicates are evaluated for that item:
@@ -38,7 +35,7 @@ Predicates are evaluated at the same point the workspace's crate predicates are 
 | Level | Evaluated |
 |-------|-----------|
 | Plugin `predicates` | At sync (gates skills & MCP) and at every hook dispatch |
-| Skill group `predicates` | At sync, before any git/crates source is fetched |
+| Skill group `predicates` | At sync, before any git source is fetched |
 | Skill frontmatter `predicates` | At sync, after the skill loads |
 | Hook `predicates` | At hook dispatch, after the matcher passes |
 | MCP server `predicates` | At sync, when collecting servers to register |
@@ -52,14 +49,13 @@ Hook-level predicates run at dispatch (not sync) so they observe live state — 
 ### Plugin manifests (TOML)
 
 ```toml
-name = "my-plugin"
 crates = ["*"]
 predicates = ["path_exists(rg)", "shell(test -f Cargo.toml)"]
 
 [[skills]]
 crates = ["serde"]
 predicates = ["path_exists(jq)"]
-source = "crate"
+source.path = "skills/serde"
 
 [[hooks]]
 name = "h"
@@ -91,7 +87,6 @@ predicates: path_exists(rg), shell(test -f Cargo.toml)
 ## Example: gating a plugin on tool availability
 
 ```toml
-name = "uses-jq"
 crates = ["*"]
 predicates = ["path_exists(jq)"]
 
