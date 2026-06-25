@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use tracing::Level;
 
 // ---------------------------------------------------------------------------
@@ -102,6 +104,14 @@ pub struct Config {
     /// User-defined plugin sources (git repos or local paths).
     #[serde(default, rename = "plugin-source")]
     pub plugin_source: Vec<PluginSourceConfig>,
+
+    /// User-installed plugin sources in the registry-ready model.
+    #[serde(default = "default_installed_sources")]
+    pub installed: InstalledSourceConfig,
+
+    /// User-configured discovery allow/deny policy.
+    #[serde(default)]
+    pub discovery: DiscoveryPolicy,
 }
 
 /// An `[[agent]]` entry — just identifies an agent by name.
@@ -137,8 +147,322 @@ impl Default for Config {
             logging: LoggingConfig::default(),
             defaults: DefaultsConfig::default(),
             plugin_source: Vec::new(),
+            installed: default_installed_sources(),
+            discovery: DiscoveryPolicy::default(),
         }
     }
+}
+
+/// Installed plugin-source declarations grouped by registry.
+#[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq)]
+pub struct InstalledSourceConfig {
+    /// Cargo dependency-table entries keyed by crate name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub crates: BTreeMap<String, CargoDependencySpec>,
+
+    /// Direct path-registry plugin sources.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
+
+    /// Direct git-registry plugin sources.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git: Vec<String>,
+}
+
+fn default_installed_sources() -> InstalledSourceConfig {
+    let mut crates = BTreeMap::new();
+    crates.insert(
+        "symposium-recommendations".to_string(),
+        CargoDependencySpec::Version("1".to_string()),
+    );
+    InstalledSourceConfig {
+        crates,
+        paths: Vec::new(),
+        git: Vec::new(),
+    }
+}
+
+/// A Cargo dependency-table value.
+///
+/// This intentionally accepts arbitrary inline-table fields so Symposium can
+/// pass Cargo-compatible dependency specs through without maintaining a partial
+/// clone of Cargo's manifest schema.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[serde(untagged)]
+pub enum CargoDependencySpec {
+    Version(String),
+    Table(BTreeMap<String, toml::Value>),
+}
+
+impl CargoDependencySpec {
+    pub fn version_req(&self) -> Option<&str> {
+        match self {
+            CargoDependencySpec::Version(version) => Some(version),
+            CargoDependencySpec::Table(fields) => fields.get("version").and_then(toml_value_str),
+        }
+    }
+
+    pub fn git(&self) -> Option<&str> {
+        match self {
+            CargoDependencySpec::Version(_) => None,
+            CargoDependencySpec::Table(fields) => fields.get("git").and_then(toml_value_str),
+        }
+    }
+
+    pub fn path(&self) -> Option<&str> {
+        match self {
+            CargoDependencySpec::Version(_) => None,
+            CargoDependencySpec::Table(fields) => fields.get("path").and_then(toml_value_str),
+        }
+    }
+
+    pub fn package(&self) -> Option<&str> {
+        match self {
+            CargoDependencySpec::Version(_) => None,
+            CargoDependencySpec::Table(fields) => fields.get("package").and_then(toml_value_str),
+        }
+    }
+}
+
+fn toml_value_str(value: &toml::Value) -> Option<&str> {
+    match value {
+        toml::Value::String(s) => Some(s),
+        _ => None,
+    }
+}
+
+/// Top-level user discovery policy.
+#[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq, Eq)]
+pub struct DiscoveryPolicy {
+    #[serde(default, skip_serializing_if = "DiscoveryRules::is_empty")]
+    pub allow: DiscoveryRules,
+    #[serde(default, skip_serializing_if = "DiscoveryRules::is_empty")]
+    pub deny: DiscoveryRules,
+}
+
+/// Discovery rules for all registries.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum DiscoveryRules {
+    #[default]
+    Empty,
+    Any,
+    Registries(DiscoveryRegistryRules),
+}
+
+impl DiscoveryRules {
+    fn is_empty(&self) -> bool {
+        matches!(self, DiscoveryRules::Empty)
+    }
+}
+
+impl<'de> Deserialize<'de> for DiscoveryRules {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Scalar(String),
+            Table(DiscoveryRegistryRules),
+        }
+
+        match Raw::deserialize(deserializer)? {
+            Raw::Scalar(s) if s == "*" => Ok(DiscoveryRules::Any),
+            Raw::Scalar(s) => Err(serde::de::Error::custom(format!(
+                "unsupported discovery rule `{s}`; use `*` or a registry table"
+            ))),
+            Raw::Table(rules) if rules.is_empty() => Ok(DiscoveryRules::Empty),
+            Raw::Table(rules) => Ok(DiscoveryRules::Registries(rules)),
+        }
+    }
+}
+
+impl Serialize for DiscoveryRules {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            DiscoveryRules::Empty => DiscoveryRegistryRules::default().serialize(serializer),
+            DiscoveryRules::Any => serializer.serialize_str("*"),
+            DiscoveryRules::Registries(rules) => rules.serialize(serializer),
+        }
+    }
+}
+
+/// Registry-specific discovery rules.
+#[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq, Eq)]
+pub struct DiscoveryRegistryRules {
+    #[serde(default, skip_serializing_if = "RegistryDiscoveryRule::is_empty")]
+    pub crates: RegistryDiscoveryRule,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub git: Vec<String>,
+}
+
+impl DiscoveryRegistryRules {
+    fn is_empty(&self) -> bool {
+        self.crates.is_empty() && self.paths.is_empty() && self.git.is_empty()
+    }
+}
+
+/// A registry rule, either wildcard or keyed specs.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum RegistryDiscoveryRule {
+    #[default]
+    Empty,
+    Any,
+    Specs(BTreeMap<String, String>),
+}
+
+impl RegistryDiscoveryRule {
+    fn is_empty(&self) -> bool {
+        matches!(self, RegistryDiscoveryRule::Empty)
+    }
+}
+
+impl<'de> Deserialize<'de> for RegistryDiscoveryRule {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Scalar(String),
+            Specs(BTreeMap<String, String>),
+        }
+
+        match Raw::deserialize(deserializer)? {
+            Raw::Scalar(s) if s == "*" => Ok(RegistryDiscoveryRule::Any),
+            Raw::Scalar(s) => Err(serde::de::Error::custom(format!(
+                "unsupported registry discovery rule `{s}`; use `*` or a map"
+            ))),
+            Raw::Specs(specs) if specs.is_empty() => Ok(RegistryDiscoveryRule::Empty),
+            Raw::Specs(specs) => Ok(RegistryDiscoveryRule::Specs(specs)),
+        }
+    }
+}
+
+impl Serialize for RegistryDiscoveryRule {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            RegistryDiscoveryRule::Empty => BTreeMap::<String, String>::new().serialize(serializer),
+            RegistryDiscoveryRule::Any => serializer.serialize_str("*"),
+            RegistryDiscoveryRule::Specs(specs) => specs.serialize(serializer),
+        }
+    }
+}
+
+/// Parsed `<CRATE>[@<VERSION>]` install operand.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CrateInstallSpec {
+    pub name: String,
+    pub dependency: CargoDependencySpec,
+}
+
+impl FromStr for CrateInstallSpec {
+    type Err = anyhow::Error;
+
+    fn from_str(input: &str) -> Result<Self, Self::Err> {
+        let (name, version) = match input.split_once('@') {
+            Some((name, version)) => (name, Some(version)),
+            None => (input, None),
+        };
+
+        if name.is_empty() {
+            anyhow::bail!("crate install spec must include a crate name");
+        }
+        if name.contains('/') || name.contains('\\') {
+            anyhow::bail!(
+                "crate install spec `{input}` looks like a path; use `cargo agents install --path`"
+            );
+        }
+
+        let dependency = match version {
+            None => CargoDependencySpec::Version("*".to_string()),
+            Some("") => anyhow::bail!("crate install spec `{input}` has an empty version"),
+            Some(version) => CargoDependencySpec::Version(version.to_string()),
+        };
+
+        Ok(CrateInstallSpec {
+            name: name.to_string(),
+            dependency,
+        })
+    }
+}
+
+/// A crate-registry source declaration parsed from `source.crate`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CrateSourceSpec {
+    /// The dependency-table key, when the source names a crate explicitly.
+    ///
+    /// `None` represents unkeyed Cargo dependency specs such as
+    /// `source.crate = { path = "../my-crate" }`, where Cargo resolves the
+    /// package name from the source itself.
+    pub key: Option<String>,
+    pub dependency: CargoDependencySpec,
+}
+
+/// Parse the value of a `source.crate` declaration.
+///
+/// Accepted forms:
+/// - `"foo"`: shorthand for `foo = "*"`
+/// - `{ foo = "1" }`: Cargo dependency table keyed by crate name
+/// - `{ foo = { git = "..." } }`: keyed inline dependency table
+/// - `{ path = "../foo" }`: unkeyed dependency table, package inferred by Cargo
+pub fn parse_crate_source_value(value: toml::Value) -> anyhow::Result<Vec<CrateSourceSpec>> {
+    match value {
+        toml::Value::String(name) if !name.is_empty() => Ok(vec![CrateSourceSpec {
+            key: Some(name),
+            dependency: CargoDependencySpec::Version("*".to_string()),
+        }]),
+        toml::Value::String(_) => anyhow::bail!("source.crate shorthand must name a crate"),
+        toml::Value::Table(table) if table.is_empty() => {
+            anyhow::bail!("source.crate table must not be empty")
+        }
+        toml::Value::Table(table) if looks_like_dependency_spec(&table) => {
+            Ok(vec![CrateSourceSpec {
+                key: None,
+                dependency: CargoDependencySpec::Table(table.into_iter().collect()),
+            }])
+        }
+        toml::Value::Table(table) => table
+            .into_iter()
+            .map(|(key, value)| {
+                let dependency = match value {
+                    toml::Value::String(version) => CargoDependencySpec::Version(version),
+                    toml::Value::Table(table) => {
+                        CargoDependencySpec::Table(table.into_iter().collect())
+                    }
+                    other => anyhow::bail!(
+                        "source.crate.{key} must be a version string or dependency table, got {}",
+                        other.type_str()
+                    ),
+                };
+                Ok(CrateSourceSpec {
+                    key: Some(key),
+                    dependency,
+                })
+            })
+            .collect(),
+        other => anyhow::bail!(
+            "source.crate must be a crate name string or dependency table, got {}",
+            other.type_str()
+        ),
+    }
+}
+
+fn looks_like_dependency_spec(table: &toml::map::Map<String, toml::Value>) -> bool {
+    const DEPENDENCY_FIELDS: &[&str] = &[
+        "version",
+        "git",
+        "path",
+        "branch",
+        "tag",
+        "rev",
+        "package",
+        "registry",
+        "default-features",
+        "features",
+        "optional",
+    ];
+    table
+        .keys()
+        .any(|key| DEPENDENCY_FIELDS.contains(&key.as_str()))
 }
 
 /// Controls which built-in plugin sources are enabled.
@@ -400,6 +724,16 @@ impl Symposium {
         sources
     }
 
+    /// Returns user-installed plugin sources in the registry-ready config shape.
+    pub fn installed_sources(&self) -> &InstalledSourceConfig {
+        &self.config.installed
+    }
+
+    /// Returns user-installed crate-registry plugin sources.
+    pub fn installed_crates(&self) -> &BTreeMap<String, CargoDependencySpec> {
+        &self.config.installed.crates
+    }
+
     /// Write the user config to disk.
     pub fn save_config(&self) -> anyhow::Result<()> {
         let path = self.dirs.config_dir.join("config.toml");
@@ -484,6 +818,10 @@ mod tests {
         assert!(config.defaults.symposium_recommendations);
         assert!(config.defaults.user_plugins);
         assert!(config.plugin_source.is_empty());
+        assert_eq!(
+            config.installed.crates.get("symposium-recommendations"),
+            Some(&CargoDependencySpec::Version("1".to_string()))
+        );
     }
 
     #[test]
@@ -564,6 +902,229 @@ mod tests {
         assert_eq!(config.plugin_source[0].name, "org-a");
         assert_eq!(config.plugin_source[1].name, "org-b");
         assert_eq!(config.plugin_source[2].name, "local");
+    }
+
+    #[test]
+    fn parse_installed_crates_dependency_table() {
+        let config: Config = toml::from_str(indoc! {r#"
+            [installed.crates]
+            symposium-recommendations = "1"
+            pinned-plugin = "=1.2.0"
+            my-org-plugins = { git = "https://github.com/my-org/my-org-plugins", branch = "main" }
+            my-local-crate = { path = "/home/me/dev/my-crate", package = "actual-crate" }
+        "#})
+        .unwrap();
+
+        assert_eq!(
+            config.installed.crates["symposium-recommendations"].version_req(),
+            Some("1")
+        );
+        assert_eq!(
+            config.installed.crates["pinned-plugin"].version_req(),
+            Some("=1.2.0")
+        );
+        assert_eq!(
+            config.installed.crates["my-org-plugins"].git(),
+            Some("https://github.com/my-org/my-org-plugins")
+        );
+        assert_eq!(
+            config.installed.crates["my-local-crate"].path(),
+            Some("/home/me/dev/my-crate")
+        );
+    }
+
+    #[test]
+    fn parse_installed_paths_and_git() {
+        let config: Config = toml::from_str(indoc! {r#"
+            [installed]
+            paths = ["/home/me/dev/plugin-source", "../relative-plugin"]
+            git = ["https://github.com/my-org/plugin-source"]
+        "#})
+        .unwrap();
+
+        assert_eq!(
+            config.installed.paths,
+            vec!["/home/me/dev/plugin-source", "../relative-plugin"]
+        );
+        assert_eq!(
+            config.installed.git,
+            vec!["https://github.com/my-org/plugin-source"]
+        );
+    }
+
+    #[test]
+    fn installed_sources_round_trip() {
+        let config: Config = toml::from_str(indoc! {r#"
+            [installed]
+            paths = ["/home/me/dev/plugin-source"]
+            git = ["https://github.com/my-org/plugin-source"]
+
+            [installed.crates]
+            symposium-recommendations = "1"
+            my-org-plugins = { git = "https://github.com/my-org/my-org-plugins", tag = "v1.0.0" }
+        "#})
+        .unwrap();
+
+        let saved = toml::to_string_pretty(&config).unwrap();
+        let reparsed: Config = toml::from_str(&saved).unwrap();
+        assert_eq!(reparsed.installed, config.installed);
+    }
+
+    #[test]
+    fn parse_discovery_policy_shorthands_and_tables() {
+        let config: Config = toml::from_str(indoc! {r#"
+            [discovery]
+            allow = "*"
+
+            [discovery.deny]
+            crates = { unsafe-plugin = "*" }
+            paths = ["/tmp/untrusted"]
+            git = ["https://github.com/bad/*"]
+        "#})
+        .unwrap();
+
+        assert_eq!(config.discovery.allow, DiscoveryRules::Any);
+        let DiscoveryRules::Registries(deny) = config.discovery.deny else {
+            panic!("expected registry-specific deny rules");
+        };
+        assert_eq!(
+            deny.crates,
+            RegistryDiscoveryRule::Specs(BTreeMap::from([(
+                "unsafe-plugin".to_string(),
+                "*".to_string()
+            )]))
+        );
+        assert_eq!(deny.paths, vec!["/tmp/untrusted"]);
+        assert_eq!(deny.git, vec!["https://github.com/bad/*"]);
+    }
+
+    #[test]
+    fn parse_crate_install_specs() {
+        let latest: CrateInstallSpec = "foo".parse().unwrap();
+        assert_eq!(latest.name, "foo");
+        assert_eq!(
+            latest.dependency,
+            CargoDependencySpec::Version("*".to_string())
+        );
+
+        let major: CrateInstallSpec = "foo@1".parse().unwrap();
+        assert_eq!(
+            major.dependency,
+            CargoDependencySpec::Version("1".to_string())
+        );
+
+        let patch: CrateInstallSpec = "foo@1.2.3".parse().unwrap();
+        assert_eq!(
+            patch.dependency,
+            CargoDependencySpec::Version("1.2.3".to_string())
+        );
+
+        let exact: CrateInstallSpec = "foo@=1.2.3".parse().unwrap();
+        assert_eq!(
+            exact.dependency,
+            CargoDependencySpec::Version("=1.2.3".to_string())
+        );
+    }
+
+    fn source_crate_value(toml: &str) -> toml::Value {
+        let value: toml::Value = toml::from_str(toml).unwrap();
+        value
+            .get("source")
+            .and_then(|source| source.get("crate"))
+            .cloned()
+            .unwrap()
+    }
+
+    #[test]
+    fn parse_source_crate_string_shorthand() {
+        let specs =
+            parse_crate_source_value(source_crate_value(r#"source.crate = "foo""#)).unwrap();
+
+        assert_eq!(
+            specs,
+            vec![CrateSourceSpec {
+                key: Some("foo".to_string()),
+                dependency: CargoDependencySpec::Version("*".to_string())
+            }]
+        );
+    }
+
+    #[test]
+    fn parse_source_crate_dotted_dependency_table() {
+        let specs = parse_crate_source_value(source_crate_value(indoc! {r#"
+            [source.crate]
+            foo = "1"
+            bar = { git = "https://github.com/me/bar", branch = "main" }
+        "#}))
+        .unwrap();
+
+        assert_eq!(specs[0].key.as_deref(), Some("bar"));
+        assert_eq!(specs[0].dependency.git(), Some("https://github.com/me/bar"));
+        assert_eq!(specs[1].key.as_deref(), Some("foo"));
+        assert_eq!(specs[1].dependency.version_req(), Some("1"));
+    }
+
+    #[test]
+    fn parse_source_crate_unkeyed_path_spec() {
+        let specs = parse_crate_source_value(source_crate_value(indoc! {r#"
+            source.crate = { path = "../my-crate", package = "actual-crate" }
+        "#}))
+        .unwrap();
+
+        assert_eq!(specs.len(), 1);
+        assert_eq!(specs[0].key, None);
+        assert_eq!(specs[0].dependency.path(), Some("../my-crate"));
+    }
+
+    #[test]
+    fn parse_source_crate_rejects_unsupported_values() {
+        let err =
+            parse_crate_source_value(source_crate_value("source.crate = [\"foo\"]")).unwrap_err();
+        assert!(
+            err.to_string().contains("source.crate must be"),
+            "unexpected error: {err}"
+        );
+
+        let err = parse_crate_source_value(source_crate_value(indoc! {r#"
+            [source.crate]
+            foo = ["1"]
+        "#}))
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("source.crate.foo"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn symposium_installed_accessors_expose_new_config_without_changing_sources() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            tmp.path().join("config.toml"),
+            indoc! {r#"
+                [installed]
+                paths = ["/home/me/dev/plugin-source"]
+
+                [installed.crates]
+                symposium-recommendations = "1"
+                local-plugin = { path = "/home/me/dev/local-plugin" }
+            "#},
+        )
+        .unwrap();
+
+        let sym = Symposium::from_dir(tmp.path());
+        assert_eq!(
+            sym.installed_sources().paths,
+            vec!["/home/me/dev/plugin-source"]
+        );
+        assert!(sym.installed_crates().contains_key("local-plugin"));
+
+        let legacy_sources = sym.plugin_sources();
+        assert!(
+            legacy_sources
+                .iter()
+                .any(|s| s.source.name == "user-plugins")
+        );
     }
 
     #[test]

@@ -41,8 +41,8 @@ That's it — `name` defaults to the crate name and `crates` defaults to `["*"]`
 | `predicate` | array of tables | no | Custom predicate definitions (`[[predicate]]`). See [Custom predicates](#predicate). |
 | `mcp_servers` | array of tables | no | MCP server registrations (`[[mcp_servers]]`). |
 | `auto-install` | array of tables | no | Transitive plugin installations (`[[auto-install]]`). See [Auto-install](#auto-install). |
-| `dependency-allow-list` | table | no | Workspace deps approved for auto-discovery. See [Dependency allow list](#dependency-allow-list). |
-| `defaults.skills` | bool | `true` | Include implicit `skills/` (recursive, unconditional) and `.agents/skills/` (one level, `workspace()` gated) skill sources. Set to `false` to suppress. |
+| `discovery.allow` / `discovery.deny` | table or `"*"` | no | Candidate plugin sources approved or rejected for auto-discovery. See [Discovery policy](#discovery-policy). |
+| `defaults.skills` | bool | `true` | Include implicit `skills/` (recursive, unconditional) and `.agents/skills/` (recursive, `workspace()` gated) skill sources. Set to `false` to suppress. |
 | `defaults.plugins` | bool | `true` | Search subtree for nested `SYMPOSIUM.toml` files. Each nested manifest becomes its own independent plugin. Set to `false` to suppress. |
 
 ## Plugin-level filtering
@@ -449,15 +449,24 @@ A crate that doesn't want to bundle plugins directly just has a thin `SYMPOSIUM.
 crates = { symposium-serde = "1.0" }
 ```
 
-## `dependency-allow-list`
+## Discovery policy
 
-Declares workspace dependencies that are approved for automatic plugin discovery. Primarily used by curated plugin crates like `symposium-recommendations`:
+Declares candidate plugin sources that are approved or rejected for automatic
+plugin discovery. Primarily used by curated plugin crates like
+`symposium-recommendations`:
 
 ```toml
-dependency-allow-list.crates = ["dial9", "dial9-viewer"]
+[discovery.allow]
+crates = { dial9 = "*", dial9-viewer = "*" }
+
+[discovery.deny]
+crates = { unsafe-plugin = "*" }
 ```
 
-On sync, Symposium collects allow lists from all installed plugins, checks workspace deps against them, and auto-installs matching crates as plugin sources. See [Plugin sources](./plugin-source.md) for details.
+On sync, Symposium collects discovery rules from all installed plugins, checks
+workspace deps and other candidate sources against them, and resolves matching
+sources into plugin sources. See [Plugin sources](./plugin-source.md) for
+details.
 
 ## `[[predicate]]`
 

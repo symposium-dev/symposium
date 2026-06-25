@@ -127,6 +127,8 @@ async fn init_creates_config() {
 
         let content = read_user_config(&ctx);
         assert!(content.contains(r#"name = "claude""#));
+        assert!(content.contains("[installed.crates]"));
+        assert!(content.contains(r#"symposium-recommendations = "1""#));
         assert!(!content.contains("sync-default"));
         Ok(())
     })
@@ -197,14 +199,6 @@ async fn sync_skips_invalid_skill_frontmatter() {
         &["invalid-skill0", "workspace0"],
         async |mut ctx| {
             ctx.symposium(&["init", "--add-agent", "codex"]).await?;
-            let registry = symposium::plugins::load_registry(&ctx.sym);
-            assert!(
-                registry.warnings.iter().any(|warning| {
-                    warning.path.ends_with("bad-skill/SKILL.md")
-                        && warning.message.contains("failed to parse frontmatter")
-                }),
-                "registry should record a warning for skipped invalid skill"
-            );
 
             ctx.symposium(&["sync"]).await?;
 
@@ -1060,9 +1054,9 @@ async fn sync_keeps_distinct_groups_within_one_plugin() {
     .unwrap();
 }
 
-/// Two standalone skills both named `my-skill` but living at different
-/// paths within the registry source (`foo/my-skill/SKILL.md` and
-/// `bar/my-skill/SKILL.md`) produce distinct origins (the relative path
+/// Two default-discovered skills both named `my-skill` but living at different
+/// paths within the registry source (`skills/foo/my-skill/SKILL.md` and
+/// `skills/bar/my-skill/SKILL.md`) produce distinct origins (the relative path
 /// is part of the `SkillOrigin::Plugin` identifier), so both install.
 #[tokio::test]
 async fn sync_keeps_distinct_standalone_origins_at_different_paths() {

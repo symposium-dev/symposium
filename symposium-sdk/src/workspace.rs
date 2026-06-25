@@ -43,6 +43,9 @@ impl WorkspaceCrate {
 pub struct LoadedWorkspace {
     /// Workspace root directory.
     pub root: PathBuf,
+    /// Workspace member crates.
+    #[serde(default)]
+    pub members: Vec<WorkspaceCrate>,
     /// Direct dependencies of all workspace members.
     pub crates: Vec<WorkspaceCrate>,
 }
@@ -52,6 +55,8 @@ pub struct LoadedWorkspace {
 struct DiskCache {
     lock_mtime: u64,
     root: PathBuf,
+    #[serde(default)]
+    members: Vec<WorkspaceCrate>,
     crates: Vec<WorkspaceCrate>,
 }
 
@@ -155,6 +160,7 @@ impl WorkspaceDeps {
 
         Some(LoadedWorkspace {
             root: cached.root,
+            members: cached.members,
             crates: cached.crates,
         })
     }
@@ -171,6 +177,7 @@ impl WorkspaceDeps {
         let disk = DiskCache {
             lock_mtime: mtime,
             root: loaded.root.clone(),
+            members: loaded.members.clone(),
             crates: loaded.crates.clone(),
         };
 
@@ -289,5 +296,28 @@ fn load_workspace(cwd: &Path, cargo_path: Option<&Path>) -> Option<LoadedWorkspa
     crates.sort_by(|a, b| a.name.cmp(&b.name));
     crates.dedup_by(|a, b| a.name == b.name);
 
-    Some(LoadedWorkspace { root, crates })
+    let mut members: Vec<_> = metadata
+        .packages
+        .iter()
+        .filter(|p| ws_members.contains(&p.id))
+        .filter_map(|p| {
+            semver::Version::parse(&p.version.to_string())
+                .ok()
+                .and_then(|v| {
+                    p.manifest_path.parent().map(|dir| WorkspaceCrate {
+                        path: Some(dir.into()),
+                        name: p.name.to_string(),
+                        version: v,
+                    })
+                })
+        })
+        .collect();
+    members.sort_by(|a, b| a.name.cmp(&b.name));
+    members.dedup_by(|a, b| a.name == b.name);
+
+    Some(LoadedWorkspace {
+        root,
+        members,
+        crates,
+    })
 }

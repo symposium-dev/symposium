@@ -46,9 +46,11 @@ async fn help_shows_plugin_subcommand() {
 
                 Commands for humans:
                 init         Set up user-wide configuration
+                install      Install plugin sources into user config
                 plugin       Manage plugins
                 self-update  Update symposium to the latest version
                 sync         Synchronize skills with workspace dependencies
+                uninstall    Uninstall plugin sources from user config
 
                 Commands for agents:
                 crate-info   Find crate sources

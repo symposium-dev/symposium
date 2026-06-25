@@ -31,8 +31,16 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 
 /// Names reserved for builtin predicates. Custom predicates must not use these.
-pub const BUILTIN_PREDICATE_NAMES: &[&str] =
-    &["crate", "shell", "path_exists", "env", "not", "any", "all"];
+pub const BUILTIN_PREDICATE_NAMES: &[&str] = &[
+    "crate",
+    "shell",
+    "path_exists",
+    "env",
+    "workspace",
+    "not",
+    "any",
+    "all",
+];
 
 /// The evaluation environment a predicate is checked against.
 ///
@@ -112,6 +120,8 @@ pub enum Predicate {
     PathExists(String),
     /// `env(<name>)` / `env(<name>=<value>)` — env var presence / equality.
     Env(String, Option<String>),
+    /// `workspace()` — source-context predicate for workspace-local defaults.
+    Workspace,
     /// `not(<p>)` — passes when the inner predicate does not.
     Not(Box<Predicate>),
     /// `any(<p>, …)` — passes when at least one inner predicate does.
@@ -138,6 +148,7 @@ impl Predicate {
             Predicate::Shell(cmd) => run_shell(cmd),
             Predicate::PathExists(arg) => path_exists(arg),
             Predicate::Env(name, expected) => env_matches(name, expected.as_deref()),
+            Predicate::Workspace => true,
             Predicate::Not(inner) => !inner.evaluate(ctx),
             Predicate::Any(children) => children.iter().any(|p| p.evaluate(ctx)),
             Predicate::All(children) => children.iter().all(|p| p.evaluate(ctx)),
@@ -170,6 +181,7 @@ impl Predicate {
             Predicate::Shell(cmd) => run_shell(cmd).then(Vec::new),
             Predicate::PathExists(arg) => path_exists(arg).then(Vec::new),
             Predicate::Env(name, expected) => env_matches(name, expected.as_deref()).then(Vec::new),
+            Predicate::Workspace => Some(Vec::new()),
             Predicate::Not(inner) => match inner.witness(ctx) {
                 Some(_) => None,
                 None => Some(Vec::new()),
@@ -399,6 +411,18 @@ fn dedup_crates(crates: Vec<(String, semver::Version)>) -> Vec<(String, semver::
 pub struct CrateList(pub Vec<Predicate>);
 
 impl CrateList {
+    pub fn wildcard() -> Self {
+        Self(vec![Predicate::CrateWildcard])
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn into_option(self) -> Option<Self> {
+        (!self.is_empty()).then_some(self)
+    }
+
     /// Parse comma-separated crate atoms (`serde, tokio>=1.0, *`).
     ///
     /// Commas inside balanced parentheses are preserved so that custom
@@ -496,6 +520,12 @@ fn parse(input: &str) -> Result<Predicate> {
         "shell" => Ok(Predicate::Shell(arg.to_string())),
         "path_exists" => Ok(Predicate::PathExists(arg.to_string())),
         "env" => parse_env(arg),
+        "workspace" => {
+            if !arg.is_empty() {
+                bail!("`workspace()` does not accept arguments");
+            }
+            Ok(Predicate::Workspace)
+        }
         "not" => Ok(Predicate::Not(Box::new(parse(arg)?))),
         "any" => {
             let preds = parse_comma_separated(arg)?;
@@ -772,6 +802,7 @@ impl std::fmt::Display for Predicate {
             Predicate::Not(inner) => write!(f, "not({inner})"),
             Predicate::Any(preds) => write!(f, "any({})", join(preds)),
             Predicate::All(preds) => write!(f, "all({})", join(preds)),
+            Predicate::Workspace => write!(f, "workspace()"),
             Predicate::Custom { name, arg } => write!(f, "{name}({arg})"),
         }
     }

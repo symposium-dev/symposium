@@ -23,9 +23,11 @@ async fn cargo_agents_help_lists_plugin_vended() {
 
                 Commands for humans:
                 init          Set up user-wide configuration
+                install       Install plugin sources into user config
                 plugin        Manage plugins
                 self-update   Update symposium to the latest version
                 sync          Synchronize skills with workspace dependencies
+                uninstall     Uninstall plugin sources from user config
 
                 Commands for agents:
                 crate-info    Find crate sources

@@ -73,6 +73,8 @@ async fn main() -> ExitCode {
     match &cli.command {
         Some(Commands::Init { .. }) => tracing::info!("cargo agents init"),
         Some(Commands::Sync) => tracing::info!("cargo agents sync"),
+        Some(Commands::Install { .. }) => tracing::info!("cargo agents install"),
+        Some(Commands::Uninstall { .. }) => tracing::info!("cargo agents uninstall"),
         Some(Commands::Plugin { command }) => {
             tracing::info!(subcommand = ?command, "cargo agents plugin");
         }
@@ -95,7 +97,11 @@ async fn main() -> ExitCode {
     // Hook commands are quiet by default (they're invoked by the agent, not the user).
     // JSON mode also suppresses human output (only JSON goes to stdout).
     let is_hook = matches!(cli.command, Some(Commands::Hook { .. }));
-    let out = if cli.quiet || is_hook || cli.json {
+    let uses_report_output = matches!(
+        cli.command,
+        Some(Commands::Install { .. } | Commands::Uninstall { .. })
+    );
+    let out = if cli.quiet || is_hook || cli.json || uses_report_output {
         Output::quiet()
     } else {
         Output::normal()

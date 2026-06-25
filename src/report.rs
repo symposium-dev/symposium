@@ -95,6 +95,13 @@ pub enum ReportEvent {
     /// A non-fatal warning.
     Warning { message: String },
 
+    /// An installed source config entry was added, updated, removed, or found unchanged.
+    InstalledSourceChanged {
+        registry: String,
+        source: String,
+        status: String,
+    },
+
     // ── Hook dispatch events ─────────────────────────────────────────
     /// A plugin hook was considered for dispatch.
     HookConsidered {
@@ -225,6 +232,20 @@ impl ReportEvent {
             Self::Warning { message } => {
                 format!("⚠️  {message}")
             }
+            Self::InstalledSourceChanged {
+                registry,
+                source,
+                status,
+            } => match status.as_str() {
+                "installed" => format!("➕ {registry} source installed: {source}"),
+                "updated" => format!("✅ {registry} source updated: {source}"),
+                "already_installed" => {
+                    format!("🟢 {registry} source already installed: {source}")
+                }
+                "uninstalled" => format!("➖ {registry} source uninstalled: {source}"),
+                "not_installed" => format!("🟢 {registry} source was not installed: {source}"),
+                other => format!("ℹ️  {registry} source {other}: {source}"),
+            },
 
             Self::HookConsidered {
                 plugin,

@@ -6,7 +6,7 @@ Symposium is a Rust crate with both a library (`src/lib.rs`) and a binary (`src/
 
 Everything hangs off the `Symposium` struct, which wraps the parsed `Config` with resolved paths for config, cache, and log directories. Two constructors: `from_environment()` for production and `from_dir()` for tests.
 
-Defines the user-wide `Config` (stored at `~/.symposium/config.toml`) with `[[agent]]` entries, logging, `[[installed-crate]]` entries, `dependency-allow-list`, and `auto-update` (off/warn/on, default warn). Provides `installed_crates()` to resolve the effective list of plugin source crates. The `workspace_deps(cwd)` factory is the standard way to create a `WorkspaceDeps` — it wires in `cargo_override` and `cache_dir` so callers get both the `SYMPOSIUM_CARGO` override and cross-invocation disk caching.
+Defines the user-wide `Config` (stored at `~/.symposium/config.toml`) with `[[agent]]` entries, logging, legacy `[[plugin-source]]` entries, registry-ready `[installed]` / `[installed.crates]` entries, `[discovery.allow]` / `[discovery.deny]` policy, and `auto-update` (off/warn/on, default on). `Symposium::plugin_sources()` still feeds the legacy sync path during the migration; new source-graph code should use `installed_sources()` / `installed_crates()`. The `workspace_deps(cwd)` factory is the standard way to create a `WorkspaceDeps` — it wires in `cargo_override` and `cache_dir` so callers get both the `SYMPOSIUM_CARGO` override and cross-invocation disk caching.
 
 ### `agents.rs` — agent abstraction
 
@@ -18,7 +18,7 @@ Implements `cargo agents init`. Prompts for agents (or accepts `--add-agent`/`--
 
 ### `install.rs` — install/uninstall commands
 
-Implements `cargo agents install` and `cargo agents uninstall`. Parses the `<CRATE>[@<VERSION>]`, `--git`, and `--path` forms, validates the source, and adds/removes `[[installed-crate]]` entries in the user config.
+Implements config-only `cargo agents install` and `cargo agents uninstall`. Parses `<CRATE>[@<VERSION>]`, `--git`, and `--path` forms, rejects mixed source forms, and mutates `[installed.crates]`, `installed.git`, or `installed.paths` deterministically. Source acquisition and sync consumption of these entries are handled in later registry-source phases.
 
 ### `status.rs` — status command
 
@@ -32,11 +32,12 @@ Two entry points: `sync(sym, cwd)` for standalone CLI use (creates its own `Work
 
 ### `plugins.rs` — plugin registry
 
-Scans plugin source crates for `SYMPOSIUM.toml` manifests and parses them into `Plugin` structs. Discovery walks from each crate root looking for `SYMPOSIUM.toml` files (pruning subtrees when found). If no manifests are found in a crate, falls back to scanning `$ROOT/skills/` for standalone `SKILL.md` files. Also reads crate `Cargo.toml` binary targets to register implicit installations.
+Scans plugin source roots for `SYMPOSIUM.toml` manifests and parses them into `Plugin` structs. A source root is always a plugin boundary: if `$ROOT/SYMPOSIUM.toml` exists it is loaded, otherwise an empty root manifest is synthesized. Every manifest defaults to `where.crates = ["*"]`, two implicit skill groups (`source.path = "skills"` and workspace-gated `source.path = ".agents/skills"`), and an implicit `[[plugins]] source.path = "."` that recursively searches for nested manifests. Nested manifests are independent plugins, not children owned by the parent. `defaults.skills = false` suppresses the implicit skill groups; `defaults.plugins = false` suppresses the implicit nested-manifest search. `[[plugins]] source.git` and `source.crate` declarations are parsed and retained for later recursive registry-source resolution; Phase 4 resolves only path-backed plugin-source declarations.
 
 Validation turns the raw TOML into:
 - `Installation` entries (optional `source`, optional `executable`/`script`, optional `args`, plus `requirements` and `install_commands`) collected on `Plugin.installations`. Inline installation references on hooks or other installations are *promoted* into synthetic `Installation` entries with derived names (`<hook>` for an inline `command`, `<owner>__req_<i>` for an inline requirement), so all references in the validated form are plain names. Implicit installations from binary targets are merged in.
 - `Hook` entries with `command: String` (the name of an `Installation`) plus optional hook-level `executable` / `script` / `args`. Validation guarantees at most one of `executable`/`script` is set across hook + installation, and at most one layer sets `args`.
+- `PluginSourceDecl` entries retained from `[[plugins]] source.path`, `source.git`, and `source.crate`. Path declarations drive the current source-root traversal; git and crate declarations remain unresolved until the recursive source graph phase.
 
 Returns a `PluginRegistry` — a table of contents that doesn't load skill content.
 
@@ -51,7 +52,9 @@ Validates skill group source constraints at parse time: mutual exclusivity of `s
 Defines one `Predicate` enum covering both crate-graph matching and runtime/environment gating, plus `PredicateSet` (a list ANDed together) and `PredicateContext` (the workspace crate list it evaluates against). Two surface syntaxes lower to the same tree:
 
 - The **`crates`** field uses crate-atom syntax (`serde`, `serde>=1.0`, `*`) and lowers, via `CrateList`, to `crate(...)` / `crate(*)` predicates OR-combined into a single `any(...)` that is appended to the same list. So `crates` is sugar — there is no separate crate-predicate type.
-- The **`predicates`** field uses function-call syntax: `crate(<atom>)`, `shell(<cmd>)` (verbatim arg, `sh -c`, exit 0 holds), `path_exists(<arg>)` (disk, then `$PATH` for bare names), `env(<name>[=<value>])`, and the combinators `not(<p>)`, `any(<p>, …)`, `all(<p>, …)`.
+- The **`predicates`** field uses function-call syntax: `crate(<atom>)`, `shell(<cmd>)` (verbatim arg, `sh -c`, exit 0 holds), `path_exists(<arg>)` (disk, then `$PATH` for bare names), `env(<name>[=<value>])`, `workspace()` (currently parsed/evaluated as a source-context marker for default workspace-local skills), and the combinators `not(<p>)`, `any(<p>, …)`, `all(<p>, …)`.
+
+Manifest authors may use either legacy top-level `crates` / `predicates` fields or the registry-ready `where.crates` / `where.predicates` table on plugins, skill groups, hooks, MCP servers, subcommands, and `[[plugins]]` declarations. Validation lowers both shapes into the same `PredicateSet`.
 
 Each gated struct (plugin, skill group, skill, hook, MCP server, subcommand) stores a single merged `predicates: PredicateSet`. Evaluation is `PredicateSet::evaluate(ctx) -> bool`. `collect_crate_names` (crates.io validation) walks all positions regardless. Plugin/group/skill/MCP predicates are evaluated at sync time; hook dispatch evaluates the plugin-level set (so a plugin's `crates` now gate its hooks) plus the hook-level set. Hook dispatch threads in the workspace crate list, but resolves it (running cargo) only when some plugin- or hook-level predicate references a *concrete* `crate(...)` — wildcard and env/shell/path predicates dispatch without a cargo query. See the [predicates reference](../reference/predicates.md).
 
@@ -104,6 +107,12 @@ The layer is always installed by the binary. Commands that want output simply em
 
 Implements `cargo agents self-update`. Queries the registry for the latest published version via `cargo search`, then installs it via `cargo install symposium --force`. Also provides `re_exec()` which replaces the current process with the newly installed binary (Unix `exec`, spawn-and-exit on Windows) — used by the `auto-update = "on"` startup path. Contains `maybe_warn_for_update()` (sync, for the `warn` library path) and `maybe_check_for_update()` (async, for the binary `on` + re-exec path).
 
+### `crate_sources/` — source acquisition
+
+Contains `RustCrateFetch`, the compatibility wrapper used by `crate-info` and old `source = "crate"` skill resolution, plus the registry-ready `SourceRegistryResolver`. The resolver accepts `RegistrySourceSpec::Path`, `::Git`, and `::Crate` and returns concrete `ResolvedSourceRoot` directories for discovery. Direct path sources canonicalize local directories without network I/O; direct git sources reuse `symposium-install`'s `GitCacheManager`; crate-registry sources render Cargo dependency-table specs into a temporary probe package and ask Cargo to resolve registry, git, or path-backed crates.
+
+Also defines `ResolvedSourceGraph`, a pre-discovery graph that currently combines installed sources with workspace root/member sources. Nodes dedupe by canonical source path and keep non-exclusive provenance flags (`installed`, `workspace`, `dependency`) plus human-readable reasons. Sync still consumes the legacy registry until later phases rewire callers to this graph.
+
 ### `crate_command.rs` — crate source lookup
 
-Contains `dispatch_crate()`, which resolves a crate's version and fetches its source code. Called by the CLI's `crate-info` command. Path dependencies are resolved to their local source directory via `WorkspaceCrate.path`.
+Contains `dispatch_crate()`, which resolves a crate's version and fetches its source code through the `RustCrateFetch` compatibility wrapper. Called by the CLI's `crate-info` command. Path dependencies are resolved to their local source directory via `WorkspaceCrate.path`.

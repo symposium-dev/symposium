@@ -18,11 +18,11 @@ Must be run from within a Rust workspace. Performs the following steps:
 
 2. **Scan dependencies** — reads the full dependency graph from the workspace.
 
-3. **Load installed crates** — fetches each `[[installed-crate]]` from the user config (from crates.io, git, or path). Checks for updates based on source type: crates.io and git check on a throttled cadence (at most once per 24 hours); path sources always check mtime.
+3. **Load installed sources** — resolves `[installed.crates]`, `installed.paths`, and `installed.git` entries from the user config. Checks for updates based on source type: crates.io and git check on a throttled cadence (at most once per 24 hours); path sources always check mtime.
 
-4. **Resolve dependency allow list** — collects `dependency-allow-list` entries from both the user config and all installed plugin crates. Checks workspace deps against the combined list and fetches any matching crates as additional plugin sources.
+4. **Resolve discovery policy** — collects `[discovery.allow]` / `[discovery.deny]` rules from both the user config and all installed plugin crates. Checks workspace deps against the combined policy and fetches any matching crates as additional plugin sources.
 
-5. **Resolve auto-installs** — follows `[[auto-install]]` entries from all loaded plugins (recursively, with predicate evaluation).
+5. **Resolve transitive plugin sources** — follows `[[plugins]] source.*` entries from all loaded plugins (recursively, with `where.*` predicate evaluation).
 
 6. **Discover applicable skills** — scans each plugin source crate for `SYMPOSIUM.toml` files (or falls back to `$ROOT/skills/`), then matches skill predicates against workspace dependencies.
 

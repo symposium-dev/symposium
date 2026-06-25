@@ -968,6 +968,7 @@ mod tests {
             installations: vec![install],
             hooks: vec![hook],
             skills: vec![],
+            plugin_sources: vec![],
             mcp_servers: vec![],
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],

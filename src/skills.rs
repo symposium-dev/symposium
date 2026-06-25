@@ -1296,6 +1296,7 @@ mod tests {
                 predicates: pred_set("serde"), // Group targets serde
                 source: PluginSource::default(),
             }],
+            plugin_sources: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
@@ -1351,6 +1352,7 @@ mod tests {
                 predicates: pred_set("other-crate"), // But group targets other-crate
                 source: PluginSource::default(),
             }],
+            plugin_sources: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
@@ -1424,6 +1426,7 @@ mod tests {
                 predicates: pred_set("serde"), // Group also targets serde
                 source: PluginSource::Path(skill_dir.to_path_buf()),
             }],
+            plugin_sources: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
@@ -1502,6 +1505,7 @@ mod tests {
                 predicates: pred_set("serde"),
                 source: PluginSource::Path(skill_dir.to_path_buf()),
             }],
+            plugin_sources: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: Default::default(),
@@ -1581,6 +1585,7 @@ mod tests {
                 },
                 source: PluginSource::Path(skill_dir.to_path_buf()),
             }],
+            plugin_sources: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: Default::default(),

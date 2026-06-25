@@ -2,9 +2,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use serde::de;
 use serde::{Deserialize, Serialize};
 
 use crate::config::Symposium;
+use crate::config::{CrateSourceSpec, parse_crate_source_value};
 use crate::hook::HookEvent;
 use crate::hook_schema::HookAgent;
 use symposium_install::Source;
@@ -38,12 +40,14 @@ impl<'de> Deserialize<'de> for PluginMcpServer {
             crates: Option<crate::predicate::CrateList>,
             #[serde(default)]
             predicates: crate::predicate::PredicateSet,
+            #[serde(default, rename = "where")]
+            where_clause: WhereClause,
             #[serde(flatten)]
             server: McpServerEntry,
         }
         let raw = Raw::deserialize(deserializer)?;
         Ok(PluginMcpServer {
-            predicates: crate::predicate::PredicateSet::merged(raw.crates, raw.predicates),
+            predicates: merge_where(raw.crates, raw.predicates, raw.where_clause, false),
             server: raw.server,
         })
     }
@@ -78,6 +82,91 @@ pub enum PluginSource {
 
 /// Default subdirectory used when no `[package.metadata.symposium]` is present.
 pub const CRATE_DEFAULT_SKILLS_PATH: &str = "skills";
+
+/// Registry declaration from a `[[plugins]]` source expansion block.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PluginSourceDecl {
+    Path(PathBuf),
+    Git(String),
+    Crate(Vec<CrateSourceSpec>),
+}
+
+impl<'de> Deserialize<'de> for PluginSourceDecl {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = toml::Value::deserialize(deserializer)?;
+        let toml::Value::Table(mut table) = value else {
+            return Err(de::Error::custom(
+                "plugin source declaration must be a table with path, git, or crate",
+            ));
+        };
+
+        let path = table.remove("path");
+        let git = table.remove("git");
+        let crate_value = table.remove("crate");
+        if !table.is_empty() {
+            let fields = table.keys().cloned().collect::<Vec<_>>().join(", ");
+            return Err(de::Error::custom(format!(
+                "unknown plugin source field(s): {fields}"
+            )));
+        }
+
+        let count = path.is_some() as u8 + git.is_some() as u8 + crate_value.is_some() as u8;
+        if count != 1 {
+            return Err(de::Error::custom(
+                "exactly one of source.path, source.git, or source.crate is required",
+            ));
+        }
+
+        if let Some(path) = path {
+            let path = path
+                .try_into()
+                .map_err(|e: toml::de::Error| de::Error::custom(e.to_string()))?;
+            return Ok(PluginSourceDecl::Path(path));
+        }
+        if let Some(git) = git {
+            let Some(git) = git.as_str() else {
+                return Err(de::Error::custom("source.git must be a string"));
+            };
+            return Ok(PluginSourceDecl::Git(git.to_string()));
+        }
+        let crate_value = crate_value.expect("count guard");
+        let specs = parse_crate_source_value(crate_value).map_err(de::Error::custom)?;
+        Ok(PluginSourceDecl::Crate(specs))
+    }
+}
+
+/// A `[[plugins]]` source expansion block parsed from a manifest.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginSearchSource {
+    pub predicates: crate::predicate::PredicateSet,
+    pub source: PluginSourceDecl,
+}
+
+/// Shared `where.*` activation filters for every filterable manifest block.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WhereClause {
+    #[serde(default)]
+    pub crates: Option<crate::predicate::CrateList>,
+    #[serde(default)]
+    pub predicates: crate::predicate::PredicateSet,
+}
+
+fn merge_where(
+    legacy_crates: Option<crate::predicate::CrateList>,
+    legacy_predicates: crate::predicate::PredicateSet,
+    where_clause: WhereClause,
+    default_wildcard_crates: bool,
+) -> crate::predicate::PredicateSet {
+    let crates = where_clause
+        .crates
+        .and_then(crate::predicate::CrateList::into_option)
+        .or_else(|| legacy_crates.and_then(crate::predicate::CrateList::into_option))
+        .or_else(|| default_wildcard_crates.then(|| crate::predicate::CrateList::wildcard()));
+    let mut predicates = legacy_predicates.predicates;
+    predicates.extend(where_clause.predicates.predicates);
+    crate::predicate::PredicateSet::merged(crates, crate::predicate::PredicateSet { predicates })
+}
 
 impl serde::Serialize for PluginSource {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
@@ -200,12 +289,14 @@ impl<'de> Deserialize<'de> for SkillGroup {
             crates: Option<crate::predicate::CrateList>,
             #[serde(default)]
             predicates: crate::predicate::PredicateSet,
+            #[serde(default, rename = "where")]
+            where_clause: WhereClause,
             #[serde(default)]
             source: PluginSource,
         }
         let raw = Raw::deserialize(deserializer)?;
         Ok(SkillGroup {
-            predicates: crate::predicate::PredicateSet::merged(raw.crates, raw.predicates),
+            predicates: merge_where(raw.crates, raw.predicates, raw.where_clause, false),
             source: raw.source,
         })
     }
@@ -330,6 +421,9 @@ pub struct Plugin {
     pub installations: Vec<Installation>,
     pub hooks: Vec<Hook>,
     pub skills: Vec<SkillGroup>,
+    /// Registry source declarations from `[[plugins]]` expansion blocks.
+    #[serde(skip_serializing)]
+    pub plugin_sources: Vec<PluginSearchSource>,
     /// MCP servers to register for this plugin.
     pub mcp_servers: Vec<PluginMcpServer>,
     /// Subcommands vended by this plugin, keyed by the name the user types
@@ -521,6 +615,7 @@ fn validate_hook(
         args: hook_args,
         format,
         predicates,
+        where_clause,
     } = raw;
 
     let command = resolve_or_promote(
@@ -610,7 +705,7 @@ fn validate_hook(
         script: hook_script,
         args: final_args,
         format,
-        predicates,
+        predicates: merge_where(None, predicates, where_clause, false),
     })
 }
 
@@ -799,20 +894,27 @@ struct RawCustomPredicate {
 }
 
 /// Raw TOML manifest deserialized from a plugin `.toml` file.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPluginManifest {
-    name: String,
+    #[serde(default)]
+    name: Option<String>,
     #[serde(default)]
     crates: crate::predicate::CrateList,
     #[serde(default)]
     predicates: crate::predicate::PredicateSet,
+    #[serde(default, rename = "where")]
+    where_clause: WhereClause,
+    #[serde(default)]
+    defaults: ManifestDefaults,
     #[serde(default)]
     installations: Vec<RawNamedInstallation>,
     #[serde(default)]
     hooks: Vec<RawHook>,
     #[serde(default)]
     skills: Vec<SkillGroup>,
+    #[serde(default, rename = "plugins")]
+    plugin_sources: Vec<RawPluginSearchSource>,
     #[serde(default)]
     mcp_servers: Vec<PluginMcpServer>,
     /// TOML key is singular (`[subcommand.<name>]`); the validated field on
@@ -821,6 +923,40 @@ struct RawPluginManifest {
     subcommand: std::collections::BTreeMap<String, RawSubcommand>,
     #[serde(default)]
     predicate: Vec<RawCustomPredicate>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestDefaults {
+    #[serde(default = "default_true")]
+    skills: bool,
+    #[serde(default = "default_true")]
+    plugins: bool,
+}
+
+impl Default for ManifestDefaults {
+    fn default() -> Self {
+        Self {
+            skills: true,
+            plugins: true,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPluginSearchSource {
+    #[serde(default)]
+    crates: Option<crate::predicate::CrateList>,
+    #[serde(default)]
+    predicates: crate::predicate::PredicateSet,
+    #[serde(default, rename = "where")]
+    where_clause: WhereClause,
+    source: PluginSourceDecl,
 }
 
 /// `[[installations]]` entry: a name plus the same fields as a `RawInlineInstallation`.
@@ -856,6 +992,8 @@ struct RawSubcommand {
     crates: Option<crate::predicate::CrateList>,
     #[serde(default)]
     predicates: crate::predicate::PredicateSet,
+    #[serde(default, rename = "where")]
+    where_clause: WhereClause,
 }
 
 #[derive(Debug, Deserialize)]
@@ -884,6 +1022,8 @@ struct RawHook {
     format: HookFormat,
     #[serde(default)]
     predicates: crate::predicate::PredicateSet,
+    #[serde(default, rename = "where")]
+    where_clause: WhereClause,
 }
 
 /// Fetch/update git-based plugin sources.
@@ -1202,47 +1342,86 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
 /// attribution (CLI validation, tests) pass `""`.
 fn scan_source_dir<P: AsRef<Path>>(dir: P, source_name: &str) -> Result<SourceDirContents> {
     let mut plugins = Vec::new();
-    let mut skill_files = Vec::new();
 
     let dir = dir.as_ref();
+    if !dir.is_dir() {
+        return Ok(SourceDirContents {
+            plugins,
+            skill_files: Vec::new(),
+        });
+    }
 
-    // A plugin source should *contain* plugins/skills, not *be* one.
-    if let Some(dir_type) = discover_directory_type(dir)? {
-        match dir_type {
-            DirectoryType::Plugin(_) => anyhow::bail!(
-                "plugin source root contains SYMPOSIUM.toml — it should contain subdirectories with plugins, not be a plugin itself: {}",
-                dir.display()
-            ),
-            DirectoryType::Skill(_) => anyhow::bail!(
-                "plugin source root contains SKILL.md — it should contain subdirectories with skills, not be a skill itself: {}",
-                dir.display()
-            ),
+    let mut visited = std::collections::BTreeSet::new();
+    let mut pending_search_roots = Vec::new();
+    let root = load_source_root_plugin(dir, source_name)?;
+    remember_manifest(&mut visited, &root.path);
+    collect_path_plugin_sources(&root, &mut pending_search_roots);
+    plugins.push(Ok(root));
+
+    while let Some(search_root) = pending_search_roots.pop() {
+        let manifests = discover_manifest_paths(&search_root)?;
+        for manifest_path in manifests {
+            if !remember_manifest(&mut visited, &manifest_path) {
+                continue;
+            }
+            let plugin = load_plugin(&manifest_path, source_name, dir)
+                .with_context(|| format!("loading plugin from `{}`", manifest_path.display()));
+            if let Ok(parsed) = &plugin {
+                collect_path_plugin_sources(parsed, &mut pending_search_roots);
+            }
+            plugins.push(plugin);
         }
     }
 
-    discover_in_directory(dir, source_name, dir, &mut plugins, &mut skill_files)?;
-
     Ok(SourceDirContents {
         plugins,
-        skill_files,
+        skill_files: Vec::new(),
     })
 }
 
-/// Recursively discover plugins and skills with precedence and pruning.
-///
-/// `source_name` and `source_dir` describe the registry source root —
-/// passed through unchanged on recursion and stamped onto each
-/// discovered `ParsedPlugin`.
-fn discover_in_directory(
-    dir: &Path,
-    source_name: &str,
-    source_dir: &Path,
-    plugins: &mut Vec<Result<ParsedPlugin>>,
-    skill_files: &mut Vec<PathBuf>,
-) -> Result<()> {
+fn load_source_root_plugin(source_dir: &Path, source_name: &str) -> Result<ParsedPlugin> {
+    let manifest_path = source_dir.join("SYMPOSIUM.toml");
+    if manifest_path.is_file() {
+        return load_plugin(&manifest_path, source_name, source_dir);
+    }
+    let manifest = RawPluginManifest::default();
+    let plugin = validate_manifest(
+        manifest,
+        default_plugin_name(&manifest_path, source_name, source_dir),
+    )
+    .with_context(|| format!("validating synthesized `{}`", manifest_path.display()))?;
+    Ok(ParsedPlugin {
+        path: manifest_path,
+        plugin,
+        source_name: source_name.to_string(),
+        source_dir: source_dir.to_path_buf(),
+    })
+}
+
+fn remember_manifest(seen: &mut std::collections::BTreeSet<PathBuf>, path: &Path) -> bool {
+    let key = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    seen.insert(key)
+}
+
+fn collect_path_plugin_sources(parsed: &ParsedPlugin, out: &mut Vec<PathBuf>) {
+    let manifest_dir = parsed.path.parent().unwrap_or(&parsed.source_dir);
+    for source in &parsed.plugin.plugin_sources {
+        if let PluginSourceDecl::Path(path) = &source.source {
+            let search_root = if path.is_absolute() {
+                path.clone()
+            } else {
+                manifest_dir.join(path)
+            };
+            out.push(search_root);
+        }
+    }
+}
+
+fn discover_manifest_paths(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut manifests = Vec::new();
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return Ok(()),
+        Err(_) => return Ok(manifests),
     };
 
     for entry in entries.flatten() {
@@ -1250,63 +1429,14 @@ fn discover_in_directory(
         if !path.is_dir() {
             continue;
         }
-
-        // Check what this directory contains (plugin takes precedence)
-        if let Some(discovered) = discover_directory_type(&path)? {
-            match discovered {
-                DirectoryType::Plugin(toml_path) => {
-                    let plugin = load_plugin(&toml_path, source_name, source_dir)
-                        .with_context(|| format!("loading plugin from `{}`", toml_path.display()));
-
-                    tracing::debug!(
-                        path = %toml_path.display(),
-                        plugin = ?plugin,
-                        "loaded plugin",
-                    );
-
-                    plugins.push(plugin);
-                }
-                DirectoryType::Skill(skill_md_path) => {
-                    tracing::debug!(
-                        path = %skill_md_path.display(),
-                        "found standalone skill",
-                    );
-                    skill_files.push(skill_md_path);
-                }
-            }
-            // Don't recurse - directory is claimed
-        } else {
-            // Directory doesn't contain plugin/skill, recurse into it
-            discover_in_directory(&path, source_name, source_dir, plugins, skill_files)?;
+        let manifest = path.join("SYMPOSIUM.toml");
+        if manifest.is_file() {
+            manifests.push(manifest);
         }
+        manifests.extend(discover_manifest_paths(&path)?);
     }
 
-    Ok(())
-}
-
-/// What type of directory this is (plugin or skill).
-enum DirectoryType {
-    Plugin(PathBuf), // Path to SYMPOSIUM.toml
-    Skill(PathBuf),  // Path to SKILL.md file
-}
-
-/// Determine if a directory contains a plugin or skill.
-/// Returns None if it contains neither.
-/// SYMPOSIUM.toml takes precedence over SKILL.md.
-fn discover_directory_type(dir: &Path) -> Result<Option<DirectoryType>> {
-    // Check for SYMPOSIUM.toml (the only valid plugin manifest)
-    let symposium_toml = dir.join("SYMPOSIUM.toml");
-    if symposium_toml.is_file() {
-        return Ok(Some(DirectoryType::Plugin(symposium_toml)));
-    }
-
-    // Check for SKILL.md
-    let skill_md = dir.join("SKILL.md");
-    if skill_md.is_file() {
-        return Ok(Some(DirectoryType::Skill(skill_md)));
-    }
-
-    Ok(None)
+    Ok(manifests)
 }
 
 /// Result of validating a single item in a plugin source directory.
@@ -1441,6 +1571,20 @@ pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
             .collect_crate_names(&mut names);
         for group in &plugin_result.plugin.skills {
             group.predicates.collect_crate_names(&mut names);
+            if let PluginSource::Path(path) = &group.source {
+                let plugin_dir = plugin_result.path.parent().unwrap_or(dir);
+                let skills_dir = if path.is_absolute() {
+                    path.clone()
+                } else {
+                    plugin_dir.join(path)
+                };
+                for skill in crate::skills::discover_skills(&skills_dir, group)
+                    .into_iter()
+                    .flatten()
+                {
+                    skill.predicates.collect_crate_names(&mut names);
+                }
+            }
         }
         for mcp in &plugin_result.plugin.mcp_servers {
             mcp.predicates.collect_crate_names(&mut names);
@@ -1482,7 +1626,8 @@ pub fn load_plugin(
 ) -> Result<ParsedPlugin> {
     let content = fs::read_to_string(manifest_path)?;
     let manifest: RawPluginManifest = toml::from_str(&content)?;
-    let plugin = validate_manifest(manifest)
+    let default_name = default_plugin_name(manifest_path, source_name, source_dir);
+    let plugin = validate_manifest(manifest, default_name)
         .with_context(|| format!("validating `{}`", manifest_path.display()))?;
     Ok(ParsedPlugin {
         path: manifest_path.to_path_buf(),
@@ -1492,13 +1637,39 @@ pub fn load_plugin(
     })
 }
 
+fn default_plugin_name(manifest_path: &Path, source_name: &str, source_dir: &Path) -> String {
+    let base = if source_name.is_empty() {
+        source_dir
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("plugin-source")
+            .to_string()
+    } else {
+        source_name.to_string()
+    };
+    let manifest_dir = manifest_path.parent().unwrap_or(source_dir);
+    let rel = manifest_dir
+        .strip_prefix(source_dir)
+        .unwrap_or(Path::new(""));
+    if rel.as_os_str().is_empty() {
+        base
+    } else {
+        format!(
+            "{}/{}",
+            base,
+            rel.to_string_lossy()
+                .replace(std::path::MAIN_SEPARATOR, "/")
+        )
+    }
+}
+
 /// Convert a raw manifest into a validated `Plugin`.
 ///
 /// User-declared `[[installations]]` come first in the resulting list, in
 /// declaration order. Inline references on installations and hooks are
 /// promoted into synthetic entries appended to the same list so that every
 /// validated reference is a plain name.
-fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
+fn validate_manifest(manifest: RawPluginManifest, default_name: String) -> Result<Plugin> {
     let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for entry in &manifest.installations {
         if !names.insert(entry.name.clone()) {
@@ -1571,48 +1742,63 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
         )?);
     }
 
-    let predicates =
-        crate::predicate::PredicateSet::merged(Some(manifest.crates), manifest.predicates);
+    let predicates = merge_where(
+        Some(manifest.crates),
+        manifest.predicates,
+        manifest.where_clause,
+        true,
+    );
 
-    // Every plugin must reference at least one crate (or custom predicate)
-    // somewhere — at the plugin, skill-group, hook, or MCP-server level — via
-    // `crates`, a `crate(...)` predicate, or a custom predicate. Otherwise it
-    // would never apply to any project.
-    let has_custom_predicate = predicates
-        .predicates
-        .iter()
-        .any(|p| matches!(p, crate::predicate::Predicate::Custom { .. }));
-    let mentions_crate = has_custom_predicate
-        || predicates.mentions_crate()
-        || manifest
-            .skills
-            .iter()
-            .any(|g| g.predicates.mentions_crate())
-        || hooks.iter().any(|h| h.predicates.mentions_crate())
-        || manifest
-            .mcp_servers
-            .iter()
-            .any(|m| m.predicates.mentions_crate());
-    if !mentions_crate {
-        bail!(
-            "plugin `{}` references no crate — add `crates = [...]` or a `crate(...)` predicate \
-             at the plugin, `[[skills]]`, or `[[mcp_servers]]` level",
-            manifest.name
-        );
+    let mut skills = manifest.skills;
+    if manifest.defaults.skills {
+        skills.push(default_skills_group("skills", None));
+        skills.push(default_skills_group(
+            ".agents/skills",
+            Some(crate::predicate::Predicate::Workspace),
+        ));
     }
 
-    validate_skill_groups(&predicates, &manifest.skills)?;
+    let mut plugin_sources = Vec::with_capacity(manifest.plugin_sources.len() + 1);
+    if manifest.defaults.plugins {
+        plugin_sources.push(PluginSearchSource {
+            predicates: crate::predicate::PredicateSet::default(),
+            source: PluginSourceDecl::Path(PathBuf::from(".")),
+        });
+    }
+    for raw in manifest.plugin_sources {
+        plugin_sources.push(PluginSearchSource {
+            predicates: merge_where(raw.crates, raw.predicates, raw.where_clause, false),
+            source: raw.source,
+        });
+    }
+
+    validate_skill_groups(&predicates, &skills)?;
 
     Ok(Plugin {
-        name: manifest.name,
+        name: manifest.name.unwrap_or(default_name),
         predicates,
         installations,
         hooks,
-        skills: manifest.skills,
+        skills,
+        plugin_sources,
         mcp_servers: manifest.mcp_servers,
         subcommands,
         custom_predicates,
     })
+}
+
+fn default_skills_group(
+    path: &str,
+    extra_predicate: Option<crate::predicate::Predicate>,
+) -> SkillGroup {
+    let mut predicates = Vec::new();
+    if let Some(predicate) = extra_predicate {
+        predicates.push(predicate);
+    }
+    SkillGroup {
+        predicates: crate::predicate::PredicateSet { predicates },
+        source: PluginSource::Path(PathBuf::from(path)),
+    }
 }
 
 /// Names a plugin subcommand cannot use because they collide with built-in
@@ -1663,6 +1849,7 @@ fn validate_subcommand(
         command: raw_command,
         crates,
         predicates,
+        where_clause,
     } = raw;
 
     if description.len() > MAX_SUBCOMMAND_DESCRIPTION_LEN {
@@ -1681,7 +1868,7 @@ fn validate_subcommand(
         description,
         audience,
         command,
-        predicates: crate::predicate::PredicateSet::merged(crates, predicates),
+        predicates: merge_where(crates, predicates, where_clause, false),
     })
 }
 
@@ -1806,7 +1993,7 @@ mod tests {
 
     fn from_str(s: &str) -> Result<Plugin> {
         let manifest: RawPluginManifest = toml::from_str(s)?;
-        validate_manifest(manifest)
+        validate_manifest(manifest, "plugin".to_string())
     }
 
     const SAMPLE: &str = indoc! {r#"
@@ -1829,7 +2016,7 @@ mod tests {
         let plugin = from_str(SAMPLE).expect("parse");
         assert_eq!(plugin.name, "example-plugin");
         assert_eq!(plugin.hooks.len(), 1);
-        assert!(plugin.skills.is_empty());
+        assert_eq!(plugin.skills.len(), 2);
     }
 
     #[test]
@@ -1844,7 +2031,7 @@ mod tests {
         "#};
         let plugin = from_str(toml).expect("parse");
         assert_eq!(plugin.name, "remote-plugin");
-        assert_eq!(plugin.skills.len(), 1);
+        assert_eq!(plugin.skills.len(), 3);
         let group = &plugin.skills[0];
         assert!(group.predicates.references_crate("serde"));
         assert!(
@@ -1920,6 +2107,98 @@ mod tests {
     }
 
     #[test]
+    fn parse_where_tables_on_filterable_blocks() {
+        let toml = indoc! {r#"
+            name = "where-plugin"
+
+            [where]
+            crates = ["serde"]
+            predicates = ["path_exists(Cargo.toml)"]
+
+            [[skills]]
+            source.path = "skills"
+            [skills.where]
+            crates = ["tokio"]
+
+            [[mcp_servers]]
+            name = "server"
+            command = "/usr/bin/true"
+            args = []
+            env = []
+            [mcp_servers.where]
+            predicates = ["env(SYMPOSIUM_TEST=1)"]
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = { executable = "/bin/echo" }
+            [hooks.where]
+            predicates = ["workspace()"]
+
+            [[plugins]]
+            source.path = "extras"
+            [plugins.where]
+            crates = ["anyhow"]
+
+            [subcommand.demo]
+            description = "Run demo"
+            command = { executable = "/bin/echo" }
+            [subcommand.demo.where]
+            crates = ["serde_json"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert!(plugin.predicates.references_crate("serde"));
+        assert!(plugin.skills[0].predicates.references_crate("tokio"));
+        assert_eq!(plugin.mcp_servers[0].predicates.predicates.len(), 1);
+        assert!(
+            plugin.hooks[0]
+                .predicates
+                .predicates
+                .contains(&crate::predicate::Predicate::Workspace)
+        );
+        assert!(
+            plugin.plugin_sources[1]
+                .predicates
+                .references_crate("anyhow")
+        );
+        assert!(
+            plugin.subcommands["demo"]
+                .predicates
+                .references_crate("serde_json")
+        );
+    }
+
+    #[test]
+    fn parse_plugin_source_registry_declarations() {
+        let toml = indoc! {r#"
+            name = "source-plugin"
+
+            [[plugins]]
+            source.git = "https://example.com/repo.git"
+
+            [[plugins]]
+            source.crate = "symposium-extra"
+
+            [[plugins]]
+            source.crate.my-extra = { path = "../my-extra", package = "my-extra-pkg" }
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.plugin_sources.len(), 4);
+        assert!(matches!(
+            &plugin.plugin_sources[1].source,
+            PluginSourceDecl::Git(url) if url == "https://example.com/repo.git"
+        ));
+        assert!(matches!(
+            &plugin.plugin_sources[2].source,
+            PluginSourceDecl::Crate(specs) if specs.len() == 1 && specs[0].key.as_deref() == Some("symposium-extra")
+        ));
+        assert!(matches!(
+            &plugin.plugin_sources[3].source,
+            PluginSourceDecl::Crate(specs) if specs.len() == 1 && specs[0].key.as_deref() == Some("my-extra")
+        ));
+    }
+
+    #[test]
     fn predicates_default_empty() {
         // With no `predicates`, the plugin gate is just the lowered `crates`
         // (here `crate(*)`), and hooks default to no predicates.
@@ -1978,21 +2257,80 @@ mod tests {
         std::fs::create_dir_all(tmp.path().join("not-a-plugin-or-skill")).unwrap();
 
         let contents = scan_source_dir(tmp.path(), "").unwrap();
-        assert_eq!(contents.plugins.len(), 1);
+        assert_eq!(contents.plugins.len(), 2);
         assert_eq!(
-            contents.plugins[0].as_ref().unwrap().plugin.name,
+            contents.plugins[1].as_ref().unwrap().plugin.name,
             "my-plugin"
         );
-        assert_eq!(contents.skill_files.len(), 1);
-        assert!(contents.skill_files[0].ends_with("assert-struct/SKILL.md"));
+        assert_eq!(contents.skill_files.len(), 0);
     }
 
     #[test]
     fn scan_source_dir_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let contents = scan_source_dir(tmp.path(), "").unwrap();
-        assert!(contents.plugins.is_empty());
+        assert_eq!(contents.plugins.len(), 1);
+        assert_eq!(contents.plugins[0].as_ref().unwrap().plugin.skills.len(), 2);
         assert!(contents.skill_files.is_empty());
+    }
+
+    #[test]
+    fn defaults_plugins_false_suppresses_recursive_manifest_search() {
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File(
+                "SYMPOSIUM.toml",
+                indoc! {r#"
+                    name = "root"
+
+                    [defaults]
+                    plugins = false
+                "#},
+            ),
+            File(
+                "nested/SYMPOSIUM.toml",
+                indoc! {r#"
+                    name = "nested"
+                "#},
+            ),
+        ]);
+
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
+        assert_eq!(contents.plugins.len(), 1);
+        assert_eq!(contents.plugins[0].as_ref().unwrap().plugin.name, "root");
+    }
+
+    #[test]
+    fn explicit_plugins_source_path_searches_subtree() {
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File(
+                "SYMPOSIUM.toml",
+                indoc! {r#"
+                    name = "root"
+
+                    [defaults]
+                    plugins = false
+
+                    [[plugins]]
+                    source.path = "somewhere"
+                "#},
+            ),
+            File(
+                "somewhere/deep/SYMPOSIUM.toml",
+                indoc! {r#"
+                    name = "deep"
+                "#},
+            ),
+        ]);
+
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
+        let names: Vec<_> = contents
+            .plugins
+            .iter()
+            .map(|p| p.as_ref().unwrap().plugin.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["root", "deep"]);
     }
 
     #[test]
@@ -2017,12 +2355,9 @@ mod tests {
             "},
         )]);
 
-        let err = scan_source_dir(tmp.path(), "").unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("plugin source root contains SKILL.md"),
-            "expected root SKILL.md error, got: {err}"
-        );
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
+        assert_eq!(contents.plugins.len(), 1);
+        assert!(contents.skill_files.is_empty());
     }
 
     #[test]
@@ -2036,11 +2371,11 @@ mod tests {
             "#},
         )]);
 
-        let err = scan_source_dir(tmp.path(), "").unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("plugin source root contains SYMPOSIUM.toml"),
-            "expected root SYMPOSIUM.toml error, got: {err}"
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
+        assert_eq!(contents.plugins.len(), 1);
+        assert_eq!(
+            contents.plugins[0].as_ref().unwrap().plugin.name,
+            "root-plugin"
         );
     }
 
@@ -2069,10 +2404,10 @@ mod tests {
         ]);
 
         let contents = scan_source_dir(tmp.path(), "").unwrap();
-        assert_eq!(contents.plugins.len(), 1);
+        assert_eq!(contents.plugins.len(), 2);
         assert_eq!(contents.skill_files.len(), 0);
         expect_test::expect![[r#"mixed-plugin"#]]
-            .assert_eq(&contents.plugins[0].as_ref().unwrap().plugin.name);
+            .assert_eq(&contents.plugins[1].as_ref().unwrap().plugin.name);
     }
 
     #[test]
@@ -2095,10 +2430,10 @@ mod tests {
         ]);
 
         let contents = scan_source_dir(tmp.path(), "").unwrap();
-        assert_eq!(contents.plugins.len(), 1);
+        assert_eq!(contents.plugins.len(), 2);
         assert_eq!(contents.skill_files.len(), 0);
         expect_test::expect![[r#"preferred-plugin"#]]
-            .assert_eq(&contents.plugins[0].as_ref().unwrap().plugin.name);
+            .assert_eq(&contents.plugins[1].as_ref().unwrap().plugin.name);
     }
 
     #[test]
@@ -2155,11 +2490,15 @@ mod tests {
         ]);
 
         let contents = scan_source_dir(tmp.path(), "").unwrap();
-        assert_eq!(contents.plugins.len(), 1);
-        assert_eq!(contents.skill_files.len(), 1);
-        expect_test::expect![[r#"foo-plugin"#]]
-            .assert_eq(&contents.plugins[0].as_ref().unwrap().plugin.name);
-        assert!(contents.skill_files[0].ends_with("baz/SKILL.md"));
+        assert_eq!(contents.plugins.len(), 3);
+        assert_eq!(contents.skill_files.len(), 0);
+        let names: Vec<_> = contents
+            .plugins
+            .iter()
+            .map(|p| p.as_ref().unwrap().plugin.name.as_str())
+            .collect();
+        assert!(names.contains(&"foo-plugin"));
+        assert!(names.contains(&"qux-plugin"));
     }
 
     #[test]
@@ -2175,7 +2514,7 @@ mod tests {
             ),
             File("bad-plugin/SYMPOSIUM.toml", "not valid toml {{{"),
             File(
-                "my-skill/SKILL.md",
+                "skills/my-skill/SKILL.md",
                 indoc! {"
                 ---
                 name: my-skill
@@ -2187,7 +2526,7 @@ mod tests {
             "},
             ),
             File(
-                "bad-skill/SKILL.md",
+                "skills/bad-skill/SKILL.md",
                 indoc! {"
                 ---
                 description: No name
@@ -2200,10 +2539,20 @@ mod tests {
         ]);
 
         let results = validate_source_dir(tmp.path()).unwrap();
-        let ok_count = results.iter().filter(|r| r.result.is_ok()).count();
-        let err_count = results.iter().filter(|r| r.result.is_err()).count();
-        assert_eq!(results.len(), 4);
-        assert_eq!(ok_count, 2);
+        let ok_count = results.iter().filter(|r| r.result.is_ok()).count()
+            + results
+                .iter()
+                .flat_map(|r| &r.children)
+                .filter(|r| r.result.is_ok())
+                .count();
+        let err_count = results.iter().filter(|r| r.result.is_err()).count()
+            + results
+                .iter()
+                .flat_map(|r| &r.children)
+                .filter(|r| r.result.is_err())
+                .count();
+        assert_eq!(results.len(), 3);
+        assert_eq!(ok_count, 6);
         assert_eq!(err_count, 2);
     }
 
@@ -2211,7 +2560,7 @@ mod tests {
     fn validate_source_dir_rejects_illformed_standalone_skill() {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[File(
-            "bad-skill/SKILL.md",
+            "skills/bad-skill/SKILL.md",
             indoc! {"
                 ---
                 name: rust-best-practice
@@ -2226,7 +2575,10 @@ mod tests {
         let results = validate_source_dir(tmp.path()).unwrap();
         assert_eq!(results.len(), 1);
         assert!(
-            results[0].result.is_err(),
+            results[0]
+                .children
+                .iter()
+                .any(|child| child.result.is_err()),
             "standalone skill with non-string YAML value should fail validation"
         );
     }
@@ -2246,7 +2598,7 @@ mod tests {
             "#},
             ),
             File(
-                "my-skill/SKILL.md",
+                "skills/my-skill/SKILL.md",
                 indoc! {"
                 ---
                 name: my-skill
@@ -2270,7 +2622,7 @@ mod tests {
         let tmp = instantiate_fixture(&[
             File("bad-plugin/SYMPOSIUM.toml", "not valid {{{"),
             File(
-                "good-skill/SKILL.md",
+                "skills/good-skill/SKILL.md",
                 indoc! {"
                 ---
                 name: good
@@ -2282,7 +2634,7 @@ mod tests {
             "},
             ),
             File(
-                "bad-skill/SKILL.md",
+                "skills/bad-skill/SKILL.md",
                 indoc! {"
                 ---
                 name: bad
@@ -2334,7 +2686,7 @@ mod tests {
         "#};
         let plugin = from_str(toml).expect("parse");
         assert_eq!(plugin.name, "multi-group");
-        assert_eq!(plugin.skills.len(), 2);
+        assert_eq!(plugin.skills.len(), 4);
         assert!(plugin.skills[0].predicates.predicates[0].references_crate("serde"));
         assert!(plugin.skills[1].predicates.predicates[0].references_crate("tokio"));
     }
@@ -2352,6 +2704,7 @@ mod tests {
             predicates: pred_set("*"),
             hooks: vec![],
             skills: vec![],
+            plugin_sources: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
@@ -2365,6 +2718,7 @@ mod tests {
             predicates: pred_set("serde"),
             hooks: vec![],
             skills: vec![],
+            plugin_sources: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
@@ -2378,6 +2732,7 @@ mod tests {
             predicates: pred_set("other-crate"),
             hooks: vec![],
             skills: vec![],
+            plugin_sources: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
@@ -2391,6 +2746,7 @@ mod tests {
             predicates: pred_set("tokio>=2.0"),
             hooks: vec![],
             skills: vec![],
+            plugin_sources: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
@@ -2429,15 +2785,12 @@ mod tests {
         ]);
 
         let results = validate_source_dir(tmp.path()).unwrap();
-        assert_eq!(results.len(), 2);
+        assert_eq!(results.len(), 3);
 
         let ok_count = results.iter().filter(|r| r.result.is_ok()).count();
         let err_count = results.iter().filter(|r| r.result.is_err()).count();
-        assert_eq!(ok_count, 1, "Plugin with crates should pass");
-        assert_eq!(
-            err_count, 1,
-            "Plugin without crates should fail TOML parsing"
-        );
+        assert_eq!(ok_count, 3, "Plugins default to where.crates = [\"*\"]");
+        assert_eq!(err_count, 0);
     }
 
     #[test]
@@ -3889,8 +4242,8 @@ mod tests {
         )]);
 
         let contents = scan_source_dir(tmp.path(), "").unwrap();
-        assert_eq!(contents.plugins.len(), 1);
-        let parsed = contents.plugins[0].as_ref().unwrap();
+        assert_eq!(contents.plugins.len(), 2);
+        let parsed = contents.plugins[1].as_ref().unwrap();
         let sub = &parsed.plugin.subcommands["demo"];
         assert_eq!(sub.description, "Run the demo tool");
         assert_eq!(sub.audience, Audience::Agents);
@@ -3946,6 +4299,7 @@ mod tests {
                 }],
                 hooks: vec![],
                 skills: vec![],
+                plugin_sources: vec![],
                 mcp_servers: vec![],
                 subcommands: BTreeMap::new(),
                 custom_predicates: vec![CustomPredicate {

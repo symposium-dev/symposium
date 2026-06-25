@@ -8,7 +8,7 @@ There are four ways a crate (or directory) becomes a plugin source:
 
 1. **The workspace itself** — The workspace root and each member crate are always scanned. Gated by the `workspace()` predicate.
 2. **Explicit install** — `cargo agents install <crate>` adds it to your config. Gated by `installed()`.
-3. **Dependency allow list** — A workspace dependency matches an entry in the `dependency-allow-list` (configured in `config.toml` or declared by an installed plugin crate). Gated by `dependency()`.
+3. **Discovery policy** — A workspace dependency or other candidate source matches `[discovery.allow]` and is not rejected by `[discovery.deny]` (configured in `config.toml` or declared by an installed plugin crate). Gated by `dependency()`.
 4. **Default** — `symposium-recommendations` is installed by default during `cargo agents init`.
 
 ## Discovery rules
@@ -19,7 +19,7 @@ When Symposium loads a plugin source crate, it scans from the crate root:
 
 2. **If no `SYMPOSIUM.toml` found anywhere** — Fall back to the default skill sources:
    - `$ROOT/skills/` — searched recursively for `SKILL.md` files. Installs unconditionally.
-   - `$ROOT/.agents/skills/` — searched one level deep for `SKILL.md` files. Installs with an implicit `workspace()` predicate (only active when the crate is the current workspace).
+   - `$ROOT/.agents/skills/` — searched recursively for `SKILL.md` files. Installs with an implicit `workspace()` predicate (only active when the crate is the current workspace).
 
    These become an anonymous, skills-only plugin.
 
@@ -61,7 +61,7 @@ skills-only-crate/
       SKILL.md
     advanced/
       SKILL.md
-  .agents/skills/           # ✓ Fallback: scanned one level (workspace-only)
+  .agents/skills/           # ✓ Fallback: scanned recursively (workspace-only)
     local-dev/
       SKILL.md
 ```

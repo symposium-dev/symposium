@@ -20,23 +20,20 @@ name = "gemini"
 level = "info"
 
 # Installed plugin crates
-[[installed-crate]]
-name = "symposium-recommendations"
+[installed]
+paths = ["/home/me/dev/my-plugin-source"]
+git = ["https://github.com/my-org/my-plugin-source"]
 
-[[installed-crate]]
-name = "my-org-plugins"
-git = "https://github.com/my-org/my-org-plugins"
-
-[[installed-crate]]
-name = "semver-tracked"
-version = "1"
-
-[[installed-crate]]
-name = "local-dev"
-path = "/home/me/dev/my-plugins"
+[installed.crates]
+symposium-recommendations = "1"
+semver-tracked = "1"
+pinned-plugin = "=1.2.0"
+my-org-plugins = { git = "https://github.com/my-org/my-org-plugins" }
+local-dev = { path = "/home/me/dev/my-plugins" }
 
 # Allow any workspace dep with a SYMPOSIUM.toml to be auto-discovered
-dependency-allow-list = ["*"]
+[discovery]
+allow = "*"
 ```
 
 ## Top-level keys
@@ -47,7 +44,8 @@ dependency-allow-list = ["*"]
 | `agents-syncing` | bool | `true` | Propagate user-authored skills from `.agents/skills/` into the per-agent skill directories of any configured agent that does not natively use `.agents/skills/` (such as `.claude/skills/` or `.kiro/skills/`). Skills that symposium itself installed — identified by the `.symposium` marker file — are not propagated. See [Workspace plugins](../workspace.md) for the user-guide overview, or [Agents syncing](#agents-syncing-mirror-user-authored-skills) below for details. |
 | `hook-scope` | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace. |
 | `auto-update` | string | `"on"` | Controls automatic update behavior. `"off"` disables update checks entirely. `"warn"` checks the registry (at most once per 24 hours) and prints a message when a newer version is available. `"on"` automatically installs the update via `cargo install` and re-executes the command with the new binary. |
-| `dependency-allow-list` | array of strings | `[]` | Workspace dependencies that are approved for automatic plugin discovery. When a workspace dep appears in this list and contains a `SYMPOSIUM.toml`, it is treated as an installed plugin crate. Use `["*"]` to approve all workspace deps. Combines with allow lists declared by installed plugin crates. |
+| `installed` | table | `symposium-recommendations` installed crate | Registry-ready installed plugin sources. See [`[installed]`](#installed). |
+| `discovery` | table | empty policy | User-configured discovery allow/deny rules. See [`[discovery]`](#discovery). |
 
 ### Agents syncing: mirror user-authored skills
 
@@ -84,22 +82,61 @@ Each `[[agent]]` entry identifies an agent you use. You can configure multiple a
 |-----|------|---------|-------------|
 | `level` | string | `"info"` | Minimum log level. One of: `trace`, `debug`, `info`, `warn`, `error`. |
 
-## `[[installed-crate]]`
+## `[installed]`
 
-Each `[[installed-crate]]` entry declares a plugin crate to load. Managed by `cargo agents install` / `cargo agents uninstall`, but can also be edited manually. Each entry must have exactly one of: a `name` only (crates.io), `git`, or `path`.
+`[installed]` declares plugin sources the user explicitly installed. This is
+the registry-ready replacement for legacy `[[installed-crate]]` and
+`[[plugin-source]]` entries.
+
+During the current migration, Symposium parses and preserves this shape, and
+new configs include the default installed crate. The old sync path still uses
+legacy `[[plugin-source]]` and `[defaults]` fields until the resolved-source
+graph is wired in.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `name` | string | *(required)* | Crate name. |
-| `version` | string | — | Version requirement (Cargo semver syntax). `"1"` means `^1`, `"=1.2.3"` means exact pin. If omitted, tracks latest. |
-| `git` | string | — | Git repository URL. |
-| `path` | string | — | Local directory path. |
+| `paths` | array of strings | `[]` | Direct path-registry plugin sources. |
+| `git` | array of strings | `[]` | Direct git-registry plugin sources. |
+
+## `[installed.crates]`
+
+`[installed.crates]` is a Cargo dependency table keyed by crate name. Values
+may be version strings or inline dependency tables with Cargo-compatible fields
+such as `version`, `git`, `path`, `branch`, `tag`, `rev`, and `package`.
+
+| Example | Meaning |
+|---------|---------|
+| `symposium-recommendations = "1"` | Track semver-compatible `1.x`. |
+| `foo = "*"` | Track latest. |
+| `foo = "=1.2.3"` | Exact pin. |
+| `foo = { git = "https://github.com/me/foo" }` | Resolve through Cargo from git. |
+| `foo = { path = "/home/me/foo" }` | Resolve through Cargo from a local crate. |
 
 ### Source types
 
 - **crates.io** (name only) — Fetched via cargo. Checks for newer compatible versions on a throttled cadence (at most once per 24 hours). Exact-pinned crates (`=`) never upgrade.
 - **git** — Checks for new commits on a similar throttled cadence.
 - **path** — Always checks mtime; re-scans immediately if the source has changed.
+
+## `[discovery]`
+
+Discovery policy controls which candidate plugin sources may be activated
+automatically. Rules can be wildcard shorthands or registry-specific tables:
+
+```toml
+[discovery]
+allow = "*"
+
+[discovery.deny]
+crates = { unsafe-plugin = "*" }
+paths = ["/tmp/untrusted"]
+git = ["https://github.com/bad/*"]
+```
+
+The supported registry keys are `crates`, `paths`, and `git`. `crates = "*"`
+allows or denies all crate-registry candidates; `crates = { name = "*" }`
+targets individual crate names. Specific policy evaluation is part of the
+resolved-source graph work and is not yet used by the legacy sync path.
 
 ## Directory resolution
 

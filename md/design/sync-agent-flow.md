@@ -6,15 +6,15 @@ Scans workspace dependencies, installs applicable skills into agent directories,
 
 1. **Find workspace root** — run `cargo metadata` to locate the workspace manifest directory.
 
-2. **Load installed crates** — read the user config's `[[installed-crate]]` entries and fetch their sources via `RustCrateFetch` (using the cargo probe technique for crates.io/git sources, or reading path sources directly). Check for updates: crates.io and git sources use a throttled cadence (at most once per 24 hours); path sources always check mtime.
+2. **Load installed sources** — read `[installed.crates]`, `installed.paths`, and `installed.git` from user config. Crate-registry entries resolve through Cargo dependency syntax; direct path and git entries use their own registries. Check for updates: crates.io and git sources use a throttled cadence (at most once per 24 hours); path sources always check mtime.
 
 3. **Scan dependencies** — read the full dependency graph from the workspace.
 
-4. **Resolve dependency allow list** — collect `dependency-allow-list` entries from the user config and all loaded plugins. Check workspace deps against the combined list; fetch any matching crates as additional plugin sources.
+4. **Resolve discovery policy** — collect `[discovery.allow]` / `[discovery.deny]` rules from the user config and all loaded plugins. Check workspace deps against the combined policy; fetch any matching crates as additional plugin sources.
 
-5. **Resolve auto-installs** — follow `[[auto-install]]` entries from all loaded plugins recursively, evaluating predicates against the workspace. Fetch each resolved crate.
+5. **Resolve transitive plugin sources** — follow `[[plugins]] source.*` entries from all loaded plugins recursively, evaluating `where.*` filters against the workspace. Fetch each resolved source.
 
-6. **Discover plugins** — for each plugin source crate, walk from the crate root looking for `SYMPOSIUM.toml` files (pruning subtrees when found). If none found, fall back to scanning `$ROOT/skills/` for `SKILL.md` files. Read crate Cargo metadata to populate implicit installations from binary targets.
+6. **Discover plugins** — for each plugin source root, load the root `SYMPOSIUM.toml` or synthesize an empty root manifest. Apply implicit `skills/`, workspace-gated `.agents/skills/`, and nested-manifest `[[plugins]] source.path = "."` defaults unless disabled with `[defaults]`. Nested manifests are independent plugins and are deduped by canonical manifest path. Read crate Cargo metadata to populate implicit installations from binary targets.
 
 7. **Match skills to dependencies** — for each plugin, evaluate plugin-level predicates, then evaluate skill group predicates and individual skill `crates` frontmatter against the workspace dependencies.
 

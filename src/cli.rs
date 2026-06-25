@@ -13,6 +13,7 @@ use crate::config::Symposium;
 use crate::crate_command::{self, DispatchResult};
 use crate::hook;
 use crate::init::{self, InitOpts};
+use crate::install;
 use crate::output::Output;
 use crate::plugins::Audience;
 use crate::self_update;
@@ -76,6 +77,34 @@ pub enum Commands {
     /// Synchronize skills with workspace dependencies
     Sync,
 
+    /// Install plugin sources into user config
+    Install {
+        /// Crate source to install, optionally as <CRATE>@<VERSION>. Repeatable.
+        crates: Vec<String>,
+
+        /// Direct path plugin source to install. Repeatable.
+        #[arg(long = "path")]
+        paths: Vec<String>,
+
+        /// Direct git plugin source to install. Repeatable.
+        #[arg(long = "git")]
+        git: Vec<String>,
+    },
+
+    /// Uninstall plugin sources from user config
+    Uninstall {
+        /// Crate source name to uninstall. Repeatable.
+        crates: Vec<String>,
+
+        /// Direct path plugin source to uninstall. Repeatable.
+        #[arg(long = "path")]
+        paths: Vec<String>,
+
+        /// Direct git plugin source to uninstall. Repeatable.
+        #[arg(long = "git")]
+        git: Vec<String>,
+    },
+
     /// Hook entry point invoked by your agent (internal)
     #[command(hide = true)]
     Hook {
@@ -117,7 +146,9 @@ pub enum Commands {
 /// this only covers the static `Commands` variants above.
 pub fn builtin_audience(name: &str) -> Option<Audience> {
     match name {
-        "init" | "sync" | "self-update" | "plugin" => Some(Audience::Humans),
+        "init" | "install" | "plugin" | "self-update" | "sync" | "uninstall" => {
+            Some(Audience::Humans)
+        }
         "crate-info" => Some(Audience::Agents),
         _ => None,
     }
@@ -179,6 +210,12 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
         }
 
         Commands::Sync => sync::sync(sym, &mut sym.workspace_deps(cwd)).await,
+
+        Commands::Install { crates, paths, git } => install::install(sym, crates, paths, git, out),
+
+        Commands::Uninstall { crates, paths, git } => {
+            install::uninstall(sym, crates, paths, git, out)
+        }
 
         Commands::SelfUpdate => self_update::self_update(sym, out),
 

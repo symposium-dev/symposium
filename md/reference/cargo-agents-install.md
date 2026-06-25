@@ -12,7 +12,10 @@ cargo agents install [OPTIONS] --git <URL> ...
 
 ## Behavior
 
-Adds the specified crate to `~/.symposium/config.toml` as an `[[installed-crate]]` entry, fetches the crate source, and discovers plugins/skills from it.
+Adds the specified source to `~/.symposium/config.toml`: crate-registry forms
+are stored under `[installed.crates]`, direct path sources under
+`installed.paths`, and direct git sources under `installed.git`. Source
+resolution and discovery then scan the resolved source tree for plugins/skills.
 
 ### Source types
 
@@ -55,6 +58,6 @@ cargo agents install --path ./my-local-plugins
 
 ## See also
 
-- [`cargo agents uninstall`](./cargo-agents-uninstall.md) — remove an installed crate
+- [`cargo agents uninstall`](./cargo-agents-uninstall.md) — remove an installed source
 - [`cargo agents status`](./cargo-agents-status.md) — see what's installed and active
-- [Configuration](./configuration.md#installed-crate) — the config file format
+- [Configuration](./configuration.md#installed) — the config file format

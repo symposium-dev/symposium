@@ -6,10 +6,10 @@ This section describes the logic of each `cargo agents` command.
 
 When Symposium loads plugin sources during sync, it follows this process:
 
-1. **Load installed crates** — read `[[installed-crate]]` entries from user config, fetch each via `RustCrateFetch` (cargo probe for crates.io/git, direct read for path sources).
-2. **Resolve dependency allow list** — collect `dependency-allow-list` entries from config and all plugins. Check workspace deps against the list; fetch matching crates as additional sources.
-3. **Resolve auto-installs** — follow `[[auto-install]]` entries recursively, evaluating predicates.
-4. **Discover plugins within each crate** — walk from crate root for `SYMPOSIUM.toml` (pruning claimed subtrees). If none found, fall back to `$ROOT/skills/` for anonymous skill-only plugins.
+1. **Load installed sources** — read `[installed.crates]`, `installed.paths`, and `installed.git` entries from user config. Crate-registry entries resolve through Cargo dependency syntax; direct path and git entries use their own registries.
+2. **Resolve discovery policy** — collect `[discovery.allow]` / `[discovery.deny]` rules from config and installed plugins. Check workspace deps and other candidates against the combined policy; resolve matching sources.
+3. **Resolve transitive plugin sources** — follow `[[plugins]] source.*` entries recursively, evaluating `where.*` filters. In the current migration state, path declarations participate in source-root discovery; git and crate declarations are parsed and retained for the later recursive source-graph phase.
+4. **Discover plugins within each source root** — load `$ROOT/SYMPOSIUM.toml`, or synthesize an empty root manifest when it is absent. Every manifest defaults to `where.crates = ["*"]`, implicit `skills/` and workspace-gated `.agents/skills/` skill groups, and implicit nested-manifest search through `[[plugins]] source.path = "."`. Nested manifests are independent plugins and dedupe by canonical manifest path.
 5. **Resolve implicit installations** — read crate `Cargo.toml` binary targets and register them as available installations for `SYMPOSIUM.toml` to reference.
 
 The key code paths are in `crate_sources/mod.rs` (`RustCrateFetch`), `plugins.rs` (discovery walk), and `skills.rs` (skill resolution).

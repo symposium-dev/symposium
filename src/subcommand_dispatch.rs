@@ -182,6 +182,7 @@ mod tests {
                 installations: vec![],
                 hooks: vec![],
                 skills: vec![],
+                plugin_sources: vec![],
                 mcp_servers: vec![],
                 subcommands,
                 custom_predicates: vec![],

@@ -208,6 +208,7 @@ mod tests {
                 hooks: vec![],
                 predicates: crate_set(crates),
                 skills: vec![],
+                plugin_sources: vec![],
                 mcp_servers: vec![],
                 subcommands,
                 installations: vec![],
@@ -264,9 +265,11 @@ mod tests {
 
              Commands for humans:
              init         Set up user-wide configuration
+             install      Install plugin sources into user config
              plugin       Manage plugins
              self-update  Update symposium to the latest version
              sync         Synchronize skills with workspace dependencies
+             uninstall    Uninstall plugin sources from user config
 
              Commands for agents:
              crate-info   Find crate sources
