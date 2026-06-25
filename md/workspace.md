@@ -6,12 +6,14 @@ Your workspace itself is a plugin source. Symposium scans the workspace root and
 
 Every plugin (including the implicit workspace plugin) has two default skill sources:
 
-| Directory | When installed | Use case |
-| --- | --- | --- |
-| `skills/` | Always (unconditional) | Skills for users of your crate |
-| `.agents/skills/` | Only when `workspace()` is true | Skills for developers of this project |
+| Directory | Search depth | When installed | Use case |
+| --- | --- | --- | --- |
+| `skills/` | Recursive | Always (unconditional) | Skills for users of your crate |
+| `.agents/skills/` | One level (`*/SKILL.md`) | Only when `workspace()` is true | Skills for developers of this project |
 
 Just drop `SKILL.md` files in either directory and they'll be picked up on the next sync. No `SYMPOSIUM.toml` needed.
+
+The `skills/` directory is searched recursively, so you can organize skills into subdirectories freely. The `.agents/skills/` directory is searched one level deep — each immediate subdirectory containing a `SKILL.md` is a skill.
 
 ## Propagation to agent-specific directories
 

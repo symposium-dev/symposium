@@ -22,7 +22,7 @@ my-crate/
             SKILL.md
 ```
 
-No `SYMPOSIUM.toml` needed — Symposium discovers `skills/*/SKILL.md` automatically when no manifest is present. This is the zero-ceremony path for crate authors.
+No `SYMPOSIUM.toml` needed — Symposium discovers `SKILL.md` files recursively under `skills/` when no manifest is present. This is the zero-ceremony path for crate authors.
 
 ### With a manifest (recommended)
 

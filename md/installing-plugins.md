@@ -48,6 +48,6 @@ This shows all installed crates, which plugins/skills are active in the current 
 
 ## What happens inside a plugin crate
 
-When you install a crate, Symposium scans it from the root for `SYMPOSIUM.toml` files. Each one defines a plugin (with skills, hooks, MCP servers, etc.). Additionally, unless overridden by a `SYMPOSIUM.toml` at the crate root, Symposium also looks for skills in `skills/` and installs them directly.
+When you install a crate, Symposium scans it from the root for `SYMPOSIUM.toml` files. Each one defines a plugin (with skills, hooks, MCP servers, etc.). Nested manifests are discovered automatically (each becomes its own independent plugin).
 
-This means the simplest plugin crate is just a crate with a `skills/` directory — no manifest needed.
+If no `SYMPOSIUM.toml` is found anywhere, Symposium falls back to scanning `skills/` recursively for `SKILL.md` files. This means the simplest plugin crate is just a crate with a `skills/` directory — no manifest needed.

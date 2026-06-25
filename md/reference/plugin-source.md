@@ -15,11 +15,13 @@ There are four ways a crate (or directory) becomes a plugin source:
 
 When Symposium loads a plugin source crate, it scans from the crate root:
 
-1. **Walk recursively for `SYMPOSIUM.toml`** — Each directory containing one is a [plugin](./plugin-definition.md). That subtree is not searched further.
+1. **Walk recursively for `SYMPOSIUM.toml`** — Each directory containing one is a [plugin](./plugin-definition.md). By default, each plugin also searches its own subtree for nested `SYMPOSIUM.toml` files, so a root manifest naturally discovers plugins in subdirectories. A nested `SYMPOSIUM.toml` becomes its own independent plugin. (Suppress with `defaults.plugins = false`.)
 
-2. **If no `SYMPOSIUM.toml` found anywhere** — Fall back to scanning `$ROOT/skills/` recursively for `SKILL.md` files. These become an anonymous, skills-only plugin that installs unconditionally (for explicit installs) or requires frontmatter predicates (for allow-list discovery).
+2. **If no `SYMPOSIUM.toml` found anywhere** — Fall back to the default skill sources:
+   - `$ROOT/skills/` — searched recursively for `SKILL.md` files. Installs unconditionally.
+   - `$ROOT/.agents/skills/` — searched one level deep for `SKILL.md` files. Installs with an implicit `workspace()` predicate (only active when the crate is the current workspace).
 
-We do not allow plugins or standalone skills to be nested within one another. When we find a directory that is either a plugin or a skill, we do not search its contents any further.
+   These become an anonymous, skills-only plugin.
 
 ### Example structure
 
@@ -27,21 +29,25 @@ We do not allow plugins or standalone skills to be nested within one another. Wh
 my-plugin-crate/
   Cargo.toml
   SYMPOSIUM.toml            # ✓ Plugin (at crate root)
-  skills/                   # ✗ Not searched (parent claimed by SYMPOSIUM.toml)
+  skills/                   # ✓ Default skill source (recursive)
     basic/
       SKILL.md
+    advanced/
+      nested/
+        SKILL.md
 ```
 
 ```text
 multi-plugin-crate/
   Cargo.toml
+  SYMPOSIUM.toml            # ✓ Root plugin (discovers nested plugins via subtree walk)
   serde/
-    SYMPOSIUM.toml          # ✓ Plugin
+    SYMPOSIUM.toml          # ✓ Nested plugin (independent)
     skills/
       basics/
         SKILL.md
   tokio/
-    SYMPOSIUM.toml          # ✓ Plugin
+    SYMPOSIUM.toml          # ✓ Nested plugin (independent)
     skills/
       async-patterns/
         SKILL.md
@@ -50,10 +56,13 @@ multi-plugin-crate/
 ```text
 skills-only-crate/
   Cargo.toml
-  skills/                   # ✓ Fallback: scanned because no SYMPOSIUM.toml exists
+  skills/                   # ✓ Fallback: scanned recursively (no SYMPOSIUM.toml exists)
     basics/
       SKILL.md
     advanced/
+      SKILL.md
+  .agents/skills/           # ✓ Fallback: scanned one level (workspace-only)
+    local-dev/
       SKILL.md
 ```
 

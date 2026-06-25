@@ -46,7 +46,7 @@ dependency-allow-list = ["*"]
 
 ## What gets installed
 
-Once a crate is activated (whether by explicit install or auto-discovery), the same rules apply. Symposium scans for `SYMPOSIUM.toml` files (each defines a plugin with skills, hooks, MCP servers, etc.) and also looks for skills in `skills/` unless overridden. Predicates on skills are evaluated as normal — active skills get installed, inactive ones don't.
+Once a crate is activated (whether by explicit install or auto-discovery), the same rules apply. Symposium scans for `SYMPOSIUM.toml` files (each defines a plugin with skills, hooks, MCP servers, etc.) and falls back to scanning `skills/` recursively if no manifest is found. Predicates on skills are evaluated as normal — active skills get installed, inactive ones don't.
 
 ## Relationship to explicit install
 

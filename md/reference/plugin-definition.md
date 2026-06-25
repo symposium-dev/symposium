@@ -42,8 +42,8 @@ That's it — `name` defaults to the crate name and `crates` defaults to `["*"]`
 | `mcp_servers` | array of tables | no | MCP server registrations (`[[mcp_servers]]`). |
 | `auto-install` | array of tables | no | Transitive plugin installations (`[[auto-install]]`). See [Auto-install](#auto-install). |
 | `dependency-allow-list` | table | no | Workspace deps approved for auto-discovery. See [Dependency allow list](#dependency-allow-list). |
-| `defaults.skills` | bool | `true` | Include implicit `skills/` and `.agents/skills/` (workspace-only) skill sources. Set to `false` to suppress. |
-| `defaults.plugins` | bool | `true` | Search subtree for nested `SYMPOSIUM.toml` files. Set to `false` to suppress. |
+| `defaults.skills` | bool | `true` | Include implicit `skills/` (recursive, unconditional) and `.agents/skills/` (one level, `workspace()` gated) skill sources. Set to `false` to suppress. |
+| `defaults.plugins` | bool | `true` | Search subtree for nested `SYMPOSIUM.toml` files. Each nested manifest becomes its own independent plugin. Set to `false` to suppress. |
 
 ## Plugin-level filtering
 
