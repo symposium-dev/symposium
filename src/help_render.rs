@@ -213,6 +213,7 @@ mod tests {
                 subcommands,
                 installations: vec![],
                 custom_predicates: vec![],
+                discovery: Default::default(),
             },
             source_name: "test".into(),
             source_dir: PathBuf::from("/test"),

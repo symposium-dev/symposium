@@ -439,6 +439,9 @@ pub struct Plugin {
     /// Custom predicate definitions vended by this plugin.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub custom_predicates: Vec<CustomPredicate>,
+    /// Discovery policy contributed by this plugin.
+    #[serde(skip_serializing)]
+    pub discovery: crate::config::DiscoveryPolicy,
 }
 
 impl Plugin {
@@ -929,6 +932,9 @@ struct RawPluginManifest {
     subcommand: std::collections::BTreeMap<String, RawSubcommand>,
     #[serde(default)]
     predicate: Vec<RawCustomPredicate>,
+    /// Discovery allow/deny policy contributed by this plugin.
+    #[serde(default)]
+    discovery: crate::config::DiscoveryPolicy,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1438,6 +1444,16 @@ pub fn load_registry_from_graph(
     }
 }
 
+/// Scan a source directory and return the list of parsed plugin results.
+///
+/// Public wrapper for use by the graph expansion logic, which needs to
+/// inspect plugins' `discovery` and `plugin_sources` fields without
+/// building a full registry.
+pub fn scan_source_dir_public(dir: &Path, source_name: &str) -> Result<Vec<Result<ParsedPlugin>>> {
+    let contents = scan_source_dir(dir, source_name)?;
+    Ok(contents.plugins)
+}
+
 /// Scan a plugin source directory for TOML plugin manifests and standalone skills.
 ///
 /// Discovery rules:
@@ -1896,6 +1912,7 @@ fn validate_manifest(manifest: RawPluginManifest, default_name: String) -> Resul
         mcp_servers: manifest.mcp_servers,
         subcommands,
         custom_predicates,
+        discovery: manifest.discovery,
     })
 }
 
@@ -2308,6 +2325,42 @@ mod tests {
             &plugin.plugin_sources[3].source,
             PluginSourceDecl::Crate(specs) if specs.len() == 1 && specs[0].key.as_deref() == Some("my-extra")
         ));
+    }
+
+    #[test]
+    fn parse_manifest_with_discovery_policy() {
+        let toml = indoc! {r#"
+            name = "recommender"
+
+            [discovery.allow]
+            crates = { dial9 = "*", dial9-viewer = "*" }
+
+            [discovery.deny]
+            crates = { unsafe-plugin = "*" }
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        use crate::config::{DiscoveryRules, RegistryDiscoveryRule};
+        let allow = &plugin.discovery.allow;
+        let deny = &plugin.discovery.deny;
+        match allow {
+            DiscoveryRules::Registries(rules) => match &rules.crates {
+                RegistryDiscoveryRule::Specs(specs) => {
+                    assert!(specs.contains_key("dial9"));
+                    assert!(specs.contains_key("dial9-viewer"));
+                }
+                other => panic!("expected Specs, got {other:?}"),
+            },
+            other => panic!("expected Registries, got {other:?}"),
+        }
+        match deny {
+            DiscoveryRules::Registries(rules) => match &rules.crates {
+                RegistryDiscoveryRule::Specs(specs) => {
+                    assert!(specs.contains_key("unsafe-plugin"));
+                }
+                other => panic!("expected Specs, got {other:?}"),
+            },
+            other => panic!("expected Registries, got {other:?}"),
+        }
     }
 
     #[test]
@@ -2821,6 +2874,7 @@ mod tests {
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            discovery: Default::default(),
         };
         assert!(plugin_wildcard.applies(&mut ctx(&workspace_crates)));
 
@@ -2835,6 +2889,7 @@ mod tests {
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            discovery: Default::default(),
         };
         assert!(plugin_serde.applies(&mut ctx(&workspace_crates)));
 
@@ -2849,6 +2904,7 @@ mod tests {
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            discovery: Default::default(),
         };
         assert!(!plugin_other.applies(&mut ctx(&workspace_crates)));
 
@@ -2863,6 +2919,7 @@ mod tests {
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            discovery: Default::default(),
         };
         assert!(!plugin_version.applies(&mut ctx(&workspace_crates)));
     }
@@ -4419,6 +4476,7 @@ mod tests {
                     command: "checker".to_string(),
                     args: vec![],
                 }],
+                discovery: Default::default(),
             },
             source_name: "test".into(),
             source_dir: std::path::PathBuf::from("/test"),

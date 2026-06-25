@@ -2291,3 +2291,84 @@ async fn sync_installed_path_source() {
     .await
     .unwrap();
 }
+
+/// `sync` discovers a workspace dependency as a plugin source when an installed
+/// plugin provides a `[discovery.allow]` rule that matches the dependency name.
+#[tokio::test]
+async fn sync_discovery_allow_discovers_dependency_plugin() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["discovery-allow0", "discovery-workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            find_installed_skill(&workspace_root.join(".claude/skills"), "dep-skill");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Recursive `[[plugins]] source.crate` resolves and installs skills from
+/// the referenced crate. Skills in the default `skills/` group install
+/// (unconditional), but `workspace()`-gated `.agents/skills/` do NOT install
+/// because the recursive source carries `Installed` provenance, not `Workspace`.
+#[tokio::test]
+async fn sync_recursive_crate_source() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["recursive-crate0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            // The unconditional skill from `skills/` installs.
+            find_installed_skill(&skills_dir, "recursive-skill");
+
+            // The workspace()-gated skill from `.agents/skills/` does NOT
+            // install — the secondary plugin only has Installed provenance.
+            let ws_only = find_installed_skills(&skills_dir, "ws-only-skill");
+            assert!(
+                ws_only.is_empty(),
+                "ws-only-skill should NOT install for a non-workspace recursive source, \
+                 but found: {ws_only:?}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Discovery policy default is deny-all: a workspace dependency with plugin
+/// content is NOT discovered unless an allow rule matches.
+///
+/// Uses a fixture with a workspace dependency on `dep-plugin` but whose
+/// installed plugin does NOT declare `[discovery.allow]` for it.
+#[tokio::test]
+async fn sync_discovery_default_deny_skips_unapproved_dep() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["discovery-deny0", "discovery-workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills = find_installed_skills(&workspace_root.join(".claude/skills"), "dep-skill");
+            assert!(
+                skills.is_empty(),
+                "dep-skill should NOT be installed without a discovery allow rule"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}

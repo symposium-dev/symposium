@@ -973,6 +973,7 @@ mod tests {
             mcp_servers: vec![],
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            discovery: Default::default(),
         };
         crate::plugins::ParsedPlugin {
             path: std::path::PathBuf::from("test.toml"),

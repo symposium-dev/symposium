@@ -188,6 +188,7 @@ mod tests {
                 mcp_servers: vec![],
                 subcommands,
                 custom_predicates: vec![],
+                discovery: Default::default(),
             },
             source_name: "test".into(),
             source_dir: PathBuf::from("/test"),

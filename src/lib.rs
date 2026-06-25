@@ -20,6 +20,7 @@ pub(crate) mod init;
 pub mod sync;
 
 pub mod crate_sources;
+pub(crate) mod discovery;
 pub(crate) mod predicate;
 pub(crate) mod skills;
 

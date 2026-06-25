@@ -75,6 +75,9 @@ pub struct ResolvedSourceGraph {
     nodes: Vec<ResolvedSourceNode>,
 }
 
+/// Maximum depth for recursive `[[plugins]] source.*` expansion.
+const MAX_RECURSIVE_DEPTH: usize = 16;
+
 impl ResolvedSourceGraph {
     pub async fn resolve_installed_and_workspace(
         sym: &Symposium,
@@ -145,6 +148,21 @@ impl ResolvedSourceGraph {
         self.add_root(root, reason);
     }
 
+    /// Returns true if the given canonical path is already a node in the graph.
+    pub fn contains_path(&self, path: &std::path::Path) -> bool {
+        self.nodes.iter().any(|node| node.root.path == path)
+    }
+
+    /// Number of source nodes in the graph.
+    pub fn len(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// True if the graph has no source nodes.
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
     fn add_root(&mut self, root: ResolvedSourceRoot, reason: SourceReason) {
         if let Some(existing) = self
             .nodes
@@ -166,6 +184,151 @@ impl ResolvedSourceGraph {
             reasons,
         });
     }
+}
+
+/// Expand a source graph by resolving recursive `[[plugins]] source.*`
+/// declarations and discovery-allowed dependency candidates.
+///
+/// Process:
+/// 1. Collect discovery policy from user config + already-discovered plugins.
+/// 2. Build dependency candidates, apply policy, resolve allowed ones.
+/// 3. For each source node, follow non-path `[[plugins]] source.*` declarations.
+/// 4. Repeat until no new sources are added or `MAX_RECURSIVE_DEPTH` is reached.
+///
+/// Returns the number of new sources added.
+pub async fn expand_source_graph(
+    graph: &mut ResolvedSourceGraph,
+    sym: &Symposium,
+    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
+) -> usize {
+    use crate::discovery::{CollectedPolicy, resolve_allowed_dep_specs, workspace_dep_candidates};
+    use crate::plugins::{PluginSourceDecl, scan_source_dir_public};
+
+    let resolver = SourceRegistryResolver::new(sym);
+    let initial_count = graph.len();
+
+    // Collect discovery policy from user config.
+    let mut policy = CollectedPolicy::default();
+    policy.add_policy(&sym.config.discovery);
+
+    // Iterate expansion rounds with depth limit.
+    for _round in 0..MAX_RECURSIVE_DEPTH {
+        let prev_count = graph.len();
+
+        // Collect discovery policy from already-resolved plugins and gather
+        // recursive source declarations.
+        let mut recursive_specs: Vec<(RegistrySourceSpec, BTreeSet<SourceProvenance>)> = Vec::new();
+
+        for node in graph.nodes().to_vec() {
+            let source_name = &node.root.source_id;
+            let dir = &node.root.path;
+            let Ok(contents) = scan_source_dir_public(dir, source_name) else {
+                continue;
+            };
+            for result in contents {
+                let Ok(parsed) = result else { continue };
+                // Add this plugin's discovery policy to the collected set.
+                policy.add_policy(&parsed.plugin.discovery);
+                // Collect non-path [[plugins]] source declarations.
+                for ps in &parsed.plugin.plugin_sources {
+                    match &ps.source {
+                        PluginSourceDecl::Git(url) => {
+                            recursive_specs.push((
+                                RegistrySourceSpec::Git(url.clone()),
+                                node.provenance.clone(),
+                            ));
+                        }
+                        PluginSourceDecl::Crate(specs) => {
+                            for spec in specs {
+                                recursive_specs.push((
+                                    RegistrySourceSpec::Crate(spec.clone()),
+                                    node.provenance.clone(),
+                                ));
+                            }
+                        }
+                        PluginSourceDecl::Path(_) => {
+                            // Path sources are already handled by scan_source_dir's
+                            // recursive manifest discovery — no expansion needed.
+                        }
+                    }
+                }
+            }
+        }
+
+        // Resolve dependency candidates against policy.
+        if policy.has_any_allow_rules() {
+            let candidates = workspace_dep_candidates(workspace_crates);
+            let allowed = resolve_allowed_dep_specs(&candidates, workspace_crates, &policy);
+            for (crate_name, dep_source) in allowed {
+                let spec = match dep_source {
+                    crate::discovery::AllowedDepSource::Path(path) => {
+                        RegistrySourceSpec::Path(path)
+                    }
+                    crate::discovery::AllowedDepSource::Crate { version } => {
+                        RegistrySourceSpec::Crate(CrateSourceSpec {
+                            key: Some(crate_name.clone()),
+                            dependency: CargoDependencySpec::Version(version),
+                        })
+                    }
+                };
+                match resolver.resolve(&spec).await {
+                    Ok(root) => {
+                        // Only add if the resolved source actually has plugin content.
+                        if root.path.join("SYMPOSIUM.toml").is_file()
+                            || root.path.join("skills").is_dir()
+                        {
+                            graph.add_resolved_root(
+                                root,
+                                SourceReason {
+                                    provenance: SourceProvenance::Dependency,
+                                    detail: format!("discovery allowed: {crate_name}"),
+                                },
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            crate_name = %crate_name,
+                            error = %e,
+                            "failed to resolve discovery candidate"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Resolve recursive source declarations.
+        for (spec, parent_provenance) in recursive_specs {
+            match resolver.resolve(&spec).await {
+                Ok(root) => {
+                    // Propagate the declaring source's provenance.
+                    for &prov in &parent_provenance {
+                        graph.add_resolved_root(
+                            root.clone(),
+                            SourceReason {
+                                provenance: prov,
+                                detail: format!("recursive source from {spec:?}"),
+                            },
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        spec = ?spec,
+                        error = %e,
+                        "failed to resolve recursive plugin source, skipping"
+                    );
+                }
+            }
+        }
+
+        // If no new sources were added this round, we've converged.
+        if graph.len() == prev_count {
+            break;
+        }
+    }
+
+    graph.len() - initial_count
 }
 
 /// Resolver for installed or transitive plugin source declarations.

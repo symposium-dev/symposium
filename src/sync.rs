@@ -230,12 +230,15 @@ fn touch_marker(marker_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Resolve all plugin sources for sync: installed crates, workspace, and legacy.
+/// Resolve all plugin sources for sync: installed crates, workspace, legacy,
+/// discovery policy, and recursive `[[plugins]] source.*` declarations.
 ///
 /// Combines:
 /// 1. New `[installed.crates]` / `installed.paths` / `installed.git` entries
 /// 2. Workspace root and member crates (workspace provenance)
 /// 3. Legacy `[[plugin-source]]` entries for backward compatibility
+/// 4. Discovery-allowed dependency candidates
+/// 5. Recursive `[[plugins]] source.git` and `source.crate` declarations
 ///
 /// When the same manifest is reached from multiple roots, provenance is unioned
 /// by `load_registry_from_graph`.
@@ -340,6 +343,17 @@ async fn resolve_sync_sources(
                 provenance: SourceProvenance::Installed,
                 detail: format!("legacy plugin-source `{}`", resolved.source.name),
             },
+        );
+    }
+
+    // Expand the graph: resolve discovery-allowed dependency candidates and
+    // recursive [[plugins]] source.git / source.crate declarations.
+    let workspace_crates = deps.load().map(|l| l.crates.clone()).unwrap_or_default();
+    let added = crate::crate_sources::expand_source_graph(&mut graph, sym, &workspace_crates).await;
+    if added > 0 {
+        tracing::debug!(
+            added,
+            "expanded source graph with discovery/recursive sources"
         );
     }
 

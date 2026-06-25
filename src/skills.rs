@@ -1304,6 +1304,7 @@ mod tests {
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            discovery: Default::default(),
         };
 
         let registry = PluginRegistry {
@@ -1361,6 +1362,7 @@ mod tests {
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            discovery: Default::default(),
         };
 
         let registry = PluginRegistry {
@@ -1436,6 +1438,7 @@ mod tests {
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            discovery: Default::default(),
         };
 
         let registry = PluginRegistry {
@@ -1516,6 +1519,7 @@ mod tests {
             installations: Vec::new(),
             subcommands: Default::default(),
             custom_predicates: vec![],
+            discovery: Default::default(),
         };
 
         let registry = PluginRegistry {
@@ -1597,6 +1601,7 @@ mod tests {
             installations: Vec::new(),
             subcommands: Default::default(),
             custom_predicates: vec![],
+            discovery: Default::default(),
         };
 
         let registry = PluginRegistry {
@@ -1973,6 +1978,7 @@ mod tests {
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            discovery: Default::default(),
         };
 
         let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate::new(
@@ -2072,6 +2078,7 @@ mod tests {
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            discovery: Default::default(),
         };
 
         let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate::new(
