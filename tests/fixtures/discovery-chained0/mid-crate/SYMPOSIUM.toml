@@ -1,0 +1,4 @@
+name = "mid-crate"
+
+[[plugins]]
+source.crate = { path = "$TEST_DIR/leaf-crate" }

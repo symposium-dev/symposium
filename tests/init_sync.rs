@@ -2372,3 +2372,74 @@ async fn sync_discovery_default_deny_skips_unapproved_dep() {
     .await
     .unwrap();
 }
+
+/// Recursive `source.crate` cycle (A → B → A) terminates without looping
+/// and both plugins' skills are installed.
+#[tokio::test]
+async fn sync_recursive_source_cycle_terminates() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["discovery-cycle0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+            find_installed_skill(&skills_dir, "skill-a");
+            find_installed_skill(&skills_dir, "skill-b");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Chained expansion: discovery allows `mid-crate` (workspace dep), which has
+/// `[[plugins]] source.crate` pointing to `leaf-crate`. The leaf skill installs
+/// even though it was never explicitly installed or discovered directly.
+#[tokio::test]
+async fn sync_chained_discovery_then_recursive_source() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["discovery-chained0", "chained-workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            find_installed_skill(&workspace_root.join(".claude/skills"), "leaf-skill");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Provenance growth: `plugin-x` is both explicitly installed AND discovered
+/// as a workspace dependency. The `dependency()`-gated skill installs because
+/// discovery adds `Dependency` provenance to the already-installed source.
+#[tokio::test]
+async fn sync_discovery_adds_provenance_to_installed_source() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["discovery-provenance0", "provenance-workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            // The unconditional skill always installs.
+            find_installed_skill(&skills_dir, "always-skill");
+
+            // The dependency()-gated skill installs because discovery added
+            // Dependency provenance to the already-installed plugin-x.
+            find_installed_skill(&skills_dir, "dep-only-skill");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}

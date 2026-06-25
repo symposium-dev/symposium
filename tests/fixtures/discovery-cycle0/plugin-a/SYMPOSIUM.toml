@@ -1,0 +1,4 @@
+name = "plugin-a"
+
+[[plugins]]
+source.crate = { path = "$TEST_DIR/plugin-b" }

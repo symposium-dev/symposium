@@ -1,0 +1,4 @@
+name = "recommender"
+
+[discovery.allow]
+crates = { plugin-x = "*" }

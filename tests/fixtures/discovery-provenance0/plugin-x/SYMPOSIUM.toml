@@ -1,0 +1,8 @@
+name = "plugin-x"
+
+[[skills]]
+source.path = "skills/always-skill"
+
+[[skills]]
+source.path = "skills/dep-only-skill"
+where.predicates = ["dependency()"]
