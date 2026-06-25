@@ -1511,11 +1511,14 @@ fn load_source_root_plugin(source_dir: &Path, source_name: &str) -> Result<Parse
         return load_plugin(&manifest_path, source_name, source_dir);
     }
     let manifest = RawPluginManifest::default();
-    let plugin = validate_manifest(
+    let mut plugin = validate_manifest(
         manifest,
         default_plugin_name(&manifest_path, source_name, source_dir),
     )
     .with_context(|| format!("validating synthesized `{}`", manifest_path.display()))?;
+
+    merge_implicit_installations(&mut plugin, source_dir);
+
     Ok(ParsedPlugin {
         path: manifest_path,
         plugin,
@@ -1754,8 +1757,12 @@ pub fn load_plugin(
     let content = fs::read_to_string(manifest_path)?;
     let manifest: RawPluginManifest = toml::from_str(&content)?;
     let default_name = default_plugin_name(manifest_path, source_name, source_dir);
-    let plugin = validate_manifest(manifest, default_name)
+    let mut plugin = validate_manifest(manifest, default_name)
         .with_context(|| format!("validating `{}`", manifest_path.display()))?;
+
+    let manifest_dir = manifest_path.parent().unwrap_or(source_dir);
+    merge_implicit_installations(&mut plugin, manifest_dir);
+
     Ok(ParsedPlugin {
         path: manifest_path.to_path_buf(),
         plugin,
@@ -1914,6 +1921,133 @@ fn validate_manifest(manifest: RawPluginManifest, default_name: String) -> Resul
         custom_predicates,
         discovery: manifest.discovery,
     })
+}
+
+/// Merge implicit installations from crate binary targets into a plugin.
+///
+/// Reads `Cargo.toml` from `crate_dir` (if it exists) and creates an
+/// `Installation` entry for each `[[bin]]` target that doesn't conflict with
+/// an explicit installation name. Also adds a `crate` alias that points to
+/// the package's default binary target (the one named after the package).
+fn merge_implicit_installations(plugin: &mut Plugin, crate_dir: &Path) {
+    let cargo_toml = crate_dir.join("Cargo.toml");
+    let Ok(content) = fs::read_to_string(&cargo_toml) else {
+        return;
+    };
+
+    let targets = match parse_binary_targets(&content) {
+        Ok(targets) => targets,
+        Err(e) => {
+            tracing::debug!(
+                path = %cargo_toml.display(),
+                error = %e,
+                "failed to parse binary targets"
+            );
+            return;
+        }
+    };
+
+    if targets.is_empty() {
+        return;
+    }
+
+    let explicit_names: std::collections::BTreeSet<String> = plugin
+        .installations
+        .iter()
+        .map(|i| i.name.clone())
+        .collect();
+
+    for target in &targets {
+        if explicit_names.contains(&target.name) {
+            continue;
+        }
+        plugin.installations.push(Installation {
+            name: target.name.clone(),
+            requirements: Vec::new(),
+            install_commands: Vec::new(),
+            source: None,
+            executable: Some(target.name.clone()),
+            script: None,
+            args: Vec::new(),
+        });
+    }
+
+    // Add a `crate` alias for the default binary target (the one matching
+    // the package name), unless `crate` is already an explicit installation.
+    if !explicit_names.contains("crate")
+        && let Some(default_target) = targets.iter().find(|t| t.is_default)
+    {
+        plugin.installations.push(Installation {
+            name: "crate".to_string(),
+            requirements: Vec::new(),
+            install_commands: Vec::new(),
+            source: None,
+            executable: Some(default_target.name.clone()),
+            script: None,
+            args: Vec::new(),
+        });
+    }
+}
+
+/// A binary target parsed from `Cargo.toml`.
+#[derive(Debug)]
+struct BinaryTarget {
+    name: String,
+    is_default: bool,
+}
+
+/// Parse binary targets from a `Cargo.toml` content string.
+///
+/// Resolution rules (matching Cargo's behavior):
+/// - If `[[bin]]` entries exist, use them.
+/// - Otherwise, if `src/main.rs` exists (inferred from package name),
+///   synthesize one target named after the package.
+/// - The "default" target is the one whose name matches the package name.
+fn parse_binary_targets(content: &str) -> Result<Vec<BinaryTarget>> {
+    #[derive(serde::Deserialize)]
+    struct CargoToml {
+        package: Option<CargoPackage>,
+        #[serde(default)]
+        bin: Vec<BinEntry>,
+    }
+    #[derive(serde::Deserialize)]
+    struct CargoPackage {
+        name: Option<String>,
+        #[serde(flatten)]
+        _rest: toml::Table,
+    }
+    #[derive(serde::Deserialize)]
+    struct BinEntry {
+        name: Option<String>,
+        #[serde(flatten)]
+        _rest: toml::Table,
+    }
+
+    let parsed: CargoToml = toml::from_str(content)?;
+    let package_name = parsed
+        .package
+        .as_ref()
+        .and_then(|p| p.name.as_deref())
+        .unwrap_or("");
+
+    let mut targets = Vec::new();
+
+    if !parsed.bin.is_empty() {
+        for entry in &parsed.bin {
+            let name = entry.name.as_deref().unwrap_or(package_name).to_string();
+            targets.push(BinaryTarget {
+                is_default: name == package_name,
+                name,
+            });
+        }
+    } else if !package_name.is_empty() {
+        targets.push(BinaryTarget {
+            name: package_name.to_string(),
+            is_default: true,
+        });
+    }
+
+    Ok(targets)
 }
 
 fn default_skills_group(
@@ -2361,6 +2495,134 @@ mod tests {
             },
             other => panic!("expected Registries, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_binary_targets_from_explicit_bin_entries() {
+        let targets = super::parse_binary_targets(indoc! {r#"
+            [package]
+            name = "my-tool"
+            version = "0.1.0"
+
+            [[bin]]
+            name = "my-tool"
+
+            [[bin]]
+            name = "helper"
+        "#})
+        .unwrap();
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].name, "my-tool");
+        assert!(targets[0].is_default);
+        assert_eq!(targets[1].name, "helper");
+        assert!(!targets[1].is_default);
+    }
+
+    #[test]
+    fn parse_binary_targets_infers_from_package_name() {
+        let targets = super::parse_binary_targets(indoc! {r#"
+            [package]
+            name = "my-tool"
+            version = "0.1.0"
+            edition = "2021"
+        "#})
+        .unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].name, "my-tool");
+        assert!(targets[0].is_default);
+    }
+
+    #[test]
+    fn implicit_installations_from_crate_binary_targets() {
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File(
+                "Cargo.toml",
+                indoc! {r#"
+                    [package]
+                    name = "my-tool"
+                    version = "0.1.0"
+                    edition = "2021"
+
+                    [[bin]]
+                    name = "my-tool"
+
+                    [[bin]]
+                    name = "helper"
+                "#},
+            ),
+            File("src/main.rs", "fn main() {}"),
+            File(
+                "SYMPOSIUM.toml",
+                indoc! {r#"
+                    name = "tool-plugin"
+                "#},
+            ),
+        ]);
+        let manifest_path = tmp.path().join("SYMPOSIUM.toml");
+        let parsed = load_plugin(&manifest_path, "test", tmp.path()).unwrap();
+
+        let names: Vec<&str> = parsed
+            .plugin
+            .installations
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect();
+        assert!(names.contains(&"my-tool"), "got: {names:?}");
+        assert!(names.contains(&"helper"), "got: {names:?}");
+        assert!(names.contains(&"crate"), "got: {names:?}");
+
+        // The `crate` alias should resolve to the package-name binary.
+        let crate_install = parsed
+            .plugin
+            .installations
+            .iter()
+            .find(|i| i.name == "crate")
+            .unwrap();
+        assert_eq!(crate_install.executable.as_deref(), Some("my-tool"));
+    }
+
+    #[test]
+    fn explicit_installation_takes_precedence_over_implicit() {
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File(
+                "Cargo.toml",
+                indoc! {r#"
+                    [package]
+                    name = "my-tool"
+                    version = "0.1.0"
+                    edition = "2021"
+
+                    [[bin]]
+                    name = "my-tool"
+                "#},
+            ),
+            File("src/main.rs", "fn main() {}"),
+            File(
+                "SYMPOSIUM.toml",
+                indoc! {r#"
+                    name = "tool-plugin"
+
+                    [[installations]]
+                    name = "my-tool"
+                    source = "cargo"
+                    crate = "my-tool"
+                "#},
+            ),
+        ]);
+        let manifest_path = tmp.path().join("SYMPOSIUM.toml");
+        let parsed = load_plugin(&manifest_path, "test", tmp.path()).unwrap();
+
+        // Only one `my-tool` installation (the explicit one with source).
+        let matching: Vec<_> = parsed
+            .plugin
+            .installations
+            .iter()
+            .filter(|i| i.name == "my-tool")
+            .collect();
+        assert_eq!(matching.len(), 1);
+        assert!(matching[0].source.is_some());
     }
 
     #[test]
