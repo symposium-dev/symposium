@@ -81,6 +81,7 @@ async fn main() -> ExitCode {
         Some(Commands::Hook { agent, event }) => {
             tracing::debug!(?agent, ?event, "cargo agents hook");
         }
+        Some(Commands::Status) => tracing::info!("cargo agents status"),
         Some(Commands::SelfUpdate) => tracing::info!("cargo agents self-update"),
         Some(Commands::CrateInfo { name, version }) => {
             tracing::debug!(%name, version = ?version, "cargo agents crate-info");

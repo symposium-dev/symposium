@@ -2443,3 +2443,27 @@ async fn sync_discovery_adds_provenance_to_installed_source() {
     .await
     .unwrap();
 }
+
+/// `status` reports resolved state without creating skill directories.
+#[tokio::test]
+async fn status_does_not_install_skills() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["installed-path0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["status"]).await?;
+
+            // Status should NOT create any skill directories.
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+            assert!(
+                !skills_dir.exists(),
+                "status should not create skill directories"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}

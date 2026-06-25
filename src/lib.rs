@@ -23,6 +23,7 @@ pub mod crate_sources;
 pub(crate) mod discovery;
 pub(crate) mod predicate;
 pub(crate) mod skills;
+pub mod status;
 
 #[cfg(test)]
 pub(crate) mod test_utils;

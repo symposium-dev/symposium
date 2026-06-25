@@ -147,6 +147,36 @@ pub enum ReportEvent {
         path: Option<String>,
         plugins: Vec<String>,
     },
+
+    // ── Status command events ────────────────────────────────────────
+    /// A resolved source node.
+    StatusSource {
+        source_id: String,
+        path: String,
+        provenance: String,
+    },
+
+    /// A plugin's active/inactive state.
+    StatusPlugin {
+        name: String,
+        active: bool,
+        source: String,
+    },
+
+    /// A skill group's active/inactive state.
+    StatusSkillGroup {
+        plugin: String,
+        source: String,
+        active: bool,
+    },
+
+    /// Summary of the resolved state.
+    StatusSummary {
+        sources: usize,
+        plugins: usize,
+        skills: usize,
+        agents: usize,
+    },
 }
 
 impl std::fmt::Display for ReportEvent {
@@ -312,6 +342,41 @@ impl ReportEvent {
                     }
                 }
                 lines
+            }
+
+            Self::StatusSource {
+                source_id,
+                path,
+                provenance,
+            } => {
+                format!("  source {source_id} ({provenance})\n    {path}")
+            }
+            Self::StatusPlugin {
+                name,
+                active,
+                source,
+            } => {
+                let mark = if *active { "active" } else { "inactive" };
+                format!("  {name} [{mark}] (from {source})")
+            }
+            Self::StatusSkillGroup {
+                plugin,
+                source,
+                active,
+            } => {
+                let mark = if *active { "active" } else { "inactive" };
+                format!("    group {source} [{mark}] in {plugin}")
+            }
+            Self::StatusSummary {
+                sources,
+                plugins,
+                skills,
+                agents,
+            } => {
+                format!(
+                    "{sources} source(s), {plugins} plugin(s), \
+                     {skills} applicable skill(s), {agents} agent(s)"
+                )
             }
         }
     }

@@ -270,6 +270,7 @@ mod tests {
              install      Install plugin sources into user config
              plugin       Manage plugins
              self-update  Update symposium to the latest version
+             status       Show resolved plugin/skill state for the current workspace
              sync         Synchronize skills with workspace dependencies
              uninstall    Uninstall plugin sources from user config
 

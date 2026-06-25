@@ -17,6 +17,7 @@ use crate::install;
 use crate::output::Output;
 use crate::plugins::Audience;
 use crate::self_update;
+use crate::status;
 use crate::subcommand_dispatch::dispatch_external;
 use crate::sync;
 
@@ -76,6 +77,9 @@ pub enum Commands {
 
     /// Synchronize skills with workspace dependencies
     Sync,
+
+    /// Show resolved plugin/skill state for the current workspace
+    Status,
 
     /// Install plugin sources into user config
     Install {
@@ -146,7 +150,7 @@ pub enum Commands {
 /// this only covers the static `Commands` variants above.
 pub fn builtin_audience(name: &str) -> Option<Audience> {
     match name {
-        "init" | "install" | "plugin" | "self-update" | "sync" | "uninstall" => {
+        "init" | "install" | "plugin" | "self-update" | "status" | "sync" | "uninstall" => {
             Some(Audience::Humans)
         }
         "crate-info" => Some(Audience::Agents),
@@ -210,6 +214,8 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
         }
 
         Commands::Sync => sync::sync(sym, &mut sym.workspace_deps(cwd)).await,
+
+        Commands::Status => status::status(sym, &mut sym.workspace_deps(cwd)).await,
 
         Commands::Install { crates, paths, git } => install::install(sym, crates, paths, git, out),
 
