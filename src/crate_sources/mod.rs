@@ -84,14 +84,20 @@ impl ResolvedSourceGraph {
         let mut graph = ResolvedSourceGraph::default();
 
         for spec in installed_source_specs(sym.installed_sources()) {
-            let root = resolver.resolve(&spec).await?;
-            graph.add_root(
-                root,
-                SourceReason {
-                    provenance: SourceProvenance::Installed,
-                    detail: "installed config".to_string(),
-                },
-            );
+            match resolver.resolve(&spec).await {
+                Ok(root) => {
+                    graph.add_root(
+                        root,
+                        SourceReason {
+                            provenance: SourceProvenance::Installed,
+                            detail: "installed config".to_string(),
+                        },
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to resolve installed source, skipping");
+                }
+            }
         }
 
         if let Some(loaded) = workspace.load() {

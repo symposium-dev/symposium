@@ -162,6 +162,7 @@ pub async fn skills_applicable_to(
     // is extra logic.
     for parsed in &registry.plugins {
         let plugin = &parsed.plugin;
+        ctx.set_source_provenance(parsed.source_provenance.clone());
         // Plugin-level predicates gate everything below. Evaluated before
         // group fetching to avoid wasted work.
         if !plugin.predicates.evaluate(&mut ctx) {
@@ -194,6 +195,8 @@ pub async fn skills_applicable_to(
 
     // Standalone skills already carry their own `SkillOrigin` (computed
     // from the plugin source name and the skill's path within that source).
+    // Clear provenance — standalone skills don't have source-context yet.
+    ctx.set_source_provenance(std::collections::BTreeSet::new());
     if !registry.standalone_skills.is_empty() {
         tracing::debug!(
             report = %crate::report::ReportEvent::PluginConsidered {
@@ -1309,6 +1312,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
+                source_provenance: std::collections::BTreeSet::new(),
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1365,6 +1369,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
+                source_provenance: std::collections::BTreeSet::new(),
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1439,6 +1444,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
+                source_provenance: std::collections::BTreeSet::new(),
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1518,6 +1524,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: PathBuf::from(".".to_string()),
+                source_provenance: std::collections::BTreeSet::new(),
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1598,6 +1605,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: PathBuf::from(".".to_string()),
+                source_provenance: std::collections::BTreeSet::new(),
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1929,5 +1937,199 @@ mod tests {
     fn wildcard_level_matches_any() {
         let ws = vec![("serde".into(), v("1.0.0"))];
         assert!(applies(&["*", "serde"], &ws));
+    }
+
+    // --- Source-context predicate integration tests ---
+
+    #[tokio::test]
+    async fn workspace_skill_group_requires_workspace_provenance() {
+        use crate::crate_sources::SourceProvenance;
+        use crate::plugins::{ParsedPlugin, Plugin, PluginRegistry, PluginSource, SkillGroup};
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let sym = crate::config::Symposium::from_dir(tmp.path());
+
+        let skill_dir = tmp.path().join(".agents").join("skills").join("ws-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: ws-only\ndescription: A workspace-only skill\n---\nWorkspace skill.",
+        )
+        .unwrap();
+
+        let make_plugin = |_provenance: std::collections::BTreeSet<SourceProvenance>| Plugin {
+            name: "test-plugin".to_string(),
+            predicates: pred_set("*"),
+            hooks: vec![],
+            skills: vec![SkillGroup {
+                predicates: crate::predicate::PredicateSet {
+                    predicates: vec![crate::predicate::Predicate::Workspace],
+                },
+                source: PluginSource::Path(PathBuf::from(".agents/skills")),
+            }],
+            plugin_sources: vec![],
+            mcp_servers: vec![],
+            installations: Vec::new(),
+            subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
+        };
+
+        let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate::new(
+            "serde".to_string(),
+            semver::Version::new(1, 0, 0),
+            None,
+        )];
+
+        // With workspace provenance: skill group IS active
+        let registry = PluginRegistry {
+            plugins: vec![ParsedPlugin {
+                path: tmp.path().join("SYMPOSIUM.toml"),
+                plugin: make_plugin(std::collections::BTreeSet::from([
+                    SourceProvenance::Workspace,
+                ])),
+                source_name: "test".to_string(),
+                source_dir: tmp.path().to_path_buf(),
+                source_provenance: std::collections::BTreeSet::from([SourceProvenance::Workspace]),
+            }],
+            standalone_skills: vec![],
+            warnings: vec![],
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
+        };
+        let results = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace_crates,
+            std::collections::HashMap::new(),
+        )
+        .await;
+        assert_eq!(
+            results.len(),
+            1,
+            "workspace provenance should activate .agents/skills group"
+        );
+        assert_eq!(results[0].skill.name(), "ws-only");
+
+        // Without workspace provenance (installed only): skill group is NOT active
+        let registry = PluginRegistry {
+            plugins: vec![ParsedPlugin {
+                path: tmp.path().join("SYMPOSIUM.toml"),
+                plugin: make_plugin(std::collections::BTreeSet::from([
+                    SourceProvenance::Installed,
+                ])),
+                source_name: "test".to_string(),
+                source_dir: tmp.path().to_path_buf(),
+                source_provenance: std::collections::BTreeSet::from([SourceProvenance::Installed]),
+            }],
+            standalone_skills: vec![],
+            warnings: vec![],
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
+        };
+        let results = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace_crates,
+            std::collections::HashMap::new(),
+        )
+        .await;
+        assert_eq!(
+            results.len(),
+            0,
+            "installed-only should not activate workspace-gated skills"
+        );
+    }
+
+    #[tokio::test]
+    async fn installed_and_dependency_filter_same_plugin_differently() {
+        use crate::crate_sources::SourceProvenance;
+        use crate::plugins::{ParsedPlugin, Plugin, PluginRegistry, PluginSource, SkillGroup};
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let sym = crate::config::Symposium::from_dir(tmp.path());
+
+        // Create skills dir
+        let skill_dir = tmp.path().join("skills").join("dep-skill");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "---\nname: dep-only\ndescription: A dependency-gated skill\n---\nDep skill.",
+        )
+        .unwrap();
+
+        let plugin = Plugin {
+            name: "gated-plugin".to_string(),
+            predicates: pred_set("*"),
+            hooks: vec![],
+            skills: vec![SkillGroup {
+                predicates: crate::predicate::PredicateSet {
+                    predicates: vec![crate::predicate::Predicate::Dependency],
+                },
+                source: PluginSource::Path(PathBuf::from("skills")),
+            }],
+            plugin_sources: vec![],
+            mcp_servers: vec![],
+            installations: Vec::new(),
+            subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
+        };
+
+        let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate::new(
+            "serde".to_string(),
+            semver::Version::new(1, 0, 0),
+            None,
+        )];
+
+        // With dependency provenance: skill IS active
+        let registry = PluginRegistry {
+            plugins: vec![ParsedPlugin {
+                path: tmp.path().join("SYMPOSIUM.toml"),
+                plugin: plugin.clone(),
+                source_name: "test".to_string(),
+                source_dir: tmp.path().to_path_buf(),
+                source_provenance: std::collections::BTreeSet::from([SourceProvenance::Dependency]),
+            }],
+            standalone_skills: vec![],
+            warnings: vec![],
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
+        };
+        let results = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace_crates,
+            std::collections::HashMap::new(),
+        )
+        .await;
+        assert_eq!(
+            results.len(),
+            1,
+            "dependency provenance should activate dep-gated group"
+        );
+
+        // With installed provenance only: skill is NOT active
+        let registry = PluginRegistry {
+            plugins: vec![ParsedPlugin {
+                path: tmp.path().join("SYMPOSIUM.toml"),
+                plugin: plugin.clone(),
+                source_name: "test".to_string(),
+                source_dir: tmp.path().to_path_buf(),
+                source_provenance: std::collections::BTreeSet::from([SourceProvenance::Installed]),
+            }],
+            standalone_skills: vec![],
+            warnings: vec![],
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
+        };
+        let results = skills_applicable_to(
+            &sym,
+            &registry,
+            &workspace_crates,
+            std::collections::HashMap::new(),
+        )
+        .await;
+        assert_eq!(
+            results.len(),
+            0,
+            "installed-only should not activate dependency-gated skills"
+        );
     }
 }

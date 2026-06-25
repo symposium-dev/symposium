@@ -13,7 +13,7 @@ use symposium_sdk::workspace::WorkspaceCrate;
 use crate::{
     config::Symposium,
     installation::{acquire_installation, resolve_runnable},
-    plugins::{self, ParsedPlugin, Plugin, PluginRegistry, Subcommand},
+    plugins::{self, Plugin, PluginRegistry, Subcommand},
 };
 use anyhow::{Context, Result, bail};
 use semver::Version;
@@ -28,13 +28,14 @@ pub fn applicable_subcommands<'a>(
 ) -> Vec<(&'a Plugin, &'a str, &'a Subcommand)> {
     let mut ctx = crate::predicate::PredicateContext::new(deps);
     let mut results = Vec::new();
-    for ParsedPlugin { plugin, .. } in &registry.plugins {
-        if !plugin.applies(&mut ctx) {
+    for parsed in &registry.plugins {
+        ctx.set_source_provenance(parsed.source_provenance.clone());
+        if !parsed.plugin.applies(&mut ctx) {
             continue;
         }
-        for (name, subcommand) in &plugin.subcommands {
+        for (name, subcommand) in &parsed.plugin.subcommands {
             if subcommand.predicates.evaluate(&mut ctx) {
-                results.push((plugin, name.as_str(), subcommand));
+                results.push((&parsed.plugin, name.as_str(), subcommand));
             }
         }
     }
@@ -158,7 +159,8 @@ fn exit_byte_from(status: ExitStatus) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{plugins::Audience, predicate::PredicateSet};
+    use crate::plugins::{Audience, ParsedPlugin};
+    use crate::predicate::PredicateSet;
     use std::{collections::BTreeMap, path::PathBuf};
 
     fn ws_crate(name: &str, version: &str) -> WorkspaceCrate {
@@ -189,6 +191,7 @@ mod tests {
             },
             source_name: "test".into(),
             source_dir: PathBuf::from("/test"),
+            source_provenance: std::collections::BTreeSet::new(),
         }
     }
 
@@ -261,5 +264,30 @@ mod tests {
 
         assert!(err.contains("plugin-a"), "expected `plugin-a` in {err}");
         assert!(err.contains("plugin-b"), "expected `plugin-b` in {err}");
+    }
+
+    #[test]
+    fn provenance_predicate_gates_subcommand_visibility() {
+        let mut subs = BTreeMap::new();
+        subs.insert("dev-tool".into(), subcommand("dev-install", None));
+
+        let mut plugin = plugin_with("ws-only", "*", subs);
+        // Gate on workspace() — only available in workspace context.
+        plugin.plugin.predicates = crate::predicate::PredicateSet {
+            predicates: vec![crate::predicate::Predicate::Workspace],
+        };
+
+        // Without workspace provenance → subcommand not visible.
+        let reg = registry(vec![plugin.clone()]);
+        let ws = [ws_crate("foo", "1.0.0")];
+        assert!(find_subcommand(&reg, "dev-tool", &ws).unwrap().is_none());
+
+        // With workspace provenance → subcommand visible.
+        let mut plugin_ws = plugin;
+        plugin_ws.source_provenance =
+            std::collections::BTreeSet::from([crate::crate_sources::SourceProvenance::Workspace]);
+        let reg = registry(vec![plugin_ws]);
+        let result = find_subcommand(&reg, "dev-tool", &ws).unwrap().unwrap();
+        assert_eq!(result.0.name, "ws-only");
     }
 }

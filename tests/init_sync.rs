@@ -2269,3 +2269,25 @@ async fn report_json_shows_skipped_skills() {
     .await
     .unwrap();
 }
+
+/// `sync` discovers and installs skills from an `installed.paths` source.
+///
+/// This tests the new registry-ready source graph: the plugin is discovered
+/// through `[installed] paths = [...]` rather than a legacy `[[plugin-source]]`.
+#[tokio::test]
+async fn sync_installed_path_source() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["installed-path0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            find_installed_skill(&workspace_root.join(".claude/skills"), "installed-skill");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}

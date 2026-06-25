@@ -230,6 +230,122 @@ fn touch_marker(marker_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Resolve all plugin sources for sync: installed crates, workspace, and legacy.
+///
+/// Combines:
+/// 1. New `[installed.crates]` / `installed.paths` / `installed.git` entries
+/// 2. Workspace root and member crates (workspace provenance)
+/// 3. Legacy `[[plugin-source]]` entries for backward compatibility
+///
+/// When the same manifest is reached from multiple roots, provenance is unioned
+/// by `load_registry_from_graph`.
+async fn resolve_sync_sources(
+    sym: &Symposium,
+    deps: &mut WorkspaceDeps,
+) -> crate::crate_sources::ResolvedSourceGraph {
+    use crate::crate_sources::{
+        ResolvedSourceGraph, ResolvedSourceRoot, SourceProvenance, SourceReason, SourceRegistry,
+        installed_source_specs,
+    };
+
+    let resolver = crate::crate_sources::SourceRegistryResolver::new(sym);
+    let mut graph = ResolvedSourceGraph::default();
+
+    // Resolve new installed sources (best-effort: warn and skip on failure).
+    for spec in installed_source_specs(sym.installed_sources()) {
+        match resolver.resolve(&spec).await {
+            Ok(root) => {
+                graph.add_resolved_root(
+                    root,
+                    SourceReason {
+                        provenance: SourceProvenance::Installed,
+                        detail: "installed config".to_string(),
+                    },
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to resolve installed source, skipping");
+            }
+        }
+    }
+
+    // Add workspace root and members (only when agents-syncing is enabled,
+    // since the workspace's default `.agents/skills` group is the mechanism
+    // that replaces the old agents-syncing propagation).
+    //
+    // The workspace root is only added when it has an explicit SYMPOSIUM.toml.
+    // Without one, the synthesized manifest's recursive `[[plugins]]` search
+    // would scan the entire project tree — finding test fixtures, build
+    // artifacts, and other directories that aren't meant to be plugin sources.
+    // Members are always added individually (they're concrete crate directories
+    // with bounded scope).
+    if sym.config.agents_syncing {
+        if let Some(loaded) = deps.load() {
+            let root_path =
+                std::fs::canonicalize(&loaded.root).unwrap_or_else(|_| loaded.root.clone());
+            if root_path.join("SYMPOSIUM.toml").is_file() {
+                graph.add_resolved_root(
+                    ResolvedSourceRoot {
+                        registry: SourceRegistry::Path,
+                        source_id: format!("workspace:{}", root_path.display()),
+                        path: root_path.clone(),
+                    },
+                    SourceReason {
+                        provenance: SourceProvenance::Workspace,
+                        detail: "workspace root".to_string(),
+                    },
+                );
+            }
+
+            for member in &loaded.members {
+                let Some(path) = member.path.as_ref() else {
+                    continue;
+                };
+                let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+                if path == root_path {
+                    continue;
+                }
+                graph.add_resolved_root(
+                    ResolvedSourceRoot {
+                        registry: SourceRegistry::Path,
+                        source_id: format!("workspace-member:{}@{}", member.name, member.version),
+                        path,
+                    },
+                    SourceReason {
+                        provenance: SourceProvenance::Workspace,
+                        detail: format!("workspace member {}", member.name),
+                    },
+                );
+            }
+        }
+    }
+
+    // Include legacy [[plugin-source]] entries for backward compatibility.
+    let sources = sym.plugin_sources();
+    let cache_base = sym.cache_dir().join("plugin-sources");
+    for resolved in &sources {
+        let Some(dir) = plugins::resolve_legacy_plugin_source_dir(resolved, &cache_base) else {
+            continue;
+        };
+        if !dir.is_dir() {
+            continue;
+        }
+        graph.add_resolved_root(
+            ResolvedSourceRoot {
+                registry: SourceRegistry::Path,
+                source_id: format!("legacy:{}", resolved.source.name),
+                path: dir,
+            },
+            SourceReason {
+                provenance: SourceProvenance::Installed,
+                detail: format!("legacy plugin-source `{}`", resolved.source.name),
+            },
+        );
+    }
+
+    graph
+}
+
 /// Resolve custom predicate installations from the registry into entries
 /// suitable for [`PredicateContext::with_custom_predicates`].
 async fn resolve_custom_predicate_entries(
@@ -301,8 +417,14 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
     let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
-    // Load plugin registry
-    let registry = plugins::load_registry(sym);
+    // Resolve the source graph: installed sources, workspace root/members,
+    // and legacy [[plugin-source]] entries. Manifest-level dedup in
+    // load_registry_from_graph unions provenance when the same manifest is
+    // reached from multiple roots.
+    let graph = resolve_sync_sources(sym, deps).await;
+
+    // Load plugin registry from graph (stamps provenance on each plugin).
+    let registry = plugins::load_registry_from_graph(&graph);
 
     for warning in &registry.warnings {
         tracing::info!(
@@ -348,6 +470,7 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
     let mut ctx = crate::predicate::PredicateContext::new(&semver_pairs);
     let mut mcp_servers: Vec<sacp::schema::McpServer> = Vec::new();
     for p in &registry.plugins {
+        ctx.set_source_provenance(p.source_provenance.clone());
         if p.plugin.applies(&mut ctx) {
             mcp_servers.extend(p.plugin.applicable_mcp_servers(&mut ctx));
         }

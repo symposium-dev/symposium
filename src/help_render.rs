@@ -216,6 +216,7 @@ mod tests {
             },
             source_name: "test".into(),
             source_dir: PathBuf::from("/test"),
+            source_provenance: std::collections::BTreeSet::new(),
         }
     }
 

@@ -28,7 +28,11 @@
 use std::path::Path;
 use std::process::Command;
 
+use std::collections::BTreeSet;
+
 use anyhow::{Context, Result, bail};
+
+use crate::crate_sources::SourceProvenance;
 
 /// Names reserved for builtin predicates. Custom predicates must not use these.
 pub const BUILTIN_PREDICATE_NAMES: &[&str] = &[
@@ -37,6 +41,8 @@ pub const BUILTIN_PREDICATE_NAMES: &[&str] = &[
     "path_exists",
     "env",
     "workspace",
+    "dependency",
+    "installed",
     "not",
     "any",
     "all",
@@ -48,9 +54,14 @@ pub const BUILTIN_PREDICATE_NAMES: &[&str] = &[
 /// `path_exists`, `env`) is read ambiently at evaluation time. Custom
 /// (plugin-defined) predicates are resolved entries whose results are cached
 /// for the lifetime of the context.
+///
+/// Source-context predicates (`workspace()`, `dependency()`, `installed()`)
+/// evaluate against the `source_provenance` set, which callers update per
+/// plugin/source root before evaluating that root's predicates.
 #[derive(Debug)]
 pub struct PredicateContext<'a> {
     pub crates: &'a [(String, semver::Version)],
+    source_provenance: BTreeSet<SourceProvenance>,
     custom_entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
     custom_cache: std::collections::HashMap<(String, String), CustomPredicateResult>,
 }
@@ -59,6 +70,7 @@ impl<'a> PredicateContext<'a> {
     pub fn new(crates: &'a [(String, semver::Version)]) -> Self {
         Self {
             crates,
+            source_provenance: BTreeSet::new(),
             custom_entries: std::collections::HashMap::new(),
             custom_cache: std::collections::HashMap::new(),
         }
@@ -70,9 +82,24 @@ impl<'a> PredicateContext<'a> {
     ) -> Self {
         Self {
             crates,
+            source_provenance: BTreeSet::new(),
             custom_entries: entries,
             custom_cache: std::collections::HashMap::new(),
         }
+    }
+
+    /// Set the source provenance flags for subsequent predicate evaluations.
+    ///
+    /// Callers update this before evaluating a plugin's predicates so that
+    /// `workspace()`, `dependency()`, and `installed()` reflect the source
+    /// that produced the plugin.
+    pub fn set_source_provenance(&mut self, provenance: BTreeSet<SourceProvenance>) {
+        self.source_provenance = provenance;
+    }
+
+    /// Returns the current source provenance flags.
+    pub fn source_provenance(&self) -> &BTreeSet<SourceProvenance> {
+        &self.source_provenance
     }
 
     /// Evaluate a custom predicate by name and argument, returning the cached
@@ -120,8 +147,12 @@ pub enum Predicate {
     PathExists(String),
     /// `env(<name>)` / `env(<name>=<value>)` — env var presence / equality.
     Env(String, Option<String>),
-    /// `workspace()` — source-context predicate for workspace-local defaults.
+    /// `workspace()` — true when the plugin source has workspace provenance.
     Workspace,
+    /// `dependency()` — true when the plugin source has dependency provenance.
+    Dependency,
+    /// `installed()` — true when the plugin source has installed provenance.
+    Installed,
     /// `not(<p>)` — passes when the inner predicate does not.
     Not(Box<Predicate>),
     /// `any(<p>, …)` — passes when at least one inner predicate does.
@@ -148,7 +179,11 @@ impl Predicate {
             Predicate::Shell(cmd) => run_shell(cmd),
             Predicate::PathExists(arg) => path_exists(arg),
             Predicate::Env(name, expected) => env_matches(name, expected.as_deref()),
-            Predicate::Workspace => true,
+            Predicate::Workspace => ctx.source_provenance.contains(&SourceProvenance::Workspace),
+            Predicate::Dependency => ctx
+                .source_provenance
+                .contains(&SourceProvenance::Dependency),
+            Predicate::Installed => ctx.source_provenance.contains(&SourceProvenance::Installed),
             Predicate::Not(inner) => !inner.evaluate(ctx),
             Predicate::Any(children) => children.iter().any(|p| p.evaluate(ctx)),
             Predicate::All(children) => children.iter().all(|p| p.evaluate(ctx)),
@@ -181,7 +216,18 @@ impl Predicate {
             Predicate::Shell(cmd) => run_shell(cmd).then(Vec::new),
             Predicate::PathExists(arg) => path_exists(arg).then(Vec::new),
             Predicate::Env(name, expected) => env_matches(name, expected.as_deref()).then(Vec::new),
-            Predicate::Workspace => Some(Vec::new()),
+            Predicate::Workspace => ctx
+                .source_provenance
+                .contains(&SourceProvenance::Workspace)
+                .then(Vec::new),
+            Predicate::Dependency => ctx
+                .source_provenance
+                .contains(&SourceProvenance::Dependency)
+                .then(Vec::new),
+            Predicate::Installed => ctx
+                .source_provenance
+                .contains(&SourceProvenance::Installed)
+                .then(Vec::new),
             Predicate::Not(inner) => match inner.witness(ctx) {
                 Some(_) => None,
                 None => Some(Vec::new()),
@@ -526,6 +572,18 @@ fn parse(input: &str) -> Result<Predicate> {
             }
             Ok(Predicate::Workspace)
         }
+        "dependency" => {
+            if !arg.is_empty() {
+                bail!("`dependency()` does not accept arguments");
+            }
+            Ok(Predicate::Dependency)
+        }
+        "installed" => {
+            if !arg.is_empty() {
+                bail!("`installed()` does not accept arguments");
+            }
+            Ok(Predicate::Installed)
+        }
         "not" => Ok(Predicate::Not(Box::new(parse(arg)?))),
         "any" => {
             let preds = parse_comma_separated(arg)?;
@@ -803,6 +861,8 @@ impl std::fmt::Display for Predicate {
             Predicate::Any(preds) => write!(f, "any({})", join(preds)),
             Predicate::All(preds) => write!(f, "all({})", join(preds)),
             Predicate::Workspace => write!(f, "workspace()"),
+            Predicate::Dependency => write!(f, "dependency()"),
+            Predicate::Installed => write!(f, "installed()"),
             Predicate::Custom { name, arg } => write!(f, "{name}({arg})"),
         }
     }
@@ -1685,5 +1745,109 @@ mod tests {
         assert_eq!(witness[0].0, "a");
         assert_eq!(witness[1].0, "b");
         assert_eq!(witness[2].0, "c");
+    }
+
+    // --- source-context predicates ---
+
+    #[test]
+    fn workspace_predicate_holds_with_workspace_provenance() {
+        let mut ctx = ctx(&[]);
+        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Workspace]));
+        let pred = parse("workspace()").unwrap();
+        assert!(pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn workspace_predicate_fails_without_provenance() {
+        let mut ctx = ctx(&[]);
+        let pred = parse("workspace()").unwrap();
+        assert!(!pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn dependency_predicate_holds_with_dependency_provenance() {
+        let mut ctx = ctx(&[]);
+        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Dependency]));
+        let pred = parse("dependency()").unwrap();
+        assert!(pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn installed_predicate_holds_with_installed_provenance() {
+        let mut ctx = ctx(&[]);
+        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Installed]));
+        let pred = parse("installed()").unwrap();
+        assert!(pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn source_predicates_are_non_exclusive() {
+        let mut ctx = ctx(&[]);
+        ctx.set_source_provenance(BTreeSet::from([
+            SourceProvenance::Installed,
+            SourceProvenance::Workspace,
+            SourceProvenance::Dependency,
+        ]));
+        assert!(parse("workspace()").unwrap().evaluate(&mut ctx));
+        assert!(parse("dependency()").unwrap().evaluate(&mut ctx));
+        assert!(parse("installed()").unwrap().evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn source_predicates_distinguish_provenance_types() {
+        let mut ctx = ctx(&[]);
+        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Installed]));
+        assert!(parse("installed()").unwrap().evaluate(&mut ctx));
+        assert!(!parse("workspace()").unwrap().evaluate(&mut ctx));
+        assert!(!parse("dependency()").unwrap().evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn not_workspace_holds_for_installed_only() {
+        let mut ctx = ctx(&[]);
+        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Installed]));
+        assert!(parse("not(workspace())").unwrap().evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn any_combinator_with_source_predicates() {
+        let mut ctx = ctx(&[]);
+        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Dependency]));
+        assert!(
+            parse("any(workspace(), dependency())")
+                .unwrap()
+                .evaluate(&mut ctx)
+        );
+        assert!(
+            !parse("all(workspace(), dependency())")
+                .unwrap()
+                .evaluate(&mut ctx)
+        );
+    }
+
+    #[test]
+    fn set_source_provenance_replaces_previous() {
+        let mut ctx = ctx(&[]);
+        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Workspace]));
+        assert!(parse("workspace()").unwrap().evaluate(&mut ctx));
+
+        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Installed]));
+        assert!(!parse("workspace()").unwrap().evaluate(&mut ctx));
+        assert!(parse("installed()").unwrap().evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn witness_returns_none_for_missing_provenance() {
+        let mut ctx = ctx(&[]);
+        let pred = parse("workspace()").unwrap();
+        assert!(pred.witness(&mut ctx).is_none());
+    }
+
+    #[test]
+    fn witness_returns_some_for_present_provenance() {
+        let mut ctx = ctx(&[]);
+        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Workspace]));
+        let pred = parse("workspace()").unwrap();
+        assert!(pred.witness(&mut ctx).is_some());
     }
 }

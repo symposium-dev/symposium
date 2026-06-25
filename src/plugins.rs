@@ -401,6 +401,12 @@ pub struct ParsedPlugin {
     /// The plugin source's root directory on disk. Used as the base for
     /// computing the `skill_path` field on `SkillOrigin::Source`.
     pub source_dir: PathBuf,
+
+    /// Source provenance flags for this plugin. These are the non-exclusive
+    /// provenance flags from the resolved source graph node that produced
+    /// this plugin. Used by `workspace()`, `dependency()`, and `installed()`
+    /// predicates.
+    pub source_provenance: std::collections::BTreeSet<crate::crate_sources::SourceProvenance>,
 }
 
 /// A loaded, *validated* plugin manifest.
@@ -1190,6 +1196,17 @@ fn resolve_plugin_source_dir(
     resolve_one_source(&resolved.source, &resolved.base_dir, &cache_base)
 }
 
+/// Resolve a legacy plugin source to its on-disk directory.
+///
+/// Used during migration to include `[[plugin-source]]` entries in the
+/// resolved source graph.
+pub fn resolve_legacy_plugin_source_dir(
+    resolved: &crate::config::ResolvedPluginSource,
+    cache_base: &Path,
+) -> Option<PathBuf> {
+    resolve_one_source(&resolved.source, &resolved.base_dir, cache_base)
+}
+
 fn resolve_one_source(
     source: &crate::config::PluginSourceConfig,
     base_dir: &Path,
@@ -1328,6 +1345,99 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
     }
 }
 
+/// Build a plugin registry from a resolved source graph.
+///
+/// Each source node is scanned for manifests and standalone skills. The
+/// resulting `ParsedPlugin`s are stamped with the node's provenance set so
+/// that `workspace()`, `dependency()`, and `installed()` predicates evaluate
+/// correctly.
+///
+/// When the same manifest (by canonical path) is discovered from multiple
+/// source roots, provenance is unioned rather than producing duplicate plugins.
+pub fn load_registry_from_graph(
+    graph: &crate::crate_sources::ResolvedSourceGraph,
+) -> PluginRegistry {
+    let mut plugins: Vec<ParsedPlugin> = Vec::new();
+    let mut standalone_skills = Vec::new();
+    let mut warnings = Vec::new();
+    let mut seen_manifests: std::collections::BTreeMap<PathBuf, usize> =
+        std::collections::BTreeMap::new();
+
+    for node in graph.nodes() {
+        let source_name = &node.root.source_id;
+        let dir = &node.root.path;
+        match scan_source_dir(dir, source_name) {
+            Ok(contents) => {
+                for result in contents.plugins {
+                    match result {
+                        Ok(mut p) => {
+                            let canonical =
+                                std::fs::canonicalize(&p.path).unwrap_or_else(|_| p.path.clone());
+                            if let Some(&idx) = seen_manifests.get(&canonical) {
+                                plugins[idx]
+                                    .source_provenance
+                                    .extend(node.provenance.iter().copied());
+                            } else {
+                                p.source_provenance = node.provenance.clone();
+                                seen_manifests.insert(canonical, plugins.len());
+                                plugins.push(p);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "failed to load plugin");
+                            warnings.push(LoadWarning {
+                                path: dir.join("<unknown>.toml"),
+                                message: format!("failed to load plugin: {e}"),
+                            });
+                        }
+                    }
+                }
+                for skill_md in contents.skill_files {
+                    match crate::skills::load_standalone_skill(&skill_md) {
+                        Ok(skill) => {
+                            let origin = standalone_skill_origin(source_name, dir, &skill_md);
+                            standalone_skills.push(StandaloneSkill { skill, origin });
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                path = %skill_md.display(),
+                                error = %e,
+                                "failed to load standalone skill"
+                            );
+                            warnings.push(LoadWarning {
+                                path: skill_md,
+                                message: format!("failed to load standalone skill: {e}"),
+                            });
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(dir = %dir.display(), error = %e, "failed to scan plugin source dir");
+                warnings.push(LoadWarning {
+                    path: dir.clone(),
+                    message: format!("failed to scan plugin source dir: {e}"),
+                });
+            }
+        }
+    }
+
+    tracing::debug!(
+        plugins = plugins.len(),
+        standalone_skills = standalone_skills.len(),
+        "plugin registry loaded from source graph"
+    );
+
+    let custom_predicates = build_custom_predicate_registry(&plugins, &mut warnings);
+
+    PluginRegistry {
+        plugins,
+        standalone_skills,
+        warnings,
+        custom_predicates,
+    }
+}
+
 /// Scan a plugin source directory for TOML plugin manifests and standalone skills.
 ///
 /// Discovery rules:
@@ -1395,6 +1505,7 @@ fn load_source_root_plugin(source_dir: &Path, source_name: &str) -> Result<Parse
         plugin,
         source_name: source_name.to_string(),
         source_dir: source_dir.to_path_buf(),
+        source_provenance: std::collections::BTreeSet::new(),
     })
 }
 
@@ -1634,6 +1745,7 @@ pub fn load_plugin(
         plugin,
         source_name: source_name.to_string(),
         source_dir: source_dir.to_path_buf(),
+        source_provenance: std::collections::BTreeSet::new(),
     })
 }
 
@@ -4310,6 +4422,7 @@ mod tests {
             },
             source_name: "test".into(),
             source_dir: std::path::PathBuf::from("/test"),
+            source_provenance: std::collections::BTreeSet::new(),
         }
     }
 
