@@ -169,71 +169,11 @@ impl CollectedPolicy {
     pub fn has_any_allow_rules(&self) -> bool {
         self.rules.iter().any(|r| r.allow)
     }
-}
 
-/// Build discovery candidates from workspace dependencies.
-///
-/// Only crates that have a `SYMPOSIUM.toml` at their source root qualify as
-/// actual plugin sources. This function returns all crates as candidates —
-/// filtering by manifest presence happens during resolution (after the policy
-/// check passes, the crate source is resolved and only then scanned for
-/// `SYMPOSIUM.toml`).
-pub fn workspace_dep_candidates(
-    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
-) -> Vec<DiscoveryCandidate> {
-    workspace_crates
-        .iter()
-        .map(|wc| DiscoveryCandidate::Crate {
-            name: wc.name.clone(),
-            version: wc.version.to_string(),
-        })
-        .collect()
-}
-
-/// Resolve allowed workspace dependency candidates into source specs.
-///
-/// For each allowed candidate with a local path, returns the path spec.
-/// Crates without a local path are returned as crate-registry specs.
-pub fn resolve_allowed_dep_specs(
-    candidates: &[DiscoveryCandidate],
-    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
-    policy: &CollectedPolicy,
-) -> Vec<(String, AllowedDepSource)> {
-    let mut results = Vec::new();
-
-    for candidate in candidates {
-        if policy.evaluate(candidate) != PolicyVerdict::Allowed {
-            continue;
-        }
-        let DiscoveryCandidate::Crate { name, .. } = candidate;
-        let normalized = normalize_crate_name(name);
-        if let Some(wc) = workspace_crates
-            .iter()
-            .find(|wc| normalize_crate_name(&wc.name) == normalized)
-        {
-            if let Some(path) = &wc.path {
-                results.push((wc.name.clone(), AllowedDepSource::Path(path.clone())));
-            } else {
-                results.push((
-                    wc.name.clone(),
-                    AllowedDepSource::Crate {
-                        version: format!("={}", wc.version),
-                    },
-                ));
-            }
-        }
+    /// Number of rules in the policy (used to detect when new rules are added).
+    pub fn rule_count(&self) -> usize {
+        self.rules.len()
     }
-
-    results
-}
-
-/// How an allowed dependency candidate should be resolved.
-#[derive(Debug, Clone)]
-pub enum AllowedDepSource {
-    /// Local path dependency — resolve directly without network.
-    Path(std::path::PathBuf),
-    /// Registry crate — resolve via Cargo probe.
-    Crate { version: String },
 }
 
 #[cfg(test)]

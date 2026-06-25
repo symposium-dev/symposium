@@ -75,9 +75,6 @@ pub struct ResolvedSourceGraph {
     nodes: Vec<ResolvedSourceNode>,
 }
 
-/// Maximum depth for recursive `[[plugins]] source.*` expansion.
-const MAX_RECURSIVE_DEPTH: usize = 16;
-
 impl ResolvedSourceGraph {
     pub async fn resolve_installed_and_workspace(
         sym: &Symposium,
@@ -163,6 +160,55 @@ impl ResolvedSourceGraph {
         self.nodes.is_empty()
     }
 
+    /// Add a source with a full provenance set. Returns `true` if provenance
+    /// grew on an existing node (i.e., at least one new provenance flag was
+    /// added that wasn't there before).
+    pub(crate) fn add_root_with_provenance(
+        &mut self,
+        root: &ResolvedSourceRoot,
+        provenance: &BTreeSet<SourceProvenance>,
+        detail: &str,
+    ) -> bool {
+        if let Some(existing) = self
+            .nodes
+            .iter_mut()
+            .find(|node| node.root.path == root.path)
+        {
+            let before = existing.provenance.len();
+            for &prov in provenance {
+                existing.provenance.insert(prov);
+                existing.reasons.insert(SourceReason {
+                    provenance: prov,
+                    detail: detail.to_string(),
+                });
+            }
+            return existing.provenance.len() > before;
+        }
+
+        let reasons = provenance
+            .iter()
+            .map(|&prov| SourceReason {
+                provenance: prov,
+                detail: detail.to_string(),
+            })
+            .collect();
+        self.nodes.push(ResolvedSourceNode {
+            root: root.clone(),
+            provenance: provenance.clone(),
+            reasons,
+        });
+        false
+    }
+
+    /// Get the current provenance set for a path, or empty if not in graph.
+    pub(crate) fn provenance_for(&self, path: &std::path::Path) -> BTreeSet<SourceProvenance> {
+        self.nodes
+            .iter()
+            .find(|node| node.root.path == path)
+            .map(|node| node.provenance.clone())
+            .unwrap_or_default()
+    }
+
     fn add_root(&mut self, root: ResolvedSourceRoot, reason: SourceReason) {
         if let Some(existing) = self
             .nodes
@@ -186,14 +232,23 @@ impl ResolvedSourceGraph {
     }
 }
 
-/// Expand a source graph by resolving recursive `[[plugins]] source.*`
-/// declarations and discovery-allowed dependency candidates.
+/// A worklist item: a source to resolve and add to the graph.
+struct WorklistItem {
+    spec: RegistrySourceSpec,
+    provenance: BTreeSet<SourceProvenance>,
+    detail: String,
+}
+
+/// Expand a source graph using a worklist algorithm.
 ///
-/// Process:
-/// 1. Collect discovery policy from user config + already-discovered plugins.
-/// 2. Build dependency candidates, apply policy, resolve allowed ones.
-/// 3. For each source node, follow non-path `[[plugins]] source.*` declarations.
-/// 4. Repeat until no new sources are added or `MAX_RECURSIVE_DEPTH` is reached.
+/// Seeds the worklist from each existing node's `[[plugins]] source.*`
+/// declarations and from discovery-allowed workspace dependency candidates.
+/// Processes items one at a time: resolve → add to graph → scan for plugins
+/// → push new work. Terminates when the worklist is empty.
+///
+/// When a resolved path is already in the graph but with less provenance,
+/// the new provenance is unioned in and the node's children are re-pushed
+/// so provenance propagates through recursive edges.
 ///
 /// Returns the number of new sources added.
 pub async fn expand_source_graph(
@@ -201,7 +256,7 @@ pub async fn expand_source_graph(
     sym: &Symposium,
     workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
 ) -> usize {
-    use crate::discovery::{CollectedPolicy, resolve_allowed_dep_specs, workspace_dep_candidates};
+    use crate::discovery::CollectedPolicy;
     use crate::plugins::{PluginSourceDecl, scan_source_dir_public};
 
     let resolver = SourceRegistryResolver::new(sym);
@@ -211,124 +266,211 @@ pub async fn expand_source_graph(
     let mut policy = CollectedPolicy::default();
     policy.add_policy(&sym.config.discovery);
 
-    // Iterate expansion rounds with depth limit.
-    for _round in 0..MAX_RECURSIVE_DEPTH {
-        let prev_count = graph.len();
+    // Track which (path, provenance) combinations we've already scanned so
+    // we don't re-process a node unless new provenance arrives.
+    let mut scanned: std::collections::BTreeMap<PathBuf, BTreeSet<SourceProvenance>> =
+        std::collections::BTreeMap::new();
 
-        // Collect discovery policy from already-resolved plugins and gather
-        // recursive source declarations.
-        let mut recursive_specs: Vec<(RegistrySourceSpec, BTreeSet<SourceProvenance>)> = Vec::new();
+    // Seed: scan existing graph nodes (installed sources, workspace, legacy)
+    // and collect their contributions to the worklist and policy.
+    let mut worklist: Vec<WorklistItem> = Vec::new();
+    seed_from_nodes(graph, &mut policy, &mut worklist, &mut scanned);
 
-        for node in graph.nodes().to_vec() {
-            let source_name = &node.root.source_id;
-            let dir = &node.root.path;
-            let Ok(contents) = scan_source_dir_public(dir, source_name) else {
-                continue;
-            };
-            for result in contents {
-                let Ok(parsed) = result else { continue };
-                // Add this plugin's discovery policy to the collected set.
-                policy.add_policy(&parsed.plugin.discovery);
-                // Collect non-path [[plugins]] source declarations.
-                for ps in &parsed.plugin.plugin_sources {
-                    match &ps.source {
-                        PluginSourceDecl::Git(url) => {
-                            recursive_specs.push((
-                                RegistrySourceSpec::Git(url.clone()),
-                                node.provenance.clone(),
-                            ));
-                        }
-                        PluginSourceDecl::Crate(specs) => {
-                            for spec in specs {
-                                recursive_specs.push((
-                                    RegistrySourceSpec::Crate(spec.clone()),
-                                    node.provenance.clone(),
-                                ));
-                            }
-                        }
-                        PluginSourceDecl::Path(_) => {
-                            // Path sources are already handled by scan_source_dir's
-                            // recursive manifest discovery — no expansion needed.
-                        }
-                    }
-                }
-            }
-        }
+    // Seed: evaluate workspace dep candidates against initial policy.
+    push_allowed_deps(&policy, workspace_crates, &mut worklist, &scanned);
 
-        // Resolve dependency candidates against policy.
-        if policy.has_any_allow_rules() {
-            let candidates = workspace_dep_candidates(workspace_crates);
-            let allowed = resolve_allowed_dep_specs(&candidates, workspace_crates, &policy);
-            for (crate_name, dep_source) in allowed {
-                let spec = match dep_source {
-                    crate::discovery::AllowedDepSource::Path(path) => {
-                        RegistrySourceSpec::Path(path)
-                    }
-                    crate::discovery::AllowedDepSource::Crate { version } => {
-                        RegistrySourceSpec::Crate(CrateSourceSpec {
-                            key: Some(crate_name.clone()),
-                            dependency: CargoDependencySpec::Version(version),
-                        })
-                    }
-                };
-                match resolver.resolve(&spec).await {
-                    Ok(root) => {
-                        // Only add if the resolved source actually has plugin content.
-                        if root.path.join("SYMPOSIUM.toml").is_file()
-                            || root.path.join("skills").is_dir()
-                        {
-                            graph.add_resolved_root(
-                                root,
-                                SourceReason {
-                                    provenance: SourceProvenance::Dependency,
-                                    detail: format!("discovery allowed: {crate_name}"),
-                                },
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        tracing::debug!(
-                            crate_name = %crate_name,
-                            error = %e,
-                            "failed to resolve discovery candidate"
-                        );
-                    }
-                }
-            }
-        }
-
-        // Resolve recursive source declarations.
-        for (spec, parent_provenance) in recursive_specs {
-            match resolver.resolve(&spec).await {
-                Ok(root) => {
-                    // Propagate the declaring source's provenance.
-                    for &prov in &parent_provenance {
-                        graph.add_resolved_root(
-                            root.clone(),
-                            SourceReason {
-                                provenance: prov,
-                                detail: format!("recursive source from {spec:?}"),
-                            },
-                        );
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        spec = ?spec,
-                        error = %e,
-                        "failed to resolve recursive plugin source, skipping"
-                    );
-                }
-            }
-        }
-
-        // If no new sources were added this round, we've converged.
-        if graph.len() == prev_count {
+    // Process worklist.
+    let mut safety_limit = 1000usize;
+    while let Some(item) = worklist.pop() {
+        safety_limit = safety_limit.saturating_sub(1);
+        if safety_limit == 0 {
+            tracing::warn!("expand_source_graph hit safety limit, stopping");
             break;
+        }
+
+        // Resolve the spec to a concrete path.
+        let root = match resolver.resolve(&item.spec).await {
+            Ok(root) => root,
+            Err(e) => {
+                tracing::debug!(spec = ?item.spec, error = %e, "failed to resolve source");
+                continue;
+            }
+        };
+
+        // For dependency candidates, only add if it has plugin content.
+        if item.provenance.contains(&SourceProvenance::Dependency)
+            && item.provenance.len() == 1
+            && !root.path.join("SYMPOSIUM.toml").is_file()
+            && !root.path.join("skills").is_dir()
+        {
+            continue;
+        }
+
+        // Add to graph (unions provenance if already present).
+        let provenance_grew = graph.add_root_with_provenance(&root, &item.provenance, &item.detail);
+
+        // Check if we've already scanned this path with at least this provenance.
+        let dominated = scanned
+            .get(&root.path)
+            .is_some_and(|prev| item.provenance.is_subset(prev));
+        if dominated && !provenance_grew {
+            continue;
+        }
+
+        // Record what we're about to scan.
+        scanned
+            .entry(root.path.clone())
+            .or_default()
+            .extend(item.provenance.iter().copied());
+
+        // Scan the source for plugins.
+        let source_name = &root.source_id;
+        let dir = &root.path;
+        let Ok(contents) = scan_source_dir_public(dir, source_name) else {
+            continue;
+        };
+
+        let node_provenance = graph.provenance_for(&root.path);
+        let policy_grew_before = policy.rule_count();
+
+        for result in contents {
+            let Ok(parsed) = result else { continue };
+
+            // Contribute discovery policy.
+            policy.add_policy(&parsed.plugin.discovery);
+
+            // Push recursive [[plugins]] source.* declarations.
+            for ps in &parsed.plugin.plugin_sources {
+                match &ps.source {
+                    PluginSourceDecl::Git(url) => {
+                        worklist.push(WorklistItem {
+                            spec: RegistrySourceSpec::Git(url.clone()),
+                            provenance: node_provenance.clone(),
+                            detail: format!("recursive from {source_name}"),
+                        });
+                    }
+                    PluginSourceDecl::Crate(specs) => {
+                        for spec in specs {
+                            worklist.push(WorklistItem {
+                                spec: RegistrySourceSpec::Crate(spec.clone()),
+                                provenance: node_provenance.clone(),
+                                detail: format!("recursive from {source_name}"),
+                            });
+                        }
+                    }
+                    PluginSourceDecl::Path(_) => {}
+                }
+            }
+        }
+
+        // If new policy rules were added, re-check workspace dep candidates.
+        if policy.rule_count() > policy_grew_before {
+            push_allowed_deps(&policy, workspace_crates, &mut worklist, &scanned);
         }
     }
 
     graph.len() - initial_count
+}
+
+/// Seed the worklist by scanning existing graph nodes for recursive source
+/// declarations and discovery policy.
+fn seed_from_nodes(
+    graph: &ResolvedSourceGraph,
+    policy: &mut crate::discovery::CollectedPolicy,
+    worklist: &mut Vec<WorklistItem>,
+    scanned: &mut std::collections::BTreeMap<PathBuf, BTreeSet<SourceProvenance>>,
+) {
+    use crate::plugins::{PluginSourceDecl, scan_source_dir_public};
+
+    for node in graph.nodes() {
+        let source_name = &node.root.source_id;
+        let dir = &node.root.path;
+
+        scanned
+            .entry(dir.clone())
+            .or_default()
+            .extend(node.provenance.iter().copied());
+
+        let Ok(contents) = scan_source_dir_public(dir, source_name) else {
+            continue;
+        };
+        for result in contents {
+            let Ok(parsed) = result else { continue };
+            policy.add_policy(&parsed.plugin.discovery);
+            for ps in &parsed.plugin.plugin_sources {
+                match &ps.source {
+                    PluginSourceDecl::Git(url) => {
+                        worklist.push(WorklistItem {
+                            spec: RegistrySourceSpec::Git(url.clone()),
+                            provenance: node.provenance.clone(),
+                            detail: format!("recursive from {source_name}"),
+                        });
+                    }
+                    PluginSourceDecl::Crate(specs) => {
+                        for spec in specs {
+                            worklist.push(WorklistItem {
+                                spec: RegistrySourceSpec::Crate(spec.clone()),
+                                provenance: node.provenance.clone(),
+                                detail: format!("recursive from {source_name}"),
+                            });
+                        }
+                    }
+                    PluginSourceDecl::Path(_) => {}
+                }
+            }
+        }
+    }
+}
+
+/// Push workspace dependency candidates that are allowed by policy but not
+/// yet scanned with `Dependency` provenance.
+fn push_allowed_deps(
+    policy: &crate::discovery::CollectedPolicy,
+    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
+    worklist: &mut Vec<WorklistItem>,
+    scanned: &std::collections::BTreeMap<PathBuf, BTreeSet<SourceProvenance>>,
+) {
+    use crate::discovery::{DiscoveryCandidate, PolicyVerdict};
+
+    if !policy.has_any_allow_rules() {
+        return;
+    }
+
+    for wc in workspace_crates {
+        let candidate = DiscoveryCandidate::Crate {
+            name: wc.name.clone(),
+            version: wc.version.to_string(),
+        };
+        if policy.evaluate(&candidate) != PolicyVerdict::Allowed {
+            continue;
+        }
+
+        // Check if we've already scanned this dep's path with Dependency provenance.
+        if let Some(path) = &wc.path {
+            let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+            if scanned
+                .get(&canonical)
+                .is_some_and(|prev| prev.contains(&SourceProvenance::Dependency))
+            {
+                continue;
+            }
+        }
+
+        let dep_provenance = BTreeSet::from([SourceProvenance::Dependency]);
+        let spec = if let Some(path) = &wc.path {
+            RegistrySourceSpec::Path(path.clone())
+        } else {
+            RegistrySourceSpec::Crate(CrateSourceSpec {
+                key: Some(wc.name.clone()),
+                dependency: CargoDependencySpec::Version(format!("={}", wc.version)),
+            })
+        };
+        worklist.push(WorklistItem {
+            spec,
+            provenance: dep_provenance,
+            detail: format!("discovery allowed: {}", wc.name),
+        });
+    }
 }
 
 /// Resolver for installed or transitive plugin source declarations.
