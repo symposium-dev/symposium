@@ -1002,7 +1002,7 @@ resolver = "2"
 
         assert_eq!(resolved.registry, SourceRegistry::Crate);
         assert_eq!(resolved.source_id, "crate:actual-plugin@0.1.0");
-        assert_eq!(resolved.path, crate_dir);
+        assert_eq!(resolved.path, std::fs::canonicalize(&crate_dir).unwrap());
     }
 
     #[tokio::test]
@@ -1031,7 +1031,7 @@ resolver = "2"
 
         assert_eq!(resolved.registry, SourceRegistry::Crate);
         assert_eq!(resolved.source_id, "crate:actual-plugin@0.2.0");
-        assert_eq!(resolved.path, crate_dir);
+        assert_eq!(resolved.path, std::fs::canonicalize(&crate_dir).unwrap());
     }
 
     #[tokio::test]
@@ -1063,10 +1063,11 @@ crate-plugin-source = {{ path = "{}" }}
         let roots = resolver.resolve_installed_sources().await.unwrap();
 
         assert_eq!(roots.len(), 2);
+        let canonical_crate_dir = std::fs::canonicalize(&crate_dir).unwrap();
         assert!(roots.iter().any(|root| {
             root.registry == SourceRegistry::Crate
                 && root.source_id == "crate:crate-plugin-source@0.3.0"
-                && root.path == crate_dir
+                && root.path == canonical_crate_dir
         }));
         assert!(roots.iter().any(|root| {
             root.registry == SourceRegistry::Path
