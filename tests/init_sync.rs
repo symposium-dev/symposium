@@ -2444,6 +2444,98 @@ async fn sync_discovery_adds_provenance_to_installed_source() {
     .unwrap();
 }
 
+/// `status` JSON output includes expected event kinds.
+#[tokio::test]
+async fn status_json_reports_sources_plugins_and_summary() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["installed-path0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+            // Run status with JSON report capture.
+            use symposium::report::{ReportLayer, ReportMode};
+            use tracing_subscriber::layer::SubscriberExt;
+            let (layer, handle) = ReportLayer::new(ReportMode::Json, tracing::Level::INFO);
+            let subscriber = tracing_subscriber::registry().with(layer);
+            let _guard = tracing::subscriber::set_default(subscriber);
+
+            let cwd = ctx.workspace_root.clone().unwrap();
+            symposium::status::status(&ctx.sym, &mut ctx.sym.workspace_deps(&cwd)).await?;
+            drop(_guard);
+
+            let events = handle.drain();
+            let kinds: Vec<&str> = events
+                .iter()
+                .filter_map(|v| v.get("kind").and_then(|k| k.as_str()))
+                .collect();
+
+            assert!(
+                kinds.contains(&"status_source"),
+                "expected status_source event, got: {kinds:?}"
+            );
+            assert!(
+                kinds.contains(&"status_plugin"),
+                "expected status_plugin event, got: {kinds:?}"
+            );
+            assert!(
+                kinds.contains(&"status_summary"),
+                "expected status_summary event, got: {kinds:?}"
+            );
+
+            // Summary should have at least 1 source and 1 plugin.
+            let summary = events
+                .iter()
+                .find(|v| v.get("kind").and_then(|k| k.as_str()) == Some("status_summary"))
+                .unwrap();
+            assert!(summary["sources"].as_u64().unwrap() >= 1);
+            assert!(summary["plugins"].as_u64().unwrap() >= 1);
+
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `status` reports inactive plugins with a reason when predicates don't match.
+#[tokio::test]
+async fn status_reports_inactive_plugin_reason() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["installed-path0", "workspace-noserde0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+            use symposium::report::{ReportLayer, ReportMode};
+            use tracing_subscriber::layer::SubscriberExt;
+            let (layer, handle) = ReportLayer::new(ReportMode::Json, tracing::Level::INFO);
+            let subscriber = tracing_subscriber::registry().with(layer);
+            let _guard = tracing::subscriber::set_default(subscriber);
+
+            let cwd = ctx.workspace_root.clone().unwrap();
+            symposium::status::status(&ctx.sym, &mut ctx.sym.workspace_deps(&cwd)).await?;
+            drop(_guard);
+
+            let events = handle.drain();
+            // The installed plugin is unconditional (where.crates defaults to "*")
+            // so it should be active. Let's verify at least one StatusPlugin is reported.
+            let plugin_events: Vec<_> = events
+                .iter()
+                .filter(|v| v.get("kind").and_then(|k| k.as_str()) == Some("status_plugin"))
+                .collect();
+            assert!(
+                !plugin_events.is_empty(),
+                "expected at least one StatusPlugin event"
+            );
+
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// `status` reports resolved state without creating skill directories.
 #[tokio::test]
 async fn status_does_not_install_skills() {

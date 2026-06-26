@@ -76,6 +76,102 @@ pub struct ResolvedSourceGraph {
 }
 
 impl ResolvedSourceGraph {
+    /// Build the initial source graph for sync and status: installed sources,
+    /// workspace root/members (when agents-syncing is enabled), and legacy
+    /// `[[plugin-source]]` entries.
+    ///
+    /// The workspace root is only added when it has an explicit `SYMPOSIUM.toml`.
+    /// Without one, the synthesized manifest's recursive `[[plugins]]` search
+    /// would scan the entire project tree.
+    pub async fn build_initial(sym: &Symposium, deps: &mut WorkspaceDeps) -> Self {
+        let resolver = SourceRegistryResolver::new(sym);
+        let mut graph = Self::default();
+
+        for spec in installed_source_specs(sym.installed_sources()) {
+            match resolver.resolve(&spec).await {
+                Ok(root) => {
+                    graph.add_root(
+                        root,
+                        SourceReason {
+                            provenance: SourceProvenance::Installed,
+                            detail: "installed config".to_string(),
+                        },
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "failed to resolve installed source, skipping");
+                }
+            }
+        }
+
+        if sym.config.agents_syncing
+            && let Some(loaded) = deps.load()
+        {
+            let root_path =
+                std::fs::canonicalize(&loaded.root).unwrap_or_else(|_| loaded.root.clone());
+            if root_path.join("SYMPOSIUM.toml").is_file() {
+                graph.add_root(
+                    ResolvedSourceRoot {
+                        registry: SourceRegistry::Path,
+                        source_id: format!("workspace:{}", root_path.display()),
+                        path: root_path.clone(),
+                    },
+                    SourceReason {
+                        provenance: SourceProvenance::Workspace,
+                        detail: "workspace root".to_string(),
+                    },
+                );
+            }
+
+            for member in &loaded.members {
+                let Some(path) = member.path.as_ref() else {
+                    continue;
+                };
+                let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
+                if path == root_path {
+                    continue;
+                }
+                graph.add_root(
+                    ResolvedSourceRoot {
+                        registry: SourceRegistry::Path,
+                        source_id: format!("workspace-member:{}@{}", member.name, member.version),
+                        path,
+                    },
+                    SourceReason {
+                        provenance: SourceProvenance::Workspace,
+                        detail: format!("workspace member {}", member.name),
+                    },
+                );
+            }
+        }
+
+        // Legacy [[plugin-source]] entries for backward compatibility.
+        let sources = sym.plugin_sources();
+        let cache_base = sym.cache_dir().join("plugin-sources");
+        for resolved in &sources {
+            let Some(dir) = crate::plugins::resolve_legacy_plugin_source_dir(resolved, &cache_base)
+            else {
+                continue;
+            };
+            if !dir.is_dir() {
+                continue;
+            }
+            graph.add_root(
+                ResolvedSourceRoot {
+                    registry: SourceRegistry::Path,
+                    source_id: format!("legacy:{}", resolved.source.name),
+                    path: dir,
+                },
+                SourceReason {
+                    provenance: SourceProvenance::Installed,
+                    detail: format!("legacy plugin-source `{}`", resolved.source.name),
+                },
+            );
+        }
+
+        graph
+    }
+
     pub async fn resolve_installed_and_workspace(
         sym: &Symposium,
         workspace: &mut WorkspaceDeps,

@@ -1937,8 +1937,16 @@ fn validate_manifest(
         });
     }
     for raw in manifest.plugin_sources {
+        let predicates = merge_where(raw.crates, raw.predicates, raw.where_clause, false);
+        if !predicates.is_empty() && !matches!(raw.source, PluginSourceDecl::Path(_)) {
+            bail!(
+                "[[plugins]] with source.git or source.crate does not support \
+                 `where`/`crates`/`predicates` filters (predicate-gated recursive \
+                 sources are a planned future extension)"
+            );
+        }
         plugin_sources.push(PluginSearchSource {
-            predicates: merge_where(raw.crates, raw.predicates, raw.where_clause, false),
+            predicates,
             source: raw.source,
         });
     }
@@ -2449,6 +2457,36 @@ mod tests {
             &plugin.plugin_sources[3].source,
             PluginSourceDecl::Crate(specs) if specs.len() == 1 && specs[0].key.as_deref() == Some("my-extra")
         ));
+    }
+
+    #[test]
+    fn rejects_predicates_on_non_path_plugin_source() {
+        let toml = indoc! {r#"
+            name = "bad"
+
+            [[plugins]]
+            where.crates = ["tokio"]
+            source.crate = "symposium-tokio"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("does not support"), "got: {err}");
+    }
+
+    #[test]
+    fn allows_predicates_on_path_plugin_source() {
+        let toml = indoc! {r#"
+            name = "ok"
+
+            [[plugins]]
+            where.crates = ["tokio"]
+            source.path = "tokio-extras"
+        "#};
+        let plugin = from_str(toml).expect("should accept predicates on path sources");
+        assert!(
+            plugin.plugin_sources[1]
+                .predicates
+                .references_crate("tokio")
+        );
     }
 
     #[test]

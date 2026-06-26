@@ -19,10 +19,8 @@ pub async fn status(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("not in a Rust workspace"))?;
     let workspace_crates = loaded.crates.clone();
 
-    // Build the source graph (same as sync, but we won't install anything).
-    let mut graph = build_source_graph(sym, deps).await;
-
-    // Expand with discovery + recursive sources.
+    // Build and expand the source graph (same as sync, but we won't install anything).
+    let mut graph = crate_sources::ResolvedSourceGraph::build_initial(sym, deps).await;
     crate_sources::expand_source_graph(&mut graph, sym, &workspace_crates).await;
 
     // Load plugin registry from graph.
@@ -108,102 +106,6 @@ pub async fn status(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
     }
 
     Ok(())
-}
-
-/// Build the initial source graph (same logic as sync's resolve_sync_sources).
-async fn build_source_graph(
-    sym: &Symposium,
-    deps: &mut WorkspaceDeps,
-) -> crate_sources::ResolvedSourceGraph {
-    use crate_sources::{
-        ResolvedSourceGraph, ResolvedSourceRoot, SourceProvenance, SourceReason, SourceRegistry,
-        installed_source_specs,
-    };
-
-    let resolver = crate_sources::SourceRegistryResolver::new(sym);
-    let mut graph = ResolvedSourceGraph::default();
-
-    for spec in installed_source_specs(sym.installed_sources()) {
-        match resolver.resolve(&spec).await {
-            Ok(root) => {
-                graph.add_resolved_root(
-                    root,
-                    SourceReason {
-                        provenance: SourceProvenance::Installed,
-                        detail: "installed config".to_string(),
-                    },
-                );
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to resolve installed source, skipping");
-            }
-        }
-    }
-
-    if sym.config.agents_syncing
-        && let Some(loaded) = deps.load()
-    {
-        let root_path = std::fs::canonicalize(&loaded.root).unwrap_or_else(|_| loaded.root.clone());
-        if root_path.join("SYMPOSIUM.toml").is_file() {
-            graph.add_resolved_root(
-                ResolvedSourceRoot {
-                    registry: SourceRegistry::Path,
-                    source_id: format!("workspace:{}", root_path.display()),
-                    path: root_path.clone(),
-                },
-                SourceReason {
-                    provenance: SourceProvenance::Workspace,
-                    detail: "workspace root".to_string(),
-                },
-            );
-        }
-
-        for member in &loaded.members {
-            let Some(path) = member.path.as_ref() else {
-                continue;
-            };
-            let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.clone());
-            if path == root_path {
-                continue;
-            }
-            graph.add_resolved_root(
-                ResolvedSourceRoot {
-                    registry: SourceRegistry::Path,
-                    source_id: format!("workspace-member:{}@{}", member.name, member.version),
-                    path,
-                },
-                SourceReason {
-                    provenance: SourceProvenance::Workspace,
-                    detail: format!("workspace member {}", member.name),
-                },
-            );
-        }
-    }
-
-    // Legacy sources.
-    let sources = sym.plugin_sources();
-    let cache_base = sym.cache_dir().join("plugin-sources");
-    for resolved in &sources {
-        let Some(dir) = plugins::resolve_legacy_plugin_source_dir(resolved, &cache_base) else {
-            continue;
-        };
-        if !dir.is_dir() {
-            continue;
-        }
-        graph.add_resolved_root(
-            ResolvedSourceRoot {
-                registry: SourceRegistry::Path,
-                source_id: format!("legacy:{}", resolved.source.name),
-                path: dir,
-            },
-            SourceReason {
-                provenance: SourceProvenance::Installed,
-                detail: format!("legacy plugin-source `{}`", resolved.source.name),
-            },
-        );
-    }
-
-    graph
 }
 
 /// Resolve custom predicate installations (mirrors sync logic).
