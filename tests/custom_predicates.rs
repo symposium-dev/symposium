@@ -243,8 +243,8 @@ async fn sync_custom_predicate_cross_plugin_fails() {
     .unwrap();
 }
 
-/// A custom predicate that returns witness JSON drives `source = "crate"` resolution.
-/// The predicate script outputs `{"selectedCrates": [...]}` naming bp-crate,
+/// A custom predicate that returns witness JSON Lines drives `source = "crate"` resolution.
+/// The predicate script outputs a `selectedCrate` record naming bp-crate,
 /// and the skill from that crate's skills/ directory gets installed.
 #[tokio::test]
 async fn sync_custom_predicate_witness_drives_crate_source() {
@@ -255,7 +255,7 @@ async fn sync_custom_predicate_witness_drives_crate_source() {
             let script_path = ctx.tempdir.join("bp-checker.sh");
             write_script(
                 &script_path,
-                r#"printf '{"selectedCrates":[{"crate":"bp-crate","version":"0.2.0"}]}'"#,
+                r#"printf '{"selectedCrate":{"name":"bp-crate","version":"0.2.0"}}\n'"#,
             );
 
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
