@@ -1205,15 +1205,25 @@ fn scan_source_dir_with_context<P: AsRef<Path>>(
         });
     }
 
+    // Accumulate custom predicate entries as plugins are scanned, so that
+    // later path-source predicates can evaluate predicates defined by
+    // earlier plugins in the same source tree.
+    let mut custom_pred_entries: std::collections::HashMap<
+        String,
+        crate::predicate::ResolvedPredicateEntry,
+    > = std::collections::HashMap::new();
+
     let mut visited = std::collections::BTreeSet::new();
     let mut pending_search_roots = Vec::new();
     let root = load_source_root_plugin(dir, source_name)?;
     remember_manifest(&mut visited, &root.path);
+    collect_custom_pred_entries_from_plugin(&root, &mut custom_pred_entries);
     collect_path_plugin_sources(
         &root,
         &mut pending_search_roots,
         workspace_crates,
         provenance,
+        &custom_pred_entries,
     );
     plugins.push(Ok(root));
 
@@ -1226,11 +1236,13 @@ fn scan_source_dir_with_context<P: AsRef<Path>>(
             let plugin = load_plugin(&manifest_path, source_name, dir)
                 .with_context(|| format!("loading plugin from `{}`", manifest_path.display()));
             if let Ok(parsed) = &plugin {
+                collect_custom_pred_entries_from_plugin(parsed, &mut custom_pred_entries);
                 collect_path_plugin_sources(
                     parsed,
                     &mut pending_search_roots,
                     workspace_crates,
                     provenance,
+                    &custom_pred_entries,
                 );
             }
             plugins.push(plugin);
@@ -1241,6 +1253,45 @@ fn scan_source_dir_with_context<P: AsRef<Path>>(
         plugins,
         skill_files: Vec::new(),
     })
+}
+
+/// Collect resolved custom predicate entries from a parsed plugin into the
+/// accumulator map. Only resolves predicates whose installations have a
+/// directly-available script or executable (no source acquisition).
+fn collect_custom_pred_entries_from_plugin(
+    parsed: &ParsedPlugin,
+    entries: &mut std::collections::HashMap<String, crate::predicate::ResolvedPredicateEntry>,
+) {
+    for cp in &parsed.plugin.custom_predicates {
+        let Some(install) = parsed.plugin.get_installation(&cp.command) else {
+            continue;
+        };
+        let source_dir = &parsed.source_dir;
+        let runnable = if let Some(script) = &install.script {
+            let path = if Path::new(script).is_absolute() {
+                PathBuf::from(script)
+            } else {
+                source_dir.join(script)
+            };
+            symposium_install::Runnable::Script(path)
+        } else if let Some(executable) = &install.executable {
+            let path = if Path::new(executable).is_absolute() {
+                PathBuf::from(executable)
+            } else {
+                source_dir.join(executable)
+            };
+            symposium_install::Runnable::Exec(path)
+        } else {
+            continue;
+        };
+        entries.insert(
+            cp.name.clone(),
+            crate::predicate::ResolvedPredicateEntry {
+                runnable,
+                args: cp.args.clone(),
+            },
+        );
+    }
 }
 
 fn load_source_root_plugin(source_dir: &Path, source_name: &str) -> Result<ParsedPlugin> {
@@ -1276,12 +1327,18 @@ fn collect_path_plugin_sources(
     out: &mut Vec<PathBuf>,
     workspace_crates: Option<&[symposium_sdk::workspace::WorkspaceCrate]>,
     provenance: &std::collections::BTreeSet<crate::crate_sources::SourceProvenance>,
+    custom_pred_entries: &std::collections::HashMap<String, crate::predicate::ResolvedPredicateEntry>,
 ) {
     let manifest_dir = parsed.path.parent().unwrap_or(&parsed.source_dir);
     for source in &parsed.plugin.plugin_sources {
         if let PluginSourceDecl::Path(path) = &source.source {
             if let Some(workspace_crates) = workspace_crates
-                && !plugin_source_path_predicates_hold(source, workspace_crates, provenance)
+                && !plugin_source_path_predicates_hold(
+                    source,
+                    workspace_crates,
+                    provenance,
+                    custom_pred_entries,
+                )
             {
                 continue;
             }
@@ -1299,12 +1356,17 @@ fn plugin_source_path_predicates_hold(
     source: &PluginSearchSource,
     workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
     provenance: &std::collections::BTreeSet<crate::crate_sources::SourceProvenance>,
+    custom_pred_entries: &std::collections::HashMap<String, crate::predicate::ResolvedPredicateEntry>,
 ) -> bool {
     if source.predicates.is_empty() {
         return true;
     }
     let pairs = crate::crate_sources::crate_pairs(workspace_crates);
-    let mut ctx = crate::predicate::PredicateContext::new(&pairs);
+    let mut ctx = if custom_pred_entries.is_empty() {
+        crate::predicate::PredicateContext::new(&pairs)
+    } else {
+        crate::predicate::PredicateContext::with_custom_predicates(&pairs, custom_pred_entries.clone())
+    };
     ctx.set_source_provenance(provenance.clone());
     source.predicates.evaluate(&mut ctx)
 }

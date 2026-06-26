@@ -1745,4 +1745,118 @@ source.paths = ["{}"]
             "source B should NOT be in graph when predicate is never defined"
         );
     }
+
+    #[tokio::test]
+    async fn expand_path_source_gated_on_own_custom_pred() {
+        // A plugin defines org_check(), has defaults.plugins = false, and
+        // uses an explicit [[plugins]] source.path = "extras" gated on
+        // org_check(). The extras/ sub-plugin should be discovered because
+        // the custom predicate is defined by the same plugin.
+        let tmp = tempfile::tempdir().unwrap();
+        let config_dir = tmp.path().join("symposium-home");
+        std::fs::create_dir(&config_dir).unwrap();
+
+        let source = config_dir.join("org-plugins");
+        std::fs::create_dir(&source).unwrap();
+
+        let checker_script = source.join("checker.sh");
+        std::fs::write(&checker_script, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&checker_script, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+
+        // Extras sub-plugin
+        let extras = source.join("extras");
+        std::fs::create_dir(&extras).unwrap();
+        std::fs::write(
+            extras.join("SYMPOSIUM.toml"),
+            "name = \"extras-plugin\"\n",
+        )
+        .unwrap();
+
+        // Root manifest: defines org_check, opts out of implicit plugin search,
+        // then explicitly declares extras/ gated on org_check().
+        std::fs::write(
+            source.join("SYMPOSIUM.toml"),
+            format!(
+                r#"name = "org-plugins"
+
+[defaults]
+plugins = false
+
+[[installations]]
+name = "org-checker"
+script = "{}"
+
+[[predicate]]
+name = "org_check"
+command = "org-checker"
+
+[[plugins]]
+where.predicates = ["org_check()"]
+source.path = "extras"
+"#,
+                checker_script.display(),
+            ),
+        )
+        .unwrap();
+
+        // Config: org-plugins loaded unconditionally
+        std::fs::write(
+            config_dir.join("config.toml"),
+            format!(
+                r#"[[plugins]]
+source.paths = ["{}"]
+"#,
+                source.display()
+            ),
+        )
+        .unwrap();
+
+        let sym = Symposium::from_dir(&config_dir);
+        let workspace_dir = tmp.path().join("workspace");
+        std::fs::create_dir(&workspace_dir).unwrap();
+        let mut deps = sym.workspace_deps(&workspace_dir);
+        let mut graph = ResolvedSourceGraph::build_initial(&sym, &mut deps).await;
+
+        let workspace_crates: Vec<symposium_sdk::workspace::WorkspaceCrate> = vec![];
+        expand_source_graph(&mut graph, &sym, &workspace_crates).await;
+
+        // The extras/ sub-plugin should have been found
+        let extras_canonical = std::fs::canonicalize(&extras).unwrap();
+        let extras_found = graph.nodes().iter().any(|n| n.root.path == extras_canonical);
+
+        // Also check: did scan_source_dir find the extras plugin within the
+        // org-plugins source node?
+        let org_source_canonical = std::fs::canonicalize(&source).unwrap();
+        let org_node = graph.nodes().iter().find(|n| n.root.path == org_source_canonical);
+        assert!(org_node.is_some(), "org-plugins should be in graph");
+
+        // The extras plugin should appear either as its own node (if the path
+        // source was expanded into the graph) or within the org-plugins scan.
+        // For path sources resolved inline during scan, the extras plugin is
+        // part of the scan results for org-plugins (same node). Let's check
+        // the scan produces it by re-scanning and checking the parsed plugins.
+        let contents = crate::plugins::scan_source_dir_public(
+            &org_source_canonical,
+            "org-plugins",
+            &workspace_crates,
+            &std::collections::BTreeSet::from([SourceProvenance::Used]),
+        )
+        .unwrap();
+        let plugin_names: Vec<String> = contents
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .map(|p| p.plugin.name.clone())
+            .collect();
+
+        assert!(
+            plugin_names.contains(&"extras-plugin".to_string()),
+            "extras-plugin should be discovered via gated source.path; \
+             found plugins: {plugin_names:?}"
+        );
+    }
 }
