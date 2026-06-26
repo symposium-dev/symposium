@@ -1092,10 +1092,7 @@ mod tests {
             HookAgent::Claude,
             &mut crate::predicate::PredicateContext::new(&[]),
         );
-        assert!(
-            empty.is_empty(),
-            "used() should fail without provenance"
-        );
+        assert!(empty.is_empty(), "used() should fail without provenance");
 
         // With used provenance → hook fires.
         plugin.source_provenance =

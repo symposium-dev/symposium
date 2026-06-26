@@ -1822,9 +1822,7 @@ mod tests {
         let registry = PluginRegistry {
             plugins: vec![ParsedPlugin {
                 path: tmp.path().join("SYMPOSIUM.toml"),
-                plugin: make_plugin(std::collections::BTreeSet::from([
-                    SourceProvenance::Used,
-                ])),
+                plugin: make_plugin(std::collections::BTreeSet::from([SourceProvenance::Used])),
                 source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
                 source_provenance: std::collections::BTreeSet::from([SourceProvenance::Used]),

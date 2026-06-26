@@ -250,9 +250,7 @@ impl Predicate {
                 .source_provenance
                 .contains(&SourceProvenance::Used)
                 .then(Vec::new),
-            Predicate::Directory(pattern) => {
-                evaluate_directory(pattern, ctx.cwd).then(Vec::new)
-            }
+            Predicate::Directory(pattern) => evaluate_directory(pattern, ctx.cwd).then(Vec::new),
             Predicate::Not(inner) => match inner.witness(ctx) {
                 Some(_) => None,
                 None => Some(Vec::new()),
@@ -820,7 +818,9 @@ fn evaluate_directory(pattern: &str, cwd: Option<&Path>) -> bool {
     };
 
     // Strip trailing separator for normalization
-    let dir_str = dir_str.trim_end_matches('/').trim_end_matches(std::path::MAIN_SEPARATOR);
+    let dir_str = dir_str
+        .trim_end_matches('/')
+        .trim_end_matches(std::path::MAIN_SEPARATOR);
 
     let Ok(canon_dir) = std::fs::canonicalize(dir_str) else {
         return false;
@@ -918,7 +918,10 @@ pub fn all_predicates_known(
     preds: &PredicateSet,
     known_customs: &std::collections::HashSet<String>,
 ) -> bool {
-    preds.predicates.iter().all(|p| predicate_known(p, known_customs))
+    preds
+        .predicates
+        .iter()
+        .all(|p| predicate_known(p, known_customs))
 }
 
 fn predicate_known(pred: &Predicate, known_customs: &std::collections::HashSet<String>) -> bool {
@@ -2019,10 +2022,7 @@ mod tests {
 
     #[test]
     fn directory_predicate_display_roundtrip() {
-        let inputs = [
-            "directory(/tmp/foo)",
-            "directory(/tmp/foo/**)",
-        ];
+        let inputs = ["directory(/tmp/foo)", "directory(/tmp/foo/**)"];
         for input in inputs {
             let p = parse(input).unwrap();
             assert_eq!(p.to_string(), input, "display drift: {input}");

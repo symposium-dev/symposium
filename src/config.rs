@@ -75,17 +75,11 @@ pub struct Config {
     pub sync_debounce_secs: u64,
 
     /// Where to install agent hooks.
-    #[serde(
-        rename = "hook-scope",
-        skip_serializing_if = "HookScope::is_default"
-    )]
+    #[serde(rename = "hook-scope", skip_serializing_if = "HookScope::is_default")]
     pub hook_scope: HookScope,
 
     /// Auto-update behavior for the symposium binary.
-    #[serde(
-        rename = "auto-update",
-        skip_serializing_if = "AutoUpdate::is_default"
-    )]
+    #[serde(rename = "auto-update", skip_serializing_if = "AutoUpdate::is_default")]
     pub auto_update: AutoUpdate,
 
     /// Agents configured for this user.
@@ -283,7 +277,12 @@ impl Serialize for PluginsEntry {
             struct Where<'a> {
                 predicates: &'a crate::predicate::PredicateSet,
             }
-            map.serialize_entry("where", &Where { predicates: &self.predicates })?;
+            map.serialize_entry(
+                "where",
+                &Where {
+                    predicates: &self.predicates,
+                },
+            )?;
         }
         #[derive(Serialize)]
         struct Source<'a> {
@@ -294,11 +293,14 @@ impl Serialize for PluginsEntry {
             #[serde(skip_serializing_if = "Vec::is_empty")]
             git: &'a Vec<String>,
         }
-        map.serialize_entry("source", &Source {
-            crates: &self.source.crates,
-            paths: &self.source.paths,
-            git: &self.source.git,
-        })?;
+        map.serialize_entry(
+            "source",
+            &Source {
+                crates: &self.source.crates,
+                paths: &self.source.paths,
+                git: &self.source.git,
+            },
+        )?;
         map.end()
     }
 }
@@ -327,9 +329,7 @@ impl<'de> Deserialize<'de> for PluginsEntry {
             source: Option<SourceRaw>,
         }
         let raw = Raw::deserialize(deserializer)?;
-        let predicates = raw.where_clause
-            .map(|w| w.predicates)
-            .unwrap_or_default();
+        let predicates = raw.where_clause.map(|w| w.predicates).unwrap_or_default();
         let source = match raw.source {
             Some(s) => PluginsEntrySource {
                 crates: s.crates,
@@ -1140,10 +1140,7 @@ mod tests {
         .unwrap();
 
         let sym = Symposium::from_dir(tmp.path());
-        assert_eq!(
-            sym.used_sources().paths,
-            vec!["/home/me/dev/plugin-source"]
-        );
+        assert_eq!(sym.used_sources().paths, vec!["/home/me/dev/plugin-source"]);
         assert!(sym.used_crates().contains_key("local-plugin"));
     }
 
@@ -1151,10 +1148,7 @@ mod tests {
     fn from_dir_creates_default_config() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        assert!(
-            sym.used_crates()
-                .contains_key("symposium-recommendations")
-        );
+        assert!(sym.used_crates().contains_key("symposium-recommendations"));
         assert_eq!(sym.config_dir(), tmp.path());
         assert_eq!(sym.cache_dir(), tmp.path().join("cache"));
     }
@@ -1340,7 +1334,10 @@ mod tests {
         let serialized = toml::to_string_pretty(&config).unwrap();
         let reparsed: Config = toml::from_str(&serialized).unwrap();
         assert_eq!(reparsed.plugins.len(), 2);
-        assert_eq!(reparsed.plugins[0].source.crates, config.plugins[0].source.crates);
+        assert_eq!(
+            reparsed.plugins[0].source.crates,
+            config.plugins[0].source.crates
+        );
         assert_eq!(reparsed.plugins[1].predicates.predicates.len(), 1);
         assert_eq!(reparsed.plugins[1].source.paths, vec!["/home/me/plugin"]);
     }

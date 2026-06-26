@@ -53,7 +53,8 @@ pub fn use_source(
         for spec in crates {
             let spec: CrateUseSpec = spec.parse()?;
             let name = spec.name;
-            let mutation = insert_crate_entry(&mut entry.source.crates, name.clone(), spec.dependency);
+            let mutation =
+                insert_crate_entry(&mut entry.source.crates, name.clone(), spec.dependency);
             changed |= matches!(mutation, Mutation::Added | Mutation::Updated);
             emit_source_event("crate", &name, mutation, out);
         }
@@ -102,13 +103,15 @@ pub fn remove_source(
         }
     } else if !paths.is_empty() {
         for path in paths {
-            let mutation = remove_from_plugins_list(&mut sym.config.plugins, |e| &mut e.source.paths, &path);
+            let mutation =
+                remove_from_plugins_list(&mut sym.config.plugins, |e| &mut e.source.paths, &path);
             changed |= mutation == Mutation::Removed;
             emit_source_event("path", &path, mutation, out);
         }
     } else if !git.is_empty() {
         for url in git {
-            let mutation = remove_from_plugins_list(&mut sym.config.plugins, |e| &mut e.source.git, &url);
+            let mutation =
+                remove_from_plugins_list(&mut sym.config.plugins, |e| &mut e.source.git, &url);
             changed |= mutation == Mutation::Removed;
             emit_source_event("git", &url, mutation, out);
         }
@@ -165,8 +168,7 @@ fn directory_scoped_plugins_entry<'a>(
     plugins: &'a mut Vec<PluginsEntry>,
     cwd: &Path,
 ) -> &'a mut PluginsEntry {
-    let canonical = std::fs::canonicalize(cwd)
-        .unwrap_or_else(|_| cwd.to_path_buf());
+    let canonical = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
     let dir_pattern = format!("{}/**", canonical.display());
 
     let idx = plugins.iter().position(|e| {
@@ -216,7 +218,11 @@ fn remove_crate_from_plugins(plugins: &mut [PluginsEntry], name: &str) -> Mutati
             found = true;
         }
     }
-    if found { Mutation::Removed } else { Mutation::NotPresent }
+    if found {
+        Mutation::Removed
+    } else {
+        Mutation::NotPresent
+    }
 }
 
 /// Remove a value from a list field across all plugins entries.
@@ -234,7 +240,11 @@ fn remove_from_plugins_list(
             found = true;
         }
     }
-    if found { Mutation::Removed } else { Mutation::NotPresent }
+    if found {
+        Mutation::Removed
+    } else {
+        Mutation::NotPresent
+    }
 }
 
 /// Remove empty plugins entries (entries with no sources left).
@@ -267,8 +277,6 @@ fn emit_source_event(registry: &'static str, source: &str, mutation: Mutation, o
             out.already_ok(format!("{registry} source already added: {source}"))
         }
         Mutation::Removed => out.removed(format!("{registry} source removed: {source}")),
-        Mutation::NotPresent => {
-            out.already_ok(format!("{registry} source not present: {source}"))
-        }
+        Mutation::NotPresent => out.already_ok(format!("{registry} source not present: {source}")),
     }
 }

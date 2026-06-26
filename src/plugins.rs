@@ -1327,7 +1327,10 @@ fn collect_path_plugin_sources(
     out: &mut Vec<PathBuf>,
     workspace_crates: Option<&[symposium_sdk::workspace::WorkspaceCrate]>,
     provenance: &std::collections::BTreeSet<crate::crate_sources::SourceProvenance>,
-    custom_pred_entries: &std::collections::HashMap<String, crate::predicate::ResolvedPredicateEntry>,
+    custom_pred_entries: &std::collections::HashMap<
+        String,
+        crate::predicate::ResolvedPredicateEntry,
+    >,
 ) {
     let manifest_dir = parsed.path.parent().unwrap_or(&parsed.source_dir);
     for source in &parsed.plugin.plugin_sources {
@@ -1356,7 +1359,10 @@ fn plugin_source_path_predicates_hold(
     source: &PluginSearchSource,
     workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
     provenance: &std::collections::BTreeSet<crate::crate_sources::SourceProvenance>,
-    custom_pred_entries: &std::collections::HashMap<String, crate::predicate::ResolvedPredicateEntry>,
+    custom_pred_entries: &std::collections::HashMap<
+        String,
+        crate::predicate::ResolvedPredicateEntry,
+    >,
 ) -> bool {
     if source.predicates.is_empty() {
         return true;
@@ -1365,7 +1371,10 @@ fn plugin_source_path_predicates_hold(
     let mut ctx = if custom_pred_entries.is_empty() {
         crate::predicate::PredicateContext::new(&pairs)
     } else {
-        crate::predicate::PredicateContext::with_custom_predicates(&pairs, custom_pred_entries.clone())
+        crate::predicate::PredicateContext::with_custom_predicates(
+            &pairs,
+            custom_pred_entries.clone(),
+        )
     };
     ctx.set_source_provenance(provenance.clone());
     source.predicates.evaluate(&mut ctx)

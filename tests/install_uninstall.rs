@@ -42,14 +42,8 @@ async fn use_cmd_registry_crates_updates_used_crates() {
 #[tokio::test]
 async fn use_cmd_path_and_git_sources_update_peer_registries() {
     with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
-        ctx.symposium(&[
-            "use",
-            "--path",
-            "/tmp/plugin-b",
-            "--path",
-            "/tmp/plugin-a",
-        ])
-        .await?;
+        ctx.symposium(&["use", "--path", "/tmp/plugin-b", "--path", "/tmp/plugin-a"])
+            .await?;
         ctx.symposium(&[
             "use",
             "--git",
@@ -60,10 +54,7 @@ async fn use_cmd_path_and_git_sources_update_peer_registries() {
         .await?;
 
         let config = parse_config(&ctx);
-        assert_eq!(
-            config.used.paths,
-            vec!["/tmp/plugin-a", "/tmp/plugin-b"]
-        );
+        assert_eq!(config.used.paths, vec!["/tmp/plugin-a", "/tmp/plugin-b"]);
         assert_eq!(
             config.used.git,
             vec![
@@ -108,9 +99,7 @@ async fn remove_cmd_removes_exact_matching_entries() {
 
         let output = ctx.symposium(&["remove", "foo"]).await?;
         assert!(output.contains("crate source removed: foo"));
-        let output = ctx
-            .symposium(&["remove", "--path", "/tmp/plugin"])
-            .await?;
+        let output = ctx.symposium(&["remove", "--path", "/tmp/plugin"]).await?;
         assert!(output.contains("path source removed: /tmp/plugin"));
         let output = ctx
             .symposium(&["remove", "--git", "https://github.com/me/plugin"])
@@ -214,9 +203,10 @@ async fn use_cmd_global_creates_unscoped_entry() {
         ctx.symposium(&["use", "--global", "foo"]).await?;
         let config = parse_config(&ctx);
         // With --global, should go into an entry with empty predicates
-        let global = config.plugins.iter().find(|e| {
-            e.predicates.is_empty() && e.source.crates.contains_key("foo")
-        });
+        let global = config
+            .plugins
+            .iter()
+            .find(|e| e.predicates.is_empty() && e.source.crates.contains_key("foo"));
         assert!(
             global.is_some(),
             "use --global should create/use a global entry"
@@ -234,7 +224,11 @@ async fn use_cmd_appends_to_existing_directory_entry() {
         ctx.symposium(&["use", "bar"]).await?;
         let config = parse_config(&ctx);
         // Both should end up in the same directory-scoped entry
-        let scoped = config.plugins.iter().find(|e| !e.predicates.is_empty()).unwrap();
+        let scoped = config
+            .plugins
+            .iter()
+            .find(|e| !e.predicates.is_empty())
+            .unwrap();
         assert!(scoped.source.crates.contains_key("foo"));
         assert!(scoped.source.crates.contains_key("bar"));
         Ok(())
@@ -266,7 +260,9 @@ async fn remove_cmd_cleans_up_empty_entry() {
         ctx.symposium(&["remove", "foo"]).await?;
         let config = parse_config(&ctx);
         // The scoped entry that had only "foo" should be cleaned up
-        let scoped_entries: Vec<_> = config.plugins.iter()
+        let scoped_entries: Vec<_> = config
+            .plugins
+            .iter()
             .filter(|e| !e.predicates.is_empty())
             .collect();
         assert!(

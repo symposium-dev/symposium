@@ -203,9 +203,12 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
 
         Commands::Status => status::status(sym, &mut sym.workspace_deps(cwd)).await,
 
-        Commands::Use { crates, paths, git, global } => {
-            install::use_source(sym, crates, paths, git, global, cwd, out)
-        }
+        Commands::Use {
+            crates,
+            paths,
+            git,
+            global,
+        } => install::use_source(sym, crates, paths, git, global, cwd, out),
 
         Commands::Remove { crates, paths, git } => {
             install::remove_source(sym, crates, paths, git, out)

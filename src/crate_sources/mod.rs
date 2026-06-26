@@ -12,7 +12,9 @@ use anyhow::{Context, Result, bail};
 use symposium_install::UpdateLevel;
 use symposium_sdk::workspace::{WorkspaceCrate, WorkspaceDeps};
 
-use crate::config::{CargoDependencySpec, CrateSourceSpec, PluginsEntrySource, UsedSourceConfig, Symposium};
+use crate::config::{
+    CargoDependencySpec, CrateSourceSpec, PluginsEntrySource, Symposium, UsedSourceConfig,
+};
 
 mod list;
 mod probe;
@@ -566,19 +568,28 @@ pub async fn expand_source_graph(
         let crate_pairs = crate_pairs(workspace_crates);
 
         // Build custom predicate entries for evaluation.
-        let custom_entries: std::collections::HashMap<String, crate::predicate::ResolvedPredicateEntry> =
-            custom_pred_info.iter().map(|(name, info)| {
-                (name.clone(), crate::predicate::ResolvedPredicateEntry {
-                    runnable: info.runnable.clone(),
-                    args: info.args.clone(),
-                })
-            }).collect();
+        let custom_entries: std::collections::HashMap<
+            String,
+            crate::predicate::ResolvedPredicateEntry,
+        > = custom_pred_info
+            .iter()
+            .map(|(name, info)| {
+                (
+                    name.clone(),
+                    crate::predicate::ResolvedPredicateEntry {
+                        runnable: info.runnable.clone(),
+                        args: info.args.clone(),
+                    },
+                )
+            })
+            .collect();
 
         for d in prev_deferred {
             if crate::predicate::all_predicates_known(&d.predicates, &known_custom_names) {
                 // Predicates are now fully resolvable — evaluate them.
                 let mut ctx = crate::predicate::PredicateContext::with_custom_predicates(
-                    &crate_pairs, custom_entries.clone()
+                    &crate_pairs,
+                    custom_entries.clone(),
                 );
                 ctx.set_source_provenance(d.provenance.clone());
                 if d.predicates.evaluate(&mut ctx) {
@@ -903,7 +914,10 @@ pub fn entry_source_specs(source: &PluginsEntrySource) -> Vec<RegistrySourceSpec
             .map(|path| RegistrySourceSpec::Path(PathBuf::from(path))),
     );
     specs.extend(
-        source.git.iter().map(|url| RegistrySourceSpec::Git(url.clone())),
+        source
+            .git
+            .iter()
+            .map(|url| RegistrySourceSpec::Git(url.clone())),
     );
     specs
 }
@@ -1511,7 +1525,11 @@ source.paths = ["scoped-plugin"]
             1,
             "directory-scoped entry should be included when cwd matches"
         );
-        assert!(graph.nodes()[0].provenance.contains(&SourceProvenance::Used));
+        assert!(
+            graph.nodes()[0]
+                .provenance
+                .contains(&SourceProvenance::Used)
+        );
     }
 
     #[tokio::test]
@@ -1601,11 +1619,18 @@ source.paths = ["{}"]
         // Source B should now be in the graph
         let source_b_canonical = std::fs::canonicalize(&source_b).unwrap();
         assert!(
-            graph.nodes().iter().any(|n| n.root.path == source_b_canonical),
+            graph
+                .nodes()
+                .iter()
+                .any(|n| n.root.path == source_b_canonical),
             "source B should be in graph after deferred retry resolved org_check(); \
              graph has {} nodes: {:?}",
             graph.nodes().len(),
-            graph.nodes().iter().map(|n| &n.root.path).collect::<Vec<_>>()
+            graph
+                .nodes()
+                .iter()
+                .map(|n| &n.root.path)
+                .collect::<Vec<_>>()
         );
         assert!(added > 0, "expand should have added source B");
     }
@@ -1683,7 +1708,10 @@ source.paths = ["{}"]
 
         let source_b_canonical = std::fs::canonicalize(&source_b).unwrap();
         assert!(
-            !graph.nodes().iter().any(|n| n.root.path == source_b_canonical),
+            !graph
+                .nodes()
+                .iter()
+                .any(|n| n.root.path == source_b_canonical),
             "source B should NOT be in graph when org_check() fails"
         );
     }
@@ -1741,7 +1769,10 @@ source.paths = ["{}"]
 
         let source_b_canonical = std::fs::canonicalize(&source_b).unwrap();
         assert!(
-            !graph.nodes().iter().any(|n| n.root.path == source_b_canonical),
+            !graph
+                .nodes()
+                .iter()
+                .any(|n| n.root.path == source_b_canonical),
             "source B should NOT be in graph when predicate is never defined"
         );
     }
@@ -1771,11 +1802,7 @@ source.paths = ["{}"]
         // Extras sub-plugin
         let extras = source.join("extras");
         std::fs::create_dir(&extras).unwrap();
-        std::fs::write(
-            extras.join("SYMPOSIUM.toml"),
-            "name = \"extras-plugin\"\n",
-        )
-        .unwrap();
+        std::fs::write(extras.join("SYMPOSIUM.toml"), "name = \"extras-plugin\"\n").unwrap();
 
         // Root manifest: defines org_check, opts out of implicit plugin search,
         // then explicitly declares extras/ gated on org_check().
@@ -1827,12 +1854,18 @@ source.paths = ["{}"]
 
         // The extras/ sub-plugin should have been found
         let extras_canonical = std::fs::canonicalize(&extras).unwrap();
-        let extras_found = graph.nodes().iter().any(|n| n.root.path == extras_canonical);
+        let extras_found = graph
+            .nodes()
+            .iter()
+            .any(|n| n.root.path == extras_canonical);
 
         // Also check: did scan_source_dir find the extras plugin within the
         // org-plugins source node?
         let org_source_canonical = std::fs::canonicalize(&source).unwrap();
-        let org_node = graph.nodes().iter().find(|n| n.root.path == org_source_canonical);
+        let org_node = graph
+            .nodes()
+            .iter()
+            .find(|n| n.root.path == org_source_canonical);
         assert!(org_node.is_some(), "org-plugins should be in graph");
 
         // The extras plugin should appear either as its own node (if the path
