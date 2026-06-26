@@ -6,8 +6,8 @@ This section describes the logic of each `cargo agents` command.
 
 When Symposium loads plugin sources during sync, it follows this process:
 
-1. **Load installed sources** — read `[installed.crates]`, `installed.paths`, and `installed.git` entries from user config. Crate-registry entries resolve through Cargo dependency syntax; direct path and git entries use their own registries.
-2. **Resolve discovery policy** — collect `[discovery.allow]` / `[discovery.deny]` rules from config and installed plugins. Check workspace deps and other candidates against the combined policy; resolve matching sources.
+1. **Load used sources** — read `[used.crates]`, `used.paths`, and `used.git` entries from user config. Crate-registry entries resolve through Cargo dependency syntax; direct path and git entries use their own registries.
+2. **Resolve discovery policy** — collect `[discovery.allow]` / `[discovery.deny]` rules from config and plugin sources in use. Check workspace deps and other candidates against the combined policy; resolve matching sources.
 3. **Resolve transitive plugin sources** — follow `[[plugins]] source.*` entries recursively, evaluating `where.*` filters. Path declarations participate in source-root discovery; git and crate declarations are resolved through the source graph.
 4. **Discover plugins within each source root** — load `$ROOT/SYMPOSIUM.toml`, or synthesize an empty root manifest when it is absent. Every manifest defaults to `where.crates = ["*"]`, implicit `skills/` and workspace-gated `.agents/skills/` skill groups, and implicit nested-manifest search through `[[plugins]] source.path = "."`. Nested manifests are independent plugins and dedupe by canonical manifest path.
 5. **Resolve implicit installations** — read crate `Cargo.toml` binary targets and register them as available installations for `SYMPOSIUM.toml` to reference.

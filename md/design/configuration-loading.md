@@ -10,28 +10,28 @@ See the [configuration reference](../reference/configuration.md#directory-resolu
 
 The user config (`~/.symposium/config.toml`) is loaded once at startup into the `Symposium` struct. If the file is missing or empty, defaults are used. If parsing fails, startup fails; invalid config is not silently replaced with defaults.
 
-## Installed source config
+## Used source config
 
-Installed sources live under `[installed]`:
+Plugin sources in use live under `[used]`:
 
 ```toml
-[installed]
+[used]
 paths = ["/home/me/dev/plugin-source"]
 git = ["https://github.com/my-org/plugin-source"]
 
-[installed.crates]
+[used.crates]
 symposium-recommendations = "1"
 my-org-plugins = { git = "https://github.com/my-org/my-org-plugins" }
 my-local-crate = { path = "/home/me/dev/my-local-crate" }
 ```
 
-`[installed.crates]` mirrors Cargo dependency-table syntax. Values may be
+`[used.crates]` mirrors Cargo dependency-table syntax. Values may be
 version strings or inline dependency tables; unknown inline-table fields are
 preserved so source resolution can hand the spec to Cargo instead of
 maintaining a partial Cargo manifest parser.
 
 New configs include `symposium-recommendations = "1"` in
-`[installed.crates]`. The legacy `[defaults]` and `[[plugin-source]]` fields
+`[used.crates]`. The legacy `[defaults]` and `[[plugin-source]]` fields
 are rejected by the config schema.
 
 ## Discovery policy

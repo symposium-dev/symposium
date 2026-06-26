@@ -73,8 +73,8 @@ async fn main() -> ExitCode {
     match &cli.command {
         Some(Commands::Init { .. }) => tracing::info!("cargo agents init"),
         Some(Commands::Sync) => tracing::info!("cargo agents sync"),
-        Some(Commands::Install { .. }) => tracing::info!("cargo agents install"),
-        Some(Commands::Uninstall { .. }) => tracing::info!("cargo agents uninstall"),
+        Some(Commands::Use { .. }) => tracing::info!("cargo agents use"),
+        Some(Commands::Remove { .. }) => tracing::info!("cargo agents remove"),
         Some(Commands::Plugin { command }) => {
             tracing::info!(subcommand = ?command, "cargo agents plugin");
         }
@@ -100,7 +100,7 @@ async fn main() -> ExitCode {
     let is_hook = matches!(cli.command, Some(Commands::Hook { .. }));
     let uses_report_output = matches!(
         cli.command,
-        Some(Commands::Install { .. } | Commands::Uninstall { .. })
+        Some(Commands::Use { .. } | Commands::Remove { .. })
     );
     let out = if cli.quiet || is_hook || cli.json || uses_report_output {
         Output::quiet()

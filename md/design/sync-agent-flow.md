@@ -6,7 +6,7 @@ Scans workspace dependencies, installs applicable skills into agent directories,
 
 1. **Find workspace root** — run `cargo metadata` to locate the workspace manifest directory.
 
-2. **Load installed sources** — read `[installed.crates]`, `installed.paths`, and `installed.git` from user config. Crate-registry entries resolve through Cargo dependency syntax; direct path and git entries use their own registries. Check for updates: crates.io and git sources use a throttled cadence (at most once per 24 hours); path sources always check mtime.
+2. **Load used sources** — read `[used.crates]`, `used.paths`, and `used.git` from user config. Crate-registry entries resolve through Cargo dependency syntax; direct path and git entries use their own registries. Check for updates: crates.io and git sources use a throttled cadence (at most once per 24 hours); path sources always check mtime.
 
 3. **Scan dependencies** — read the full dependency graph from the workspace.
 

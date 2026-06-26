@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use symposium_install::UpdateLevel;
 use symposium_sdk::workspace::{WorkspaceCrate, WorkspaceDeps};
 
-use crate::config::{CargoDependencySpec, CrateSourceSpec, InstalledSourceConfig, Symposium};
+use crate::config::{CargoDependencySpec, CrateSourceSpec, UsedSourceConfig, Symposium};
 
 mod list;
 mod probe;
@@ -49,7 +49,7 @@ pub struct ResolvedSourceRoot {
 /// Non-exclusive provenance flags for why a source is in the graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SourceProvenance {
-    Installed,
+    Used,
     Workspace,
     Dependency,
 }
@@ -86,19 +86,19 @@ impl ResolvedSourceGraph {
         let resolver = SourceRegistryResolver::new(sym);
         let mut graph = Self::default();
 
-        for spec in installed_source_specs(sym.installed_sources()) {
+        for spec in used_source_specs(sym.used_sources()) {
             match resolver.resolve(&spec).await {
                 Ok(root) => {
                     graph.add_root(
                         root,
                         SourceReason {
-                            provenance: SourceProvenance::Installed,
-                            detail: "installed config".to_string(),
+                            provenance: SourceProvenance::Used,
+                            detail: "used config".to_string(),
                         },
                     );
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "failed to resolve installed source, skipping");
+                    tracing::warn!(error = %e, "failed to resolve used source, skipping");
                 }
             }
         }
@@ -147,26 +147,26 @@ impl ResolvedSourceGraph {
         graph
     }
 
-    pub async fn resolve_installed_and_workspace(
+    pub async fn resolve_used_and_workspace(
         sym: &Symposium,
         workspace: &mut WorkspaceDeps,
     ) -> Result<Self> {
         let resolver = SourceRegistryResolver::new(sym);
         let mut graph = ResolvedSourceGraph::default();
 
-        for spec in installed_source_specs(sym.installed_sources()) {
+        for spec in used_source_specs(sym.used_sources()) {
             match resolver.resolve(&spec).await {
                 Ok(root) => {
                     graph.add_root(
                         root,
                         SourceReason {
-                            provenance: SourceProvenance::Installed,
-                            detail: "installed config".to_string(),
+                            provenance: SourceProvenance::Used,
+                            detail: "used config".to_string(),
                         },
                     );
                 }
                 Err(e) => {
-                    tracing::warn!(error = %e, "failed to resolve installed source, skipping");
+                    tracing::warn!(error = %e, "failed to resolve used source, skipping");
                 }
             }
         }
@@ -605,7 +605,7 @@ impl<'a> SourceRegistryResolver<'a> {
 
     pub async fn resolve_installed_sources(&self) -> Result<Vec<ResolvedSourceRoot>> {
         let mut roots = Vec::new();
-        for spec in installed_source_specs(self.sym.installed_sources()) {
+        for spec in used_source_specs(self.sym.used_sources()) {
             roots.push(self.resolve(&spec).await?);
         }
         Ok(roots)
@@ -654,24 +654,22 @@ impl<'a> SourceRegistryResolver<'a> {
     }
 }
 
-/// Normalize installed source config into registry source specs.
-pub fn installed_source_specs(installed: &InstalledSourceConfig) -> Vec<RegistrySourceSpec> {
+/// Normalize used source config into registry source specs.
+pub fn used_source_specs(used: &UsedSourceConfig) -> Vec<RegistrySourceSpec> {
     let mut specs = Vec::new();
-    specs.extend(installed.crates.iter().map(|(name, dependency)| {
+    specs.extend(used.crates.iter().map(|(name, dependency)| {
         RegistrySourceSpec::Crate(CrateSourceSpec {
             key: Some(name.clone()),
             dependency: dependency.clone(),
         })
     }));
     specs.extend(
-        installed
-            .paths
+        used.paths
             .iter()
             .map(|path| RegistrySourceSpec::Path(PathBuf::from(path))),
     );
     specs.extend(
-        installed
-            .git
+        used.git
             .iter()
             .map(|url| RegistrySourceSpec::Git(url.clone())),
     );
@@ -1047,10 +1045,10 @@ resolver = "2"
         std::fs::write(
             config_dir.join("config.toml"),
             format!(
-                r#"[installed]
+                r#"[used]
 paths = ["direct-plugin-source"]
 
-[installed.crates]
+[used.crates]
 crate-plugin-source = {{ path = "{}" }}
 "#,
                 crate_dir.display()
@@ -1080,7 +1078,7 @@ crate-plugin-source = {{ path = "{}" }}
         let tmp = tempfile::tempdir().unwrap();
         let config_dir = tmp.path().join("symposium-home");
         std::fs::create_dir(&config_dir).unwrap();
-        std::fs::write(config_dir.join("config.toml"), "[installed]\n").unwrap();
+        std::fs::write(config_dir.join("config.toml"), "[used]\n").unwrap();
 
         let workspace_root = tmp.path().join("workspace");
         std::fs::create_dir(&workspace_root).unwrap();
@@ -1088,7 +1086,7 @@ crate-plugin-source = {{ path = "{}" }}
 
         let sym = Symposium::from_dir(&config_dir);
         let mut deps = sym.workspace_deps(&workspace_root);
-        let graph = ResolvedSourceGraph::resolve_installed_and_workspace(&sym, &mut deps)
+        let graph = ResolvedSourceGraph::resolve_used_and_workspace(&sym, &mut deps)
             .await
             .unwrap();
 
@@ -1114,7 +1112,7 @@ crate-plugin-source = {{ path = "{}" }}
         std::fs::write(
             config_dir.join("config.toml"),
             format!(
-                r#"[installed]
+                r#"[used]
 paths = ["{}"]
 "#,
                 workspace_root.display()
@@ -1124,7 +1122,7 @@ paths = ["{}"]
 
         let sym = Symposium::from_dir(&config_dir);
         let mut deps = sym.workspace_deps(&workspace_root);
-        let graph = ResolvedSourceGraph::resolve_installed_and_workspace(&sym, &mut deps)
+        let graph = ResolvedSourceGraph::resolve_used_and_workspace(&sym, &mut deps)
             .await
             .unwrap();
 
@@ -1136,7 +1134,7 @@ paths = ["{}"]
             .collect::<Vec<_>>();
         assert_eq!(root_nodes.len(), 1);
         let root_node = root_nodes[0];
-        assert!(root_node.provenance.contains(&SourceProvenance::Installed));
+        assert!(root_node.provenance.contains(&SourceProvenance::Used));
         assert!(root_node.provenance.contains(&SourceProvenance::Workspace));
         assert_eq!(root_node.reasons.len(), 2);
     }
@@ -1188,7 +1186,7 @@ paths = ["{}"]
 
         let mut graph = ResolvedSourceGraph::default();
         for provenance in [
-            SourceProvenance::Installed,
+            SourceProvenance::Used,
             SourceProvenance::Workspace,
             SourceProvenance::Dependency,
         ] {
@@ -1203,7 +1201,7 @@ paths = ["{}"]
 
         assert_eq!(graph.nodes().len(), 1);
         let node = &graph.nodes()[0];
-        assert!(node.provenance.contains(&SourceProvenance::Installed));
+        assert!(node.provenance.contains(&SourceProvenance::Used));
         assert!(node.provenance.contains(&SourceProvenance::Workspace));
         assert!(node.provenance.contains(&SourceProvenance::Dependency));
         assert_eq!(node.reasons.len(), 3);

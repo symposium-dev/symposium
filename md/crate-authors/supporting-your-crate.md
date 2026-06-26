@@ -63,7 +63,7 @@ source.path = "docs/agent-skills"
 
 Users get your crate's skills in two ways:
 
-1. **Explicit install** — `cargo agents install my-crate` fetches and scans your crate.
+1. **Explicit use** — `cargo agents use my-crate` fetches and scans your crate.
 2. **Discovery policy** — If your crate is allowed by `[discovery.allow]` policy (e.g., from `symposium-recommendations`), users who depend on your crate get skills automatically.
 
 To get your crate added to the default allow list, submit a PR to the `symposium-recommendations` crate.

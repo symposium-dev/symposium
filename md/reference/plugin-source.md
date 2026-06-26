@@ -7,8 +7,8 @@ A **plugin source** is a crate that Symposium scans for plugins and standalone s
 There are four ways a crate (or directory) becomes a plugin source:
 
 1. **The workspace itself** — The workspace root and each member crate are always scanned. Gated by the `workspace()` predicate.
-2. **Explicit install** — `cargo agents install <crate>` adds it to your config. Gated by `installed()`.
-3. **Discovery policy** — A workspace dependency or other candidate source matches `[discovery.allow]` and is not rejected by `[discovery.deny]` (configured in `config.toml` or declared by an installed plugin crate). Gated by `dependency()`.
+2. **Explicit use** — `cargo agents use <crate>` adds it to your config. Gated by `used()`.
+3. **Discovery policy** — A workspace dependency or other candidate source matches `[discovery.allow]` and is not rejected by `[discovery.deny]` (configured in `config.toml` or declared by a plugin crate in use). Gated by `dependency()`.
 4. **Default** — `symposium-recommendations` is installed by default during `cargo agents init`.
 
 ## Discovery rules
@@ -69,19 +69,19 @@ skills-only-crate/
 ## Managing plugin sources
 
 ```bash
-# Install a plugin crate
-cargo agents install my-plugin
+# Add a plugin crate
+cargo agents use my-plugin
 
-# Install from git
-cargo agents install --git https://github.com/org/my-plugin
+# Add from git
+cargo agents use --git https://github.com/org/my-plugin
 
-# Install from a local path (for development)
-cargo agents install --path ./my-plugins
+# Add from a local path (for development)
+cargo agents use --path ./my-plugins
 
-# Uninstall
-cargo agents uninstall my-plugin
+# Remove
+cargo agents remove my-plugin
 
-# See what's installed and active
+# See what's in use and active
 cargo agents status
 ```
 

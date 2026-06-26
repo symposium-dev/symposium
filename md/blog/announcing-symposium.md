@@ -39,7 +39,7 @@ Finally, we want writing code with agents to be more *efficient* and *reliable*.
 
 # Symposium Plugins
 
-A Symposium **plugin** defines a set of extensions (mcp servers, skills, hooks, etc) and the conditions in which they should be used (currently: when a given version of a given crate is in the project's dependencies). Plugins are hosted on repositories called a "plugin source"; we define a [central repository](https://github.com/symposium-dev/recommendations) with our globally recommended plugins, but you can additional plugin sources of your own if you like.
+A Symposium **plugin** defines a set of extensions (mcp servers, skills, hooks, etc) and the conditions in which they should be used (currently: when a given version of a given crate is in the project's dependencies). Plugins are hosted on repositories called a "plugin source"; we define a [central repository](https://github.com/symposium-dev/recommendations) with our globally recommended plugins, but you can add additional plugin sources of your own if you like.
 
 ## Skills
 

@@ -77,30 +77,30 @@ pub enum Commands {
     /// Show resolved plugin/skill state for the current workspace
     Status,
 
-    /// Install plugin sources into user config
-    Install {
-        /// Crate source to install, optionally as <CRATE>@<VERSION>. Repeatable.
+    /// Add plugin sources to user config
+    Use {
+        /// Crate source to add, optionally as <CRATE>@<VERSION>. Repeatable.
         crates: Vec<String>,
 
-        /// Direct path plugin source to install. Repeatable.
+        /// Direct path plugin source to add. Repeatable.
         #[arg(long = "path")]
         paths: Vec<String>,
 
-        /// Direct git plugin source to install. Repeatable.
+        /// Direct git plugin source to add. Repeatable.
         #[arg(long = "git")]
         git: Vec<String>,
     },
 
-    /// Uninstall plugin sources from user config
-    Uninstall {
-        /// Crate source name to uninstall. Repeatable.
+    /// Remove plugin sources from user config
+    Remove {
+        /// Crate source name to remove. Repeatable.
         crates: Vec<String>,
 
-        /// Direct path plugin source to uninstall. Repeatable.
+        /// Direct path plugin source to remove. Repeatable.
         #[arg(long = "path")]
         paths: Vec<String>,
 
-        /// Direct git plugin source to uninstall. Repeatable.
+        /// Direct git plugin source to remove. Repeatable.
         #[arg(long = "git")]
         git: Vec<String>,
     },
@@ -146,7 +146,7 @@ pub enum Commands {
 /// this only covers the static `Commands` variants above.
 pub fn builtin_audience(name: &str) -> Option<Audience> {
     match name {
-        "init" | "install" | "plugin" | "self-update" | "status" | "sync" | "uninstall" => {
+        "init" | "use" | "plugin" | "self-update" | "status" | "sync" | "remove" => {
             Some(Audience::Humans)
         }
         "crate-info" => Some(Audience::Agents),
@@ -198,10 +198,10 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
 
         Commands::Status => status::status(sym, &mut sym.workspace_deps(cwd)).await,
 
-        Commands::Install { crates, paths, git } => install::install(sym, crates, paths, git, out),
+        Commands::Use { crates, paths, git } => install::use_source(sym, crates, paths, git, out),
 
-        Commands::Uninstall { crates, paths, git } => {
-            install::uninstall(sym, crates, paths, git, out)
+        Commands::Remove { crates, paths, git } => {
+            install::remove_source(sym, crates, paths, git, out)
         }
 
         Commands::SelfUpdate => self_update::self_update(sym, out),

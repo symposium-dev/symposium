@@ -271,13 +271,13 @@ impl ReportEvent {
                 source,
                 status,
             } => match status.as_str() {
-                "installed" => format!("➕ {registry} source installed: {source}"),
+                "added" => format!("➕ {registry} source added: {source}"),
                 "updated" => format!("✅ {registry} source updated: {source}"),
-                "already_installed" => {
-                    format!("🟢 {registry} source already installed: {source}")
+                "already_added" => {
+                    format!("🟢 {registry} source already added: {source}")
                 }
-                "uninstalled" => format!("➖ {registry} source uninstalled: {source}"),
-                "not_installed" => format!("🟢 {registry} source was not installed: {source}"),
+                "removed" => format!("➖ {registry} source removed: {source}"),
+                "not_present" => format!("🟢 {registry} source not present: {source}"),
                 other => format!("ℹ️  {registry} source {other}: {source}"),
             },
 

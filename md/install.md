@@ -56,6 +56,6 @@ Symposium discovers plugins from three sources:
 
 1. **Your workspace** — plugins meant for use when developing crates in your workspace. Skills in `skills/` or `.agents/skills/`, plus any `SYMPOSIUM.toml` files you add. See [Workspace plugins](./workspace.md).
 2. **Your dependencies** — workspace deps scanned automatically for crates that contain plugins. See [Auto-discovery](./auto-discovery.md).
-3. **Explicit installs** — additional plugin crates you install with `cargo agents install`. See [Plugins via Crates](./installing-plugins.md). These crates can be hosted on crates.io but could also be hosted in a git repo or your local filesystem.
+3. **Explicit adds** — additional plugin crates you add with `cargo agents use`. See [Plugins via Crates](./installing-plugins.md). These crates can be hosted on crates.io but could also be hosted in a git repo or your local filesystem.
 
 If you maintain a crate and would like to add plugin support to your dependents, see [Supporting your crate](./crate-authors/supporting-your-crate.md).

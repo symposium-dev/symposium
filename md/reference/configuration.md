@@ -19,12 +19,12 @@ name = "gemini"
 [logging]
 level = "info"
 
-# Installed plugin crates
-[installed]
+# Plugin crates in use
+[used]
 paths = ["/home/me/dev/my-plugin-source"]
 git = ["https://github.com/my-org/my-plugin-source"]
 
-[installed.crates]
+[used.crates]
 symposium-recommendations = "1"
 semver-tracked = "1"
 pinned-plugin = "=1.2.0"
@@ -44,7 +44,7 @@ allow = "*"
 | `agents-syncing` | bool | `true` | Propagate user-authored skills from `.agents/skills/` into the per-agent skill directories of any configured agent that does not natively use `.agents/skills/` (such as `.claude/skills/` or `.kiro/skills/`). Skills that symposium itself installed — identified by the `.symposium` marker file — are not propagated. See [Workspace plugins](../workspace.md) for the user-guide overview, or [Agents syncing](#agents-syncing-mirror-user-authored-skills) below for details. |
 | `hook-scope` | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace. |
 | `auto-update` | string | `"on"` | Controls automatic update behavior. `"off"` disables update checks entirely. `"warn"` checks the registry (at most once per 24 hours) and prints a message when a newer version is available. `"on"` automatically installs the update via `cargo install` and re-executes the command with the new binary. |
-| `installed` | table | `symposium-recommendations` installed crate | Registry-ready installed plugin sources. See [`[installed]`](#installed). |
+| `used` | table | `symposium-recommendations` crate | Registry-ready plugin sources in use. See [`[used]`](#used). |
 | `discovery` | table | empty policy | User-configured discovery allow/deny rules. See [`[discovery]`](#discovery). |
 
 ### Agents syncing: mirror user-authored skills
@@ -82,10 +82,10 @@ Each `[[agent]]` entry identifies an agent you use. You can configure multiple a
 |-----|------|---------|-------------|
 | `level` | string | `"info"` | Minimum log level. One of: `trace`, `debug`, `info`, `warn`, `error`. |
 
-## `[installed]`
+## `[used]`
 
-`[installed]` declares plugin sources the user explicitly installed. New
-configs include the default `symposium-recommendations = "1"` installed crate.
+`[used]` declares plugin sources the user explicitly added. New
+configs include the default `symposium-recommendations = "1"` crate.
 Legacy `[[plugin-source]]`, `[[installed-crate]]`, and `[defaults]` config
 shapes are rejected.
 
@@ -94,9 +94,9 @@ shapes are rejected.
 | `paths` | array of strings | `[]` | Direct path-registry plugin sources. |
 | `git` | array of strings | `[]` | Direct git-registry plugin sources. |
 
-## `[installed.crates]`
+## `[used.crates]`
 
-`[installed.crates]` is a Cargo dependency table keyed by crate name. Values
+`[used.crates]` is a Cargo dependency table keyed by crate name. Values
 may be version strings or inline dependency tables with Cargo-compatible fields
 such as `version`, `git`, `path`, `branch`, `tag`, `rev`, and `package`.
 

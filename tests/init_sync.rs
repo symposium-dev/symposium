@@ -127,7 +127,7 @@ async fn init_creates_config() {
 
         let content = read_user_config(&ctx);
         assert!(content.contains(r#"name = "claude""#));
-        assert!(content.contains("[installed.crates]"));
+        assert!(content.contains("[used.crates]"));
         assert!(content.contains(r#"symposium-recommendations = "1""#));
         assert!(!content.contains("sync-default"));
         Ok(())
@@ -1867,10 +1867,10 @@ async fn report_json_shows_skipped_skills() {
     .unwrap();
 }
 
-/// `sync` discovers and installs skills from an `installed.paths` source.
+/// `sync` discovers and installs skills from a `used.paths` source.
 ///
 /// This tests the new registry-ready source graph: the plugin is discovered
-/// through `[installed] paths = [...]`.
+/// through `[used] paths = [...]`.
 #[tokio::test]
 async fn sync_installed_path_source() {
     with_fixture(

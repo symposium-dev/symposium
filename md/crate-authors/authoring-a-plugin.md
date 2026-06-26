@@ -211,12 +211,12 @@ Publish a standalone plugin crate (e.g., `symposium-serde`) and submit it for in
 
 ### For private/internal use
 
-Install directly without going through the allow list:
+Add directly without going through the allow list:
 
 ```bash
-cargo agents install my-company-plugin
+cargo agents use my-company-plugin
 # or from git:
-cargo agents install --git https://github.com/my-org/my-plugin
+cargo agents use --git https://github.com/my-org/my-plugin
 ```
 
 ## Step 4. Validate your plugin

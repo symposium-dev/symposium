@@ -1,5 +1,5 @@
 hook-scope = "project"
 auto-sync = false
 
-[installed]
+[used]
 paths = ["plugins"]

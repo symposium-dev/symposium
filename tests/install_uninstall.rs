@@ -1,4 +1,4 @@
-//! Config-only install/uninstall command tests.
+//! Config-only use/remove command tests.
 
 use indoc::indoc;
 use symposium::config::{CargoDependencySpec, Config};
@@ -11,26 +11,26 @@ fn parse_config(ctx: &symposium_testlib::TestContext) -> Config {
 }
 
 #[tokio::test]
-async fn install_registry_crates_updates_installed_crates() {
+async fn use_cmd_registry_crates_updates_used_crates() {
     with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
         let output = ctx
-            .symposium(&["install", "foo", "bar@1", "baz@=1.2.3"])
+            .symposium(&["use", "foo", "bar@1", "baz@=1.2.3"])
             .await?;
-        assert!(output.contains("crate source installed: foo"));
-        assert!(output.contains("crate source installed: bar"));
-        assert!(output.contains("crate source installed: baz"));
+        assert!(output.contains("crate source added: foo"));
+        assert!(output.contains("crate source added: bar"));
+        assert!(output.contains("crate source added: baz"));
 
         let config = parse_config(&ctx);
         assert_eq!(
-            config.installed.crates["foo"],
+            config.used.crates["foo"],
             CargoDependencySpec::Version("*".to_string())
         );
         assert_eq!(
-            config.installed.crates["bar"],
+            config.used.crates["bar"],
             CargoDependencySpec::Version("1".to_string())
         );
         assert_eq!(
-            config.installed.crates["baz"],
+            config.used.crates["baz"],
             CargoDependencySpec::Version("=1.2.3".to_string())
         );
         Ok(())
@@ -40,10 +40,10 @@ async fn install_registry_crates_updates_installed_crates() {
 }
 
 #[tokio::test]
-async fn install_path_and_git_sources_update_peer_registries() {
+async fn use_cmd_path_and_git_sources_update_peer_registries() {
     with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
         ctx.symposium(&[
-            "install",
+            "use",
             "--path",
             "/tmp/plugin-b",
             "--path",
@@ -51,7 +51,7 @@ async fn install_path_and_git_sources_update_peer_registries() {
         ])
         .await?;
         ctx.symposium(&[
-            "install",
+            "use",
             "--git",
             "https://github.com/me/plugin-b",
             "--git",
@@ -61,11 +61,11 @@ async fn install_path_and_git_sources_update_peer_registries() {
 
         let config = parse_config(&ctx);
         assert_eq!(
-            config.installed.paths,
+            config.used.paths,
             vec!["/tmp/plugin-a", "/tmp/plugin-b"]
         );
         assert_eq!(
-            config.installed.git,
+            config.used.git,
             vec![
                 "https://github.com/me/plugin-a",
                 "https://github.com/me/plugin-b"
@@ -78,18 +78,18 @@ async fn install_path_and_git_sources_update_peer_registries() {
 }
 
 #[tokio::test]
-async fn install_is_idempotent_and_updates_version_constraints() {
+async fn use_cmd_is_idempotent_and_updates_version_constraints() {
     with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
-        ctx.symposium(&["install", "foo@1"]).await?;
-        let output = ctx.symposium(&["install", "foo@1"]).await?;
-        assert!(output.contains("crate source already installed: foo"));
+        ctx.symposium(&["use", "foo@1"]).await?;
+        let output = ctx.symposium(&["use", "foo@1"]).await?;
+        assert!(output.contains("crate source already added: foo"));
 
-        let output = ctx.symposium(&["install", "foo@2"]).await?;
+        let output = ctx.symposium(&["use", "foo@2"]).await?;
         assert!(output.contains("crate source updated: foo"));
 
         let config = parse_config(&ctx);
         assert_eq!(
-            config.installed.crates["foo"],
+            config.used.crates["foo"],
             CargoDependencySpec::Version("2".to_string())
         );
         Ok(())
@@ -99,29 +99,29 @@ async fn install_is_idempotent_and_updates_version_constraints() {
 }
 
 #[tokio::test]
-async fn uninstall_removes_exact_matching_entries() {
+async fn remove_cmd_removes_exact_matching_entries() {
     with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
-        ctx.symposium(&["install", "foo", "bar"]).await?;
-        ctx.symposium(&["install", "--path", "/tmp/plugin"]).await?;
-        ctx.symposium(&["install", "--git", "https://github.com/me/plugin"])
+        ctx.symposium(&["use", "foo", "bar"]).await?;
+        ctx.symposium(&["use", "--path", "/tmp/plugin"]).await?;
+        ctx.symposium(&["use", "--git", "https://github.com/me/plugin"])
             .await?;
 
-        let output = ctx.symposium(&["uninstall", "foo"]).await?;
-        assert!(output.contains("crate source uninstalled: foo"));
+        let output = ctx.symposium(&["remove", "foo"]).await?;
+        assert!(output.contains("crate source removed: foo"));
         let output = ctx
-            .symposium(&["uninstall", "--path", "/tmp/plugin"])
+            .symposium(&["remove", "--path", "/tmp/plugin"])
             .await?;
-        assert!(output.contains("path source uninstalled: /tmp/plugin"));
+        assert!(output.contains("path source removed: /tmp/plugin"));
         let output = ctx
-            .symposium(&["uninstall", "--git", "https://github.com/me/plugin"])
+            .symposium(&["remove", "--git", "https://github.com/me/plugin"])
             .await?;
-        assert!(output.contains("git source uninstalled: https://github.com/me/plugin"));
+        assert!(output.contains("git source removed: https://github.com/me/plugin"));
 
         let config = parse_config(&ctx);
-        assert!(!config.installed.crates.contains_key("foo"));
-        assert!(config.installed.crates.contains_key("bar"));
-        assert!(config.installed.paths.is_empty());
-        assert!(config.installed.git.is_empty());
+        assert!(!config.used.crates.contains_key("foo"));
+        assert!(config.used.crates.contains_key("bar"));
+        assert!(config.used.paths.is_empty());
+        assert!(config.used.git.is_empty());
         Ok(())
     })
     .await
@@ -129,15 +129,15 @@ async fn uninstall_removes_exact_matching_entries() {
 }
 
 #[tokio::test]
-async fn uninstall_missing_entry_is_noop() {
+async fn remove_cmd_missing_entry_is_noop() {
     with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
-        let output = ctx.symposium(&["uninstall", "missing"]).await?;
-        assert!(output.contains("crate source was not installed: missing"));
+        let output = ctx.symposium(&["remove", "missing"]).await?;
+        assert!(output.contains("crate source not present: missing"));
 
         assert!(
             ctx.sym
                 .config
-                .installed
+                .used
                 .crates
                 .contains_key("symposium-recommendations")
         );
@@ -148,10 +148,10 @@ async fn uninstall_missing_entry_is_noop() {
 }
 
 #[tokio::test]
-async fn install_rejects_mixed_source_forms() {
+async fn use_cmd_rejects_mixed_source_forms() {
     with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
         let err = ctx
-            .symposium(&["install", "foo", "--path", "/tmp/plugin"])
+            .symposium(&["use", "foo", "--path", "/tmp/plugin"])
             .await
             .unwrap_err();
         assert!(
@@ -165,14 +165,14 @@ async fn install_rejects_mixed_source_forms() {
 }
 
 #[tokio::test]
-async fn install_and_uninstall_are_in_human_help_section() {
+async fn use_cmd_and_remove_cmd_are_in_human_help_section() {
     with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
         let output = ctx.symposium(&["--help"]).await?;
         assert!(output.contains(indoc! {"
-            install      Install plugin sources into user config
+            use          Add plugin sources to user config
         "}));
         assert!(output.contains(indoc! {"
-            uninstall    Uninstall plugin sources from user config
+            remove       Remove plugin sources from user config
         "}));
         Ok(())
     })

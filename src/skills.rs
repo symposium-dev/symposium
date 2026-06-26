@@ -1823,11 +1823,11 @@ mod tests {
             plugins: vec![ParsedPlugin {
                 path: tmp.path().join("SYMPOSIUM.toml"),
                 plugin: make_plugin(std::collections::BTreeSet::from([
-                    SourceProvenance::Installed,
+                    SourceProvenance::Used,
                 ])),
                 source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
-                source_provenance: std::collections::BTreeSet::from([SourceProvenance::Installed]),
+                source_provenance: std::collections::BTreeSet::from([SourceProvenance::Used]),
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1843,7 +1843,7 @@ mod tests {
         assert_eq!(
             results.len(),
             0,
-            "installed-only should not activate workspace-gated skills"
+            "used-only should not activate workspace-gated skills"
         );
     }
 
@@ -1923,7 +1923,7 @@ mod tests {
                 plugin: plugin.clone(),
                 source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
-                source_provenance: std::collections::BTreeSet::from([SourceProvenance::Installed]),
+                source_provenance: std::collections::BTreeSet::from([SourceProvenance::Used]),
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1939,7 +1939,7 @@ mod tests {
         assert_eq!(
             results.len(),
             0,
-            "installed-only should not activate dependency-gated skills"
+            "used-only should not activate dependency-gated skills"
         );
     }
 }

@@ -2,7 +2,7 @@
 //!
 //! Implements the allow/deny specificity rules for workspace dependency
 //! auto-discovery. Candidates are matched against collected policy rules
-//! (from user config and installed plugin manifests), and only allowed
+//! (from user config and used plugin manifests), and only allowed
 //! candidates are resolved as plugin sources.
 
 use crate::config::{

@@ -1079,13 +1079,13 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_respects_installed_provenance_predicate() {
+    fn dispatch_respects_used_provenance_predicate() {
         let mut plugin = plugin_with_hook(vec![], vec![]);
         plugin.plugin.predicates = crate::predicate::PredicateSet {
-            predicates: vec![crate::predicate::Predicate::Installed],
+            predicates: vec![crate::predicate::Predicate::Used],
         };
 
-        // Without installed provenance → hook skipped.
+        // Without used provenance → hook skipped.
         let empty = dispatched_hooks_for_payload(
             &[plugin.clone()],
             &pre_tool_use_input(),
@@ -1094,19 +1094,19 @@ mod tests {
         );
         assert!(
             empty.is_empty(),
-            "installed() should fail without provenance"
+            "used() should fail without provenance"
         );
 
-        // With installed provenance → hook fires.
+        // With used provenance → hook fires.
         plugin.source_provenance =
-            std::collections::BTreeSet::from([crate::crate_sources::SourceProvenance::Installed]);
+            std::collections::BTreeSet::from([crate::crate_sources::SourceProvenance::Used]);
         let matched = dispatched_hooks_for_payload(
             &[plugin],
             &pre_tool_use_input(),
             HookAgent::Claude,
             &mut crate::predicate::PredicateContext::new(&[]),
         );
-        assert_eq!(matched.len(), 1, "installed() should pass with provenance");
+        assert_eq!(matched.len(), 1, "used() should pass with provenance");
     }
 
     #[test]
@@ -1133,7 +1133,7 @@ mod tests {
 
     #[test]
     fn dispatch_per_plugin_provenance_isolation() {
-        // Two plugins: first is workspace-only, second is installed-only.
+        // Two plugins: first is workspace-only, second is used-only.
         // A workspace() predicate should match only the first.
         let mut workspace_plugin = plugin_with_hook(vec![], vec![]);
         workspace_plugin.plugin.name = "ws-plugin".into();
@@ -1143,16 +1143,16 @@ mod tests {
         workspace_plugin.source_provenance =
             std::collections::BTreeSet::from([crate::crate_sources::SourceProvenance::Workspace]);
 
-        let mut installed_plugin = plugin_with_hook(vec![], vec![]);
-        installed_plugin.plugin.name = "inst-plugin".into();
-        installed_plugin.plugin.predicates = crate::predicate::PredicateSet {
+        let mut used_plugin = plugin_with_hook(vec![], vec![]);
+        used_plugin.plugin.name = "inst-plugin".into();
+        used_plugin.plugin.predicates = crate::predicate::PredicateSet {
             predicates: vec![crate::predicate::Predicate::Workspace],
         };
-        installed_plugin.source_provenance =
-            std::collections::BTreeSet::from([crate::crate_sources::SourceProvenance::Installed]);
+        used_plugin.source_provenance =
+            std::collections::BTreeSet::from([crate::crate_sources::SourceProvenance::Used]);
 
         let hooks = dispatched_hooks_for_payload(
-            &[workspace_plugin, installed_plugin],
+            &[workspace_plugin, used_plugin],
             &pre_tool_use_input(),
             HookAgent::Claude,
             &mut crate::predicate::PredicateContext::new(&[]),

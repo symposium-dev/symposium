@@ -402,7 +402,7 @@ pub struct ParsedPlugin {
 
     /// Source provenance flags for this plugin. These are the non-exclusive
     /// provenance flags from the resolved source graph node that produced
-    /// this plugin. Used by `workspace()`, `dependency()`, and `installed()`
+    /// this plugin. Used by `workspace()`, `dependency()`, and `used()`
     /// predicates.
     pub source_provenance: std::collections::BTreeSet<crate::crate_sources::SourceProvenance>,
 }
@@ -1062,7 +1062,7 @@ fn standalone_skill_origin(
 ///
 /// Each source node is scanned for manifests and standalone skills. The
 /// resulting `ParsedPlugin`s are stamped with the node's provenance set so
-/// that `workspace()`, `dependency()`, and `installed()` predicates evaluate
+/// that `workspace()`, `dependency()`, and `used()` predicates evaluate
 /// correctly.
 ///
 /// When the same manifest (by canonical path) is discovered from multiple

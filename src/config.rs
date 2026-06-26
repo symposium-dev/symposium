@@ -99,8 +99,8 @@ pub struct Config {
     pub logging: LoggingConfig,
 
     /// User-installed plugin sources in the registry-ready model.
-    #[serde(default = "default_installed_sources")]
-    pub installed: InstalledSourceConfig,
+    #[serde(default = "default_used_sources")]
+    pub used: UsedSourceConfig,
 
     /// User-configured discovery allow/deny policy.
     #[serde(default)]
@@ -138,7 +138,7 @@ impl Default for Config {
             auto_update: AutoUpdate::default(),
             agents: Vec::new(),
             logging: LoggingConfig::default(),
-            installed: default_installed_sources(),
+            used: default_used_sources(),
             discovery: DiscoveryPolicy::default(),
         }
     }
@@ -146,10 +146,10 @@ impl Default for Config {
 
 /// Installed plugin-source declarations grouped by registry.
 #[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq)]
-pub struct InstalledSourceConfig {
+pub struct UsedSourceConfig {
     /// Cargo dependency-table entries keyed by crate name.
     #[serde(
-        default = "default_installed_crates",
+        default = "default_used_crates",
         skip_serializing_if = "BTreeMap::is_empty"
     )]
     pub crates: BTreeMap<String, CargoDependencySpec>,
@@ -163,15 +163,15 @@ pub struct InstalledSourceConfig {
     pub git: Vec<String>,
 }
 
-fn default_installed_sources() -> InstalledSourceConfig {
-    InstalledSourceConfig {
-        crates: default_installed_crates(),
+fn default_used_sources() -> UsedSourceConfig {
+    UsedSourceConfig {
+        crates: default_used_crates(),
         paths: Vec::new(),
         git: Vec::new(),
     }
 }
 
-fn default_installed_crates() -> BTreeMap<String, CargoDependencySpec> {
+fn default_used_crates() -> BTreeMap<String, CargoDependencySpec> {
     let mut crates = BTreeMap::new();
     crates.insert(
         "symposium-recommendations".to_string(),
@@ -345,14 +345,14 @@ impl Serialize for RegistryDiscoveryRule {
     }
 }
 
-/// Parsed `<CRATE>[@<VERSION>]` install operand.
+/// Parsed `<CRATE>[@<VERSION>]` use operand.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CrateInstallSpec {
+pub struct CrateUseSpec {
     pub name: String,
     pub dependency: CargoDependencySpec,
 }
 
-impl FromStr for CrateInstallSpec {
+impl FromStr for CrateUseSpec {
     type Err = anyhow::Error;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
@@ -362,21 +362,21 @@ impl FromStr for CrateInstallSpec {
         };
 
         if name.is_empty() {
-            anyhow::bail!("crate install spec must include a crate name");
+            anyhow::bail!("crate use spec must include a crate name");
         }
         if name.contains('/') || name.contains('\\') {
             anyhow::bail!(
-                "crate install spec `{input}` looks like a path; use `cargo agents install --path`"
+                "crate use spec `{input}` looks like a path; use `cargo agents use --path`"
             );
         }
 
         let dependency = match version {
             None => CargoDependencySpec::Version("*".to_string()),
-            Some("") => anyhow::bail!("crate install spec `{input}` has an empty version"),
+            Some("") => anyhow::bail!("crate use spec `{input}` has an empty version"),
             Some(version) => CargoDependencySpec::Version(version.to_string()),
         };
 
-        Ok(CrateInstallSpec {
+        Ok(CrateUseSpec {
             name: name.to_string(),
             dependency,
         })
@@ -628,13 +628,13 @@ impl Symposium {
     }
 
     /// Returns user-installed plugin sources in the registry-ready config shape.
-    pub fn installed_sources(&self) -> &InstalledSourceConfig {
-        &self.config.installed
+    pub fn used_sources(&self) -> &UsedSourceConfig {
+        &self.config.used
     }
 
     /// Returns user-installed crate-registry plugin sources.
-    pub fn installed_crates(&self) -> &BTreeMap<String, CargoDependencySpec> {
-        &self.config.installed.crates
+    pub fn used_crates(&self) -> &BTreeMap<String, CargoDependencySpec> {
+        &self.config.used.crates
     }
 
     /// Write the user config to disk.
@@ -717,7 +717,7 @@ mod tests {
     fn parse_empty_config() {
         let config: Config = toml::from_str("").unwrap();
         assert_eq!(
-            config.installed.crates.get("symposium-recommendations"),
+            config.used.crates.get("symposium-recommendations"),
             Some(&CargoDependencySpec::Version("1".to_string()))
         );
     }
@@ -745,9 +745,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_installed_crates_dependency_table() {
+    fn parse_used_crates_dependency_table() {
         let config: Config = toml::from_str(indoc! {r#"
-            [installed.crates]
+            [used.crates]
             symposium-recommendations = "1"
             pinned-plugin = "=1.2.0"
             my-org-plugins = { git = "https://github.com/my-org/my-org-plugins", branch = "main" }
@@ -756,50 +756,50 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            config.installed.crates["symposium-recommendations"].version_req(),
+            config.used.crates["symposium-recommendations"].version_req(),
             Some("1")
         );
         assert_eq!(
-            config.installed.crates["pinned-plugin"].version_req(),
+            config.used.crates["pinned-plugin"].version_req(),
             Some("=1.2.0")
         );
         assert_eq!(
-            config.installed.crates["my-org-plugins"].git(),
+            config.used.crates["my-org-plugins"].git(),
             Some("https://github.com/my-org/my-org-plugins")
         );
         assert_eq!(
-            config.installed.crates["my-local-crate"].path(),
+            config.used.crates["my-local-crate"].path(),
             Some("/home/me/dev/my-crate")
         );
     }
 
     #[test]
-    fn parse_installed_paths_and_git() {
+    fn parse_used_paths_and_git() {
         let config: Config = toml::from_str(indoc! {r#"
-            [installed]
+            [used]
             paths = ["/home/me/dev/plugin-source", "../relative-plugin"]
             git = ["https://github.com/my-org/plugin-source"]
         "#})
         .unwrap();
 
         assert_eq!(
-            config.installed.paths,
+            config.used.paths,
             vec!["/home/me/dev/plugin-source", "../relative-plugin"]
         );
         assert_eq!(
-            config.installed.git,
+            config.used.git,
             vec!["https://github.com/my-org/plugin-source"]
         );
     }
 
     #[test]
-    fn installed_sources_round_trip() {
+    fn used_sources_round_trip() {
         let config: Config = toml::from_str(indoc! {r#"
-            [installed]
+            [used]
             paths = ["/home/me/dev/plugin-source"]
             git = ["https://github.com/my-org/plugin-source"]
 
-            [installed.crates]
+            [used.crates]
             symposium-recommendations = "1"
             my-org-plugins = { git = "https://github.com/my-org/my-org-plugins", tag = "v1.0.0" }
         "#})
@@ -807,7 +807,7 @@ mod tests {
 
         let saved = toml::to_string_pretty(&config).unwrap();
         let reparsed: Config = toml::from_str(&saved).unwrap();
-        assert_eq!(reparsed.installed, config.installed);
+        assert_eq!(reparsed.used, config.used);
     }
 
     #[test]
@@ -840,26 +840,26 @@ mod tests {
 
     #[test]
     fn parse_crate_install_specs() {
-        let latest: CrateInstallSpec = "foo".parse().unwrap();
+        let latest: CrateUseSpec = "foo".parse().unwrap();
         assert_eq!(latest.name, "foo");
         assert_eq!(
             latest.dependency,
             CargoDependencySpec::Version("*".to_string())
         );
 
-        let major: CrateInstallSpec = "foo@1".parse().unwrap();
+        let major: CrateUseSpec = "foo@1".parse().unwrap();
         assert_eq!(
             major.dependency,
             CargoDependencySpec::Version("1".to_string())
         );
 
-        let patch: CrateInstallSpec = "foo@1.2.3".parse().unwrap();
+        let patch: CrateUseSpec = "foo@1.2.3".parse().unwrap();
         assert_eq!(
             patch.dependency,
             CargoDependencySpec::Version("1.2.3".to_string())
         );
 
-        let exact: CrateInstallSpec = "foo@=1.2.3".parse().unwrap();
+        let exact: CrateUseSpec = "foo@=1.2.3".parse().unwrap();
         assert_eq!(
             exact.dependency,
             CargoDependencySpec::Version("=1.2.3".to_string())
@@ -937,15 +937,15 @@ mod tests {
     }
 
     #[test]
-    fn symposium_installed_accessors_expose_new_config() {
+    fn symposium_used_accessors_expose_new_config() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join("config.toml"),
             indoc! {r#"
-                [installed]
+                [used]
                 paths = ["/home/me/dev/plugin-source"]
 
-                [installed.crates]
+                [used.crates]
                 symposium-recommendations = "1"
                 local-plugin = { path = "/home/me/dev/local-plugin" }
             "#},
@@ -954,10 +954,10 @@ mod tests {
 
         let sym = Symposium::from_dir(tmp.path());
         assert_eq!(
-            sym.installed_sources().paths,
+            sym.used_sources().paths,
             vec!["/home/me/dev/plugin-source"]
         );
-        assert!(sym.installed_crates().contains_key("local-plugin"));
+        assert!(sym.used_crates().contains_key("local-plugin"));
     }
 
     #[test]
@@ -965,7 +965,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
         assert!(
-            sym.installed_crates()
+            sym.used_crates()
                 .contains_key("symposium-recommendations")
         );
         assert_eq!(sym.config_dir(), tmp.path());
@@ -980,14 +980,14 @@ mod tests {
             indoc! {r#"
                 auto-sync = false
 
-                [installed]
+                [used]
                 paths = ["/tmp/plugin-source"]
             "#},
         )
         .unwrap();
         let sym = Symposium::from_dir(tmp.path());
         assert!(!sym.config.auto_sync);
-        assert_eq!(sym.installed_sources().paths, vec!["/tmp/plugin-source"]);
+        assert_eq!(sym.used_sources().paths, vec!["/tmp/plugin-source"]);
     }
 
     #[test]

@@ -8,9 +8,9 @@
 |---------|-------------|
 | [`cargo agents init`](./cargo-agents-init.md) | Set up user-wide configuration |
 | [`cargo agents sync`](./cargo-agents-sync.md) | Synchronize skills with workspace dependencies |
-| [`cargo agents install`](./cargo-agents-install.md) | Install a plugin crate |
-| [`cargo agents uninstall`](./cargo-agents-uninstall.md) | Uninstall a plugin crate |
-| [`cargo agents status`](./cargo-agents-status.md) | Show installed crates and active plugins |
+| [`cargo agents use`](./cargo-agents-use.md) | Add a plugin crate |
+| [`cargo agents remove`](./cargo-agents-remove.md) | Remove a plugin crate |
+| [`cargo agents status`](./cargo-agents-status.md) | Show crates in use and active plugins |
 | [`cargo agents plugin`](./cargo-agents-plugin.md) | Manage and validate plugins |
 | [`cargo agents self-update`](./cargo-agents-self-update.md) | Update symposium to the latest version |
 | [`cargo agents crate-info`](./cargo-agents-crate-info.md) | Find crate sources (agent-facing) |

@@ -9,10 +9,10 @@ Create a directory with your plugin content and install it as a path source:
 ```bash
 mkdir ~/my-plugin
 # Add SYMPOSIUM.toml and skills...
-cargo agents install --path ~/my-plugin
+cargo agents use --path ~/my-plugin
 ```
 
-Path sources always check mtime — changes are picked up immediately on the next sync, with no version bumping or re-install needed.
+Path sources always check mtime — changes are picked up immediately on the next sync, with no version bumping needed.
 
 ## Developing inside a crate
 
@@ -27,15 +27,15 @@ mkdir skills
 # ...
 
 # Install locally for testing
-cargo agents install --path .
+cargo agents use --path .
 ```
 
 When you're happy with it, publish to crates.io and switch to the published version:
 
 ```bash
 cargo publish
-cargo agents uninstall my-symposium-plugin
-cargo agents install my-symposium-plugin
+cargo agents remove my-symposium-plugin
+cargo agents use my-symposium-plugin
 ```
 
 ## Testing with `validate`

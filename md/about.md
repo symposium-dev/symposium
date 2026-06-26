@@ -15,12 +15,12 @@ The [`init` command](./references/cargo-agents-init.md) will guide you through p
 
 ## Leveraging the wisdom of crates.io
 
-You can use the `cargo agents` command to install agent plugins from crates.io.
+You can use the `cargo agents` command to add agent plugins from crates.io.
 
-*Example:* The [dial9](https://github.com/dial9-rs/dial9) project provides telemetry that can help you optimize your service. It also contains skills to help your agent query the data and diagnose performance problems for you. You can install those skills by doing:
+*Example:* The [dial9](https://github.com/dial9-rs/dial9) project provides telemetry that can help you optimize your service. It also contains skills to help your agent query the data and diagnose performance problems for you. You can add those skills by doing:
 
 ```bash
-cargo agents install dial9
+cargo agents use dial9
 ```
 
 ## Automatically discovering plugins from your dependencies

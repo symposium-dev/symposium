@@ -19,7 +19,7 @@ The available predicate functions are:
 | `env(<name>=<value>)` | `<name>` is set and equals `<value>` exactly. Only the first `=` separates name from value, so `env(KEY=a=b)` matches the value `a=b`. |
 | `workspace()` | The plugin was sourced from the current workspace (workspace root or a member crate). |
 | `dependency()` | The plugin was sourced via discovery policy from a workspace dependency. |
-| `installed()` | The plugin was sourced from an explicitly installed crate (`cargo agents install`). |
+| `used()` | The plugin was sourced from an explicitly added crate (`cargo agents use`). |
 | `not(<predicate>)` | The inner predicate does **not** hold. The only way to express absence. |
 | `any(<p>, <p>, …)` | At least one inner predicate holds (logical **OR**). |
 | `all(<p>, <p>, …)` | Every inner predicate holds (logical **AND**). |

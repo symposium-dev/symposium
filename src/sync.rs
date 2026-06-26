@@ -323,7 +323,7 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
     let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
-    // Resolve the source graph: installed sources plus workspace root/members.
+    // Resolve the source graph: used sources plus workspace root/members.
     // Manifest-level dedup in
     // load_registry_from_graph unions provenance when the same manifest is
     // reached from multiple roots.
@@ -413,7 +413,7 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
 
     // Track every skill directory we (re)install during this sync. Anything
     // we find later that has the marker file but isn't in this set is stale.
-    let mut installed_dirs: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut synced_dirs: BTreeSet<PathBuf> = BTreeSet::new();
 
     for agent_name in &agent_names {
         let agent = Agent::from_config_name(agent_name)?;
@@ -476,7 +476,7 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
 
             match sync_skill_dir(source_dir, &dest_dir, &project_root, debounce) {
                 Ok(true) => {
-                    installed_dirs.insert(dest_dir.clone());
+                    synced_dirs.insert(dest_dir.clone());
                     tracing::info!(
                         report = %crate::report::ReportEvent::SkillInstalled {
                             skill: dir_name.clone(),
@@ -486,9 +486,9 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
                     );
                 }
                 Ok(false) => {
-                    // Debounced or unchanged — still record as installed
+                    // Debounced or unchanged — still record as synced
                     // so stale-cleanup doesn't remove it.
-                    installed_dirs.insert(dest_dir.clone());
+                    synced_dirs.insert(dest_dir.clone());
                 }
                 Err(e) => {
                     tracing::info!(
@@ -539,7 +539,7 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
 
                     match sync_skill_dir(source_dir, &dest_dir, &project_root, debounce) {
                         Ok(true) => {
-                            installed_dirs.insert(dest_dir.clone());
+                            synced_dirs.insert(dest_dir.clone());
                             tracing::info!(
                                 report = %crate::report::ReportEvent::SkillPropagated {
                                     skill: name.to_string(),
@@ -550,9 +550,9 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
                         }
                         Ok(false) => {
                             // Debounced or unchanged — still record as
-                            // installed so stale-cleanup doesn't remove it.
+                            // synced so stale-cleanup doesn't remove it.
                             if dest_dir.exists() {
-                                installed_dirs.insert(dest_dir.clone());
+                                synced_dirs.insert(dest_dir.clone());
                             }
                         }
                         Err(e) => {
@@ -582,7 +582,7 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.is_dir() || installed_dirs.contains(&path) {
+            if !path.is_dir() || synced_dirs.contains(&path) {
                 continue;
             }
             if !has_symposium_marker(&path) {

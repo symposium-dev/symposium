@@ -35,7 +35,7 @@ pub async fn status(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
             .provenance
             .iter()
             .map(|p| match p {
-                SourceProvenance::Installed => "installed",
+                SourceProvenance::Used => "used",
                 SourceProvenance::Workspace => "workspace",
                 SourceProvenance::Dependency => "dependency",
             })

@@ -43,14 +43,14 @@ source.path = "skills"
 
 Publish to your private registry, or host in a git repository your team can access.
 
-### 3. Team members install
+### 3. Team members add the plugin
 
 ```bash
 # From a private registry
-cargo agents install my-company-plugins
+cargo agents use my-company-plugins
 
 # Or from git
-cargo agents install --git https://github.com/my-company/symposium-plugins
+cargo agents use --git https://github.com/my-company/symposium-plugins
 ```
 
 ## Auto-discovery for internal crates
@@ -91,10 +91,10 @@ command = "company-linter"
 
 ## Keeping everyone up to date
 
-Team members tracking latest (`cargo agents install my-company-plugins` without `@`) automatically get updates on sync. For controlled rollouts, have team members pin to a version:
+Team members tracking latest (`cargo agents use my-company-plugins` without `@`) automatically get updates on sync. For controlled rollouts, have team members pin to a version:
 
 ```bash
-cargo agents install my-company-plugins@1
+cargo agents use my-company-plugins@1
 ```
 
 They'll get patch/minor updates within 1.x but won't jump to 2.x until they explicitly upgrade.

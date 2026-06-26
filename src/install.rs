@@ -1,11 +1,11 @@
-//! Config-only install/uninstall commands.
+//! Config-only use/remove commands.
 //!
 //! Source acquisition is wired in later phases. This module only mutates the
-//! registry-ready installed-source config deterministically.
+//! registry-ready used-source config deterministically.
 
 use anyhow::{Result, bail};
 
-use crate::config::{CargoDependencySpec, CrateInstallSpec, Symposium};
+use crate::config::{CargoDependencySpec, CrateUseSpec, Symposium};
 use crate::output::Output;
 use crate::report::ReportEvent;
 
@@ -21,29 +21,29 @@ enum Mutation {
 impl Mutation {
     fn as_status(self) -> &'static str {
         match self {
-            Mutation::Added => "installed",
+            Mutation::Added => "added",
             Mutation::Updated => "updated",
-            Mutation::AlreadyPresent => "already_installed",
-            Mutation::Removed => "uninstalled",
-            Mutation::NotPresent => "not_installed",
+            Mutation::AlreadyPresent => "already_added",
+            Mutation::Removed => "removed",
+            Mutation::NotPresent => "not_present",
         }
     }
 }
 
-/// Install crate-, path-, or git-registry sources by editing config.toml.
-pub fn install(
+/// Add crate-, path-, or git-registry sources by editing config.toml.
+pub fn use_source(
     sym: &mut Symposium,
     crates: Vec<String>,
     paths: Vec<String>,
     git: Vec<String>,
     out: &Output,
 ) -> Result<()> {
-    validate_source_form("install", &crates, &paths, &git)?;
+    validate_source_form("use", &crates, &paths, &git)?;
 
     let mut changed = false;
     if !crates.is_empty() {
         for spec in crates {
-            let spec: CrateInstallSpec = spec.parse()?;
+            let spec: CrateUseSpec = spec.parse()?;
             let name = spec.name;
             let mutation = insert_crate(sym, name.clone(), spec.dependency);
             changed |= matches!(mutation, Mutation::Added | Mutation::Updated);
@@ -51,18 +51,18 @@ pub fn install(
         }
     } else if !paths.is_empty() {
         for path in paths {
-            let mutation = insert_list_entry(&mut sym.config.installed.paths, path.clone());
+            let mutation = insert_list_entry(&mut sym.config.used.paths, path.clone());
             changed |= mutation == Mutation::Added;
             emit_source_event("path", &path, mutation, out);
         }
     } else if !git.is_empty() {
         for url in git {
-            let mutation = insert_list_entry(&mut sym.config.installed.git, url.clone());
+            let mutation = insert_list_entry(&mut sym.config.used.git, url.clone());
             changed |= mutation == Mutation::Added;
             emit_source_event("git", &url, mutation, out);
         }
     } else {
-        bail!("install requires a crate name, --path, or --git");
+        bail!("use requires a crate name, --path, or --git");
     }
 
     if changed {
@@ -71,23 +71,23 @@ pub fn install(
     Ok(())
 }
 
-/// Uninstall crate-, path-, or git-registry sources by editing config.toml.
-pub fn uninstall(
+/// Remove crate-, path-, or git-registry sources by editing config.toml.
+pub fn remove_source(
     sym: &mut Symposium,
     crates: Vec<String>,
     paths: Vec<String>,
     git: Vec<String>,
     out: &Output,
 ) -> Result<()> {
-    validate_source_form("uninstall", &crates, &paths, &git)?;
+    validate_source_form("remove", &crates, &paths, &git)?;
 
     let mut changed = false;
     if !crates.is_empty() {
         for name in crates {
             if name.contains('@') {
-                bail!("uninstall expects crate names without versions: `{name}`");
+                bail!("remove expects crate names without versions: `{name}`");
             }
-            let mutation = if sym.config.installed.crates.remove(&name).is_some() {
+            let mutation = if sym.config.used.crates.remove(&name).is_some() {
                 Mutation::Removed
             } else {
                 Mutation::NotPresent
@@ -97,18 +97,18 @@ pub fn uninstall(
         }
     } else if !paths.is_empty() {
         for path in paths {
-            let mutation = remove_list_entry(&mut sym.config.installed.paths, &path);
+            let mutation = remove_list_entry(&mut sym.config.used.paths, &path);
             changed |= mutation == Mutation::Removed;
             emit_source_event("path", &path, mutation, out);
         }
     } else if !git.is_empty() {
         for url in git {
-            let mutation = remove_list_entry(&mut sym.config.installed.git, &url);
+            let mutation = remove_list_entry(&mut sym.config.used.git, &url);
             changed |= mutation == Mutation::Removed;
             emit_source_event("git", &url, mutation, out);
         }
     } else {
-        bail!("uninstall requires a crate name, --path, or --git");
+        bail!("remove requires a crate name, --path, or --git");
     }
 
     if changed {
@@ -131,14 +131,14 @@ fn validate_source_form(
 }
 
 fn insert_crate(sym: &mut Symposium, name: String, dependency: CargoDependencySpec) -> Mutation {
-    match sym.config.installed.crates.get(&name) {
+    match sym.config.used.crates.get(&name) {
         Some(existing) if existing == &dependency => Mutation::AlreadyPresent,
         Some(_) => {
-            sym.config.installed.crates.insert(name, dependency);
+            sym.config.used.crates.insert(name, dependency);
             Mutation::Updated
         }
         None => {
-            sym.config.installed.crates.insert(name, dependency);
+            sym.config.used.crates.insert(name, dependency);
             Mutation::Added
         }
     }
@@ -173,14 +173,14 @@ fn emit_source_event(registry: &'static str, source: &str, mutation: Mutation, o
     );
 
     match mutation {
-        Mutation::Added => out.added(format!("{registry} source installed: {source}")),
+        Mutation::Added => out.added(format!("{registry} source added: {source}")),
         Mutation::Updated => out.done(format!("{registry} source updated: {source}")),
         Mutation::AlreadyPresent => {
-            out.already_ok(format!("{registry} source already installed: {source}"))
+            out.already_ok(format!("{registry} source already added: {source}"))
         }
-        Mutation::Removed => out.removed(format!("{registry} source uninstalled: {source}")),
+        Mutation::Removed => out.removed(format!("{registry} source removed: {source}")),
         Mutation::NotPresent => {
-            out.already_ok(format!("{registry} source was not installed: {source}"))
+            out.already_ok(format!("{registry} source not present: {source}"))
         }
     }
 }

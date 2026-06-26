@@ -41,7 +41,7 @@ pub const BUILTIN_PREDICATE_NAMES: &[&str] = &[
     "env",
     "workspace",
     "dependency",
-    "installed",
+    "used",
     "not",
     "any",
     "all",
@@ -54,7 +54,7 @@ pub const BUILTIN_PREDICATE_NAMES: &[&str] = &[
 /// (plugin-defined) predicates are resolved entries whose results are cached
 /// for the lifetime of the context.
 ///
-/// Source-context predicates (`workspace()`, `dependency()`, `installed()`)
+/// Source-context predicates (`workspace()`, `dependency()`, `used()`)
 /// evaluate against the `source_provenance` set, which callers update per
 /// plugin/source root before evaluating that root's predicates.
 #[derive(Debug)]
@@ -90,7 +90,7 @@ impl<'a> PredicateContext<'a> {
     /// Set the source provenance flags for subsequent predicate evaluations.
     ///
     /// Callers update this before evaluating a plugin's predicates so that
-    /// `workspace()`, `dependency()`, and `installed()` reflect the source
+    /// `workspace()`, `dependency()`, and `used()` reflect the source
     /// that produced the plugin.
     pub fn set_source_provenance(&mut self, provenance: BTreeSet<SourceProvenance>) {
         self.source_provenance = provenance;
@@ -150,8 +150,8 @@ pub enum Predicate {
     Workspace,
     /// `dependency()` — true when the plugin source has dependency provenance.
     Dependency,
-    /// `installed()` — true when the plugin source has installed provenance.
-    Installed,
+    /// `used()` — true when the plugin source has used provenance.
+    Used,
     /// `not(<p>)` — passes when the inner predicate does not.
     Not(Box<Predicate>),
     /// `any(<p>, …)` — passes when at least one inner predicate does.
@@ -182,7 +182,7 @@ impl Predicate {
             Predicate::Dependency => ctx
                 .source_provenance
                 .contains(&SourceProvenance::Dependency),
-            Predicate::Installed => ctx.source_provenance.contains(&SourceProvenance::Installed),
+            Predicate::Used => ctx.source_provenance.contains(&SourceProvenance::Used),
             Predicate::Not(inner) => !inner.evaluate(ctx),
             Predicate::Any(children) => children.iter().any(|p| p.evaluate(ctx)),
             Predicate::All(children) => children.iter().all(|p| p.evaluate(ctx)),
@@ -223,9 +223,9 @@ impl Predicate {
                 .source_provenance
                 .contains(&SourceProvenance::Dependency)
                 .then(Vec::new),
-            Predicate::Installed => ctx
+            Predicate::Used => ctx
                 .source_provenance
-                .contains(&SourceProvenance::Installed)
+                .contains(&SourceProvenance::Used)
                 .then(Vec::new),
             Predicate::Not(inner) => match inner.witness(ctx) {
                 Some(_) => None,
@@ -544,11 +544,11 @@ fn parse(input: &str) -> Result<Predicate> {
             }
             Ok(Predicate::Dependency)
         }
-        "installed" => {
+        "used" => {
             if !arg.is_empty() {
-                bail!("`installed()` does not accept arguments");
+                bail!("`used()` does not accept arguments");
             }
-            Ok(Predicate::Installed)
+            Ok(Predicate::Used)
         }
         "not" => Ok(Predicate::Not(Box::new(parse(arg)?))),
         "any" => {
@@ -828,7 +828,7 @@ impl std::fmt::Display for Predicate {
             Predicate::All(preds) => write!(f, "all({})", join(preds)),
             Predicate::Workspace => write!(f, "workspace()"),
             Predicate::Dependency => write!(f, "dependency()"),
-            Predicate::Installed => write!(f, "installed()"),
+            Predicate::Used => write!(f, "used()"),
             Predicate::Custom { name, arg } => write!(f, "{name}({arg})"),
         }
     }
@@ -1692,10 +1692,10 @@ mod tests {
     }
 
     #[test]
-    fn installed_predicate_holds_with_installed_provenance() {
+    fn used_predicate_holds_with_used_provenance() {
         let mut ctx = ctx(&[]);
-        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Installed]));
-        let pred = parse("installed()").unwrap();
+        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Used]));
+        let pred = parse("used()").unwrap();
         assert!(pred.evaluate(&mut ctx));
     }
 
@@ -1703,28 +1703,28 @@ mod tests {
     fn source_predicates_are_non_exclusive() {
         let mut ctx = ctx(&[]);
         ctx.set_source_provenance(BTreeSet::from([
-            SourceProvenance::Installed,
+            SourceProvenance::Used,
             SourceProvenance::Workspace,
             SourceProvenance::Dependency,
         ]));
         assert!(parse("workspace()").unwrap().evaluate(&mut ctx));
         assert!(parse("dependency()").unwrap().evaluate(&mut ctx));
-        assert!(parse("installed()").unwrap().evaluate(&mut ctx));
+        assert!(parse("used()").unwrap().evaluate(&mut ctx));
     }
 
     #[test]
     fn source_predicates_distinguish_provenance_types() {
         let mut ctx = ctx(&[]);
-        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Installed]));
-        assert!(parse("installed()").unwrap().evaluate(&mut ctx));
+        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Used]));
+        assert!(parse("used()").unwrap().evaluate(&mut ctx));
         assert!(!parse("workspace()").unwrap().evaluate(&mut ctx));
         assert!(!parse("dependency()").unwrap().evaluate(&mut ctx));
     }
 
     #[test]
-    fn not_workspace_holds_for_installed_only() {
+    fn not_workspace_holds_for_used_only() {
         let mut ctx = ctx(&[]);
-        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Installed]));
+        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Used]));
         assert!(parse("not(workspace())").unwrap().evaluate(&mut ctx));
     }
 
@@ -1750,9 +1750,9 @@ mod tests {
         ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Workspace]));
         assert!(parse("workspace()").unwrap().evaluate(&mut ctx));
 
-        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Installed]));
+        ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Used]));
         assert!(!parse("workspace()").unwrap().evaluate(&mut ctx));
-        assert!(parse("installed()").unwrap().evaluate(&mut ctx));
+        assert!(parse("used()").unwrap().evaluate(&mut ctx));
     }
 
     #[test]
