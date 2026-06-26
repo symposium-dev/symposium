@@ -261,6 +261,20 @@ pub struct SkillGroup {
     /// Remote source for skills.
     #[serde(default)]
     pub source: PluginSource,
+    #[serde(default)]
+    pub warn: SkillGroupWarn,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SkillGroupWarn {
+    #[serde(default = "default_true")]
+    pub if_empty: bool,
+}
+
+impl Default for SkillGroupWarn {
+    fn default() -> Self {
+        Self { if_empty: true }
+    }
 }
 
 impl<'de> Deserialize<'de> for SkillGroup {
@@ -276,11 +290,14 @@ impl<'de> Deserialize<'de> for SkillGroup {
             where_clause: WhereClause,
             #[serde(default)]
             source: PluginSource,
+            #[serde(default)]
+            warn: SkillGroupWarn,
         }
         let raw = Raw::deserialize(deserializer)?;
         Ok(SkillGroup {
             predicates: merge_where(raw.crates, raw.predicates, raw.where_clause, false),
             source: raw.source,
+            warn: raw.warn,
         })
     }
 }
@@ -1378,7 +1395,7 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
                     let skills_dir: PathBuf = joined.components().collect();
                     plugin_skill_dirs.push(skills_dir.clone());
                     let found = crate::skills::discover_skills(&skills_dir, group);
-                    if found.is_empty() {
+                    if found.is_empty() && group.warn.if_empty {
                         children.push(ValidationResult {
                             path: skills_dir,
                             kind: ValidationKind::Skill,
@@ -1818,6 +1835,7 @@ fn default_skills_group(
     SkillGroup {
         predicates: crate::predicate::PredicateSet { predicates },
         source: PluginSource::Path(PathBuf::from(path)),
+        warn: SkillGroupWarn { if_empty: false },
     }
 }
 
@@ -2819,8 +2837,87 @@ mod tests {
                 .filter(|r| r.result.is_err())
                 .count();
         assert_eq!(results.len(), 3);
-        assert_eq!(ok_count, 6);
+        assert_eq!(ok_count, 3);
         assert_eq!(err_count, 2);
+    }
+
+    #[test]
+    fn validate_no_warning_for_default_skill_groups() {
+        use crate::test_utils::{File, instantiate_fixture};
+        // A plugin with no explicit [[skills]] — only defaults apply.
+        // Neither skills/ nor .agents/skills/ exist, but no warning should fire.
+        let tmp = instantiate_fixture(&[File(
+            "my-plugin/SYMPOSIUM.toml",
+            indoc! {r#"
+                [discovery.allow]
+                crates = { foo = "*" }
+            "#},
+        )]);
+
+        let results = validate_source_dir(tmp.path()).unwrap();
+        let warnings: Vec<_> = results
+            .iter()
+            .flat_map(|r| std::iter::once(r).chain(r.children.iter()))
+            .filter_map(|r| r.warning.as_deref())
+            .collect();
+        assert!(
+            warnings.is_empty(),
+            "default skill groups should not warn when directories don't exist, \
+             but got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn validate_warns_for_explicit_empty_skill_group() {
+        use crate::test_utils::{File, instantiate_fixture};
+        // A plugin with an explicit [[skills]] source.path pointing to a
+        // non-existent directory should produce a warning.
+        let tmp = instantiate_fixture(&[File(
+            "my-plugin/SYMPOSIUM.toml",
+            indoc! {r#"
+                [[skills]]
+                source.path = "nonexistent-dir"
+            "#},
+        )]);
+
+        let results = validate_source_dir(tmp.path()).unwrap();
+        let warnings: Vec<_> = results
+            .iter()
+            .flat_map(|r| std::iter::once(r).chain(r.children.iter()))
+            .filter_map(|r| r.warning.as_deref())
+            .collect();
+        assert_eq!(
+            warnings.len(),
+            1,
+            "explicit skill group with missing dir should warn, got: {warnings:?}"
+        );
+        assert!(warnings[0].contains("no SKILL.md"));
+    }
+
+    #[test]
+    fn validate_warn_if_empty_false_suppresses_warning() {
+        use crate::test_utils::{File, instantiate_fixture};
+        // A plugin author can suppress the empty-group warning with
+        // warn.if_empty = false on their explicit skill group.
+        let tmp = instantiate_fixture(&[File(
+            "my-plugin/SYMPOSIUM.toml",
+            indoc! {r#"
+                [[skills]]
+                source.path = "nonexistent-dir"
+                warn.if_empty = false
+            "#},
+        )]);
+
+        let results = validate_source_dir(tmp.path()).unwrap();
+        let warnings: Vec<_> = results
+            .iter()
+            .flat_map(|r| std::iter::once(r).chain(r.children.iter()))
+            .filter_map(|r| r.warning.as_deref())
+            .collect();
+        assert!(
+            warnings.is_empty(),
+            "warn.if_empty = false should suppress the warning, but got: {warnings:?}"
+        );
     }
 
     #[test]

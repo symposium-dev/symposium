@@ -1094,6 +1094,7 @@ mod tests {
             skills: vec![SkillGroup {
                 predicates: pred_set("serde"), // Group targets serde
                 source: PluginSource::default(),
+                warn: Default::default(),
             }],
             plugin_sources: vec![],
             mcp_servers: vec![],
@@ -1152,6 +1153,7 @@ mod tests {
             skills: vec![SkillGroup {
                 predicates: pred_set("other-crate"), // But group targets other-crate
                 source: PluginSource::default(),
+                warn: Default::default(),
             }],
             plugin_sources: vec![],
             mcp_servers: vec![],
@@ -1228,6 +1230,7 @@ mod tests {
             skills: vec![SkillGroup {
                 predicates: pred_set("serde"), // Group also targets serde
                 source: PluginSource::Path(skill_dir.to_path_buf()),
+                warn: Default::default(),
             }],
             plugin_sources: vec![],
             mcp_servers: vec![],
@@ -1309,6 +1312,7 @@ mod tests {
             skills: vec![SkillGroup {
                 predicates: pred_set("serde"),
                 source: PluginSource::Path(skill_dir.to_path_buf()),
+                warn: Default::default(),
             }],
             plugin_sources: vec![],
             mcp_servers: vec![],
@@ -1391,6 +1395,7 @@ mod tests {
                     ],
                 },
                 source: PluginSource::Path(skill_dir.to_path_buf()),
+                warn: Default::default(),
             }],
             plugin_sources: vec![],
             mcp_servers: vec![],
@@ -1768,6 +1773,7 @@ mod tests {
                     predicates: vec![crate::predicate::Predicate::Workspace],
                 },
                 source: PluginSource::Path(PathBuf::from(".agents/skills")),
+                warn: Default::default(),
             }],
             plugin_sources: vec![],
             mcp_servers: vec![],
@@ -1868,6 +1874,7 @@ mod tests {
                     predicates: vec![crate::predicate::Predicate::Dependency],
                 },
                 source: PluginSource::Path(PathBuf::from("skills")),
+                warn: Default::default(),
             }],
             plugin_sources: vec![],
             mcp_servers: vec![],
