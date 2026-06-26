@@ -42,6 +42,7 @@ pub const BUILTIN_PREDICATE_NAMES: &[&str] = &[
     "workspace",
     "dependency",
     "used",
+    "directory",
     "not",
     "any",
     "all",
@@ -60,6 +61,7 @@ pub const BUILTIN_PREDICATE_NAMES: &[&str] = &[
 #[derive(Debug)]
 pub struct PredicateContext<'a> {
     pub crates: &'a [(String, semver::Version)],
+    cwd: Option<&'a Path>,
     source_provenance: BTreeSet<SourceProvenance>,
     custom_entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
     custom_cache: std::collections::HashMap<(String, String), CustomPredicateResult>,
@@ -69,6 +71,17 @@ impl<'a> PredicateContext<'a> {
     pub fn new(crates: &'a [(String, semver::Version)]) -> Self {
         Self {
             crates,
+            cwd: None,
+            source_provenance: BTreeSet::new(),
+            custom_entries: std::collections::HashMap::new(),
+            custom_cache: std::collections::HashMap::new(),
+        }
+    }
+
+    pub fn with_cwd(crates: &'a [(String, semver::Version)], cwd: &'a Path) -> Self {
+        Self {
+            crates,
+            cwd: Some(cwd),
             source_provenance: BTreeSet::new(),
             custom_entries: std::collections::HashMap::new(),
             custom_cache: std::collections::HashMap::new(),
@@ -81,10 +94,16 @@ impl<'a> PredicateContext<'a> {
     ) -> Self {
         Self {
             crates,
+            cwd: None,
             source_provenance: BTreeSet::new(),
             custom_entries: entries,
             custom_cache: std::collections::HashMap::new(),
         }
+    }
+
+    /// Set the working directory for `directory()` predicate evaluation.
+    pub fn set_cwd(&mut self, cwd: &'a Path) {
+        self.cwd = Some(cwd);
     }
 
     /// Set the source provenance flags for subsequent predicate evaluations.
@@ -152,6 +171,9 @@ pub enum Predicate {
     Dependency,
     /// `used()` — true when the plugin source has used provenance.
     Used,
+    /// `directory(<path>)` — exact match on canonicalized cwd.
+    /// `directory(<path>/**)` — prefix match (cwd starts with canonicalized path).
+    Directory(String),
     /// `not(<p>)` — passes when the inner predicate does not.
     Not(Box<Predicate>),
     /// `any(<p>, …)` — passes when at least one inner predicate does.
@@ -183,6 +205,7 @@ impl Predicate {
                 .source_provenance
                 .contains(&SourceProvenance::Dependency),
             Predicate::Used => ctx.source_provenance.contains(&SourceProvenance::Used),
+            Predicate::Directory(pattern) => evaluate_directory(pattern, ctx.cwd),
             Predicate::Not(inner) => !inner.evaluate(ctx),
             Predicate::Any(children) => children.iter().any(|p| p.evaluate(ctx)),
             Predicate::All(children) => children.iter().all(|p| p.evaluate(ctx)),
@@ -227,6 +250,9 @@ impl Predicate {
                 .source_provenance
                 .contains(&SourceProvenance::Used)
                 .then(Vec::new),
+            Predicate::Directory(pattern) => {
+                evaluate_directory(pattern, ctx.cwd).then(Vec::new)
+            }
             Predicate::Not(inner) => match inner.witness(ctx) {
                 Some(_) => None,
                 None => Some(Vec::new()),
@@ -550,6 +576,12 @@ fn parse(input: &str) -> Result<Predicate> {
             }
             Ok(Predicate::Used)
         }
+        "directory" => {
+            if arg.is_empty() {
+                bail!("`directory()` requires a path argument");
+            }
+            Ok(Predicate::Directory(arg.to_string()))
+        }
         "not" => Ok(Predicate::Not(Box::new(parse(arg)?))),
         "any" => {
             let preds = parse_comma_separated(arg)?;
@@ -769,6 +801,41 @@ fn run_shell(command: &str) -> bool {
     }
 }
 
+/// Evaluate `directory(<pattern>)` against the given cwd.
+///
+/// Two forms:
+/// - `directory(/path/**)` — prefix match after canonicalizing both sides.
+/// - `directory(/path)` — exact match (trailing slashes stripped).
+///
+/// Returns false when cwd is None or canonicalization fails.
+fn evaluate_directory(pattern: &str, cwd: Option<&Path>) -> bool {
+    let Some(cwd) = cwd else {
+        return false;
+    };
+
+    let (dir_str, prefix_mode) = if let Some(stripped) = pattern.strip_suffix("/**") {
+        (stripped, true)
+    } else {
+        (pattern.as_ref(), false)
+    };
+
+    // Strip trailing separator for normalization
+    let dir_str = dir_str.trim_end_matches('/').trim_end_matches(std::path::MAIN_SEPARATOR);
+
+    let Ok(canon_dir) = std::fs::canonicalize(dir_str) else {
+        return false;
+    };
+    let Ok(canon_cwd) = std::fs::canonicalize(cwd) else {
+        return false;
+    };
+
+    if prefix_mode {
+        canon_cwd.starts_with(&canon_dir)
+    } else {
+        canon_cwd == canon_dir
+    }
+}
+
 fn path_exists(arg: &str) -> bool {
     if arg.is_empty() {
         return false;
@@ -829,6 +896,7 @@ impl std::fmt::Display for Predicate {
             Predicate::Workspace => write!(f, "workspace()"),
             Predicate::Dependency => write!(f, "dependency()"),
             Predicate::Used => write!(f, "used()"),
+            Predicate::Directory(path) => write!(f, "directory({path})"),
             Predicate::Custom { name, arg } => write!(f, "{name}({arg})"),
         }
     }
@@ -840,6 +908,28 @@ fn join(preds: &[Predicate]) -> String {
         .map(|p| p.to_string())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+// --- predicate introspection for deferred resolution ---
+
+/// Returns true if every custom predicate referenced by the predicate set is
+/// present in `known_customs`. Builtin predicates are always "known".
+pub fn all_predicates_known(
+    preds: &PredicateSet,
+    known_customs: &std::collections::HashSet<String>,
+) -> bool {
+    preds.predicates.iter().all(|p| predicate_known(p, known_customs))
+}
+
+fn predicate_known(pred: &Predicate, known_customs: &std::collections::HashSet<String>) -> bool {
+    match pred {
+        Predicate::Custom { name, .. } => known_customs.contains(name),
+        Predicate::Not(inner) => predicate_known(inner, known_customs),
+        Predicate::Any(children) | Predicate::All(children) => {
+            children.iter().all(|p| predicate_known(p, known_customs))
+        }
+        _ => true,
+    }
 }
 
 // --- custom predicate evaluation infrastructure ---
@@ -856,7 +946,7 @@ pub struct CustomPredicateResult {
 }
 
 /// A resolved custom predicate entry ready for invocation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ResolvedPredicateEntry {
     pub runnable: symposium_install::Runnable,
     pub args: Vec<String>,
@@ -1768,5 +1858,175 @@ mod tests {
         ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Workspace]));
         let pred = parse("workspace()").unwrap();
         assert!(pred.witness(&mut ctx).is_some());
+    }
+
+    // --- directory() predicate ---
+
+    #[test]
+    fn directory_predicate_exact_match() {
+        let dir = tempfile::tempdir().unwrap();
+        let path_str = dir.path().to_str().unwrap();
+        let pred = parse(&format!("directory({path_str})")).unwrap();
+        let mut ctx = PredicateContext::with_cwd(&[], dir.path());
+        assert!(pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn directory_predicate_exact_rejects_subdirectory() {
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("bar");
+        std::fs::create_dir(&subdir).unwrap();
+        let path_str = dir.path().to_str().unwrap();
+        let pred = parse(&format!("directory({path_str})")).unwrap();
+        let mut ctx = PredicateContext::with_cwd(&[], &subdir);
+        assert!(!pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn directory_predicate_prefix_matches_subdirectory() {
+        let dir = tempfile::tempdir().unwrap();
+        let subdir = dir.path().join("bar");
+        std::fs::create_dir(&subdir).unwrap();
+        let path_str = dir.path().to_str().unwrap();
+        let pred = parse(&format!("directory({path_str}/**)")).unwrap();
+        let mut ctx = PredicateContext::with_cwd(&[], &subdir);
+        assert!(pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn directory_predicate_prefix_matches_exact() {
+        let dir = tempfile::tempdir().unwrap();
+        let path_str = dir.path().to_str().unwrap();
+        let pred = parse(&format!("directory({path_str}/**)")).unwrap();
+        let mut ctx = PredicateContext::with_cwd(&[], dir.path());
+        assert!(pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn directory_predicate_rejects_sibling() {
+        let parent = tempfile::tempdir().unwrap();
+        let foo = parent.path().join("foo");
+        let bar = parent.path().join("bar");
+        std::fs::create_dir(&foo).unwrap();
+        std::fs::create_dir(&bar).unwrap();
+        let foo_str = foo.to_str().unwrap();
+        let pred = parse(&format!("directory({foo_str}/**)")).unwrap();
+        let mut ctx = PredicateContext::with_cwd(&[], &bar);
+        assert!(!pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn directory_predicate_handles_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        let link = dir.path().join("link");
+        std::fs::create_dir(&real).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        #[cfg(not(unix))]
+        std::os::windows::fs::symlink_dir(&real, &link).unwrap();
+
+        let real_str = real.to_str().unwrap();
+        let pred = parse(&format!("directory({real_str})")).unwrap();
+        // cwd is the symlink — canonicalization should resolve it to real
+        let mut ctx = PredicateContext::with_cwd(&[], &link);
+        assert!(pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn directory_predicate_requires_arg() {
+        assert!(parse("directory()").is_err());
+    }
+
+    #[test]
+    fn directory_predicate_nonexistent_path() {
+        let pred = parse("directory(/nonexistent/path/xyz123/**)").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let mut ctx = PredicateContext::with_cwd(&[], dir.path());
+        assert!(!pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn directory_predicate_trailing_slash_normalized() {
+        let dir = tempfile::tempdir().unwrap();
+        let path_str = dir.path().to_str().unwrap();
+        let pred = parse(&format!("directory({path_str}/)")).unwrap();
+        let mut ctx = PredicateContext::with_cwd(&[], dir.path());
+        assert!(pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn directory_predicate_combined_with_crate() {
+        let dir = tempfile::tempdir().unwrap();
+        let path_str = dir.path().to_str().unwrap();
+        let w = ws(&[("tokio", "1.0.0")]);
+        let set = PredicateSet {
+            predicates: vec![
+                parse(&format!("directory({path_str}/**)")).unwrap(),
+                parse("crate(tokio)").unwrap(),
+            ],
+        };
+        // Both hold
+        let mut ctx = PredicateContext::with_cwd(&w, dir.path());
+        assert!(set.evaluate(&mut ctx));
+        // cwd matches but crate missing
+        let empty: Vec<(String, semver::Version)> = vec![];
+        let mut ctx2 = PredicateContext::with_cwd(&empty, dir.path());
+        assert!(!set.evaluate(&mut ctx2));
+    }
+
+    #[test]
+    fn directory_predicate_no_cwd_returns_false() {
+        let dir = tempfile::tempdir().unwrap();
+        let path_str = dir.path().to_str().unwrap();
+        let pred = parse(&format!("directory({path_str})")).unwrap();
+        // Plain ctx has no cwd
+        let mut ctx = ctx(&[]);
+        assert!(!pred.evaluate(&mut ctx));
+    }
+
+    // --- all_predicates_known tests ---
+
+    #[test]
+    fn all_predicates_known_with_only_builtins() {
+        let preds = PredicateSet::parse("crate(serde), env(CI)").unwrap();
+        let known = std::collections::HashSet::new();
+        assert!(all_predicates_known(&preds, &known));
+    }
+
+    #[test]
+    fn all_predicates_known_with_known_custom() {
+        let preds = PredicateSet::parse("my_pred()").unwrap();
+        let known = std::collections::HashSet::from(["my_pred".to_string()]);
+        assert!(all_predicates_known(&preds, &known));
+    }
+
+    #[test]
+    fn all_predicates_known_with_unknown_custom() {
+        let preds = PredicateSet::parse("unknown_pred()").unwrap();
+        let known = std::collections::HashSet::new();
+        assert!(!all_predicates_known(&preds, &known));
+    }
+
+    #[test]
+    fn all_predicates_known_nested_combinator() {
+        let preds = PredicateSet::parse("any(crate(serde), my_pred())").unwrap();
+        let empty: std::collections::HashSet<String> = std::collections::HashSet::new();
+        assert!(!all_predicates_known(&preds, &empty));
+        let known = std::collections::HashSet::from(["my_pred".to_string()]);
+        assert!(all_predicates_known(&preds, &known));
+    }
+
+    #[test]
+    fn directory_predicate_display_roundtrip() {
+        let inputs = [
+            "directory(/tmp/foo)",
+            "directory(/tmp/foo/**)",
+        ];
+        for input in inputs {
+            let p = parse(input).unwrap();
+            assert_eq!(p.to_string(), input, "display drift: {input}");
+            assert_eq!(parse(&p.to_string()).unwrap(), p, "round-trip: {input}");
+        }
     }
 }

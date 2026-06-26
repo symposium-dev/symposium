@@ -690,7 +690,7 @@ pub async fn acquire_source(
 }
 
 /// What an installation resolves to once acquired.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Runnable {
     /// Run as a binary: `path args...`.
     Exec(PathBuf),

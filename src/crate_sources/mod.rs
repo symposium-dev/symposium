@@ -12,7 +12,7 @@ use anyhow::{Context, Result, bail};
 use symposium_install::UpdateLevel;
 use symposium_sdk::workspace::{WorkspaceCrate, WorkspaceDeps};
 
-use crate::config::{CargoDependencySpec, CrateSourceSpec, UsedSourceConfig, Symposium};
+use crate::config::{CargoDependencySpec, CrateSourceSpec, PluginsEntrySource, UsedSourceConfig, Symposium};
 
 mod list;
 mod probe;
@@ -70,9 +70,12 @@ pub struct ResolvedSourceNode {
 }
 
 /// Resolved plugin source graph before discovery mutates agent directories.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default)]
 pub struct ResolvedSourceGraph {
     nodes: Vec<ResolvedSourceNode>,
+    /// Config entries deferred because they reference custom predicates not
+    /// yet defined. Drained by `expand_source_graph`.
+    deferred_config_entries: Vec<DeferredSource>,
 }
 
 impl ResolvedSourceGraph {
@@ -86,19 +89,52 @@ impl ResolvedSourceGraph {
         let resolver = SourceRegistryResolver::new(sym);
         let mut graph = Self::default();
 
-        for spec in used_source_specs(sym.used_sources()) {
-            match resolver.resolve(&spec).await {
-                Ok(root) => {
-                    graph.add_root(
-                        root,
-                        SourceReason {
-                            provenance: SourceProvenance::Used,
-                            detail: "used config".to_string(),
-                        },
-                    );
+        // Evaluate each [[plugins]] entry's predicates before adding its sources.
+        // Entries with unknown custom predicates are deferred for the expand loop.
+        let cwd = deps.cwd().to_path_buf();
+        let crate_list: Vec<(String, semver::Version)> = Vec::new();
+        let known_customs: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for entry in &sym.config.plugins {
+            if !crate::predicate::all_predicates_known(&entry.predicates, &known_customs) {
+                // Defer: contains custom predicates not yet defined.
+                // These will be retried by expand_source_graph.
+                for spec in entry_source_specs(&entry.source) {
+                    graph.deferred_config_entries.push(DeferredSource {
+                        spec,
+                        provenance: BTreeSet::from([SourceProvenance::Used]),
+                        detail: "used config (deferred)".to_string(),
+                        predicates: entry.predicates.clone(),
+                        origin: "config.toml".to_string(),
+                    });
                 }
-                Err(e) => {
-                    tracing::warn!(error = %e, "failed to resolve used source, skipping");
+                continue;
+            }
+
+            let mut pred_ctx = crate::predicate::PredicateContext::with_cwd(&crate_list, &cwd);
+            pred_ctx.set_source_provenance(BTreeSet::from([SourceProvenance::Used]));
+
+            if !entry.predicates.evaluate(&mut pred_ctx) {
+                tracing::debug!(
+                    predicates = ?entry.predicates,
+                    "skipping [[plugins]] entry: predicates not satisfied"
+                );
+                continue;
+            }
+            for spec in entry_source_specs(&entry.source) {
+                match resolver.resolve(&spec).await {
+                    Ok(root) => {
+                        graph.add_root(
+                            root,
+                            SourceReason {
+                                provenance: SourceProvenance::Used,
+                                detail: "used config".to_string(),
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to resolve used source, skipping");
+                    }
                 }
             }
         }
@@ -310,12 +346,68 @@ struct WorklistItem {
     detail: String,
 }
 
-/// Expand a source graph using a worklist algorithm.
+/// A source declaration deferred because its predicates reference unknown
+/// custom predicates. Will be retried when the defining plugin is loaded.
+#[derive(Debug, Clone)]
+struct DeferredSource {
+    spec: RegistrySourceSpec,
+    provenance: BTreeSet<SourceProvenance>,
+    detail: String,
+    predicates: crate::predicate::PredicateSet,
+    origin: String,
+}
+
+/// Info needed to resolve a custom predicate at retry time.
+#[derive(Debug, Clone)]
+struct CustomPredicateInfo {
+    /// The resolved runnable for this predicate.
+    runnable: symposium_install::Runnable,
+    /// Static args to pass before the dynamic arg.
+    args: Vec<String>,
+}
+
+/// Try to resolve a custom predicate's installation from a parsed plugin.
+fn resolve_custom_pred_info(
+    parsed: &crate::plugins::ParsedPlugin,
+    cp: &crate::plugins::CustomPredicate,
+) -> Option<CustomPredicateInfo> {
+    let install = parsed.plugin.get_installation(&cp.command)?;
+    let source_dir = &parsed.source_dir;
+
+    // Resolve the script or executable path relative to the source dir.
+    if let Some(script) = &install.script {
+        let script_path = if std::path::Path::new(script).is_absolute() {
+            PathBuf::from(script)
+        } else {
+            source_dir.join(script)
+        };
+        Some(CustomPredicateInfo {
+            runnable: symposium_install::Runnable::Script(script_path),
+            args: cp.args.clone(),
+        })
+    } else if let Some(executable) = &install.executable {
+        let exec_path = if std::path::Path::new(executable).is_absolute() {
+            PathBuf::from(executable)
+        } else {
+            source_dir.join(executable)
+        };
+        Some(CustomPredicateInfo {
+            runnable: symposium_install::Runnable::Exec(exec_path),
+            args: cp.args.clone(),
+        })
+    } else {
+        None
+    }
+}
+
+/// Expand a source graph using a worklist algorithm with deferred retry.
 ///
 /// Seeds the worklist from each existing node's `[[plugins]] source.*`
 /// declarations and from discovery-allowed workspace dependency candidates.
 /// Processes items one at a time: resolve → add to graph → scan for plugins
-/// → push new work. Terminates when the worklist is empty.
+/// → push new work. When a plugin source declaration is gated on a custom
+/// predicate not yet defined, it is deferred and retried after the worklist
+/// drains (when newly-discovered custom predicates may unblock it).
 ///
 /// When a resolved path is already in the graph but with less provenance,
 /// the new provenance is unioned in and the node's children are re-pushed
@@ -328,7 +420,7 @@ pub async fn expand_source_graph(
     workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
 ) -> usize {
     use crate::discovery::CollectedPolicy;
-    use crate::plugins::{PluginSourceDecl, scan_source_dir_public};
+    use crate::plugins::scan_source_dir_public;
 
     let resolver = SourceRegistryResolver::new(sym);
     let initial_count = graph.len();
@@ -336,6 +428,16 @@ pub async fn expand_source_graph(
     // Collect discovery policy from user config.
     let mut policy = CollectedPolicy::default();
     policy.add_policy(&sym.config.discovery);
+
+    // Track custom predicate names and their resolution info as discovered.
+    let mut known_custom_names: std::collections::HashSet<String> =
+        std::collections::HashSet::new();
+    let mut custom_pred_info: std::collections::HashMap<String, CustomPredicateInfo> =
+        std::collections::HashMap::new();
+
+    // Sources deferred because they reference unknown custom predicates.
+    // Seed from any config entries deferred during build_initial.
+    let mut deferred: Vec<DeferredSource> = std::mem::take(&mut graph.deferred_config_entries);
 
     // Track which (path, provenance) combinations we've already scanned so
     // we don't re-process a node unless new provenance arrives.
@@ -351,103 +453,159 @@ pub async fn expand_source_graph(
         &mut worklist,
         &mut scanned,
         workspace_crates,
+        &mut known_custom_names,
+        &mut custom_pred_info,
+        &mut deferred,
     );
 
     // Seed: evaluate workspace dep candidates against initial policy.
     push_allowed_deps(&policy, workspace_crates, &mut worklist, &scanned);
 
-    // Process worklist.
+    // Process worklist with deferred-retry loop.
     let mut safety_limit = 1000usize;
-    while let Some(item) = worklist.pop() {
-        safety_limit = safety_limit.saturating_sub(1);
-        if safety_limit == 0 {
-            tracing::warn!("expand_source_graph hit safety limit, stopping");
+    loop {
+        // Drain the worklist.
+        while let Some(item) = worklist.pop() {
+            safety_limit = safety_limit.saturating_sub(1);
+            if safety_limit == 0 {
+                tracing::warn!("expand_source_graph hit safety limit, stopping");
+                return graph.len() - initial_count;
+            }
+
+            // Resolve the spec to a concrete path.
+            let root = match resolver.resolve(&item.spec).await {
+                Ok(root) => root,
+                Err(e) => {
+                    tracing::debug!(spec = ?item.spec, error = %e, "failed to resolve source");
+                    continue;
+                }
+            };
+
+            // For dependency candidates, only add if it has plugin content.
+            if item.provenance.contains(&SourceProvenance::Dependency)
+                && item.provenance.len() == 1
+                && !root.path.join("SYMPOSIUM.toml").is_file()
+                && !root.path.join("skills").is_dir()
+            {
+                continue;
+            }
+
+            // Add to graph (unions provenance if already present).
+            let provenance_grew =
+                graph.add_root_with_provenance(&root, &item.provenance, &item.detail);
+
+            // Check if we've already scanned this path with at least this provenance.
+            let dominated = scanned
+                .get(&root.path)
+                .is_some_and(|prev| item.provenance.is_subset(prev));
+            if dominated && !provenance_grew {
+                continue;
+            }
+
+            // Record what we're about to scan.
+            scanned
+                .entry(root.path.clone())
+                .or_default()
+                .extend(item.provenance.iter().copied());
+
+            // Scan the source for plugins.
+            let source_name = &root.source_id;
+            let dir = &root.path;
+            let node_provenance = graph.provenance_for(&root.path);
+            let Ok(contents) =
+                scan_source_dir_public(dir, source_name, workspace_crates, &node_provenance)
+            else {
+                continue;
+            };
+
+            let policy_grew_before = policy.rule_count();
+
+            for result in contents {
+                let Ok(parsed) = result else { continue };
+
+                // Collect custom predicate definitions from this plugin.
+                for cp in &parsed.plugin.custom_predicates {
+                    known_custom_names.insert(cp.name.clone());
+                    if let Some(info) = resolve_custom_pred_info(&parsed, cp) {
+                        custom_pred_info.insert(cp.name.clone(), info);
+                    }
+                }
+
+                // Contribute discovery policy.
+                policy.add_policy(&parsed.plugin.discovery);
+
+                // Push recursive [[plugins]] source.* declarations.
+                for ps in &parsed.plugin.plugin_sources {
+                    if !try_push_plugin_source(
+                        ps,
+                        &node_provenance,
+                        workspace_crates,
+                        &known_custom_names,
+                        source_name,
+                        &mut worklist,
+                        &mut deferred,
+                    ) {
+                        continue;
+                    }
+                }
+            }
+
+            // If new policy rules were added, re-check workspace dep candidates.
+            if policy.rule_count() > policy_grew_before {
+                push_allowed_deps(&policy, workspace_crates, &mut worklist, &scanned);
+            }
+        }
+
+        // Worklist is empty. Retry deferred entries whose predicates are now known.
+        if deferred.is_empty() {
             break;
         }
 
-        // Resolve the spec to a concrete path.
-        let root = match resolver.resolve(&item.spec).await {
-            Ok(root) => root,
-            Err(e) => {
-                tracing::debug!(spec = ?item.spec, error = %e, "failed to resolve source");
-                continue;
-            }
-        };
+        let mut progress = false;
+        let prev_deferred = std::mem::take(&mut deferred);
+        let crate_pairs = crate_pairs(workspace_crates);
 
-        // For dependency candidates, only add if it has plugin content.
-        if item.provenance.contains(&SourceProvenance::Dependency)
-            && item.provenance.len() == 1
-            && !root.path.join("SYMPOSIUM.toml").is_file()
-            && !root.path.join("skills").is_dir()
-        {
-            continue;
-        }
+        // Build custom predicate entries for evaluation.
+        let custom_entries: std::collections::HashMap<String, crate::predicate::ResolvedPredicateEntry> =
+            custom_pred_info.iter().map(|(name, info)| {
+                (name.clone(), crate::predicate::ResolvedPredicateEntry {
+                    runnable: info.runnable.clone(),
+                    args: info.args.clone(),
+                })
+            }).collect();
 
-        // Add to graph (unions provenance if already present).
-        let provenance_grew = graph.add_root_with_provenance(&root, &item.provenance, &item.detail);
-
-        // Check if we've already scanned this path with at least this provenance.
-        let dominated = scanned
-            .get(&root.path)
-            .is_some_and(|prev| item.provenance.is_subset(prev));
-        if dominated && !provenance_grew {
-            continue;
-        }
-
-        // Record what we're about to scan.
-        scanned
-            .entry(root.path.clone())
-            .or_default()
-            .extend(item.provenance.iter().copied());
-
-        // Scan the source for plugins.
-        let source_name = &root.source_id;
-        let dir = &root.path;
-        let node_provenance = graph.provenance_for(&root.path);
-        let Ok(contents) =
-            scan_source_dir_public(dir, source_name, workspace_crates, &node_provenance)
-        else {
-            continue;
-        };
-
-        let policy_grew_before = policy.rule_count();
-
-        for result in contents {
-            let Ok(parsed) = result else { continue };
-
-            // Contribute discovery policy.
-            policy.add_policy(&parsed.plugin.discovery);
-
-            // Push recursive [[plugins]] source.* declarations.
-            for ps in &parsed.plugin.plugin_sources {
-                if !plugin_source_predicates_hold(ps, &node_provenance, workspace_crates) {
-                    continue;
+        for d in prev_deferred {
+            if crate::predicate::all_predicates_known(&d.predicates, &known_custom_names) {
+                // Predicates are now fully resolvable — evaluate them.
+                let mut ctx = crate::predicate::PredicateContext::with_custom_predicates(
+                    &crate_pairs, custom_entries.clone()
+                );
+                ctx.set_source_provenance(d.provenance.clone());
+                if d.predicates.evaluate(&mut ctx) {
+                    worklist.push(WorklistItem {
+                        spec: d.spec,
+                        provenance: d.provenance,
+                        detail: d.detail,
+                    });
+                    progress = true;
                 }
-                match &ps.source {
-                    PluginSourceDecl::Git(url) => {
-                        worklist.push(WorklistItem {
-                            spec: RegistrySourceSpec::Git(url.clone()),
-                            provenance: node_provenance.clone(),
-                            detail: format!("recursive from {source_name}"),
-                        });
-                    }
-                    PluginSourceDecl::Crate(specs) => {
-                        for spec in specs {
-                            worklist.push(WorklistItem {
-                                spec: RegistrySourceSpec::Crate(spec.clone()),
-                                provenance: node_provenance.clone(),
-                                detail: format!("recursive from {source_name}"),
-                            });
-                        }
-                    }
-                    PluginSourceDecl::Path(_) => {}
-                }
+                // else: predicate evaluated to false — legitimately skip
+            } else {
+                // Still unknown — keep deferred
+                deferred.push(d);
             }
         }
 
-        // If new policy rules were added, re-check workspace dep candidates.
-        if policy.rule_count() > policy_grew_before {
-            push_allowed_deps(&policy, workspace_crates, &mut worklist, &scanned);
+        if !progress {
+            // Stuck: remaining entries reference undefined predicates.
+            for d in &deferred {
+                tracing::warn!(
+                    origin = %d.origin,
+                    predicates = ?d.predicates,
+                    "plugin source deferred: custom predicate(s) never defined"
+                );
+            }
+            break;
         }
     }
 
@@ -462,8 +620,11 @@ fn seed_from_nodes(
     worklist: &mut Vec<WorklistItem>,
     scanned: &mut std::collections::BTreeMap<PathBuf, BTreeSet<SourceProvenance>>,
     workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
+    known_custom_names: &mut std::collections::HashSet<String>,
+    custom_pred_info: &mut std::collections::HashMap<String, CustomPredicateInfo>,
+    deferred: &mut Vec<DeferredSource>,
 ) {
-    use crate::plugins::{PluginSourceDecl, scan_source_dir_public};
+    use crate::plugins::scan_source_dir_public;
 
     for node in graph.nodes() {
         let source_name = &node.root.source_id;
@@ -481,48 +642,98 @@ fn seed_from_nodes(
         };
         for result in contents {
             let Ok(parsed) = result else { continue };
+
+            // Collect custom predicate definitions.
+            for cp in &parsed.plugin.custom_predicates {
+                known_custom_names.insert(cp.name.clone());
+                if let Some(info) = resolve_custom_pred_info(&parsed, cp) {
+                    custom_pred_info.insert(cp.name.clone(), info);
+                }
+            }
+
             policy.add_policy(&parsed.plugin.discovery);
             for ps in &parsed.plugin.plugin_sources {
-                if !plugin_source_predicates_hold(ps, &node.provenance, workspace_crates) {
-                    continue;
-                }
-                match &ps.source {
-                    PluginSourceDecl::Git(url) => {
-                        worklist.push(WorklistItem {
-                            spec: RegistrySourceSpec::Git(url.clone()),
-                            provenance: node.provenance.clone(),
-                            detail: format!("recursive from {source_name}"),
-                        });
-                    }
-                    PluginSourceDecl::Crate(specs) => {
-                        for spec in specs {
-                            worklist.push(WorklistItem {
-                                spec: RegistrySourceSpec::Crate(spec.clone()),
-                                provenance: node.provenance.clone(),
-                                detail: format!("recursive from {source_name}"),
-                            });
-                        }
-                    }
-                    PluginSourceDecl::Path(_) => {}
-                }
+                try_push_plugin_source(
+                    ps,
+                    &node.provenance,
+                    workspace_crates,
+                    known_custom_names,
+                    source_name,
+                    worklist,
+                    deferred,
+                );
             }
         }
     }
 }
 
-fn plugin_source_predicates_hold(
-    source: &crate::plugins::PluginSearchSource,
+/// Attempt to push a plugin source declaration onto the worklist.
+/// If the predicates reference unknown custom predicates, defers the source instead.
+/// Returns true if the source was pushed (or deferred), false if predicates failed.
+fn try_push_plugin_source(
+    ps: &crate::plugins::PluginSearchSource,
     provenance: &BTreeSet<SourceProvenance>,
     workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
+    known_custom_names: &std::collections::HashSet<String>,
+    source_name: &str,
+    worklist: &mut Vec<WorklistItem>,
+    deferred: &mut Vec<DeferredSource>,
 ) -> bool {
-    if source.predicates.is_empty() {
+    use crate::plugins::PluginSourceDecl;
+
+    // Convert the source declaration to specs (only git/crate go through worklist).
+    let specs: Vec<RegistrySourceSpec> = match &ps.source {
+        PluginSourceDecl::Git(url) => vec![RegistrySourceSpec::Git(url.clone())],
+        PluginSourceDecl::Crate(crate_specs) => crate_specs
+            .iter()
+            .map(|s| RegistrySourceSpec::Crate(s.clone()))
+            .collect(),
+        PluginSourceDecl::Path(_) => return true, // path sources resolved inline
+    };
+
+    if ps.predicates.is_empty() {
+        // No predicates — push directly.
+        for spec in specs {
+            worklist.push(WorklistItem {
+                spec,
+                provenance: provenance.clone(),
+                detail: format!("recursive from {source_name}"),
+            });
+        }
         return true;
     }
 
+    // Check if all predicates are resolvable with currently known customs.
+    if !crate::predicate::all_predicates_known(&ps.predicates, known_custom_names) {
+        // Defer: we can't evaluate yet.
+        for spec in specs {
+            deferred.push(DeferredSource {
+                spec,
+                provenance: provenance.clone(),
+                detail: format!("recursive from {source_name}"),
+                predicates: ps.predicates.clone(),
+                origin: source_name.to_string(),
+            });
+        }
+        return true;
+    }
+
+    // All predicates known — evaluate them.
     let crate_pairs = crate_pairs(workspace_crates);
     let mut ctx = crate::predicate::PredicateContext::new(&crate_pairs);
     ctx.set_source_provenance(provenance.clone());
-    source.predicates.evaluate(&mut ctx)
+    if !ps.predicates.evaluate(&mut ctx) {
+        return false;
+    }
+
+    for spec in specs {
+        worklist.push(WorklistItem {
+            spec,
+            provenance: provenance.clone(),
+            detail: format!("recursive from {source_name}"),
+        });
+    }
+    true
 }
 
 /// Push workspace dependency candidates that are allowed by policy but not
@@ -672,6 +883,27 @@ pub fn used_source_specs(used: &UsedSourceConfig) -> Vec<RegistrySourceSpec> {
         used.git
             .iter()
             .map(|url| RegistrySourceSpec::Git(url.clone())),
+    );
+    specs
+}
+
+/// Convert a single `PluginsEntrySource` into registry source specs.
+pub fn entry_source_specs(source: &PluginsEntrySource) -> Vec<RegistrySourceSpec> {
+    let mut specs = Vec::new();
+    specs.extend(source.crates.iter().map(|(name, dependency)| {
+        RegistrySourceSpec::Crate(CrateSourceSpec {
+            key: Some(name.clone()),
+            dependency: dependency.clone(),
+        })
+    }));
+    specs.extend(
+        source
+            .paths
+            .iter()
+            .map(|path| RegistrySourceSpec::Path(PathBuf::from(path))),
+    );
+    specs.extend(
+        source.git.iter().map(|url| RegistrySourceSpec::Git(url.clone())),
     );
     specs
 }
@@ -1205,5 +1437,312 @@ paths = ["{}"]
         assert!(node.provenance.contains(&SourceProvenance::Workspace));
         assert!(node.provenance.contains(&SourceProvenance::Dependency));
         assert_eq!(node.reasons.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn build_initial_skips_directory_scoped_entry_when_cwd_differs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_dir = tmp.path().join("symposium-home");
+        std::fs::create_dir(&config_dir).unwrap();
+
+        let plugin_dir = config_dir.join("scoped-plugin");
+        std::fs::create_dir(&plugin_dir).unwrap();
+
+        let matching_dir = tmp.path().join("matching-project");
+        std::fs::create_dir(&matching_dir).unwrap();
+        let non_matching_dir = tmp.path().join("other-project");
+        std::fs::create_dir(&non_matching_dir).unwrap();
+
+        // Config with a directory-scoped entry pointing at the scoped-plugin path
+        std::fs::write(
+            config_dir.join("config.toml"),
+            format!(
+                r#"[[plugins]]
+where.predicates = ["directory({}/**)"]
+source.paths = ["scoped-plugin"]
+"#,
+                matching_dir.display()
+            ),
+        )
+        .unwrap();
+
+        let sym = Symposium::from_dir(&config_dir);
+
+        // From non-matching directory: the scoped entry is skipped
+        let mut deps = sym.workspace_deps(&non_matching_dir);
+        let graph = ResolvedSourceGraph::build_initial(&sym, &mut deps).await;
+        assert!(
+            graph.nodes().is_empty(),
+            "directory-scoped entry should be skipped when cwd doesn't match"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_initial_includes_directory_scoped_entry_when_cwd_matches() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config_dir = tmp.path().join("symposium-home");
+        std::fs::create_dir(&config_dir).unwrap();
+
+        let plugin_dir = config_dir.join("scoped-plugin");
+        std::fs::create_dir(&plugin_dir).unwrap();
+
+        let matching_dir = tmp.path().join("matching-project");
+        std::fs::create_dir(&matching_dir).unwrap();
+
+        std::fs::write(
+            config_dir.join("config.toml"),
+            format!(
+                r#"[[plugins]]
+where.predicates = ["directory({}/**)"]
+source.paths = ["scoped-plugin"]
+"#,
+                matching_dir.display()
+            ),
+        )
+        .unwrap();
+
+        let sym = Symposium::from_dir(&config_dir);
+
+        // From matching directory: the scoped entry is included
+        let mut deps = sym.workspace_deps(&matching_dir);
+        let graph = ResolvedSourceGraph::build_initial(&sym, &mut deps).await;
+        assert_eq!(
+            graph.nodes().len(),
+            1,
+            "directory-scoped entry should be included when cwd matches"
+        );
+        assert!(graph.nodes()[0].provenance.contains(&SourceProvenance::Used));
+    }
+
+    #[tokio::test]
+    async fn expand_defers_and_retries_custom_pred_gated_config_entry() {
+        // Config entry A: unconditional, loads a plugin that defines `org_check`.
+        // Config entry B: gated on `org_check()`, loads source B.
+        // After build_initial + expand, source B should be in the graph because
+        // org_check is discovered during expansion and the deferred config entry
+        // is retried.
+        let tmp = tempfile::tempdir().unwrap();
+        let config_dir = tmp.path().join("symposium-home");
+        std::fs::create_dir(&config_dir).unwrap();
+
+        // Source A: defines custom predicate org_check
+        let source_a = config_dir.join("source-a");
+        std::fs::create_dir(&source_a).unwrap();
+
+        let checker_script = source_a.join("checker.sh");
+        std::fs::write(&checker_script, "#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&checker_script, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+
+        std::fs::write(
+            source_a.join("SYMPOSIUM.toml"),
+            format!(
+                r#"name = "source-a-plugin"
+
+[[installations]]
+name = "org-checker"
+script = "{}"
+
+[[predicate]]
+name = "org_check"
+command = "org-checker"
+"#,
+                checker_script.display(),
+            ),
+        )
+        .unwrap();
+
+        // Source B: has a SYMPOSIUM.toml (so it passes the plugin content check)
+        let source_b = config_dir.join("source-b");
+        std::fs::create_dir(&source_b).unwrap();
+        std::fs::write(
+            source_b.join("SYMPOSIUM.toml"),
+            "name = \"source-b-plugin\"\n",
+        )
+        .unwrap();
+
+        // Config: entry A unconditional, entry B gated on org_check()
+        std::fs::write(
+            config_dir.join("config.toml"),
+            format!(
+                r#"[[plugins]]
+source.paths = ["{}"]
+
+[[plugins]]
+where.predicates = ["org_check()"]
+source.paths = ["{}"]
+"#,
+                source_a.display(),
+                source_b.display(),
+            ),
+        )
+        .unwrap();
+
+        let sym = Symposium::from_dir(&config_dir);
+        let workspace_dir = tmp.path().join("workspace");
+        std::fs::create_dir(&workspace_dir).unwrap();
+        let mut deps = sym.workspace_deps(&workspace_dir);
+        let mut graph = ResolvedSourceGraph::build_initial(&sym, &mut deps).await;
+
+        // At this point, entry B should be deferred (org_check not yet known)
+        assert!(
+            !graph.deferred_config_entries.is_empty(),
+            "entry B should be deferred"
+        );
+
+        // Expand: scans source A, discovers org_check, retries entry B
+        let workspace_crates: Vec<symposium_sdk::workspace::WorkspaceCrate> = vec![];
+        let added = expand_source_graph(&mut graph, &sym, &workspace_crates).await;
+
+        // Source B should now be in the graph
+        let source_b_canonical = std::fs::canonicalize(&source_b).unwrap();
+        assert!(
+            graph.nodes().iter().any(|n| n.root.path == source_b_canonical),
+            "source B should be in graph after deferred retry resolved org_check(); \
+             graph has {} nodes: {:?}",
+            graph.nodes().len(),
+            graph.nodes().iter().map(|n| &n.root.path).collect::<Vec<_>>()
+        );
+        assert!(added > 0, "expand should have added source B");
+    }
+
+    #[tokio::test]
+    async fn expand_skips_custom_pred_gated_config_entry_when_pred_fails() {
+        // Config entry B gated on org_check() where the predicate script exits 1.
+        // Source B should NOT be in the graph.
+        let tmp = tempfile::tempdir().unwrap();
+        let config_dir = tmp.path().join("symposium-home");
+        std::fs::create_dir(&config_dir).unwrap();
+
+        let source_a = config_dir.join("source-a");
+        std::fs::create_dir(&source_a).unwrap();
+
+        let checker_script = source_a.join("checker.sh");
+        std::fs::write(&checker_script, "#!/bin/sh\nexit 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&checker_script, std::fs::Permissions::from_mode(0o755))
+                .unwrap();
+        }
+
+        std::fs::write(
+            source_a.join("SYMPOSIUM.toml"),
+            format!(
+                r#"name = "source-a-plugin"
+
+[[installations]]
+name = "org-checker"
+script = "{}"
+
+[[predicate]]
+name = "org_check"
+command = "org-checker"
+"#,
+                checker_script.display(),
+            ),
+        )
+        .unwrap();
+
+        let source_b = config_dir.join("source-b");
+        std::fs::create_dir(&source_b).unwrap();
+        std::fs::write(
+            source_b.join("SYMPOSIUM.toml"),
+            "name = \"source-b-plugin\"\n",
+        )
+        .unwrap();
+
+        std::fs::write(
+            config_dir.join("config.toml"),
+            format!(
+                r#"[[plugins]]
+source.paths = ["{}"]
+
+[[plugins]]
+where.predicates = ["org_check()"]
+source.paths = ["{}"]
+"#,
+                source_a.display(),
+                source_b.display(),
+            ),
+        )
+        .unwrap();
+
+        let sym = Symposium::from_dir(&config_dir);
+        let workspace_dir = tmp.path().join("workspace");
+        std::fs::create_dir(&workspace_dir).unwrap();
+        let mut deps = sym.workspace_deps(&workspace_dir);
+        let mut graph = ResolvedSourceGraph::build_initial(&sym, &mut deps).await;
+
+        let workspace_crates: Vec<symposium_sdk::workspace::WorkspaceCrate> = vec![];
+        expand_source_graph(&mut graph, &sym, &workspace_crates).await;
+
+        let source_b_canonical = std::fs::canonicalize(&source_b).unwrap();
+        assert!(
+            !graph.nodes().iter().any(|n| n.root.path == source_b_canonical),
+            "source B should NOT be in graph when org_check() fails"
+        );
+    }
+
+    #[tokio::test]
+    async fn expand_warns_on_undefined_custom_pred() {
+        // A [[plugins]] source is gated on `never_defined()` — no plugin
+        // defines it. The expansion should not include the gated source
+        // (it gets deferred and never retried).
+        let tmp = tempfile::tempdir().unwrap();
+        let config_dir = tmp.path().join("symposium-home");
+        std::fs::create_dir(&config_dir).unwrap();
+
+        let source_a = config_dir.join("source-a");
+        std::fs::create_dir(&source_a).unwrap();
+
+        let source_b = config_dir.join("source-b");
+        std::fs::create_dir(&source_b).unwrap();
+        std::fs::create_dir(source_b.join("skills")).unwrap();
+
+        // Source A references B gated on a predicate nobody defines
+        std::fs::write(
+            source_a.join("SYMPOSIUM.toml"),
+            format!(
+                r#"name = "source-a-plugin"
+
+[[plugins]]
+where.predicates = ["never_defined()"]
+source.path = "{}"
+"#,
+                source_b.display(),
+            ),
+        )
+        .unwrap();
+
+        std::fs::write(
+            config_dir.join("config.toml"),
+            format!(
+                r#"[[plugins]]
+source.paths = ["{}"]
+"#,
+                source_a.display()
+            ),
+        )
+        .unwrap();
+
+        let sym = Symposium::from_dir(&config_dir);
+        let workspace_dir = tmp.path().join("workspace");
+        std::fs::create_dir(&workspace_dir).unwrap();
+        let mut deps = sym.workspace_deps(&workspace_dir);
+        let mut graph = ResolvedSourceGraph::build_initial(&sym, &mut deps).await;
+
+        let workspace_crates: Vec<symposium_sdk::workspace::WorkspaceCrate> = vec![];
+        expand_source_graph(&mut graph, &sym, &workspace_crates).await;
+
+        let source_b_canonical = std::fs::canonicalize(&source_b).unwrap();
+        assert!(
+            !graph.nodes().iter().any(|n| n.root.path == source_b_canonical),
+            "source B should NOT be in graph when predicate is never defined"
+        );
     }
 }

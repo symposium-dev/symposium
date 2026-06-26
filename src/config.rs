@@ -56,28 +56,26 @@ impl HookScope {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Config {
     /// Automatically run `sync` when hooks are invoked.
-    #[serde(default = "default_true", rename = "auto-sync")]
+    #[serde(rename = "auto-sync")]
     pub auto_sync: bool,
 
     /// Propagate user-authored skills from `.agents/skills/` to each
     /// configured agent's skill directory (e.g. `.claude/skills/`,
     /// `.kiro/skills/`). Skills that symposium itself installed into
     /// `.agents/skills/` are not propagated.
-    #[serde(default = "default_true", rename = "agents-syncing")]
+    #[serde(rename = "agents-syncing")]
     pub agents_syncing: bool,
 
     /// How many seconds after a successful sync we skip re-checking a skill
     /// directory. Set to 0 to disable debouncing (useful in tests).
-    #[serde(default = "default_sync_debounce_secs", rename = "sync-debounce-secs")]
+    #[serde(rename = "sync-debounce-secs")]
     pub sync_debounce_secs: u64,
 
     /// Where to install agent hooks.
     #[serde(
-        default,
         rename = "hook-scope",
         skip_serializing_if = "HookScope::is_default"
     )]
@@ -85,26 +83,106 @@ pub struct Config {
 
     /// Auto-update behavior for the symposium binary.
     #[serde(
-        default,
         rename = "auto-update",
         skip_serializing_if = "AutoUpdate::is_default"
     )]
     pub auto_update: AutoUpdate,
 
     /// Agents configured for this user.
-    #[serde(default, rename = "agent")]
+    #[serde(rename = "agent")]
     pub agents: Vec<AgentEntry>,
 
-    #[serde(default)]
     pub logging: LoggingConfig,
 
-    /// User-installed plugin sources in the registry-ready model.
-    #[serde(default = "default_used_sources")]
+    /// User-installed plugin sources. New format uses `[[plugins]]` entries,
+    /// but the legacy `[used]` format is transparently upgraded on read.
+    ///
+    /// This field is serialized as `[[plugins]]` and the legacy `[used]` key
+    /// is never written on save.
+    pub plugins: Vec<PluginsEntry>,
+
+    /// Legacy compat: never serialized, only present during deserialization.
+    #[serde(skip)]
     pub used: UsedSourceConfig,
 
     /// User-configured discovery allow/deny policy.
-    #[serde(default)]
     pub discovery: DiscoveryPolicy,
+}
+
+impl<'de> Deserialize<'de> for Config {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawConfig {
+            #[serde(default = "default_true", rename = "auto-sync")]
+            auto_sync: bool,
+            #[serde(default = "default_true", rename = "agents-syncing")]
+            agents_syncing: bool,
+            #[serde(default = "default_sync_debounce_secs", rename = "sync-debounce-secs")]
+            sync_debounce_secs: u64,
+            #[serde(default, rename = "hook-scope")]
+            hook_scope: HookScope,
+            #[serde(default, rename = "auto-update")]
+            auto_update: AutoUpdate,
+            #[serde(default, rename = "agent")]
+            agents: Vec<AgentEntry>,
+            #[serde(default)]
+            logging: LoggingConfig,
+            #[serde(default)]
+            used: Option<UsedSourceConfig>,
+            #[serde(default)]
+            plugins: Option<Vec<PluginsEntry>>,
+            #[serde(default)]
+            discovery: DiscoveryPolicy,
+        }
+        let raw = RawConfig::deserialize(deserializer)?;
+
+        // Determine plugins entries: prefer [[plugins]] if present,
+        // otherwise migrate legacy [used] to a single global entry.
+        let plugins = match (raw.plugins, raw.used) {
+            (Some(plugins), _) => plugins,
+            (None, Some(used)) => {
+                vec![PluginsEntry {
+                    predicates: crate::predicate::PredicateSet::default(),
+                    source: PluginsEntrySource {
+                        crates: used.crates,
+                        paths: used.paths,
+                        git: used.git,
+                    },
+                }]
+            }
+            (None, None) => default_plugins(),
+        };
+
+        // Build the compatibility `used` view: merge all global (no-predicate) entries.
+        let used = plugins_to_used(&plugins);
+
+        Ok(Config {
+            auto_sync: raw.auto_sync,
+            agents_syncing: raw.agents_syncing,
+            sync_debounce_secs: raw.sync_debounce_secs,
+            hook_scope: raw.hook_scope,
+            auto_update: raw.auto_update,
+            agents: raw.agents,
+            logging: raw.logging,
+            plugins,
+            used,
+            discovery: raw.discovery,
+        })
+    }
+}
+
+/// Build a legacy `UsedSourceConfig` view by merging all plugin entries
+/// (regardless of predicates) for backward compatibility with callers that
+/// still use `sym.used_sources()` / `sym.used_crates()`.
+fn plugins_to_used(plugins: &[PluginsEntry]) -> UsedSourceConfig {
+    let mut used = UsedSourceConfig::default();
+    for entry in plugins {
+        used.crates.extend(entry.source.crates.clone());
+        used.paths.extend(entry.source.paths.clone());
+        used.git.extend(entry.source.git.clone());
+    }
+    used
 }
 
 /// An `[[agent]]` entry — just identifies an agent by name.
@@ -130,6 +208,8 @@ impl Default for LoggingConfig {
 
 impl Default for Config {
     fn default() -> Self {
+        let plugins = default_plugins();
+        let used = plugins_to_used(&plugins);
         Self {
             auto_sync: true,
             agents_syncing: true,
@@ -138,13 +218,17 @@ impl Default for Config {
             auto_update: AutoUpdate::default(),
             agents: Vec::new(),
             logging: LoggingConfig::default(),
-            used: default_used_sources(),
+            plugins,
+            used,
             discovery: DiscoveryPolicy::default(),
         }
     }
 }
 
 /// Installed plugin-source declarations grouped by registry.
+///
+/// Legacy type retained for backward-compatible deserialization of `[used]`.
+/// New code should use `PluginsEntry` / `PluginsEntrySource` instead.
 #[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq)]
 pub struct UsedSourceConfig {
     /// Cargo dependency-table entries keyed by crate name.
@@ -163,12 +247,110 @@ pub struct UsedSourceConfig {
     pub git: Vec<String>,
 }
 
-fn default_used_sources() -> UsedSourceConfig {
-    UsedSourceConfig {
-        crates: default_used_crates(),
-        paths: Vec::new(),
-        git: Vec::new(),
+/// A `[[plugins]]` entry in user config. Each entry conditionally contributes
+/// plugin sources gated by its `where.*` predicates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PluginsEntry {
+    /// Activation predicates (from `where.predicates`). Empty means always active.
+    pub predicates: crate::predicate::PredicateSet,
+    /// Plugin sources contributed by this entry.
+    pub source: PluginsEntrySource,
+}
+
+/// Plugin sources within a single `[[plugins]]` entry.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PluginsEntrySource {
+    /// Cargo dependency-table entries keyed by crate name.
+    pub crates: BTreeMap<String, CargoDependencySpec>,
+    /// Direct path-registry plugin sources.
+    pub paths: Vec<String>,
+    /// Direct git-registry plugin sources.
+    pub git: Vec<String>,
+}
+
+impl PluginsEntrySource {
+    pub fn is_empty(&self) -> bool {
+        self.crates.is_empty() && self.paths.is_empty() && self.git.is_empty()
     }
+}
+
+impl Serialize for PluginsEntry {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(None)?;
+        if !self.predicates.is_empty() {
+            #[derive(Serialize)]
+            struct Where<'a> {
+                predicates: &'a crate::predicate::PredicateSet,
+            }
+            map.serialize_entry("where", &Where { predicates: &self.predicates })?;
+        }
+        #[derive(Serialize)]
+        struct Source<'a> {
+            #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+            crates: &'a BTreeMap<String, CargoDependencySpec>,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            paths: &'a Vec<String>,
+            #[serde(skip_serializing_if = "Vec::is_empty")]
+            git: &'a Vec<String>,
+        }
+        map.serialize_entry("source", &Source {
+            crates: &self.source.crates,
+            paths: &self.source.paths,
+            git: &self.source.git,
+        })?;
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for PluginsEntry {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct WhereRaw {
+            #[serde(default)]
+            predicates: crate::predicate::PredicateSet,
+        }
+        #[derive(Deserialize)]
+        struct SourceRaw {
+            #[serde(default)]
+            crates: BTreeMap<String, CargoDependencySpec>,
+            #[serde(default)]
+            paths: Vec<String>,
+            #[serde(default)]
+            git: Vec<String>,
+        }
+        #[derive(Deserialize)]
+        struct Raw {
+            #[serde(default, rename = "where")]
+            where_clause: Option<WhereRaw>,
+            #[serde(default)]
+            source: Option<SourceRaw>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        let predicates = raw.where_clause
+            .map(|w| w.predicates)
+            .unwrap_or_default();
+        let source = match raw.source {
+            Some(s) => PluginsEntrySource {
+                crates: s.crates,
+                paths: s.paths,
+                git: s.git,
+            },
+            None => PluginsEntrySource::default(),
+        };
+        Ok(PluginsEntry { predicates, source })
+    }
+}
+
+fn default_plugins() -> Vec<PluginsEntry> {
+    vec![PluginsEntry {
+        predicates: crate::predicate::PredicateSet::default(),
+        source: PluginsEntrySource {
+            crates: default_used_crates(),
+            paths: Vec::new(),
+            git: Vec::new(),
+        },
+    }]
 }
 
 fn default_used_crates() -> BTreeMap<String, CargoDependencySpec> {
@@ -637,6 +819,11 @@ impl Symposium {
         &self.config.used.crates
     }
 
+    /// Rebuild the legacy `used` compatibility view from `plugins`.
+    pub fn rebuild_used_compat(&mut self) {
+        self.config.used = plugins_to_used(&self.config.plugins);
+    }
+
     /// Write the user config to disk.
     pub fn save_config(&self) -> anyhow::Result<()> {
         let path = self.dirs.config_dir.join("config.toml");
@@ -1054,5 +1241,123 @@ mod tests {
         }
 
         assert_eq!(result, xdg_state.join("symposium").join("logs"));
+    }
+
+    // --- [[plugins]] config format tests ---
+
+    #[test]
+    fn parse_plugins_array_basic() {
+        let config: Config = toml::from_str(indoc! {r#"
+            [[plugins]]
+            source.crates = { foo = "1" }
+        "#})
+        .unwrap();
+        assert_eq!(config.plugins.len(), 1);
+        assert!(config.plugins[0].predicates.is_empty());
+        assert_eq!(
+            config.plugins[0].source.crates["foo"],
+            CargoDependencySpec::Version("1".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_plugins_array_with_predicates() {
+        let config: Config = toml::from_str(indoc! {r#"
+            [[plugins]]
+            where.predicates = ["directory(/tmp/foo/**)"]
+            source.crates = { bar = "2" }
+        "#})
+        .unwrap();
+        assert_eq!(config.plugins.len(), 1);
+        assert!(!config.plugins[0].predicates.is_empty());
+        assert_eq!(config.plugins[0].predicates.predicates.len(), 1);
+        assert_eq!(
+            config.plugins[0].predicates.predicates[0].to_string(),
+            "directory(/tmp/foo/**)"
+        );
+    }
+
+    #[test]
+    fn parse_plugins_multiple_entries() {
+        let config: Config = toml::from_str(indoc! {r#"
+            [[plugins]]
+            source.crates = { symposium-recommendations = "1" }
+
+            [[plugins]]
+            where.predicates = ["directory(/tmp/project/**)"]
+            source.crates = { foo = "1" }
+            source.paths = ["/home/me/plugin"]
+        "#})
+        .unwrap();
+        assert_eq!(config.plugins.len(), 2);
+        assert!(config.plugins[0].predicates.is_empty());
+        assert!(!config.plugins[1].predicates.is_empty());
+        assert_eq!(config.plugins[1].source.paths, vec!["/home/me/plugin"]);
+    }
+
+    #[test]
+    fn parse_legacy_used_format_migrates_to_plugins() {
+        let config: Config = toml::from_str(indoc! {r#"
+            [used]
+            paths = ["/home/me/dev/plugin-source"]
+            git = ["https://github.com/org/plugin"]
+
+            [used.crates]
+            foo = "1"
+        "#})
+        .unwrap();
+        // Legacy format becomes a single global plugins entry
+        assert_eq!(config.plugins.len(), 1);
+        assert!(config.plugins[0].predicates.is_empty());
+        assert_eq!(
+            config.plugins[0].source.crates["foo"],
+            CargoDependencySpec::Version("1".to_string())
+        );
+        assert_eq!(
+            config.plugins[0].source.paths,
+            vec!["/home/me/dev/plugin-source"]
+        );
+        assert_eq!(
+            config.plugins[0].source.git,
+            vec!["https://github.com/org/plugin"]
+        );
+        // Compat accessor still works
+        assert_eq!(config.used.paths, vec!["/home/me/dev/plugin-source"]);
+    }
+
+    #[test]
+    fn plugins_entries_round_trip() {
+        let config: Config = toml::from_str(indoc! {r#"
+            [[plugins]]
+            source.crates = { symposium-recommendations = "1" }
+
+            [[plugins]]
+            where.predicates = ["directory(/tmp/foo/**)"]
+            source.crates = { bar = "2" }
+            source.paths = ["/home/me/plugin"]
+        "#})
+        .unwrap();
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        let reparsed: Config = toml::from_str(&serialized).unwrap();
+        assert_eq!(reparsed.plugins.len(), 2);
+        assert_eq!(reparsed.plugins[0].source.crates, config.plugins[0].source.crates);
+        assert_eq!(reparsed.plugins[1].predicates.predicates.len(), 1);
+        assert_eq!(reparsed.plugins[1].source.paths, vec!["/home/me/plugin"]);
+    }
+
+    #[test]
+    fn plugins_compat_used_merges_all_entries() {
+        let config: Config = toml::from_str(indoc! {r#"
+            [[plugins]]
+            source.crates = { foo = "1" }
+
+            [[plugins]]
+            where.predicates = ["directory(/tmp/foo/**)"]
+            source.crates = { bar = "2" }
+        "#})
+        .unwrap();
+        // Compat view merges crates from all entries
+        assert!(config.used.crates.contains_key("foo"));
+        assert!(config.used.crates.contains_key("bar"));
     }
 }

@@ -179,3 +179,102 @@ async fn use_cmd_and_remove_cmd_are_in_human_help_section() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn use_cmd_creates_directory_scoped_entry() {
+    with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
+        ctx.symposium(&["use", "foo"]).await?;
+        let config = parse_config(&ctx);
+        // Without --global, should create a directory-scoped entry
+        let scoped = config.plugins.iter().find(|e| !e.predicates.is_empty());
+        assert!(
+            scoped.is_some(),
+            "use without --global should create a directory-scoped entry"
+        );
+        let scoped = scoped.unwrap();
+        assert_eq!(scoped.predicates.predicates.len(), 1);
+        let pred_str = scoped.predicates.predicates[0].to_string();
+        assert!(
+            pred_str.starts_with("directory(") && pred_str.ends_with("/**)"),
+            "expected directory(**) predicate, got: {pred_str}"
+        );
+        assert_eq!(
+            scoped.source.crates["foo"],
+            CargoDependencySpec::Version("*".to_string())
+        );
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn use_cmd_global_creates_unscoped_entry() {
+    with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
+        ctx.symposium(&["use", "--global", "foo"]).await?;
+        let config = parse_config(&ctx);
+        // With --global, should go into an entry with empty predicates
+        let global = config.plugins.iter().find(|e| {
+            e.predicates.is_empty() && e.source.crates.contains_key("foo")
+        });
+        assert!(
+            global.is_some(),
+            "use --global should create/use a global entry"
+        );
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn use_cmd_appends_to_existing_directory_entry() {
+    with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
+        ctx.symposium(&["use", "foo"]).await?;
+        ctx.symposium(&["use", "bar"]).await?;
+        let config = parse_config(&ctx);
+        // Both should end up in the same directory-scoped entry
+        let scoped = config.plugins.iter().find(|e| !e.predicates.is_empty()).unwrap();
+        assert!(scoped.source.crates.contains_key("foo"));
+        assert!(scoped.source.crates.contains_key("bar"));
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn remove_cmd_finds_source_across_entries() {
+    with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
+        ctx.symposium(&["use", "foo"]).await?;
+        ctx.symposium(&["use", "--global", "bar"]).await?;
+        // Remove from scoped entry
+        ctx.symposium(&["remove", "foo"]).await?;
+        let config = parse_config(&ctx);
+        assert!(!config.used.crates.contains_key("foo"));
+        assert!(config.used.crates.contains_key("bar"));
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn remove_cmd_cleans_up_empty_entry() {
+    with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
+        ctx.symposium(&["use", "foo"]).await?;
+        ctx.symposium(&["remove", "foo"]).await?;
+        let config = parse_config(&ctx);
+        // The scoped entry that had only "foo" should be cleaned up
+        let scoped_entries: Vec<_> = config.plugins.iter()
+            .filter(|e| !e.predicates.is_empty())
+            .collect();
+        assert!(
+            scoped_entries.is_empty() || scoped_entries.iter().all(|e| !e.source.is_empty()),
+            "empty entries should be cleaned up after removal"
+        );
+        Ok(())
+    })
+    .await
+    .unwrap();
+}

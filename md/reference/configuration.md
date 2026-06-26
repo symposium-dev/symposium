@@ -19,17 +19,15 @@ name = "gemini"
 [logging]
 level = "info"
 
-# Plugin crates in use
-[used]
-paths = ["/home/me/dev/my-plugin-source"]
-git = ["https://github.com/my-org/my-plugin-source"]
+# Plugin sources — the [[plugins]] array
+[[plugins]]
+source.crates = { symposium-recommendations = "1" }
 
-[used.crates]
-symposium-recommendations = "1"
-semver-tracked = "1"
-pinned-plugin = "=1.2.0"
-my-org-plugins = { git = "https://github.com/my-org/my-org-plugins" }
-local-dev = { path = "/home/me/dev/my-plugins" }
+[[plugins]]
+where.predicates = ["directory(/home/me/dev/work/**)"]
+source.crates = { my-org-plugins = { git = "https://github.com/my-org/my-org-plugins" } }
+source.paths = ["/home/me/dev/my-plugin-source"]
+source.git = ["https://github.com/my-org/my-plugin-source"]
 
 # Allow any workspace dep with a SYMPOSIUM.toml to be auto-discovered
 [discovery]
@@ -44,7 +42,7 @@ allow = "*"
 | `agents-syncing` | bool | `true` | Propagate user-authored skills from `.agents/skills/` into the per-agent skill directories of any configured agent that does not natively use `.agents/skills/` (such as `.claude/skills/` or `.kiro/skills/`). Skills that symposium itself installed — identified by the `.symposium` marker file — are not propagated. See [Workspace plugins](../workspace.md) for the user-guide overview, or [Agents syncing](#agents-syncing-mirror-user-authored-skills) below for details. |
 | `hook-scope` | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace. |
 | `auto-update` | string | `"on"` | Controls automatic update behavior. `"off"` disables update checks entirely. `"warn"` checks the registry (at most once per 24 hours) and prints a message when a newer version is available. `"on"` automatically installs the update via `cargo install` and re-executes the command with the new binary. |
-| `used` | table | `symposium-recommendations` crate | Registry-ready plugin sources in use. See [`[used]`](#used). |
+| `plugins` | array of tables | `symposium-recommendations` crate | Plugin sources in use. See [`[[plugins]]`](#plugins). |
 | `discovery` | table | empty policy | User-configured discovery allow/deny rules. See [`[discovery]`](#discovery). |
 
 ### Agents syncing: mirror user-authored skills
@@ -82,23 +80,39 @@ Each `[[agent]]` entry identifies an agent you use. You can configure multiple a
 |-----|------|---------|-------------|
 | `level` | string | `"info"` | Minimum log level. One of: `trace`, `debug`, `info`, `warn`, `error`. |
 
-## `[used]`
+## `[[plugins]]`
 
-`[used]` declares plugin sources the user explicitly added. New
-configs include the default `symposium-recommendations = "1"` crate.
-Legacy `[[plugin-source]]`, `[[installed-crate]]`, and `[defaults]` config
-shapes are rejected.
+Each `[[plugins]]` entry declares one group of plugin sources the user explicitly added. `cargo agents use` appends entries here. New configs include a default entry with `symposium-recommendations = "1"`. Legacy `[used]` / `[used.crates]` config is silently migrated on load; legacy `[[plugin-source]]`, `[[installed-crate]]`, and `[defaults]` shapes are rejected.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `paths` | array of strings | `[]` | Direct path-registry plugin sources. |
-| `git` | array of strings | `[]` | Direct git-registry plugin sources. |
+| `where.predicates` | array of strings | `[]` | Predicates that must hold for this entry's sources to be resolved. Commonly used for directory-scoping (e.g. `directory(/home/me/project/**)`). |
+| `source.crates` | table | `{}` | Cargo dependency table keyed by crate name. |
+| `source.paths` | array of strings | `[]` | Direct path-registry plugin sources. |
+| `source.git` | array of strings | `[]` | Direct git-registry plugin sources. |
 
-## `[used.crates]`
+### Example entries
 
-`[used.crates]` is a Cargo dependency table keyed by crate name. Values
-may be version strings or inline dependency tables with Cargo-compatible fields
-such as `version`, `git`, `path`, `branch`, `tag`, `rev`, and `package`.
+```toml
+# Global — no predicates, active everywhere.
+[[plugins]]
+source.crates = { symposium-recommendations = "1" }
+
+# Scoped to a workspace tree.
+[[plugins]]
+where.predicates = ["directory(/home/me/dev/work/**)"]
+source.crates = { my-org-plugins = "2" }
+source.paths = ["/home/me/dev/local-plugin"]
+
+# From git, scoped to a specific project.
+[[plugins]]
+where.predicates = ["directory(/home/me/dev/my-project)"]
+source.git = ["https://github.com/my-org/agent-skills"]
+```
+
+### `source.crates` values
+
+`source.crates` is a Cargo dependency table. Values may be version strings or inline dependency tables with Cargo-compatible fields such as `version`, `git`, `path`, `branch`, `tag`, `rev`, and `package`.
 
 | Example | Meaning |
 |---------|---------|
@@ -113,6 +127,14 @@ such as `version`, `git`, `path`, `branch`, `tag`, `rev`, and `package`.
 - **crates.io** (name only) — Fetched via cargo. Checks for newer compatible versions on a throttled cadence (at most once per 24 hours). Exact-pinned crates (`=`) never upgrade.
 - **git** — Checks for new commits on a similar throttled cadence.
 - **path** — Always checks mtime; re-scans immediately if the source has changed.
+
+### Directory scoping and `--global`
+
+When you run `cargo agents use <CRATE>` without `--global`, the resulting entry is scoped to the current workspace via `where.predicates = ["directory(<cwd>/**)"]`. This means the plugin source is only resolved when you are working in that directory tree. Pass `--global` to omit the predicate and make the source active everywhere.
+
+### Legacy `[used]` migration
+
+Existing configs with the `[used]` / `[used.crates]` shape are transparently loaded as a single `[[plugins]]` entry with no `where.predicates` (equivalent to global scope). The on-disk file is not rewritten unless the user runs a command that mutates config.
 
 ## `[discovery]`
 

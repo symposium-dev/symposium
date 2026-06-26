@@ -127,7 +127,7 @@ async fn init_creates_config() {
 
         let content = read_user_config(&ctx);
         assert!(content.contains(r#"name = "claude""#));
-        assert!(content.contains("[used.crates]"));
+        assert!(content.contains("[[plugins]]"));
         assert!(content.contains(r#"symposium-recommendations = "1""#));
         assert!(!content.contains("sync-default"));
         Ok(())

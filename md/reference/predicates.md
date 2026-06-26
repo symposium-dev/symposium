@@ -17,6 +17,8 @@ The available predicate functions are:
 | `path_exists(<arg>)` | `<arg>` resolves to an existing path. An argument with a path separator is checked on the filesystem (cwd-relative or absolute). A bare name with no separator is checked against the cwd and then searched on `$PATH`, so it matches either a local entry (`path_exists(.git)`) or an installed binary (`path_exists(rg)`). |
 | `env(<name>)` | The environment variable `<name>` is set (to any value). |
 | `env(<name>=<value>)` | `<name>` is set and equals `<value>` exactly. Only the first `=` separates name from value, so `env(KEY=a=b)` matches the value `a=b`. |
+| `directory(<path>)` | The working directory (`cwd`) is exactly `<path>`. |
+| `directory(<path>/**)` | The working directory is at or below `<path>` (prefix match). |
 | `workspace()` | The plugin was sourced from the current workspace (workspace root or a member crate). |
 | `dependency()` | The plugin was sourced via discovery policy from a workspace dependency. |
 | `used()` | The plugin was sourced from an explicitly added crate (`cargo agents use`). |
@@ -118,6 +120,12 @@ predicates = ["all(crate(serde), env(USE_SERDE))"]
 
 # Apply only when a crate is absent (impossible with `crates`).
 predicates = ["not(crate(legacy-thing))"]
+
+# Scope to a specific workspace (exact path).
+predicates = ["directory(/home/me/dev/my-project)"]
+
+# Scope to any project under a directory tree.
+predicates = ["directory(/home/me/dev/work/**)"]
 ```
 
 These are equivalent — `crates` is just the terse form for the common case:

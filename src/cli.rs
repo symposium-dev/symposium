@@ -89,6 +89,11 @@ pub enum Commands {
         /// Direct git plugin source to add. Repeatable.
         #[arg(long = "git")]
         git: Vec<String>,
+
+        /// Add source globally (active in all workspaces). Without this flag,
+        /// sources are scoped to the current workspace.
+        #[arg(long)]
+        global: bool,
     },
 
     /// Remove plugin sources from user config
@@ -198,7 +203,9 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
 
         Commands::Status => status::status(sym, &mut sym.workspace_deps(cwd)).await,
 
-        Commands::Use { crates, paths, git } => install::use_source(sym, crates, paths, git, out),
+        Commands::Use { crates, paths, git, global } => {
+            install::use_source(sym, crates, paths, git, global, cwd, out)
+        }
 
         Commands::Remove { crates, paths, git } => {
             install::remove_source(sym, crates, paths, git, out)
