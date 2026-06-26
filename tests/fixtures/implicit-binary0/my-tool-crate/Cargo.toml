@@ -1,0 +1,10 @@
+[package]
+name = "my-tool"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "my-tool"
+
+[[bin]]
+name = "helper-bin"

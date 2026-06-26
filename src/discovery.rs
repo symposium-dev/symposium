@@ -332,6 +332,140 @@ mod tests {
     }
 
     #[test]
+    fn registry_deny_beats_global_allow() {
+        // allow = "*" (tier 0) vs deny.crates = "*" (tier 1) → denied
+        let mut collected = CollectedPolicy::default();
+        let allow_all: DiscoveryPolicy = toml::from_str(r#"allow = "*""#).unwrap();
+        let deny_crates: DiscoveryPolicy = toml::from_str(
+            r#"
+            [deny]
+            crates = "*"
+            "#,
+        )
+        .unwrap();
+        collected.add_policy(&allow_all);
+        collected.add_policy(&deny_crates);
+
+        assert_eq!(
+            collected.evaluate(&crate_candidate("foo")),
+            PolicyVerdict::Denied
+        );
+    }
+
+    #[test]
+    fn registry_allow_beats_global_deny() {
+        // deny = "*" (tier 0) vs allow.crates = "*" (tier 1) → allowed
+        let mut collected = CollectedPolicy::default();
+        let deny_all: DiscoveryPolicy = toml::from_str(r#"deny = "*""#).unwrap();
+        let allow_crates: DiscoveryPolicy = toml::from_str(
+            r#"
+            [allow]
+            crates = "*"
+            "#,
+        )
+        .unwrap();
+        collected.add_policy(&deny_all);
+        collected.add_policy(&allow_crates);
+
+        assert_eq!(
+            collected.evaluate(&crate_candidate("foo")),
+            PolicyVerdict::Allowed
+        );
+    }
+
+    #[test]
+    fn specific_deny_beats_registry_wildcard_allow() {
+        // allow.crates = "*" (tier 1) vs deny.crates = { bad = "*" } (tier 2) → bad denied
+        let mut collected = CollectedPolicy::default();
+        let allow_all_crates: DiscoveryPolicy = toml::from_str(
+            r#"
+            [allow]
+            crates = "*"
+            "#,
+        )
+        .unwrap();
+        let deny_specific: DiscoveryPolicy = toml::from_str(
+            r#"
+            [deny]
+            crates = { bad = "*" }
+            "#,
+        )
+        .unwrap();
+        collected.add_policy(&allow_all_crates);
+        collected.add_policy(&deny_specific);
+
+        assert_eq!(
+            collected.evaluate(&crate_candidate("bad")),
+            PolicyVerdict::Denied
+        );
+        assert_eq!(
+            collected.evaluate(&crate_candidate("good")),
+            PolicyVerdict::Allowed
+        );
+    }
+
+    #[test]
+    fn specific_allow_beats_registry_wildcard_deny() {
+        // deny.crates = "*" (tier 1) vs allow.crates = { good = "*" } (tier 2) → good allowed
+        let mut collected = CollectedPolicy::default();
+        let deny_all_crates: DiscoveryPolicy = toml::from_str(
+            r#"
+            [deny]
+            crates = "*"
+            "#,
+        )
+        .unwrap();
+        let allow_specific: DiscoveryPolicy = toml::from_str(
+            r#"
+            [allow]
+            crates = { good = "*" }
+            "#,
+        )
+        .unwrap();
+        collected.add_policy(&deny_all_crates);
+        collected.add_policy(&allow_specific);
+
+        assert_eq!(
+            collected.evaluate(&crate_candidate("good")),
+            PolicyVerdict::Allowed
+        );
+        assert_eq!(
+            collected.evaluate(&crate_candidate("other")),
+            PolicyVerdict::Denied
+        );
+    }
+
+    #[test]
+    fn multi_source_policy_specificity_governs() {
+        // Simulates: user config denies a crate, plugin allows it.
+        // Specific allow (tier 2) from plugin beats specific deny (tier 2)?
+        // No — same specificity, deny wins.
+        let mut collected = CollectedPolicy::default();
+        let user_deny: DiscoveryPolicy = toml::from_str(
+            r#"
+            [deny]
+            crates = { contested = "*" }
+            "#,
+        )
+        .unwrap();
+        let plugin_allow: DiscoveryPolicy = toml::from_str(
+            r#"
+            [allow]
+            crates = { contested = "*" }
+            "#,
+        )
+        .unwrap();
+        collected.add_policy(&user_deny);
+        collected.add_policy(&plugin_allow);
+
+        // Same specificity → deny wins regardless of source order.
+        assert_eq!(
+            collected.evaluate(&crate_candidate("contested")),
+            PolicyVerdict::Denied
+        );
+    }
+
+    #[test]
     fn no_allow_rules_means_has_any_allow_rules_false() {
         let policy = CollectedPolicy::default();
         assert!(!policy.has_any_allow_rules());

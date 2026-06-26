@@ -1511,13 +1511,13 @@ fn load_source_root_plugin(source_dir: &Path, source_name: &str) -> Result<Parse
         return load_plugin(&manifest_path, source_name, source_dir);
     }
     let manifest = RawPluginManifest::default();
-    let mut plugin = validate_manifest(
+    let implicit_bins = read_binary_targets(source_dir);
+    let plugin = validate_manifest(
         manifest,
         default_plugin_name(&manifest_path, source_name, source_dir),
+        implicit_bins,
     )
     .with_context(|| format!("validating synthesized `{}`", manifest_path.display()))?;
-
-    merge_implicit_installations(&mut plugin, source_dir);
 
     Ok(ParsedPlugin {
         path: manifest_path,
@@ -1757,11 +1757,10 @@ pub fn load_plugin(
     let content = fs::read_to_string(manifest_path)?;
     let manifest: RawPluginManifest = toml::from_str(&content)?;
     let default_name = default_plugin_name(manifest_path, source_name, source_dir);
-    let mut plugin = validate_manifest(manifest, default_name)
-        .with_context(|| format!("validating `{}`", manifest_path.display()))?;
-
     let manifest_dir = manifest_path.parent().unwrap_or(source_dir);
-    merge_implicit_installations(&mut plugin, manifest_dir);
+    let implicit_bins = read_binary_targets(manifest_dir);
+    let plugin = validate_manifest(manifest, default_name, implicit_bins)
+        .with_context(|| format!("validating `{}`", manifest_path.display()))?;
 
     Ok(ParsedPlugin {
         path: manifest_path.to_path_buf(),
@@ -1803,8 +1802,14 @@ fn default_plugin_name(manifest_path: &Path, source_name: &str, source_dir: &Pat
 /// User-declared `[[installations]]` come first in the resulting list, in
 /// declaration order. Inline references on installations and hooks are
 /// promoted into synthetic entries appended to the same list so that every
-/// validated reference is a plain name.
-fn validate_manifest(manifest: RawPluginManifest, default_name: String) -> Result<Plugin> {
+/// validated reference is a plain name. `implicit_bins` (from `Cargo.toml`
+/// binary targets) are merged after explicit installations but before hooks
+/// and subcommands are validated, so they can be referenced by name.
+fn validate_manifest(
+    manifest: RawPluginManifest,
+    default_name: String,
+    implicit_bins: Vec<BinaryTarget>,
+) -> Result<Plugin> {
     let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for entry in &manifest.installations {
         if !names.insert(entry.name.clone()) {
@@ -1855,6 +1860,37 @@ fn validate_manifest(manifest: RawPluginManifest, default_name: String) -> Resul
             .position(|i| i.name == name)
             .expect("just pushed");
         installations[idx].requirements = reqs;
+    }
+
+    // Merge implicit installations from Cargo.toml binary targets. Explicit
+    // installations take precedence — only names not already declared are added.
+    for target in &implicit_bins {
+        if !names.contains(&target.name) {
+            names.insert(target.name.clone());
+            installations.push(Installation {
+                name: target.name.clone(),
+                requirements: Vec::new(),
+                install_commands: Vec::new(),
+                source: None,
+                executable: Some(target.name.clone()),
+                script: None,
+                args: Vec::new(),
+            });
+        }
+    }
+    if !names.contains("crate")
+        && let Some(default_target) = implicit_bins.iter().find(|t| t.is_default)
+    {
+        names.insert("crate".to_string());
+        installations.push(Installation {
+            name: "crate".to_string(),
+            requirements: Vec::new(),
+            install_commands: Vec::new(),
+            source: None,
+            executable: Some(default_target.name.clone()),
+            script: None,
+            args: Vec::new(),
+        });
     }
 
     let mut hooks = Vec::with_capacity(manifest.hooks.len());
@@ -1923,19 +1959,14 @@ fn validate_manifest(manifest: RawPluginManifest, default_name: String) -> Resul
     })
 }
 
-/// Merge implicit installations from crate binary targets into a plugin.
-///
-/// Reads `Cargo.toml` from `crate_dir` (if it exists) and creates an
-/// `Installation` entry for each `[[bin]]` target that doesn't conflict with
-/// an explicit installation name. Also adds a `crate` alias that points to
-/// the package's default binary target (the one named after the package).
-fn merge_implicit_installations(plugin: &mut Plugin, crate_dir: &Path) {
+/// Read binary targets from a `Cargo.toml` in `crate_dir`.
+/// Returns an empty vec if no `Cargo.toml` exists or parsing fails.
+fn read_binary_targets(crate_dir: &Path) -> Vec<BinaryTarget> {
     let cargo_toml = crate_dir.join("Cargo.toml");
     let Ok(content) = fs::read_to_string(&cargo_toml) else {
-        return;
+        return Vec::new();
     };
-
-    let targets = match parse_binary_targets(&content) {
+    match parse_binary_targets(&content) {
         Ok(targets) => targets,
         Err(e) => {
             tracing::debug!(
@@ -1943,49 +1974,8 @@ fn merge_implicit_installations(plugin: &mut Plugin, crate_dir: &Path) {
                 error = %e,
                 "failed to parse binary targets"
             );
-            return;
+            Vec::new()
         }
-    };
-
-    if targets.is_empty() {
-        return;
-    }
-
-    let explicit_names: std::collections::BTreeSet<String> = plugin
-        .installations
-        .iter()
-        .map(|i| i.name.clone())
-        .collect();
-
-    for target in &targets {
-        if explicit_names.contains(&target.name) {
-            continue;
-        }
-        plugin.installations.push(Installation {
-            name: target.name.clone(),
-            requirements: Vec::new(),
-            install_commands: Vec::new(),
-            source: None,
-            executable: Some(target.name.clone()),
-            script: None,
-            args: Vec::new(),
-        });
-    }
-
-    // Add a `crate` alias for the default binary target (the one matching
-    // the package name), unless `crate` is already an explicit installation.
-    if !explicit_names.contains("crate")
-        && let Some(default_target) = targets.iter().find(|t| t.is_default)
-    {
-        plugin.installations.push(Installation {
-            name: "crate".to_string(),
-            requirements: Vec::new(),
-            install_commands: Vec::new(),
-            source: None,
-            executable: Some(default_target.name.clone()),
-            script: None,
-            args: Vec::new(),
-        });
     }
 }
 
@@ -2256,7 +2246,7 @@ mod tests {
 
     fn from_str(s: &str) -> Result<Plugin> {
         let manifest: RawPluginManifest = toml::from_str(s)?;
-        validate_manifest(manifest, "plugin".to_string())
+        validate_manifest(manifest, "plugin".to_string(), Vec::new())
     }
 
     const SAMPLE: &str = indoc! {r#"
@@ -2623,6 +2613,83 @@ mod tests {
             .collect();
         assert_eq!(matching.len(), 1);
         assert!(matching[0].source.is_some());
+    }
+
+    #[test]
+    fn hook_references_implicit_binary_by_name() {
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File(
+                "Cargo.toml",
+                indoc! {r#"
+                    [package]
+                    name = "my-tool"
+                    version = "0.1.0"
+                    edition = "2021"
+
+                    [[bin]]
+                    name = "my-tool"
+
+                    [[bin]]
+                    name = "helper-bin"
+                "#},
+            ),
+            File("src/main.rs", "fn main() {}"),
+            File(
+                "SYMPOSIUM.toml",
+                indoc! {r#"
+                    name = "tool-plugin"
+
+                    [[hooks]]
+                    name = "helper-hook"
+                    event = "PreToolUse"
+                    command = "helper-bin"
+                "#},
+            ),
+        ]);
+        let manifest_path = tmp.path().join("SYMPOSIUM.toml");
+        let parsed = load_plugin(&manifest_path, "test", tmp.path()).unwrap();
+
+        // The hook's command references "helper-bin" which comes from implicit installations.
+        assert_eq!(parsed.plugin.hooks[0].command, "helper-bin");
+        assert!(
+            parsed.plugin.get_installation("helper-bin").is_some(),
+            "helper-bin should be an available installation"
+        );
+    }
+
+    #[test]
+    fn subcommand_references_crate_alias() {
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File(
+                "Cargo.toml",
+                indoc! {r#"
+                    [package]
+                    name = "my-tool"
+                    version = "0.1.0"
+                    edition = "2021"
+                "#},
+            ),
+            File("src/main.rs", "fn main() {}"),
+            File(
+                "SYMPOSIUM.toml",
+                indoc! {r#"
+                    name = "tool-plugin"
+
+                    [subcommand.run-tool]
+                    description = "Run the tool"
+                    command = "crate"
+                "#},
+            ),
+        ]);
+        let manifest_path = tmp.path().join("SYMPOSIUM.toml");
+        let parsed = load_plugin(&manifest_path, "test", tmp.path()).unwrap();
+
+        // The subcommand references "crate" which is the default binary alias.
+        assert_eq!(parsed.plugin.subcommands["run-tool"].command, "crate");
+        let crate_install = parsed.plugin.get_installation("crate").unwrap();
+        assert_eq!(crate_install.executable.as_deref(), Some("my-tool"));
     }
 
     #[test]

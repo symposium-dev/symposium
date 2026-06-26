@@ -1,0 +1,12 @@
+name = "my-tool-plugin"
+
+# Hook references "helper-bin" — an implicit installation from [[bin]] targets.
+[[hooks]]
+name = "helper-hook"
+event = "PreToolUse"
+command = "helper-bin"
+
+# Subcommand references "crate" — the default binary alias.
+[subcommand.run-tool]
+description = "Run the tool"
+command = "crate"
