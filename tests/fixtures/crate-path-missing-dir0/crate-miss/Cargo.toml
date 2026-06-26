@@ -4,5 +4,3 @@ version = "0.1.0"
 edition = "2021"
 
 # Points to a directory that doesn't exist
-[[package.metadata.symposium.skills]]
-path = "nonexistent-directory"

@@ -98,6 +98,9 @@ pub struct CargoSource {
     /// sources, used to derive a cache key).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// Install from a local crate directory (`cargo install --path`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     /// Install from a git URL (`cargo install --git`) instead of crates.io.
     /// When set, the user must specify `executable` on the installation since
     /// crates.io is not consulted to discover binary names.
@@ -123,6 +126,7 @@ impl CargoSource {
         Self {
             crate_name: crate_name.into(),
             version: None,
+            path: None,
             git: None,
             global: false,
         }
@@ -140,6 +144,12 @@ impl CargoSource {
     /// consulted to discover binary names.
     pub fn with_git(mut self, git_url: impl Into<String>) -> Self {
         self.git = Some(git_url.into());
+        self
+    }
+
+    /// Install from a local crate directory.
+    pub fn with_path(mut self, path: impl Into<String>) -> Self {
+        self.path = Some(path.into());
         self
     }
 }
@@ -267,6 +277,7 @@ async fn install_cargo_crate(
     binary_name: Option<String>,
     cache_dir: Option<PathBuf>,
     git: Option<String>,
+    path: Option<String>,
 ) -> Result<()> {
     let ctx = ctx.clone();
     let crate_name = crate_name.to_string();
@@ -280,6 +291,7 @@ async fn install_cargo_crate(
             binary_name,
             cache_dir.as_deref(),
             git,
+            path,
         )
     })
     .await
@@ -293,6 +305,7 @@ fn install_cargo_crate_sync(
     binary_name: Option<String>,
     cache_dir: Option<&Path>,
     git: Option<String>,
+    path: Option<String>,
 ) -> Result<()> {
     use std::fs;
 
@@ -320,46 +333,53 @@ fn install_cargo_crate_sync(
     };
     let cache_dir_str = cache_dir.map(|p| p.to_str().unwrap().to_string());
 
-    // Try cargo binstall first (faster, uses prebuilt binaries).
-    tracing::info!("Attempting cargo binstall for {}", crate_spec);
-    let mut binstall_args: Vec<&str> = vec!["binstall", "--no-confirm"];
-    if let Some(dir) = cache_dir_str.as_deref() {
-        binstall_args.push("--root");
-        binstall_args.push(dir);
-    }
-    if let Some(git) = &git {
-        binstall_args.push("--git");
-        binstall_args.push(git);
-    }
-    binstall_args.push(&crate_spec);
-    let binstall_result = ctx.cargo_command().args(binstall_args).output();
-
     let binary_path = match (cache_dir, binary_name.as_ref()) {
         (Some(dir), Some(bin)) => Some(dir.join("bin").join(platform_binary_exe(bin))),
         _ => None,
     };
 
-    match binstall_result {
-        Ok(output) if output.status.success() => {
-            tracing::info!("Successfully installed {} via cargo binstall", crate_spec);
-            if binary_path.is_none() {
-                return Ok(());
+    if path.is_none() {
+        // Try cargo binstall first (faster, uses prebuilt binaries). Path
+        // installs are local source builds, so binstall does not apply.
+        tracing::info!("Attempting cargo binstall for {}", crate_spec);
+        let mut binstall_args: Vec<&str> = vec!["binstall", "--no-confirm"];
+        if let Some(dir) = cache_dir_str.as_deref() {
+            binstall_args.push("--root");
+            binstall_args.push(dir);
+        }
+        if let Some(git) = &git {
+            binstall_args.push("--git");
+            binstall_args.push(git);
+        }
+        binstall_args.push(&crate_spec);
+        let binstall_result = ctx.cargo_command().args(binstall_args).output();
+
+        match binstall_result {
+            Ok(output) if output.status.success() => {
+                tracing::info!("Successfully installed {} via cargo binstall", crate_spec);
+                if binary_path.is_none() {
+                    return Ok(());
+                }
+                if let Some(bin) = binary_path.as_ref()
+                    && bin.exists()
+                {
+                    return Ok(());
+                }
             }
-            if let Some(bin) = binary_path.as_ref()
-                && bin.exists()
-            {
-                return Ok(());
+            Ok(output) => {
+                tracing::debug!(
+                    "cargo binstall failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+            Err(e) => {
+                tracing::debug!("cargo binstall not available: {}", e);
             }
         }
-        Ok(output) => {
-            tracing::debug!(
-                "cargo binstall failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        Err(e) => {
-            tracing::debug!("cargo binstall not available: {}", e);
-        }
+    } else if let Some(bin) = binary_path.as_ref()
+        && bin.exists()
+    {
+        return Ok(());
     }
 
     tracing::info!("Falling back to cargo install for {}", crate_spec);
@@ -372,7 +392,12 @@ fn install_cargo_crate_sync(
         args.push("--git");
         args.push(git);
     }
-    args.push(&crate_spec);
+    if let Some(path) = &path {
+        args.push("--path");
+        args.push(path);
+    } else {
+        args.push(&crate_spec);
+    }
     let install_result = ctx
         .cargo_command()
         .args(&args)
@@ -394,6 +419,17 @@ fn install_cargo_crate_sync(
 fn get_binary_cache_dir(ctx: &InstallContext, krate: &str, version: &str) -> Result<PathBuf> {
     let path = ctx.cache_dir().join("binaries").join(krate).join(version);
     Ok(path)
+}
+
+/// Cache key for a path-sourced cargo install. Path installs are local
+/// development inputs, so fold in the absolute path to avoid collisions
+/// between crates with the same package name.
+fn path_cache_version(path: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+    format!("path-{:016x}", hasher.finish())
 }
 
 /// Cache key for a git-sourced cargo install. The user-supplied `version` (or
@@ -444,10 +480,39 @@ async fn acquire_cargo(
             Some(resolved.clone()),
             None,
             cargo.git.clone(),
+            cargo.path.clone(),
         )
         .await?;
         return Ok(AcquiredCargo {
             cache_dir: None,
+            resolved_executable: Some(resolved),
+        });
+    }
+
+    if let Some(path) = cargo.path.as_deref() {
+        let resolved = match executable_hint {
+            Some(name) => name.to_string(),
+            None => bail!(
+                "cargo source for crate `{}` with `path` requires `executable` to be set",
+                cargo.crate_name
+            ),
+        };
+        let cache_dir = get_binary_cache_dir(ctx, &cargo.crate_name, &path_cache_version(path))?;
+        let probe = cache_dir.join("bin").join(platform_binary_exe(&resolved));
+        if !probe.exists() {
+            install_cargo_crate(
+                ctx,
+                &cargo.crate_name,
+                "",
+                Some(resolved.clone()),
+                Some(cache_dir.clone()),
+                None,
+                Some(path.to_string()),
+            )
+            .await?;
+        }
+        return Ok(AcquiredCargo {
+            cache_dir: Some(cache_dir),
             resolved_executable: Some(resolved),
         });
     }
@@ -472,6 +537,7 @@ async fn acquire_cargo(
                 Some(resolved.clone()),
                 Some(cache_dir.clone()),
                 Some(git_url.to_string()),
+                None,
             )
             .await?;
         }
@@ -510,6 +576,7 @@ async fn acquire_cargo(
             &version,
             resolved.clone(),
             Some(cache_dir.clone()),
+            None,
             None,
         )
         .await?;

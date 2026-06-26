@@ -93,7 +93,7 @@ pub async fn render_help(sym: &Symposium, cwd: &Path) -> String {
     let mut graph = crate::crate_sources::ResolvedSourceGraph::build_initial(sym, &mut deps).await;
     let workspace_crates = deps.load().map(|l| l.crates.clone()).unwrap_or_default();
     crate::crate_sources::expand_source_graph(&mut graph, sym, &workspace_crates).await;
-    let registry = load_registry_from_graph(&graph);
+    let registry = load_registry_from_graph(&graph, &workspace_crates);
     let workspace = deps.crates();
     render(&registry, workspace)
 }
@@ -281,14 +281,13 @@ mod tests {
              crate-info   Find crate sources
 
              Options:
-                   --update <UPDATE>  Control plugin source update behavior (none, check, fetch) [default: none] [possible values: none, check, fetch]
-               -q, --quiet            Suppress status output
-               -v, --verbose          Print detailed information about decisions made
-                   --json             Output structured JSON report
-               -h, --help             Print help
-               -V, --version          Print version
+               -q, --quiet    Suppress status output
+               -v, --verbose  Print detailed information about decisions made
+                   --json     Output structured JSON report
+               -h, --help     Print help
+               -V, --version  Print version
          "#]]
-             .assert_eq(&redact(render(&reg, &ws)));
+        .assert_eq(&redact(render(&reg, &ws)));
     }
 
     #[test]

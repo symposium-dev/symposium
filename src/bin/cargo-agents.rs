@@ -108,9 +108,6 @@ async fn main() -> ExitCode {
         Output::normal()
     };
 
-    // Ensure git-based plugin sources are up to date (non-blocking on failure).
-    plugins::ensure_plugin_sources(&sym, cli.update).await;
-
     // Auto-update = "on": check for updates and re-exec if a new binary was
     // installed.  Skipped for self-update (which always checks explicitly)
     // and for hooks (session-start injects the warn nudge into hook output;
@@ -172,45 +169,8 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) -> ExitCode {
+async fn handle_plugin_command(_sym: &config::Symposium, command: PluginCommand) -> ExitCode {
     match command {
-        PluginCommand::Sync { provider } => {
-            match plugins::sync_plugin_source(sym, provider.as_deref()).await {
-                Ok(synced) => {
-                    if synced.is_empty() {
-                        if let Some(ref p) = provider {
-                            println!("No git source found for provider: {p}");
-                        } else {
-                            println!("No git sources to sync.");
-                        }
-                    } else {
-                        for name in &synced {
-                            println!("Synced: {name}");
-                        }
-                    }
-                    ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("Sync failed: {e}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        PluginCommand::List => {
-            let providers = plugins::list_plugins(sym);
-            for provider in &providers {
-                tracing::info!(
-                    report = %report::ReportEvent::ProviderListed {
-                        name: provider.name.clone(),
-                        source_type: provider.source_type.to_string(),
-                        url: provider.git_url.clone(),
-                        path: provider.path.clone(),
-                        plugins: provider.plugins.iter().map(|p| p.name.clone()).collect(),
-                    },
-                );
-            }
-            ExitCode::SUCCESS
-        }
         PluginCommand::Validate {
             path,
             no_check_crates,
@@ -287,18 +247,6 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                 }
             }
         }
-        PluginCommand::Show { plugin } => match plugins::find_plugin(sym, &plugin) {
-            Some(p) => {
-                println!("# Source: {}", p.path.display());
-                println!();
-                print!("{}", tokio::fs::read_to_string(p.path).await.unwrap());
-                ExitCode::SUCCESS
-            }
-            None => {
-                eprintln!("Plugin not found: {plugin}");
-                ExitCode::FAILURE
-            }
-        },
     }
 }
 

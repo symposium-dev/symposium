@@ -4,5 +4,3 @@ version = "0.1.0"
 edition = "2021"
 
 # Malformed: "skills" should be an array of tables, not a string
-[package.metadata.symposium]
-skills = "not-an-array"

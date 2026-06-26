@@ -31,6 +31,27 @@ async fn dispatches_known_subcommand() {
     .unwrap();
 }
 
+/// A plugin crate can expose a subcommand backed only by its implicit default
+/// binary target. Dispatch installs the local crate through cargo and runs the
+/// resulting binary from Symposium's managed cache.
+#[tokio::test]
+async fn dispatches_implicit_crate_binary_subcommand() {
+    symposium_testlib::with_fixture(
+        TestMode::SimulationOnly,
+        &["implicit-subcommand0"],
+        async |mut ctx| {
+            let out = ctx.symposium(&["hello"]).await?;
+            assert!(
+                out.contains("implicit-binary-ran"),
+                "expected implicit binary output, got: {out}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// `--help` in a workspace with a plugin subcommand shows it in the agents section.
 #[tokio::test]
 async fn help_shows_plugin_subcommand() {
@@ -58,12 +79,11 @@ async fn help_shows_plugin_subcommand() {
                 greet        Print rustc version
 
                 Options:
-                      --update <UPDATE>  Control plugin source update behavior (none, check, fetch) [default: none] [possible values: none, check, fetch]
-                  -q, --quiet            Suppress status output
-                  -v, --verbose          Print detailed information about decisions made
-                      --json             Output structured JSON report
-                  -h, --help             Print help
-                  -V, --version          Print version
+                  -q, --quiet    Suppress status output
+                  -v, --verbose  Print detailed information about decisions made
+                      --json     Output structured JSON report
+                  -h, --help     Print help
+                  -V, --version  Print version
             "#]]
             .assert_eq(&redact(out));
             Ok(())

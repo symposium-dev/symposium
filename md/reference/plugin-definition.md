@@ -40,7 +40,7 @@ That's it — `name` defaults to the crate name and `crates` defaults to `["*"]`
 | `hooks` | array of tables | no | Hooks (`[[hooks]]`). |
 | `predicate` | array of tables | no | Custom predicate definitions (`[[predicate]]`). See [Custom predicates](#predicate). |
 | `mcp_servers` | array of tables | no | MCP server registrations (`[[mcp_servers]]`). |
-| `auto-install` | array of tables | no | Transitive plugin installations (`[[auto-install]]`). See [Auto-install](#auto-install). |
+| `plugins` | array of tables | default `source.path = "."` | Transitive plugin source declarations (`[[plugins]] source.*`). See [Plugin Sources](#plugins-source). |
 | `discovery.allow` / `discovery.deny` | table or `"*"` | no | Candidate plugin sources approved or rejected for auto-discovery. See [Discovery policy](#discovery-policy). |
 | `defaults.skills` | bool | `true` | Include implicit `skills/` (recursive, unconditional) and `.agents/skills/` (recursive, `workspace()` gated) skill sources. Set to `false` to suppress. |
 | `defaults.plugins` | bool | `true` | Search subtree for nested `SYMPOSIUM.toml` files. Each nested manifest becomes its own independent plugin. Set to `false` to suppress. |
@@ -93,7 +93,7 @@ source.path = "skills/baz"
 
 ## Implicit installations from crate binary targets
 
-Every binary target defined in the plugin crate's `Cargo.toml` is automatically available as an installation — referenced by name in `command` fields, with no explicit `[[installations]]` section needed. Additionally, a special `crate` installation refers to the crate's default binary target (if one exists).
+Every binary target defined in the plugin crate's `Cargo.toml` is automatically available as an installation — referenced by name in `command` fields, with no explicit `[[installations]]` section needed. Additionally, a special `crate` installation refers to the crate's default binary target (if one exists). Local plugin crates are installed through Symposium's managed cargo cache before the binary runs.
 
 This means a crate that ships a CLI tool can wire it into hooks with zero boilerplate:
 
@@ -413,40 +413,46 @@ echo '{"tool": "Bash", "input": "cargo test"}' | cargo agents hook claude pre-to
 
 You can also use `copilot`, `gemini`, `codex`, or `kiro` as the agent name.
 
-## `[[auto-install]]`
+## `[[plugins]] source.*`
 
-Each `[[auto-install]]` entry declares additional plugin crates that should be installed alongside this one. The `crates` field uses the same format as `[dependencies]` in `Cargo.toml`. Supports optional predicates for conditional installation.
+Each `[[plugins]]` entry declares an additional plugin source to scan. Path sources are used for nested manifests inside the current source tree. Git and crate sources are resolved by their registries during source graph expansion.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `crates` | table | Crates to install. Same format as Cargo's `[dependencies]`: `{ name = "version" }` or `{ name = { version = "...", git = "..." } }`. |
-| `predicates` | array of strings | Optional. Predicates that must hold for these crates to be auto-installed. |
+| `source.path` | string | Directory to search recursively for `SYMPOSIUM.toml`, relative to the current manifest. |
+| `source.git` | string | Direct git-registry plugin source URL. |
+| `source.crate` | string or table | Crate-registry source using Cargo dependency syntax. |
+| `where.crates` / `where.predicates` | arrays | Optional filters for the source declaration. |
 
 ### Examples
 
 ```toml
 # Always also install a companion crate
-[[auto-install]]
-crates = { symposium-serde-extras = "1.0" }
+[[plugins]]
+source.crate.symposium-serde-extras = "1.0"
 
 # Conditionally install based on workspace deps
-[[auto-install]]
-predicates = ["crate(tokio)"]
-crates = { symposium-tokio = "2" }
+[[plugins]]
+where.crates = ["tokio"]
+source.path = "tokio-extras"
+
+[[plugins]]
+where.crates = ["serde"]
+source.crate.symposium-serde-extras = "1"
 
 # Git source
-[[auto-install]]
-crates = { my-private-plugin = { git = "https://github.com/my-org/my-private-plugin" } }
+[[plugins]]
+source.git = "https://github.com/my-org/my-private-plugin"
 ```
 
-Auto-install is resolved recursively — if `symposium-serde-extras` itself has `[[auto-install]]` entries, those are followed too.
+Plugin sources are resolved recursively — if `symposium-serde-extras` itself has `[[plugins]]` entries, those are followed too.
 
 A crate that doesn't want to bundle plugins directly just has a thin `SYMPOSIUM.toml` pointing elsewhere:
 
 ```toml
 # A redirect-only plugin
-[[auto-install]]
-crates = { symposium-serde = "1.0" }
+[[plugins]]
+source.crate.symposium-serde = "1.0"
 ```
 
 ## Discovery policy
@@ -633,9 +639,9 @@ command = "/usr/local/bin/widgetlib-mcp"
 args = ["--stdio"]
 env = []
 
-# When this plugin is installed, also install the extras
-[[auto-install]]
-crates = { widgetlib-extras = "1.0" }
+# When this plugin is installed, also scan the extras crate
+[[plugins]]
+source.crate.widgetlib-extras = "1.0"
 ```
 
 ## Validation

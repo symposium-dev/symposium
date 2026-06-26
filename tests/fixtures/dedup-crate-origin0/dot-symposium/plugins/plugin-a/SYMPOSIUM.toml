@@ -2,4 +2,4 @@ name = "plugin-a"
 crates = ["crate-x"]
 
 [[skills]]
-source = "crate"
+source.path = "skills"

@@ -1,0 +1,6 @@
+[package]
+name = "test-implicit-subcommand"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]

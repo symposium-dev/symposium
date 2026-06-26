@@ -57,6 +57,7 @@ impl HookScope {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     /// Automatically run `sync` when hooks are invoked.
     #[serde(default = "default_true", rename = "auto-sync")]
@@ -96,14 +97,6 @@ pub struct Config {
 
     #[serde(default)]
     pub logging: LoggingConfig,
-
-    /// Default plugin sources that are always included unless disabled.
-    #[serde(default)]
-    pub defaults: DefaultsConfig,
-
-    /// User-defined plugin sources (git repos or local paths).
-    #[serde(default, rename = "plugin-source")]
-    pub plugin_source: Vec<PluginSourceConfig>,
 
     /// User-installed plugin sources in the registry-ready model.
     #[serde(default = "default_installed_sources")]
@@ -145,8 +138,6 @@ impl Default for Config {
             auto_update: AutoUpdate::default(),
             agents: Vec::new(),
             logging: LoggingConfig::default(),
-            defaults: DefaultsConfig::default(),
-            plugin_source: Vec::new(),
             installed: default_installed_sources(),
             discovery: DiscoveryPolicy::default(),
         }
@@ -157,7 +148,10 @@ impl Default for Config {
 #[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq)]
 pub struct InstalledSourceConfig {
     /// Cargo dependency-table entries keyed by crate name.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(
+        default = "default_installed_crates",
+        skip_serializing_if = "BTreeMap::is_empty"
+    )]
     pub crates: BTreeMap<String, CargoDependencySpec>,
 
     /// Direct path-registry plugin sources.
@@ -170,16 +164,20 @@ pub struct InstalledSourceConfig {
 }
 
 fn default_installed_sources() -> InstalledSourceConfig {
+    InstalledSourceConfig {
+        crates: default_installed_crates(),
+        paths: Vec::new(),
+        git: Vec::new(),
+    }
+}
+
+fn default_installed_crates() -> BTreeMap<String, CargoDependencySpec> {
     let mut crates = BTreeMap::new();
     crates.insert(
         "symposium-recommendations".to_string(),
         CargoDependencySpec::Version("1".to_string()),
     );
-    InstalledSourceConfig {
-        crates,
-        paths: Vec::new(),
-        git: Vec::new(),
-    }
+    crates
 }
 
 /// A Cargo dependency-table value.
@@ -465,63 +463,6 @@ fn looks_like_dependency_spec(table: &toml::map::Map<String, toml::Value>) -> bo
         .any(|key| DEPENDENCY_FIELDS.contains(&key.as_str()))
 }
 
-/// Controls which built-in plugin sources are enabled.
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct DefaultsConfig {
-    /// Include the `symposium-dev/recommendations` git source (default: true).
-    #[serde(default = "default_true", rename = "symposium-recommendations")]
-    pub symposium_recommendations: bool,
-
-    /// Include `~/.symposium/plugins/` as a local source (default: true).
-    #[serde(default = "default_true", rename = "user-plugins")]
-    pub user_plugins: bool,
-}
-
-impl Default for DefaultsConfig {
-    fn default() -> Self {
-        Self {
-            symposium_recommendations: true,
-            user_plugins: true,
-        }
-    }
-}
-
-/// A configured plugin source — either a git repository or a local path.
-#[derive(Debug, Deserialize, Serialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct PluginSourceConfig {
-    /// Display name for this source.
-    pub name: String,
-
-    /// GitHub URL (fetched as tarball, cached locally).
-    #[serde(default)]
-    pub git: Option<String>,
-
-    /// Local directory path (relative to config dir, or absolute).
-    #[serde(default)]
-    pub path: Option<String>,
-
-    /// Whether to auto-update on startup (git sources only, default: true).
-    #[serde(default = "default_true", rename = "auto-update")]
-    pub auto_update: bool,
-}
-
-// ---------------------------------------------------------------------------
-// Merged configuration view
-// ---------------------------------------------------------------------------
-
-/// A plugin source together with its base directory for resolving relative paths.
-#[derive(Debug, Clone)]
-pub struct ResolvedPluginSource {
-    pub source: PluginSourceConfig,
-    /// Directory to resolve relative `path` values against.
-    /// For user sources this is the user config dir; for project sources
-    /// this is the project root.
-    pub base_dir: PathBuf,
-}
-
-const BUILTIN_RECOMMENDATIONS_URL: &str = "https://github.com/symposium-dev/recommendations";
-
 /// Full application context: parsed config + resolved directory paths.
 ///
 /// Thread `&Symposium` through all call sites instead of using global state.
@@ -686,44 +627,6 @@ impl Symposium {
         &self.home_dir
     }
 
-    /// Returns the effective list of plugin sources, including built-in defaults.
-    pub fn plugin_sources(&self) -> Vec<ResolvedPluginSource> {
-        let mut sources = Vec::new();
-
-        if self.config.defaults.symposium_recommendations {
-            sources.push(ResolvedPluginSource {
-                source: PluginSourceConfig {
-                    name: "symposium-recommendations".to_string(),
-                    git: Some(BUILTIN_RECOMMENDATIONS_URL.to_string()),
-                    path: None,
-                    auto_update: true,
-                },
-                base_dir: self.dirs.config_dir.clone(),
-            });
-        }
-
-        if self.config.defaults.user_plugins {
-            sources.push(ResolvedPluginSource {
-                source: PluginSourceConfig {
-                    name: "user-plugins".to_string(),
-                    git: None,
-                    path: Some("plugins".to_string()),
-                    auto_update: true,
-                },
-                base_dir: self.dirs.config_dir.clone(),
-            });
-        }
-
-        for s in &self.config.plugin_source {
-            sources.push(ResolvedPluginSource {
-                source: s.clone(),
-                base_dir: self.dirs.config_dir.clone(),
-            });
-        }
-
-        sources
-    }
-
     /// Returns user-installed plugin sources in the registry-ready config shape.
     pub fn installed_sources(&self) -> &InstalledSourceConfig {
         &self.config.installed
@@ -787,10 +690,8 @@ fn resolve_logs_dir(config_dir: &Path) -> PathBuf {
 fn load_config_from(config_dir: &Path) -> Config {
     let path = config_dir.join("config.toml");
     match fs::read_to_string(&path) {
-        Ok(contents) => toml::from_str(&contents).unwrap_or_else(|e| {
-            eprintln!("warning: failed to parse {}: {e}", path.display());
-            Config::default()
-        }),
+        Ok(contents) => toml::from_str(&contents)
+            .unwrap_or_else(|e| panic!("failed to parse {}: {e}", path.display())),
         Err(_) => Config::default(),
     }
 }
@@ -815,9 +716,6 @@ mod tests {
     #[test]
     fn parse_empty_config() {
         let config: Config = toml::from_str("").unwrap();
-        assert!(config.defaults.symposium_recommendations);
-        assert!(config.defaults.user_plugins);
-        assert!(config.plugin_source.is_empty());
         assert_eq!(
             config.installed.crates.get("symposium-recommendations"),
             Some(&CargoDependencySpec::Version("1".to_string()))
@@ -825,83 +723,25 @@ mod tests {
     }
 
     #[test]
-    fn parse_defaults_disable_recommendations() {
-        let config: Config = toml::from_str(indoc! {"
+    fn legacy_defaults_are_rejected() {
+        let err = toml::from_str::<Config>(indoc! {"
             [defaults]
             symposium-recommendations = false
         "})
-        .unwrap();
-        assert!(!config.defaults.symposium_recommendations);
-        assert!(config.defaults.user_plugins);
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field"), "{err}");
     }
 
     #[test]
-    fn parse_defaults_disable_user_plugins() {
-        let config: Config = toml::from_str(indoc! {"
-            [defaults]
-            user-plugins = false
-        "})
-        .unwrap();
-        assert!(config.defaults.symposium_recommendations);
-        assert!(!config.defaults.user_plugins);
-    }
-
-    #[test]
-    fn parse_plugin_source_git() {
-        let config: Config = toml::from_str(indoc! {r#"
+    fn legacy_plugin_source_is_rejected() {
+        let err = toml::from_str::<Config>(indoc! {r#"
             [[plugin-source]]
             name = "my-org"
             git = "https://github.com/my-org/plugins"
             auto-update = false
         "#})
-        .unwrap();
-        assert_eq!(config.plugin_source.len(), 1);
-        assert_eq!(config.plugin_source[0].name, "my-org");
-        assert_eq!(
-            config.plugin_source[0].git.as_deref(),
-            Some("https://github.com/my-org/plugins")
-        );
-        assert!(!config.plugin_source[0].auto_update);
-    }
-
-    #[test]
-    fn parse_plugin_source_path() {
-        let config: Config = toml::from_str(indoc! {r#"
-            [[plugin-source]]
-            name = "local"
-            path = "my-plugins"
-        "#})
-        .unwrap();
-        assert_eq!(config.plugin_source.len(), 1);
-        assert_eq!(config.plugin_source[0].path.as_deref(), Some("my-plugins"));
-        assert!(config.plugin_source[0].auto_update); // default true
-    }
-
-    #[test]
-    fn parse_multiple_plugin_sources() {
-        let config: Config = toml::from_str(indoc! {r#"
-            [defaults]
-            symposium-recommendations = false
-
-            [[plugin-source]]
-            name = "org-a"
-            git = "https://github.com/a/plugins"
-
-            [[plugin-source]]
-            name = "org-b"
-            git = "https://github.com/b/plugins"
-            auto-update = false
-
-            [[plugin-source]]
-            name = "local"
-            path = "extras"
-        "#})
-        .unwrap();
-        assert!(!config.defaults.symposium_recommendations);
-        assert_eq!(config.plugin_source.len(), 3);
-        assert_eq!(config.plugin_source[0].name, "org-a");
-        assert_eq!(config.plugin_source[1].name, "org-b");
-        assert_eq!(config.plugin_source[2].name, "local");
+        .unwrap_err();
+        assert!(err.to_string().contains("unknown field"), "{err}");
     }
 
     #[test]
@@ -1097,7 +937,7 @@ mod tests {
     }
 
     #[test]
-    fn symposium_installed_accessors_expose_new_config_without_changing_sources() {
+    fn symposium_installed_accessors_expose_new_config() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join("config.toml"),
@@ -1118,20 +958,16 @@ mod tests {
             vec!["/home/me/dev/plugin-source"]
         );
         assert!(sym.installed_crates().contains_key("local-plugin"));
-
-        let legacy_sources = sym.plugin_sources();
-        assert!(
-            legacy_sources
-                .iter()
-                .any(|s| s.source.name == "user-plugins")
-        );
     }
 
     #[test]
     fn from_dir_creates_default_config() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        assert!(sym.config.defaults.symposium_recommendations);
+        assert!(
+            sym.installed_crates()
+                .contains_key("symposium-recommendations")
+        );
         assert_eq!(sym.config_dir(), tmp.path());
         assert_eq!(sym.cache_dir(), tmp.path().join("cache"));
     }
@@ -1141,14 +977,17 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join("config.toml"),
-            indoc! {"
-                [defaults]
-                symposium-recommendations = false
-            "},
+            indoc! {r#"
+                auto-sync = false
+
+                [installed]
+                paths = ["/tmp/plugin-source"]
+            "#},
         )
         .unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        assert!(!sym.config.defaults.symposium_recommendations);
+        assert!(!sym.config.auto_sync);
+        assert_eq!(sym.installed_sources().paths, vec!["/tmp/plugin-source"]);
     }
 
     #[test]

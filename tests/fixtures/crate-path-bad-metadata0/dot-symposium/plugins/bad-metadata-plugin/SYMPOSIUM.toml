@@ -2,4 +2,4 @@ name = "bad-metadata-plugin"
 crates = ["crate-bad"]
 
 [[skills]]
-source = "crate"
+source.path = "skills"

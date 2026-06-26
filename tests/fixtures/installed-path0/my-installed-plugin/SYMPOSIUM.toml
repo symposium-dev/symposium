@@ -1,1 +1,2 @@
 name = "my-installed-plugin"
+where.crates = ["serde"]

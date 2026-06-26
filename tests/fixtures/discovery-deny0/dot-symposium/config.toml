@@ -1,8 +1,4 @@
 hook-scope = "project"
 
-[defaults]
-symposium-recommendations = false
-user-plugins = false
-
 [installed]
 paths = ["$TEST_DIR/empty-plugin"]

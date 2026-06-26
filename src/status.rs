@@ -24,7 +24,7 @@ pub async fn status(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
     crate_sources::expand_source_graph(&mut graph, sym, &workspace_crates).await;
 
     // Load plugin registry from graph.
-    let registry = plugins::load_registry_from_graph(&graph);
+    let registry = plugins::load_registry_from_graph(&graph, &workspace_crates);
 
     // Resolve custom predicates.
     let custom_entries = resolve_custom_predicates(sym, &registry).await;
@@ -58,11 +58,17 @@ pub async fn status(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
     for parsed in &registry.plugins {
         ctx.set_source_provenance(parsed.source_provenance.clone());
         let plugin_active = parsed.plugin.applies(&mut ctx);
+        let reason = if plugin_active {
+            None
+        } else {
+            parsed.plugin.predicates.first_failing(&mut ctx)
+        };
         tracing::info!(
             report = %ReportEvent::StatusPlugin {
                 name: parsed.plugin.name.clone(),
                 active: plugin_active,
                 source: parsed.source_name.clone(),
+                reason,
             },
         );
 
@@ -73,12 +79,18 @@ pub async fn status(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
         // Evaluate skill groups.
         for group in &parsed.plugin.skills {
             let group_active = group.predicates.evaluate(&mut ctx);
+            let reason = if group_active {
+                None
+            } else {
+                group.predicates.first_failing(&mut ctx)
+            };
             let source_desc = format!("{:?}", group.source);
             tracing::info!(
                 report = %ReportEvent::StatusSkillGroup {
                     plugin: parsed.plugin.name.clone(),
                     source: source_desc,
                     active: group_active,
+                    reason,
                 },
             );
         }

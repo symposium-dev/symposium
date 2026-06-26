@@ -4,7 +4,7 @@ predicates = ["battery_pack(cli)"]
 [[installations]]
 name = "bp-checker"
 # Script generated at runtime by the test — returns witness JSON
-# naming bp-crate so that source = "crate" resolution picks it up.
+# naming bp-crate so that source.path = "skills" resolution picks it up.
 executable = "$TEST_DIR/bp-checker.sh"
 
 [[predicate]]
@@ -12,4 +12,4 @@ name = "battery_pack"
 command = "bp-checker"
 
 [[skills]]
-source = "crate"
+source.path = "skills"

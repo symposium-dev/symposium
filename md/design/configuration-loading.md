@@ -8,12 +8,11 @@ See the [configuration reference](../reference/configuration.md#directory-resolu
 
 ## Config loading
 
-The user config (`~/.symposium/config.toml`) is loaded once at startup into the `Symposium` struct. If the file is missing or empty, defaults are used. If parsing fails, a warning is printed and defaults are used.
+The user config (`~/.symposium/config.toml`) is loaded once at startup into the `Symposium` struct. If the file is missing or empty, defaults are used. If parsing fails, startup fails; invalid config is not silently replaced with defaults.
 
 ## Installed source config
 
-The registry-ready config model is parsed and preserved even while sync still
-uses the legacy source pipeline. Installed sources live under `[installed]`:
+Installed sources live under `[installed]`:
 
 ```toml
 [installed]
@@ -28,17 +27,12 @@ my-local-crate = { path = "/home/me/dev/my-local-crate" }
 
 `[installed.crates]` mirrors Cargo dependency-table syntax. Values may be
 version strings or inline dependency tables; unknown inline-table fields are
-preserved so later source-resolution phases can hand the spec to Cargo instead
-of maintaining a partial Cargo manifest parser. The source-acquisition layer
-now has that Cargo probe path; sync will start consuming it when the resolved
-source graph is wired in.
+preserved so source resolution can hand the spec to Cargo instead of
+maintaining a partial Cargo manifest parser.
 
 New configs include `symposium-recommendations = "1"` in
-`[installed.crates]`. For compatibility during the migration, the legacy
-`[defaults] symposium-recommendations` and `[[plugin-source]]` fields still
-feed the current sync path through `Symposium::plugin_sources()`. New code that
-needs the registry-ready model should use `Symposium::installed_sources()` or
-`Symposium::installed_crates()`.
+`[installed.crates]`. The legacy `[defaults]` and `[[plugin-source]]` fields
+are rejected by the config schema.
 
 ## Discovery policy
 
@@ -56,8 +50,8 @@ paths = ["/tmp/untrusted"]
 git = ["https://github.com/bad/*"]
 ```
 
-Policy evaluation is intentionally not wired into sync yet. The parsed shape is
-available for the resolved-source graph phase.
+Policy evaluation is part of source graph expansion during sync, status, help,
+hook dispatch, and subcommand dispatch.
 
 ## Workspace source metadata
 

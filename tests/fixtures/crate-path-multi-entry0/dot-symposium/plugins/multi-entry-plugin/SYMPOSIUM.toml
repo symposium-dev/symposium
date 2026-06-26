@@ -2,4 +2,4 @@ name = "multi-entry-plugin"
 crates = ["crate-m"]
 
 [[skills]]
-source = "crate"
+source.path = "skills"

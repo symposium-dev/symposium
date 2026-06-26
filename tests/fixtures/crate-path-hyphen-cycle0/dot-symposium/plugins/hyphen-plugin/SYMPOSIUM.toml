@@ -2,4 +2,4 @@ name = "hyphen-plugin"
 crates = ["crate-foo"]
 
 [[skills]]
-source = "crate"
+source.path = "skills"

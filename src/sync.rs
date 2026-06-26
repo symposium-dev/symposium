@@ -323,14 +323,14 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
     let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
-    // Resolve the source graph: installed sources, workspace root/members,
-    // and legacy [[plugin-source]] entries. Manifest-level dedup in
+    // Resolve the source graph: installed sources plus workspace root/members.
+    // Manifest-level dedup in
     // load_registry_from_graph unions provenance when the same manifest is
     // reached from multiple roots.
     let graph = resolve_sync_sources(sym, deps).await;
 
     // Load plugin registry from graph (stamps provenance on each plugin).
-    let registry = plugins::load_registry_from_graph(&graph);
+    let registry = plugins::load_registry_from_graph(&graph, &workspace);
 
     for warning in &registry.warnings {
         tracing::info!(
@@ -626,40 +626,20 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
     Ok(())
 }
 
-/// Register global hooks for all configured agents.
 /// Register hooks for all configured agents. Uses `home_dir` (global scope).
 /// Called from `init` after writing the user config.
 pub fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
-    let registry = plugins::load_registry(sym);
-    let mcp_servers: Vec<sacp::schema::McpServer> = registry
-        .plugins
-        .iter()
-        .flat_map(|p| p.plugin.mcp_servers.iter().map(|s| s.server.clone()))
-        .collect();
-
-    let server_names: Vec<&str> = mcp_servers
-        .iter()
-        .map(|s| match s {
-            sacp::schema::McpServer::Stdio(s) => s.name.as_str(),
-            sacp::schema::McpServer::Http(s) => s.name.as_str(),
-            sacp::schema::McpServer::Sse(s) => s.name.as_str(),
-            _ => panic!("unsupported McpServer variant"),
-        })
-        .collect();
-
     let agent_names: Vec<String> = sym.config.agents.iter().map(|a| a.name.clone()).collect();
 
     for agent_name in &agent_names {
         let agent = Agent::from_config_name(agent_name)?;
         agent.register_hooks(sym.home_dir(), sym, out)?;
-        agent.register_global_mcp_servers(sym.home_dir(), &mcp_servers, out)?;
     }
 
     // Unregister hooks for agents no longer configured
     for &agent in Agent::all() {
         if !agent_names.contains(&agent.config_name().to_string()) {
             agent.unregister_hooks(sym.home_dir(), sym, out);
-            let _ = agent.unregister_global_mcp_servers(sym.home_dir(), &server_names, out);
         }
     }
 

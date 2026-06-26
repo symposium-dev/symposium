@@ -18,7 +18,7 @@ The available predicate functions are:
 | `env(<name>)` | The environment variable `<name>` is set (to any value). |
 | `env(<name>=<value>)` | `<name>` is set and equals `<value>` exactly. Only the first `=` separates name from value, so `env(KEY=a=b)` matches the value `a=b`. |
 | `workspace()` | The plugin was sourced from the current workspace (workspace root or a member crate). |
-| `dependency()` | The plugin was sourced via the dependency allow list (a workspace dep that matched). |
+| `dependency()` | The plugin was sourced via discovery policy from a workspace dependency. |
 | `installed()` | The plugin was sourced from an explicitly installed crate (`cargo agents install`). |
 | `not(<predicate>)` | The inner predicate does **not** hold. The only way to express absence. |
 | `any(<p>, <p>, …)` | At least one inner predicate holds (logical **OR**). |
@@ -39,6 +39,7 @@ Predicates are evaluated at the same point the workspace's crate predicates are 
 | Skill frontmatter `predicates` | At sync, after the skill loads |
 | Hook `predicates` | At hook dispatch, after the matcher passes |
 | MCP server `predicates` | At sync, when collecting servers to register |
+| `[[plugins]]` source `predicates` | During source graph expansion, before the recursive source is resolved |
 
 Hook-level predicates run at dispatch (not sync) so they observe live state — e.g. a hook gated on `path_exists(jq)` will silently disable itself if `jq` was uninstalled since the last sync, without forcing a re-sync.
 

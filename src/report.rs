@@ -161,6 +161,8 @@ pub enum ReportEvent {
         name: String,
         active: bool,
         source: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
 
     /// A skill group's active/inactive state.
@@ -168,6 +170,8 @@ pub enum ReportEvent {
         plugin: String,
         source: String,
         active: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
     },
 
     /// Summary of the resolved state.
@@ -355,17 +359,27 @@ impl ReportEvent {
                 name,
                 active,
                 source,
+                reason,
             } => {
                 let mark = if *active { "active" } else { "inactive" };
-                format!("  {name} [{mark}] (from {source})")
+                if let Some(reason) = reason {
+                    format!("  {name} [{mark}] (from {source}): {reason}")
+                } else {
+                    format!("  {name} [{mark}] (from {source})")
+                }
             }
             Self::StatusSkillGroup {
                 plugin,
                 source,
                 active,
+                reason,
             } => {
                 let mark = if *active { "active" } else { "inactive" };
-                format!("    group {source} [{mark}] in {plugin}")
+                if let Some(reason) = reason {
+                    format!("    group {source} [{mark}] in {plugin}: {reason}")
+                } else {
+                    format!("    group {source} [{mark}] in {plugin}")
+                }
             }
             Self::StatusSummary {
                 sources,

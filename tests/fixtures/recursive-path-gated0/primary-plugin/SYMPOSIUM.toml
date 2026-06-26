@@ -1,0 +1,6 @@
+name = "primary-plugin"
+defaults.plugins = false
+
+[[plugins]]
+where.crates = ["serde"]
+source.path = "serde-plugin"

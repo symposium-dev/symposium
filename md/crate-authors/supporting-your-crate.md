@@ -64,21 +64,21 @@ source.path = "docs/agent-skills"
 Users get your crate's skills in two ways:
 
 1. **Explicit install** — `cargo agents install my-crate` fetches and scans your crate.
-2. **Allow-list discovery** — If your crate is listed in a `dependency-allow-list` (e.g., in `symposium-recommendations`), users who depend on your crate get skills automatically.
+2. **Discovery policy** — If your crate is allowed by `[discovery.allow]` policy (e.g., from `symposium-recommendations`), users who depend on your crate get skills automatically.
 
 To get your crate added to the default allow list, submit a PR to the `symposium-recommendations` crate.
 
 ## Redirecting to a companion crate
 
-If you don't want to include plugin content in your main crate (to keep it lean), you can redirect via `[[auto-install]]`:
+If you don't want to include plugin content in your main crate (to keep it lean), you can redirect via `[[plugins]] source.crate`:
 
 ```toml
 # SYMPOSIUM.toml in my-crate (minimal, no skills of its own)
-[[auto-install]]
-crates = { symposium-my-crate = "1.0" }
+[[plugins]]
+source.crate.symposium-my-crate = "1.0"
 ```
 
-This tells Symposium: "when you install me, also install `symposium-my-crate` which has the actual plugins."
+This tells Symposium: "when you scan me, also scan `symposium-my-crate` which has the actual plugins."
 
 ## Want to write a skill for someone else's crate?
 

@@ -76,9 +76,8 @@ pub struct ResolvedSourceGraph {
 }
 
 impl ResolvedSourceGraph {
-    /// Build the initial source graph for sync and status: installed sources,
-    /// workspace root/members (when agents-syncing is enabled), and legacy
-    /// `[[plugin-source]]` entries.
+    /// Build the initial source graph for sync and status: installed sources
+    /// plus workspace root/members when agents-syncing is enabled.
     ///
     /// The workspace root is only added when it has an explicit `SYMPOSIUM.toml`.
     /// Without one, the synthesized manifest's recursive `[[plugins]]` search
@@ -143,30 +142,6 @@ impl ResolvedSourceGraph {
                     },
                 );
             }
-        }
-
-        // Legacy [[plugin-source]] entries for backward compatibility.
-        let sources = sym.plugin_sources();
-        let cache_base = sym.cache_dir().join("plugin-sources");
-        for resolved in &sources {
-            let Some(dir) = crate::plugins::resolve_legacy_plugin_source_dir(resolved, &cache_base)
-            else {
-                continue;
-            };
-            if !dir.is_dir() {
-                continue;
-            }
-            graph.add_root(
-                ResolvedSourceRoot {
-                    registry: SourceRegistry::Path,
-                    source_id: format!("legacy:{}", resolved.source.name),
-                    path: dir,
-                },
-                SourceReason {
-                    provenance: SourceProvenance::Installed,
-                    detail: format!("legacy plugin-source `{}`", resolved.source.name),
-                },
-            );
         }
 
         graph
@@ -370,7 +345,13 @@ pub async fn expand_source_graph(
     // Seed: scan existing graph nodes (installed sources, workspace, legacy)
     // and collect their contributions to the worklist and policy.
     let mut worklist: Vec<WorklistItem> = Vec::new();
-    seed_from_nodes(graph, &mut policy, &mut worklist, &mut scanned);
+    seed_from_nodes(
+        graph,
+        &mut policy,
+        &mut worklist,
+        &mut scanned,
+        workspace_crates,
+    );
 
     // Seed: evaluate workspace dep candidates against initial policy.
     push_allowed_deps(&policy, workspace_crates, &mut worklist, &scanned);
@@ -422,11 +403,13 @@ pub async fn expand_source_graph(
         // Scan the source for plugins.
         let source_name = &root.source_id;
         let dir = &root.path;
-        let Ok(contents) = scan_source_dir_public(dir, source_name) else {
+        let node_provenance = graph.provenance_for(&root.path);
+        let Ok(contents) =
+            scan_source_dir_public(dir, source_name, workspace_crates, &node_provenance)
+        else {
             continue;
         };
 
-        let node_provenance = graph.provenance_for(&root.path);
         let policy_grew_before = policy.rule_count();
 
         for result in contents {
@@ -437,6 +420,9 @@ pub async fn expand_source_graph(
 
             // Push recursive [[plugins]] source.* declarations.
             for ps in &parsed.plugin.plugin_sources {
+                if !plugin_source_predicates_hold(ps, &node_provenance, workspace_crates) {
+                    continue;
+                }
                 match &ps.source {
                     PluginSourceDecl::Git(url) => {
                         worklist.push(WorklistItem {
@@ -475,6 +461,7 @@ fn seed_from_nodes(
     policy: &mut crate::discovery::CollectedPolicy,
     worklist: &mut Vec<WorklistItem>,
     scanned: &mut std::collections::BTreeMap<PathBuf, BTreeSet<SourceProvenance>>,
+    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
 ) {
     use crate::plugins::{PluginSourceDecl, scan_source_dir_public};
 
@@ -487,13 +474,18 @@ fn seed_from_nodes(
             .or_default()
             .extend(node.provenance.iter().copied());
 
-        let Ok(contents) = scan_source_dir_public(dir, source_name) else {
+        let Ok(contents) =
+            scan_source_dir_public(dir, source_name, workspace_crates, &node.provenance)
+        else {
             continue;
         };
         for result in contents {
             let Ok(parsed) = result else { continue };
             policy.add_policy(&parsed.plugin.discovery);
             for ps in &parsed.plugin.plugin_sources {
+                if !plugin_source_predicates_hold(ps, &node.provenance, workspace_crates) {
+                    continue;
+                }
                 match &ps.source {
                     PluginSourceDecl::Git(url) => {
                         worklist.push(WorklistItem {
@@ -516,6 +508,21 @@ fn seed_from_nodes(
             }
         }
     }
+}
+
+fn plugin_source_predicates_hold(
+    source: &crate::plugins::PluginSearchSource,
+    provenance: &BTreeSet<SourceProvenance>,
+    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
+) -> bool {
+    if source.predicates.is_empty() {
+        return true;
+    }
+
+    let crate_pairs = crate_pairs(workspace_crates);
+    let mut ctx = crate::predicate::PredicateContext::new(&crate_pairs);
+    ctx.set_source_provenance(provenance.clone());
+    source.predicates.evaluate(&mut ctx)
 }
 
 /// Push workspace dependency candidates that are allowed by policy but not
@@ -638,10 +645,11 @@ impl<'a> SourceRegistryResolver<'a> {
     async fn resolve_crate(&self, spec: &CrateSourceSpec) -> Result<ResolvedSourceRoot> {
         let result =
             probe::fetch_dependency_via_cargo(spec.key.as_deref(), &spec.dependency).await?;
+        let path = std::fs::canonicalize(&result.path).unwrap_or(result.path);
         Ok(ResolvedSourceRoot {
             registry: SourceRegistry::Crate,
             source_id: format!("crate:{}@{}", result.name, result.version),
-            path: result.path,
+            path,
         })
     }
 }
@@ -1130,6 +1138,41 @@ paths = ["{}"]
         assert!(root_node.provenance.contains(&SourceProvenance::Installed));
         assert!(root_node.provenance.contains(&SourceProvenance::Workspace));
         assert_eq!(root_node.reasons.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn crate_registry_resolver_canonicalizes_path() {
+        // The crate registry resolves through cargo metadata, which may return
+        // non-canonical paths (e.g., through symlinks). The resolver must
+        // canonicalize so that graph dedup works across registries.
+        let tmp = tempfile::tempdir().unwrap();
+        let real_dir = tmp.path().join("real-plugin");
+        write_minimal_crate(&real_dir, "shared-plugin", "0.1.0");
+
+        let symlink_dir = tmp.path().join("link-to-plugin");
+        std::os::unix::fs::symlink(&real_dir, &symlink_dir).unwrap();
+
+        let sym = Symposium::from_dir(tmp.path());
+        let resolver = SourceRegistryResolver::new(&sym);
+        let spec = CrateSourceSpec {
+            key: Some("shared-plugin".to_string()),
+            dependency: spec_table(&[(
+                "path",
+                toml::Value::String(symlink_dir.to_string_lossy().to_string()),
+            )]),
+        };
+
+        let resolved = resolver
+            .resolve(&RegistrySourceSpec::Crate(spec))
+            .await
+            .unwrap();
+
+        let canonical = std::fs::canonicalize(&real_dir).unwrap();
+        assert_eq!(
+            resolved.path, canonical,
+            "crate registry should return canonical path, but got {:?} instead of {:?}",
+            resolved.path, canonical
+        );
     }
 
     #[test]

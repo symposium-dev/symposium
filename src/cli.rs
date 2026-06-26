@@ -33,10 +33,6 @@ use crate::sync;
     disable_help_subcommand = true
 )]
 pub struct Cli {
-    /// Control plugin source update behavior (none, check, fetch)
-    #[arg(long, global = true, default_value = "none")]
-    pub update: symposium_install::UpdateLevel,
-
     /// Suppress status output
     #[arg(short = 'q', long, global = true)]
     pub quiet: bool,
@@ -160,21 +156,6 @@ pub fn builtin_audience(name: &str) -> Option<Audience> {
 
 #[derive(Debug, Subcommand)]
 pub enum PluginCommand {
-    /// Sync plugin sources from git repositories
-    Sync {
-        /// Provider name to sync (omit to sync all)
-        provider: Option<String>,
-    },
-
-    /// List all providers and their plugins
-    List,
-
-    /// Show details for a specific plugin
-    Show {
-        /// Plugin name
-        plugin: String,
-    },
-
     /// Validate a plugin source directory or a single TOML manifest
     Validate {
         /// Path to a directory or a single .toml file

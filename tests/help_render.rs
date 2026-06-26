@@ -35,12 +35,11 @@ async fn cargo_agents_help_lists_plugin_vended() {
                 example-tool  Analyze the example crate
 
                 Options:
-                      --update <UPDATE>  Control plugin source update behavior (none, check, fetch) [default: none] [possible values: none, check, fetch]
-                  -q, --quiet            Suppress status output
-                  -v, --verbose          Print detailed information about decisions made
-                      --json             Output structured JSON report
-                  -h, --help             Print help
-                  -V, --version          Print version
+                  -q, --quiet    Suppress status output
+                  -v, --verbose  Print detailed information about decisions made
+                      --json     Output structured JSON report
+                  -h, --help     Print help
+                  -V, --version  Print version
             "#]]
             .assert_eq(&redact(out));
             Ok(())

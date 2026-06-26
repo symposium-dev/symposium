@@ -14,7 +14,7 @@ Scans workspace dependencies, installs applicable skills into agent directories,
 
 5. **Resolve transitive plugin sources** — follow `[[plugins]] source.*` entries from all loaded plugins recursively, evaluating `where.*` filters against the workspace. Fetch each resolved source.
 
-6. **Discover plugins** — for each plugin source root, load the root `SYMPOSIUM.toml` or synthesize an empty root manifest. Apply implicit `skills/`, workspace-gated `.agents/skills/`, and nested-manifest `[[plugins]] source.path = "."` defaults unless disabled with `[defaults]`. Nested manifests are independent plugins and are deduped by canonical manifest path. Read crate Cargo metadata to populate implicit installations from binary targets.
+6. **Discover plugins** — for each plugin source root, load the root `SYMPOSIUM.toml` or synthesize an empty root manifest. Apply implicit `skills/`, workspace-gated `.agents/skills/`, and nested-manifest `[[plugins]] source.path = "."` defaults unless disabled with manifest `defaults.*` fields. Nested manifests are independent plugins and are deduped by canonical manifest path. Read crate `Cargo.toml` binary targets to populate implicit installations.
 
 7. **Match skills to dependencies** — for each plugin, evaluate plugin-level predicates, then evaluate skill group predicates and individual skill `crates` frontmatter against the workspace dependencies.
 

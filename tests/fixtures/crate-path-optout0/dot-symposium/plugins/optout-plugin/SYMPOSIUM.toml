@@ -2,4 +2,4 @@ name = "optout-plugin"
 crates = ["crate-opt"]
 
 [[skills]]
-source = "crate"
+source.path = "skills"

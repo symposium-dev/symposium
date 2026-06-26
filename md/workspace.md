@@ -9,11 +9,11 @@ Every plugin (including the implicit workspace plugin) has two default skill sou
 | Directory | Search depth | When installed | Use case |
 | --- | --- | --- | --- |
 | `skills/` | Recursive | Always (unconditional) | Skills for users of your crate |
-| `.agents/skills/` | One level (`*/SKILL.md`) | Only when `workspace()` is true | Skills for developers of this project |
+| `.agents/skills/` | Recursive | Only when `workspace()` is true | Skills for developers of this project |
 
 Just drop `SKILL.md` files in either directory and they'll be picked up on the next sync. No `SYMPOSIUM.toml` needed.
 
-The `skills/` directory is searched recursively, so you can organize skills into subdirectories freely. The `.agents/skills/` directory is searched one level deep — each immediate subdirectory containing a `SKILL.md` is a skill.
+Both directories are searched recursively, so you can organize skills into subdirectories freely. Nested `.agents/skills/` entries are hoisted to the flat skill name when copied to agents that require flat skill directories.
 
 ## Propagation to agent-specific directories
 
@@ -25,7 +25,7 @@ For more control, add a `SYMPOSIUM.toml` at your workspace root or in a member c
 
 - Gate skills with predicates (`crates`, `env`, `path_exists`, etc.)
 - Add hooks and MCP servers
-- Declare `[[auto-install]]` for companion plugin crates
+- Declare `[[plugins]] source.crate` for companion plugin crates
 - Disable defaults like `skills/` and `.agents/skills/`
 
 Adding a `SYMPOSIUM.toml` is purely additive — the default `skills/` and `.agents/skills/` sources continue to work. See the [plugin definition reference](./reference/plugin-definition.md) for details on suppressing defaults.

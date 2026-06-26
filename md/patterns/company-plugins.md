@@ -59,14 +59,16 @@ If your internal crates ship their own `SYMPOSIUM.toml`, you can add them to the
 
 ```toml
 # In my-company-plugins/SYMPOSIUM.toml
-dependency-allow-list.crates = ["my-company-api", "my-company-auth", "my-company-db"]
+[discovery.allow]
+crates = { my-company-api = "*", my-company-auth = "*", my-company-db = "*" }
 ```
 
 Or team members can opt in globally:
 
 ```toml
 # In ~/.symposium/config.toml
-dependency-allow-list = ["*"]
+[discovery]
+allow = "*"
 ```
 
 ## Hooks for enforcement

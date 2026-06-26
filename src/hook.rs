@@ -416,7 +416,7 @@ async fn discovery_hint(sym: &Symposium, deps: &mut WorkspaceDeps) -> Option<Str
     let mut graph = crate::crate_sources::ResolvedSourceGraph::build_initial(sym, deps).await;
     let workspace_crates = deps.load().map(|l| l.crates.clone()).unwrap_or_default();
     crate::crate_sources::expand_source_graph(&mut graph, sym, &workspace_crates).await;
-    let registry = crate::plugins::load_registry_from_graph(&graph);
+    let registry = crate::plugins::load_registry_from_graph(&graph, &workspace_crates);
     let pairs = crate::crate_sources::crate_pairs(deps.crates());
 
     let any_subcommand = !applicable_subcommands(&registry, &pairs).is_empty();
@@ -491,7 +491,14 @@ pub async fn dispatch_plugin_hooks(
     prior_output: serde_json::Value,
     deps: &mut WorkspaceDeps,
 ) -> Result<serde_json::Value, Vec<u8>> {
-    let plugins = crate::plugins::load_all_plugins(sym);
+    let mut graph = crate::crate_sources::ResolvedSourceGraph::build_initial(sym, deps).await;
+    let workspace_crates = deps
+        .load()
+        .map(|loaded| loaded.crates.clone())
+        .unwrap_or_default();
+    crate::crate_sources::expand_source_graph(&mut graph, sym, &workspace_crates).await;
+    let registry = crate::plugins::load_registry_from_graph(&graph, &workspace_crates);
+    let plugins = registry.plugins;
 
     // Resolving the workspace means running cargo, so only do it when some
     // plugin's hook gating actually references a concrete crate (a `crate(*)`

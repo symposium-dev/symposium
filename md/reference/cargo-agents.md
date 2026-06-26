@@ -25,4 +25,4 @@
 | `--help` | Print help |
 | `--version` | Print version |
 
-The `-v` and `--json` flags work with `sync`, `status`, `plugin list`, and `plugin validate`. During hook dispatch, decision events are emitted at debug level and appear in verbose output when testing hooks.
+The `-v` and `--json` flags work with `sync`, `status`, and `plugin validate`. During hook dispatch, decision events are emitted at debug level and appear in verbose output when testing hooks.

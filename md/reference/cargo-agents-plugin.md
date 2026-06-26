@@ -10,22 +10,6 @@ cargo agents plugin <SUBCOMMAND>
 
 ## Subcommands
 
-### `cargo agents plugin list`
-
-```bash
-cargo agents plugin list
-```
-
-List all installed plugin crates and the plugins they provide.
-
-### `cargo agents plugin show`
-
-```bash
-cargo agents plugin show <PLUGIN>
-```
-
-Show details for a specific plugin, including its TOML configuration and source crate.
-
 ### `cargo agents plugin validate`
 
 ```bash

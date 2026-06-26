@@ -1,0 +1,5 @@
+name = "implicit-tool-plugin"
+
+[subcommand.hello]
+description = "Run the implicit binary"
+command = "crate"

@@ -22,8 +22,7 @@
 //!
 //! Besides the boolean gate ([`PredicateSet::evaluate`]), predicates carry a
 //! **witness**: the set of workspace crates that participate in a satisfying
-//! evaluation. This drives `source = "crate"` skill resolution — see
-//! [`PredicateSet::witness`] and [`union_matched_crates`].
+//! evaluation. This is used for diagnostics and predicate tests.
 
 use std::path::Path;
 use std::process::Command;
@@ -296,22 +295,6 @@ impl Predicate {
         }
     }
 
-    /// True if this predicate names a concrete crate in a position that can
-    /// appear in a [`witness`](Self::witness) — i.e. a `crate(serde)` not under
-    /// any `not(...)`. A crate beneath a negation never contributes a crate to
-    /// fetch from (the `Not` arm of `witness` discards its inner witness), so
-    /// it cannot anchor a `source = "crate"` group. Custom predicates may
-    /// produce witnesses at runtime, so they count as fetchable.
-    pub fn has_fetchable_crate(&self) -> bool {
-        match self {
-            Predicate::Crate(..) => true,
-            Predicate::Custom { .. } => true,
-            Predicate::Not(_) => false,
-            Predicate::Any(v) | Predicate::All(v) => v.iter().any(Predicate::has_fetchable_crate),
-            _ => false,
-        }
-    }
-
     /// Collect every crate name referenced anywhere in this predicate.
     ///
     /// Used for crates.io existence validation, so it ignores tree position
@@ -376,6 +359,18 @@ impl PredicateSet {
         self.predicates.iter().all(|p| p.evaluate(ctx))
     }
 
+    /// Return a display string for the first top-level predicate that fails.
+    ///
+    /// This is intentionally a top-level explanation: nested combinators keep
+    /// their full expression so status output can explain the actual gate
+    /// without needing a separate diagnostic tree.
+    pub fn first_failing(&self, ctx: &mut PredicateContext) -> Option<String> {
+        self.predicates
+            .iter()
+            .find(|p| !p.evaluate(ctx))
+            .map(ToString::to_string)
+    }
+
     /// Witness for the whole set (treated as one big `all(...)`): `None` if any
     /// predicate is false, otherwise the deduplicated union of witnesses.
     pub fn witness(&self, ctx: &mut PredicateContext) -> Option<Vec<(String, semver::Version)>> {
@@ -401,13 +396,6 @@ impl PredicateSet {
         self.predicates.iter().any(Predicate::has_concrete_crate)
     }
 
-    /// True if a concrete crate appears in a fetchable (non-negated) position.
-    /// Gates `source = "crate"` validation: such a group must name at least one
-    /// crate it can actually fetch skills from.
-    pub fn has_fetchable_crate(&self) -> bool {
-        self.predicates.iter().any(Predicate::has_fetchable_crate)
-    }
-
     /// True if any crate predicate (including `crate(*)`) appears anywhere.
     pub fn mentions_crate(&self) -> bool {
         self.predicates.iter().any(Predicate::mentions_crate)
@@ -417,28 +405,6 @@ impl PredicateSet {
     pub fn references_crate(&self, name: &str) -> bool {
         self.predicates.iter().any(|p| p.references_crate(name))
     }
-}
-
-/// Union the witnesses of several predicate sets, deduplicated by crate name.
-///
-/// A set whose gate is false contributes nothing. Drives `source = "crate"`
-/// resolution: the concrete crates whose source trees to fetch skills from.
-pub fn union_matched_crates(
-    sets: &[&PredicateSet],
-    ctx: &mut PredicateContext,
-) -> Vec<(String, semver::Version)> {
-    let mut seen = std::collections::HashSet::new();
-    let mut result = Vec::new();
-    for set in sets {
-        if let Some(matched) = set.witness(ctx) {
-            for pair in matched {
-                if seen.insert(pair.0.clone()) {
-                    result.push(pair);
-                }
-            }
-        }
-    }
-    result
 }
 
 fn dedup_crates(crates: Vec<(String, semver::Version)>) -> Vec<(String, semver::Version)> {
@@ -1204,17 +1170,6 @@ mod tests {
         assert!(p.witness(&mut ctx(&[])).is_none());
     }
 
-    #[test]
-    fn union_matched_crates_dedups_across_sets() {
-        let plugin = PredicateSet::from_crates("serde").unwrap();
-        let group = PredicateSet::from_crates("serde, tokio").unwrap();
-        let w = ws(&[("serde", "1.0.0"), ("tokio", "1.0.0")]);
-        let result = union_matched_crates(&[&plugin, &group], &mut ctx(&w));
-        let mut names: Vec<_> = result.into_iter().map(|(n, _)| n).collect();
-        names.sort();
-        assert_eq!(names, vec!["serde", "tokio"]);
-    }
-
     // --- introspection ---
 
     #[test]
@@ -1244,33 +1199,6 @@ mod tests {
                 .unwrap()
                 .has_concrete_crate()
         );
-    }
-
-    #[test]
-    fn has_fetchable_crate() {
-        let fetchable = |s: &str| PredicateSet::parse(s).unwrap().has_fetchable_crate();
-        // A crate in a positive position is fetchable...
-        assert!(fetchable("crate(serde)"));
-        assert!(fetchable("any(crate(serde), not(crate(legacy)))"));
-        assert!(fetchable("all(crate(serde), env(USE_SERDE))"));
-        assert!(
-            PredicateSet::from_crates("serde")
-                .unwrap()
-                .has_fetchable_crate()
-        );
-        // ...but a crate only under `not(...)` is not (its witness is empty).
-        assert!(!fetchable("not(crate(legacy))"));
-        assert!(!fetchable("all(not(crate(a)), env(X))"));
-        // `not(not(crate(a)))` still cannot fetch: `Not` always yields an empty
-        // witness regardless of nesting depth.
-        assert!(!fetchable("not(not(crate(a)))"));
-        // Wildcards and non-crate leaves are never fetchable.
-        assert!(
-            !PredicateSet::from_crates("*")
-                .unwrap()
-                .has_fetchable_crate()
-        );
-        assert!(!fetchable("shell(true)"));
     }
 
     // --- Display round-trip ---
@@ -1397,15 +1325,6 @@ mod tests {
             arg: "x".into(),
         };
         assert!(!p.has_concrete_crate());
-    }
-
-    #[test]
-    fn has_fetchable_crate_custom_is_true() {
-        let p = Predicate::Custom {
-            name: "foo".into(),
-            arg: "x".into(),
-        };
-        assert!(p.has_fetchable_crate());
     }
 
     #[test]

@@ -2,4 +2,4 @@ name = "diamond-plugin"
 crates = ["crate-a", "crate-b"]
 
 [[skills]]
-source = "crate"
+source.path = "skills"

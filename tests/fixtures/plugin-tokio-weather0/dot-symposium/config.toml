@@ -1,5 +1,4 @@
 hook-scope = "project"
 
-[defaults]
-symposium-recommendations = false
-user-plugins = true
+[installed]
+paths = ["plugins"]

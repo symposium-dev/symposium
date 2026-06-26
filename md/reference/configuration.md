@@ -84,14 +84,10 @@ Each `[[agent]]` entry identifies an agent you use. You can configure multiple a
 
 ## `[installed]`
 
-`[installed]` declares plugin sources the user explicitly installed. This is
-the registry-ready replacement for legacy `[[installed-crate]]` and
-`[[plugin-source]]` entries.
-
-During the current migration, Symposium parses and preserves this shape, and
-new configs include the default installed crate. The old sync path still uses
-legacy `[[plugin-source]]` and `[defaults]` fields until the resolved-source
-graph is wired in.
+`[installed]` declares plugin sources the user explicitly installed. New
+configs include the default `symposium-recommendations = "1"` installed crate.
+Legacy `[[plugin-source]]`, `[[installed-crate]]`, and `[defaults]` config
+shapes are rejected.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|

@@ -1,0 +1,5 @@
+name = "primary-plugin"
+
+[[plugins]]
+where.crates = ["serde"]
+source.crate = { path = "$TEST_DIR/secondary-plugin" }

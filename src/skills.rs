@@ -17,7 +17,6 @@ fn source_display(source: &PluginSource) -> String {
         PluginSource::None => "none".into(),
         PluginSource::Path(p) => format!("path:{}", p.display()),
         PluginSource::Git(url) => format!("git:{url}"),
-        PluginSource::Crate => "crate".into(),
     }
 }
 
@@ -57,11 +56,6 @@ impl Skill {
 /// plugin manifest pointed at them. Two plugins in the same registry
 /// source that both reference the same on-disk skill therefore dedupe.
 ///
-/// - `Crate { name, version }` — the skill came from walking the source tree
-///   of a specific crate version (`source = "crate"`).
-///   Identity is `(name, version)` only: two plugins targeting the same
-///   crate version produce the same logical skills regardless of which
-///   plugin pointed at them.
 /// - `Git { source, commit_sha, skill_path }` — the skill came from a
 ///   `source.git` group. Identity is `(source, commit_sha, skill_path)`:
 ///   `source` is the parsed [`GitSource`](symposium_install::git::GitSource)
@@ -72,17 +66,13 @@ impl Skill {
 ///   deduplicate. Different SKILL.md files within one repo stay distinct.
 /// - `Source { source_name, skill_path }` — the skill came from a
 ///   plugin's `source.path` group, or from a standalone `SKILL.md` in
-///   a registry source. `source_name` is the registry source's
-///   display name (e.g. `"user-plugins"`); `skill_path` is the
+///   a registry source. `source_name` is the resolved source id;
+///   `skill_path` is the
 ///   SKILL.md's parent directory relative to the source root, with
 ///   forward slashes. Two plugins in the same source pointing at the
 ///   same on-disk skill bundle therefore produce the same origin.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 pub enum SkillOrigin {
-    Crate {
-        name: String,
-        version: semver::Version,
-    },
     Git {
         /// The parsed git source (carries normalized repo identity).
         source: symposium_install::git::GitSource,
@@ -104,15 +94,11 @@ pub enum SkillOrigin {
 impl SkillOrigin {
     /// Short, readable disambiguator embedded into install paths.
     ///
-    /// For `Crate` we expand to `<name>-<version>` — readable on disk
-    /// and already collision-free within a workspace. The other
-    /// variants don't have a clean printable form, so we hash:
     /// 8-hex-char prefix of SHA-256 over the JSON-serialized origin.
-    /// Hash collisions there would manifest as a name clash at install
-    /// time, not silent data loss.
+    /// Hash collisions would manifest as a name clash at install time,
+    /// not silent data loss.
     pub fn short_hash(&self) -> String {
         match self {
-            SkillOrigin::Crate { name, version } => format!("{name}-{version}"),
             SkillOrigin::Git { .. } | SkillOrigin::Source { .. } => {
                 use sha2::{Digest, Sha256};
                 let bytes = serde_json::to_vec(self).expect("SkillOrigin always serializes");
@@ -225,8 +211,6 @@ pub async fn skills_applicable_to(
 /// fetching git sources, to avoid unnecessary downloads. Each returned
 /// skill is paired with the `SkillOrigin` it was discovered through:
 ///
-/// - `CratePath` → `SkillOrigin::Crate { name, version }`, one per
-///   matched crate (canonical name/version from the fetch result).
 /// - `Git` → `SkillOrigin::Git { source, commit_sha, skill_path }`, one
 ///   per discovered SKILL.md (path varies per skill within the group).
 /// - `Path` → `SkillOrigin::Source { source_name, skill_path }`, with
@@ -237,7 +221,7 @@ async fn load_skills_for_group(
     sym: &Symposium,
     parsed: &ParsedPlugin,
     group: &SkillGroup,
-    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
+    _workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
     ctx: &mut PredicateContext<'_>,
 ) -> Vec<(Skill, SkillOrigin)> {
     let plugin = &parsed.plugin;
@@ -271,7 +255,6 @@ async fn load_skills_for_group(
     }
 
     let skills = match &group.source {
-        PluginSource::Crate => load_crate_skills(plugin, group, workspace_crates, ctx).await,
         PluginSource::Git(url) => load_git_skills(sym, group, url).await,
         PluginSource::Path(p) => {
             let plugin_dir = plugin_path.parent().unwrap_or(plugin_path);
@@ -297,185 +280,6 @@ async fn load_skills_for_group(
     );
 
     skills
-}
-
-/// Resolve crate source predicates, fetch each matched crate, read its
-/// `[package.metadata.symposium]`, and discover skills. Follows redirects
-/// recursively with cycle detection.
-///
-/// The crates to fetch are the *witness* of the plugin- and group-level
-/// predicate sets: the concrete crates that participate in satisfying the gate
-/// (see [`predicate::union_matched_crates`]).
-async fn load_crate_skills(
-    plugin: &crate::plugins::Plugin,
-    group: &SkillGroup,
-    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
-    ctx: &mut PredicateContext<'_>,
-) -> Vec<(Skill, SkillOrigin)> {
-    let matched = predicate::union_matched_crates(&[&plugin.predicates, &group.predicates], ctx);
-    let mut skills = Vec::new();
-    for (name, _version) in &matched {
-        let mut visited = std::collections::HashSet::new();
-        fetch_and_resolve_skills(
-            name,
-            None,
-            workspace_crates,
-            group,
-            &mut visited,
-            &mut skills,
-            0,
-        )
-        .await;
-    }
-    skills
-}
-
-const MAX_REDIRECT_DEPTH: usize = 10;
-
-/// Recursively fetch a crate and resolve its skills via metadata.
-async fn fetch_and_resolve_skills(
-    crate_name: &str,
-    version_spec: Option<&str>,
-    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
-    group: &SkillGroup,
-    visited: &mut std::collections::HashSet<String>,
-    skills: &mut Vec<(Skill, SkillOrigin)>,
-    depth: usize,
-) {
-    if depth >= MAX_REDIRECT_DEPTH {
-        tracing::warn!(
-            crate_name = %crate_name,
-            "redirect chain exceeded depth limit ({MAX_REDIRECT_DEPTH}); stopping"
-        );
-        return;
-    }
-
-    let normalized = crate::crate_sources::normalize_crate_name(crate_name);
-    let visit_key = format!("{normalized}@{}", version_spec.unwrap_or("*"));
-    if !visited.insert(visit_key) {
-        tracing::warn!(
-            crate_name = %crate_name,
-            "cycle detected in crate skill metadata redirects; skipping"
-        );
-        return;
-    }
-
-    let mut fetcher = crate::crate_sources::RustCrateFetch::new(crate_name, workspace_crates);
-    if let Some(vs) = version_spec {
-        fetcher = fetcher.version(vs);
-    }
-
-    let result = match fetcher.fetch().await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(
-                crate_name = %crate_name,
-                error = %e,
-                "failed to fetch crate source for skills"
-            );
-            return;
-        }
-    };
-
-    let version = match semver::Version::parse(&result.version) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(
-                crate_name = %crate_name,
-                version = %result.version,
-                error = %e,
-                "skipping crate-source skills: unparseable version"
-            );
-            return;
-        }
-    };
-
-    let origin = SkillOrigin::Crate {
-        name: result.name.clone(),
-        version,
-    };
-
-    let cargo_toml_path = result.path.join("Cargo.toml");
-    let metadata = match crate::crate_metadata::parse_crate_metadata(&cargo_toml_path) {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::warn!(
-                crate_name = %crate_name,
-                error = %e,
-                "failed to parse crate metadata; falling back to default skills/ path"
-            );
-            None
-        }
-    };
-
-    match metadata {
-        None => {
-            let dir = result.path.join(crate::plugins::CRATE_DEFAULT_SKILLS_PATH);
-            let discovered = discover_skills(&dir, group);
-            tracing::debug!(
-                report = %crate::report::ReportEvent::SkillSourceSearched {
-                    plugin: format!("crate:{crate_name}"),
-                    source: format!("crate_path:{}", crate::plugins::CRATE_DEFAULT_SKILLS_PATH),
-                    path: dir.display().to_string(),
-                    skills_found: discovered.iter().filter(|r| r.is_ok()).count(),
-                },
-            );
-            for skill_result in discovered {
-                match skill_result {
-                    Ok(skill) => skills.push((skill, origin.clone())),
-                    Err(e) => tracing::warn!(
-                        crate_name = %crate_name,
-                        error = %e,
-                        "failed to load skill from crate source"
-                    ),
-                }
-            }
-        }
-        Some(meta) => {
-            for source in &meta.skills {
-                match source {
-                    crate::crate_metadata::SkillSource::Path(p) => {
-                        let dir = result.path.join(p);
-                        let discovered = discover_skills(&dir, group);
-                        tracing::debug!(
-                            report = %crate::report::ReportEvent::SkillSourceSearched {
-                                plugin: format!("crate:{crate_name}"),
-                                source: format!("crate_path:{p}"),
-                                path: dir.display().to_string(),
-                                skills_found: discovered.iter().filter(|r| r.is_ok()).count(),
-                            },
-                        );
-                        for skill_result in discovered {
-                            match skill_result {
-                                Ok(skill) => skills.push((skill, origin.clone())),
-                                Err(e) => tracing::warn!(
-                                    crate_name = %crate_name,
-                                    path = %p,
-                                    error = %e,
-                                    "failed to load skill from crate source"
-                                ),
-                            }
-                        }
-                    }
-                    crate::crate_metadata::SkillSource::Crate {
-                        name: target_name,
-                        version: target_version,
-                    } => {
-                        Box::pin(fetch_and_resolve_skills(
-                            target_name,
-                            target_version.as_deref(),
-                            workspace_crates,
-                            group,
-                            visited,
-                            skills,
-                            depth + 1,
-                        ))
-                        .await;
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// Fetch a `source.git` group's tree and build a per-skill `Git` origin
@@ -956,10 +760,6 @@ mod tests {
     #[test]
     fn skill_origin_kinds_are_distinct() {
         // Distinct variants must not collide even with similar field values.
-        let c = SkillOrigin::Crate {
-            name: "foo".into(),
-            version: semver::Version::new(1, 0, 0),
-        };
         let s = SkillOrigin::Source {
             source_name: "foo".into(),
             skill_path: "1.0.0".into(),
@@ -974,11 +774,7 @@ mod tests {
             commit_sha: "deadbeef".into(),
             skill_path: "1.0.0".into(),
         };
-        assert_ne!(c, s);
-        assert_ne!(c, g);
         assert_ne!(s, g);
-        assert_ne!(c.short_hash(), s.short_hash());
-        assert_ne!(c.short_hash(), g.short_hash());
         assert_ne!(s.short_hash(), g.short_hash());
     }
 

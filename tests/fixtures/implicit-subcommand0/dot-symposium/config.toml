@@ -1,0 +1,5 @@
+hook-scope = "project"
+auto-sync = false
+
+[installed]
+paths = ["plugins/implicit-tool"]
