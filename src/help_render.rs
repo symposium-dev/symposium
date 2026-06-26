@@ -16,7 +16,7 @@ use symposium_sdk::workspace::WorkspaceCrate;
 use crate::{
     cli::{Cli, Commands, builtin_audience},
     config::Symposium,
-    plugins::{Audience, PluginRegistry, load_registry},
+    plugins::{Audience, PluginRegistry, load_registry_from_graph},
     subcommand_dispatch::applicable_subcommands,
 };
 
@@ -33,7 +33,7 @@ pub const AGENTS_HEADING: &str = "Commands for agents";
 /// - no subcommand, or the bare `help` keyword -> top-level
 /// - `<built-in> --help` (incl. nested and required-arg commands) -> clap's own per command help, re-rendered;
 /// - a plugin-vended `<name> --help` -> `None`, so dispatch forwards `--help` to the child.
-pub fn help_text(
+pub async fn help_text(
     parse: Result<&Cli, &clap::Error>,
     args: &[String],
     sym: &Symposium,
@@ -44,12 +44,12 @@ pub fn help_text(
             let help_keyword = matches!(&cli.command, Some(Commands::External(argv)) if argv.first().and_then(|fst| fst.to_str()) == Some("help"));
 
             if cli.command.is_none() || help_keyword {
-                return Some(render_help(sym, cwd));
+                return Some(render_help(sym, cwd).await);
             }
 
             if cli.help {
                 // `<built-in> --help`; fall back to top-level if the target is a plugin (External) or `--help` come before any subcommand name.
-                return Some(subcommand_help(args).unwrap_or_else(|| render_help(sym, cwd)));
+                return Some(subcommand_help(args).unwrap_or(render_help(sym, cwd).await));
             }
 
             None
@@ -88,9 +88,12 @@ pub fn subcommand_help(args: &[String]) -> Option<String> {
     })
 }
 
-pub fn render_help(sym: &Symposium, cwd: &Path) -> String {
-    let registry = load_registry(sym);
+pub async fn render_help(sym: &Symposium, cwd: &Path) -> String {
     let mut deps = sym.workspace_deps(cwd);
+    let mut graph = crate::crate_sources::ResolvedSourceGraph::build_initial(sym, &mut deps).await;
+    let workspace_crates = deps.load().map(|l| l.crates.clone()).unwrap_or_default();
+    crate::crate_sources::expand_source_graph(&mut graph, sym, &workspace_crates).await;
+    let registry = load_registry_from_graph(&graph);
     let workspace = deps.crates();
     render(&registry, workspace)
 }

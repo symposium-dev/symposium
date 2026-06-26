@@ -239,7 +239,7 @@ impl TestContext {
 
         let parse = Cli::try_parse_from(&full_args);
         if let Some(text) =
-            symposium::help_render::help_text(parse.as_ref(), &args_str, &self.sym, &cwd)
+            symposium::help_render::help_text(parse.as_ref(), &args_str, &self.sym, &cwd).await
         {
             out.println(text);
             return Ok(out.captured().join("\n"));

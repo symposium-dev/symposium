@@ -18,7 +18,6 @@ use crate::{
 use crate::{
     help_render::{AGENTS_HEADING, HUMANS_HEADING},
     hook_schema::symposium::{OutputEvent, SessionStartInput},
-    plugins::load_registry,
     subcommand_dispatch::applicable_subcommands,
 };
 use symposium_sdk::workspace::WorkspaceDeps;
@@ -384,7 +383,9 @@ pub async fn dispatch_builtin(
         symposium::InputEvent::UserPromptSubmit(prompt) => {
             handle_user_prompt_submit(sym, prompt).await
         }
-        symposium::InputEvent::SessionStart(session) => handle_session_start(sym, session, deps),
+        symposium::InputEvent::SessionStart(session) => {
+            handle_session_start(sym, session, deps).await
+        }
         _ => symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
     }
 }
@@ -392,12 +393,12 @@ pub async fn dispatch_builtin(
 /// Handle SessionStart: orient the agent toward crate-aware tooling and, when due, nudge the
 /// user to update. The two fragments are computed independently -- the discovery hint is never gated
 /// behind the update-check throttle -- then joined into a single context block.
-fn handle_session_start(
+async fn handle_session_start(
     sym: &Symposium,
     _payload: &SessionStartInput,
     deps: &mut WorkspaceDeps,
 ) -> OutputEvent {
-    let fragments = [discovery_hint(sym, deps), update_nudge(sym)]
+    let fragments = [discovery_hint(sym, deps).await, update_nudge(sym)]
         .into_iter()
         .flatten()
         .collect::<Vec<String>>();
@@ -411,8 +412,11 @@ fn handle_session_start(
 
 /// Suggest `cargo agents --help` when the active workspace exposes crate-aware plugin subcommands.
 /// Reuses the help renderer's `applicable_subcommands`, so the hint fires only when there is actually something to discover; `None` otherwise.
-fn discovery_hint(sym: &Symposium, deps: &mut WorkspaceDeps) -> Option<String> {
-    let registry = load_registry(sym);
+async fn discovery_hint(sym: &Symposium, deps: &mut WorkspaceDeps) -> Option<String> {
+    let mut graph = crate::crate_sources::ResolvedSourceGraph::build_initial(sym, deps).await;
+    let workspace_crates = deps.load().map(|l| l.crates.clone()).unwrap_or_default();
+    crate::crate_sources::expand_source_graph(&mut graph, sym, &workspace_crates).await;
+    let registry = crate::plugins::load_registry_from_graph(&graph);
     let pairs = crate::crate_sources::crate_pairs(deps.crates());
 
     let any_subcommand = !applicable_subcommands(&registry, &pairs).is_empty();

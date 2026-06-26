@@ -42,7 +42,7 @@ async fn main() -> ExitCode {
     // `--help` / `-h` / `help` / no subcommand -> audience-grouped top-level help (or clap's
     // per-command help for `<built-in> --help`).
     // Plugin `<name> --help` returns `None` here and is forwarded to the child by dispatch below.
-    if let Some(text) = help_render::help_text(parse.as_ref(), &args_str, &sym, &cwd) {
+    if let Some(text) = help_render::help_text(parse.as_ref(), &args_str, &sym, &cwd).await {
         print!("{text}");
         return ExitCode::SUCCESS;
     }

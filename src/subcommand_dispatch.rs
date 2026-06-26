@@ -96,8 +96,11 @@ pub async fn dispatch_external(
         .context("subcommand name must be valid UTF-8")?;
     let forwarded = argv.collect::<Vec<_>>();
 
-    let registry = plugins::load_registry(sym);
     let mut deps = sym.workspace_deps(cwd);
+    let mut graph = crate::crate_sources::ResolvedSourceGraph::build_initial(sym, &mut deps).await;
+    let workspace_crates = deps.load().map(|l| l.crates.clone()).unwrap_or_default();
+    crate::crate_sources::expand_source_graph(&mut graph, sym, &workspace_crates).await;
+    let registry = plugins::load_registry_from_graph(&graph);
     let workspace = deps.crates();
 
     let (plugin, subcommand) = find_subcommand(&registry, name, workspace)?
