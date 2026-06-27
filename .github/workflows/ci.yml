@@ -101,3 +101,29 @@ jobs:
 
       - name: Test
         run: cargo test ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
+
+  xtask:
+    name: Run xtask checks
+    needs: check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ubuntu-xtask-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ubuntu-xtask-cargo-
+
+      - name: Check for orphaned md files
+        run: cargo xtask md-orphan-check

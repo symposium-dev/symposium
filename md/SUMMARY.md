@@ -80,3 +80,8 @@
     - [Goose](./design/agent-details/goose.md)
     - [Kiro](./design/agent-details/kiro.md)
     - [OpenCode](./design/agent-details/opencode.md)
+- [RFDs](./rfds/README.md)
+  - [Template](./rfds/TEMPLATE/README.md)
+  - [Accepted](./rfds/accepted.md) <!-- put accepted rfds in this section; the file goes in the rfds directory -->
+  - [Completed](./rfds/completed.md) <!-- move completed rfds to this section -->
+    - [RFD Process](./rfds/rfd-process/README.md)
