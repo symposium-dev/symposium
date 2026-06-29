@@ -88,6 +88,10 @@ pub struct Config {
     )]
     pub auto_update: AutoUpdate,
 
+    /// Opt-in usage telemetry. Off by default.
+    #[serde(default, skip_serializing_if = "TelemetryConfig::is_default")]
+    pub telemetry: TelemetryConfig,
+
     /// Agents configured for this user.
     #[serde(default, rename = "agent")]
     pub agents: Vec<AgentEntry>,
@@ -109,6 +113,25 @@ pub struct Config {
 pub struct AgentEntry {
     /// Agent name (e.g., "claude", "copilot", "gemini").
     pub name: String,
+}
+
+/// Opt-in usage telemetry settings.
+///
+/// Telemetry is recorded as a local, append-only JSON-lines event log under
+/// `<config-dir>/telemetry/` that the user can inspect and share manually.
+/// Nothing is uploaded automatically.
+#[derive(Debug, Default, Deserialize, Serialize, Clone, PartialEq, Eq)]
+pub struct TelemetryConfig {
+    /// Record anonymous usage events (session starts, prompts, tool usage)
+    /// to the local event log. Off by default.
+    #[serde(default)]
+    pub enabled: bool,
+}
+
+impl TelemetryConfig {
+    fn is_default(&self) -> bool {
+        *self == TelemetryConfig::default()
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -133,6 +156,7 @@ impl Default for Config {
             sync_debounce_secs: default_sync_debounce_secs(),
             hook_scope: HookScope::default(),
             auto_update: AutoUpdate::default(),
+            telemetry: TelemetryConfig::default(),
             agents: Vec::new(),
             logging: LoggingConfig::default(),
             defaults: DefaultsConfig::default(),
@@ -614,6 +638,32 @@ mod tests {
         assert!(config.agents.is_empty());
         assert!(config.auto_sync); // default true
         assert!(config.agents_syncing); // default true
+    }
+
+    #[test]
+    fn parse_telemetry_defaults_off() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(!config.telemetry.enabled);
+    }
+
+    #[test]
+    fn parse_telemetry_enabled() {
+        let config: Config = toml::from_str(indoc! {"
+            [telemetry]
+            enabled = true
+        "})
+        .unwrap();
+        assert!(config.telemetry.enabled);
+    }
+
+    #[test]
+    fn telemetry_off_is_omitted_from_serialized_config() {
+        let config = Config::default();
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        assert!(
+            !serialized.contains("[telemetry]"),
+            "default (off) telemetry should not be written to config.toml: {serialized}"
+        );
     }
 
     #[test]

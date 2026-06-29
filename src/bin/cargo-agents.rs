@@ -83,6 +83,9 @@ async fn main() -> ExitCode {
         Some(Commands::CrateInfo { name, version }) => {
             tracing::debug!(%name, version = ?version, "cargo agents crate-info");
         }
+        Some(Commands::Telemetry { command }) => {
+            tracing::info!(subcommand = ?command, "cargo agents telemetry");
+        }
         Some(Commands::External(argv)) => {
             tracing::info!(argv = ?argv, "cargo agents <external>");
         }

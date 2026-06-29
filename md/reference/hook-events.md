@@ -10,6 +10,7 @@ This page documents the JSON schemas for symposium-format hooks — the input yo
 | `PostToolUse` | After a tool completes. Can inject context. |
 | `UserPromptSubmit` | When the user submits a prompt. Can inject context. |
 | `SessionStart` | When an agent session begins. Can inject context. |
+| `Stop` | When an agent session/turn ends. |
 
 ## Input schemas
 
@@ -91,6 +92,22 @@ Your hook receives one of the following JSON objects on stdin, depending on whic
 | `session_id` | string or null | Agent session identifier, if available. |
 | `cwd` | string or null | Working directory of the agent. |
 
+### `Stop`
+
+```json
+{
+  "Stop": {
+    "session_id": "abc-123",
+    "cwd": "/home/user/project"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `session_id` | string or null | Agent session identifier, if available. |
+| `cwd` | string or null | Working directory of the agent. |
+
 ## Output schemas
 
 Your hook writes a JSON object to stdout. The object is wrapped in an enum tag matching the event, just like the input.
@@ -154,6 +171,20 @@ Your hook writes a JSON object to stdout. The object is wrapped in an enum tag m
 |-------|------|-------------|
 | `additionalContext` | string or null | Text injected into the agent's context at session start. |
 
+### `Stop` output
+
+```json
+{
+  "Stop": {
+    "additionalContext": "Things look good!"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `additionalContext` | string or null | Text injected into the agent's context when the session/turn ends. |
+
 ## Exit codes
 
 | Code | Meaning |
@@ -164,7 +195,7 @@ Your hook writes a JSON object to stdout. The object is wrapped in an enum tag m
 
 ## Matcher
 
-The `matcher` field on a hook entry is a regex matched against `tool_name` for `PreToolUse` and `PostToolUse` events. For `UserPromptSubmit` and `SessionStart`, the matcher is ignored (all hooks fire). Use `"*"` to match all tools.
+The `matcher` field on a hook entry is a regex matched against `tool_name` for `PreToolUse` and `PostToolUse` events. For `UserPromptSubmit`, `SessionStart`, and `Stop`, the matcher is ignored (all hooks fire). Use `"*"` to match all tools.
 
 ## Testing
 

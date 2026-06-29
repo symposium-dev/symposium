@@ -26,6 +26,7 @@ async fn cargo_agents_help_lists_plugin_vended() {
                 plugin        Manage plugins
                 self-update   Update symposium to the latest version
                 sync          Synchronize skills with workspace dependencies
+                telemetry     Manage opt-in usage telemetry (status, enable, disable, show)
 
                 Commands for agents:
                 crate-info    Find crate sources

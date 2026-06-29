@@ -14,6 +14,7 @@ impl Agent for ClaudeCode {
                 Some(erase_agent_hook_event(ClaudeUserPromptSubmitEvent))
             }
             super::HookEvent::SessionStart => Some(erase_agent_hook_event(ClaudeSessionStartEvent)),
+            super::HookEvent::Stop => Some(erase_agent_hook_event(ClaudeStopEvent)),
             _ => None,
         }
     }
@@ -49,6 +50,7 @@ claude_event!(
     ClaudeSessionStartInput,
     ClaudeSessionStartOutput
 );
+claude_event!(ClaudeStopEvent, ClaudeStopInput, ClaudeStopOutput);
 
 // ── Helper: extract context from symposium output ─────────────────────
 
@@ -532,6 +534,91 @@ impl AgentHookOutput for ClaudeSessionStartOutput {
                 .as_ref()
                 .and_then(|h| h.additional_context.clone()),
         ))
+    }
+    fn to_hook_output(&self) -> serde_json::Value {
+        serde_json::to_value(self).unwrap()
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+// ── Stop ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeStopInput {
+    pub hook_event_name: String,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ClaudeStopOutput {
+    #[serde(rename = "continue", skip_serializing_if = "Option::is_none")]
+    pub do_continue: Option<bool>,
+    #[serde(rename = "stopReason", skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    #[serde(rename = "suppressOutput", skip_serializing_if = "Option::is_none")]
+    pub suppress_output: Option<bool>,
+    #[serde(rename = "systemMessage", skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<String>,
+    #[serde(flatten)]
+    pub rest: serde_json::Map<String, serde_json::Value>,
+}
+
+impl AgentHookInput for ClaudeStopInput {
+    fn parse_input(payload: &str) -> anyhow::Result<Self> {
+        Ok(serde_json::from_str(payload)?)
+    }
+    fn to_symposium(&self) -> symposium::InputEvent {
+        symposium::InputEvent::Stop(symposium::StopInput::new(
+            self.rest
+                .get("session_id")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            self.rest
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+        ))
+    }
+    fn from_symposium(event: &symposium::InputEvent) -> Self {
+        let symposium::InputEvent::Stop(p) = event else {
+            panic!("wrong event type")
+        };
+        let mut rest = serde_json::Map::new();
+        if let Some(s) = &p.session_id {
+            rest.insert("session_id".into(), serde_json::Value::String(s.clone()));
+        }
+        if let Some(c) = &p.cwd {
+            rest.insert("cwd".into(), serde_json::Value::String(c.clone()));
+        }
+        Self {
+            hook_event_name: "Stop".into(),
+            rest,
+        }
+    }
+    fn to_string(&self) -> anyhow::Result<String> {
+        serde_json::to_string(self).map_err(Into::into)
+    }
+    fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
+        self
+    }
+}
+
+impl AgentHookOutput for ClaudeStopOutput {
+    fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
+        if output.is_empty() {
+            return Ok(Self::default());
+        }
+        Ok(serde_json::from_slice(output)?)
+    }
+    fn from_symposium(_event: &symposium::OutputEvent) -> Self {
+        // Stop hooks don't inject additionalContext into the agent.
+        Self::default()
+    }
+    fn to_symposium(&self) -> symposium::OutputEvent {
+        symposium::OutputEvent::Stop(symposium::StopOutput::default())
     }
     fn to_hook_output(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap()

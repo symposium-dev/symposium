@@ -440,6 +440,7 @@ fn register_claude_hooks(settings_path: &Path, out: &Output) -> Result<()> {
         "PostToolUse",
         "UserPromptSubmit",
         "SessionStart",
+        "Stop",
     ] {
         let command = format!("cargo-agents hook claude {}", event_to_cli_arg(event));
         if ensure_claude_hook_entry(hooks_obj, event, &command) {
@@ -1037,6 +1038,7 @@ fn event_to_cli_arg(event: &str) -> &str {
         "PostToolUse" | "postToolUse" => "post-tool-use",
         "UserPromptSubmit" | "userPromptSubmit" => "user-prompt-submit",
         "SessionStart" | "sessionStart" | "agentSpawn" => "session-start",
+        "Stop" | "stop" => "stop",
         other => other,
     }
 }

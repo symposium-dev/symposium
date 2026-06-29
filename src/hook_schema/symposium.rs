@@ -10,8 +10,8 @@
 // Re-export wire types from the SDK crate.
 pub use symposium_sdk::hook::{
     Input as InputEvent, Output as OutputEvent, PostToolUseInput, PostToolUseOutput,
-    PreToolUseInput, PreToolUseOutput, SessionStartInput, SessionStartOutput,
-    UserPromptSubmitInput, UserPromptSubmitOutput,
+    PreToolUseInput, PreToolUseOutput, SessionStartInput, SessionStartOutput, StopInput,
+    StopOutput, UserPromptSubmitInput, UserPromptSubmitOutput,
 };
 
 // ── AgentHookInput for InputEvent ────────────────────────────────────────
