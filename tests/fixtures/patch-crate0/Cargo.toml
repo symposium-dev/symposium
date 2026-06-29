@@ -1,0 +1,10 @@
+[package]
+name = "patch-demo"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crate-x = "0.1.0"
+
+[patch.crates-io]
+crate-x = { path = "crate-x" }

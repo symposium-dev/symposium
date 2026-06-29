@@ -7,6 +7,77 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/symposium-dev/symposium/compare/symposium-v0.3.0...symposium-v0.4.0) - 2026-05-14
+
+### Added
+
+- inject update nudge into session-start hook additionalContext
+- add self-update command and auto-update infrastructure
+
+### Fixed
+
+- normalize CURRENT_VERSION in test snapshots for release compatibility
+- use atomic rename in mock cargo install to avoid "Text file busy"
+- rustfmt formatting and switch version check to cargo search
+
+### Other
+
+- remove binary download, default auto-update to on, add init prompt
+- auto-update re-exec for both sync and hook invocations
+- end-to-end auto-update re-exec with mock cargo install
+- snapshot output for update check tests with expect_test
+- capture Output messages, assert update warning text
+- move auto-update check into cli::run, add integration tests
+- move cargo override from env var to Symposium field
+- cargo search, cargo_command() helper, tests, hook update behavior
+- SkillOrigin keyed on source location, readable Crate dirs
+- demotion to suffixed names when a new origin introduces a conflict
+- promotion to unsuffixed slot when origin conflict disappears
+- only suffix skill dirs with origin hash on conflict
+- dispatch on group source via single match in load_skills_for_group
+- SkillOrigin::Git keys on (repo, commit_sha, skill_path)
+- per-group disambiguator on SkillOrigin::Plugin; sha2 hash
+- introduce SkillOrigin and dedup skill installs by origin
+- add has_symposium_marker helper
+- address review comments
+- drop unimplemented 'distribution: workspace' section
+- rewrite workspace-skills page
+- Document workspace skills in user guide
+- Add agents-syncing: mirror user-authored skills across agent dirs
+
+## [0.3.0](https://github.com/symposium-dev/symposium/compare/symposium-v0.2.1...symposium-v0.3.0) - 2026-05-13
+
+### Added
+
+- track installed skills via per-skill `.symposium` marker file
+- resolve crate-sourced skills during sync
+- add matched_crates predicate resolution
+- add crate_path skill source type with parse-time validation
+
+### Fixed
+
+- resolve path dependencies in crate-info command
+- *(doc)* Add GitHub and Zulip links.
+
+### Other
+
+- Merge pull request #216 from nikomatsakis/gitignore-strategy
+- pacify the merciless cargo-fmt
+- rename publishing-skills.md to authoring-a-plugin.md; add mdbook redirects
+- extract normalize_crate_name helper for hyphen/underscore equality
+- introduce CratePathSource newtype for the CratePath payload
+- make PluginSource an enum preserving shorthand vs explicit crate_path
+- rewrite crate-author documentation for crate-sourced skills
+- remove agent-specific directories
+- update stale `crate` subcommand to `crate-info`
+- Merge pull request #203 from jlizen/clippy/collapsible-if-and-plugins-misc
+- Merge pull request #205 from jlizen/clippy/trivial-mechanical
+- Merge pull request #202 from jlizen/main
+- Refactor installation schema, again
+- Refactor hook installation schema
+- Add ability to resolve hooks using distributions.
+- Merge pull request #192 from anaslimem/claude-updated-input-json
+
 ## [0.2.1](https://github.com/symposium-dev/symposium/compare/symposium-v0.2.0...symposium-v0.2.1) - 2026-04-21
 
 ### Other

@@ -9,12 +9,18 @@
 | [`cargo agents init`](./cargo-agents-init.md) | Set up user-wide configuration |
 | [`cargo agents sync`](./cargo-agents-sync.md) | Synchronize skills with workspace dependencies |
 | [`cargo agents plugin`](./cargo-agents-plugin.md) | Manage plugin sources |
+| [`cargo agents self-update`](./cargo-agents-self-update.md) | Update symposium to the latest version |
+| [`cargo agents crate-info`](./cargo-agents-crate-info.md) | Find crate sources (agent-facing) |
 
 ## Global options
 
 | Flag | Description |
 |------|-------------|
+| `-v`, `--verbose` | Print detailed decision trace (which plugins matched, which skills were considered, etc.) |
+| `--json` | Output structured JSON report to stdout; suppresses human-readable output. Combine with `-v` to include the full decision trace. |
 | `--update <LEVEL>` | Plugin source update behavior: `none` (default), `check`, `fetch` |
 | `-q`, `--quiet` | Suppress status output |
 | `--help` | Print help |
 | `--version` | Print version |
+
+The `-v` and `--json` flags work with `sync`, `plugin list`, and `plugin validate`. During hook dispatch, decision events are emitted at debug level and appear in verbose output when testing hooks.

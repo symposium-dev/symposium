@@ -1,16 +1,21 @@
 use clap::Parser;
+use std::env;
 use std::process::ExitCode;
 
 use symposium::cli::{Cli, Commands, PluginCommand};
 use symposium::config;
+use symposium::help_render;
 use symposium::hook;
 use symposium::output::Output;
-use symposium::plugins::{self, ParsedPlugin};
+use symposium::plugins;
+use symposium::report;
+use symposium::self_update;
+use symposium::state;
+use symposium::subcommand_dispatch::dispatch_external;
 
 #[tokio::main]
 async fn main() -> ExitCode {
     let mut sym = config::Symposium::from_environment();
-    sym.init_logging();
 
     // When invoked as `cargo agents`, cargo passes "agents" as the first arg.
     // Strip it so clap sees the real arguments.
@@ -22,7 +27,47 @@ async fn main() -> ExitCode {
     } else {
         args
     };
-    let cli = Cli::parse_from(filtered);
+
+    let cwd = env::current_dir().expect("failed to get current directory");
+
+    // Parse without exiting on error: a help request on a built-in with required args
+    // (`crate-info --help`, `plugin --help`) surfaces a parse error that `help_text` recovers.
+    // `args_str` feeds the subcommand-name walk.
+    let args_str = filtered
+        .iter()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let parse = Cli::try_parse_from(filtered);
+
+    // `--help` / `-h` / `help` / no subcommand -> audience-grouped top-level help (or clap's
+    // per-command help for `<built-in> --help`).
+    // Plugin `<name> --help` returns `None` here and is forwarded to the child by dispatch below.
+    if let Some(text) = help_render::help_text(parse.as_ref(), &args_str, &sym, &cwd) {
+        print!("{text}");
+        return ExitCode::SUCCESS;
+    }
+
+    let cli = match parse {
+        Ok(cli) => cli,
+        Err(err) => err.exit(),
+    };
+
+    // Always install the report layer. Mode determines output format:
+    // --json → accumulate JSON array; -v → stderr trace; default → stdout.
+    let (mode, level) = if cli.json {
+        let level = if cli.verbose {
+            tracing::Level::DEBUG
+        } else {
+            tracing::Level::INFO
+        };
+        (report::ReportMode::Json, level)
+    } else if cli.verbose {
+        (report::ReportMode::Verbose, tracing::Level::DEBUG)
+    } else {
+        (report::ReportMode::Normal, tracing::Level::INFO)
+    };
+    let (report_layer, report_handle) = report::ReportLayer::new(mode, level);
+    sym.init_logging(Some(report_layer));
 
     // Log the command being invoked
     match &cli.command {
@@ -34,15 +79,23 @@ async fn main() -> ExitCode {
         Some(Commands::Hook { agent, event }) => {
             tracing::debug!(?agent, ?event, "cargo agents hook");
         }
+        Some(Commands::SelfUpdate) => tracing::info!("cargo agents self-update"),
         Some(Commands::CrateInfo { name, version }) => {
             tracing::debug!(%name, version = ?version, "cargo agents crate-info");
+        }
+        Some(Commands::External(argv)) => {
+            tracing::info!(argv = ?argv, "cargo agents <external>");
         }
         None => {}
     }
 
-    // Hook commands are quiet by default (they're invoked by the agent, not the user)
+    // Stamp state.toml with the running binary version (silently updates on mismatch).
+    state::ensure_current(sym.config_dir());
+
+    // Hook commands are quiet by default (they're invoked by the agent, not the user).
+    // JSON mode also suppresses human output (only JSON goes to stdout).
     let is_hook = matches!(cli.command, Some(Commands::Hook { .. }));
-    let out = if cli.quiet || is_hook {
+    let out = if cli.quiet || is_hook || cli.json {
         Output::quiet()
     } else {
         Output::normal()
@@ -51,24 +104,59 @@ async fn main() -> ExitCode {
     // Ensure git-based plugin sources are up to date (non-blocking on failure).
     plugins::ensure_plugin_sources(&sym, cli.update).await;
 
-    let cwd = std::env::current_dir().expect("failed to get current directory");
+    // Auto-update = "on": check for updates and re-exec if a new binary was
+    // installed.  Skipped for self-update (which always checks explicitly)
+    // and for hooks (session-start injects the warn nudge into hook output;
+    // the "on" re-exec for hooks is handled here).
+    if !matches!(cli.command, Some(Commands::SelfUpdate)) && !is_hook {
+        if self_update::maybe_check_for_update(&sym, &out).await {
+            self_update::re_exec();
+        }
+    } else if is_hook
+        && sym.config.auto_update == config::AutoUpdate::On
+        && self_update::maybe_check_for_update(&sym, &Output::quiet()).await
+    {
+        self_update::re_exec();
+    }
 
     match cli.command {
         // Commands that need direct I/O (stdin/stdout) stay in the binary
         Some(Commands::Hook { agent, event }) => hook::run(&sym, agent, event).await,
 
-        Some(Commands::Plugin { command }) => handle_plugin_command(&sym, command).await,
-
-        None => {
-            use clap::CommandFactory;
-            Cli::command().print_help().ok();
-            println!();
-            ExitCode::SUCCESS
+        Some(Commands::Plugin { command }) => {
+            let code = handle_plugin_command(&sym, command).await;
+            let events = report_handle.drain();
+            if !events.is_empty() {
+                println!("{}", serde_json::to_string_pretty(&events).unwrap());
+            }
+            code
         }
+
+        Some(Commands::External(argv)) => match dispatch_external(&sym, &cwd, argv).await {
+            Ok(result) => {
+                use std::io::Write;
+                std::io::stdout().write_all(&result.stdout).ok();
+                std::io::stderr().write_all(&result.stderr).ok();
+                ExitCode::from(result.exit_code)
+            }
+            Err(err) => {
+                eprintln!("Error: {err:#}");
+                ExitCode::FAILURE
+            }
+        },
+        // No-subcommand and the `help` keyword are handled by the help branch
+        // right after parsing, above.
+        None => unreachable!("no-subcommand routes to the help renderer above"),
 
         // Everything else delegates to the library
         Some(cmd) => match symposium::cli::run(&mut sym, cmd, &cwd, &out).await {
-            Ok(()) => ExitCode::SUCCESS,
+            Ok(()) => {
+                let events = report_handle.drain();
+                if !events.is_empty() {
+                    println!("{}", serde_json::to_string_pretty(&events).unwrap());
+                }
+                ExitCode::SUCCESS
+            }
             Err(e) => {
                 eprintln!("Error: {e:#}");
                 ExitCode::FAILURE
@@ -104,25 +192,15 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
         PluginCommand::List => {
             let providers = plugins::list_plugins(sym);
             for provider in &providers {
-                println!("Provider: {}", provider.name);
-                println!("  Type: {}", provider.source_type);
-                if let Some(ref url) = provider.git_url {
-                    println!("  URL: {url}");
-                }
-                if let Some(ref path) = provider.path {
-                    println!("  Path: {path}");
-                }
-                if provider.plugins.is_empty() {
-                    println!("  (no plugins)");
-                } else {
-                    for plugin in &provider.plugins {
-                        println!(
-                            "  - {} ({} hooks, {} skill groups)",
-                            plugin.name, plugin.hooks_count, plugin.skill_groups_count
-                        );
-                    }
-                }
-                println!();
+                tracing::info!(
+                    report = %report::ReportEvent::ProviderListed {
+                        name: provider.name.clone(),
+                        source_type: provider.source_type.to_string(),
+                        url: provider.git_url.clone(),
+                        path: provider.path.clone(),
+                        plugins: provider.plugins.iter().map(|p| p.name.clone()).collect(),
+                    },
+                );
             }
             ExitCode::SUCCESS
         }
@@ -140,11 +218,8 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                             return ExitCode::FAILURE;
                         }
                         for r in &results {
-                            errors += print_validation_result(r, "  ");
+                            errors += emit_validation_results(r);
                         }
-                        let total = count_results(&results);
-                        let passed = total - errors;
-                        println!("\n  {passed}/{total} valid");
                     }
                     Err(e) => {
                         eprintln!("✗ {}: {e}", path.display());
@@ -155,23 +230,32 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                 if !no_check_crates {
                     match plugins::collect_crate_names_in_source_dir(&path) {
                         Ok(crate_names) => {
-                            if !crate_names.is_empty() {
-                                println!(
-                                    "\n📦 Checking {} crate name(s) on crates.io...",
-                                    crate_names.len()
+                            for name in &crate_names {
+                                let exists = plugins::check_crate_exists(name).await;
+                                tracing::info!(
+                                    report = %report::ReportEvent::Validated {
+                                        path: name.clone(),
+                                        item_kind: "crate".into(),
+                                        valid: exists,
+                                        error: if exists { None } else { Some("not found on crates.io".into()) },
+                                        warning: None,
+                                    },
                                 );
-                                for name in &crate_names {
-                                    if plugins::check_crate_exists(name).await {
-                                        println!("  ✅ {name}");
-                                    } else {
-                                        eprintln!("  ✗ {name} — not found on crates.io");
-                                        errors += 1;
-                                    }
+                                if !exists {
+                                    errors += 1;
                                 }
                             }
                         }
                         Err(e) => {
-                            eprintln!("✗ failed to collect crate names: {e}");
+                            tracing::info!(
+                                report = %report::ReportEvent::Validated {
+                                    path: path.display().to_string(),
+                                    item_kind: "crate-check".into(),
+                                    valid: false,
+                                    error: Some(format!("failed to collect crate names: {e}")),
+                                    warning: None,
+                                },
+                            );
                             errors += 1;
                         }
                     }
@@ -183,9 +267,10 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                     ExitCode::SUCCESS
                 }
             } else {
-                match plugins::load_plugin(&path) {
-                    Ok(ParsedPlugin { path, plugin: _ }) => {
-                        println!("{}", tokio::fs::read_to_string(path).await.unwrap());
+                let parent = path.parent().unwrap_or(&path);
+                match plugins::load_plugin(&path, "", parent) {
+                    Ok(p) => {
+                        println!("{}", tokio::fs::read_to_string(p.path).await.unwrap());
                         ExitCode::SUCCESS
                     }
                     Err(e) => {
@@ -196,10 +281,10 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
             }
         }
         PluginCommand::Show { plugin } => match plugins::find_plugin(sym, &plugin) {
-            Some(ParsedPlugin { path, plugin: _ }) => {
-                println!("# Source: {}", path.display());
+            Some(p) => {
+                println!("# Source: {}", p.path.display());
                 println!();
-                print!("{}", tokio::fs::read_to_string(path).await.unwrap());
+                print!("{}", tokio::fs::read_to_string(p.path).await.unwrap());
                 ExitCode::SUCCESS
             }
             None => {
@@ -210,28 +295,35 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
     }
 }
 
-fn print_validation_result(r: &plugins::ValidationResult, indent: &str) -> usize {
+fn emit_validation_results(r: &plugins::ValidationResult) -> usize {
     let mut errors = 0;
     match &r.result {
         Ok(()) => {
-            if let Some(ref w) = r.warning {
-                println!("{indent}⚠️  {} ({}): {w}", r.path.display(), r.kind);
-            } else {
-                println!("{indent}✅ {} ({})", r.path.display(), r.kind);
-            }
+            tracing::info!(
+                report = %report::ReportEvent::Validated {
+                    path: r.path.display().to_string(),
+                    item_kind: r.kind.to_string(),
+                    valid: true,
+                    error: None,
+                    warning: r.warning.clone(),
+                },
+            );
         }
         Err(e) => {
-            eprintln!("{indent}✗ {} ({}): {e}", r.path.display(), r.kind);
+            tracing::info!(
+                report = %report::ReportEvent::Validated {
+                    path: r.path.display().to_string(),
+                    item_kind: r.kind.to_string(),
+                    valid: false,
+                    error: Some(e.to_string()),
+                    warning: None,
+                },
+            );
             errors += 1;
         }
     }
-    let child_indent = format!("{indent}    ");
     for child in &r.children {
-        errors += print_validation_result(child, &child_indent);
+        errors += emit_validation_results(child);
     }
     errors
-}
-
-fn count_results(results: &[plugins::ValidationResult]) -> usize {
-    results.iter().map(|r| 1 + count_results(&r.children)).sum()
 }

@@ -2,6 +2,8 @@
 
 A skill is a `SKILL.md` file inside a skill directory. Skills follow the [agentskills.io](https://agentskills.io/specification.md) format.
 
+Skills can be supplied by a [plugin](./plugin-definition.md) or [by adding skills into the `.agents/skills` directory within the workspace](../workspace-skills.md).
+
 ## Directory layout
 
 ```text
@@ -33,6 +35,7 @@ Prefer deriving `Serialize` and `Deserialize` on data types.
 | `name` | string | yes | Skill identifier. |
 | `description` | string | yes | Short description shown in skill listings. |
 | `crates` | string | no | Comma-separated crate atoms this skill is about (e.g., `crates: serde, tokio>=1.0`). Narrows the enclosing `[[skills]]` group scope — cannot widen it. |
+| `predicates` | string | no | Comma-separated predicates (`crate`, `shell`, `path_exists`, `env`, `not`, `any`, `all`); all must hold for the skill to activate. ANDed with plugin- and group-level predicates. See [Predicates](./predicates.md). |
 
 ## Crate atoms
 

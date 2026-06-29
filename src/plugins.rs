@@ -7,60 +7,208 @@ use serde::{Deserialize, Serialize};
 use crate::config::Symposium;
 use crate::hook::HookEvent;
 use crate::hook_schema::HookAgent;
-use crate::installation::Source;
+use symposium_install::Source;
 
 use sacp::schema::McpServer;
 
 /// An MCP server entry in a plugin manifest.
 pub type McpServerEntry = McpServer;
 
-/// An MCP server entry with optional crate filtering.
+/// An MCP server entry with optional activation predicates.
 ///
-/// When `crates` is present, the server is only registered if the workspace
-/// matches those predicates (ANDed with plugin-level `crates`).
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// The server's `crates` and `predicates` fields are merged into one
+/// [`PredicateSet`](crate::predicate::PredicateSet); the server is only
+/// registered when that set holds (ANDed with the plugin-level set).
+#[derive(Debug, Clone, Serialize)]
 pub struct PluginMcpServer {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crates: Option<crate::predicate::PredicateSet>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::predicate::PredicateSet::is_empty"
+    )]
+    pub predicates: crate::predicate::PredicateSet,
     #[serde(flatten)]
     pub server: McpServerEntry,
 }
 
-/// Controls how aggressively plugin sources are updated.
-#[derive(Debug, Clone, Copy, clap::ValueEnum)]
-pub enum UpdateLevel {
-    /// Debounced: skip the API check if fetched recently.
-    None,
-    /// Always check freshness via API, but only download if stale.
-    Check,
-    /// Always re-download regardless of staleness.
-    Fetch,
+impl<'de> Deserialize<'de> for PluginMcpServer {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct Raw {
+            #[serde(default)]
+            crates: Option<crate::predicate::CrateList>,
+            #[serde(default)]
+            predicates: crate::predicate::PredicateSet,
+            #[serde(flatten)]
+            server: McpServerEntry,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(PluginMcpServer {
+            predicates: crate::predicate::PredicateSet::merged(raw.crates, raw.predicates),
+            server: raw.server,
+        })
+    }
 }
 
-/// Source declaration for remote plugin artifacts.
-#[derive(Debug, Default, Serialize, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub struct PluginSource {
-    /// Path on the local filesystem.
-    pub path: Option<PathBuf>,
+use symposium_install::UpdateLevel;
 
+/// Source declaration for a skill group.
+///
+/// Accepts one of:
+/// - `source.path = "..."` — local path
+/// - `source.git = "..."` — GitHub URL
+/// - `source = "crate"` — skills live in crate source trees (layout controlled
+///   by `[package.metadata.symposium]` in each crate's Cargo.toml)
+///
+/// `source = "crate"` is the only valid crate form. The former
+/// `source.crate = { ... }` and `source.crate_path = "..."` are parse errors
+/// with a migration hint.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum PluginSource {
+    /// No source specified (skills discovered in the plugin directory itself).
+    #[default]
+    None,
+    /// Local filesystem path, relative to the plugin manifest.
+    Path(PathBuf),
     /// GitHub URL pointing to a directory in a repository.
-    pub git: Option<String>,
+    Git(String),
+    /// Crate source — fetch skills from workspace crates' source trees.
+    /// Layout is determined by `[package.metadata.symposium]` in each crate.
+    Crate,
+}
+
+/// Default subdirectory used when no `[package.metadata.symposium]` is present.
+pub const CRATE_DEFAULT_SKILLS_PATH: &str = "skills";
+
+impl serde::Serialize for PluginSource {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        match self {
+            PluginSource::None => serializer.serialize_map(Some(0))?.end(),
+            PluginSource::Path(p) => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("path", p)?;
+                map.end()
+            }
+            PluginSource::Git(url) => {
+                let mut map = serializer.serialize_map(Some(1))?;
+                map.serialize_entry("git", url)?;
+                map.end()
+            }
+            PluginSource::Crate => serializer.serialize_str("crate"),
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PluginSource {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de;
+
+        /// Top-level fields of the `source` table.
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct PluginSourceFields {
+            #[serde(default)]
+            path: Option<PathBuf>,
+            #[serde(default)]
+            git: Option<String>,
+            /// Rejected: `source.crate = { ... }` is no longer valid.
+            #[serde(default, rename = "crate")]
+            crate_field: Option<toml::Value>,
+            /// Rejected: `source.crate_path = "..."` is no longer valid.
+            #[serde(default)]
+            crate_path: Option<toml::Value>,
+        }
+
+        struct PluginSourceVisitor;
+
+        impl<'de> de::Visitor<'de> for PluginSourceVisitor {
+            type Value = PluginSource;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(r#""crate" or a table with path/git"#)
+            }
+
+            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                match v {
+                    "crate" => Ok(PluginSource::Crate),
+                    other => Err(de::Error::custom(format!(
+                        "unknown source shorthand \"{other}\"; only \"crate\" is supported"
+                    ))),
+                }
+            }
+
+            fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
+                let fields =
+                    PluginSourceFields::deserialize(de::value::MapAccessDeserializer::new(map))?;
+
+                if fields.crate_path.is_some() {
+                    return Err(de::Error::custom(
+                        "source.crate_path is no longer supported; use `source = \"crate\"` \
+                         and add [package.metadata.symposium] to your crate's Cargo.toml instead",
+                    ));
+                }
+                if fields.crate_field.is_some() {
+                    return Err(de::Error::custom(
+                        "source.crate no longer accepts fields; use `source = \"crate\"` \
+                         and add [package.metadata.symposium] to your crate's Cargo.toml instead",
+                    ));
+                }
+
+                let exclusive_count = fields.path.is_some() as u8 + fields.git.is_some() as u8;
+                if exclusive_count > 1 {
+                    return Err(de::Error::custom(
+                        "source.path and source.git are mutually exclusive",
+                    ));
+                }
+
+                Ok(match (fields.path, fields.git) {
+                    (Some(p), None) => PluginSource::Path(p),
+                    (None, Some(url)) => PluginSource::Git(url),
+                    (None, None) => PluginSource::None,
+                    _ => unreachable!("exclusive_count > 1 guard"),
+                })
+            }
+        }
+
+        deserializer.deserialize_any(PluginSourceVisitor)
+    }
 }
 
 /// A `[[skills]]` entry from a plugin manifest.
 ///
-/// Each group declares which crates it advises on (`crates`) and
-/// optionally a remote source for the skill files.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+/// The group's `crates` and `predicates` fields are merged into one
+/// [`PredicateSet`](crate::predicate::PredicateSet) that gates the group and,
+/// for `source = "crate"`, locates the crate sources to fetch from.
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct SkillGroup {
-    /// Crate predicates this group advises on (e.g., `["serde", "serde_json>=1.0"]`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub crates: Option<crate::predicate::PredicateSet>,
+    #[serde(
+        default,
+        skip_serializing_if = "crate::predicate::PredicateSet::is_empty"
+    )]
+    pub predicates: crate::predicate::PredicateSet,
     /// Remote source for skills.
     #[serde(default)]
     pub source: PluginSource,
+}
+
+impl<'de> Deserialize<'de> for SkillGroup {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Raw {
+            #[serde(default)]
+            crates: Option<crate::predicate::CrateList>,
+            #[serde(default)]
+            predicates: crate::predicate::PredicateSet,
+            #[serde(default)]
+            source: PluginSource,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        Ok(SkillGroup {
+            predicates: crate::predicate::PredicateSet::merged(raw.crates, raw.predicates),
+            source: raw.source,
+        })
+    }
 }
 
 /// Raw command reference as it appears in TOML: a string (named installation
@@ -131,6 +279,18 @@ pub struct Installation {
     pub args: Vec<String>,
 }
 
+/// A validated custom predicate definition from a `[[predicate]]` entry.
+#[derive(Debug, Clone, Serialize)]
+pub struct CustomPredicate {
+    /// The predicate name (valid identifier, not a builtin).
+    pub name: String,
+    /// Name of the installation whose binary/script implements this predicate.
+    pub command: String,
+    /// Static arguments passed before the dynamic raw-arg.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+}
+
 /// A parsed plugin with its path and manifest.
 #[derive(Debug, Clone)]
 pub struct ParsedPlugin {
@@ -139,6 +299,17 @@ pub struct ParsedPlugin {
 
     /// The parsed plugin manifest.
     pub plugin: Plugin,
+
+    /// The plugin source the manifest was discovered through (e.g.
+    /// `"user-plugins"`, `"symposium-recommendations"`, or a name from
+    /// a `[[plugin-source]]` entry in the user config). Two plugins in
+    /// the same source that point at the same on-disk skill bundle
+    /// produce the same `SkillOrigin::Source` and dedupe at sync time.
+    pub source_name: String,
+
+    /// The plugin source's root directory on disk. Used as the base for
+    /// computing the `skill_path` field on `SkillOrigin::Source`.
+    pub source_dir: PathBuf,
 }
 
 /// A loaded, *validated* plugin manifest.
@@ -149,8 +320,11 @@ pub struct ParsedPlugin {
 #[derive(Debug, Clone, Serialize)]
 pub struct Plugin {
     pub name: String,
-    /// Crate predicates this plugin applies to. `["*"]` for all crates.
-    pub crates: crate::predicate::PredicateSet,
+    /// Activation predicates for this plugin — the plugin's `crates` (lowered to
+    /// `any(crate(...))`) merged with its `predicates`. Holds when every entry
+    /// holds. Evaluated at sync time (for skills/MCP), at subcommand lookup, and
+    /// at hook dispatch.
+    pub predicates: crate::predicate::PredicateSet,
     /// Named installation entries available to hooks in this plugin.
     /// Order matches declaration order in the manifest.
     pub installations: Vec<Installation>,
@@ -158,34 +332,79 @@ pub struct Plugin {
     pub skills: Vec<SkillGroup>,
     /// MCP servers to register for this plugin.
     pub mcp_servers: Vec<PluginMcpServer>,
+    /// Subcommands vended by this plugin, keyed by the name the user types
+    /// after `cargo agents`. Empty for plugins that vend no subcommands.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub subcommands: std::collections::BTreeMap<String, Subcommand>,
+    /// Custom predicate definitions vended by this plugin.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub custom_predicates: Vec<CustomPredicate>,
 }
 
 impl Plugin {
-    /// Check if this plugin applies to the given workspace crates.
-    /// Returns true if any predicate matches.
-    pub fn applies_to_crates(&self, workspace_crates: &[(String, semver::Version)]) -> bool {
-        self.crates.matches(workspace_crates)
+    /// Check if this plugin's activation predicates hold in `ctx`.
+    pub fn applies(&self, ctx: &mut crate::predicate::PredicateContext) -> bool {
+        self.predicates.evaluate(ctx)
     }
 
-    /// Return MCP servers applicable to the given workspace crates.
+    /// Look up a named installation on this plugin.
+    pub fn get_installation(&self, name: &str) -> Option<&Installation> {
+        self.installations.iter().find(|i| i.name == name)
+    }
+
+    /// True if gating this plugin's hooks (plugin-level plus hook-level
+    /// predicates) needs the workspace crate graph — i.e. some predicate names a
+    /// concrete crate, not just `crate(*)`. Lets hook dispatch skip the cargo
+    /// query when no crate is actually referenced.
+    pub fn hooks_need_crate_resolution(&self) -> bool {
+        self.predicates.has_concrete_crate()
+            || self.hooks.iter().any(|h| h.predicates.has_concrete_crate())
+    }
+
+    /// Return MCP servers whose own predicates hold in `ctx`.
     ///
-    /// A server matches if its own `crates` predicates match (or are absent,
-    /// meaning it inherits from the plugin level which is already checked).
+    /// ANDed with the plugin-level predicates, which the caller checks
+    /// separately.
     pub fn applicable_mcp_servers(
         &self,
-        workspace_crates: &[(String, semver::Version)],
+        ctx: &mut crate::predicate::PredicateContext,
     ) -> Vec<McpServerEntry> {
         self.mcp_servers
             .iter()
-            .filter(|s| {
-                let Some(ref pred_set) = s.crates else {
-                    return true;
-                };
-                pred_set.matches(workspace_crates)
-            })
+            .filter(|s| s.predicates.evaluate(ctx))
             .map(|s| s.server.clone())
             .collect()
     }
+}
+
+/// Whether a subcommand is intended for human or agent use.
+///
+/// Controls grouping in `cargo agents --help`; does not gate dispatch.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Audience {
+    Humans,
+    #[default]
+    Agents,
+}
+
+/// A validated `[subcommand.<name>]` entry.
+///
+/// `command` is the name of an `Installation` in the plugin (possibly a
+/// synthetic one promoted from an inline declaration), matching the same
+/// resolution pattern as `Hook.command`.
+#[derive(Debug, Clone, Serialize)]
+pub struct Subcommand {
+    pub description: String,
+    pub audience: Audience,
+    pub command: String,
+    /// Activation predicates for this subcommand (its `crates` lowered and
+    /// merged with its `predicates`). ANDed with the plugin-level set.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::predicate::PredicateSet::is_empty"
+    )]
+    pub predicates: crate::predicate::PredicateSet,
 }
 
 /// A validated hook definition.
@@ -214,6 +433,13 @@ pub struct Hook {
     /// (hook `args`, installation `args`) is non-empty.
     pub args: Vec<String>,
     pub format: HookFormat,
+    /// Activation predicates that must all hold for this hook to dispatch.
+    /// Evaluated at dispatch time, ANDed with the plugin's predicates.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::predicate::PredicateSet::is_empty"
+    )]
+    pub predicates: crate::predicate::PredicateSet,
 }
 
 /// Resolve a `RawInstallationRef`. If named, validate against the existing
@@ -294,6 +520,7 @@ fn validate_hook(
         script: hook_script,
         args: hook_args,
         format,
+        predicates,
     } = raw;
 
     let command = resolve_or_promote(
@@ -383,6 +610,7 @@ fn validate_hook(
         script: hook_script,
         args: final_args,
         format,
+        predicates,
     })
 }
 
@@ -399,15 +627,22 @@ fn validate_installation(install: &Installation) -> Result<()> {
             install.name
         );
     }
-    if let Some(Source::Cargo(c)) = &install.source
-        && c.git.is_some()
-        && install.executable.is_none()
-    {
-        bail!(
-            "installation `{}`: cargo source with `git` requires `executable` to be set \
-             (crates.io is not consulted, so the binary name is unknown)",
-            install.name
-        );
+    if let Some(Source::Cargo(c)) = &install.source {
+        if c.git.is_some() && install.executable.is_none() {
+            bail!(
+                "installation `{}`: cargo source with `git` requires `executable` to be set \
+                 (crates.io is not consulted, so the binary name is unknown)",
+                install.name
+            );
+        }
+        if c.global && install.executable.is_none() {
+            bail!(
+                "installation `{}`: cargo source with `global = true` requires `executable` to \
+                 be set (the binary is spawned by name via `$PATH` lookup, so we don't infer \
+                 it from crates.io)",
+                install.name
+            );
+        }
     }
     Ok(())
 }
@@ -464,6 +699,62 @@ pub struct PluginInfo {
     pub skill_groups_count: usize,
 }
 
+/// A standalone skill in the registry, paired with the origin it should be
+/// attributed to (derived from the source name + the skill's path within
+/// that source, so two registries can each contribute a same-named
+/// standalone skill without colliding).
+#[derive(Debug, Clone)]
+pub struct StandaloneSkill {
+    pub skill: crate::skills::Skill,
+    pub origin: crate::skills::SkillOrigin,
+}
+
+/// A resolved custom predicate definition in the registry.
+///
+/// Stores the plugin index and predicate index within that plugin so that
+/// acquisition can look up the `Installation` later.
+#[derive(Debug, Clone)]
+pub struct ResolvedCustomPredicate {
+    /// Index into `PluginRegistry.plugins` for the owning plugin.
+    pub plugin_index: usize,
+    /// The command installation name on the owning plugin.
+    pub command: String,
+    /// Static args passed before the dynamic raw-arg.
+    pub args: Vec<String>,
+}
+
+/// Global registry of custom predicates collected from all plugins.
+///
+/// Built unconditionally from every plugin's `[[predicate]]` entries (regardless
+/// of whether the plugin is "active" in the current workspace). Collisions
+/// (same name from two plugins) are excluded and warned at load time.
+#[derive(Debug, Default)]
+pub struct CustomPredicateRegistry {
+    entries: std::collections::HashMap<String, ResolvedCustomPredicate>,
+}
+
+impl CustomPredicateRegistry {
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn get(&self, name: &str) -> Option<&ResolvedCustomPredicate> {
+        self.entries.get(name)
+    }
+
+    pub fn contains_key(&self, name: &str) -> bool {
+        self.entries.contains_key(name)
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &ResolvedCustomPredicate)> {
+        self.entries.iter()
+    }
+}
+
 /// Loaded plugin registry: plugins from TOML manifests and standalone skills
 /// discovered directly in plugin source directories.
 #[derive(Debug)]
@@ -472,9 +763,11 @@ pub struct PluginRegistry {
     pub plugins: Vec<ParsedPlugin>,
     /// Skills discovered as standalone directories containing a `SKILL.md`
     /// file directly in a plugin source directory (no TOML manifest needed).
-    pub standalone_skills: Vec<crate::skills::Skill>,
+    pub standalone_skills: Vec<StandaloneSkill>,
     /// Non-fatal load warnings for plugins or standalone skills that were skipped.
     pub warnings: Vec<LoadWarning>,
+    /// Global custom predicate registry. Built from all plugins' `custom_predicates`.
+    pub custom_predicates: CustomPredicateRegistry,
 }
 
 /// A non-fatal plugin source load failure.
@@ -494,12 +787,26 @@ struct SourceDirContents {
     skill_files: Vec<PathBuf>,
 }
 
+/// A `[[predicate]]` entry in the raw TOML manifest.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCustomPredicate {
+    name: String,
+    /// Named installation or inline installation table.
+    command: RawInstallationRef,
+    #[serde(default)]
+    args: Vec<String>,
+}
+
 /// Raw TOML manifest deserialized from a plugin `.toml` file.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPluginManifest {
     name: String,
-    crates: crate::predicate::PredicateSet,
+    #[serde(default)]
+    crates: crate::predicate::CrateList,
+    #[serde(default)]
+    predicates: crate::predicate::PredicateSet,
     #[serde(default)]
     installations: Vec<RawNamedInstallation>,
     #[serde(default)]
@@ -508,6 +815,12 @@ struct RawPluginManifest {
     skills: Vec<SkillGroup>,
     #[serde(default)]
     mcp_servers: Vec<PluginMcpServer>,
+    /// TOML key is singular (`[subcommand.<name>]`); the validated field on
+    /// `Plugin` is plural (`subcommands`).
+    #[serde(default)]
+    subcommand: std::collections::BTreeMap<String, RawSubcommand>,
+    #[serde(default)]
+    predicate: Vec<RawCustomPredicate>,
 }
 
 /// `[[installations]]` entry: a name plus the same fields as a `RawInlineInstallation`.
@@ -526,6 +839,23 @@ struct RawNamedInstallation {
     script: Option<String>,
     #[serde(default)]
     args: Vec<String>,
+}
+
+/// Raw `[subcommand.<name>]` entry. The TOML table-key is the subcommand
+/// name; this struct carries the table body.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSubcommand {
+    description: String,
+    #[serde(default)]
+    audience: Audience,
+    /// Named installation (`"my-install"`) or inline installation table —
+    /// same shape as `RawHook.command`.
+    command: RawInstallationRef,
+    #[serde(default)]
+    crates: Option<crate::predicate::CrateList>,
+    #[serde(default)]
+    predicates: crate::predicate::PredicateSet,
 }
 
 #[derive(Debug, Deserialize)]
@@ -552,6 +882,8 @@ struct RawHook {
     args: Vec<String>,
     #[serde(default)]
     format: HookFormat,
+    #[serde(default)]
+    predicates: crate::predicate::PredicateSet,
 }
 
 /// Fetch/update git-based plugin sources.
@@ -644,15 +976,15 @@ pub fn list_plugins(sym: &Symposium) -> Vec<ProviderInfo> {
         let source = &resolved.source;
         let source_path = resolve_plugin_source_dir(sym, resolved);
         let plugins: Vec<PluginInfo> = source_path
-            .and_then(|p| scan_source_dir(&p).ok())
+            .and_then(|p| scan_source_dir(&p, &source.name).ok())
             .map(|c| c.plugins)
             .unwrap_or_default()
             .into_iter()
             .filter_map(|r| r.ok())
-            .map(|ParsedPlugin { path: _, plugin: p }| PluginInfo {
-                name: p.name,
-                hooks_count: p.hooks.len(),
-                skill_groups_count: p.skills.len(),
+            .map(|p| PluginInfo {
+                name: p.plugin.name,
+                hooks_count: p.plugin.hooks.len(),
+                skill_groups_count: p.plugin.skills.len(),
             })
             .collect();
 
@@ -675,7 +1007,7 @@ pub fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
     for resolved in &sources {
         let source_path = resolve_plugin_source_dir(sym, resolved);
         if let Some(ref path) = source_path
-            && let Ok(contents) = scan_source_dir(path)
+            && let Ok(contents) = scan_source_dir(path, &resolved.source.name)
         {
             for parsed_plugin in contents.plugins.into_iter().flatten() {
                 if parsed_plugin.plugin.name == name {
@@ -687,7 +1019,9 @@ pub fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
     None
 }
 
-/// Resolve the directories for all configured plugin sources.
+/// Resolve the directories for all configured plugin sources, paired with
+/// each source's display name (used to attribute standalone skills to a
+/// stable origin).
 ///
 /// For `path` sources: resolves relative to the source's `base_dir`, or uses absolute paths as-is.
 /// For `git` sources: computes the cache path under `~/.symposium/cache/plugin-sources/`.
@@ -696,13 +1030,13 @@ pub fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
 fn resolve_plugin_source_dirs(
     sym: &Symposium,
     sources: &[crate::config::ResolvedPluginSource],
-) -> Vec<PathBuf> {
+) -> Vec<(String, PathBuf)> {
     let cache_base = sym.cache_dir().join("plugin-sources");
 
     let mut dirs = Vec::new();
     for resolved in sources {
         if let Some(dir) = resolve_one_source(&resolved.source, &resolved.base_dir, &cache_base) {
-            dirs.push(dir);
+            dirs.push((resolved.source.name.clone(), dir));
         }
     }
     dirs
@@ -729,14 +1063,47 @@ fn resolve_one_source(
             return Some(base_dir.join(p));
         }
     } else if let Some(ref git_url) = source.git {
-        match crate::installation::git::parse_github_url(git_url) {
-            Ok(gh) => return Some(cache_base.join(gh.cache_key())),
-            Err(e) => {
-                tracing::warn!(source = %source.name, error = %e, "bad plugin source URL");
+        let cache_mgr = symposium_install::git::GitCacheManager::from_cache_dir(cache_base);
+        match cache_mgr.cache_path_for_url(git_url) {
+            Some(path) => return Some(path),
+            None => {
+                tracing::warn!(source = %source.name, url = %git_url, "bad plugin source URL");
             }
         }
     }
     None
+}
+
+/// Build the `SkillOrigin` for a standalone skill discovered at
+/// `skill_md` inside the plugin source rooted at `source_dir`.
+///
+/// Identity is `(source_name, skill_path-relative-to-source-root)`,
+/// which matches the `Source` origin assigned to plugin `source.path`
+/// groups. So a standalone skill at `<source>/foo/SKILL.md` and a
+/// plugin in the same source whose `source.path` points at `foo/`
+/// produce the *same* origin — they describe the same on-disk skill.
+fn standalone_skill_origin(
+    source_name: &str,
+    source_dir: &Path,
+    skill_md: &Path,
+) -> crate::skills::SkillOrigin {
+    let skill_dir = skill_md.parent().unwrap_or(skill_md);
+    // Canonicalize both ends so the result matches what
+    // `load_path_skills` produces for a plugin pointing at the same
+    // on-disk skill via `../`-laden joins.
+    let canonical_skill =
+        std::fs::canonicalize(skill_dir).unwrap_or_else(|_| skill_dir.to_path_buf());
+    let canonical_root =
+        std::fs::canonicalize(source_dir).unwrap_or_else(|_| source_dir.to_path_buf());
+    let rel = canonical_skill
+        .strip_prefix(&canonical_root)
+        .unwrap_or(&canonical_skill)
+        .to_string_lossy()
+        .replace(std::path::MAIN_SEPARATOR, "/");
+    crate::skills::SkillOrigin::Source {
+        source_name: source_name.to_string(),
+        skill_path: rel,
+    }
 }
 
 /// Fetch a plugin source repository, returning the cached directory path.
@@ -745,11 +1112,9 @@ async fn fetch_plugin_source(
     git_url: &str,
     update: UpdateLevel,
 ) -> Result<PathBuf> {
-    use crate::installation::git;
-
-    let source = git::parse_github_url(git_url)?;
-    let cache_mgr = git::GitCacheManager::new(sym, "plugin-sources");
-    cache_mgr.get_or_fetch(&source, git_url, update).await
+    let cache_mgr =
+        symposium_install::git::GitCacheManager::new(&sym.install_context(), "plugin-sources");
+    cache_mgr.fetch_url(git_url, update).await
 }
 
 /// Scan all configured plugin source directories and load the registry.
@@ -762,8 +1127,8 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
     let mut standalone_skills = Vec::new();
     let mut warnings = Vec::new();
 
-    for dir in resolve_plugin_source_dirs(sym, &sources) {
-        match scan_source_dir(&dir) {
+    for (source_name, dir) in resolve_plugin_source_dirs(sym, &sources) {
+        match scan_source_dir(&dir, &source_name) {
             Ok(contents) => {
                 for result in contents.plugins {
                     match result {
@@ -779,7 +1144,10 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
                 }
                 for skill_md in contents.skill_files {
                     match crate::skills::load_standalone_skill(&skill_md) {
-                        Ok(skill) => standalone_skills.push(skill),
+                        Ok(skill) => {
+                            let origin = standalone_skill_origin(&source_name, &dir, &skill_md);
+                            standalone_skills.push(StandaloneSkill { skill, origin });
+                        }
                         Err(e) => {
                             tracing::warn!(
                                 path = %skill_md.display(),
@@ -810,10 +1178,13 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
         "plugin registry loaded"
     );
 
+    let custom_predicates = build_custom_predicate_registry(&plugins, &mut warnings);
+
     PluginRegistry {
         plugins,
         standalone_skills,
         warnings,
+        custom_predicates,
     }
 }
 
@@ -824,7 +1195,12 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
 /// 2. Skill = directory with `SKILL.md` file
 /// 3. Plugin takes precedence over skill in the same directory
 /// 4. Once a directory is claimed as plugin/skill, don't recurse into it
-fn scan_source_dir<P: AsRef<Path>>(dir: P) -> Result<SourceDirContents> {
+///
+/// `source_name` is the registry source the directory was reached
+/// through; it gets stamped onto each `ParsedPlugin` so origin
+/// attribution can use it later. Callers that don't care about origin
+/// attribution (CLI validation, tests) pass `""`.
+fn scan_source_dir<P: AsRef<Path>>(dir: P, source_name: &str) -> Result<SourceDirContents> {
     let mut plugins = Vec::new();
     let mut skill_files = Vec::new();
 
@@ -844,7 +1220,7 @@ fn scan_source_dir<P: AsRef<Path>>(dir: P) -> Result<SourceDirContents> {
         }
     }
 
-    discover_in_directory(dir, &mut plugins, &mut skill_files)?;
+    discover_in_directory(dir, source_name, dir, &mut plugins, &mut skill_files)?;
 
     Ok(SourceDirContents {
         plugins,
@@ -853,8 +1229,14 @@ fn scan_source_dir<P: AsRef<Path>>(dir: P) -> Result<SourceDirContents> {
 }
 
 /// Recursively discover plugins and skills with precedence and pruning.
+///
+/// `source_name` and `source_dir` describe the registry source root —
+/// passed through unchanged on recursion and stamped onto each
+/// discovered `ParsedPlugin`.
 fn discover_in_directory(
     dir: &Path,
+    source_name: &str,
+    source_dir: &Path,
     plugins: &mut Vec<Result<ParsedPlugin>>,
     skill_files: &mut Vec<PathBuf>,
 ) -> Result<()> {
@@ -873,7 +1255,7 @@ fn discover_in_directory(
         if let Some(discovered) = discover_directory_type(&path)? {
             match discovered {
                 DirectoryType::Plugin(toml_path) => {
-                    let plugin = load_plugin(&toml_path)
+                    let plugin = load_plugin(&toml_path, source_name, source_dir)
                         .with_context(|| format!("loading plugin from `{}`", toml_path.display()));
 
                     tracing::debug!(
@@ -895,7 +1277,7 @@ fn discover_in_directory(
             // Don't recurse - directory is claimed
         } else {
             // Directory doesn't contain plugin/skill, recurse into it
-            discover_in_directory(&path, plugins, skill_files)?;
+            discover_in_directory(&path, source_name, source_dir, plugins, skill_files)?;
         }
     }
 
@@ -963,7 +1345,7 @@ impl std::fmt::Display for ValidationKind {
 /// Scans for TOML plugin manifests and standalone SKILL.md files,
 /// attempts to load each, and returns validation results for all items found.
 pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
-    let contents = scan_source_dir(dir)?;
+    let contents = scan_source_dir(dir, "")?;
     let mut results = Vec::new();
     let mut plugin_skill_dirs: Vec<PathBuf> = Vec::new();
 
@@ -982,7 +1364,7 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
         if let Some(parsed) = &plugin {
             let plugin_dir = parsed.path.parent().unwrap_or(dir);
             for group in &parsed.plugin.skills {
-                if let Some(ref rel_path) = group.source.path {
+                if let PluginSource::Path(ref rel_path) = group.source {
                     let joined = plugin_dir.join(rel_path);
                     let skills_dir: PathBuf = joined.components().collect();
                     plugin_skill_dirs.push(skills_dir.clone());
@@ -1049,34 +1431,25 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
 /// standalone SKILL.md files, returning deduplicated crate names.
 /// Items that fail to load are silently skipped.
 pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
-    let contents = scan_source_dir(dir)?;
+    let contents = scan_source_dir(dir, "")?;
     let mut names = std::collections::BTreeSet::new();
 
     for plugin_result in contents.plugins.into_iter().flatten() {
-        for pred in &plugin_result.plugin.crates.predicates {
-            pred.collect_crate_names(&mut names);
-        }
+        plugin_result
+            .plugin
+            .predicates
+            .collect_crate_names(&mut names);
         for group in &plugin_result.plugin.skills {
-            if let Some(pred_set) = &group.crates {
-                for pred in &pred_set.predicates {
-                    pred.collect_crate_names(&mut names);
-                }
-            }
+            group.predicates.collect_crate_names(&mut names);
         }
         for mcp in &plugin_result.plugin.mcp_servers {
-            if let Some(pred_set) = &mcp.crates {
-                for pred in &pred_set.predicates {
-                    pred.collect_crate_names(&mut names);
-                }
-            }
+            mcp.predicates.collect_crate_names(&mut names);
         }
     }
 
     for skill_md in contents.skill_files {
         if let Ok(skill) = crate::skills::load_standalone_skill(&skill_md) {
-            for pred in &skill.crates {
-                pred.collect_crate_names(&mut names);
-            }
+            skill.predicates.collect_crate_names(&mut names);
         }
     }
 
@@ -1096,7 +1469,17 @@ pub async fn check_crate_exists(crate_name: &str) -> bool {
 }
 
 /// Load and validate a single plugin from a TOML manifest.
-pub fn load_plugin(manifest_path: &Path) -> Result<ParsedPlugin> {
+///
+/// `source_name` and `source_dir` describe the plugin source the
+/// manifest was found through (used for `SkillOrigin::Source`
+/// attribution at sync time). Standalone callers — like the
+/// `plugin validate` CLI — that don't need origin attribution can pass
+/// an empty string and the manifest's parent directory.
+pub fn load_plugin(
+    manifest_path: &Path,
+    source_name: &str,
+    source_dir: &Path,
+) -> Result<ParsedPlugin> {
     let content = fs::read_to_string(manifest_path)?;
     let manifest: RawPluginManifest = toml::from_str(&content)?;
     let plugin = validate_manifest(manifest)
@@ -1104,6 +1487,8 @@ pub fn load_plugin(manifest_path: &Path) -> Result<ParsedPlugin> {
     Ok(ParsedPlugin {
         path: manifest_path.to_path_buf(),
         plugin,
+        source_name: source_name.to_string(),
+        source_dir: source_dir.to_path_buf(),
     })
 }
 
@@ -1171,25 +1556,252 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
         hooks.push(validate_hook(raw, &mut installations, &mut names)?);
     }
 
+    let mut subcommands = std::collections::BTreeMap::new();
+    for (name, raw) in manifest.subcommand {
+        let sub = validate_subcommand(name.clone(), raw, &mut installations, &mut names)?;
+        subcommands.insert(name, sub);
+    }
+
+    let mut custom_predicates = Vec::with_capacity(manifest.predicate.len());
+    for raw in manifest.predicate {
+        custom_predicates.push(validate_custom_predicate(
+            raw,
+            &mut installations,
+            &mut names,
+        )?);
+    }
+
+    let predicates =
+        crate::predicate::PredicateSet::merged(Some(manifest.crates), manifest.predicates);
+
+    // Every plugin must reference at least one crate (or custom predicate)
+    // somewhere — at the plugin, skill-group, hook, or MCP-server level — via
+    // `crates`, a `crate(...)` predicate, or a custom predicate. Otherwise it
+    // would never apply to any project.
+    let has_custom_predicate = predicates
+        .predicates
+        .iter()
+        .any(|p| matches!(p, crate::predicate::Predicate::Custom { .. }));
+    let mentions_crate = has_custom_predicate
+        || predicates.mentions_crate()
+        || manifest
+            .skills
+            .iter()
+            .any(|g| g.predicates.mentions_crate())
+        || hooks.iter().any(|h| h.predicates.mentions_crate())
+        || manifest
+            .mcp_servers
+            .iter()
+            .any(|m| m.predicates.mentions_crate());
+    if !mentions_crate {
+        bail!(
+            "plugin `{}` references no crate — add `crates = [...]` or a `crate(...)` predicate \
+             at the plugin, `[[skills]]`, or `[[mcp_servers]]` level",
+            manifest.name
+        );
+    }
+
+    validate_skill_groups(&predicates, &manifest.skills)?;
+
     Ok(Plugin {
         name: manifest.name,
-        crates: manifest.crates,
+        predicates,
         installations,
         hooks,
         skills: manifest.skills,
         mcp_servers: manifest.mcp_servers,
+        subcommands,
+        custom_predicates,
     })
+}
+
+/// Names a plugin subcommand cannot use because they collide with built-in
+/// `cargo agents` commands.
+const RESERVED_SUBCOMMAND_NAMES: &[&str] = &[
+    "init",
+    "sync",
+    "hook",
+    "plugin",
+    "crate-info",
+    "self-update",
+    "help",
+];
+
+/// Maximum length (bytes) of a subcommand's `description` field.
+const MAX_SUBCOMMAND_DESCRIPTION_LEN: usize = 1024;
+
+/// Validate the user-typed name of a `[subcommand.<name>]` table.
+fn validate_subcommand_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        bail!("subcommand name is empty");
+    }
+    if RESERVED_SUBCOMMAND_NAMES.contains(&name) {
+        bail!("subcommand `{name}` shadows a built-in `cargo agents` command");
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!("subcommand `{name}` has invalid characters (allow ASCII alphanumeric, `-`, `_`)");
+    }
+    Ok(())
+}
+
+/// Validate a raw subcommand into a `Subcommand`, promoting any inline
+/// `command` into a synthetic installation entry.
+fn validate_subcommand(
+    name: String,
+    raw: RawSubcommand,
+    installations: &mut Vec<Installation>,
+    names: &mut std::collections::BTreeSet<String>,
+) -> Result<Subcommand> {
+    validate_subcommand_name(&name)?;
+
+    let RawSubcommand {
+        description,
+        audience,
+        command: raw_command,
+        crates,
+        predicates,
+    } = raw;
+
+    if description.len() > MAX_SUBCOMMAND_DESCRIPTION_LEN {
+        bail!("subcommand `{name}` description exceeds {MAX_SUBCOMMAND_DESCRIPTION_LEN} chars");
+    }
+
+    let command = resolve_or_promote(
+        raw_command,
+        installations,
+        names,
+        &mut || name.clone(),
+        &format!("subcommand `{name}`"),
+    )?;
+
+    Ok(Subcommand {
+        description,
+        audience,
+        command,
+        predicates: crate::predicate::PredicateSet::merged(crates, predicates),
+    })
+}
+
+/// Validate a `[[predicate]]` entry, promoting inline `command` if needed.
+fn validate_custom_predicate(
+    raw: RawCustomPredicate,
+    installations: &mut Vec<Installation>,
+    names: &mut std::collections::BTreeSet<String>,
+) -> Result<CustomPredicate> {
+    crate::predicate::validate_custom_predicate_name(&raw.name)?;
+
+    let command = resolve_or_promote(
+        raw.command,
+        installations,
+        names,
+        &mut || format!("__pred_{}", raw.name),
+        &format!("predicate `{}`", raw.name),
+    )?;
+
+    Ok(CustomPredicate {
+        name: raw.name,
+        command,
+        args: raw.args,
+    })
+}
+
+/// Collect custom predicates from all plugins, detecting collisions.
+fn build_custom_predicate_registry(
+    plugins: &[ParsedPlugin],
+    warnings: &mut Vec<LoadWarning>,
+) -> CustomPredicateRegistry {
+    let mut entries = std::collections::HashMap::new();
+    let mut collisions: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for (plugin_idx, parsed) in plugins.iter().enumerate() {
+        for cp in &parsed.plugin.custom_predicates {
+            if collisions.contains(&cp.name) {
+                continue;
+            }
+            if let Some(existing) = entries.get(&cp.name) {
+                let existing: &ResolvedCustomPredicate = existing;
+                let existing_plugin_name = &plugins[existing.plugin_index].plugin.name;
+                warnings.push(LoadWarning {
+                    path: parsed.path.clone(),
+                    message: format!(
+                        "custom predicate `{}` defined by both `{}` and `{}` — skipping both",
+                        cp.name, existing_plugin_name, parsed.plugin.name
+                    ),
+                });
+                entries.remove(&cp.name);
+                collisions.insert(cp.name.clone());
+            } else {
+                entries.insert(
+                    cp.name.clone(),
+                    ResolvedCustomPredicate {
+                        plugin_index: plugin_idx,
+                        command: cp.command.clone(),
+                        args: cp.args.clone(),
+                    },
+                );
+            }
+        }
+    }
+
+    CustomPredicateRegistry { entries }
+}
+
+/// Validate skill-group source constraints that serde alone cannot express.
+///
+/// When a group uses `source = "crate"`, a concrete crate must be named in a
+/// *fetchable* (non-negated) position (plugin-level or group-level) so
+/// Symposium has a crate whose source tree to fetch skills from. A crate named
+/// only under `not(...)` doesn't count: negation gates the group but never
+/// contributes a crate to fetch (its witness is always empty).
+///
+/// Valid:
+///   crates = ["serde"]              + source = "crate"  → fetch serde
+///   crates = ["*"], group ["serde"] + source = "crate"  → fetch serde
+///   crates = ["*", "serde"]         + source = "crate"  → fetch serde
+///   predicates = ["any(crate(a), crate(b))"]            → fetch a and/or b
+///
+/// Invalid:
+///   crates = ["*"]                  + source = "crate"  → no concrete crate
+///   crates = ["*"], group ["*"]     + source = "crate"  → no concrete crate
+///   predicates = ["not(crate(legacy))"]                 → no fetchable crate
+fn validate_skill_groups(
+    plugin_predicates: &crate::predicate::PredicateSet,
+    skills: &[SkillGroup],
+) -> Result<()> {
+    for (i, group) in skills.iter().enumerate() {
+        if group.source == PluginSource::Crate {
+            let has_fetchable_crate =
+                plugin_predicates.has_fetchable_crate() || group.predicates.has_fetchable_crate();
+            if !has_fetchable_crate {
+                bail!(
+                    "skills group {i} uses source = \"crate\" but no concrete `crate(...)` \
+                     predicate is reachable in a fetchable position (plugin-level or \
+                     group-level, not under `not(...)`) — at least one is required to \
+                     resolve a crate to fetch skills from"
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use indoc::indoc;
+    use std::collections::BTreeMap;
 
     use crate::predicate::PredicateSet;
 
     fn pred_set(s: &str) -> PredicateSet {
-        PredicateSet::parse(s).unwrap()
+        PredicateSet::from_crates(s).unwrap()
+    }
+
+    fn ctx(crates: &[(String, semver::Version)]) -> crate::predicate::PredicateContext<'_> {
+        crate::predicate::PredicateContext::new(crates)
     }
 
     fn from_str(s: &str) -> Result<Plugin> {
@@ -1234,13 +1846,89 @@ mod tests {
         assert_eq!(plugin.name, "remote-plugin");
         assert_eq!(plugin.skills.len(), 1);
         let group = &plugin.skills[0];
-        let cr = group.crates.as_ref().unwrap();
-        assert_eq!(cr.predicates.len(), 1);
-        assert!(cr.predicates[0].references_crate("serde"));
-        assert_eq!(
-            group.source.git.as_deref(),
-            Some("https://github.com/org/repo/tree/main/serde")
+        assert!(group.predicates.references_crate("serde"));
+        assert!(
+            matches!(
+                &group.source,
+                PluginSource::Git(url) if url == "https://github.com/org/repo/tree/main/serde"
+            ),
+            "expected Git source, got {:?}",
+            group.source
         );
+    }
+
+    #[test]
+    fn parse_predicates_top_level() {
+        let toml = indoc! {r#"
+            name = "env-pred-plugin"
+            crates = ["*"]
+            predicates = ["shell(command -v rg)", "path_exists(Cargo.toml)"]
+
+            [[skills]]
+            crates = ["serde"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        // `crates = ["*"]` lowers to a leading `crate(*)`, then the two
+        // function-call predicates.
+        use crate::predicate::Predicate;
+        assert_eq!(
+            plugin.predicates.predicates,
+            vec![
+                Predicate::CrateWildcard,
+                Predicate::Shell("command -v rg".into()),
+                Predicate::PathExists("Cargo.toml".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_predicates_on_skill_group() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[skills]]
+            crates = ["serde"]
+            predicates = ["shell(command -v jq)"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        // group `crates = ["serde"]` lowers to `crate(serde)`, plus the shell predicate.
+        use crate::predicate::Predicate;
+        assert_eq!(
+            plugin.skills[0].predicates.predicates,
+            vec![
+                Predicate::Crate("serde".into(), None),
+                Predicate::Shell("command -v jq".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_predicates_on_hook() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = { script = "scripts/x.sh" }
+            predicates = ["path_exists(.git)"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.hooks[0].predicates.predicates.len(), 1);
+    }
+
+    #[test]
+    fn predicates_default_empty() {
+        // With no `predicates`, the plugin gate is just the lowered `crates`
+        // (here `crate(*)`), and hooks default to no predicates.
+        let plugin = from_str(SAMPLE).expect("parse");
+        assert_eq!(
+            plugin.predicates.predicates,
+            vec![crate::predicate::Predicate::CrateWildcard]
+        );
+        assert!(plugin.hooks[0].predicates.is_empty());
     }
 
     #[test]
@@ -1254,9 +1942,7 @@ mod tests {
         "#};
         let plugin = from_str(toml).expect("parse");
         let group = &plugin.skills[0];
-        let cr = group.crates.as_ref().unwrap();
-        assert_eq!(cr.predicates.len(), 1);
-        assert!(cr.predicates[0].references_crate("serde"));
+        assert!(group.predicates.predicates[0].references_crate("serde"));
     }
 
     #[test]
@@ -1291,7 +1977,7 @@ mod tests {
         // Also create a random directory (should be ignored)
         std::fs::create_dir_all(tmp.path().join("not-a-plugin-or-skill")).unwrap();
 
-        let contents = scan_source_dir(tmp.path()).unwrap();
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
         assert_eq!(contents.plugins.len(), 1);
         assert_eq!(
             contents.plugins[0].as_ref().unwrap().plugin.name,
@@ -1304,14 +1990,14 @@ mod tests {
     #[test]
     fn scan_source_dir_empty() {
         let tmp = tempfile::tempdir().unwrap();
-        let contents = scan_source_dir(tmp.path()).unwrap();
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
         assert!(contents.plugins.is_empty());
         assert!(contents.skill_files.is_empty());
     }
 
     #[test]
     fn scan_source_dir_missing() {
-        let contents = scan_source_dir("/nonexistent/path/abc123").unwrap();
+        let contents = scan_source_dir("/nonexistent/path/abc123", "").unwrap();
         assert!(contents.plugins.is_empty());
         assert!(contents.skill_files.is_empty());
     }
@@ -1331,7 +2017,7 @@ mod tests {
             "},
         )]);
 
-        let err = scan_source_dir(tmp.path()).unwrap_err();
+        let err = scan_source_dir(tmp.path(), "").unwrap_err();
         assert!(
             err.to_string()
                 .contains("plugin source root contains SKILL.md"),
@@ -1350,7 +2036,7 @@ mod tests {
             "#},
         )]);
 
-        let err = scan_source_dir(tmp.path()).unwrap_err();
+        let err = scan_source_dir(tmp.path(), "").unwrap_err();
         assert!(
             err.to_string()
                 .contains("plugin source root contains SYMPOSIUM.toml"),
@@ -1382,7 +2068,7 @@ mod tests {
             ),
         ]);
 
-        let contents = scan_source_dir(tmp.path()).unwrap();
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
         assert_eq!(contents.plugins.len(), 1);
         assert_eq!(contents.skill_files.len(), 0);
         expect_test::expect![[r#"mixed-plugin"#]]
@@ -1408,7 +2094,7 @@ mod tests {
             ),
         ]);
 
-        let contents = scan_source_dir(tmp.path()).unwrap();
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
         assert_eq!(contents.plugins.len(), 1);
         assert_eq!(contents.skill_files.len(), 0);
         expect_test::expect![[r#"preferred-plugin"#]]
@@ -1468,7 +2154,7 @@ mod tests {
             ),
         ]);
 
-        let contents = scan_source_dir(tmp.path()).unwrap();
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
         assert_eq!(contents.plugins.len(), 1);
         assert_eq!(contents.skill_files.len(), 1);
         expect_test::expect![[r#"foo-plugin"#]]
@@ -1649,8 +2335,8 @@ mod tests {
         let plugin = from_str(toml).expect("parse");
         assert_eq!(plugin.name, "multi-group");
         assert_eq!(plugin.skills.len(), 2);
-        assert!(plugin.skills[0].crates.as_ref().unwrap().predicates[0].references_crate("serde"));
-        assert!(plugin.skills[1].crates.as_ref().unwrap().predicates[0].references_crate("tokio"));
+        assert!(plugin.skills[0].predicates.predicates[0].references_crate("serde"));
+        assert!(plugin.skills[1].predicates.predicates[0].references_crate("tokio"));
     }
 
     #[test]
@@ -1663,46 +2349,54 @@ mod tests {
         // Plugin with wildcard - should apply to all
         let plugin_wildcard = Plugin {
             name: "wildcard".to_string(),
-            crates: pred_set("*"),
+            predicates: pred_set("*"),
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
+            subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
-        assert!(plugin_wildcard.applies_to_crates(&workspace_crates));
+        assert!(plugin_wildcard.applies(&mut ctx(&workspace_crates)));
 
         // Plugin targeting serde - should apply
         let plugin_serde = Plugin {
             name: "serde-plugin".to_string(),
-            crates: pred_set("serde"),
+            predicates: pred_set("serde"),
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
+            subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
-        assert!(plugin_serde.applies_to_crates(&workspace_crates));
+        assert!(plugin_serde.applies(&mut ctx(&workspace_crates)));
 
         // Plugin targeting non-existent crate - should not apply
         let plugin_other = Plugin {
             name: "other-plugin".to_string(),
-            crates: pred_set("other-crate"),
+            predicates: pred_set("other-crate"),
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
+            subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
-        assert!(!plugin_other.applies_to_crates(&workspace_crates));
+        assert!(!plugin_other.applies(&mut ctx(&workspace_crates)));
 
         // Plugin with version predicate - should reject wrong version
         let plugin_version = Plugin {
             name: "version-plugin".to_string(),
-            crates: pred_set("tokio>=2.0"),
+            predicates: pred_set("tokio>=2.0"),
             hooks: vec![],
             skills: vec![],
             mcp_servers: vec![],
             installations: Vec::new(),
+            subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
         };
-        assert!(!plugin_version.applies_to_crates(&workspace_crates));
+        assert!(!plugin_version.applies(&mut ctx(&workspace_crates)));
     }
 
     #[test]
@@ -2388,6 +3082,65 @@ mod tests {
         from_str(toml).expect("parse");
     }
 
+    /// `global = true` on cargo source round-trips through validation.
+    #[test]
+    fn cargo_global_field_round_trips() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "rg"
+            source = "cargo"
+            crate = "ripgrep"
+            executable = "rg"
+            global = true
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = "rg"
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        let install = plugin
+            .installations
+            .iter()
+            .find(|i| i.name == "rg")
+            .unwrap();
+        match &install.source {
+            Some(Source::Cargo(c)) => assert!(c.global),
+            _ => panic!("expected cargo source"),
+        }
+    }
+
+    /// Cargo source with `global = true` and no `executable` is rejected at
+    /// parse time — we don't infer the binary from crates.io for global
+    /// installs, so the user must say what to spawn.
+    #[test]
+    fn cargo_global_without_executable_errors() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "rg"
+            source = "cargo"
+            crate = "ripgrep"
+            global = true
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = "rg"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("`global = true` requires `executable`"),
+            "got: {err}"
+        );
+    }
+
     /// `git` field on cargo source round-trips through validation.
     #[test]
     fn cargo_git_field_round_trips() {
@@ -2661,6 +3414,598 @@ mod tests {
         assert!(
             err.to_string().contains("unknown installation"),
             "got: {err}"
+        );
+    }
+
+    // --- source = "crate" parsing ---
+
+    #[test]
+    fn parse_source_crate_shorthand() {
+        let toml = indoc! {r#"
+            name = "crate-shorthand"
+            crates = ["serde"]
+
+            [[skills]]
+            source = "crate"
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.skills[0].source, PluginSource::Crate);
+    }
+
+    #[test]
+    fn parse_source_crate_path_is_error() {
+        let toml = indoc! {r#"
+            name = "bad"
+            crates = ["serde"]
+
+            [[skills]]
+            source.crate_path = "skills"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("no longer supported"),
+            "expected migration hint, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_source_crate_table_is_error() {
+        let toml = indoc! {r#"
+            name = "bad"
+            crates = ["serde"]
+
+            [[skills]]
+            source.crate = { name = "foo" }
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("no longer accepts fields"),
+            "expected migration hint, got: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_source_unknown_string_is_error() {
+        let toml = indoc! {r#"
+            name = "bad"
+            crates = ["serde"]
+
+            [[skills]]
+            source = "magic"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("unknown source shorthand"),
+            "expected unknown shorthand error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn reject_path_and_git() {
+        let toml = indoc! {r#"
+            name = "bad"
+            crates = ["serde"]
+
+            [[skills]]
+            source.path = "."
+            source.git = "https://github.com/org/repo/tree/main/x"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("mutually exclusive"), "{err}");
+    }
+
+    // --- wildcard + source = "crate" validation tests ---
+
+    #[test]
+    fn crate_valid_with_plugin_non_wildcard() {
+        let toml = indoc! {r#"
+            name = "ok"
+            crates = ["serde"]
+
+            [[skills]]
+            source = "crate"
+        "#};
+        from_str(toml).expect("should be valid");
+    }
+
+    #[test]
+    fn crate_reference_on_hook_satisfies_requirement() {
+        // A plugin whose only crate reference is a `crate(...)` predicate on a
+        // hook is valid — the hook is crate-gated even with no plugin-level
+        // `crates`.
+        let toml = indoc! {r#"
+            name = "hook-crate"
+
+            [[hooks]]
+            name = "h"
+            event = "PreToolUse"
+            command = { script = "scripts/x.sh" }
+            predicates = ["crate(serde)"]
+        "#};
+        let plugin = from_str(toml).expect("should be valid");
+        assert!(plugin.hooks[0].predicates.references_crate("serde"));
+    }
+
+    #[test]
+    fn crate_valid_with_group_non_wildcard() {
+        let toml = indoc! {r#"
+            name = "ok"
+            crates = ["*"]
+
+            [[skills]]
+            crates = ["serde"]
+            source = "crate"
+        "#};
+        from_str(toml).expect("should be valid");
+    }
+
+    #[test]
+    fn crate_valid_with_mixed_wildcard_and_concrete() {
+        let toml = indoc! {r#"
+            name = "ok"
+            crates = ["*", "serde"]
+
+            [[skills]]
+            source = "crate"
+        "#};
+        from_str(toml).expect("should be valid");
+    }
+
+    #[test]
+    fn crate_reject_all_wildcards() {
+        let toml = indoc! {r#"
+            name = "bad"
+            crates = ["*"]
+
+            [[skills]]
+            crates = ["*"]
+            source = "crate"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("concrete"), "{err}");
+    }
+
+    #[test]
+    fn crate_reject_wildcard_plugin_no_group_crates() {
+        let toml = indoc! {r#"
+            name = "bad"
+            crates = ["*"]
+
+            [[skills]]
+            source = "crate"
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("concrete"), "{err}");
+    }
+
+    #[test]
+    fn crate_reject_negated_only() {
+        // A `source = "crate"` group whose only crate reference sits under
+        // `not(...)` has nothing to fetch (the witness of a negation is always
+        // empty), so it is rejected even though a crate is "mentioned".
+        let toml = indoc! {r#"
+            name = "bad"
+
+            [[skills]]
+            source = "crate"
+            predicates = ["not(crate(legacy))"]
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(err.to_string().contains("fetchable"), "{err}");
+    }
+
+    #[test]
+    fn crate_valid_with_positive_inside_any() {
+        // A concrete crate in a fetchable (non-negated) position anchors the
+        // group, even when nested in combinators and sitting beside a `not`.
+        let toml = indoc! {r#"
+            name = "ok"
+
+            [[skills]]
+            source = "crate"
+            predicates = ["any(crate(serde), not(crate(legacy)))"]
+        "#};
+        from_str(toml).expect("should be valid");
+    }
+
+    // --- TOML serialization round-trip tests ---
+
+    fn roundtrip(plugin: &Plugin) -> Plugin {
+        let toml_str = toml::to_string_pretty(plugin).expect("serialize");
+        from_str(&toml_str).unwrap_or_else(|e| panic!("round-trip parse failed:\n{toml_str}\n{e}"))
+    }
+
+    #[test]
+    fn roundtrip_source_crate() {
+        let plugin = from_str(indoc! {r#"
+            name = "rt"
+            crates = ["serde"]
+
+            [[skills]]
+            source = "crate"
+        "#})
+        .unwrap();
+        let rt = roundtrip(&plugin);
+        assert_eq!(rt.skills[0].source, PluginSource::Crate);
+    }
+
+    #[test]
+    fn roundtrip_source_path() {
+        let plugin = from_str(indoc! {r#"
+            name = "rt"
+            crates = ["serde"]
+
+            [[skills]]
+            source.path = "skills/v1"
+        "#})
+        .unwrap();
+        let rt = roundtrip(&plugin);
+        assert!(
+            matches!(
+                &rt.skills[0].source,
+                PluginSource::Path(p) if p.as_path() == std::path::Path::new("skills/v1")
+            ),
+            "expected Path source, got {:?}",
+            rt.skills[0].source,
+        );
+    }
+
+    #[test]
+    fn roundtrip_source_git() {
+        let plugin = from_str(indoc! {r#"
+            name = "rt"
+            crates = ["serde"]
+
+            [[skills]]
+            source.git = "https://github.com/org/repo/tree/main/skills"
+        "#})
+        .unwrap();
+        let rt = roundtrip(&plugin);
+        assert!(
+            matches!(
+                &rt.skills[0].source,
+                PluginSource::Git(url) if url == "https://github.com/org/repo/tree/main/skills"
+            ),
+            "expected Git source, got {:?}",
+            rt.skills[0].source,
+        );
+    }
+
+    #[test]
+    fn roundtrip_source_none() {
+        let plugin = from_str(indoc! {r#"
+            name = "rt"
+            crates = ["serde"]
+
+            [[skills]]
+            crates = ["serde"]
+        "#})
+        .unwrap();
+        let rt = roundtrip(&plugin);
+        assert!(
+            matches!(&rt.skills[0].source, PluginSource::None),
+            "expected None source, got {:?}",
+            rt.skills[0].source,
+        );
+    }
+
+    #[test]
+    fn serialize_crate_uses_string_form() {
+        let plugin = from_str(indoc! {r#"
+            name = "rt"
+            crates = ["serde"]
+
+            [[skills]]
+            source = "crate"
+        "#})
+        .unwrap();
+        let toml_str = toml::to_string_pretty(&plugin).expect("serialize");
+        assert!(
+            toml_str.contains(r#"source = "crate""#),
+            "Crate should serialize as source = \"crate\", got:\n{toml_str}"
+        );
+    }
+
+    #[test]
+    fn parse_subcommand_minimal_named() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "tool"
+            source = "cargo"
+            crate = "example-tool"
+
+            [subcommand.foo]
+            description = "Run foo"
+            command = "tool"
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.subcommands.len(), 1);
+        let sub = &plugin.subcommands["foo"];
+        assert_eq!(sub.description, "Run foo");
+        assert_eq!(sub.audience, Audience::Agents); // default
+        assert_eq!(sub.command, "tool");
+    }
+
+    #[test]
+    fn parse_subcommand_audience_humans() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "tool"
+            source = "cargo"
+            crate = "example-tool"
+
+            [subcommand.foo]
+            description = "Run foo"
+            command = "tool"
+            audience = "humans"
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.subcommands["foo"].audience, Audience::Humans);
+    }
+
+    #[test]
+    fn parse_subcommand_inline_command_is_promoted() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [subcommand.foo]
+            description = "Run foo"
+            command = { source = "cargo", crate = "example-tool", executable = "example-tool" }
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        // The inline command is promoted to a synthetic installation named
+        // after the subcommand.
+        assert_eq!(plugin.subcommands["foo"].command, "foo");
+        let install = plugin
+            .installations
+            .iter()
+            .find(|i| i.name == "foo")
+            .expect("synthetic installation present");
+        assert_eq!(install.executable.as_deref(), Some("example-tool"));
+    }
+
+    #[test]
+    fn parse_subcommand_rejects_unknown_field() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [subcommand.foo]
+            description = "Run foo"
+            command = "tool"
+            bogus = 42
+        "#};
+        let err = from_str(toml).err().expect("expected error");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("bogus") || msg.contains("unknown"), "{msg}");
+    }
+
+    #[test]
+    fn parse_subcommand_rejects_reserved_name() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "tool"
+            source = "cargo"
+            crate = "example-tool"
+
+            [subcommand.init]
+            description = "Try to shadow init"
+            command = "tool"
+        "#};
+        let err = from_str(toml).err().expect("expected error");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("shadows") && msg.contains("init"), "{msg}");
+    }
+
+    #[test]
+    fn parse_subcommand_rejects_invalid_name_chars() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "tool"
+            source = "cargo"
+            crate = "example-tool"
+
+            [subcommand."foo.bar"]
+            description = "dotted name"
+            command = "tool"
+        "#};
+        let err = from_str(toml).err().expect("expected error");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("invalid characters"), "{msg}");
+    }
+
+    #[test]
+    fn parse_subcommand_rejects_oversized_description() {
+        let huge = "x".repeat(1100);
+        let toml = format!(
+            r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "tool"
+            source = "cargo"
+            crate = "example-tool"
+
+            [subcommand.foo]
+            description = "{huge}"
+            command = "tool"
+            "#
+        );
+        let err = from_str(&toml).err().expect("expected error");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("1024"), "{msg}");
+    }
+
+    #[test]
+    fn parse_subcommand_unknown_command_reference_fails() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [subcommand.foo]
+            description = "..."
+            command = "missing"
+        "#};
+        let err = from_str(toml).err().expect("expected error");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("unknown installation"), "{msg}");
+    }
+
+    #[test]
+    fn scan_source_dir_loads_plugin_with_subcommand() {
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[File(
+            "demo-plugin/SYMPOSIUM.toml",
+            indoc! {r#"
+                name = "demo-plugin"
+                crates = ["example-crate"]
+
+                [[installations]]
+                name = "example-tool"
+                source = "cargo"
+                crate = "example-tool"
+                executable = "example-tool"
+                args = ["serve"]
+
+                [subcommand.demo]
+                description = "Run the demo tool"
+                audience = "agents"
+                command = "example-tool"
+            "#},
+        )]);
+
+        let contents = scan_source_dir(tmp.path(), "").unwrap();
+        assert_eq!(contents.plugins.len(), 1);
+        let parsed = contents.plugins[0].as_ref().unwrap();
+        let sub = &parsed.plugin.subcommands["demo"];
+        assert_eq!(sub.description, "Run the demo tool");
+        assert_eq!(sub.audience, Audience::Agents);
+        assert_eq!(sub.command, "example-tool");
+
+        let install = parsed
+            .plugin
+            .installations
+            .iter()
+            .find(|i| i.name == "example-tool")
+            .expect("named installation present");
+        assert_eq!(install.executable.as_deref(), Some("example-tool"));
+        assert_eq!(install.args, vec!["serve".to_string()]);
+    }
+
+    #[test]
+    fn parse_subcommand_with_crates_predicate() {
+        let toml = indoc! {r#"
+            name = "p"
+            crates = ["*"]
+
+            [[installations]]
+            name = "tool"
+            source = "cargo"
+            crate = "example-tool"
+
+            [subcommand.foo]
+            description = "Only for serde projects"
+            command = "tool"
+            crates = ["serde"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        let sub = &plugin.subcommands["foo"];
+        assert!(sub.predicates.references_crate("serde"));
+    }
+
+    // --- custom predicate collision tests ---
+
+    fn make_plugin_with_predicate(plugin_name: &str, predicate_name: &str) -> ParsedPlugin {
+        ParsedPlugin {
+            path: std::path::PathBuf::from(format!("{plugin_name}.toml")),
+            plugin: Plugin {
+                name: plugin_name.to_string(),
+                predicates: pred_set("*"),
+                installations: vec![Installation {
+                    name: "checker".to_string(),
+                    source: None,
+                    executable: Some("/bin/true".to_string()),
+                    script: None,
+                    args: vec![],
+                    requirements: vec![],
+                    install_commands: vec![],
+                }],
+                hooks: vec![],
+                skills: vec![],
+                mcp_servers: vec![],
+                subcommands: BTreeMap::new(),
+                custom_predicates: vec![CustomPredicate {
+                    name: predicate_name.to_string(),
+                    command: "checker".to_string(),
+                    args: vec![],
+                }],
+            },
+            source_name: "test".into(),
+            source_dir: std::path::PathBuf::from("/test"),
+        }
+    }
+
+    #[test]
+    fn custom_predicate_registry_no_collision() {
+        let plugins = vec![
+            make_plugin_with_predicate("alpha", "foo"),
+            make_plugin_with_predicate("beta", "bar"),
+        ];
+        let mut warnings = vec![];
+        let registry = build_custom_predicate_registry(&plugins, &mut warnings);
+        assert!(warnings.is_empty());
+        assert_eq!(registry.len(), 2);
+        assert!(registry.contains_key("foo"));
+        assert!(registry.contains_key("bar"));
+    }
+
+    #[test]
+    fn custom_predicate_registry_two_way_collision() {
+        let plugins = vec![
+            make_plugin_with_predicate("alpha", "shared"),
+            make_plugin_with_predicate("beta", "shared"),
+        ];
+        let mut warnings = vec![];
+        let registry = build_custom_predicate_registry(&plugins, &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("shared"));
+        assert!(warnings[0].message.contains("alpha"));
+        assert!(warnings[0].message.contains("beta"));
+        assert!(
+            !registry.contains_key("shared"),
+            "collided predicate must be removed"
+        );
+    }
+
+    #[test]
+    fn custom_predicate_registry_three_way_collision() {
+        let plugins = vec![
+            make_plugin_with_predicate("alpha", "shared"),
+            make_plugin_with_predicate("beta", "shared"),
+            make_plugin_with_predicate("gamma", "shared"),
+        ];
+        let mut warnings = vec![];
+        let registry = build_custom_predicate_registry(&plugins, &mut warnings);
+        // Warning is emitted only on the second occurrence (alpha vs beta);
+        // the third (gamma) sees the name in the collision set and skips.
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            !registry.contains_key("shared"),
+            "collided predicate must be removed"
         );
     }
 }

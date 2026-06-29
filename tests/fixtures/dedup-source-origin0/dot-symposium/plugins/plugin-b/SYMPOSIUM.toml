@@ -1,0 +1,6 @@
+name = "plugin-b"
+crates = ["serde"]
+
+[[skills]]
+crates = ["serde"]
+source.path = "../shared/the-skill"

@@ -1,0 +1,11 @@
+[package]
+name = "crate-b"
+version = "0.1.0"
+edition = "2021"
+
+# This path entry should succeed even though the redirect below cycles.
+[[package.metadata.symposium.skills]]
+path = "skills"
+
+[[package.metadata.symposium.skills]]
+crate = { name = "crate-a" }

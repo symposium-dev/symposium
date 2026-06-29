@@ -1,0 +1,5 @@
+name = "crate-x-plugin"
+crates = ["crate-x"]
+
+[[skills]]
+source = "crate"

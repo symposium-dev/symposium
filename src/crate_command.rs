@@ -20,8 +20,9 @@ pub async fn dispatch_crate(
     cwd: &Path,
 ) -> DispatchResult {
     tracing::debug!(%name, ?version, "crate-info dispatched");
-    let workspace = crate_sources::workspace_semver_pairs(cwd);
-    let mut fetch = crate_sources::RustCrateFetch::new(name, &workspace, sym.cache_dir());
+    let mut deps = sym.workspace_deps(cwd);
+    let workspace = deps.crates();
+    let mut fetch = crate_sources::RustCrateFetch::new(name, workspace);
     if let Some(v) = version {
         fetch = fetch.version(v);
     }

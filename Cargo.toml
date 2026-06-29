@@ -1,6 +1,6 @@
 [package]
 name = "symposium"
-version = "0.2.1"
+version = "0.4.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "AI the Rust Way"
@@ -40,16 +40,19 @@ semver = "1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml_ng = "0.10"
+sha2 = "0.10"
 tar = "0.4"
 tempfile = "3.6"
+symposium-sdk = { path = "symposium-sdk", features = ["clap"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 toml = "0.8"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "registry"] }
 bytes = "1.11.1"
 dialoguer = "0.12.0"
 toml_edit = "0.25.11"
 url = "2.5.8"
+symposium-install = { version = "0.1.0", path = "symposium-install", features = ["clap"] }
 
 
 [dev-dependencies]
@@ -59,4 +62,4 @@ indoc = "2.0.7"
 symposium-testlib = { path = "symposium-testlib" }
 
 [workspace]
-members = [".", "symposium-testlib"]
+members = [".", "symposium-testlib", "symposium-install", "symposium-sdk", "xtask"]

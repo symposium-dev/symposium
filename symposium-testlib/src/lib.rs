@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::anyhow;
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
@@ -118,39 +119,32 @@ impl HookStep {
         let session_id = Some("test-session-id".to_string());
         let cwd = Some(cwd.to_string());
         match self {
-            Self::SessionStart => {
-                sym_types::InputEvent::SessionStart(sym_types::SessionStartInput {
-                    session_id,
-                    cwd,
-                })
-            }
-            Self::UserPromptSubmit { prompt } => {
-                sym_types::InputEvent::UserPromptSubmit(sym_types::UserPromptSubmitInput {
-                    prompt: prompt.clone(),
-                    session_id,
-                    cwd,
-                })
-            }
+            Self::SessionStart => sym_types::InputEvent::SessionStart(
+                sym_types::SessionStartInput::new(session_id, cwd),
+            ),
+            Self::UserPromptSubmit { prompt } => sym_types::InputEvent::UserPromptSubmit(
+                sym_types::UserPromptSubmitInput::new(prompt.clone(), session_id, cwd),
+            ),
             Self::PreToolUse {
                 tool_name,
                 tool_input,
-            } => sym_types::InputEvent::PreToolUse(sym_types::PreToolUseInput {
-                tool_name: tool_name.clone(),
-                tool_input: tool_input.clone(),
+            } => sym_types::InputEvent::PreToolUse(sym_types::PreToolUseInput::new(
+                tool_name.clone(),
+                tool_input.clone(),
                 session_id,
                 cwd,
-            }),
+            )),
             Self::PostToolUse {
                 tool_name,
                 tool_input,
                 tool_response,
-            } => sym_types::InputEvent::PostToolUse(sym_types::PostToolUseInput {
-                tool_name: tool_name.clone(),
-                tool_input: tool_input.clone(),
-                tool_response: tool_response.clone(),
+            } => sym_types::InputEvent::PostToolUse(sym_types::PostToolUseInput::new(
+                tool_name.clone(),
+                tool_input.clone(),
+                tool_response.clone(),
                 session_id,
                 cwd,
-            }),
+            )),
         }
     }
 }
@@ -227,25 +221,62 @@ impl Drop for TestContext {
 }
 
 impl TestContext {
-    /// Run a `symposium` CLI command in-process, returning captured output
-    /// with temp-dir paths normalized.
+    /// Run a `symposium` CLI command in-process, returning captured output.
     pub async fn symposium(&mut self, args: &[&str]) -> anyhow::Result<String> {
-        let mut full_args = vec!["cargo-agents", "-q"];
+        let mut full_args = vec!["cargo-agents"];
         full_args.extend_from_slice(args);
 
-        let cli = Cli::try_parse_from(&full_args).map_err(|e| anyhow::anyhow!("{e}"))?;
-
-        let out = symposium::output::Output::quiet();
+        let out = symposium::output::Output::capturing();
         let cwd = self
             .workspace_root
             .clone()
             .unwrap_or_else(|| self.sym.config_dir().to_path_buf());
 
+        let args_str = full_args
+            .iter()
+            .map(|fs| fs.to_string())
+            .collect::<Vec<_>>();
+
+        let parse = Cli::try_parse_from(&full_args);
+        if let Some(text) =
+            symposium::help_render::help_text(parse.as_ref(), &args_str, &self.sym, &cwd)
+        {
+            out.println(text);
+            return Ok(out.captured().join("\n"));
+        }
+
+        let cli = parse.map_err(|err| anyhow!("{err}"))?;
         if let Some(cmd) = cli.command {
             symposium::cli::run(&mut self.sym, cmd, &cwd, &out).await?;
         }
 
-        Ok(String::new())
+        Ok(out.captured().join("\n"))
+    }
+
+    /// Run `cargo agents sync` with a report layer and return the captured
+    /// report events as JSON values. The `level` controls verbosity:
+    /// `tracing::Level::INFO` for install/remove only, `tracing::Level::DEBUG`
+    /// for the full decision trace.
+    pub async fn sync_with_report(
+        &mut self,
+        level: tracing::Level,
+    ) -> anyhow::Result<Vec<serde_json::Value>> {
+        use symposium::report::{ReportLayer, ReportMode};
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let (layer, handle) = ReportLayer::new(ReportMode::Json, level);
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        let cwd = self
+            .workspace_root
+            .clone()
+            .unwrap_or_else(|| self.sym.config_dir().to_path_buf());
+
+        symposium::sync::sync(&self.sym, &mut self.sym.workspace_deps(&cwd)).await?;
+
+        drop(_guard);
+        Ok(handle.drain())
     }
 
     /// Run the full hook pipeline: parse → builtin → plugins → serialize.
@@ -431,10 +462,28 @@ impl TestContext {
         Ok(SubmitResult { hooks, response })
     }
 
-    /// Replace temp directory paths with a stable placeholder for snapshot tests.
+    /// Point `cargo` invocations at a mock script for the duration of this test.
+    ///
+    /// Writes the given shell script into the tempdir and configures `Symposium`
+    /// to use it instead of the real `cargo`.  No environment variables are
+    /// mutated, so tests can run in parallel without interference.
+    pub fn set_mock_cargo(&mut self, script: &str) {
+        let script_path = self.tempdir.join("mock-cargo");
+        std::fs::write(&script_path, script).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        self.sym.set_cargo_override(script_path);
+    }
+
+    /// Replace variable content with stable placeholders for snapshot tests.
     pub fn normalize_paths(&self, output: &str) -> String {
         let config_dir = self.sym.config_dir().to_string_lossy().to_string();
-        output.replace(&config_dir, "$CONFIG_DIR")
+        output
+            .replace(&config_dir, "$CONFIG_DIR")
+            .replace(symposium::state::CURRENT_VERSION, "$VERSION")
     }
 }
 
@@ -486,11 +535,24 @@ async fn setup_fixture(fixtures: &[&str]) -> TestContext {
         .unwrap_or_else(|| root.to_path_buf());
 
     assert!(
-        scan.workspace_dirs.len() <= 1,
-        "multiple Cargo.toml found in fixtures: {:?}",
+        scan.workspace_dirs.len() <= 1
+            || scan.workspace_dirs.iter().all(|d| {
+                // All other Cargo.toml dirs must be subdirectories of the shallowest one.
+                let shallowest = scan
+                    .workspace_dirs
+                    .iter()
+                    .min_by_key(|p| p.components().count())
+                    .unwrap();
+                d == shallowest || d.starts_with(shallowest)
+            }),
+        "multiple unrelated Cargo.toml found in fixtures: {:?}",
         scan.workspace_dirs
     );
-    let workspace_root = scan.workspace_dirs.first().cloned();
+    let workspace_root = scan
+        .workspace_dirs
+        .iter()
+        .min_by_key(|p| p.components().count())
+        .cloned();
 
     let sym = Symposium::from_dir(&config_dir);
 

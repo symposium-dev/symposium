@@ -18,13 +18,14 @@
 # User's guide
 
 - [Installing Symposium](./install.md)
+- [Workspace skills](./workspace-skills.md)
 - [Custom plugin sources](./custom-plugin-source.md)
 
 # For crate authors
 
 - [Supporting your crate](./crate-authors/supporting-your-crate.md)
-- [Publishing standalone skills](./crate-authors/publishing-skills.md)
-- [Creating a plugin](./crate-authors/creating-a-plugin.md)
+- [Authoring a plugin](./crate-authors/authoring-a-plugin.md)
+- [Writing a hook handler](./crate-authors/writing-a-hook-handler.md)
 
 # Appendices
 
@@ -32,9 +33,10 @@
   - [The `cargo agents` command](./reference/cargo-agents.md)
     - [`cargo agents init`](./reference/cargo-agents-init.md)
     - [`cargo agents sync`](./reference/cargo-agents-sync.md)
+    - [`cargo agents self-update`](./reference/cargo-agents-self-update.md)
     - [`cargo agents plugin`](./reference/cargo-agents-plugin.md)
+    - [`cargo agents crate-info`](./reference/cargo-agents-crate-info.md)
     - [Unstable agent commands](./reference/cargo-agents-unstable.md)
-      - [`cargo agents crate-info`](./reference/cargo-agents-crate-info.md)
       - [`cargo agents hook`](./reference/cargo-agents-hook.md)
   - [Supported agents](./reference/supported-agents.md)
     - [Claude Code](./reference/agents/claude.md)
@@ -47,9 +49,12 @@
   - [Configuration](./reference/configuration.md)
   - [Plugin sources](./reference/plugin-source.md)
   - [Plugin definition](./reference/plugin-definition.md)
+  - [Symposium hook events](./reference/hook-events.md)
   - [Skill definition](./reference/skill-definition.md)
   - [Crate predicates](./reference/crate-predicates.md)
+  - [Predicates](./reference/predicates.md)
 - [Contribution guide](./design/welcome.md)
+  - [Tenets](./design/tenets.md)
   - [Key repositories](./design/repositories.md)
   - [Key modules](./design/module-structure.md)
   - [Configuration loading](./design/configuration-loading.md)
@@ -57,6 +62,8 @@
   - [State](./design/state.md)
     - [Session state](./design/session-state.md)
   - [Hooks](./design/hooks.md)
+  - [Subcommands](./design/subcommands.md)
+  - [Report layer](./design/report-layer.md)
   - [Important flows](./design/important-flows.md)
     - [`init`](./design/init-user-flow.md)
     - [`sync`](./design/sync-agent-flow.md)
@@ -73,3 +80,8 @@
     - [Goose](./design/agent-details/goose.md)
     - [Kiro](./design/agent-details/kiro.md)
     - [OpenCode](./design/agent-details/opencode.md)
+- [RFDs](./rfds/README.md)
+  - [Template](./rfds/TEMPLATE/README.md)
+  - [Accepted](./rfds/accepted.md) <!-- put accepted rfds in this section; the file goes in the rfds directory -->
+  - [Completed](./rfds/completed.md) <!-- move completed rfds to this section -->
+    - [RFD Process](./rfds/rfd-process/README.md)

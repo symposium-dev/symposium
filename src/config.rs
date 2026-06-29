@@ -8,6 +8,35 @@ use tracing::Level;
 // User configuration (~/.symposium/config.toml)
 // ---------------------------------------------------------------------------
 
+/// Auto-update behavior for the symposium binary.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoUpdate {
+    /// Never check for or install updates.
+    Off,
+    /// Print a warning when a newer version is available.
+    Warn,
+    /// Automatically install updates and re-exec into the new version.
+    #[default]
+    On,
+}
+
+impl AutoUpdate {
+    fn is_default(&self) -> bool {
+        matches!(self, AutoUpdate::On)
+    }
+}
+
+impl std::fmt::Display for AutoUpdate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AutoUpdate::Off => write!(f, "off"),
+            AutoUpdate::Warn => write!(f, "warn"),
+            AutoUpdate::On => write!(f, "on"),
+        }
+    }
+}
+
 /// Where agent hooks are installed.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -31,6 +60,18 @@ pub struct Config {
     #[serde(default = "default_true", rename = "auto-sync")]
     pub auto_sync: bool,
 
+    /// Propagate user-authored skills from `.agents/skills/` to each
+    /// configured agent's skill directory (e.g. `.claude/skills/`,
+    /// `.kiro/skills/`). Skills that symposium itself installed into
+    /// `.agents/skills/` are not propagated.
+    #[serde(default = "default_true", rename = "agents-syncing")]
+    pub agents_syncing: bool,
+
+    /// How many seconds after a successful sync we skip re-checking a skill
+    /// directory. Set to 0 to disable debouncing (useful in tests).
+    #[serde(default = "default_sync_debounce_secs", rename = "sync-debounce-secs")]
+    pub sync_debounce_secs: u64,
+
     /// Where to install agent hooks.
     #[serde(
         default,
@@ -38,6 +79,14 @@ pub struct Config {
         skip_serializing_if = "HookScope::is_default"
     )]
     pub hook_scope: HookScope,
+
+    /// Auto-update behavior for the symposium binary.
+    #[serde(
+        default,
+        rename = "auto-update",
+        skip_serializing_if = "AutoUpdate::is_default"
+    )]
+    pub auto_update: AutoUpdate,
 
     /// Agents configured for this user.
     #[serde(default, rename = "agent")]
@@ -80,7 +129,10 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             auto_sync: true,
+            agents_syncing: true,
+            sync_debounce_secs: default_sync_debounce_secs(),
             hook_scope: HookScope::default(),
+            auto_update: AutoUpdate::default(),
             agents: Vec::new(),
             logging: LoggingConfig::default(),
             defaults: DefaultsConfig::default(),
@@ -152,8 +204,7 @@ const BUILTIN_RECOMMENDATIONS_URL: &str = "https://github.com/symposium-dev/reco
 #[derive(Clone)]
 pub struct Symposium {
     pub config: Config,
-    config_dir: PathBuf,
-    cache_dir: PathBuf,
+    dirs: symposium_sdk::dirs::SymposiumDirs,
     home_dir: PathBuf,
 }
 
@@ -166,21 +217,18 @@ impl Symposium {
     /// 3. `~/.symposium`
     pub fn from_environment() -> Self {
         let home_dir = dirs::home_dir().expect("could not determine home directory");
-        let config_dir = resolve_config_dir_from_env();
-        let _ = fs::create_dir_all(&config_dir);
+        let dirs = symposium_sdk::dirs::SymposiumDirs::from_environment();
+        let _ = fs::create_dir_all(&dirs.config_dir);
+        let _ = fs::create_dir_all(&dirs.cache_dir);
 
-        let config = load_config_from(&config_dir);
-
-        let cache_dir = resolve_cache_dir(&config_dir);
-        let _ = fs::create_dir_all(&cache_dir);
+        let config = load_config_from(&dirs.config_dir);
 
         // Note: can't use tracing here — logging isn't initialized yet.
         // init_logging() is called after construction.
 
         Self {
             config,
-            config_dir,
-            cache_dir,
+            dirs,
             home_dir,
         }
     }
@@ -201,19 +249,67 @@ impl Symposium {
         // global hook registration writes into the tempdir.
         let home_dir = root.to_path_buf();
 
+        let dirs = symposium_sdk::dirs::SymposiumDirs::new(config_dir, cache_dir, None);
+
         Self {
             config,
-            config_dir,
-            cache_dir,
+            dirs,
             home_dir,
         }
     }
 
-    /// Initialize logging. Call once at startup.
-    pub fn init_logging(&self) {
+    /// The resolved directory paths.
+    pub fn dirs(&self) -> &symposium_sdk::dirs::SymposiumDirs {
+        &self.dirs
+    }
+
+    /// The cargo binary override, if set via `SYMPOSIUM_CARGO`.
+    pub fn cargo_override(&self) -> Option<&Path> {
+        self.dirs.cargo_override.as_deref()
+    }
+
+    /// Create a `WorkspaceDeps` with disk caching enabled.
+    pub fn workspace_deps(&self, cwd: &Path) -> symposium_sdk::workspace::WorkspaceDeps {
+        self.dirs.workspace_deps(cwd)
+    }
+
+    /// Build a `Command` for the cargo binary.
+    ///
+    /// Uses the test override if set, otherwise plain `"cargo"`.
+    pub fn cargo_command(&self) -> std::process::Command {
+        match &self.dirs.cargo_override {
+            Some(path) => std::process::Command::new(path),
+            None => std::process::Command::new("cargo"),
+        }
+    }
+
+    /// Create an [`InstallContext`] for use with `symposium-install` functions.
+    pub fn install_context(&self) -> symposium_install::InstallContext {
+        let ctx = symposium_install::InstallContext::new(self.dirs.cache_dir.clone());
+        match &self.dirs.cargo_override {
+            Some(path) => ctx.with_cargo_bin(path.clone()),
+            None => ctx,
+        }
+    }
+
+    /// Override the cargo binary path (test-only).
+    #[doc(hidden)]
+    pub fn set_cargo_override(&mut self, path: PathBuf) {
+        self.dirs.cargo_override = Some(path);
+    }
+
+    /// Initialize logging with an optional report layer. Call once at startup.
+    ///
+    /// When `report_layer` is `Some`, the layer is composed into the
+    /// subscriber so it receives events alongside the file logger.
+    /// Per-layer filtering ensures the report layer can receive debug
+    /// events even when the file log level is set higher.
+    pub fn init_logging(&self, report_layer: Option<crate::report::ReportLayer>) {
         use std::fs::OpenOptions;
         use tracing_subscriber::EnvFilter;
-        use tracing_subscriber::fmt;
+        use tracing_subscriber::Layer as _;
+        use tracing_subscriber::layer::SubscriberExt;
+        use tracing_subscriber::util::SubscriberInitExt;
 
         let logs = self.logs_dir();
         let now = chrono::Local::now();
@@ -227,17 +323,26 @@ impl Symposium {
             .expect("failed to open log file");
 
         let level = self.log_level();
-        let filter = EnvFilter::new(level.as_str());
+        let file_filter = EnvFilter::new(level.as_str());
 
-        fmt()
-            .with_env_filter(filter)
+        let file_layer = tracing_subscriber::fmt::layer()
             .with_writer(file)
             .with_ansi(false)
+            .with_filter(file_filter);
+
+        // The report layer does its own level filtering internally, so
+        // give it a permissive filter that lets all events through.
+        let report_filter = EnvFilter::new("trace");
+        let report_layer = report_layer.map(|l| l.with_filter(report_filter));
+
+        tracing_subscriber::registry()
+            .with(file_layer)
+            .with(report_layer)
             .init();
 
         tracing::debug!(
-            config_dir = %self.config_dir.display(),
-            cache_dir = %self.cache_dir.display(),
+            config_dir = %self.dirs.config_dir.display(),
+            cache_dir = %self.dirs.cache_dir.display(),
             log_level = %level,
             log_file = %log_path.display(),
             "logging initialized"
@@ -246,11 +351,11 @@ impl Symposium {
     }
 
     pub fn config_dir(&self) -> &Path {
-        &self.config_dir
+        &self.dirs.config_dir
     }
 
     pub fn cache_dir(&self) -> &Path {
-        &self.cache_dir
+        &self.dirs.cache_dir
     }
 
     pub fn home_dir(&self) -> &Path {
@@ -269,7 +374,7 @@ impl Symposium {
                     path: None,
                     auto_update: true,
                 },
-                base_dir: self.config_dir.clone(),
+                base_dir: self.dirs.config_dir.clone(),
             });
         }
 
@@ -281,14 +386,14 @@ impl Symposium {
                     path: Some("plugins".to_string()),
                     auto_update: true,
                 },
-                base_dir: self.config_dir.clone(),
+                base_dir: self.dirs.config_dir.clone(),
             });
         }
 
         for s in &self.config.plugin_source {
             sources.push(ResolvedPluginSource {
                 source: s.clone(),
-                base_dir: self.config_dir.clone(),
+                base_dir: self.dirs.config_dir.clone(),
             });
         }
 
@@ -297,7 +402,7 @@ impl Symposium {
 
     /// Write the user config to disk.
     pub fn save_config(&self) -> anyhow::Result<()> {
-        let path = self.config_dir.join("config.toml");
+        let path = self.dirs.config_dir.join("config.toml");
         let contents = toml::to_string_pretty(&self.config)?;
         fs::write(&path, contents)?;
         Ok(())
@@ -305,13 +410,13 @@ impl Symposium {
 
     #[cfg(test)]
     pub fn plugins_dir(&self) -> PathBuf {
-        let dir = self.config_dir.join("plugins");
+        let dir = self.dirs.config_dir.join("plugins");
         let _ = fs::create_dir_all(&dir);
         dir
     }
 
     fn logs_dir(&self) -> PathBuf {
-        let dir = resolve_logs_dir(&self.config_dir);
+        let dir = resolve_logs_dir(&self.dirs.config_dir);
         let _ = fs::create_dir_all(&dir);
         dir
     }
@@ -331,17 +436,6 @@ impl Symposium {
     }
 }
 
-/// Resolve config dir from environment variables.
-fn resolve_config_dir_from_env() -> PathBuf {
-    if let Ok(home) = env::var("SYMPOSIUM_HOME") {
-        PathBuf::from(home)
-    } else if let Ok(xdg) = env::var("XDG_CONFIG_HOME") {
-        PathBuf::from(xdg).join("symposium")
-    } else {
-        default_home()
-    }
-}
-
 /// Resolve logs dir from environment.
 ///
 /// Resolution: SYMPOSIUM_HOME/logs → XDG_STATE_HOME/symposium/logs → config_dir/logs.
@@ -353,17 +447,6 @@ fn resolve_logs_dir(config_dir: &Path) -> PathBuf {
         return PathBuf::from(xdg).join("symposium").join("logs");
     }
     config_dir.join("logs")
-}
-
-/// Resolve cache dir from environment.
-fn resolve_cache_dir(config_dir: &Path) -> PathBuf {
-    if let Ok(home) = env::var("SYMPOSIUM_HOME") {
-        return PathBuf::from(home).join("cache");
-    }
-    if let Ok(xdg) = env::var("XDG_CACHE_HOME") {
-        return PathBuf::from(xdg).join("symposium");
-    }
-    config_dir.join("cache")
 }
 
 /// Load config from a config directory.
@@ -378,15 +461,12 @@ fn load_config_from(config_dir: &Path) -> Config {
     }
 }
 
-/// Returns the default symposium home directory (~/.symposium).
-fn default_home() -> PathBuf {
-    dirs::home_dir()
-        .expect("could not determine home directory")
-        .join(".symposium")
-}
-
 fn default_true() -> bool {
     true
+}
+
+fn default_sync_debounce_secs() -> u64 {
+    5
 }
 
 fn default_level() -> String {
@@ -533,6 +613,16 @@ mod tests {
         let config: Config = toml::from_str("").unwrap();
         assert!(config.agents.is_empty());
         assert!(config.auto_sync); // default true
+        assert!(config.agents_syncing); // default true
+    }
+
+    #[test]
+    fn parse_agents_syncing_disabled() {
+        let config: Config = toml::from_str(indoc! {"
+            agents-syncing = false
+        "})
+        .unwrap();
+        assert!(!config.agents_syncing);
     }
 
     #[test]

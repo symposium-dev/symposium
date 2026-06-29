@@ -4,13 +4,24 @@ use std::{
     process::{Command, ExitCode, Stdio},
 };
 
-use crate::installation::{Runnable, acquire_source, make_executable};
+use symposium_install::Runnable;
+
+use crate::installation::{
+    AcquiredInstallation, AcquiredRunnable, acquire_installation, resolve_runnable,
+};
 use crate::plugins::{HookFormat, Installation};
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
     plugins::ParsedPlugin,
 };
+use crate::{
+    help_render::{AGENTS_HEADING, HUMANS_HEADING},
+    hook_schema::symposium::{OutputEvent, SessionStartInput},
+    plugins::load_registry,
+    subcommand_dispatch::applicable_subcommands,
+};
+use symposium_sdk::workspace::WorkspaceDeps;
 
 /// A hook prepared for dispatch — installation names looked up to concrete
 /// `Installation` entries, so the dispatch loop never has to scan the plugin's
@@ -31,11 +42,10 @@ struct ResolvedHook {
 
 impl ResolvedHook {
     fn build(parsed_plugin: &ParsedPlugin, hook: &crate::plugins::Hook) -> anyhow::Result<Self> {
-        let installations = &parsed_plugin.plugin.installations;
+        let plugin = &parsed_plugin.plugin;
         let lookup = |name: &str| -> anyhow::Result<Installation> {
-            installations
-                .iter()
-                .find(|i| i.name == name)
+            plugin
+                .get_installation(name)
                 .cloned()
                 .ok_or_else(|| anyhow::anyhow!("installation `{name}` not found in plugin"))
         };
@@ -60,113 +70,141 @@ impl ResolvedHook {
     }
 }
 
-/// Acquire an installation as a requirement: run its kind-specific source
-/// step (if any), then any declared `install_commands`. Does NOT resolve to
-/// a runnable — requirements are only ever "ensure on disk".
-async fn install(sym: &Symposium, install: &Installation) -> anyhow::Result<()> {
-    if let Some(source) = &install.source {
-        acquire_source(sym, source, install.executable.as_deref()).await?;
-    }
-    run_install_commands(&install.install_commands).await
+/// Sanitize an installation name for use as part of an env var name.
+/// Replaces non-alphanumeric chars with underscore.
+fn env_safe(name: &str) -> String {
+    name.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
 }
 
-/// Run a list of post-install shell commands sequentially. Stops at the first
-/// failure.
-async fn run_install_commands(commands: &[String]) -> anyhow::Result<()> {
-    for cmd in commands {
-        let status = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .status()
-            .await?;
-        if !status.success() {
-            anyhow::bail!("install command `{cmd}` exited with {status}");
+/// Build the env vars (including augmented PATH) for the spawn.
+///
+/// Iterates `acquired` in order; the parent directory of each absolute
+/// `runnable` is prepended to `$PATH` so later entries take precedence over
+/// earlier ones (the command's own parent ends up first since it's pushed
+/// last and prepended).
+fn build_env(acquired: &[AcquiredInstallation]) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    let mut path_prefix: Vec<String> = Vec::new();
+
+    for a in acquired {
+        let key = env_safe(&a.name);
+        if let Some(base) = &a.base {
+            env.push((format!("SYMPOSIUM_DIR_{key}"), base.display().to_string()));
+        }
+        if let Some(
+            AcquiredRunnable::ResolvedScript { path, .. } | AcquiredRunnable::ResolvedExec { path },
+        ) = &a.runnable
+        {
+            env.push((format!("SYMPOSIUM_{key}"), path.display().to_string()));
+            if let Some(parent) = path.parent() {
+                let parent_str = parent.display().to_string();
+                if !parent_str.is_empty() {
+                    path_prefix.push(parent_str);
+                }
+            }
         }
     }
-    Ok(())
+
+    // Command was pushed last into `acquired`; reverse so its bin dir wins
+    // PATH lookup over requirements' bin dirs.
+    path_prefix.reverse();
+
+    if !path_prefix.is_empty() {
+        let existing = std::env::var("PATH").unwrap_or_default();
+        let joined = if existing.is_empty() {
+            path_prefix.join(":")
+        } else {
+            format!("{}:{}", path_prefix.join(":"), existing)
+        };
+        env.push(("PATH".to_string(), joined));
+    }
+
+    env
 }
 
 enum SpawnSpec {
-    Exec { path: PathBuf, args: Vec<String> },
-    Script { path: PathBuf, args: Vec<String> },
+    Exec {
+        path: PathBuf,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+    },
+    Script {
+        path: PathBuf,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+    },
 }
 
 async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Result<SpawnSpec> {
-    let installation = &hook.command;
-    // Validation guarantees only one slot is set across hook + installation.
-    let exec_choice = installation
-        .executable
-        .as_deref()
-        .or(hook.hook_executable.as_deref());
-    let script_choice = installation
-        .script
-        .as_deref()
-        .or(hook.hook_script.as_deref());
-
-    // Acquire the source if any.
-    let acquired = match &installation.source {
-        Some(source) => Some(acquire_source(sym, source, exec_choice).await?),
-        None => None,
-    };
-
-    // install_commands run after source acquisition.
-    run_install_commands(&installation.install_commands).await?;
-
-    let runnable = match (acquired, exec_choice, script_choice) {
-        (Some(a), Some(name), None) => Runnable::Exec(a.resolve_executable(name)),
-        (Some(a), None, Some(name)) => Runnable::Script(a.resolve_script(name)),
-        (Some(a), None, None) => {
-            // Cargo single-binary fallback: use the binary name resolved at
-            // acquisition time (from crates.io or the explicit hint).
-            if let Some(name) = a.resolved_executable.as_deref() {
-                Runnable::Exec(a.resolve_executable(name))
-            } else {
-                anyhow::bail!(
-                    "hook `{}`: command resolved to no executable or script",
-                    hook.hook_name
+    // Acquire requirements first so the command's PATH sees them.
+    let mut acquired: Vec<AcquiredInstallation> = Vec::new();
+    for requirement in &hook.requirements {
+        match acquire_installation(sym, requirement, None, None).await {
+            Ok(a) => acquired.push(a),
+            Err(e) => {
+                tracing::error!(
+                    name = %requirement.name,
+                    error = %e,
+                    "failed to install hook requirement"
                 );
             }
         }
-        (None, Some(name), None) => Runnable::Exec(PathBuf::from(name)),
-        (None, None, Some(name)) => Runnable::Script(PathBuf::from(name)),
-        (None, None, None) => anyhow::bail!(
-            "hook `{}`: command resolved to no executable or script",
-            hook.hook_name
-        ),
-        // Unreachable: validation rejects executable+script set together.
-        (_, Some(_), Some(_)) => unreachable!("validation forbids both executable and script"),
-    };
+    }
 
-    match runnable {
-        Runnable::Exec(path) => {
-            make_executable(&path).ok();
-            Ok(SpawnSpec::Exec {
-                path,
-                args: hook.args.clone(),
-            })
-        }
-        Runnable::Script(path) => Ok(SpawnSpec::Script {
+    let command_acquired = acquire_installation(
+        sym,
+        &hook.command,
+        hook.hook_executable.as_deref(),
+        hook.hook_script.as_deref(),
+    )
+    .await?;
+
+    acquired.push(command_acquired.clone());
+    let env = build_env(&acquired);
+
+    let label = format!("hook `{}`", hook.hook_name);
+    let runnable = resolve_runnable(command_acquired, &label)?;
+
+    Ok(match runnable {
+        Runnable::Script(path) => SpawnSpec::Script {
             path,
             args: hook.args.clone(),
-        }),
-    }
+            env,
+        },
+        Runnable::Exec(path) => SpawnSpec::Exec {
+            path,
+            args: hook.args.clone(),
+            env,
+        },
+    })
 }
 
 fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
     match spec {
-        SpawnSpec::Script { path, args } => Command::new("sh")
-            .arg(path)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn(),
-        SpawnSpec::Exec { path, args } => Command::new(path)
-            .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn(),
+        SpawnSpec::Script { path, args, env } => {
+            let mut cmd = Command::new("sh");
+            cmd.arg(path).args(args);
+            for (k, v) in env {
+                cmd.env(k, v);
+            }
+            cmd.stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        }
+        SpawnSpec::Exec { path, args, env } => {
+            let mut cmd = Command::new(path);
+            cmd.args(args);
+            for (k, v) in env {
+                cmd.env(k, v);
+            }
+            cmd.stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        }
     }
 }
 
@@ -188,12 +226,20 @@ pub async fn execute_hook(
         let payload = handler.parse_input(input)?;
         let sym_input = payload.to_symposium();
 
-        // Auto-sync: install applicable skills into agent dirs (non-fatal).
+        // Create a shared WorkspaceDeps for the entire hook invocation.
+        // Auto-sync populates it if it runs; later stages reuse the cached result.
         let fallback_cwd = std::env::current_dir().unwrap_or_default();
-        run_auto_sync(sym, &sym_input, &fallback_cwd).await;
+        let cwd = match sym_input.cwd() {
+            Some(s) => PathBuf::from(s),
+            None => fallback_cwd,
+        };
+        let mut deps = sym.workspace_deps(&cwd);
+
+        // Auto-sync: install applicable skills into agent dirs (non-fatal).
+        run_auto_sync(sym, &mut deps).await;
 
         // Builtin dispatch → symposium output → host agent output as Value
-        let builtin_sym_output = dispatch_builtin(sym, &sym_input).await;
+        let builtin_sym_output = dispatch_builtin(sym, &sym_input, &mut deps).await;
         let builtin_agent_output = handler.translate_output(&builtin_sym_output);
         let prior_output = builtin_agent_output.to_hook_output();
 
@@ -205,6 +251,7 @@ pub async fn execute_hook(
             &sym_input,
             payload.as_ref(),
             prior_output,
+            &mut deps,
         )
         .await
         .map_err(|stderr| {
@@ -279,23 +326,47 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, output: &[u
 }
 
 /// Run sync if we're in a workspace directory and auto-sync is enabled. Non-fatal.
-async fn run_auto_sync(
-    sym: &Symposium,
-    input: &symposium::InputEvent,
-    fallback_cwd: &std::path::Path,
-) {
+///
+/// Uses per-workspace state to skip sync when `Cargo.lock` hasn't changed
+/// since the last successful sync, avoiding expensive `cargo metadata` calls
+/// on every hook invocation.
+///
+/// If sync runs, `deps` gets populated — later hook stages reuse the result.
+async fn run_auto_sync(sym: &Symposium, deps: &mut WorkspaceDeps) {
     if !sym.config.auto_sync {
         tracing::debug!("auto-sync disabled, skipping");
         return;
     }
-    tracing::debug!("auto-sync enabled, running");
-    let cwd = match input.cwd() {
-        Some(s) => std::path::PathBuf::from(s),
-        None => fallback_cwd.to_path_buf(),
-    };
-    let out = crate::output::Output::quiet();
-    if let Err(e) = crate::sync::sync(sym, &cwd, &out).await {
+
+    let cwd = deps.cwd().to_path_buf();
+
+    // Find workspace root via `cargo locate-project` (fast, no dep resolution).
+    // If we can't find one, fall through to full sync which will
+    // use cargo metadata.
+    let workspace_root = crate::workspace_state::find_workspace_root(sym, &cwd);
+
+    if let Some(ref root) = workspace_root {
+        let state = crate::workspace_state::WorkspaceState::load(sym, root);
+        if state.sync_is_fresh(root) {
+            tracing::debug!("auto-sync skipped: Cargo.lock unchanged since last sync");
+            return;
+        }
+    }
+
+    tracing::debug!("auto-sync running");
+    if let Err(e) = crate::sync::sync(sym, deps).await {
         tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
+        return;
+    }
+
+    // Record successful sync. If we didn't find the root earlier,
+    // try again now (sync may have created Cargo.lock).
+    let root = workspace_root.or_else(|| crate::workspace_state::find_workspace_root(sym, &cwd));
+    if let Some(ref root) = root {
+        let mut state = crate::workspace_state::WorkspaceState::load(sym, root);
+        state.record_sync(root);
+        state.workspace_root = Some(root.clone());
+        state.save(sym, root);
     }
 }
 
@@ -303,6 +374,7 @@ async fn run_auto_sync(
 pub async fn dispatch_builtin(
     sym: &Symposium,
     input: &symposium::InputEvent,
+    deps: &mut WorkspaceDeps,
 ) -> symposium::OutputEvent {
     match input {
         symposium::InputEvent::PreToolUse(_) => {
@@ -312,16 +384,68 @@ pub async fn dispatch_builtin(
         symposium::InputEvent::UserPromptSubmit(prompt) => {
             handle_user_prompt_submit(sym, prompt).await
         }
-        symposium::InputEvent::SessionStart(session) => handle_session_start(sym, session),
+        symposium::InputEvent::SessionStart(session) => handle_session_start(sym, session, deps),
+        _ => symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
     }
 }
 
-/// Handle SessionStart: return empty (no session-start-context support).
+/// Handle SessionStart: orient the agent toward crate-aware tooling and, when due, nudge the
+/// user to update. The two fragments are computed independently -- the discovery hint is never gated
+/// behind the update-check throttle -- then joined into a single context block.
 fn handle_session_start(
-    _sym: &Symposium,
-    _payload: &symposium::SessionStartInput,
-) -> symposium::OutputEvent {
-    symposium::OutputEvent::empty_for(HookEvent::SessionStart)
+    sym: &Symposium,
+    _payload: &SessionStartInput,
+    deps: &mut WorkspaceDeps,
+) -> OutputEvent {
+    let fragments = [discovery_hint(sym, deps), update_nudge(sym)]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<String>>();
+
+    if fragments.is_empty() {
+        OutputEvent::empty_for(HookEvent::SessionStart)
+    } else {
+        OutputEvent::with_context(HookEvent::SessionStart, fragments.join("\n\n"))
+    }
+}
+
+/// Suggest `cargo agents --help` when the active workspace exposes crate-aware plugin subcommands.
+/// Reuses the help renderer's `applicable_subcommands`, so the hint fires only when there is actually something to discover; `None` otherwise.
+fn discovery_hint(sym: &Symposium, deps: &mut WorkspaceDeps) -> Option<String> {
+    let registry = load_registry(sym);
+    let pairs = crate::crate_sources::crate_pairs(deps.crates());
+
+    let any_subcommand = !applicable_subcommands(&registry, &pairs).is_empty();
+
+    any_subcommand.then(|| {
+        format!(
+            "This project has crate-aware tools available via `cargo agents`. \
+             Run `cargo agents --help` to list them before working with the Rust code. \
+             Only use tools under the '{AGENTS_HEADING}' section unless the user \
+             explicitly asks you to run one from '{HUMANS_HEADING}'."
+        )
+    })
+}
+
+/// Nudge the user to update. Gated by `auto-update = \"warn\"`, the 25h throttle,
+/// and a newer published version on the registry; `None` otherwise.
+fn update_nudge(sym: &Symposium) -> Option<String> {
+    use crate::config::AutoUpdate;
+    use crate::state::CURRENT_VERSION;
+
+    if sym.config.auto_update != AutoUpdate::Warn {
+        return None;
+    }
+    if !crate::state::should_check_for_update(sym.config_dir()) {
+        return None;
+    }
+    crate::state::record_update_check(sym.config_dir());
+
+    let latest = crate::self_update::check_upgrade(sym).ok()??;
+    Some(format!(
+        "symposium {latest} is available (current: {CURRENT_VERSION}). \
+         Run `cargo agents self-update` to upgrade."
+    ))
 }
 
 /// Handle PostToolUse: no-op for now.
@@ -361,9 +485,23 @@ pub async fn dispatch_plugin_hooks(
     sym_input: &symposium::InputEvent,
     original_input: &dyn AgentHookInput,
     prior_output: serde_json::Value,
+    deps: &mut WorkspaceDeps,
 ) -> Result<serde_json::Value, Vec<u8>> {
     let plugins = crate::plugins::load_all_plugins(sym);
-    let hooks = dispatched_hooks_for_payload(&plugins, sym_input);
+
+    // Resolving the workspace means running cargo, so only do it when some
+    // plugin's hook gating actually references a concrete crate (a `crate(*)`
+    // wildcard or env/shell/path predicate never needs the crate graph).
+    let pairs = if plugins
+        .iter()
+        .any(|p| p.plugin.hooks_need_crate_resolution())
+    {
+        crate::crate_sources::crate_pairs(deps.crates())
+    } else {
+        Vec::new()
+    };
+    let mut ctx = crate::predicate::PredicateContext::new(&pairs);
+    let hooks = dispatched_hooks_for_payload(&plugins, sym_input, host_agent, &mut ctx);
 
     let mut output = prior_output;
 
@@ -375,31 +513,14 @@ pub async fn dispatch_plugin_hooks(
             "running plugin hook"
         );
 
-        // Acquire each requirement (best-effort).
-        for requirement in &hook.requirements {
-            if let Err(e) = install(sym, requirement).await {
-                tracing::error!(name = %requirement.name, error = %e, "failed to install hook requirement");
-            }
-        }
-
-        // Determine stdin for the plugin based on its declared format
+        // Determine stdin for the plugin based on its declared format.
+        // After format selection, the only two cases are:
+        // - native (matches host agent) → pass through original input
+        // - symposium → deliver canonical format
         let hook_agent = hook.format.as_agent();
-        let temp_input: Box<dyn AgentHookInput>;
         let hook_input: &dyn AgentHookInput = if hook_agent == Some(host_agent) {
-            // Same format as host — pass through original input
             original_input
-        } else if let Some(target) = hook_agent {
-            // Different agent format — convert symposium → target
-            let handler = target.event(event);
-            match handler {
-                Some(h) => {
-                    temp_input = h.translate_input(sym_input);
-                    &*temp_input
-                }
-                None => continue, // target agent doesn't support this event
-            }
         } else {
-            // Symposium format
             sym_input
         };
         let stdin_str = match hook_input.to_string() {
@@ -434,16 +555,26 @@ pub async fn dispatch_plugin_hooks(
 
                 tracing::trace!(?child_out, "hook finished");
 
-                match child_out.status.code() {
+                let exit_code = child_out.status.code();
+                tracing::debug!(
+                    report = %crate::report::ReportEvent::HookDispatched {
+                        plugin: hook.plugin_name.clone(),
+                        hook: hook.hook_name.clone(),
+                        exit_code,
+                        error: None,
+                    },
+                );
+                match exit_code {
                     None | Some(2) => return Err(child_out.stderr),
                     Some(0) if child_out.stdout.is_empty() => continue,
                     Some(0) => {
-                        // Parse output and convert to host agent format
+                        // Parse output and convert to host agent format.
+                        // Two cases: native (same as host) or symposium.
                         let host_handler = host_agent.event(event);
                         let Some(host_h) = host_handler else { continue };
 
                         let host_json = if hook_agent == Some(host_agent) {
-                            // Same format — parse as host agent, serialize to Value
+                            // Native format — parse as host agent output
                             match host_h.parse_output(&child_out.stdout) {
                                 Ok(o) => o.to_hook_output(),
                                 Err(e) => {
@@ -451,35 +582,17 @@ pub async fn dispatch_plugin_hooks(
                                     continue;
                                 }
                             }
-                        } else if let Some(target) = hook_agent {
-                            // Different agent — parse as hook agent → symposium → host agent
-                            let target_handler = target.event(event);
-                            let Some(target_h) = target_handler else {
-                                continue;
-                            };
-                            match target_h.parse_output(&child_out.stdout) {
-                                Ok(hook_out) => {
-                                    let sym_out = hook_out.to_symposium();
-                                    let host_out = host_h.translate_output(&sym_out);
-                                    host_out.to_hook_output()
-                                }
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "failed to parse hook output");
-                                    continue;
-                                }
-                            }
                         } else {
-                            // Symposium format — parse as symposium → host agent
+                            // Symposium format — parse and convert to host agent
                             match serde_json::from_slice::<serde_json::Value>(&child_out.stdout) {
                                 Ok(v) => {
-                                    // Try to parse as symposium OutputEvent
                                     if let Ok(sym_out) =
                                         serde_json::from_value::<symposium::OutputEvent>(v.clone())
                                     {
                                         let host_out = host_h.translate_output(&sym_out);
                                         host_out.to_hook_output()
                                     } else {
-                                        v // fallback: use raw JSON
+                                        v
                                     }
                                 }
                                 Err(e) => {
@@ -499,7 +612,17 @@ pub async fn dispatch_plugin_hooks(
                     }
                 }
             }
-            Err(e) => tracing::warn!(error = %e, "failed to spawn hook command"),
+            Err(e) => {
+                tracing::debug!(
+                    report = %crate::report::ReportEvent::HookDispatched {
+                        plugin: hook.plugin_name.clone(),
+                        hook: hook.hook_name.clone(),
+                        exit_code: None,
+                        error: Some(e.to_string()),
+                    },
+                );
+                tracing::warn!(error = %e, "failed to spawn hook command");
+            }
         }
     }
 
@@ -527,34 +650,89 @@ pub fn merge(a: &mut serde_json::Value, b: serde_json::Value) {
     *a = b;
 }
 
-/// Match plugin hooks against the incoming event, then resolve every
-/// `InstallationRef` (named or inline) on the matched hooks into a concrete
-/// `InstallationKind`. The resulting `ResolvedHook`s are ready to dispatch
-/// without further plugin lookups.
+/// Match plugin hooks against the incoming event, selecting at most one hook
+/// per plugin based on format priority:
+/// 1. A hook whose format matches the host agent (native fidelity).
+/// 2. A symposium-format hook (portable fallback).
+/// 3. Otherwise, nothing fires for that plugin.
+///
+/// The resulting `ResolvedHook`s are ready to dispatch without further plugin
+/// lookups.
 fn dispatched_hooks_for_payload(
     plugins: &[ParsedPlugin],
     input: &symposium::InputEvent,
+    host_agent: HookAgent,
+    ctx: &mut crate::predicate::PredicateContext,
 ) -> Vec<ResolvedHook> {
     tracing::trace!(?input, "matching hooks for payload");
 
     let mut out = Vec::new();
 
     for parsed_plugin in plugins {
+        // Plugin-level predicates gate every hook in the plugin. Evaluated once
+        // per plugin per dispatch — keep them cheap.
+        if !parsed_plugin.plugin.applies(ctx) {
+            tracing::debug!(
+                plugin = %parsed_plugin.plugin.name,
+                "plugin predicates failed, skipping hooks"
+            );
+            continue;
+        }
+
+        let mut native_match: Option<&crate::plugins::Hook> = None;
+        let mut symposium_match: Option<&crate::plugins::Hook> = None;
+
         for hook in &parsed_plugin.plugin.hooks {
-            tracing::trace!(?hook);
             if hook.event != input.event() {
                 continue;
             }
             if let Some(matcher) = &hook.matcher
                 && !input.matches_matcher(matcher)
             {
+                continue;
+            }
+
+            match hook.format.as_agent() {
+                Some(agent) if agent == host_agent => {
+                    native_match = Some(hook);
+                }
+                None => {
+                    // format = "symposium"
+                    symposium_match = Some(hook);
+                }
+                Some(_) => {
+                    // Different agent format — does not fire on this agent.
+                }
+            }
+        }
+
+        let selected = native_match.or(symposium_match);
+        if let Some(hook) = selected {
+            // Hook-level predicates are evaluated at dispatch so they pick up
+            // live state (file present, tool installed, crate present, …).
+            if !hook.predicates.evaluate(ctx) {
                 tracing::debug!(
-                    ?input,
-                    ?matcher,
-                    "skipping hook due to non-matching matcher"
+                    report = %crate::report::ReportEvent::HookConsidered {
+                        plugin: parsed_plugin.plugin.name.clone(),
+                        hook: hook.name.clone(),
+                        event: format!("{:?}", input.event()),
+                        selected: false,
+                        format: Some(format!("{:?}", hook.format)),
+                        reason: Some("hook predicates not satisfied".into()),
+                    },
                 );
                 continue;
             }
+            tracing::debug!(
+                report = %crate::report::ReportEvent::HookConsidered {
+                    plugin: parsed_plugin.plugin.name.clone(),
+                    hook: hook.name.clone(),
+                    event: format!("{:?}", input.event()),
+                    selected: true,
+                    format: Some(format!("{:?}", hook.format)),
+                    reason: None,
+                },
+            );
             match ResolvedHook::build(parsed_plugin, hook) {
                 Ok(dispatched) => out.push(dispatched),
                 Err(e) => {
@@ -566,6 +744,22 @@ fn dispatched_hooks_for_payload(
                     );
                 }
             }
+        } else if parsed_plugin
+            .plugin
+            .hooks
+            .iter()
+            .any(|h| h.event == input.event())
+        {
+            tracing::debug!(
+                report = %crate::report::ReportEvent::HookConsidered {
+                    plugin: parsed_plugin.plugin.name.clone(),
+                    hook: "(none)".into(),
+                    event: format!("{:?}", input.event()),
+                    selected: false,
+                    format: None,
+                    reason: Some("no matching format for this agent".into()),
+                },
+            );
         }
     }
 
@@ -574,19 +768,106 @@ fn dispatched_hooks_for_payload(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+
+    #[test]
+    fn env_safe_sanitizes_punctuation() {
+        assert_eq!(env_safe("rtk"), "rtk");
+        assert_eq!(env_safe("rtk-hooks"), "rtk_hooks");
+        assert_eq!(env_safe("a.b-c"), "a_b_c");
+        assert_eq!(env_safe("name__req_0"), "name__req_0");
+    }
+
+    #[test]
+    fn build_env_sets_dir_and_name_vars() {
+        // [req (rtk), command (no-source)] order — command was pushed last,
+        // so PATH should put its bin dir first.
+        let acquired = vec![
+            AcquiredInstallation {
+                name: "rtk".to_string(),
+                base: Some(PathBuf::from("/cache/rtk/1.0")),
+                runnable: Some(AcquiredRunnable::ResolvedExec {
+                    path: PathBuf::from("/cache/rtk/1.0/bin/rtk"),
+                }),
+            },
+            AcquiredInstallation {
+                name: "no-source".to_string(),
+                base: None,
+                runnable: Some(AcquiredRunnable::ResolvedExec {
+                    path: PathBuf::from("/usr/local/bin/tool"),
+                }),
+            },
+        ];
+        let env: std::collections::HashMap<_, _> = build_env(&acquired).into_iter().collect();
+        assert_eq!(
+            env.get("SYMPOSIUM_DIR_rtk").map(String::as_str),
+            Some("/cache/rtk/1.0")
+        );
+        assert_eq!(
+            env.get("SYMPOSIUM_rtk").map(String::as_str),
+            Some("/cache/rtk/1.0/bin/rtk")
+        );
+        // No source means no _DIR, but absolute runnable path → SYMPOSIUM_<name> set.
+        assert_eq!(env.get("SYMPOSIUM_DIR_no_source"), None);
+        assert_eq!(
+            env.get("SYMPOSIUM_no_source").map(String::as_str),
+            Some("/usr/local/bin/tool")
+        );
+        // Command (pushed last) wins PATH lookup, so its parent comes first.
+        let path = env.get("PATH").expect("PATH set");
+        assert!(path.starts_with("/usr/local/bin"), "PATH = {path}");
+        assert!(path.contains("/cache/rtk/1.0/bin"), "PATH = {path}");
+    }
+
+    #[test]
+    fn build_env_no_runnable_no_vars() {
+        // Pure-setup installation: no runnable means no SYMPOSIUM_<name>
+        // and no PATH contribution. SYMPOSIUM_DIR_<name> still gets set
+        // when there's a managed base dir.
+        let acquired = vec![AcquiredInstallation {
+            name: "setup".to_string(),
+            base: Some(PathBuf::from("/cache/setup")),
+            runnable: None,
+        }];
+        let env: std::collections::HashMap<_, _> = build_env(&acquired).into_iter().collect();
+        assert_eq!(
+            env.get("SYMPOSIUM_DIR_setup").map(String::as_str),
+            Some("/cache/setup")
+        );
+        assert!(env.get("SYMPOSIUM_setup").is_none());
+        assert!(env.get("PATH").is_none());
+    }
+
+    #[test]
+    fn build_env_global_cargo_skips_env_and_path() {
+        // Global cargo: PathLookup runnable. Nothing exposed.
+        let acquired = vec![AcquiredInstallation {
+            name: "rg".to_string(),
+            base: None,
+            runnable: Some(AcquiredRunnable::GlobalExec {
+                path: PathBuf::from("rg".to_string()),
+            }),
+        }];
+        let env: std::collections::HashMap<_, _> = build_env(&acquired).into_iter().collect();
+        assert!(env.get("SYMPOSIUM_DIR_rg").is_none());
+        assert!(env.get("SYMPOSIUM_rg").is_none());
+        assert!(env.get("PATH").is_none());
+    }
 
     #[tokio::test]
     async fn builtin_pre_tool_use_returns_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        let input = symposium::InputEvent::PreToolUse(symposium::PreToolUseInput {
-            tool_name: "Bash".to_string(),
-            tool_input: serde_json::Value::default(),
-            session_id: None,
-            cwd: None,
-        });
-        let output = dispatch_builtin(&sym, &input).await;
+        let mut deps = sym.workspace_deps(tmp.path());
+        let input = symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
+            "Bash".to_string(),
+            serde_json::Value::default(),
+            None,
+            None,
+        ));
+        let output = dispatch_builtin(&sym, &input, &mut deps).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -594,14 +875,15 @@ mod tests {
     async fn builtin_post_tool_use_returns_empty_for_now() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        let input = symposium::InputEvent::PostToolUse(symposium::PostToolUseInput {
-            tool_name: "Bash".to_string(),
-            tool_input: serde_json::json!({"command": "ls"}),
-            tool_response: serde_json::json!({"stdout": "file.rs"}),
-            session_id: Some("test-session".to_string()),
-            cwd: Some("/tmp".to_string()),
-        });
-        let output = dispatch_builtin(&sym, &input).await;
+        let mut deps = sym.workspace_deps(tmp.path());
+        let input = symposium::InputEvent::PostToolUse(symposium::PostToolUseInput::new(
+            "Bash".to_string(),
+            serde_json::json!({"command": "ls"}),
+            serde_json::json!({"stdout": "file.rs"}),
+            Some("test-session".to_string()),
+            Some("/tmp".to_string()),
+        ));
+        let output = dispatch_builtin(&sym, &input, &mut deps).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -609,12 +891,13 @@ mod tests {
     async fn builtin_user_prompt_submit_returns_empty_for_now() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        let input = symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput {
-            prompt: "Use tokio for async".to_string(),
-            session_id: Some("test-session".to_string()),
-            cwd: Some("/tmp".to_string()),
-        });
-        let output = dispatch_builtin(&sym, &input).await;
+        let mut deps = sym.workspace_deps(tmp.path());
+        let input = symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput::new(
+            "Use tokio for async".to_string(),
+            Some("test-session".to_string()),
+            Some("/tmp".to_string()),
+        ));
+        let output = dispatch_builtin(&sym, &input, &mut deps).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -632,5 +915,151 @@ mod tests {
     fn symposium_output_empty_has_no_context() {
         let output = symposium::OutputEvent::empty_for(HookEvent::PreToolUse);
         assert!(output.additional_context().is_none());
+    }
+
+    /// Helper: build a minimal plugin with a single PreToolUse hook backed
+    /// by a no-op script installation (no `source`, just an on-disk script).
+    fn plugin_with_hook(
+        plugin_shell: Vec<&str>,
+        hook_shell: Vec<&str>,
+    ) -> crate::plugins::ParsedPlugin {
+        use crate::plugins::{Hook, HookFormat, Installation, Plugin};
+
+        let install = Installation {
+            name: "no-op".into(),
+            requirements: vec![],
+            install_commands: vec![],
+            source: None,
+            executable: None,
+            script: Some("/bin/true".into()),
+            args: vec![],
+        };
+        let hook = Hook {
+            name: "h".into(),
+            event: HookEvent::PreToolUse,
+            agent: None,
+            matcher: None,
+            requirements: vec![],
+            command: "no-op".into(),
+            executable: None,
+            script: None,
+            args: vec![],
+            format: HookFormat::Symposium,
+            predicates: crate::predicate::PredicateSet {
+                predicates: hook_shell
+                    .into_iter()
+                    .map(|c| crate::predicate::Predicate::Shell(c.into()))
+                    .collect(),
+            },
+        };
+        // Plugin gate: `crate(*)` (always applies) plus the shell predicates.
+        let plugin_predicates = std::iter::once(crate::predicate::Predicate::CrateWildcard)
+            .chain(
+                plugin_shell
+                    .into_iter()
+                    .map(|c| crate::predicate::Predicate::Shell(c.into())),
+            )
+            .collect();
+        let plugin = Plugin {
+            name: "test-plugin".into(),
+            predicates: crate::predicate::PredicateSet {
+                predicates: plugin_predicates,
+            },
+            installations: vec![install],
+            hooks: vec![hook],
+            skills: vec![],
+            mcp_servers: vec![],
+            subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
+        };
+        crate::plugins::ParsedPlugin {
+            path: std::path::PathBuf::from("test.toml"),
+            plugin,
+            source_name: "test-source".to_string(),
+            source_dir: PathBuf::from(".".to_string()),
+        }
+    }
+
+    fn pre_tool_use_input() -> symposium::InputEvent {
+        symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
+            "Bash".into(),
+            serde_json::json!({}),
+            None,
+            None,
+        ))
+    }
+
+    #[test]
+    fn dispatch_skips_when_plugin_predicate_fails() {
+        let plugin = plugin_with_hook(vec!["false"], vec![]);
+        let hooks = dispatched_hooks_for_payload(
+            &[plugin],
+            &pre_tool_use_input(),
+            HookAgent::Claude,
+            &mut crate::predicate::PredicateContext::new(&[]),
+        );
+        assert!(hooks.is_empty(), "plugin-level false should drop all hooks");
+    }
+
+    #[test]
+    fn dispatch_skips_when_hook_predicate_fails() {
+        let plugin = plugin_with_hook(vec![], vec!["false"]);
+        let hooks = dispatched_hooks_for_payload(
+            &[plugin],
+            &pre_tool_use_input(),
+            HookAgent::Claude,
+            &mut crate::predicate::PredicateContext::new(&[]),
+        );
+        assert!(hooks.is_empty(), "hook-level false should drop the hook");
+    }
+
+    #[test]
+    fn dispatch_includes_when_predicates_pass() {
+        let plugin = plugin_with_hook(vec!["true"], vec!["true"]);
+        let hooks = dispatched_hooks_for_payload(
+            &[plugin],
+            &pre_tool_use_input(),
+            HookAgent::Claude,
+            &mut crate::predicate::PredicateContext::new(&[]),
+        );
+        assert_eq!(hooks.len(), 1);
+    }
+
+    /// A plugin gated on a concrete crate must not dispatch its hooks in a
+    /// workspace that lacks the crate (regression: hooks used to fire for every
+    /// plugin regardless of its `crates`).
+    #[test]
+    fn dispatch_respects_plugin_crate_gate() {
+        // Replace the wildcard plugin gate with a concrete `crate(serde)`.
+        let mut plugin = plugin_with_hook(vec![], vec![]);
+        plugin.plugin.predicates = crate::predicate::PredicateSet {
+            predicates: vec![crate::predicate::Predicate::Crate("serde".into(), None)],
+        };
+
+        // No serde in the workspace → the hook is skipped.
+        let empty = dispatched_hooks_for_payload(
+            &[plugin.clone()],
+            &pre_tool_use_input(),
+            HookAgent::Claude,
+            &mut crate::predicate::PredicateContext::new(&[]),
+        );
+        assert!(
+            empty.is_empty(),
+            "crate-gated hook should not fire without the crate"
+        );
+
+        // serde present → the hook fires.
+        let deps = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let matched = dispatched_hooks_for_payload(
+            &[plugin],
+            &pre_tool_use_input(),
+            HookAgent::Claude,
+            &mut crate::predicate::PredicateContext::new(&deps),
+        );
+        assert_eq!(
+            matched.len(),
+            1,
+            "crate-gated hook should fire when the crate is present"
+        );
     }
 }

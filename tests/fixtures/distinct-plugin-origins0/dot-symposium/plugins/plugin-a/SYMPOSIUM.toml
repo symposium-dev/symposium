@@ -1,0 +1,6 @@
+name = "plugin-a"
+crates = ["serde"]
+
+[[skills]]
+crates = ["serde"]
+source.path = "."

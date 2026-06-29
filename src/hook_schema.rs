@@ -54,25 +54,7 @@ impl HookAgent {
     }
 }
 
-/// Hook event types supported by Symposium.
-#[derive(Debug, Copy, Clone, clap::ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
-pub enum HookEvent {
-    #[value(name = "pre-tool-use")]
-    #[serde(rename = "PreToolUse")]
-    PreToolUse,
-
-    #[value(name = "post-tool-use")]
-    #[serde(rename = "PostToolUse")]
-    PostToolUse,
-
-    #[value(name = "user-prompt-submit")]
-    #[serde(rename = "UserPromptSubmit")]
-    UserPromptSubmit,
-
-    #[value(name = "session-start")]
-    #[serde(rename = "SessionStart")]
-    SessionStart,
-}
+pub use symposium_sdk::hook::HookEvent;
 
 /// Represents the data sent *from* an agent *to* a hook.
 pub trait AgentHookInput: Debug {

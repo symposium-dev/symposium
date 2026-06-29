@@ -9,7 +9,7 @@ Symposium is a standard Cargo project with both a library and a binary:
 ```bash
 cargo check              # type-check
 cargo test               # run the test suite
-cargo run -- crate tokio # run locally: crate-specific guidance
+cargo run -- crate-info tokio # run locally: crate-specific guidance
 ```
 
 Tests use snapshot assertions via the `expect-test` crate. If a snapshot changes, run with `UPDATE_EXPECT=1` to update it:

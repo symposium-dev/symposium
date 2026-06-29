@@ -1,0 +1,10 @@
+name = "multi-plugin"
+crates = ["serde"]
+
+[[skills]]
+crates = ["serde"]
+source.path = "group-a"
+
+[[skills]]
+crates = ["serde"]
+source.path = "group-b"

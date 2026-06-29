@@ -2,6 +2,8 @@
 
 Find crate sources and guidance.
 
+This is an agent-facing command, listed under "Commands for agents" in `cargo agents --help`. Its output format and exit codes may change in future releases.
+
 ## Usage
 
 ```bash

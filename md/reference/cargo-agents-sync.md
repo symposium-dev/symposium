@@ -8,6 +8,8 @@ Synchronize skills with workspace dependencies.
 cargo agents sync
 ```
 
+With the global `-v` flag, sync additionally shows each plugin, skill group, and skill that was evaluated and why each was included or skipped. With `--json`, stdout receives a JSON array of structured event objects (see [global options](./cargo-agents.md#global-options)).
+
 ## Behavior
 
 Must be run from within a Rust workspace. Performs the following steps:
@@ -18,11 +20,13 @@ Must be run from within a Rust workspace. Performs the following steps:
 
 3. **Discover applicable skills** — loads plugin sources (from user config) and matches skill predicates against workspace dependencies.
 
-4. **Install skills** — for each configured agent, copies applicable `SKILL.md` files into the agent's expected skill directory (e.g., `.claude/skills/` for Claude Code, `.agents/skills/` for Copilot/Gemini/Codex).
+4. **Install skills** — for each configured agent, copies applicable `SKILL.md` files into the agent's expected skill directory (e.g., `.claude/skills/` for Claude Code, `.agents/skills/` for Copilot/Gemini/Codex). A `.gitignore` containing `*` is written into every new skill directory (and its `skills/` parent if new), and an empty `.symposium` marker file is dropped into each installed skill directory.
 
-5. **Clean up stale skills** — removes skills that were previously installed by symposium but are no longer applicable (e.g., because a dependency was removed). Tracks installed skills in a per-agent manifest (`.symposium.toml` in the agent's skill directory). Skills not in the manifest (user-managed) are left untouched.
+5. **Mirror workspace skills** — if `agents-syncing` is enabled (default), user-authored skills in `<workspace>/.agents/skills/` are propagated into the skill directories of any configured agent that doesn't natively use `.agents/skills/` (e.g., `.claude/skills/`, `.kiro/skills/`). See [Workspace skills](../workspace-skills.md).
 
-6. **Register hooks** — ensures hooks and MCP servers are registered for all configured agents. Registers both global hooks (for all projects) and project-specific hooks (for the current project). Unregisters hooks for agents no longer in the config.
+6. **Clean up stale skills** — scans every agent's skills parent directory and removes any subdirectory containing the `.symposium` marker that wasn't installed (or propagated) this sync. Directories without the marker (user-managed) are left untouched.
+
+7. **Register hooks** — ensures hooks and MCP servers are registered for all configured agents. Registers both global hooks (for all projects) and project-specific hooks (for the current project). Unregisters hooks for agents no longer in the config.
 
 ## Automatic sync
 

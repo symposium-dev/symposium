@@ -1,9 +1,8 @@
 //! Init command: `cargo agents init`.
 
 use std::io::IsTerminal;
-use std::path::PathBuf;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use dialoguer::MultiSelect;
 
 use crate::agents::Agent;
@@ -28,9 +27,13 @@ fn interactive(out: &Output) -> bool {
 
 /// Resolve which agents to configure. Priority:
 /// 1. Explicit `--add-agent` / `--remove-agent` flags (applied to existing set)
-/// 2. Interactive multi-select (if terminal), pre-selecting existing agents
+/// 2. Interactive multi-select (if `should_prompt`), pre-selecting existing agents
 /// 3. Default to first agent (Claude) in non-interactive mode
-fn resolve_agents(opts: &InitOpts, existing: &[AgentEntry], out: &Output) -> Result<Vec<Agent>> {
+fn resolve_agents(
+    opts: &InitOpts,
+    existing: &[AgentEntry],
+    should_prompt: bool,
+) -> Result<Vec<Agent>> {
     if !opts.agents.is_empty() || !opts.remove_agents.is_empty() {
         let mut names: Vec<String> = existing.iter().map(|e| e.name.clone()).collect();
         for name in &opts.agents {
@@ -45,7 +48,7 @@ fn resolve_agents(opts: &InitOpts, existing: &[AgentEntry], out: &Output) -> Res
         }
         return names.iter().map(|n| Agent::from_config_name(n)).collect();
     }
-    if interactive(out) {
+    if should_prompt {
         return prompt_for_agents(existing);
     }
     if !existing.is_empty() {
@@ -65,8 +68,12 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
     tracing::info!("init started");
     out.println("Setting up symposium for your user account.\n");
 
-    let agents = resolve_agents(opts, &sym.config.agents, out)?;
-    tracing::debug!(agents = ?agents.iter().map(|a| a.config_name()).collect::<Vec<_>>(), "resolved agents");
+    // CLI flags signal non-interactive intent — skip all prompts.
+    let cli_driven = !opts.agents.is_empty() || !opts.remove_agents.is_empty();
+    let should_prompt = !cli_driven && interactive(out);
+
+    // Resolve each setting: CLI flag > interactive prompt > keep existing.
+    let agents = resolve_agents(opts, &sym.config.agents, should_prompt)?;
 
     sym.config.agents = agents
         .iter()
@@ -75,19 +82,27 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
         })
         .collect();
 
-    if let Some(scope) = opts.hook_scope {
-        sym.config.hook_scope = scope;
-    } else if !agents.is_empty() && interactive(out) {
-        sym.config.hook_scope = prompt_for_hook_scope(sym.config.hook_scope)?;
-    }
-    tracing::debug!(scope = ?sym.config.hook_scope, "hook scope");
+    sym.config.hook_scope = match opts.hook_scope {
+        Some(scope) => scope,
+        None if should_prompt && !agents.is_empty() => {
+            prompt_for_hook_scope(sym.config.hook_scope)?
+        }
+        None => sym.config.hook_scope,
+    };
 
-    sym.save_config().context("failed to write user config")?;
-    tracing::info!(
+    if should_prompt && !agents.is_empty() {
+        sym.config.auto_update = prompt_for_auto_update(sym.config.auto_update)?;
+    }
+
+    tracing::debug!(
         agents = ?agents.iter().map(|a| a.config_name()).collect::<Vec<_>>(),
         scope = ?sym.config.hook_scope,
-        "config written"
+        auto_update = ?sym.config.auto_update,
+        "resolved config"
     );
+
+    // Persist and apply.
+    sym.save_config().context("failed to write user config")?;
 
     let config_path = sym.config_dir().join("config.toml");
 
@@ -108,7 +123,6 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
         agent_names.join(", ")
     ));
 
-    // Register global hooks (project-scope hooks are installed by `sync`).
     if sym.config.hook_scope == crate::config::HookScope::Global {
         crate::sync::register_hooks(sym, out).context("failed to register global hooks")?;
     }
@@ -141,6 +155,33 @@ fn prompt_for_hook_scope(current: crate::config::HookScope) -> Result<crate::con
     })
 }
 
+fn prompt_for_auto_update(current: crate::config::AutoUpdate) -> Result<crate::config::AutoUpdate> {
+    use crate::config::AutoUpdate;
+
+    let items = [
+        "Auto-update (recommended)",
+        "Warn when updates are available",
+        "Off",
+    ];
+    let default = match current {
+        AutoUpdate::On => 0,
+        AutoUpdate::Warn => 1,
+        AutoUpdate::Off => 2,
+    };
+
+    let selection = dialoguer::Select::new()
+        .with_prompt("Automatic updates")
+        .items(items)
+        .default(default)
+        .interact()?;
+
+    Ok(match selection {
+        0 => AutoUpdate::On,
+        1 => AutoUpdate::Warn,
+        _ => AutoUpdate::Off,
+    })
+}
+
 fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {
     let agents = Agent::all();
     let items: Vec<&str> = agents.iter().map(|a| a.display_name()).collect();
@@ -157,31 +198,4 @@ fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {
         .interact()?;
 
     Ok(selections.into_iter().map(|i| agents[i]).collect())
-}
-
-// ---------------------------------------------------------------------------
-// Workspace detection
-// ---------------------------------------------------------------------------
-
-/// Find the workspace root using `cargo metadata`, run from the given directory.
-pub fn find_workspace_root(cwd: &std::path::Path) -> Result<PathBuf> {
-    let output = std::process::Command::new("cargo")
-        .args(["metadata", "--no-deps", "--format-version=1"])
-        .current_dir(cwd)
-        .output()
-        .context("failed to run cargo metadata")?;
-
-    if !output.status.success() {
-        bail!("not in a Rust workspace (cargo metadata failed)");
-    }
-
-    let metadata: serde_json::Value =
-        serde_json::from_slice(&output.stdout).context("failed to parse cargo metadata output")?;
-
-    let workspace_root = metadata
-        .get("workspace_root")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow::anyhow!("cargo metadata missing workspace_root"))?;
-
-    Ok(PathBuf::from(workspace_root))
 }

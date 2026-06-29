@@ -1,0 +1,522 @@
+//! Git-sourced plugin artifacts: URL parsing, API client, and cache management.
+
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+
+use crate::{InstallContext, UpdateLevel};
+
+/// Minimum interval between freshness checks for cached sources.
+const DEBOUNCE_DURATION: std::time::Duration = std::time::Duration::from_secs(60);
+
+// ── Public parsed-URL type ──────────────────────────────────────────────
+
+/// A parsed git source URL.
+///
+/// Different URL forms that refer to the same logical repository (e.g.,
+/// `https://github.com/foo/bar` and `git@github.com:foo/bar.git`) parse
+/// to the same variant with the same fields, enabling deduplication.
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
+pub enum GitSource {
+    /// A GitHub-hosted repository.
+    GitHub {
+        /// Repository owner (e.g. `"symposium-dev"`).
+        owner: String,
+        /// Repository name (e.g. `"symposium"`).
+        repo: String,
+        /// Branch, tag, or commit ref. Empty string means default branch.
+        git_ref: String,
+        /// Path within the repo. Empty string means repo root.
+        subpath: String,
+    },
+}
+
+impl GitSource {
+    /// A normalized identity string suitable for use in `SkillOrigin`.
+    ///
+    /// Two URLs that refer to the same logical repository produce the same
+    /// `repo_id`, regardless of URL form.
+    pub fn repo_id(&self) -> String {
+        match self {
+            GitSource::GitHub { owner, repo, .. } => format!("{owner}/{repo}"),
+        }
+    }
+
+    /// The intra-repo subpath (the portion after `tree/<ref>/` in a GitHub URL).
+    /// Empty string if the URL points at the repo root.
+    pub fn subpath(&self) -> &str {
+        match self {
+            GitSource::GitHub { subpath, .. } => subpath,
+        }
+    }
+
+    /// Filesystem-safe cache directory name.
+    fn cache_key(&self) -> String {
+        match self {
+            GitSource::GitHub {
+                owner,
+                repo,
+                git_ref,
+                subpath,
+            } => {
+                let mut key = format!("{owner}--{repo}");
+                if !git_ref.is_empty() {
+                    key.push_str(&format!("@{git_ref}"));
+                }
+                if !subpath.is_empty() {
+                    let path_slug = subpath.replace('/', "--");
+                    key.push_str(&format!("--{path_slug}"));
+                }
+                key
+            }
+        }
+    }
+}
+
+/// Parse a git URL into a structured [`GitSource`].
+///
+/// Currently recognizes GitHub URLs:
+/// - `https://github.com/owner/repo`
+/// - `https://github.com/owner/repo/tree/branch/path/to/dir`
+pub fn parse_git_url(url: &str) -> Result<GitSource> {
+    // Normalize: case-insensitive host matching
+    let lower = url.to_lowercase();
+    if lower.starts_with("https://github.com/") {
+        return parse_github_https(url);
+    }
+    bail!("unrecognized git URL: {url}")
+}
+
+/// Parse an `https://github.com/...` URL.
+fn parse_github_https(url: &str) -> Result<GitSource> {
+    // Strip the prefix case-insensitively
+    let stripped = &url["https://github.com/".len()..];
+
+    // Remove trailing slash
+    let stripped = stripped.trim_end_matches('/');
+
+    let parts: Vec<&str> = stripped.splitn(4, '/').collect();
+
+    match parts.len() {
+        // owner/repo
+        2 => Ok(GitSource::GitHub {
+            owner: parts[0].to_string(),
+            repo: parts[1].to_string(),
+            git_ref: String::new(),
+            subpath: String::new(),
+        }),
+        // owner/repo/tree/ref[/path...]
+        n if n >= 4 && parts[2] == "tree" => {
+            // rest is "branch/path/to/dir" — first segment is the ref, rest is path
+            // But branches can contain slashes... we take the first segment as the ref.
+            let rest = parts[3];
+            let (git_ref, subpath) = match rest.split_once('/') {
+                Some((r, p)) => (r.to_string(), p.to_string()),
+                None => (rest.to_string(), String::new()),
+            };
+            Ok(GitSource::GitHub {
+                owner: parts[0].to_string(),
+                repo: parts[1].to_string(),
+                git_ref,
+                subpath,
+            })
+        }
+        _ => bail!("cannot parse GitHub URL: {url}"),
+    }
+}
+
+// --- GitHub API client ---
+
+/// Client for GitHub REST API operations.
+struct GitHubClient {
+    client: reqwest::Client,
+}
+
+impl GitHubClient {
+    fn new() -> Self {
+        let client = reqwest::Client::builder()
+            .user_agent("cargo-agents")
+            .build()
+            .expect("failed to build HTTP client");
+        Self { client }
+    }
+
+    /// Resolve the commit SHA for a given ref (branch, tag, or "HEAD").
+    async fn resolve_commit_sha(&self, source: &GitSource) -> Result<String> {
+        let GitSource::GitHub {
+            owner,
+            repo,
+            git_ref,
+            ..
+        } = source;
+        let ref_str = if git_ref.is_empty() { "HEAD" } else { git_ref };
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/commits/{}",
+            owner, repo, ref_str
+        );
+
+        let resp = self
+            .client
+            .get(&url)
+            .header("Accept", "application/vnd.github.v3+json")
+            .send()
+            .await
+            .with_context(|| format!("failed to query GitHub API: {url}"))?;
+
+        tracing::trace!(%url, status = %resp.status(), "GitHub API resolve_commit_sha");
+
+        if !resp.status().is_success() {
+            bail!("GitHub API error (HTTP {}): {}", resp.status(), url);
+        }
+
+        let json: serde_json::Value = resp.json().await?;
+        let sha = json["sha"]
+            .as_str()
+            .context("GitHub API response missing 'sha' field")?;
+        Ok(sha.to_string())
+    }
+
+    /// Download the repository tarball for a given ref.
+    async fn download_tarball(&self, source: &GitSource) -> Result<bytes::Bytes> {
+        let GitSource::GitHub {
+            owner,
+            repo,
+            git_ref,
+            ..
+        } = source;
+        let ref_str = if git_ref.is_empty() { "HEAD" } else { git_ref };
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/tarball/{}",
+            owner, repo, ref_str
+        );
+
+        let resp = self
+            .client
+            .get(&url)
+            .header("Accept", "application/vnd.github.v3+json")
+            .send()
+            .await
+            .with_context(|| format!("failed to download tarball: {url}"))?;
+
+        if !resp.status().is_success() {
+            bail!(
+                "GitHub tarball download failed (HTTP {}): {}",
+                resp.status(),
+                url
+            );
+        }
+
+        let bytes = resp
+            .bytes()
+            .await
+            .context("failed to read tarball response body")?;
+        tracing::trace!(%url, bytes = bytes.len(), "tarball downloaded");
+        Ok(bytes)
+    }
+}
+
+// --- Plugin cache manager ---
+
+/// Metadata stored alongside cached plugin artifacts.
+#[non_exhaustive]
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct PluginCacheMeta {
+    /// The resolved commit SHA that was fetched.
+    pub commit_sha: String,
+    /// RFC 3339 timestamp of when this cache entry was last fetched.
+    pub fetched_at: String,
+    /// The original URL that produced this cache entry.
+    pub source_url: String,
+}
+
+const CACHE_META_FILENAME: &str = ".symposium-cache-meta.json";
+
+/// Manages downloading and caching of git-sourced plugin artifacts.
+pub struct GitCacheManager {
+    cache_dir: PathBuf,
+    client: GitHubClient,
+}
+
+impl GitCacheManager {
+    /// Create a cache manager for the given subdirectory under the cache root.
+    ///
+    /// Use `"plugins"` for individual skill git sources,
+    /// `"plugin-sources"` for plugin source repositories.
+    pub fn new(ctx: &InstallContext, subdir: &str) -> Self {
+        Self::from_cache_dir(&ctx.cache_dir().join(subdir))
+    }
+
+    /// Create a cache manager rooted at an already-resolved directory.
+    pub fn from_cache_dir(cache_dir: &Path) -> Self {
+        Self {
+            cache_dir: cache_dir.to_path_buf(),
+            client: GitHubClient::new(),
+        }
+    }
+
+    /// Compute the expected cache directory for a URL without fetching.
+    ///
+    /// Returns `None` if the URL cannot be parsed.
+    pub fn cache_path_for_url(&self, url: &str) -> Option<PathBuf> {
+        let source = parse_git_url(url).ok()?;
+        Some(self.cache_dir.join(source.cache_key()))
+    }
+
+    /// Parse a git URL and fetch/cache the repository.
+    ///
+    /// This is the primary entry point — it parses the URL into a
+    /// [`GitSource`] internally and delegates to the cache logic.
+    pub async fn fetch_url(&self, url: &str, update: UpdateLevel) -> Result<PathBuf> {
+        let source = parse_git_url(url)?;
+        self.fetch(&source, url, update).await
+    }
+
+    /// Like [`fetch_url`](Self::fetch_url), but also returns the parsed
+    /// [`GitSource`] for callers that need the structured representation
+    /// (e.g. to build a `SkillOrigin`).
+    pub async fn fetch_url_parsed(
+        &self,
+        url: &str,
+        update: UpdateLevel,
+    ) -> Result<(PathBuf, GitSource)> {
+        let source = parse_git_url(url)?;
+        let path = self.fetch(&source, url, update).await?;
+        Ok((path, source))
+    }
+
+    /// Get the cached plugin directory, downloading or updating as needed.
+    ///
+    /// `update` controls how aggressively we check for updates:
+    /// - `None`: skip API calls if cache was fetched within `DEBOUNCE_DURATION`
+    /// - `Check`: always call the API to check freshness, download only if stale
+    /// - `Fetch`: always re-download regardless of staleness
+    async fn fetch(
+        &self,
+        source: &GitSource,
+        source_url: &str,
+        update: UpdateLevel,
+    ) -> Result<PathBuf> {
+        std::fs::create_dir_all(&self.cache_dir).with_context(|| {
+            format!(
+                "failed to create cache directory {}",
+                self.cache_dir.display()
+            )
+        })?;
+
+        let cache_key = source.cache_key();
+        let plugin_dir = self.cache_dir.join(&cache_key);
+        let meta_path = plugin_dir.join(CACHE_META_FILENAME);
+
+        // If cached, check freshness according to update level
+        if plugin_dir.exists()
+            && let Some(meta) = self.read_meta(&meta_path)
+        {
+            // Debounce: if fetched recently, skip the API call entirely
+            if matches!(update, UpdateLevel::None)
+                && let Ok(fetched_at) = chrono::DateTime::parse_from_rfc3339(&meta.fetched_at)
+            {
+                let age = chrono::Utc::now() - fetched_at.with_timezone(&chrono::Utc);
+                if age < chrono::Duration::from_std(DEBOUNCE_DURATION).unwrap() {
+                    tracing::debug!(%cache_key, "plugin cache is recent, skipping check");
+                    return Ok(plugin_dir);
+                }
+            }
+
+            // Fetch level: skip freshness check, always re-download
+            if matches!(update, UpdateLevel::Fetch) {
+                tracing::info!(%cache_key, "force-fetching plugin source");
+                let sha = self.client.resolve_commit_sha(source).await?;
+                self.fetch_and_cache_with_sha(source, source_url, &plugin_dir, &meta_path, &sha)
+                    .await?;
+                return Ok(plugin_dir);
+            }
+
+            // None (past debounce) or Check: check freshness via API
+            match self.client.resolve_commit_sha(source).await {
+                Ok(remote_sha) => {
+                    if meta.commit_sha == remote_sha {
+                        tracing::debug!(%cache_key, "plugin cache is fresh");
+                        // Update fetched_at so subsequent debounce checks use this time
+                        self.touch_meta(&meta_path, &meta);
+                        return Ok(plugin_dir);
+                    }
+                    tracing::info!(%cache_key, "plugin cache is stale, re-fetching");
+                    self.fetch_and_cache_with_sha(
+                        source,
+                        source_url,
+                        &plugin_dir,
+                        &meta_path,
+                        &remote_sha,
+                    )
+                    .await?;
+                    return Ok(plugin_dir);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        %cache_key,
+                        error = %e,
+                        "failed to check freshness, using cached version"
+                    );
+                    return Ok(plugin_dir);
+                }
+            }
+        }
+
+        // Download and extract (fresh fetch — need to resolve SHA)
+        let sha = self.client.resolve_commit_sha(source).await?;
+        self.fetch_and_cache_with_sha(source, source_url, &plugin_dir, &meta_path, &sha)
+            .await?;
+        Ok(plugin_dir)
+    }
+
+    async fn fetch_and_cache_with_sha(
+        &self,
+        source: &GitSource,
+        source_url: &str,
+        plugin_dir: &std::path::Path,
+        meta_path: &std::path::Path,
+        sha: &str,
+    ) -> Result<()> {
+        let tarball = self.client.download_tarball(source).await?;
+
+        // Extract to a temp directory first, then move into place
+        std::fs::create_dir_all(&self.cache_dir).with_context(|| {
+            format!(
+                "failed to create cache directory `{}`",
+                self.cache_dir.display()
+            )
+        })?;
+        let temp_dir = tempfile::tempdir_in(&self.cache_dir).with_context(|| {
+            format!(
+                "failed to create temp directory for extraction in {}",
+                self.cache_dir.display()
+            )
+        })?;
+
+        extract_tarball(&tarball, temp_dir.path())?;
+
+        // If a subpath is specified, we need to find and move just that subtree
+        let subpath = source.subpath();
+        let source_dir = if subpath.is_empty() {
+            temp_dir.path().to_path_buf()
+        } else {
+            let sub = temp_dir.path().join(subpath);
+            if !sub.is_dir() {
+                bail!(
+                    "path '{}' not found in repository {}",
+                    subpath,
+                    source.repo_id()
+                );
+            }
+            sub
+        };
+
+        // Remove old cache and move new one into place
+        if plugin_dir.exists() {
+            std::fs::remove_dir_all(plugin_dir)
+                .with_context(|| format!("failed to remove old cache: {}", plugin_dir.display()))?;
+        }
+        std::fs::create_dir_all(plugin_dir.parent().unwrap_or(plugin_dir))?;
+
+        // Copy (not rename — source may be a subdirectory of temp_dir)
+        copy_dir_recursive(&source_dir, plugin_dir)?;
+
+        // Write meta
+        let meta = PluginCacheMeta {
+            commit_sha: sha.to_string(),
+            fetched_at: chrono::Utc::now().to_rfc3339(),
+            source_url: source_url.to_string(),
+        };
+        let meta_json = serde_json::to_string_pretty(&meta)?;
+        std::fs::write(meta_path, meta_json)?;
+        tracing::trace!(%sha, source_url, "cache meta written");
+
+        Ok(())
+    }
+
+    fn read_meta(&self, path: &std::path::Path) -> Option<PluginCacheMeta> {
+        let content = std::fs::read_to_string(path).ok()?;
+        serde_json::from_str(&content).ok()
+    }
+
+    /// Read the cache meta for a plugin directory previously returned by
+    /// [`get_or_fetch`]. Returns `None` if the meta is missing or malformed.
+    pub fn read_meta_for(&self, plugin_dir: &std::path::Path) -> Option<PluginCacheMeta> {
+        self.read_meta(&plugin_dir.join(CACHE_META_FILENAME))
+    }
+
+    /// Update `fetched_at` to now so the debounce window resets.
+    fn touch_meta(&self, path: &std::path::Path, meta: &PluginCacheMeta) {
+        let updated = PluginCacheMeta {
+            commit_sha: meta.commit_sha.clone(),
+            fetched_at: chrono::Utc::now().to_rfc3339(),
+            source_url: meta.source_url.clone(),
+        };
+        if let Ok(json) = serde_json::to_string_pretty(&updated) {
+            let _ = std::fs::write(path, json);
+        }
+    }
+}
+
+/// Extract a gzip tarball, flattening the single top-level directory.
+fn extract_tarball(tarball_bytes: &[u8], dest: &std::path::Path) -> Result<()> {
+    use flate2::read::GzDecoder;
+    use tar::Archive;
+
+    std::fs::create_dir_all(dest)?;
+
+    let gz = GzDecoder::new(std::io::Cursor::new(tarball_bytes));
+    let mut archive = Archive::new(gz);
+
+    archive.unpack(dest).context("failed to extract tarball")?;
+
+    // GitHub tarballs contain a single top-level directory (org-repo-sha/).
+    // Flatten it.
+    flatten_single_dir(dest)?;
+
+    Ok(())
+}
+
+/// If a directory contains exactly one subdirectory and nothing else,
+/// move that subdirectory's contents up one level.
+fn flatten_single_dir(dir: &std::path::Path) -> Result<()> {
+    let entries: Vec<_> = std::fs::read_dir(dir)?.collect::<std::result::Result<Vec<_>, _>>()?;
+
+    if entries.len() == 1 && entries[0].file_type()?.is_dir() {
+        let inner = entries[0].path();
+        for entry in std::fs::read_dir(&inner)? {
+            let entry = entry?;
+            let src = entry.path();
+            let file_name = src.file_name().unwrap().to_os_string();
+            let dst = dir.join(file_name);
+            if dst.exists() {
+                if dst.is_dir() {
+                    copy_dir_recursive(&src, &dst)?;
+                } else {
+                    std::fs::remove_file(&dst)?;
+                    std::fs::rename(&src, &dst)?;
+                }
+            } else {
+                std::fs::rename(&src, &dst)?;
+            }
+        }
+        std::fs::remove_dir_all(&inner)?;
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+        if path.is_dir() {
+            std::fs::create_dir_all(&dst_path)?;
+            copy_dir_recursive(&path, &dst_path)?;
+        } else {
+            std::fs::copy(&path, &dst_path)?;
+        }
+    }
+    Ok(())
+}
