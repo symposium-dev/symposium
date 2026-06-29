@@ -402,12 +402,12 @@ mod tests {
 
     #[test]
     fn pre_tool_use_round_trips_object_to_copilot_string() {
-        let canon = symposium::InputEvent::PreToolUse(symposium::PreToolUseInput {
-            tool_name: "bash".into(),
-            tool_input: serde_json::json!({"command": "ls"}),
-            session_id: None,
-            cwd: None,
-        });
+        let canon = symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
+            "bash".into(),
+            serde_json::json!({"command": "ls"}),
+            None,
+            None,
+        ));
         let out = CopilotPreToolUseInput::from_symposium(&canon);
         let s = out
             .tool_args
@@ -429,13 +429,13 @@ mod tests {
 
     #[test]
     fn post_tool_use_round_trips_object_to_copilot_string() {
-        let canon = symposium::InputEvent::PostToolUse(symposium::PostToolUseInput {
-            tool_name: "bash".into(),
-            tool_input: serde_json::json!({"command": "ls"}),
-            tool_response: serde_json::json!({"exit_code": 0}),
-            session_id: None,
-            cwd: None,
-        });
+        let canon = symposium::InputEvent::PostToolUse(symposium::PostToolUseInput::new(
+            "bash".into(),
+            serde_json::json!({"command": "ls"}),
+            serde_json::json!({"exit_code": 0}),
+            None,
+            None,
+        ));
         let out = CopilotPostToolUseInput::from_symposium(&canon);
         let s = out
             .tool_args
