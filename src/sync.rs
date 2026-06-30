@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
+use symposium_install::UpdateLevel;
 
 use crate::agents::Agent;
 use crate::config::Symposium;
@@ -235,6 +236,7 @@ fn touch_marker(marker_path: &Path) -> Result<()> {
 async fn resolve_custom_predicate_entries(
     sym: &Symposium,
     registry: &plugins::PluginRegistry,
+    update: UpdateLevel,
 ) -> std::collections::HashMap<String, crate::predicate::ResolvedPredicateEntry> {
     use crate::predicate::ResolvedPredicateEntry;
 
@@ -252,7 +254,8 @@ async fn resolve_custom_predicate_entries(
         };
 
         let acquired =
-            match crate::installation::acquire_installation(sym, install, None, None).await {
+            match crate::installation::acquire_installation(sym, install, None, None, update).await
+            {
                 Ok(a) => a,
                 Err(e) => {
                     tracing::warn!(
@@ -291,7 +294,7 @@ async fn resolve_custom_predicate_entries(
 
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
-pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
+pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel) -> Result<()> {
     let out = &Output::quiet();
     let loaded = deps
         .load()
@@ -319,10 +322,11 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps) -> Result<()> {
     );
 
     // Resolve custom predicate installations.
-    let custom_entries = resolve_custom_predicate_entries(sym, &registry).await;
+    let custom_entries = resolve_custom_predicate_entries(sym, &registry, update).await;
 
     // Find all applicable skills
-    let applicable = skills::skills_applicable_to(sym, &registry, &workspace, custom_entries).await;
+    let applicable =
+        skills::skills_applicable_to(sym, &registry, &workspace, custom_entries, update).await;
 
     // Dedup by `(skill_name, SkillOrigin)`: two `Crate` origins with the
     // same (name, version) collapse (the skills are the same logical bytes

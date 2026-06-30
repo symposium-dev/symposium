@@ -1840,6 +1840,58 @@ async fn auto_sync_reruns_when_cargo_lock_changes() {
     .unwrap();
 }
 
+/// `SessionStart` runs once per session and must re-sync skills regardless of
+/// whether `Cargo.lock` changed. A skill deleted while the freshness gate is
+/// satisfied is reinstalled on the next `SessionStart`, where a `PreToolUse`
+/// would have skipped (see `auto_sync_skips_when_cargo_lock_unchanged`).
+#[tokio::test]
+async fn auto_sync_always_runs_on_session_start() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            // First hook call records a fresh workspace state and installs skills.
+            let pre_tool = [symposium_testlib::HookStep::PreToolUse {
+                tool_name: "Bash".to_string(),
+                tool_input: serde_json::json!({}),
+            }];
+            ctx.prompt_or_hook("test", &pre_tool, symposium::hook_schema::HookAgent::Claude)
+                .await?;
+            let skill_dir = find_installed_skill(&skills_dir, "serde-guidance");
+
+            // The gate is now fresh (Cargo.lock unchanged): a PreToolUse hook
+            // would skip sync. Remove the skill so we can observe a re-sync.
+            std::fs::remove_dir_all(&skill_dir).unwrap();
+            assert!(
+                find_installed_skills(&skills_dir, "serde-guidance").is_empty(),
+                "skill should be gone after removal"
+            );
+
+            // SessionStart bypasses the freshness gate and re-syncs.
+            ctx.prompt_or_hook(
+                "test",
+                &[symposium_testlib::HookStep::session_start()],
+                symposium::hook_schema::HookAgent::Claude,
+            )
+            .await?;
+
+            assert!(
+                !find_installed_skills(&skills_dir, "serde-guidance").is_empty(),
+                "SessionStart should re-sync and reinstall the skill even with Cargo.lock unchanged"
+            );
+
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// Crate metadata redirects: `crate-a` declares a redirect to `crate-b` via
 /// `[package.metadata.symposium]`. The plugin activates based on plugin-level
 /// `crates = ["crate-a"]` and discovers `crate-b`'s skills via redirect.

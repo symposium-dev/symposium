@@ -102,7 +102,17 @@ async fn main() -> ExitCode {
     };
 
     // Ensure git-based plugin sources are up to date (non-blocking on failure).
-    plugins::ensure_plugin_sources(&sym, cli.update).await;
+    // SessionStart runs once per session, so we force a real freshness check
+    // there; other invocations use the `--update` level (debounced by default).
+    let source_update = match &cli.command {
+        Some(Commands::Hook { event, .. })
+            if *event == symposium::hook::HookEvent::SessionStart =>
+        {
+            symposium_install::UpdateLevel::Check
+        }
+        _ => cli.update,
+    };
+    plugins::ensure_plugin_sources(&sym, source_update).await;
 
     // Auto-update = "on": check for updates and re-exec if a new binary was
     // installed.  Skipped for self-update (which always checks explicitly)
@@ -149,7 +159,7 @@ async fn main() -> ExitCode {
         None => unreachable!("no-subcommand routes to the help renderer above"),
 
         // Everything else delegates to the library
-        Some(cmd) => match symposium::cli::run(&mut sym, cmd, &cwd, &out).await {
+        Some(cmd) => match symposium::cli::run(&mut sym, cmd, &cwd, &out, cli.update).await {
             Ok(()) => {
                 let events = report_handle.drain();
                 if !events.is_empty() {

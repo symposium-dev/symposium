@@ -22,5 +22,7 @@ pub(crate) mod crate_sources;
 pub(crate) mod predicate;
 pub(crate) mod skills;
 
+pub use symposium_install::UpdateLevel;
+
 #[cfg(test)]
 pub(crate) mod test_utils;

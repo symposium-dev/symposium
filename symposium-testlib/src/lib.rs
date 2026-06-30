@@ -246,8 +246,9 @@ impl TestContext {
         }
 
         let cli = parse.map_err(|err| anyhow!("{err}"))?;
+        let update = cli.update;
         if let Some(cmd) = cli.command {
-            symposium::cli::run(&mut self.sym, cmd, &cwd, &out).await?;
+            symposium::cli::run(&mut self.sym, cmd, &cwd, &out, update).await?;
         }
 
         Ok(out.captured().join("\n"))
@@ -273,7 +274,12 @@ impl TestContext {
             .clone()
             .unwrap_or_else(|| self.sym.config_dir().to_path_buf());
 
-        symposium::sync::sync(&self.sym, &mut self.sym.workspace_deps(&cwd)).await?;
+        symposium::sync::sync(
+            &self.sym,
+            &mut self.sym.workspace_deps(&cwd),
+            symposium::UpdateLevel::None,
+        )
+        .await?;
 
         drop(_guard);
         Ok(handle.drain())

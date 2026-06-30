@@ -155,7 +155,15 @@ pub enum PluginCommand {
 ///
 /// `cwd` is the working directory for commands that need it (sync, start, crate).
 /// The binary passes `std::env::current_dir()`; tests pass the fixture workspace root.
-pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -> Result<()> {
+/// `update` is the global `--update` level, threaded into `sync` so `--update
+/// fetch` forces a refresh of git skill sources as well as plugin repos.
+pub async fn run(
+    sym: &mut Symposium,
+    cmd: Commands,
+    cwd: &Path,
+    out: &Output,
+    update: symposium_install::UpdateLevel,
+) -> Result<()> {
     // Periodic update check (skipped for self-update, which always checks).
     // In the binary, re-exec happens if auto-update = "on" succeeds.
     // Here in the library we just run the warn check; the binary wraps
@@ -178,7 +186,7 @@ pub async fn run(sym: &mut Symposium, cmd: Commands, cwd: &Path, out: &Output) -
             init::init(sym, out, &opts).await
         }
 
-        Commands::Sync => sync::sync(sym, &mut sym.workspace_deps(cwd)).await,
+        Commands::Sync => sync::sync(sym, &mut sym.workspace_deps(cwd), update).await,
 
         Commands::SelfUpdate => self_update::self_update(sym, out),
 

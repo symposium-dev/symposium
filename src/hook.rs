@@ -7,7 +7,8 @@ use std::{
 use symposium_install::Runnable;
 
 use crate::installation::{
-    AcquiredInstallation, AcquiredRunnable, acquire_installation, resolve_runnable,
+    AcquiredInstallation, AcquiredRunnable, acquire_installation, refresh_installation_if_present,
+    resolve_runnable,
 };
 use crate::plugins::{HookFormat, Installation};
 use crate::{
@@ -138,10 +139,14 @@ enum SpawnSpec {
 }
 
 async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Result<SpawnSpec> {
+    // Dispatch-time acquisition serves the cache (git checks debounced); the
+    // `SessionStart` prewarm is what forces a freshness check once per session.
+    let update = symposium_install::UpdateLevel::None;
+
     // Acquire requirements first so the command's PATH sees them.
     let mut acquired: Vec<AcquiredInstallation> = Vec::new();
     for requirement in &hook.requirements {
-        match acquire_installation(sym, requirement, None, None).await {
+        match acquire_installation(sym, requirement, None, None, update).await {
             Ok(a) => acquired.push(a),
             Err(e) => {
                 tracing::error!(
@@ -158,6 +163,7 @@ async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Resul
         &hook.command,
         hook.hook_executable.as_deref(),
         hook.hook_script.as_deref(),
+        update,
     )
     .await?;
 
@@ -236,7 +242,16 @@ pub async fn execute_hook(
         let mut deps = sym.workspace_deps(&cwd);
 
         // Auto-sync: install applicable skills into agent dirs (non-fatal).
-        run_auto_sync(sym, &mut deps).await;
+        // SessionStart refreshes source caches and syncs unconditionally.
+        let session_start = event == HookEvent::SessionStart;
+        run_auto_sync(sym, &mut deps, session_start).await;
+
+        // SessionStart (once per session) also refreshes every hook's already-
+        // cached source, so later events dispatch fresh binaries without per-
+        // event network cost. Best-effort; gated by `auto-sync`.
+        if session_start && sym.config.auto_sync {
+            prewarm_hook_sources(sym, &mut deps).await;
+        }
 
         // Builtin dispatch → symposium output → host agent output as Value
         let builtin_sym_output = dispatch_builtin(sym, &sym_input, &mut deps).await;
@@ -327,12 +342,16 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, output: &[u
 
 /// Run sync if we're in a workspace directory and auto-sync is enabled. Non-fatal.
 ///
-/// Uses per-workspace state to skip sync when `Cargo.lock` hasn't changed
-/// since the last successful sync, avoiding expensive `cargo metadata` calls
-/// on every hook invocation.
+/// On most events this uses per-workspace state to skip sync when `Cargo.lock`
+/// hasn't changed since the last successful sync, avoiding expensive `cargo
+/// metadata` calls on every hook invocation. If sync runs, `deps` gets
+/// populated — later hook stages reuse the result.
 ///
-/// If sync runs, `deps` gets populated — later hook stages reuse the result.
-async fn run_auto_sync(sym: &Symposium, deps: &mut WorkspaceDeps) {
+/// `SessionStart` runs once per session, so there we do the real work: refresh
+/// every source cache (`UpdateLevel::Check`) and sync unconditionally, ignoring
+/// the `Cargo.lock` freshness gate — upstream skill changes land even when the
+/// workspace's dependencies are unchanged.
+async fn run_auto_sync(sym: &Symposium, deps: &mut WorkspaceDeps, session_start: bool) {
     if !sym.config.auto_sync {
         tracing::debug!("auto-sync disabled, skipping");
         return;
@@ -345,7 +364,9 @@ async fn run_auto_sync(sym: &Symposium, deps: &mut WorkspaceDeps) {
     // use cargo metadata.
     let workspace_root = crate::workspace_state::find_workspace_root(sym, &cwd);
 
-    if let Some(ref root) = workspace_root {
+    // SessionStart always syncs (and refreshes sources); other events skip
+    // when the workspace hasn't changed since the last sync.
+    if !session_start && let Some(ref root) = workspace_root {
         let state = crate::workspace_state::WorkspaceState::load(sym, root);
         if state.sync_is_fresh(root) {
             tracing::debug!("auto-sync skipped: Cargo.lock unchanged since last sync");
@@ -353,8 +374,14 @@ async fn run_auto_sync(sym: &Symposium, deps: &mut WorkspaceDeps) {
         }
     }
 
+    let update = if session_start {
+        symposium_install::UpdateLevel::Check
+    } else {
+        symposium_install::UpdateLevel::None
+    };
+
     tracing::debug!("auto-sync running");
-    if let Err(e) = crate::sync::sync(sym, deps).await {
+    if let Err(e) = crate::sync::sync(sym, deps, update).await {
         tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
         return;
     }
@@ -367,6 +394,64 @@ async fn run_auto_sync(sym: &Symposium, deps: &mut WorkspaceDeps) {
         state.record_sync(root);
         state.workspace_root = Some(root.clone());
         state.save(sym, root);
+    }
+}
+
+/// Refresh the source cache for every hook the workspace could fire this
+/// session. Run once on `SessionStart` (where the per-session cost is
+/// acceptable) so later events dispatch fresh binaries from cache — dispatch
+/// itself acquires with `UpdateLevel::None`. This is also the only path that
+/// re-pulls a `cargo + git` hook binary whose branch moved, since its
+/// version-keyed cache never invalidates on its own.
+///
+/// Refresh-only: a source that was never acquired is left alone (it installs
+/// lazily when the hook first fires) — `SessionStart` updates installed tools
+/// but never installs eagerly. Best-effort: failures are logged and skipped.
+async fn prewarm_hook_sources(sym: &Symposium, deps: &mut WorkspaceDeps) {
+    let plugins = crate::plugins::load_all_plugins(sym);
+
+    // Resolving the workspace runs cargo, so only do it when some hook's
+    // gating references a concrete crate (mirrors dispatch).
+    let pairs = if plugins
+        .iter()
+        .any(|p| p.plugin.hooks_need_crate_resolution())
+    {
+        crate::crate_sources::crate_pairs(deps.crates())
+    } else {
+        Vec::new()
+    };
+    let mut ctx = crate::predicate::PredicateContext::new(&pairs);
+
+    for parsed in &plugins {
+        if !parsed.plugin.applies(&mut ctx) {
+            continue;
+        }
+        for hook in &parsed.plugin.hooks {
+            if !hook.predicates.evaluate(&mut ctx) {
+                continue;
+            }
+            let resolved = match ResolvedHook::build(parsed, hook) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::debug!(plugin = %parsed.plugin.name, hook = %hook.name, error = %e, "prewarm: skipping unbuildable hook");
+                    continue;
+                }
+            };
+            for req in &resolved.requirements {
+                if let Err(e) = refresh_installation_if_present(sym, req, None).await {
+                    tracing::debug!(name = %req.name, error = %e, "prewarm: requirement refresh failed");
+                }
+            }
+            if let Err(e) = refresh_installation_if_present(
+                sym,
+                &resolved.command,
+                resolved.hook_executable.as_deref(),
+            )
+            .await
+            {
+                tracing::debug!(plugin = %resolved.plugin_name, hook = %resolved.hook_name, error = %e, "prewarm: command refresh failed");
+            }
+        }
     }
 }
 

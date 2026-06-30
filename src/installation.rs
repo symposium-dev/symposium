@@ -73,6 +73,10 @@ pub enum AcquiredRunnable {
 /// `install_commands`, and resolve its runnable using the installation's
 /// own `executable`/`script` plus any hook-level overrides.
 ///
+/// `update` is forwarded to the source step: hook dispatch acquires with
+/// `None` (serve cache, debounced), while the `SessionStart` prewarm uses
+/// `Check` to force a refresh of git/cargo sources once per session.
+///
 /// `plugin_dir` is the directory containing the plugin's manifest;
 /// relative `executable` / `script` paths on no-source installations
 /// resolve against it.
@@ -81,12 +85,15 @@ pub async fn acquire_installation(
     installation: &Installation,
     override_executable: Option<&str>,
     override_script: Option<&str>,
+    update: symposium_install::UpdateLevel,
 ) -> anyhow::Result<AcquiredInstallation> {
     let exec_choice = installation.executable.as_deref().or(override_executable);
     let script_choice = installation.script.as_deref().or(override_script);
 
     let acquired = match &installation.source {
-        Some(source) => Some(acquire_source(&sym.install_context(), source, exec_choice).await?),
+        Some(source) => {
+            Some(acquire_source(&sym.install_context(), source, exec_choice, update).await?)
+        }
         None => None,
     };
 
@@ -134,6 +141,30 @@ pub async fn acquire_installation(
         base: acquired.as_ref().and_then(|a| a.base.clone()),
         runnable,
     })
+}
+
+/// Refresh an installation's already-acquired source in place (a freshness
+/// `Check`), running its `install_commands` only when a refresh actually ran.
+/// A source that was never acquired — or a no-source installation — is left
+/// untouched. This backs the `SessionStart` prewarm: it keeps installed hook
+/// tools current without eagerly installing ones a hook may never use (those
+/// install lazily on first dispatch).
+pub async fn refresh_installation_if_present(
+    sym: &Symposium,
+    installation: &Installation,
+    override_executable: Option<&str>,
+) -> anyhow::Result<()> {
+    let Some(source) = &installation.source else {
+        return Ok(());
+    };
+    let exec_choice = installation.executable.as_deref().or(override_executable);
+    let refreshed =
+        symposium_install::refresh_source_if_present(&sym.install_context(), source, exec_choice)
+            .await?;
+    if refreshed {
+        run_install_commands(&installation.install_commands).await?;
+    }
+    Ok(())
 }
 
 pub fn resolve_runnable(installation: AcquiredInstallation, label: &str) -> Result<Runnable> {

@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use symposium_install::UpdateLevel;
 
 use crate::config::Symposium;
 use crate::plugins::{ParsedPlugin, PluginRegistry, PluginSource, SkillGroup};
@@ -151,6 +152,7 @@ pub async fn skills_applicable_to(
     registry: &PluginRegistry,
     workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
     custom_predicate_entries: std::collections::HashMap<String, predicate::ResolvedPredicateEntry>,
+    update: UpdateLevel,
 ) -> Vec<SkillWithGroupContext> {
     let mut results = Vec::new();
 
@@ -185,7 +187,7 @@ pub async fn skills_applicable_to(
 
         for group in &plugin.skills {
             let skills =
-                load_skills_for_group(sym, parsed, group, workspace_crates, &mut ctx).await;
+                load_skills_for_group(sym, parsed, group, workspace_crates, &mut ctx, update).await;
             for (skill, origin) in skills {
                 collect_skill_applicable_to(skill, origin, &plugin.name, &mut ctx, &mut results);
             }
@@ -236,6 +238,7 @@ async fn load_skills_for_group(
     group: &SkillGroup,
     workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
     ctx: &mut PredicateContext<'_>,
+    update: UpdateLevel,
 ) -> Vec<(Skill, SkillOrigin)> {
     let plugin = &parsed.plugin;
     let plugin_path = parsed.path.as_path();
@@ -269,7 +272,7 @@ async fn load_skills_for_group(
 
     let skills = match &group.source {
         PluginSource::Crate => load_crate_skills(plugin, group, workspace_crates, ctx).await,
-        PluginSource::Git(url) => load_git_skills(sym, group, url).await,
+        PluginSource::Git(url) => load_git_skills(sym, group, url, update).await,
         PluginSource::Path(p) => {
             let plugin_dir = plugin_path.parent().unwrap_or(plugin_path);
             let dir = plugin_dir.join(p);
@@ -483,8 +486,10 @@ async fn load_git_skills(
     sym: &Symposium,
     group: &SkillGroup,
     url: &str,
+    update: UpdateLevel,
 ) -> Vec<(Skill, SkillOrigin)> {
-    let Some((cache_dir, source, commit_sha)) = fetch_git_skill_source(sym, url).await else {
+    let Some((cache_dir, source, commit_sha)) = fetch_git_skill_source(sym, url, update).await
+    else {
         return Vec::new();
     };
     let discovered = discover_skills(&cache_dir, group);
@@ -601,12 +606,10 @@ fn skill_path_within_repo(cache_dir: &Path, skill_md: &Path, source_subpath: &st
 async fn fetch_git_skill_source(
     sym: &Symposium,
     git_url: &str,
+    update: UpdateLevel,
 ) -> Option<(PathBuf, symposium_install::git::GitSource, String)> {
     let cache_mgr = symposium_install::git::GitCacheManager::new(&sym.install_context(), "plugins");
-    let (cache_dir, source) = match cache_mgr
-        .fetch_url_parsed(git_url, symposium_install::UpdateLevel::None)
-        .await
-    {
+    let (cache_dir, source) = match cache_mgr.fetch_url_parsed(git_url, update).await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(git = %git_url, error = %e, "failed to fetch skill source");
@@ -1325,6 +1328,7 @@ mod tests {
             &registry,
             &workspace_crates,
             std::collections::HashMap::new(),
+            UpdateLevel::None,
         )
         .await;
 
@@ -1380,6 +1384,7 @@ mod tests {
             &registry,
             &workspace_crates,
             std::collections::HashMap::new(),
+            UpdateLevel::None,
         )
         .await;
 
@@ -1452,6 +1457,7 @@ mod tests {
             &registry,
             &workspace_crates,
             std::collections::HashMap::new(),
+            UpdateLevel::None,
         )
         .await;
 
@@ -1530,6 +1536,7 @@ mod tests {
             &registry,
             &workspace,
             std::collections::HashMap::new(),
+            UpdateLevel::None,
         )
         .await;
         assert!(
@@ -1609,6 +1616,7 @@ mod tests {
             &registry,
             &workspace,
             std::collections::HashMap::new(),
+            UpdateLevel::None,
         )
         .await;
         assert_eq!(skills.len(), 1);
@@ -1741,6 +1749,7 @@ mod tests {
             &registry,
             &workspace,
             std::collections::HashMap::new(),
+            UpdateLevel::None,
         )
         .await;
         assert_eq!(results.len(), 1);
