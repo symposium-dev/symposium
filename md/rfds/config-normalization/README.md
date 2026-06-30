@@ -278,7 +278,12 @@ Verification:
 - Existing plugin manifest parsing tests still pass.
 
 - [x] Custom deserializer audit.
-- [ ] Behavior-preserving parser refactor.
+- [x] Behavior-preserving parser refactor.
+
+Implemented by deserializing skill groups, MCP servers, and skill group source
+syntax into raw manifest structs, then validating them into `SkillGroup`,
+`PluginMcpServer`, and `PluginSource`. `CrateList` now names the raw
+string-or-list TOML union separately from crate-atom parsing.
 
 ### Step 3: Refactor user config parsing without behavior changes
 
@@ -290,7 +295,12 @@ Verification:
 - `cargo test --all --workspace`
 - Existing config parsing tests still pass.
 
-- [ ] Behavior-preserving config parser refactor.
+- [x] Behavior-preserving config parser refactor.
+
+Implemented by loading `~/.symposium/config.toml` through `RawConfig` and
+validating into the runtime `Config`. `Config` remains serializable for
+`save_config`, but it is no longer the Serde root used by config loading. The
+internal `state.toml` file follows the same pattern with `RawState`.
 
 ### Step 4: Add CST-aware editing helpers when needed
 
@@ -306,4 +316,5 @@ Verification:
 - assertions that the edited document still parses through the normal
   validation path.
 
-- [ ] CST-aware editing helper.
+- [ ] CST-aware editing helper. Deferred until a command needs to rewrite
+  user-owned TOML while preserving comments and ordering.

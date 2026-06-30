@@ -17,7 +17,7 @@ const UPDATE_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// Runtime version of this binary, baked in at compile time.
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Serialize)]
 pub struct State {
     /// Semver of the binary that last wrote this file.
     pub version: String,
@@ -25,6 +25,22 @@ pub struct State {
     /// Last time we checked crates.io for a newer version.
     #[serde(default, rename = "last-update-check")]
     pub last_update_check: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawState {
+    version: String,
+    #[serde(default, rename = "last-update-check")]
+    last_update_check: Option<DateTime<Utc>>,
+}
+
+impl RawState {
+    fn validate(self) -> State {
+        State {
+            version: self.version,
+            last_update_check: self.last_update_check,
+        }
+    }
 }
 
 impl Default for State {
@@ -40,7 +56,9 @@ impl Default for State {
 pub fn load(config_dir: &Path) -> Option<State> {
     let path = state_path(config_dir);
     let contents = fs::read_to_string(path).ok()?;
-    toml::from_str(&contents).ok()
+    toml::from_str::<RawState>(&contents)
+        .ok()
+        .map(RawState::validate)
 }
 
 fn save(config_dir: &Path, state: &State) {

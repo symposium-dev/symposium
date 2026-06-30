@@ -30,22 +30,22 @@ pub struct PluginMcpServer {
     pub server: McpServerEntry,
 }
 
-impl<'de> Deserialize<'de> for PluginMcpServer {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        struct Raw {
-            #[serde(default)]
-            crates: Option<crate::predicate::CrateList>,
-            #[serde(default)]
-            predicates: crate::predicate::PredicateSet,
-            #[serde(flatten)]
-            server: McpServerEntry,
+#[derive(Debug, Deserialize)]
+struct RawPluginMcpServer {
+    #[serde(default)]
+    crates: Option<crate::predicate::CrateList>,
+    #[serde(default)]
+    predicates: crate::predicate::PredicateSet,
+    #[serde(flatten)]
+    server: McpServerEntry,
+}
+
+impl RawPluginMcpServer {
+    fn validate(self) -> PluginMcpServer {
+        PluginMcpServer {
+            predicates: crate::predicate::PredicateSet::merged(self.crates, self.predicates),
+            server: self.server,
         }
-        let raw = Raw::deserialize(deserializer)?;
-        Ok(PluginMcpServer {
-            predicates: crate::predicate::PredicateSet::merged(raw.crates, raw.predicates),
-            server: raw.server,
-        })
     }
 }
 
@@ -76,6 +76,65 @@ pub enum PluginSource {
     Crate,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum RawPluginSource {
+    Shorthand(String),
+    Table(RawPluginSourceTable),
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPluginSourceTable {
+    #[serde(default)]
+    path: Option<PathBuf>,
+    #[serde(default)]
+    git: Option<String>,
+    /// Rejected: `source.crate = { ... }` is no longer valid.
+    #[serde(default, rename = "crate")]
+    crate_field: Option<toml::Value>,
+    /// Rejected: `source.crate_path = "..."` is no longer valid.
+    #[serde(default)]
+    crate_path: Option<toml::Value>,
+}
+
+impl RawPluginSource {
+    fn validate(self) -> Result<PluginSource> {
+        match self {
+            RawPluginSource::Shorthand(value) => match value.as_str() {
+                "crate" => Ok(PluginSource::Crate),
+                other => bail!("unknown source shorthand \"{other}\"; only \"crate\" is supported"),
+            },
+            RawPluginSource::Table(fields) => {
+                if fields.crate_path.is_some() {
+                    bail!(
+                        "source.crate_path is no longer supported; use `source = \"crate\"` \
+                         and add [package.metadata.symposium] to your crate's Cargo.toml instead"
+                    );
+                }
+                if fields.crate_field.is_some() {
+                    bail!(
+                        "source.crate no longer accepts fields; use `source = \"crate\"` \
+                         and add [package.metadata.symposium] to your crate's Cargo.toml instead"
+                    );
+                }
+
+                let exclusive_count = fields.path.is_some() as u8 + fields.git.is_some() as u8;
+                if exclusive_count > 1 {
+                    bail!("source.path and source.git are mutually exclusive");
+                }
+
+                Ok(match (fields.path, fields.git) {
+                    (Some(p), None) => PluginSource::Path(p),
+                    (None, Some(url)) => PluginSource::Git(url),
+                    (None, None) => PluginSource::None,
+                    _ => unreachable!("exclusive_count > 1 guard"),
+                })
+            }
+        }
+    }
+}
+
 /// Default subdirectory used when no `[package.metadata.symposium]` is present.
 pub const CRATE_DEFAULT_SKILLS_PATH: &str = "skills";
 
@@ -99,81 +158,6 @@ impl serde::Serialize for PluginSource {
     }
 }
 
-impl<'de> serde::Deserialize<'de> for PluginSource {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        use serde::de;
-
-        /// Top-level fields of the `source` table.
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct PluginSourceFields {
-            #[serde(default)]
-            path: Option<PathBuf>,
-            #[serde(default)]
-            git: Option<String>,
-            /// Rejected: `source.crate = { ... }` is no longer valid.
-            #[serde(default, rename = "crate")]
-            crate_field: Option<toml::Value>,
-            /// Rejected: `source.crate_path = "..."` is no longer valid.
-            #[serde(default)]
-            crate_path: Option<toml::Value>,
-        }
-
-        struct PluginSourceVisitor;
-
-        impl<'de> de::Visitor<'de> for PluginSourceVisitor {
-            type Value = PluginSource;
-
-            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-                f.write_str(r#""crate" or a table with path/git"#)
-            }
-
-            fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
-                match v {
-                    "crate" => Ok(PluginSource::Crate),
-                    other => Err(de::Error::custom(format!(
-                        "unknown source shorthand \"{other}\"; only \"crate\" is supported"
-                    ))),
-                }
-            }
-
-            fn visit_map<A: de::MapAccess<'de>>(self, map: A) -> Result<Self::Value, A::Error> {
-                let fields =
-                    PluginSourceFields::deserialize(de::value::MapAccessDeserializer::new(map))?;
-
-                if fields.crate_path.is_some() {
-                    return Err(de::Error::custom(
-                        "source.crate_path is no longer supported; use `source = \"crate\"` \
-                         and add [package.metadata.symposium] to your crate's Cargo.toml instead",
-                    ));
-                }
-                if fields.crate_field.is_some() {
-                    return Err(de::Error::custom(
-                        "source.crate no longer accepts fields; use `source = \"crate\"` \
-                         and add [package.metadata.symposium] to your crate's Cargo.toml instead",
-                    ));
-                }
-
-                let exclusive_count = fields.path.is_some() as u8 + fields.git.is_some() as u8;
-                if exclusive_count > 1 {
-                    return Err(de::Error::custom(
-                        "source.path and source.git are mutually exclusive",
-                    ));
-                }
-
-                Ok(match (fields.path, fields.git) {
-                    (Some(p), None) => PluginSource::Path(p),
-                    (None, Some(url)) => PluginSource::Git(url),
-                    (None, None) => PluginSource::None,
-                    _ => unreachable!("exclusive_count > 1 guard"),
-                })
-            }
-        }
-
-        deserializer.deserialize_any(PluginSourceVisitor)
-    }
-}
-
 /// A `[[skills]]` entry from a plugin manifest.
 ///
 /// The group's `crates` and `predicates` fields are merged into one
@@ -191,22 +175,26 @@ pub struct SkillGroup {
     pub source: PluginSource,
 }
 
-impl<'de> Deserialize<'de> for SkillGroup {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct Raw {
-            #[serde(default)]
-            crates: Option<crate::predicate::CrateList>,
-            #[serde(default)]
-            predicates: crate::predicate::PredicateSet,
-            #[serde(default)]
-            source: PluginSource,
-        }
-        let raw = Raw::deserialize(deserializer)?;
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSkillGroup {
+    #[serde(default)]
+    crates: Option<crate::predicate::CrateList>,
+    #[serde(default)]
+    predicates: crate::predicate::PredicateSet,
+    #[serde(default)]
+    source: Option<RawPluginSource>,
+}
+
+impl RawSkillGroup {
+    fn validate(self) -> Result<SkillGroup> {
         Ok(SkillGroup {
-            predicates: crate::predicate::PredicateSet::merged(raw.crates, raw.predicates),
-            source: raw.source,
+            predicates: crate::predicate::PredicateSet::merged(self.crates, self.predicates),
+            source: self
+                .source
+                .map(RawPluginSource::validate)
+                .transpose()?
+                .unwrap_or_default(),
         })
     }
 }
@@ -812,9 +800,9 @@ struct RawPluginManifest {
     #[serde(default)]
     hooks: Vec<RawHook>,
     #[serde(default)]
-    skills: Vec<SkillGroup>,
+    skills: Vec<RawSkillGroup>,
     #[serde(default)]
-    mcp_servers: Vec<PluginMcpServer>,
+    mcp_servers: Vec<RawPluginMcpServer>,
     /// TOML key is singular (`[subcommand.<name>]`); the validated field on
     /// `Plugin` is plural (`subcommands`).
     #[serde(default)]
@@ -1573,6 +1561,16 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
 
     let predicates =
         crate::predicate::PredicateSet::merged(Some(manifest.crates), manifest.predicates);
+    let skills = manifest
+        .skills
+        .into_iter()
+        .map(RawSkillGroup::validate)
+        .collect::<Result<Vec<_>>>()?;
+    let mcp_servers = manifest
+        .mcp_servers
+        .into_iter()
+        .map(RawPluginMcpServer::validate)
+        .collect::<Vec<_>>();
 
     // Every plugin must reference at least one crate (or custom predicate)
     // somewhere — at the plugin, skill-group, hook, or MCP-server level — via
@@ -1584,15 +1582,9 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
         .any(|p| matches!(p, crate::predicate::Predicate::Custom { .. }));
     let mentions_crate = has_custom_predicate
         || predicates.mentions_crate()
-        || manifest
-            .skills
-            .iter()
-            .any(|g| g.predicates.mentions_crate())
+        || skills.iter().any(|g| g.predicates.mentions_crate())
         || hooks.iter().any(|h| h.predicates.mentions_crate())
-        || manifest
-            .mcp_servers
-            .iter()
-            .any(|m| m.predicates.mentions_crate());
+        || mcp_servers.iter().any(|m| m.predicates.mentions_crate());
     if !mentions_crate {
         bail!(
             "plugin `{}` references no crate — add `crates = [...]` or a `crate(...)` predicate \
@@ -1601,15 +1593,15 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
         );
     }
 
-    validate_skill_groups(&predicates, &manifest.skills)?;
+    validate_skill_groups(&predicates, &skills)?;
 
     Ok(Plugin {
         name: manifest.name,
         predicates,
         installations,
         hooks,
-        skills: manifest.skills,
-        mcp_servers: manifest.mcp_servers,
+        skills,
+        mcp_servers,
         subcommands,
         custom_predicates,
     })

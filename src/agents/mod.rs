@@ -552,16 +552,16 @@ fn ensure_codex_hook_entry(
     };
 
     let already_registered = arr.iter().any(|group| {
-        group.get("hooks").and_then(|h| h.as_array()).map_or_else(
-            || false,
-            |hooks| {
+        group
+            .get("hooks")
+            .and_then(|h| h.as_array())
+            .is_some_and(|hooks| {
                 hooks.iter().any(|h| {
                     h.get("command")
                         .and_then(|c| c.as_str())
                         .is_some_and(|c| c.starts_with("cargo-agents hook"))
                 })
-            },
-        )
+            })
     });
 
     if already_registered {

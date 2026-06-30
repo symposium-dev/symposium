@@ -398,6 +398,13 @@ fn dedup_crates(crates: Vec<(String, semver::Version)>) -> Vec<(String, semver::
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CrateList(pub Vec<Predicate>);
 
+#[derive(Debug, serde::Deserialize)]
+#[serde(untagged)]
+enum RawCrateList {
+    One(String),
+    Many(Vec<String>),
+}
+
 impl CrateList {
     /// Parse comma-separated crate atoms (`serde, tokio>=1.0, *`).
     ///
@@ -431,15 +438,9 @@ impl<'de> serde::Deserialize<'de> for CrateList {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         // Accept either a single string (`crates = "serde"`) or a sequence
         // (`crates = ["serde", "tokio>=1.0"]`).
-        #[derive(serde::Deserialize)]
-        #[serde(untagged)]
-        enum Raw {
-            One(String),
-            Many(Vec<String>),
-        }
-        let atoms = match Raw::deserialize(deserializer)? {
-            Raw::One(s) => vec![s],
-            Raw::Many(v) => v,
+        let atoms = match RawCrateList::deserialize(deserializer)? {
+            RawCrateList::One(s) => vec![s],
+            RawCrateList::Many(v) => v,
         };
         let predicates = atoms
             .iter()
