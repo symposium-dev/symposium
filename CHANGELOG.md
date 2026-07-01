@@ -135,7 +135,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Other
 
-- update the anem of the book
+- update the name of the book
 - fmt
 - Support cargo subcommand convention for 'cargo agents'
 - fmt
@@ -198,5 +198,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add Gemini BeforeTool hook
 - Typo in PR template
 - Add adapter skeleton for hooks
-- Rewiew nits. Add merge docs and cfg out tests using sh
+- Review nits. Add merge docs and cfg out tests using sh
 - Forward hooks output
