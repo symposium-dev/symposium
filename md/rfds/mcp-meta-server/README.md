@@ -178,33 +178,60 @@ The meta-server re-resolves the workspace on `list_tools` calls when `Cargo.lock
 
 ## Implementation plan and status
 
-### Step 1: `mcp-serve` subcommand skeleton
+Each step is independently mergeable and leaves the codebase green.
 
-Add a `cargo agents mcp-serve` subcommand that starts a stdio MCP server, advertises `list_tools` and `call_tool`, and exits cleanly on stdin close. No plugin integration yet — just the two-tool skeleton with a hardcoded capability index.
+### Step 1: Register the meta-server entry during `sync` (refactor, new tests)
 
-- [ ] Add `mcp-serve` to CLI
-- [ ] Implement MCP stdio transport using the `rmcp` crate (the official Rust MCP SDK)
-- [ ] Tests: verify JSON-RPC handshake and tool listing
+Change `sync` to write a single `"symposium"` MCP entry (pointing to `cargo-agents mcp-serve`) instead of per-plugin entries. The existing `mcp_server_registration.rs` infrastructure handles the per-agent format differences — we just change the input from the collected plugin servers to one fixed entry. The `mcp-serve` subcommand doesn't exist yet, but registration is just writing config JSON.
 
-### Step 2: Plugin-driven capability index
+This is partly a refactor (removing the per-plugin write path) and partly new behavior (the fixed entry). The existing `sync_filters_mcp_servers_by_crates` test and friends update to assert a single `"symposium"` entry rather than per-plugin entries.
 
-Wire the meta-server to the plugin registry. `list_tools` description and responses are generated from applicable `[[mcp_servers]]` entries.
+- [ ] Replace per-plugin MCP registration in `sync.rs` with a single `"symposium"` entry
+- [ ] Update existing MCP integration tests to expect the new behavior
+- [ ] Verify: `cargo test` passes, `.claude/settings.json` contains only `"symposium"` after sync
 
-- [ ] Resolve workspace deps and plugin registry at startup
-- [ ] Build capability index from plugin MCP server declarations
-- [ ] Tests: verify index reflects test plugin fixtures
+### Step 2: `mcp-serve` subcommand with hardcoded two-tool skeleton (new tests)
 
-### Step 3: Lazy server dispatch
+Add `cargo agents mcp-serve` as a new `Commands` variant. It starts a stdio MCP server (via `rmcp`) that advertises `list_tools` and `call_tool` with hardcoded descriptions and returns empty/stub responses. Exits cleanly on stdin EOF.
 
-Implement `call_tool` dispatching to backing plugin servers. Servers start on first call to `list_tools` (with `tools`) or `call_tool`, and are managed for the session lifetime. Support stdio, HTTP, and SSE transports for backing servers.
+Integration test: spawn `cargo-agents mcp-serve` as a child process, send MCP `initialize` + `tools/list` JSON-RPC requests over stdin, assert the response contains exactly the two tools with expected names. This validates the transport layer end-to-end.
 
-- [ ] Process table (cold/starting/ready/dead)
-- [ ] MCP client for each backing server (stdio + HTTP/SSE via `rmcp`)
-- [ ] Tests: end-to-end call through meta-server to a mock plugin server
+- [ ] Add `rmcp` dependency
+- [ ] Add `McpServe` variant to `Commands`, wire handler
+- [ ] Implement stdio MCP server with `list_tools` and `call_tool` stubs
+- [ ] Integration test: spawn process, verify JSON-RPC handshake and tool listing
 
-### Step 4: Registration in `init`/`sync`
+### Step 3: Plugin-driven capability index (new tests)
 
-Update `init` and `sync` to write the meta-server entry into each agent's MCP config.
+Wire `list_tools` to the real plugin registry. At startup, the meta-server resolves `WorkspaceDeps` and collects applicable `[[mcp_servers]]` to build the capability index. The `list_tools` description is generated dynamically; calling it with `tools: [...]` returns schemas (which requires starting the backing server).
 
-- [ ] Write `"symposium"` entry per agent format
-- [ ] Tests: verify idempotent registration
+For this step, only the *index* (tool names per domain) needs to work — schema retrieval can return an error for now.
+
+Integration test: use an existing fixture (e.g., `mcp-filtering0` + `workspace0`), spawn `mcp-serve` in that workspace, call `list_tools` with no args, assert the index contains `always-server` tools and `serde-server` tools but not `missing-crate-server` tools.
+
+- [ ] Resolve workspace and plugin registry at meta-server startup
+- [ ] Build capability index from applicable plugin MCP server declarations
+- [ ] Generate dynamic `list_tools` description with domain listing
+- [ ] Handle `domain` parameter filtering
+- [ ] Integration test: verify index reflects workspace-filtered plugins
+
+### Step 4: Lazy server dispatch and `call_tool` (new tests)
+
+Implement the process table and `call_tool` dispatch. When the agent calls `call_tool` (or `list_tools` with `tools: [...]`), the meta-server starts the backing server if cold, waits for MCP handshake, then proxies the request. Support stdio transport first; HTTP/SSE can follow.
+
+Integration test: create a minimal mock MCP server (a small script or binary in the test fixture that responds to `tools/list` and `tools/call`). Spawn `mcp-serve`, call `call_tool` targeting the mock, assert the response passes through correctly. Also test the `Dead → restart` path by having the mock exit after one call.
+
+- [ ] Process table (Cold/Starting/Ready/Dead state machine)
+- [ ] MCP client connection to backing servers (stdio first)
+- [ ] `call_tool` dispatch: start if cold, proxy request, return response
+- [ ] `list_tools` with `tools` parameter: start server, fetch schemas, return
+- [ ] Error propagation: surface backing server errors to agent
+- [ ] Integration tests: successful dispatch, cold start, crash recovery
+
+### Step 5: Freshness and `auto-sync` gating (new tests)
+
+Re-resolve the workspace on `list_tools` when `Cargo.lock` mtime has changed since last resolution, gated by the `auto-sync` config setting. When auto-sync is off, the index stays static for the session lifetime.
+
+- [ ] Track `Cargo.lock` mtime at startup
+- [ ] On `list_tools`, check mtime; if changed and auto-sync enabled, re-resolve
+- [ ] Integration test: modify fixture's `Cargo.lock` mid-session, verify index updates
