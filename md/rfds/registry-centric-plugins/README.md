@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Generalize Symposium's plugin system around *package managers* (PMs). A plugin is identified by a canonical triple `pm:name:version`, fetched by its PM, and unpacked into a cached directory. Users install plugins with `cargo agents use`, projects auto-discover them via their dependencies, and predicates gate activation without changing what's installed.
+Generalize Symposium's plugin system around *package managers* (PMs). A plugin is identified by a canonical tuple `(pm, name, version)`, fetched by its PM, and unpacked into a cached directory. Users install plugins with `symposium use`, projects auto-discover them via their dependencies, and predicates gate activation without changing what's installed.
 
 ## Motivation
 
@@ -12,192 +12,292 @@ Generalize Symposium's plugin system around *package managers* (PMs). A plugin i
 
 **Bundle executable code with plugin configuration.** Plugins can define hooks and MCP servers, but these need supporting binaries — a custom linter, a token-reduction tool like [RTK](https://github.com/rtk-ai/rtk/), a code generation tool. Today there's no clean way to distribute an executable alongside the TOML that references it. By connecting plugins to PMs, binaries and configuration ship together. The PM handles building and versioning; Symposium just fetches the directory and scans it.
 
-## Core concepts
+## As a user
 
-### Plugin identity: the `pm:name:version` triple
+To start, users install symposium:
 
-Every plugin has a canonical identifier — three colon-separated strings:
-
-- **pm** — which package manager owns it (e.g., `cargo`, `npm`, `recommendations`, `git`)
-- **name** — the package name within that PM's namespace
-- **version** — arbitrary text whose meaning is defined by the PM (e.g., `1.2.3` for cargo, a commit SHA for git).
-
-Examples:
-- `cargo:serde-skills:1.2.3`
-- `recommendations:cargo:serde:0.1.0`
-- `git:github.com/rtk-ai/rtk:1.0.0-a3b2c1d`
-- `npm:eslint-plugin-symposium:2.1.0`
-
-### The package manager interface
-
-A PM implements four operations:
-
-| Operation | Input | Output | Used by |
-|-----------|-------|--------|---------|
-| `resolve` | opaque TOML value (from `source.<pm>`) | set of `pm:name:version` | manifest processing |
-| `search` | partial query string (`pm?:name:version?`) | set of identifiers + metadata | `cargo agents use` |
-| `fetch` | `pm:name:version` | directory with `Symposium.toml` + content | sync/install |
-| `list-deps` | workspace directory | set of identifiers | auto-discovery |
-
-- **`resolve`** takes the TOML value from a `source.<pm> = { ... }` entry and returns canonical triples. This is deterministic — given the same input and registry state, it returns the same result.
-- **`search`** is the interactive/fuzzy version for CLI use. Partial queries match broadly.
-- **`fetch`** downloads and unpacks the exact versioned content.
-- **`list-deps`** inspects the workspace to report what the project depends on, expressed as identifiers relevant to this PM.
-
-### Built-in PMs
-
-#### `recommendations`
-
-Ships with Symposium (the `symposium-recommendations` crate). A git repo containing directories keyed by plugin identifiers (which can reference other PMs' namespaces, e.g., `cargo:serde:*`). Its `list-deps` reads a project-level `Symposium.toml` to find explicit recommendations. Its `search` walks the repository. This is how Symposium provides curated, opinionated defaults.
-
-#### `cargo`
-
-Reads workspace `Cargo.toml`/`Cargo.lock` for `list-deps`. Searches crates.io for packages that contain a `Symposium.toml` or `skills/` directory. `fetch` downloads the crate source and extracts the plugin directory.
-
-#### `git`
-
-Fetches plugin directories from git repositories. The canonical version encodes the resolved commit SHA.
-
-#### `path`
-
-Local directories. Identity is filesystem-based. Primarily for development and workspace-local plugins.
-
-### Plugins
-
-A *plugin* is a directory containing:
-
-- An optional `Symposium.toml` manifest
-- Optional skills (`skills/`, `.agents/skills/`)
-- Optional hooks, MCP servers, and other agentic extensions
-- Optional sub-plugins (nested directories with their own manifests)
-
-We favor *convention over configuration*. A directory with just a `skills/` subdirectory (and no `Symposium.toml`) is a valid plugin.
-
-#### Sub-plugins
-
-A plugin's manifest can declare dependencies on other plugins via `[[plugins]]` entries. Installing a plugin installs its sub-plugins transitively. Predicates on sub-plugins still apply (they're installed but may not activate).
-
-#### Installed vs. active
-
-A plugin is *installed* when its content is in the local cache. A plugin is *active* when its predicates evaluate to true in the current workspace. Sync only wires active plugins into agent directories — but all installed plugins are available for activation without re-fetching.
-
-### Predicates
-
-Predicates gate *activation*, not installation. They are flat — no per-PM namespace tables:
-
-```toml
-predicates = ["depends-on(serde)", "path-exists(build.rs)"]
+```bash
+cargo install symposium
+symposium init
 ```
-
-Or the shorthand:
-
-```toml
-depends-on = ["serde", "cargo:tokio"]
-```
-
-The `depends-on` predicate can be bare (matched across all PMs' `list-deps`) or scoped to a specific PM (`depends-on(cargo:serde)`).
-
-Predicates can appear at any level: plugin, skill group, individual skill, hook, MCP server. A predicate on a plugin means none of its contents activate (but sub-plugins with passing predicates still can).
-
-Available predicates include:
-- `depends-on(name)` / `depends-on(pm:name)` — workspace depends on this identifier
-- `path-exists(path)` — file or directory exists
-- `env(VAR)` / `env(VAR=value)` — environment variable check
-- `shell(command)` — arbitrary shell check (exit 0 = true)
-- `not(p)`, `any(p, ...)`, `all(p, ...)` — combinators
-
-### State model
-
-Three layers of state:
-
-1. **Config** (`~/.symposium/config.toml`) — version *requirements* for root plugins. Written by `cargo agents use`. Example: `["cargo:serde-skills:1.*", "recommendations:*:*"]`. These are the user's explicit choices.
-
-2. **Cache** (`~/.symposium/cache/`) — unpacked plugin directories on disk, keyed by canonical `pm:name:version`. Rebuilt from config + resolution at any time. This is the materialized result of `fetch`. Also stores sub-plugins.
-
-3. **Agent directories** (`.claude/skills/`, `.agents/skills/`, etc.) — the synced output. Only active (predicates-pass) content from cached plugins is copied here.
-
-Config stores roots with version ranges. Cache stores resolved, exact versions. Agent dirs store the activated subset.
-
-## Use cases
-
-After the user runs `cargo install symposium` and then `cargo agents init`:
 
 ### Dependency discovery
 
-The user starts their agent in a project. The agent invokes a hook which advises them that there are new extensions available for some of their dependencies. The user runs `cargo agents sync`, picks the ones they want, and they are installed.
+Symposium will automatically scan the dependencies of your project to find relevant plugins. This scan is done by executing `symposium sync`. Users can also configure Symposium to automatically sync every time an agent executes in their workspace.
 
-Flow:
-1. Walk all PMs, call `list-deps` on each → set of identifiers the project depends on
-2. For each identifier, `search` across PMs for matching plugins (including recommendations)
-3. For new matches not yet installed: prompt the user to pick which to install
-4. Fetch and cache chosen plugins
-5. Evaluate predicates → determine active set
-6. Sync active skills/hooks/MCP servers to agent directories
+When users run `symposium sync`, Symposium will scan their dependencies and look for eligible plugins. If it finds plugins that the user has not yet installed, it will prompt them to confirm installation. Users can approve the plugins or else decline; these choices are recorded in the Symposium configuration. We can expand these options later to e.g. permit "accept this automatically across all workspaces in the future" etc.
 
-### Global use
+If auto-sync is not enabled, Symposium still checks to see if there are new plugins (or new versions of plugins) available since the user last synchronized. If there are, then a hint is added to the agent to prompt the user to run `symposium sync`.
 
-User runs `cargo agents use --global C`. We search through PMs for packages named `C` (the user can also do `cargo agents use --global cargo:C` to be explicit). The plugin is installed and available everywhere.
+See the [discovery & sync sub-RFD](./discovery-sync/README.md) for the detailed algorithm.
 
-### Local use
+### Workspace-local extensions
 
-User runs `cargo agents use C`. We search through PMs for packages named `C` (or `cargo agents use cargo:C`). The plugin is installed and available in that workspace directory. Does not modify any files in the workspace — config lives in `~/.symposium/`.
+Projects can also define plugins that should be made available whenever that project is part of the user's active workspace (i.e., the user is hacking on that project). For example, consider a Rust project like `widget`, which has a workspace with two crates, `widget-lib` and `widget-test`:
 
-### Workspace plugins
+```
+widget/
+  Cargo.toml <-- defines the workspace
+  crates/
+    widget-lib/
+      Cargo.toml <-- defines the `widget-lib` crate
+    widget-test/
+      Cargo.toml <-- defines the `widget-test` crate
+```
 
-A project has a `Symposium.toml` at its workspace root or in a crate within the workspace. It specifies skills, hooks, `[[plugins]]`, etc. These are always active for developers working in that project. Consumers of the library get a curated subset (gated by predicates).
+The user could add plugins alongside any of those `Cargo.toml` files and they'll be picked up by Symposium. We always activate all plugins for any project in the workspace, so you would get plugins from both `widget-lib` and `widget-test` regardless of which specific crate you are working on.
 
-### Implicit plugins (convention over configuration)
+There are two ways to define a plugin. The simplest is to follow *common conventions* that Symposium supports:
 
-A missing `Symposium.toml` is equivalent to an empty one. Symposium applies defaults:
-- `skills/<name>/SKILL.md` files are discovered as skills
-- `.agents/skills/<name>/SKILL.md` files are discovered as skills
+* If you add skills into `.agents/skills`, they will be installed for anyone working in that workspace.
+* If you add skills into `skills`, they will be installed for anyone working in that workspace *and* through dependency discovery.
 
-No explicit configuration is needed to expose skills — just place them in the conventional directories.
+You can also define a `Symposium.toml` that contains other kinds of plugins and extensions (e.g., mcp servers). We may add additional conventions in the future (e.g., apm, openplugin standard, etc).
 
-## Key commands
+To continue the `widget` example:
 
-- **`cargo agents use [--global] X`** — searches all PMs for `X`, presents options if ambiguous, records the version requirement in config (global or workspace-scoped).
-- **`cargo agents remove X`** — removes from config.
-- **`cargo agents sync`** — resolves config requirements, runs discovery, installs new plugins (prompting or auto-installing), evaluates predicates, syncs active content to agent dirs.
-- **`cargo agents status`** — shows what's installed, what's active, and why.
 
-## Enterprise control
+```
+widget/
+  Cargo.toml
+  Symposium.toml                 <-- defines add'l plugins loaded when working in this workspace
+  crates/
+    widget-lib/
+      Cargo.toml
+      Symposium.toml         <-- defines add'l plugins loaded in this workspace; can also define
+      skills/                      plugins for workspaces that depend on widget-lib
+        widget-test-skill/ <-- available when working in the workspace 
+          SKILL.md             *and* to other workspaces that depend on widget-lib
+    widget-test/
+      Cargo.toml
+      .agents/
+        skills/
+          widget-test-skill/ <-- available when working in the workspace only
+            SKILL.md
+```
 
-The primary mechanism for enterprise customization is **overriding the crates that provide built-in PMs**:
+### Explicit use
 
-- **`symposium-recommendations`** — provides the recommendations PM. A corporate fork curates the approved plugin set, vouches for internal tooling, removes community plugins that don't meet policy.
-- **`symposium-cargo`** — provides the cargo PM. A corporate fork can point at an internal registry mirror, restrict which crates are searchable, etc.
+Users can also explicitly install plugins with the `use` command. The default is to install the plugin locally for the current workspace.
 
-This works because the PM interface is the seam — the binary loads whatever PM implementations are installed. No special enterprise configuration syntax needed; just ship your own crate.
+```bash
+symposium use X
+```
 
-**Policy plugin (orthogonal).** In addition to PM overrides, organizations can provide a policy plugin that enforces rules across the system — deny-listing specific plugins, requiring approval before installation, restricting what can activate in certain environments. This is a separate, overridable extension point (e.g., a `symposium-policy` crate). Design TBD.
+This will search across all registries for a package named `X` and show the matches to the user. So, if `X` is a plugin name, it would show the most recent plugin; if there is an entry in the recommendations repository, that would also be shown. Users can pick the one(s) they wish to install. This will add the entries into `~/.symposium/config.toml` along with the workspace directory so that they are known to be activated.
 
-## Summary of changes from today
+Users can also install plugins globally:
 
-| Change | Kind | Area |
-|--------|------|------|
-| `source = "crate"` on skill groups | Removed | Plugin model |
-| `[[plugin-source]]` in config | Removed | Plugin model |
-| `[defaults]` in config (booleans) | Removed | Plugin model |
-| `self-contained = true` in config | Removed | Plugin model |
-| `crates:` in SKILL.md frontmatter | Removed | Predicates |
-| `PredicateOutput.selected_crates` in symposium-sdk | Removed | Plugin model |
-| `crate_metadata.rs`, `load_crate_skills`, `fetch_and_resolve_skills`, `union_matched_crates` | Removed | Plugin model |
-| `where.{cargo,predicates}` namespaced tables | Removed | Predicates |
-| `[[plugin-source]]` → root `[[plugins]]` in config | Renamed | Plugin model |
-| `crates = [...]` → `depends-on = [...]` / `predicates = ["depends-on(...)"]` | Renamed | Predicates |
-| `cargo agents crate-info` → `cargo agents info` | Renamed | Custom PMs |
-| Package manager abstraction (4 operations) | Added | Plugin model |
-| `pm:name:version` canonical identity | Added | Plugin model |
-| `cargo agents use` / `cargo agents remove` | Added | User-managed plugins |
-| `cargo agents status` | Added | User-managed plugins |
-| Config as version requirements (not exact pins) | Added | Plugin model |
-| Cache layer (unpacked plugins keyed by triple) | Added | Plugin model |
-| Auto-discovery via PM `list-deps` + `search` | Added | Discovery |
-| Sub-plugins (transitive installation) | Added | Plugin model |
-| Installed vs. active distinction | Added | Plugin model |
-| Convention-based plugin defaults | Added | Plugin defaults |
-| Custom PMs defined by plugins | Added | Custom PMs |
+```bash
+symposium use --global X
+```
+
+This works the same way but activates those plugins across all workspaces.
+
+Users could also edit their config.toml to define their specific predicates for when they want plugins to be activated (e.g., when a certain file is present in the workspace, for Rust workspaces only, etc).
+
+
+## As a crate author
+
+The core workflows for *publishing plugins* via Symposium are as follows. We use Rust crates as an example but everything we say about cargo applies equally to other supported package registries like PyPI, npm, etc.
+
+### Publishing in your crate
+
+Rust crates (and packages in other languages) can package extensions within their sources that are distributed inline. Simply add skills or plugins directly into your repository and Symposium will pick them up.
+
+Publishing plugins directly with your crate has the advantage that they are versioned together. But you may wish to be able to update plugins independently. In that case, you can have your crate's plugin redirect Symposium to load a chained plugin with another crate name, such as `widget-symposium`. This way you can publish `widget-symposium` as often as you like.
+
+The conventions for publishing in your own crate are the same as when defining plugins for your workspace. Recalling our `widget` example:
+
+```
+widget/
+    Cargo.toml
+    crates/
+      widget-lib/
+        Cargo.toml
+        Symposium.toml         <-- defines `[[plugins]] source.cargo = { widget-symposium = "1" }`
+      widget-test/
+        Cargo.toml
+      widget-symposium/
+        Cargo.toml
+```
+
+### Publishing for someone else's crate
+
+You can also add a plugin into the central symposium recommendations repository. This uses the "recommendations" package manager. Our convention is that the `symposium-recommendations` repository contains a subdirectory structure with directories named for other package managers:
+
+```
+symposium-recommendations/
+    ...
+    cargo/
+      widget-lib/              <-- defines `[[plugins]] source.cargo = { widget-symposium = "1" }`
+        Symposium.toml
+```
+
+So you can add a new plugin in a subdirectory of `cargo` (e.g., `cargo/widget-lib`) that adds a plugin for that crate. When a project in the workspace has a dependency on a crate `widget-lib=1.2`, we will search for plugins that match `cargo:widget-lib:1.2` for all registered package managers. The cargo package manager uses this to find the source for `widget-lib` at version `1.2` and look for embedded plugins. The *recommendations* package manager looks for a directory `cargo/widget-lib` (the version is ignored) and returns a match.
+
+### Publishing a plugin not associated with a crate
+
+The `symposium-recommendations` repository can also be used to publish centralized plugins that don't have an associated crate or whatever. For example, this might be used to distribute a collection of skills from a github repository or to distribute a tool whose installation is not managed by Symposium. To do that, you simply add to the directory called `symposium`:
+
+```
+symposium-recommendations/
+  symposium/
+    yolo-skills/
+      Symposium.toml             <-- defines whatever
+```
+
+## Key concepts
+
+### Plugins
+
+A *plugin* is defined by a directory with an optional `Symposium.toml` file. The directory is typically the root directory of a workspace or a project in the workspace, but it could also be specified via a path or be found in a cloned github repository or other means. If there is no `Symposium.toml` file, that is equivalent to having an empty file.
+
+#### Plugin identifier
+
+Every plugin has a canonical identifier — a tuple `(pm, name, version)` — as described in the [package managers](#package-managers) section.
+
+#### Agentic extensions
+
+`Symposium.toml` files contain the following kinds of content:
+
+* `[[plugins]]` defines a set of additional *chained plugins*. If a plugin X defines a chained plugin Y, then whenever X is loaded, Y will be loaded.
+* `[[skills]]` identifies directories where we should search for skills. Any skills found in there will be installed into the user's workspace in the appropriate place(s) for the agent(s) they've selected.
+* `[[mcp]]` identifies mcp-servers.
+* `[[hooks]]` identifies hooks. Symposium allows you to define vendor-neutral hooks that work for any vendor or vendor-specific hooks that target a particular agent (e.g., Claude Code or Codex).
+* `[[installable]]` identifies *installable content*, which can be referenced by MCP servers or hooks (which need an executable). An easy option is to package your content as a cargo package that will be cargo-install'd and managed by Symposium, but there are other options.
+
+#### Predicates
+
+The plugin itself and each of its subsections can be gated with a `predicates = [...]` field. When a plugin is installed, the content is only *activated* if the predicate matches.
+
+Common predicates include:
+
+* `workspace()`, true if this plugin is part of the active workspace;
+* `used()`, true if this plugin was explicitly used by the user;
+* `workspace-dependency()`, true if plugin is a dependency of some project in the current workspace;
+* `env(FOO=BAR)`, true if the environment variable `FOO` is set to `BAR`;
+* `file-exists(path)`, true if the given file exists;
+* `depends-on(package-id)`, true if some project in the workspace depends on `package-id`;
+    * This is delegated to the installed Symposium package managers. By default it refers to any of them, but you can be more specific, e.g., `depends-on(cargo, serde, 1.0)` or `depends-on(npm, leftpad)`.
+* `shell(command)`, true if the given command exits with code 0;
+* `workspace-directory(/home/ferris/dev/rust)`, true if the active workspace is a subdirectory of the given path.
+
+Note that the first three predicates are not mutually exclusive. A given plugin may (a) appear in the workspace; (b) appear in the dependencies of a project in the workspace; and (c) be explicitly used all at the same time.
+
+There is also a shorthand for `depends-on` that reuses the PM's `resolve` format:
+
+```toml
+[depends-on]
+cargo = { tokio = "1", serde = "1" }
+```
+
+This is equivalent to `predicates = ["depends-on(cargo, tokio, 1)", "depends-on(cargo, serde, 1)"]` — the value under `depends-on.$pm` is passed to that PM's `resolve` to determine what packages are referenced.
+
+#### Default content
+
+Finally, plugins have some default content that is added automatically unless it is disabled via a `[defaults]` section. Currently we have one default, `default.skills = (true|false)`. Assuming the default is not set to false, then the following is added to the plugin.
+
+```toml
+[[skills]]
+source.path = "skills"
+
+[[skills]]
+predicates = ["workspace()"]
+source.path = ".agents/skills"
+```
+
+These defaults establish the skills conventions described earlier. For example, the `widget-test` crate had skills defined in `.agents/skills`. If you were to depend on `widget-test`, but you don't have it in your workspace, those skills would *not* be added to your workspace, because they are gated behind a predicate.
+
+### Package managers
+
+A package manager (PM) is a pluggable backend that knows how to find, resolve, fetch, and enumerate plugins from a particular ecosystem. Each PM is a separate binary that Symposium invokes — installed as an `[[installable]]` from either the recommendations repository or the user's root config. The `path` PM is built into the Symposium binary itself (since it just reads local directories), but `cargo`, `git`, and any future PMs (npm, pypi, etc.) are separate binaries.
+
+Every PM implements four operations:
+
+| Operation | Input | Output | Used by |
+|-----------|-------|--------|---------|
+| `resolve` | opaque TOML value (from `source.<pm>`) | set of package-ids | manifest processing |
+| `search` | partial query string | set of package-ids + metadata | `symposium use` |
+| `fetch` | package-id | directory with plugin content | sync/install |
+| `list-deps` | workspace directory | set of package-ids | auto-discovery |
+
+A **package-id** is a tuple `(pm, name, version)` where all three components are PM-defined strings. Examples: `(cargo, serde, 1.0.210)`, `(git, github.com/rtk-ai/rtk, abc123def)`, `(recommendations, cargo/serde, 0.1.0)`. There is no mandated string-serialized format — the tuple is the identity.
+
+See the [PM interface sub-RFD](./pm-interface/README.md) for full protocol details.
+
+#### Example: The recommendations manager
+
+The recommendations PM is provided by the `symposium-recommendations` crate. It operates over a repository of curated plugin directories, organized by the PM namespace they relate to:
+
+```
+symposium-recommendations/
+  cargo/
+    serde/
+      Symposium.toml
+    tokio/
+      Symposium.toml
+  symposium/
+    yolo-skills/
+      Symposium.toml
+```
+
+It defines the core operations as follows:
+
+| Operation | Definition |
+|-----------|------------|
+| `resolve` | accepts a string `"foo"` or a list of strings `["foo", "bar"]` and treats them as in search |
+| `search` | if PM is specified, search the `pm/name` directory; otherwise, search all directories |
+| `fetch` | load the plugin from `pm/name` directory |
+| `list-deps` | returns empty set |
+
+Note: the recommendations PM participates in discovery not via `list-deps` but via `search`. The discovery flow calls `list-deps` on all PMs (e.g., cargo returns `(cargo, serde, 1.0.210)`), then for each dependency calls `search` on all PMs with the full tuple. The recommendations PM matches on `(pm, name)` and ignores the version component. This is where the recommendations PM gets to offer advice for other PMs' dependencies.
+
+#### Example: The cargo manager
+
+The cargo package manager works with Symposium packages embedded within crates or cargo workspaces.
+
+It defines package-ids like `(cargo, $crate-name, $version)`.
+
+It defines the core operations as follows:
+
+| Operation | Definition |
+|-----------|------------|
+| `resolve` | accepts a object like `{foo = "1"}` using the same format as expected by cargo; resolves per cargo algorithm |
+| `search` | if PM = `cargo`, search cargo registry for matching crates; otherwise, return empty |
+| `fetch` | creates a dummy project to populate the cargo cache and returns the crate source directory from there |
+| `list-deps` | returns direct dependencies from the workspace `Cargo.toml` and all workspace members |
+
+#### Example: The git manager
+
+The git package manager works with Symposium packages found in git repositories.
+
+It defines package-ids like `(git, $git-url, $sha-hash)`. The `git-url` component uses a URL fragment to encode the ref (following npm's convention), e.g., `git@github.com:rtk-ai/rtk#main`. The `version` is always the resolved commit SHA.
+
+It defines the core operations as follows:
+
+| Operation | Definition |
+|-----------|------------|
+| `resolve` | accepts an object like `{url = "...", branch = "...", rev = "..." }` and resolves to a commit SHA |
+| `search` | returns empty (git repos aren't a searchable registry) |
+| `fetch` | clones/fetches the repo at the specified commit SHA and returns the directory |
+| `list-deps` | returns empty (no concept of "workspace depends on a git repo") |
+
+## Frequently asked questions
+
+### How does Symposium work in the enterprise?
+
+Symposium routes all plugin distribution through existing package registries (crates.io, npm, PyPI, etc). Enterprises already operate internal mirrors and proxies for these registries — Symposium inherits that infrastructure automatically.
+
+The primary control point is the **recommendations repository**. Companies supply their own `symposium-recommendations` crate (or override the default) to curate which plugins are offered to their developers. In the future, the recommendations repository may also supply allow/deny lists and other centralized controls (e.g., "these plugins are approved for production use," "these plugins require security review before installation"). This is left for future design.
+
+Companies can also disable specific PMs entirely — for example, disabling the `git` PM to prevent developers from installing unvetted plugins from arbitrary repositories, restricting installs to only those that flow through a scanned registry.
+
+### Why route through existing registries?
+
+Routing through existing registries gives enterprises central scanning (malware, license, vulnerability), access control, audit trails, and air-gapped environment support — all using tooling they already have.
+
+The tradeoff is that some plugins don't have a natural "home" in a language-specific registry (e.g., a collection of general-purpose agent skills not tied to any library). For these, the recommendations repository or a dedicated "symposium plugins" crate serves as the packaging vehicle — slightly artificial but consistent with the model.
 
 ## Detailed design
 
@@ -205,45 +305,23 @@ This works because the PM interface is the seam — the binary loads whatever PM
 
 #### [PM interface](./pm-interface/README.md)
 
-The core abstraction. Protocol for PM implementations (trait? CLI binary? JSON-RPC?), error semantics, caching contract, how `resolve`/`search`/`fetch`/`list-deps` work in detail. Includes the built-in PMs (cargo, recommendations, git, path) as concrete implementations showing the interface in action.
+The core abstraction. Protocol for PM implementations, error semantics, caching contract, how `resolve`/`search`/`fetch`/`list-deps` work in detail.
+
+#### [Cargo PM](./cargo-pm/README.md)
+
+The cargo PM specifically: `resolve` schema, `fetch` via cargo toolchain, `list-deps` from `Cargo.lock`, plugin detection in crates, redirect support.
+
+#### [Plugin model](./plugin-model/README.md)
+
+What a plugin is, `Symposium.toml` structure, defaults (skill discovery, implicit installations), predicates, chained plugins, installed vs. active.
 
 #### [Discovery & sync](./discovery-sync/README.md)
 
-The hook-triggered discovery flow, prompt UX, how recommendations vouch for deps by keying on other PMs' identifiers (`cargo:serde:*`), auto-install configuration, behavior when multiple PMs return matches, ordering of operations.
+The hook-triggered discovery flow, prompt UX, how recommendations vouch for deps by keying on other PMs' identifiers (`cargo:serde:*`), auto-install configuration, behavior when multiple PMs return matches.
 
 #### [User-managed plugins](./user-managed-plugins/README.md)
 
-`cargo agents use`/`remove`/`status` commands. Config file format, version requirement syntax, global vs. workspace-local scoping (local installs don't modify workspace files).
-
-### Predicates (inline)
-
-Predicates are flat expressions gating activation. Grammar:
-
-```
-predicate   = function "(" args ")"
-function    = "depends-on" | "path-exists" | "env" | "shell" | "not" | "any" | "all"
-args        = (predicate | string) ("," (predicate | string))*
-```
-
-Available predicates:
-- `depends-on(name)` / `depends-on(pm:name)` — workspace depends on this identifier (checked via PMs' `list-deps`)
-- `path-exists(path)` — file or directory exists relative to workspace root
-- `env(VAR)` / `env(VAR=value)` — environment variable check
-- `shell(command)` — exit 0 = true
-- `not(p)`, `any(p, ...)`, `all(p, ...)` — combinators
-
-Shorthand in TOML: `depends-on = ["serde", "cargo:tokio"]` is sugar for `predicates = ["depends-on(serde)", "depends-on(cargo:tokio)"]`.
-
-Predicates can appear at any level (plugin, skill group, skill, hook, MCP server). A predicate on a plugin gates all its contents but not its sub-plugins (which have their own predicates).
-
-### Plugin defaults (inline)
-
-Convention-over-configuration rules applied to every plugin directory:
-
-- A missing `Symposium.toml` is equivalent to an empty one.
-- `skills/<name>/SKILL.md` files are discovered as skills.
-- `.agents/skills/<name>/SKILL.md` files are discovered as skills.
-- A co-located `Cargo.toml` with `[[bin]]` targets provides implicit installations (hooks/MCP servers can reference them by name without explicit `[installation]` entries).
+`symposium use`/`remove`/`status` commands. Config file format, version requirement syntax, global vs. workspace-local scoping.
 
 ### Future work
 
@@ -253,9 +331,9 @@ Convention-over-configuration rules applied to every plugin directory:
 
 ## Implementation order
 
-1. **PM interface** — the foundation. Identity triple, four operations, state layers, sub-plugins.
-2. **Predicates** — lands alongside. Flat syntax, `depends-on`.
-3. **Plugin defaults** — convention-over-configuration. "Just drop skills in a directory."
+1. **PM interface** — the foundation. Identity triple, four operations, state layers.
+2. **Plugin model** — what a plugin is, defaults, predicates, chained plugins.
+3. **Cargo PM** — first real PM implementation.
 4. **Discovery & sync** — PM `list-deps` + `search`, prompt UX. Enables "plugins from your dependencies."
 5. **User-managed plugins** — `use`/`remove`/`status` UX.
 6. **Future work** — fixed-point, custom PMs, policy — as demand arises.
