@@ -92,6 +92,7 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
 
     if should_prompt && !agents.is_empty() {
         sym.config.auto_update = prompt_for_auto_update(sym.config.auto_update)?;
+        sym.config.telemetry.enabled = prompt_for_telemetry(sym.config.telemetry.enabled)?;
     }
 
     tracing::debug!(
@@ -180,6 +181,17 @@ fn prompt_for_auto_update(current: crate::config::AutoUpdate) -> Result<crate::c
         1 => AutoUpdate::Warn,
         _ => AutoUpdate::Off,
     })
+}
+
+fn prompt_for_telemetry(current: bool) -> Result<bool> {
+    Ok(dialoguer::Confirm::new()
+        .with_prompt(
+            "Enable anonymous usage telemetry? It is stored locally under \
+             ~/.symposium/telemetry/ and never uploaded automatically — you can review \
+             it with `cargo agents telemetry show` and share it yourself",
+        )
+        .default(current)
+        .interact()?)
 }
 
 fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {

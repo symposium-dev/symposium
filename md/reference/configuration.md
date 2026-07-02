@@ -76,6 +76,24 @@ Each `[[agent]]` entry identifies an agent you use. You can configure multiple a
 |-----|------|---------|-------------|
 | `level` | string | `"info"` | Minimum log level. One of: `trace`, `debug`, `info`, `warn`, `error`. |
 
+## `[telemetry]`
+
+Opt-in, per-user usage telemetry. Off by default. When enabled, Symposium
+appends anonymous events as JSON lines to a local, per-day log under
+`~/.symposium/telemetry/`. **Nothing is uploaded automatically** — you inspect
+and share the data yourself with `cargo agents telemetry show`. The preference
+is also collected during `cargo agents init`. See the
+[telemetry design chapter](../design/telemetry.md) for the event format.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | bool | `false` | Record anonymous usage events (session starts, prompts, tool usage — counts and metadata only, no prompt or command content). Toggle with `cargo agents telemetry enable` / `disable`. |
+
+```toml
+[telemetry]
+enabled = true
+```
+
 ## `[defaults]`
 
 Controls the two built-in plugin sources. Both are enabled by default.
@@ -114,6 +132,7 @@ User-wide data lives under `~/.symposium/` by default. Override with environment
 |------|---------|
 | `~/.symposium/config.toml` | User configuration |
 | `~/.symposium/state.toml` | Persistent state (binary version stamp, last update check) |
+| `~/.symposium/telemetry/` | Telemetry event log, one JSONL file per day (created when `[telemetry] enabled = true` and events are recorded) |
 | `~/.symposium/plugins/` | User-defined plugins |
 | `~/.symposium/cache/` | Cache directory (crate sources, plugin sources) |
 | `~/.symposium/logs/` | Log files (one per invocation, timestamped) |

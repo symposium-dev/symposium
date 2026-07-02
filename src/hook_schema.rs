@@ -41,6 +41,19 @@ pub enum HookAgent {
 }
 
 impl HookAgent {
+    /// Canonical lowercase agent name (matches the config `[[agent]]` names).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            HookAgent::Claude => "claude",
+            HookAgent::Codex => "codex",
+            HookAgent::Copilot => "copilot",
+            HookAgent::Gemini => "gemini",
+            HookAgent::Goose => "goose",
+            HookAgent::Kiro => "kiro",
+            HookAgent::OpenCode => "opencode",
+        }
+    }
+
     pub fn event(&self, event: HookEvent) -> Option<Box<dyn ErasedAgentHookEvent>> {
         match self {
             HookAgent::Claude => claude::ClaudeCode.event(event),

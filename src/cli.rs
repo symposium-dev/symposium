@@ -105,9 +105,34 @@ pub enum Commands {
         version: Option<String>,
     },
 
+    /// Manage opt-in usage telemetry (status, enable, disable, show)
+    Telemetry {
+        #[command(subcommand)]
+        command: Option<TelemetryCommand>,
+    },
+
     /// Plugin-vended subcommand. `argv[0]` is the name; the rest forwards to the child.
     #[command(external_subcommand)]
     External(Vec<OsString>),
+}
+
+#[derive(Debug, Subcommand)]
+pub enum TelemetryCommand {
+    /// Show whether telemetry is enabled, where data lives, and how much is stored (default)
+    Status,
+
+    /// Turn on telemetry collection (writes `[telemetry] enabled = true`)
+    Enable,
+
+    /// Turn off telemetry collection
+    Disable,
+
+    /// Print recent recorded events as JSON lines, for inspection
+    Show {
+        /// Number of most-recent events to print
+        #[arg(long, default_value_t = 50)]
+        count: usize,
+    },
 }
 
 /// Audience section a built-in subcommand belongs to in `--help`.
@@ -117,7 +142,7 @@ pub enum Commands {
 /// this only covers the static `Commands` variants above.
 pub fn builtin_audience(name: &str) -> Option<Audience> {
     match name {
-        "init" | "sync" | "self-update" | "plugin" => Some(Audience::Humans),
+        "init" | "sync" | "self-update" | "plugin" | "telemetry" => Some(Audience::Humans),
         "crate-info" => Some(Audience::Agents),
         _ => None,
     }
@@ -200,6 +225,45 @@ pub async fn run(
                     anyhow::bail!("{e}");
                 }
             }
+        }
+
+        Commands::Telemetry { command } => {
+            match command.unwrap_or(TelemetryCommand::Status) {
+                TelemetryCommand::Status => {
+                    print!(
+                        "{}",
+                        crate::telemetry::status_text(
+                            sym.config_dir(),
+                            sym.config.telemetry.enabled
+                        )
+                    );
+                }
+                TelemetryCommand::Enable => {
+                    sym.config.telemetry.enabled = true;
+                    sym.save_config()?;
+                    out.println(
+                        "Telemetry enabled. Events are stored locally under the telemetry \
+                         directory and are never uploaded automatically — review them with \
+                         `cargo agents telemetry show`.",
+                    );
+                }
+                TelemetryCommand::Disable => {
+                    sym.config.telemetry.enabled = false;
+                    sym.save_config()?;
+                    out.println("Telemetry disabled.");
+                }
+                TelemetryCommand::Show { count } => {
+                    let events = crate::telemetry::recent_events(sym.config_dir(), count);
+                    if events.is_empty() {
+                        out.println("No telemetry events recorded.");
+                    } else {
+                        for event in &events {
+                            println!("{}", serde_json::to_string(event)?);
+                        }
+                    }
+                }
+            }
+            Ok(())
         }
 
         Commands::External(argv) => {

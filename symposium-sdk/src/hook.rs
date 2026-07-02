@@ -55,6 +55,10 @@ pub enum HookEvent {
     #[cfg_attr(feature = "clap", value(name = "session-start"))]
     #[serde(rename = "SessionStart")]
     SessionStart,
+
+    #[cfg_attr(feature = "clap", value(name = "stop"))]
+    #[serde(rename = "Stop")]
+    Stop,
 }
 
 // ── Input types ─────────────────────────────────────────────────────────
@@ -67,6 +71,7 @@ pub enum Input {
     PostToolUse(PostToolUseInput),
     UserPromptSubmit(UserPromptSubmitInput),
     SessionStart(SessionStartInput),
+    Stop(StopInput),
 }
 
 impl Input {
@@ -77,6 +82,7 @@ impl Input {
             Input::PostToolUse(_) => HookEvent::PostToolUse,
             Input::UserPromptSubmit(_) => HookEvent::UserPromptSubmit,
             Input::SessionStart(_) => HookEvent::SessionStart,
+            Input::Stop(_) => HookEvent::Stop,
         }
     }
 
@@ -87,6 +93,18 @@ impl Input {
             Input::PostToolUse(p) => p.cwd.as_deref(),
             Input::UserPromptSubmit(p) => p.cwd.as_deref(),
             Input::SessionStart(p) => p.cwd.as_deref(),
+            Input::Stop(p) => p.cwd.as_deref(),
+        }
+    }
+
+    /// Extract the session id from any event variant.
+    pub fn session_id(&self) -> Option<&str> {
+        match self {
+            Input::PreToolUse(p) => p.session_id.as_deref(),
+            Input::PostToolUse(p) => p.session_id.as_deref(),
+            Input::UserPromptSubmit(p) => p.session_id.as_deref(),
+            Input::SessionStart(p) => p.session_id.as_deref(),
+            Input::Stop(p) => p.session_id.as_deref(),
         }
     }
 
@@ -103,7 +121,7 @@ impl Input {
         let tool_name = match self {
             Input::PreToolUse(p) => &p.tool_name,
             Input::PostToolUse(p) => &p.tool_name,
-            Input::UserPromptSubmit(_) | Input::SessionStart(_) => return true,
+            Input::UserPromptSubmit(_) | Input::SessionStart(_) | Input::Stop(_) => return true,
         };
 
         regex::Regex::new(matcher).is_ok_and(|re| re.is_match(tool_name))
@@ -210,6 +228,22 @@ impl SessionStartInput {
     }
 }
 
+/// Input for a `Stop` event — emitted when an agent session/turn ends.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct StopInput {
+    #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
+impl StopInput {
+    pub fn new(session_id: Option<String>, cwd: Option<String>) -> Self {
+        Self { session_id, cwd }
+    }
+}
+
 // ── Output types ────────────────────────────────────────────────────────
 
 /// Output event written to stdout.
@@ -220,6 +254,7 @@ pub enum Output {
     PostToolUse(PostToolUseOutput),
     UserPromptSubmit(UserPromptSubmitOutput),
     SessionStart(SessionStartOutput),
+    Stop(StopOutput),
 }
 
 impl Output {
@@ -232,6 +267,7 @@ impl Output {
                 Output::UserPromptSubmit(UserPromptSubmitOutput::default())
             }
             HookEvent::SessionStart => Output::SessionStart(SessionStartOutput::default()),
+            HookEvent::Stop => Output::Stop(StopOutput::default()),
         }
     }
 
@@ -244,6 +280,7 @@ impl Output {
                 Output::UserPromptSubmit(UserPromptSubmitOutput::context(context))
             }
             HookEvent::SessionStart => Output::SessionStart(SessionStartOutput::context(context)),
+            HookEvent::Stop => Output::Stop(StopOutput::context(context)),
         }
     }
 
@@ -254,6 +291,7 @@ impl Output {
             Output::PostToolUse(o) => o.additional_context.as_deref(),
             Output::UserPromptSubmit(o) => o.additional_context.as_deref(),
             Output::SessionStart(o) => o.additional_context.as_deref(),
+            Output::Stop(o) => o.additional_context.as_deref(),
         }
     }
 }
@@ -408,6 +446,30 @@ impl SessionStartOutput {
     }
 }
 
+/// Output for a `Stop` event.
+#[non_exhaustive]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct StopOutput {
+    #[serde(
+        rename = "additionalContext",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub additional_context: Option<String>,
+}
+
+impl StopOutput {
+    /// Create an output with all fields specified.
+    pub fn new(additional_context: Option<String>) -> Self {
+        Self { additional_context }
+    }
+
+    /// Create an output that injects additional context.
+    pub fn context(text: impl Into<String>) -> Self {
+        Self::new(Some(text.into()))
+    }
+}
+
 // ── Handler trait ───────────────────────────────────────────────────────
 
 /// Default dispatch logic: matches on the event variant and calls the
@@ -424,6 +486,7 @@ pub async fn default_handle_event(
             handler.user_prompt_submit(event).await?,
         )),
         Input::SessionStart(event) => Ok(Output::SessionStart(handler.session_start(event).await?)),
+        Input::Stop(event) => Ok(Output::Stop(handler.stop(event).await?)),
     }
 }
 
@@ -466,6 +529,11 @@ pub trait HookHandler {
         _event: &SessionStartInput,
     ) -> anyhow::Result<SessionStartOutput> {
         Ok(SessionStartOutput::default())
+    }
+
+    /// Called when an agent session/turn ends.
+    async fn stop(&self, _event: &StopInput) -> anyhow::Result<StopOutput> {
+        Ok(StopOutput::default())
     }
 }
 
@@ -528,5 +596,6 @@ fn is_empty_output(output: &Output) -> bool {
         Output::PostToolUse(o) => o.additional_context.is_none(),
         Output::UserPromptSubmit(o) => o.additional_context.is_none(),
         Output::SessionStart(o) => o.additional_context.is_none(),
+        Output::Stop(o) => o.additional_context.is_none(),
     }
 }
