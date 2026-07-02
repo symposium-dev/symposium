@@ -1,0 +1,210 @@
+# MCP meta-server for progressive tool disclosure
+
+## TL;DR
+
+- Instead of writing plugin MCP servers directly into agent config, Symposium runs a single "meta" MCP server that gates access to all plugin-provided servers.
+- The meta-server exposes two tools — `list_tools` and `call_tool` — following the progressive disclosure / bounded context pack pattern.
+- This avoids context bloat, keeps `.claude/` (and equivalents) clean, and gives Symposium a persistent in-process channel to the agent.
+
+## Motivation
+
+Today, `[[mcp_servers]]` entries in plugins are registered directly into the agent's MCP configuration during `sync`. This has three problems:
+
+1. **Context bloat.** Every registered MCP server's tools are loaded into the agent's context window at startup. A workspace with many plugins could inject dozens of tool schemas the agent never uses.
+
+2. **Config pollution.** Writing entries into `.claude/settings.local.json` (or equivalent) leaves artifacts that are visible to the user, hard to `.gitignore` cleanly, and create merge friction in shared repos.
+
+3. **No return channel.** Once tools are registered, Symposium has no way to communicate with the agent session — for elicitation, status updates, or dynamic capability changes.
+
+A single Symposium-owned MCP server solves all three: one config entry, progressive tool loading, and an always-available communication channel.
+
+## Change in a nutshell
+
+At `cargo agents init` (or `sync`), Symposium registers exactly one MCP server — itself — into the agent's config:
+
+```jsonc
+// .claude/settings.local.json (Claude Code example)
+{
+  "mcpServers": {
+    "symposium": {
+      "command": "cargo-agents",
+      "args": ["mcp-serve"]
+    }
+  }
+}
+```
+
+When the agent starts a session, it connects to this server and sees two tools:
+
+```
+symposium__list_tools  — List available tools, optionally filtered by domain
+symposium__call_tool   — Execute a tool by name
+```
+
+The `list_tools` description contains a capability index (the "menu") built from all applicable plugin MCP servers. The agent requests schemas on demand and executes through `call_tool`. Plugin servers are started lazily on first use.
+
+## Detailed plans
+
+### Meta-server architecture
+
+The meta-server is a stdio MCP server implemented in `cargo-agents mcp-serve`. It:
+
+1. Resolves the workspace (same `WorkspaceDeps` logic as sync/hooks).
+2. Collects all applicable `[[mcp_servers]]` from the plugin registry.
+3. Exposes a two-tool interface following the bounded context pack pattern.
+
+#### The two tools
+
+**`list_tools`**
+
+```
+description: |
+  List available tools from Symposium plugins.
+  
+  Domains:
+    sqlx: [query, explain, migrate_status]
+    sea-orm: [generate_entity, diff_schema]
+    ...
+
+parameters:
+  domain: string (optional) — filter to a specific domain
+  tools: array of strings (optional) — return full schemas for these tools
+```
+
+The two parameters are independent:
+
+- `domain` filters the capability index to one domain (returns tool names only).
+- `tools` returns full JSON schemas for the named tools (regardless of domain).
+
+When called with no arguments, returns the full structured index. Both can be combined (e.g., "show me the sqlx domain and also give me the schema for `sea-orm__generate_entity`").
+
+**`call_tool`**
+
+```
+parameters:
+  tool: string — fully qualified tool name (e.g., "sqlx__query")
+  input: object — tool-specific parameters
+```
+
+Dispatches to the appropriate plugin MCP server. If the backing server isn't running, starts it first (lazy initialization).
+
+#### Lazy server lifecycle
+
+Plugin MCP servers are not started until the agent requests their tool schemas (via `list_tools`) or invokes one of their tools (via `call_tool`). The meta-server maintains a process table:
+
+- **Cold** — server not running, schema loaded from plugin manifest.
+- **Starting** — server process spawning, calls queue.
+- **Ready** — server running, calls dispatched directly.
+- **Dead** — server exited unexpectedly, restart on next call.
+
+Servers are shut down when the meta-server exits (agent session ends).
+
+### Capability index in the description
+
+The `list_tools` description is dynamically generated from applicable plugins. It follows the pattern from the bounded context packs literature:
+
+```
+Domains:
+  sqlx: [query, explain, migrate_status]
+  sea-orm: [generate_entity, diff_schema]
+  tokio-console: [list_tasks, task_detail]
+```
+
+This means the agent sees the full capability menu just by reading the tool description — no discovery call needed for basic orientation. The model only calls `list_tools` when it needs parameter schemas.
+
+If the index exceeds a reasonable size (TBD, likely ~2000 chars), the description is truncated with a note to call `list_tools` for the full listing.
+
+### Registration mechanics
+
+During `init`/`sync`, Symposium writes a single MCP entry named `"symposium"` pointing to `cargo-agents mcp-serve`. The entry is identified by its well-known name — no additional ownership markers are needed. Individual plugin server entries are never written to agent config.
+
+### Agent compatibility
+
+| Agent | MCP config location | Transport |
+|-------|-------------------|-----------|
+| Claude Code | `.claude/settings.local.json` | stdio |
+| Gemini CLI | `.gemini/settings.json` | stdio |
+| Copilot | `.github/copilot-mcp.json` | stdio |
+| Codex CLI | `codex.json` | stdio |
+| Kiro | `.kiro/mcp.json` | stdio |
+| OpenCode | `.opencode/config.json` | stdio |
+| Goose | `.goose/mcp.json` | stdio |
+
+All supported agents use stdio transport for local servers, so one implementation covers all.
+
+### Future: elicitation and notifications
+
+Because the meta-server is an always-connected channel, it can also:
+
+- Surface notifications (e.g., "new plugin version available").
+- Provide a `symposium__status` resource with sync state.
+- Act as an elicitation endpoint if MCP gains that capability, or use sampling requests.
+
+These are out of scope for the initial implementation but inform the architecture.
+
+## Frequently asked questions
+
+### Why not just register plugin servers directly with a `.gitignore`?
+
+Three reasons. First, `.gitignore` patterns for agent config directories (`.claude/`, `.github/`) are coarse — you'd either ignore too much or need per-file patterns that users have to maintain. Second, direct registration means every plugin's tools land in context at startup regardless of whether the agent needs them. Third, direct registration gives Symposium no way to communicate with the agent after initialization.
+
+### Why two tools instead of exposing each plugin tool directly?
+
+Exposing each tool directly through the meta-server would still bloat the context — the agent would see N tool schemas at connection time. The two-tool pattern means the agent sees exactly 2 schemas at startup (~600 tokens) regardless of how many plugin tools exist. It requests schemas on demand.
+
+### What about tool namespacing and conflicts?
+
+Tool names are prefixed with the plugin server name: `sqlx__query`, `sea-orm__generate_entity`. If two plugins declare a server with the same qualified tool name, the first-registered wins and a warning is emitted. The conflicting tool from the later plugin is skipped.
+
+### How does this affect latency?
+
+First call to a cold server pays startup cost (process spawn + MCP handshake). Subsequent calls go directly. For most plugin servers (small Rust binaries), startup is <100ms.
+
+### What about HTTP/SSE backing servers?
+
+The meta-server acts as an MCP client to each backing server using whatever transport that server declares (stdio, HTTP, or SSE). From the agent's perspective it's always stdio — the meta-server bridges the transport gap.
+
+### What if a backing server crashes mid-call?
+
+The meta-server surfaces the error to the agent as-is (the MCP error response from the backing server, or a connection-lost error if it crashed). The server transitions to `Dead` state and is restarted on the next call.
+
+### What if `Cargo.toml` changes mid-session?
+
+The meta-server re-resolves the workspace on `list_tools` calls when `Cargo.lock` mtime has changed (same freshness gate as hooks). This is gated behind the user's `auto-sync` configuration setting — if auto-sync is disabled, the index stays static until the next manual `cargo agents sync`.
+
+### What about the `sync --agent` flow?
+
+`sync --agent` currently writes MCP entries directly. With this change, it writes only the single meta-server entry. The `--agent` flag remains for agents that need explicit sync, but the MCP section of the output shrinks to one entry.
+
+## Implementation plan and status
+
+### Step 1: `mcp-serve` subcommand skeleton
+
+Add a `cargo agents mcp-serve` subcommand that starts a stdio MCP server, advertises `list_tools` and `call_tool`, and exits cleanly on stdin close. No plugin integration yet — just the two-tool skeleton with a hardcoded capability index.
+
+- [ ] Add `mcp-serve` to CLI
+- [ ] Implement MCP stdio transport using the `rmcp` crate (the official Rust MCP SDK)
+- [ ] Tests: verify JSON-RPC handshake and tool listing
+
+### Step 2: Plugin-driven capability index
+
+Wire the meta-server to the plugin registry. `list_tools` description and responses are generated from applicable `[[mcp_servers]]` entries.
+
+- [ ] Resolve workspace deps and plugin registry at startup
+- [ ] Build capability index from plugin MCP server declarations
+- [ ] Tests: verify index reflects test plugin fixtures
+
+### Step 3: Lazy server dispatch
+
+Implement `call_tool` dispatching to backing plugin servers. Servers start on first call to `list_tools` (with `tools`) or `call_tool`, and are managed for the session lifetime. Support stdio, HTTP, and SSE transports for backing servers.
+
+- [ ] Process table (cold/starting/ready/dead)
+- [ ] MCP client for each backing server (stdio + HTTP/SSE via `rmcp`)
+- [ ] Tests: end-to-end call through meta-server to a mock plugin server
+
+### Step 4: Registration in `init`/`sync`
+
+Update `init` and `sync` to write the meta-server entry into each agent's MCP config.
+
+- [ ] Write `"symposium"` entry per agent format
+- [ ] Tests: verify idempotent registration

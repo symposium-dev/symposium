@@ -84,5 +84,6 @@
 - [RFDs](./rfds/README.md)
   - [Template](./rfds/TEMPLATE/README.md)
   - [Accepted](./rfds/accepted.md) <!-- put accepted rfds in this section; the file goes in the rfds directory -->
+    - [MCP meta-server](./rfds/mcp-meta-server/README.md)
   - [Completed](./rfds/completed.md) <!-- move completed rfds to this section -->
     - [RFD Process](./rfds/rfd-process/README.md)
