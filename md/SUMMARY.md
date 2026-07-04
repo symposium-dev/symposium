@@ -14,6 +14,7 @@
 - [About symposium](./about.md)
 - [Blog](./blog/outline.md)
   - [Announcing Symposium (2026-04-21)](./blog/announcing-symposium.md)
+  - [A Maturing Symposium (2026-07-03)](./blog/a-maturing-symposium.md)
 
 # User's guide
 
