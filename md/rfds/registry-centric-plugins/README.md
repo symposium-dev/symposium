@@ -29,8 +29,6 @@ When users run `symposium sync`, Symposium will scan their dependencies and look
 
 If auto-sync is not enabled, Symposium still checks to see if there are new plugins (or new versions of plugins) available since the user last synchronized. If there are, then a hint is added to the agent to prompt the user to run `symposium sync`.
 
-See the [discovery & sync sub-RFD](./discovery-sync/README.md) for the detailed algorithm.
-
 ### Workspace-local extensions
 
 Projects can also define plugins that should be made available whenever that project is part of the user's active workspace (i.e., the user is hacking on that project). For example, consider a Rust project like `widget`, which has a workspace with two crates, `widget-lib` and `widget-test`:
@@ -301,27 +299,12 @@ The tradeoff is that some plugins don't have a natural "home" in a language-spec
 
 ## Detailed design
 
-### Sub-RFDs
+We plan follow-up RFDs with more details on each component:
 
-#### [PM interface](./pm-interface/README.md)
-
-The core abstraction. Protocol for PM implementations, error semantics, caching contract, how `resolve`/`search`/`fetch`/`list-deps` work in detail.
-
-#### [Cargo PM](./cargo-pm/README.md)
-
-The cargo PM specifically: `resolve` schema, `fetch` via cargo toolchain, `list-deps` from `Cargo.lock`, plugin detection in crates, redirect support.
-
-#### [Plugin model](./plugin-model/README.md)
-
-What a plugin is, `Symposium.toml` structure, defaults (skill discovery, implicit installations), predicates, chained plugins, installed vs. active.
-
-#### [Discovery & sync](./discovery-sync/README.md)
-
-The hook-triggered discovery flow, prompt UX, how recommendations vouch for deps by keying on other PMs' identifiers (`cargo:serde:*`), auto-install configuration, behavior when multiple PMs return matches.
-
-#### [User-managed plugins](./user-managed-plugins/README.md)
-
-`symposium use`/`remove`/`status` commands. Config file format, version requirement syntax, global vs. workspace-local scoping.
+- **Plugin model** — what a plugin is, `Symposium.toml` structure, defaults (skill discovery, implicit installations), predicates, chained plugins, installed vs. active.
+- **PM interface + Cargo PM** — the JSON-RPC protocol for PM binaries, error semantics, caching contract. The cargo PM specifically: `resolve` schema, `fetch` via cargo toolchain, `list-deps` from `Cargo.lock`.
+- **Discovery & sync** — the two-phase discovery algorithm (`list-deps` on all PMs, then `search` on all PMs for each dep), hook-triggered notification, prompt UX, auto-install configuration.
+- **User-managed plugins** — `symposium use`/`remove`/`status` commands, config file format, version requirement syntax, global vs. workspace-local scoping.
 
 ### Future work
 
@@ -331,9 +314,8 @@ The hook-triggered discovery flow, prompt UX, how recommendations vouch for deps
 
 ## Implementation order
 
-1. **PM interface** — the foundation. Identity triple, four operations, state layers.
-2. **Plugin model** — what a plugin is, defaults, predicates, chained plugins.
-3. **Cargo PM** — first real PM implementation.
-4. **Discovery & sync** — PM `list-deps` + `search`, prompt UX. Enables "plugins from your dependencies."
-5. **User-managed plugins** — `use`/`remove`/`status` UX.
-6. **Future work** — fixed-point, custom PMs, policy — as demand arises.
+1. **Plugin model** — what a plugin is, defaults, predicates, chained plugins.
+2. **PM interface + Cargo PM** — the foundation. Identity tuple, four operations, JSON-RPC protocol, first real PM.
+3. **Discovery & sync** — PM `list-deps` + `search`, prompt UX. Enables "plugins from your dependencies."
+4. **User-managed plugins** — `use`/`remove`/`status` UX.
+5. **Future work** — fixed-point, custom PMs, policy — as demand arises.
