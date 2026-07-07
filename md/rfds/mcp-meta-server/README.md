@@ -3,8 +3,9 @@
 ## TL;DR
 
 - Instead of writing plugin MCP servers directly into agent config, Symposium runs a single "meta" MCP server that gates access to all plugin-provided servers.
-- The meta-server exposes two tools — `list_tools` and `call_tool` — following the progressive disclosure / bounded context pack pattern.
-- This avoids context bloat, keeps `.claude/` (and equivalents) clean, and gives Symposium a persistent in-process channel to the agent.
+- The meta-server exposes two tools — `list_tools` and `execute` — following the progressive disclosure pattern.
+- `list_tools` returns TypeScript declarations describing available tools. `execute` runs a JavaScript program with those tools available as global functions.
+- This avoids context bloat, keeps `.claude/` (and equivalents) clean, gives Symposium a persistent in-process channel to the agent, and lets the agent compose multi-step tool workflows in a single round trip.
 
 ## Motivation
 
@@ -16,7 +17,7 @@ Today, `[[mcp_servers]]` entries in plugins are registered directly into the age
 
 3. **No return channel.** Once tools are registered, Symposium has no way to communicate with the agent session — for elicitation, status updates, or dynamic capability changes.
 
-A single Symposium-owned MCP server solves all three: one config entry, progressive tool loading, and an always-available communication channel.
+A single Symposium-owned MCP server solves all three: one config entry, progressive tool loading, and an always-available communication channel. Adding code execution on top eliminates the "one round trip per tool call" bottleneck.
 
 ## Change in a nutshell
 
@@ -37,11 +38,47 @@ At `cargo agents init` (or `sync`), Symposium registers exactly one MCP server �
 When the agent starts a session, it connects to this server and sees two tools:
 
 ```
-symposium__list_tools  — List available tools, optionally filtered by domain
-symposium__call_tool   — Execute a tool by name
+symposium__list_tools  — Show available tools as TypeScript declarations
+symposium__execute     — Run a JavaScript program with tools as globals
 ```
 
-The `list_tools` description contains a capability index (the "menu") built from all applicable plugin MCP servers. The agent requests schemas on demand and executes through `call_tool`. Plugin servers are started lazily on first use.
+The `list_tools` description contains a capability index (the "menu") built from all applicable plugin MCP servers. When the agent needs details, it calls `list_tools` and receives TypeScript declarations. It then writes a JavaScript program that calls those functions and passes it to `execute`.
+
+### Example flow
+
+The agent sees this in the `list_tools` description:
+
+```
+Available servers: sqlx, sea_orm
+Call list_tools for full declarations.
+```
+
+It calls `list_tools({ servers: ["sqlx"] })` and gets:
+
+```typescript
+declare namespace sqlx {
+  /** Execute a SQL query and return rows */
+  function query(params: { sql: string; params?: any[] }): any;
+  /** Explain a query plan */
+  function explain(params: { sql: string }): any;
+  /** Show pending and applied migrations */
+  function migrate_status(): any;
+}
+```
+
+It then calls `execute` with a JavaScript program:
+
+```javascript
+const users = await sqlx.query({ sql: "SELECT id, name FROM users WHERE active = $1", params: [true] });
+const tables = users.rows.map(u => u.table_name);
+const entities = [];
+for (const t of tables) {
+  entities.push(await sea_orm.generate_entity({ table: t }));
+}
+return entities.filter(e => e.code.includes("DateTime"));
+```
+
+The meta-server runs this in a sandboxed JS interpreter, dispatching `sqlx.query(...)` and `sea_orm.generate_entity(...)` to the respective backing MCP servers, and returns the final value to the agent.
 
 ## Detailed plans
 
@@ -51,7 +88,8 @@ The meta-server is a stdio MCP server implemented in `cargo-agents mcp-serve`. I
 
 1. Resolves the workspace (same `WorkspaceDeps` logic as sync/hooks).
 2. Collects all applicable `[[mcp_servers]]` from the plugin registry.
-3. Exposes a two-tool interface following the bounded context pack pattern.
+3. Exposes two tools: `list_tools` and `execute`.
+4. Embeds a JavaScript interpreter for executing agent-submitted programs.
 
 #### The two tools
 
@@ -59,40 +97,61 @@ The meta-server is a stdio MCP server implemented in `cargo-agents mcp-serve`. I
 
 ```
 description: |
-  List available tools from Symposium plugins.
+  List available tools as TypeScript declarations.
   
-  Domains:
-    sqlx: [query, explain, migrate_status]
-    sea-orm: [generate_entity, diff_schema]
-    ...
+  Available servers: sqlx, sea_orm, tokio_console
+  Call list_tools for full declarations.
 
 parameters:
-  domain: string (optional) — filter to a specific domain
-  tools: array of strings (optional) — return full schemas for these tools
+  servers: array of strings (optional) — which servers to show (default: all)
 ```
 
-The two parameters are independent:
+Returns TypeScript declarations for the requested servers. When called with no arguments, returns declarations for all available servers.
 
-- `domain` filters the capability index to one domain (returns tool names only).
-- `tools` returns full JSON schemas for the named tools (regardless of domain).
-
-When called with no arguments, returns the full structured index. Both can be combined (e.g., "show me the sqlx domain and also give me the schema for `sea-orm__generate_entity`").
-
-**`call_tool`**
+**`execute`**
 
 ```
 parameters:
-  tool: string — fully qualified tool name (e.g., "sqlx__query")
-  input: object — tool-specific parameters
+  script: string — JavaScript program to run
 ```
 
-Dispatches to the appropriate plugin MCP server. If the backing server isn't running, starts it first (lazy initialization).
+Runs the script in a sandboxed JS interpreter. Each MCP server is exposed as a namespace object on the global scope (e.g., `sqlx`, `sea_orm`). Tool functions within each namespace are async — the script should use `await`. The return value of the script (last expression or explicit `return`) is serialized as JSON and returned to the agent.
+
+#### TypeScript declarations from MCP schemas
+
+MCP tool schemas are JSON Schema with `type: "object"` at the root. The conversion to TypeScript declarations is mechanical:
+
+| JSON Schema | TypeScript |
+|-------------|-----------|
+| `{ "type": "string" }` | `string` |
+| `{ "type": "number" }` or `"integer"` | `number` |
+| `{ "type": "boolean" }` | `boolean` |
+| `{ "type": "array", "items": T }` | `T[]` |
+| `{ "type": "object", "properties": {...} }` | `{ field: T; ... }` |
+| `{ "enum": ["a", "b"] }` | `"a" \| "b"` |
+| not in `required` | `field?: T` |
+| anything else | `any` |
+
+Return types are `any` since the MCP spec (2025-03-26) does not type tool outputs. If a server declares `outputSchema` (2025-11-25 spec), we can generate a return type from it.
+
+Descriptions from the JSON Schema `description` field become JSDoc comments on the declaration.
+
+#### JavaScript execution engine
+
+The meta-server embeds a lightweight JS engine. Two candidates:
+
+- **rquickjs** — Rust bindings to QuickJS. ~500KB, sub-ms startup, ES2020, easy host function registration.
+- **Boa** — pure Rust. No C dependency, still maturing on spec compliance.
+
+We start with rquickjs (better spec compliance, proven in production). The sandbox exposes only the MCP tool namespaces — no filesystem, network, or other ambient capabilities.
+
+Each namespace function is registered as a host-backed async function. When the script calls `await sqlx.query(...)`, the engine suspends, the meta-server dispatches to the backing MCP server, and resumes the script with the result.
 
 #### Lazy server lifecycle
 
-Plugin MCP servers are not started until the agent requests their tool schemas (via `list_tools`) or invokes one of their tools (via `call_tool`). The meta-server maintains a process table:
+Plugin MCP servers are not started until the agent requests their declarations (via `list_tools`) or executes a script that calls one of their tools. The meta-server maintains a process table:
 
-- **Cold** — server not running, schema loaded from plugin manifest.
+- **Cold** — server not running, tool list known from plugin manifest.
 - **Starting** — server process spawning, calls queue.
 - **Ready** — server running, calls dispatched directly.
 - **Dead** — server exited unexpectedly, restart on next call.
@@ -101,16 +160,14 @@ Servers are shut down when the meta-server exits (agent session ends).
 
 ### Capability index in the description
 
-The `list_tools` description is dynamically generated from applicable plugins. It follows the pattern from the bounded context packs literature:
+The `list_tools` description is dynamically generated from applicable plugins:
 
 ```
-Domains:
-  sqlx: [query, explain, migrate_status]
-  sea-orm: [generate_entity, diff_schema]
-  tokio-console: [list_tasks, task_detail]
+Available servers: sqlx, sea_orm, tokio_console
+Call list_tools for full TypeScript declarations.
 ```
 
-This means the agent sees the full capability menu just by reading the tool description — no discovery call needed for basic orientation. The model only calls `list_tools` when it needs parameter schemas.
+This gives the agent orientation without consuming tokens on full schemas. The model calls `list_tools` when it needs the actual function signatures.
 
 If the index exceeds a reasonable size (TBD, likely ~2000 chars), the description is truncated with a note to call `list_tools` for the full listing.
 
@@ -150,6 +207,7 @@ The progressive disclosure pattern for MCP tools is well-established. Our design
 
 - [Advanced Tool Use](https://www.anthropic.com/engineering/advanced-tool-use) — recommends keeping 3–5 tools always loaded, deferring the rest. Reports 85% token reduction and accuracy improvements.
 - [Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) — introduces "just-in-time retrieval": agents maintain lightweight identifiers and load data at runtime via tools.
+- [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp) — proposes presenting MCP tools as code APIs rather than direct tool calls. The agent writes programs that compose tools, filter intermediate results, and use control flow — all in one execution. Reports 98.7% token reduction. This directly informs our `execute` tool design.
 - [Tool Search Tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool) — Anthropic's API-level implementation of progressive disclosure (`defer_loading: true`, BM25/regex search over up to 10,000 tools). Only works via the Claude API, not for MCP-based agent sessions.
 
 ### Community MCP aggregators
@@ -173,12 +231,13 @@ The [MCP 2025-03-26 spec](https://modelcontextprotocol.io/specification/2025-03-
 
 - `tools/list` supports cursor-based pagination (for large result sets, not progressive disclosure).
 - `notifications/tools/list_changed` lets servers signal that their tool set changed mid-session.
+- `inputSchema` is always JSON Schema with `type: "object"` at the root — straightforward to convert to TypeScript declarations.
 
 Progressive disclosure must be implemented at the application layer — which is what the meta-server does.
 
 ### How Symposium differs
 
-The key differentiator from existing aggregators: the meta-server is **workspace-aware**. It uses crate predicates to determine which plugin servers are applicable, starts them lazily, and integrates with the existing Symposium config/sync lifecycle. No manual server configuration is needed — plugins declare `[[mcp_servers]]` and the meta-server handles the rest.
+The key differentiator from existing aggregators: the meta-server is **workspace-aware** and uses **code execution** rather than one-call-at-a-time proxying. It uses crate predicates to determine which plugin servers are applicable, starts them lazily, presents their schemas as TypeScript declarations, and lets the agent compose multi-step workflows in a single `execute` call. No manual server configuration is needed — plugins declare `[[mcp_servers]]` and the meta-server handles the rest.
 
 ## Frequently asked questions
 
@@ -186,29 +245,41 @@ The key differentiator from existing aggregators: the meta-server is **workspace
 
 Three reasons. First, `.gitignore` patterns for agent config directories (`.claude/`, `.github/`) are coarse — you'd either ignore too much or need per-file patterns that users have to maintain. Second, direct registration means every plugin's tools land in context at startup regardless of whether the agent needs them. Third, direct registration gives Symposium no way to communicate with the agent after initialization.
 
-### Why two tools instead of exposing each plugin tool directly?
+### Why `execute` instead of a simple `call_tool`?
 
-Exposing each tool directly through the meta-server would still bloat the context — the agent would see N tool schemas at connection time. The two-tool pattern means the agent sees exactly 2 schemas at startup (~600 tokens) regardless of how many plugin tools exist. It requests schemas on demand.
+A `call_tool` proxy still requires one round trip per tool invocation. For multi-step workflows (query a database, filter results, pass them to another tool), the agent must go back and forth with the meta-server for each step, paying latency and token cost each time. With `execute`, the agent writes a short program that composes multiple calls, filters intermediate data, and uses control flow — all in a single invocation. Intermediate results never enter the agent's context unless explicitly returned. See [Code Execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp) for the detailed rationale.
+
+### Why TypeScript declarations instead of JSON Schema?
+
+Models have seen millions of TypeScript type definitions in training. `.d.ts` syntax is the most token-efficient, highest-fidelity way for a model to understand a function's signature. JSON Schema is verbose and less directly actionable — the model would have to mentally convert it before writing code anyway.
+
+### Why JavaScript (QuickJS) instead of Rhai or Lua?
+
+Models produce correct JavaScript at extremely high rates — it's by far the most represented language in training data. JSON is a literal in the language, so there's no serialization ceremony. QuickJS provides ES2020 compliance in ~500KB with sub-millisecond startup. Rhai is Rust-native but less familiar to models; Lua is lightweight but requires explicit JSON handling.
 
 ### What about tool namespacing and conflicts?
 
-Tool names are prefixed with the plugin server name: `sqlx__query`, `sea-orm__generate_entity`. If two plugins declare a server with the same qualified tool name, the first-registered wins and a warning is emitted. The conflicting tool from the later plugin is skipped.
+Each MCP server becomes a namespace: `sqlx.query(...)`, `sea_orm.generate_entity(...)`. If two plugins declare a server with the same name, the first-registered wins and a warning is emitted.
 
 ### How does this affect latency?
 
-First call to a cold server pays startup cost (process spawn + MCP handshake). Subsequent calls go directly. For most plugin servers (small Rust binaries), startup is <100ms.
+First call to a cold server pays startup cost (process spawn + MCP handshake). Subsequent calls go directly. For most plugin servers (small Rust binaries), startup is <100ms. The JS interpreter itself is sub-millisecond startup.
 
 ### What about HTTP/SSE backing servers?
 
 The meta-server acts as an MCP client to each backing server using whatever transport that server declares (stdio, HTTP, or SSE). From the agent's perspective it's always stdio — the meta-server bridges the transport gap.
 
-### What if a backing server crashes mid-call?
+### What if a backing server crashes mid-execution?
 
-The meta-server surfaces the error to the agent as-is (the MCP error response from the backing server, or a connection-lost error if it crashed). The server transitions to `Dead` state and is restarted on the next call.
+The meta-server surfaces the error as a JavaScript exception within the script. If the script doesn't catch it, the `execute` call returns an error with the exception message. The server transitions to `Dead` state and is restarted on the next call.
 
 ### What if `Cargo.toml` changes mid-session?
 
 The meta-server re-resolves the workspace on `list_tools` calls when `Cargo.lock` mtime has changed (same freshness gate as hooks). This is gated behind the user's `auto-sync` configuration setting — if auto-sync is disabled, the index stays static until the next manual `cargo agents sync`.
+
+### Is there a script size or execution time limit?
+
+Yes. Scripts are limited to a configurable timeout (default: 30s) and the JS engine runs with bounded memory. These limits prevent runaway loops from hanging the agent session.
 
 ### What about the `sync --agent` flow?
 
@@ -228,43 +299,42 @@ This is partly a refactor (removing the per-plugin write path) and partly new be
 - [ ] Update existing MCP integration tests to expect the new behavior
 - [ ] Verify: `cargo test` passes, `.claude/settings.json` contains only `"symposium"` after sync
 
-### Step 2: `mcp-serve` subcommand with hardcoded two-tool skeleton (new tests)
+### Step 2: `mcp-serve` subcommand with two-tool skeleton (new tests)
 
-Add `cargo agents mcp-serve` as a new `Commands` variant. It starts a stdio MCP server (via `rmcp`) that advertises `list_tools` and `call_tool` with hardcoded descriptions and returns empty/stub responses. Exits cleanly on stdin EOF.
+Add `cargo agents mcp-serve` as a new `Commands` variant. It starts a stdio MCP server (via `rmcp`) that advertises `list_tools` and `execute` with hardcoded descriptions and returns empty/stub responses. Exits cleanly on stdin EOF.
 
-Integration test: spawn `cargo-agents mcp-serve` as a child process, send MCP `initialize` + `tools/list` JSON-RPC requests over stdin, assert the response contains exactly the two tools with expected names. This validates the transport layer end-to-end.
+Integration test: spawn `cargo-agents mcp-serve` as a child process, send MCP `initialize` + `tools/list` JSON-RPC requests over stdin, assert the response contains exactly the two tools with expected names.
 
 - [ ] Add `rmcp` dependency
 - [ ] Add `McpServe` variant to `Commands`, wire handler
-- [ ] Implement stdio MCP server with `list_tools` and `call_tool` stubs
+- [ ] Implement stdio MCP server with `list_tools` and `execute` stubs
 - [ ] Integration test: spawn process, verify JSON-RPC handshake and tool listing
 
-### Step 3: Plugin-driven capability index (new tests)
+### Step 3: Plugin-driven `list_tools` with TypeScript generation (new tests)
 
-Wire `list_tools` to the real plugin registry. At startup, the meta-server resolves `WorkspaceDeps` and collects applicable `[[mcp_servers]]` to build the capability index. The `list_tools` description is generated dynamically; calling it with `tools: [...]` returns schemas (which requires starting the backing server).
+Wire `list_tools` to the real plugin registry. At startup, the meta-server resolves `WorkspaceDeps` and collects applicable `[[mcp_servers]]`. Calling `list_tools` starts the relevant backing servers, fetches their `tools/list` schemas, converts them to TypeScript declarations, and returns the result.
 
-For this step, only the *index* (tool names per domain) needs to work — schema retrieval can return an error for now.
-
-Integration test: use an existing fixture (e.g., `mcp-filtering0` + `workspace0`), spawn `mcp-serve` in that workspace, call `list_tools` with no args, assert the index contains `always-server` tools and `serde-server` tools but not `missing-crate-server` tools.
+Integration test: use an existing fixture (e.g., `mcp-filtering0` + `workspace0`), spawn `mcp-serve` in that workspace, call `list_tools`, assert the response contains TypeScript declarations for `always-server` tools but not `missing-crate-server` tools.
 
 - [ ] Resolve workspace and plugin registry at meta-server startup
-- [ ] Build capability index from applicable plugin MCP server declarations
-- [ ] Generate dynamic `list_tools` description with domain listing
-- [ ] Handle `domain` parameter filtering
-- [ ] Integration test: verify index reflects workspace-filtered plugins
+- [ ] Implement JSON Schema → TypeScript declaration conversion
+- [ ] On `list_tools`, start backing servers and fetch their tool schemas
+- [ ] Generate and return TypeScript declarations grouped by namespace
+- [ ] Integration test: verify declarations reflect workspace-filtered plugins
+- [ ] Unit tests: JSON Schema → TypeScript conversion for common schema patterns
 
-### Step 4: Lazy server dispatch and `call_tool` (new tests)
+### Step 4: `execute` with embedded JS engine (new tests)
 
-Implement the process table and `call_tool` dispatch. When the agent calls `call_tool` (or `list_tools` with `tools: [...]`), the meta-server starts the backing server if cold, waits for MCP handshake, then proxies the request. Support stdio transport first; HTTP/SSE can follow.
+Embed rquickjs (QuickJS). Register each backing server's tools as async functions on namespace globals. The `execute` tool runs the agent-submitted script, dispatching tool calls to backing servers, and returns the final value.
 
-Integration test: create a minimal mock MCP server (a small script or binary in the test fixture that responds to `tools/list` and `tools/call`). Spawn `mcp-serve`, call `call_tool` targeting the mock, assert the response passes through correctly. Also test the `Dead → restart` path by having the mock exit after one call.
+Integration test: create a minimal mock MCP server (a small script in the fixture that responds to `tools/list` and `tools/call`). Spawn `mcp-serve`, call `execute` with a script that calls the mock, assert the return value passes through correctly. Test error propagation by having the mock return an error.
 
-- [ ] Process table (Cold/Starting/Ready/Dead state machine)
-- [ ] MCP client connection to backing servers (stdio first)
-- [ ] `call_tool` dispatch: start if cold, proxy request, return response
-- [ ] `list_tools` with `tools` parameter: start server, fetch schemas, return
-- [ ] Error propagation: surface backing server errors to agent
-- [ ] Integration tests: successful dispatch, cold start, crash recovery
+- [ ] Add `rquickjs` dependency
+- [ ] Register namespace globals from backing server tool lists
+- [ ] Implement async dispatch: JS `await` → MCP `tools/call` → resume
+- [ ] Return script result as JSON to agent
+- [ ] Timeout and memory limits
+- [ ] Integration tests: successful execution, multi-call scripts, error propagation
 
 ### Step 5: Freshness and `auto-sync` gating (new tests)
 
