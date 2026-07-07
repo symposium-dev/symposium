@@ -870,31 +870,85 @@ fn run_custom_predicate(
     }
 }
 
-/// Parse witness JSON from custom predicate stdout.
+/// Parse witness JSON Lines from custom predicate stdout.
 ///
-/// Returns `None` if stdout is non-empty but not valid witness JSON (the
-/// predicate should be treated as failed). Returns `Some(vec![])` for empty
-/// stdout (pass, no witness crates). Returns `Some(crates)` on valid JSON.
+/// Each non-blank line must be a JSON object with exactly one key identifying
+/// the record type. Known record types are processed; unknown types emit a
+/// warning and are skipped (forward compatibility). A malformed line (invalid
+/// JSON, zero keys, multiple keys, or bad field values) causes the predicate
+/// to be treated as failed.
 fn parse_witness_stdout(predicate_name: &str, stdout: &[u8]) -> Option<Vec<SelectedCrate>> {
-    use symposium_sdk::predicate::PredicateOutput;
-
     if stdout.is_empty() {
         return Some(Vec::new());
     }
 
-    let output: PredicateOutput = match serde_json::from_slice(stdout) {
-        Ok(o) => o,
-        Err(e) => {
+    let text = match std::str::from_utf8(stdout) {
+        Ok(s) => s,
+        Err(_) => {
             tracing::warn!(
                 predicate = predicate_name,
-                error = %e,
-                "custom predicate stdout is not valid witness JSON — treating as failed"
+                "custom predicate stdout is not valid UTF-8 — treating as failed"
             );
             return None;
         }
     };
 
-    Some(output.selected_crates)
+    let mut crates = Vec::new();
+
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        let obj: serde_json::Map<String, serde_json::Value> = match serde_json::from_str(line) {
+            Ok(m) => m,
+            Err(e) => {
+                tracing::warn!(
+                    predicate = predicate_name,
+                    error = %e,
+                    line,
+                    "custom predicate stdout line is not valid JSON — treating as failed"
+                );
+                return None;
+            }
+        };
+
+        if obj.len() != 1 {
+            tracing::warn!(
+                predicate = predicate_name,
+                line,
+                "custom predicate stdout line must have exactly one key — treating as failed"
+            );
+            return None;
+        }
+
+        let (key, value) = obj.into_iter().next().unwrap();
+        match key.as_str() {
+            "selectedCrate" => {
+                let sc: SelectedCrate = match serde_json::from_value(value) {
+                    Ok(sc) => sc,
+                    Err(e) => {
+                        tracing::warn!(
+                            predicate = predicate_name,
+                            error = %e,
+                            "custom predicate selectedCrate record is malformed — treating as failed"
+                        );
+                        return None;
+                    }
+                };
+                crates.push(sc);
+            }
+            unknown => {
+                tracing::warn!(
+                    predicate = predicate_name,
+                    key = unknown,
+                    "unknown predicate record type, skipping"
+                );
+            }
+        }
+    }
+
+    Some(crates)
 }
 
 #[cfg(test)]
@@ -1584,7 +1638,7 @@ mod tests {
 
     #[test]
     fn witness_custom_with_selected_crates() {
-        let json = r#"{"selectedCrates":[{"crate":"cli-battery-pack","version":"0.3.1"}]}"#;
+        let json = r#"{"selectedCrate":{"name":"cli-battery-pack","version":"0.3.1"}}"#;
         let (mut ctx, _script) = ctx_with_script_entry("bp", &format!("printf '{json}'"));
         let pred = Predicate::Custom {
             name: "bp".into(),
@@ -1625,26 +1679,31 @@ mod tests {
             name: "bp".into(),
             arg: "x".into(),
         };
-        // Invalid JSON on stdout causes the predicate to fail.
         assert!(!pred.evaluate(&mut ctx));
     }
 
     #[test]
     fn witness_custom_invalid_version_fails_predicate() {
-        let json = r#"{"selectedCrates":[{"crate":"good","version":"1.0.0"},{"crate":"bad","version":"not-semver"}]}"#;
-        let (mut ctx, _script) = ctx_with_script_entry("bp", &format!("printf '{json}'"));
+        let (mut ctx, _script) = ctx_with_script_entry(
+            "bp",
+            "printf '{\"selectedCrate\":{\"name\":\"good\",\"version\":\"1.0.0\"}}\n'\n\
+             printf '{\"selectedCrate\":{\"name\":\"bad\",\"version\":\"not-semver\"}}\n'",
+        );
         let pred = Predicate::Custom {
             name: "bp".into(),
             arg: "x".into(),
         };
-        // Any malformed entry fails the whole predicate.
         assert!(!pred.evaluate(&mut ctx));
     }
 
     #[test]
     fn witness_custom_multiple_crates() {
-        let json = r#"{"selectedCrates":[{"crate":"a","version":"1.0.0"},{"crate":"b","version":"2.0.0"},{"crate":"c","version":"3.0.0"}]}"#;
-        let (mut ctx, _script) = ctx_with_script_entry("bp", &format!("printf '{json}'"));
+        let (mut ctx, _script) = ctx_with_script_entry(
+            "bp",
+            "printf '{\"selectedCrate\":{\"name\":\"a\",\"version\":\"1.0.0\"}}\n'\n\
+             printf '{\"selectedCrate\":{\"name\":\"b\",\"version\":\"2.0.0\"}}\n'\n\
+             printf '{\"selectedCrate\":{\"name\":\"c\",\"version\":\"3.0.0\"}}\n'",
+        );
         let pred = Predicate::Custom {
             name: "bp".into(),
             arg: "x".into(),
@@ -1654,5 +1713,58 @@ mod tests {
         assert_eq!(witness[0].0, "a");
         assert_eq!(witness[1].0, "b");
         assert_eq!(witness[2].0, "c");
+    }
+
+    #[test]
+    fn witness_custom_unknown_record_type_is_skipped() {
+        let (mut ctx, _script) = ctx_with_script_entry(
+            "bp",
+            "printf '{\"futureFeature\":{\"x\":1}}\n'\n\
+             printf '{\"selectedCrate\":{\"name\":\"serde\",\"version\":\"1.0.0\"}}\n'",
+        );
+        let pred = Predicate::Custom {
+            name: "bp".into(),
+            arg: "x".into(),
+        };
+        let witness = pred.witness(&mut ctx).unwrap();
+        assert_eq!(witness.len(), 1);
+        assert_eq!(witness[0].0, "serde");
+    }
+
+    #[test]
+    fn witness_custom_empty_object_fails_predicate() {
+        let (mut ctx, _script) = ctx_with_script_entry("bp", "printf '{}'");
+        let pred = Predicate::Custom {
+            name: "bp".into(),
+            arg: "x".into(),
+        };
+        assert!(!pred.evaluate(&mut ctx));
+    }
+
+    #[test]
+    fn witness_custom_blank_lines_are_skipped() {
+        let (mut ctx, _script) = ctx_with_script_entry(
+            "bp",
+            "printf '\\n'\n\
+             printf '{\"selectedCrate\":{\"name\":\"tokio\",\"version\":\"1.40.0\"}}\n'\n\
+             printf '\\n'",
+        );
+        let pred = Predicate::Custom {
+            name: "bp".into(),
+            arg: "x".into(),
+        };
+        let witness = pred.witness(&mut ctx).unwrap();
+        assert_eq!(witness.len(), 1);
+        assert_eq!(witness[0].0, "tokio");
+    }
+
+    #[test]
+    fn witness_custom_multiple_keys_fails_predicate() {
+        let (mut ctx, _script) = ctx_with_script_entry("bp", "printf '{\"keyA\":1,\"keyB\":2}'");
+        let pred = Predicate::Custom {
+            name: "bp".into(),
+            arg: "x".into(),
+        };
+        assert!(!pred.evaluate(&mut ctx));
     }
 }

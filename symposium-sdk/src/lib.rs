@@ -30,20 +30,14 @@
 //!
 //! A custom predicate binary receives its argument via CLI args, and signals
 //! pass/fail via exit code. To participate in crate-sourced skill resolution,
-//! it prints witness JSON to stdout:
+//! it emits JSON Lines records to stdout using [`PredicateEmitter`]:
 //!
 //! ```no_run
-//! use symposium_sdk::predicate::{PredicateOutput, SelectedCrate};
+//! use symposium_sdk::predicate::PredicateEmitter;
 //!
-//! let output = PredicateOutput {
-//!     selected_crates: vec![
-//!         SelectedCrate {
-//!             crate_name: "my-crate".into(),
-//!             version: semver::Version::new(1, 0, 0),
-//!         },
-//!     ],
-//! };
-//! println!("{}", serde_json::to_string(&output).unwrap());
+//! PredicateEmitter::stdout()
+//!     .selected_crate("my-crate", &semver::Version::new(1, 0, 0))
+//!     .unwrap();
 //! ```
 
 pub mod dirs;
