@@ -54,7 +54,7 @@ impl HookScope {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone)]
 pub struct Config {
     /// Automatically run `sync` when hooks are invoked.
     #[serde(default = "default_true", rename = "auto-sync")]
@@ -161,6 +161,71 @@ impl Default for Config {
             logging: LoggingConfig::default(),
             defaults: DefaultsConfig::default(),
             plugin_source: Vec::new(),
+        }
+    }
+}
+
+/// Raw user config root as accepted in `~/.symposium/config.toml`.
+#[derive(Debug, Deserialize)]
+struct RawConfig {
+    #[serde(default = "default_true", rename = "auto-sync")]
+    auto_sync: bool,
+    #[serde(default = "default_true", rename = "agents-syncing")]
+    agents_syncing: bool,
+    #[serde(default = "default_sync_debounce_secs", rename = "sync-debounce-secs")]
+    sync_debounce_secs: u64,
+    #[serde(default, rename = "hook-scope")]
+    hook_scope: HookScope,
+    #[serde(default, rename = "auto-update")]
+    auto_update: AutoUpdate,
+    #[serde(default)]
+    telemetry: TelemetryConfig,
+    #[serde(default, rename = "agent")]
+    agents: Vec<AgentEntry>,
+    #[serde(default)]
+    logging: LoggingConfig,
+    #[serde(default)]
+    defaults: DefaultsConfig,
+    #[serde(default, rename = "plugin-source")]
+    plugin_source: Vec<PluginSourceConfig>,
+}
+
+impl Default for RawConfig {
+    fn default() -> Self {
+        Config::default().into()
+    }
+}
+
+impl RawConfig {
+    fn validate(self) -> Config {
+        Config {
+            auto_sync: self.auto_sync,
+            agents_syncing: self.agents_syncing,
+            sync_debounce_secs: self.sync_debounce_secs,
+            hook_scope: self.hook_scope,
+            auto_update: self.auto_update,
+            telemetry: self.telemetry,
+            agents: self.agents,
+            logging: self.logging,
+            defaults: self.defaults,
+            plugin_source: self.plugin_source,
+        }
+    }
+}
+
+impl From<Config> for RawConfig {
+    fn from(config: Config) -> Self {
+        Self {
+            auto_sync: config.auto_sync,
+            agents_syncing: config.agents_syncing,
+            sync_debounce_secs: config.sync_debounce_secs,
+            hook_scope: config.hook_scope,
+            auto_update: config.auto_update,
+            telemetry: config.telemetry,
+            agents: config.agents,
+            logging: config.logging,
+            defaults: config.defaults,
+            plugin_source: config.plugin_source,
         }
     }
 }
@@ -477,10 +542,12 @@ fn resolve_logs_dir(config_dir: &Path) -> PathBuf {
 fn load_config_from(config_dir: &Path) -> Config {
     let path = config_dir.join("config.toml");
     match fs::read_to_string(&path) {
-        Ok(contents) => toml::from_str(&contents).unwrap_or_else(|e| {
-            eprintln!("warning: failed to parse {}: {e}", path.display());
-            Config::default()
-        }),
+        Ok(contents) => toml::from_str::<RawConfig>(&contents)
+            .unwrap_or_else(|e| {
+                eprintln!("warning: failed to parse {}: {e}", path.display());
+                RawConfig::default()
+            })
+            .validate(),
         Err(_) => Config::default(),
     }
 }
@@ -502,9 +569,13 @@ mod tests {
     use super::*;
     use indoc::indoc;
 
+    fn parse_config(toml: &str) -> Config {
+        toml::from_str::<RawConfig>(toml).unwrap().validate()
+    }
+
     #[test]
     fn parse_empty_config() {
-        let config: Config = toml::from_str("").unwrap();
+        let config = parse_config("");
         assert!(config.defaults.symposium_recommendations);
         assert!(config.defaults.user_plugins);
         assert!(config.plugin_source.is_empty());
@@ -512,35 +583,32 @@ mod tests {
 
     #[test]
     fn parse_defaults_disable_recommendations() {
-        let config: Config = toml::from_str(indoc! {"
+        let config = parse_config(indoc! {"
             [defaults]
             symposium-recommendations = false
-        "})
-        .unwrap();
+        "});
         assert!(!config.defaults.symposium_recommendations);
         assert!(config.defaults.user_plugins);
     }
 
     #[test]
     fn parse_defaults_disable_user_plugins() {
-        let config: Config = toml::from_str(indoc! {"
+        let config = parse_config(indoc! {"
             [defaults]
             user-plugins = false
-        "})
-        .unwrap();
+        "});
         assert!(config.defaults.symposium_recommendations);
         assert!(!config.defaults.user_plugins);
     }
 
     #[test]
     fn parse_plugin_source_git() {
-        let config: Config = toml::from_str(indoc! {r#"
+        let config = parse_config(indoc! {r#"
             [[plugin-source]]
             name = "my-org"
             git = "https://github.com/my-org/plugins"
             auto-update = false
-        "#})
-        .unwrap();
+        "#});
         assert_eq!(config.plugin_source.len(), 1);
         assert_eq!(config.plugin_source[0].name, "my-org");
         assert_eq!(
@@ -552,12 +620,11 @@ mod tests {
 
     #[test]
     fn parse_plugin_source_path() {
-        let config: Config = toml::from_str(indoc! {r#"
+        let config = parse_config(indoc! {r#"
             [[plugin-source]]
             name = "local"
             path = "my-plugins"
-        "#})
-        .unwrap();
+        "#});
         assert_eq!(config.plugin_source.len(), 1);
         assert_eq!(config.plugin_source[0].path.as_deref(), Some("my-plugins"));
         assert!(config.plugin_source[0].auto_update); // default true
@@ -565,7 +632,7 @@ mod tests {
 
     #[test]
     fn parse_multiple_plugin_sources() {
-        let config: Config = toml::from_str(indoc! {r#"
+        let config = parse_config(indoc! {r#"
             [defaults]
             symposium-recommendations = false
 
@@ -581,8 +648,7 @@ mod tests {
             [[plugin-source]]
             name = "local"
             path = "extras"
-        "#})
-        .unwrap();
+        "#});
         assert!(!config.defaults.symposium_recommendations);
         assert_eq!(config.plugin_source.len(), 3);
         assert_eq!(config.plugin_source[0].name, "org-a");
@@ -616,7 +682,7 @@ mod tests {
 
     #[test]
     fn parse_agents() {
-        let config: Config = toml::from_str(indoc! {r#"
+        let config = parse_config(indoc! {r#"
             auto-sync = true
 
             [[agent]]
@@ -624,8 +690,7 @@ mod tests {
 
             [[agent]]
             name = "copilot"
-        "#})
-        .unwrap();
+        "#});
         assert_eq!(config.agents.len(), 2);
         assert_eq!(config.agents[0].name, "claude");
         assert_eq!(config.agents[1].name, "copilot");
@@ -634,7 +699,7 @@ mod tests {
 
     #[test]
     fn parse_config_defaults() {
-        let config: Config = toml::from_str("").unwrap();
+        let config = parse_config("");
         assert!(config.agents.is_empty());
         assert!(config.auto_sync); // default true
         assert!(config.agents_syncing); // default true
@@ -642,17 +707,16 @@ mod tests {
 
     #[test]
     fn parse_telemetry_defaults_off() {
-        let config: Config = toml::from_str("").unwrap();
+        let config = parse_config("");
         assert!(!config.telemetry.enabled);
     }
 
     #[test]
     fn parse_telemetry_enabled() {
-        let config: Config = toml::from_str(indoc! {"
+        let config = parse_config(indoc! {"
             [telemetry]
             enabled = true
-        "})
-        .unwrap();
+        "});
         assert!(config.telemetry.enabled);
     }
 
@@ -668,10 +732,9 @@ mod tests {
 
     #[test]
     fn parse_agents_syncing_disabled() {
-        let config: Config = toml::from_str(indoc! {"
+        let config = parse_config(indoc! {"
             agents-syncing = false
-        "})
-        .unwrap();
+        "});
         assert!(!config.agents_syncing);
     }
 

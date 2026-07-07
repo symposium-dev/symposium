@@ -6,7 +6,7 @@ Symposium is a Rust crate with both a library (`src/lib.rs`) and a binary (`src/
 
 Everything hangs off the `Symposium` struct, which wraps the parsed `Config` with resolved paths for config, cache, and log directories. Two constructors: `from_environment()` for production and `from_dir()` for tests.
 
-Defines the user-wide `Config` (stored at `~/.symposium/config.toml`) with `[[agent]]` entries, logging, plugin sources, defaults, and `auto-update` (off/warn/on, default warn). Provides `plugin_sources()` to resolve the effective list of plugin source directories. The `workspace_deps(cwd)` factory is the standard way to create a `WorkspaceDeps` — it wires in `cargo_override` and `cache_dir` so callers get both the `SYMPOSIUM_CARGO` override and cross-invocation disk caching.
+Defines the user-wide `Config` (stored at `~/.symposium/config.toml`) with `[[agent]]` entries, logging, plugin sources, defaults, and `auto-update` (off/warn/on, default on). User config is deserialized through `RawConfig` and validated into the runtime `Config`; runtime code does not deserialize `Config` directly. Provides `plugin_sources()` to resolve the effective list of plugin source directories. The `workspace_deps(cwd)` factory is the standard way to create a `WorkspaceDeps` — it wires in `cargo_override` and `cache_dir` so callers get both the `SYMPOSIUM_CARGO` override and cross-invocation disk caching.
 
 ### `agents.rs` — agent abstraction
 
@@ -29,6 +29,7 @@ Two entry points: `sync(sym, cwd)` for standalone CLI use (creates its own `Work
 Scans configured plugin source directories for TOML manifests and parses them into `Plugin` structs. Validation here turns the raw TOML into:
 - `Installation` entries (optional `source`, optional `executable`/`script`, optional `args`, plus `requirements` and `install_commands`) collected on `Plugin.installations`. Inline installation references on hooks or other installations are *promoted* into synthetic `Installation` entries with derived names (`<hook>` for an inline `command`, `<owner>__req_<i>` for an inline requirement), so all references in the validated form are plain names.
 - `Hook` entries with `command: String` (the name of an `Installation`) plus optional hook-level `executable` / `script` / `args`. Validation guarantees at most one of `executable`/`script` is set across hook + installation, and at most one layer sets `args`.
+- `SkillGroup` and `PluginMcpServer` entries whose `crates` sugar and `predicates` list are merged into one runtime `PredicateSet`. Skill group `source` syntax is deserialized as raw string/table forms, then validated into `PluginSource`.
 
 Also discovers standalone `SKILL.md` files not wrapped in a plugin. Returns a `PluginRegistry` — a table of contents that doesn't load skill content.
 
@@ -42,7 +43,7 @@ Defines `Source` (the `source = "..."`-tagged enum: `cargo`, `github`) and `acqu
 - **`cargo + git`**: the cache key folds in only the URL + user version, never the resolved commit, so a moved branch never invalidates it on its own. `Check`/`Fetch` resolve the remote `HEAD` with a cheap `git ls-remote` and compare against the commit recorded in a `.commit-sha` file in the cache dir; the binary is reinstalled (`cargo install --force`) **only when the SHA changed** (or `Fetch`, or the binary is missing). `None` never resolves the remote.
 - **github** (script/subtree sources): honors the level directly via the git cache manager (freshness checks debounced to a 60s window under `None`).
 
-Validates skill group source constraints at parse time: mutual exclusivity of `source.path`/`source.git`/`source = "crate"`, and the requirement that `source = "crate"` has at least one non-wildcard predicate.
+Validates skill group source constraints during manifest validation: mutual exclusivity of `source.path`/`source.git`/`source = "crate"`, and the requirement that `source = "crate"` has at least one non-wildcard predicate.
 
 ### `crate_metadata.rs` — parse Cargo.toml metadata
 
@@ -90,7 +91,7 @@ Builtin dispatch currently only acts on `SessionStart`, where `handle_session_st
 
 ### `state.rs` — persistent state
 
-Manages `state.toml` in the config directory. Tracks the semver of the binary that last touched the directory (for future migration hooks) and the timestamp of the last update check (to throttle crates.io queries to once per 24 hours). `ensure_current()` is called on startup to silently stamp the current version. `should_check_for_update()` / `record_update_check()` gate the auto-update flow.
+Manages `state.toml` in the config directory. Deserializes through `RawState` and validates into the runtime `State`. Tracks the semver of the binary that last touched the directory (for future migration hooks) and the timestamp of the last update check (to throttle crates.io queries to once per 24 hours). `ensure_current()` is called on startup to silently stamp the current version. `should_check_for_update()` / `record_update_check()` gate the auto-update flow.
 
 ### `telemetry.rs` — opt-in usage telemetry
 
