@@ -304,7 +304,7 @@ We plan follow-up RFDs with more details on each component:
 - **[Plugin model](./plugin-model/README.md)** — what a plugin is, `Symposium.toml` structure, defaults (skill discovery, implicit installations), predicates, chained plugins, installed vs. active.
 - **[PM interface](./pm-interface/README.md) + [Cargo PM](./cargo-pm/README.md)** — the JSON-RPC protocol for PM binaries, error semantics, caching contract. The cargo PM specifically: `resolve` schema, `fetch` via cargo toolchain, `list-deps` from `Cargo.lock`.
 - **[Discovery & sync](./discovery-sync/README.md)** — the two-phase discovery algorithm (`list-deps` on all PMs, then `search` on all PMs for each dep), hook-triggered notification, prompt UX, auto-install configuration.
-- **User-managed plugins** — `symposium use`/`remove`/`status` commands, config file format, version requirement syntax, global vs. workspace-local scoping.
+- **[User-managed plugins](./user-managed-plugins/README.md)** — `symposium use`/`remove`/`status` commands, config file format, version requirement syntax, global vs. workspace-local scoping.
 
 ### Future work
 
