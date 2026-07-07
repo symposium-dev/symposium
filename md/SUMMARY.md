@@ -85,5 +85,8 @@
   - [Accepted](./rfds/accepted.md) <!-- put accepted rfds in this section; the file goes in the rfds directory -->
     - [Registry-centric plugin distribution](./rfds/registry-centric-plugins/README.md)
       - [Plugin model](./rfds/registry-centric-plugins/plugin-model/README.md)
+      - [PM interface](./rfds/registry-centric-plugins/pm-interface/README.md)
+      - [Cargo PM](./rfds/registry-centric-plugins/cargo-pm/README.md)
+      - [Discovery & sync](./rfds/registry-centric-plugins/discovery-sync/README.md)
   - [Completed](./rfds/completed.md) <!-- move completed rfds to this section -->
     - [RFD Process](./rfds/rfd-process/README.md)
