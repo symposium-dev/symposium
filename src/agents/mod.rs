@@ -166,7 +166,7 @@ impl Agent {
             }
             Agent::Codex => register_codex_hooks(&home.join(".codex").join("hooks.json"), out),
             Agent::Copilot => {
-                register_copilot_hooks_global(&home.join(".copilot").join("config.json"), out)
+                register_copilot_hooks_global(&home.join(".copilot").join("settings.json"), out)
             }
             Agent::Gemini => {
                 register_gemini_hooks(&home.join(".gemini").join("settings.json"), out)
@@ -405,7 +405,7 @@ impl Agent {
             }
             Agent::Codex => unregister_codex_hooks(&home.join(".codex").join("hooks.json"), out),
             Agent::Copilot => {
-                unregister_copilot_hooks_global(&home.join(".copilot").join("config.json"), out)
+                unregister_copilot_hooks_global(&home.join(".copilot").join("settings.json"), out)
             }
             Agent::Gemini => {
                 unregister_gemini_hooks(&home.join(".gemini").join("settings.json"), out)
@@ -475,7 +475,7 @@ fn ensure_claude_hook_entry(
         group
             .get("hooks")
             .and_then(|h| h.as_array())
-            .map_or(false, |hooks| {
+            .is_some_and(|hooks| {
                 hooks.iter().any(|h| {
                     h.get("command")
                         .and_then(|c| c.as_str())
@@ -552,16 +552,16 @@ fn ensure_codex_hook_entry(
     };
 
     let already_registered = arr.iter().any(|group| {
-        group
-            .get("hooks")
-            .and_then(|h| h.as_array())
-            .map_or(false, |hooks| {
+        group.get("hooks").and_then(|h| h.as_array()).map_or_else(
+            || false,
+            |hooks| {
                 hooks.iter().any(|h| {
                     h.get("command")
                         .and_then(|c| c.as_str())
                         .is_some_and(|c| c.starts_with("cargo-agents hook"))
                 })
-            })
+            },
+        )
     });
 
     if already_registered {
@@ -587,7 +587,7 @@ fn unregister_codex_hooks(hooks_path: &Path, out: &Output) {
 // GitHub Copilot hook registration
 // ---------------------------------------------------------------------------
 
-/// Register hooks in the global Copilot config file (`~/.copilot/config.json`).
+/// Register hooks in the global Copilot user settings file (`~/.copilot/settings.json`).
 fn register_copilot_hooks_global(config_path: &Path, out: &Output) -> Result<()> {
     let display = display_path(config_path);
     let mut config = load_json_or_empty(config_path)?;
@@ -602,7 +602,7 @@ fn register_copilot_hooks_global(config_path: &Path, out: &Output) -> Result<()>
 
     // Check if already registered
     let already = hooks_obj.values().any(|arr| {
-        arr.as_array().map_or(false, |a| {
+        arr.as_array().is_some_and(|a| {
             a.iter().any(|h| {
                 h.get("bash")
                     .and_then(|c| c.as_str())
@@ -755,7 +755,7 @@ fn ensure_gemini_hook_entry(
         group
             .get("hooks")
             .and_then(|h| h.as_array())
-            .map_or(false, |hooks| {
+            .is_some_and(|hooks| {
                 hooks.iter().any(|h| {
                     h.get("command")
                         .and_then(|c| c.as_str())
@@ -948,7 +948,7 @@ fn unregister_settings_hooks(settings_path: &Path, command_prefix: &str, out: &O
                 !group
                     .get("hooks")
                     .and_then(|h| h.as_array())
-                    .map_or(false, |hooks| {
+                    .is_some_and(|hooks| {
                         hooks.iter().any(|h| {
                             h.get("command")
                                 .and_then(|c| c.as_str())
