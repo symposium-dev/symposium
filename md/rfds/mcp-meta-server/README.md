@@ -142,6 +142,44 @@ Because the meta-server is an always-connected channel, it can also:
 
 These are out of scope for the initial implementation but inform the architecture.
 
+## Related work
+
+The progressive disclosure pattern for MCP tools is well-established. Our design draws on and is compatible with this landscape.
+
+### Anthropic guidance
+
+- [Advanced Tool Use](https://www.anthropic.com/engineering/advanced-tool-use) — recommends keeping 3–5 tools always loaded, deferring the rest. Reports 85% token reduction and accuracy improvements.
+- [Effective Context Engineering for AI Agents](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents) — introduces "just-in-time retrieval": agents maintain lightweight identifiers and load data at runtime via tools.
+- [Tool Search Tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool) — Anthropic's API-level implementation of progressive disclosure (`defer_loading: true`, BM25/regex search over up to 10,000 tools). Only works via the Claude API, not for MCP-based agent sessions.
+
+### Community MCP aggregators
+
+Several projects have converged on the same "2–4 meta-tools" pattern:
+
+- [mcp-gateway (ViperJuice)](https://github.com/ViperJuice/mcp-gateway) — 26 meta-tools including `catalog_search`, `describe`, `invoke`. 4-step progressive disclosure with on-demand server provisioning.
+- [mcp-gateway (MikkoParkkola)](https://github.com/MikkoParkkola/mcp-gateway) — Rust. 4 meta-tools: `gateway_list_servers`, `gateway_list_tools`, `gateway_search_tools` (TF-IDF), `gateway_invoke`. Claims 89% token savings.
+- [1MCP](https://github.com/1mcp-app/agent) — unified runtime with 3-step CLI: `instructions`, `inspect`, `run`.
+- [NCP](https://github.com/portel-dev/ncp) — 2–3 meta-tools: `find` (vector similarity), `code`, `run`. Claims 97% fewer tokens.
+- [MCPProxy-Go](https://github.com/smart-mcp-proxy/mcpproxy-go) — Go proxy with BM25 `retrieve_tools` filtering. Claims 99% token reduction.
+
+### Bounded context packs literature
+
+- [The Meta-Tool Pattern](https://blog.synapticlabs.ai/bounded-context-packs-meta-tool-pattern) — articulates the two-tool discovery+execution pattern and three-layer architecture (meta-tools, domain agents, atomic tools).
+- [From Theory to Production](https://blog.synapticlabs.ai/bounded-context-packs-from-theory-to-production) — production walkthrough via the "Nexus" Obsidian plugin. `getTools`/`useTools`, dynamic description-embedded index, schema stripping.
+
+### MCP spec primitives
+
+The [MCP 2025-03-26 spec](https://modelcontextprotocol.io/specification/2025-03-26/server/tools) provides building blocks but no built-in discovery/search mechanism:
+
+- `tools/list` supports cursor-based pagination (for large result sets, not progressive disclosure).
+- `notifications/tools/list_changed` lets servers signal that their tool set changed mid-session.
+
+Progressive disclosure must be implemented at the application layer — which is what the meta-server does.
+
+### How Symposium differs
+
+The key differentiator from existing aggregators: the meta-server is **workspace-aware**. It uses crate predicates to determine which plugin servers are applicable, starts them lazily, and integrates with the existing Symposium config/sync lifecycle. No manual server configuration is needed — plugins declare `[[mcp_servers]]` and the meta-server handles the rest.
+
 ## Frequently asked questions
 
 ### Why not just register plugin servers directly with a `.gitignore`?
