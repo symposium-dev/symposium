@@ -28,13 +28,37 @@ When enabled, events are appended as **JSON lines** to per-day files under
 ```
 
 Each line is one [`TelemetryEvent`](./module-structure.md): an `at` timestamp
-plus a kind-tagged payload (`EventKind`), e.g.
+and an optional `session_id` on the envelope, then a kind-tagged payload
+(`EventKind`), e.g.
 
 ```json
-{"at":"2026-06-23T17:58:13Z","kind":"session_start","session_id":"P1","agent":"claude","plugins":["tokio-plugin"]}
-{"at":"2026-06-23T17:58:14Z","kind":"user_prompt","session_id":"P1"}
-{"at":"2026-06-23T17:58:15Z","kind":"tool_use","session_id":"P1","tool":"Bash"}
+{"at":"2026-07-09T17:58:13Z","session_id":"P1","kind":"session_start","agent":"claude","crate_count":42}
+{"at":"2026-07-09T17:58:13Z","session_id":"P1","kind":"plugin_activation","plugin":"async-plugin","crates":["tokio"]}
+{"at":"2026-07-09T17:58:13Z","session_id":"P1","kind":"skill_activation","skill":"async-patterns","plugin":"async-plugin","crates":["tokio"]}
+{"at":"2026-07-09T17:58:13Z","session_id":"P1","kind":"skill_activation","skill":"rust-general","plugin":"core-plugin"}
+{"at":"2026-07-09T17:58:13Z","session_id":"P1","kind":"sync_run","installed":2,"reaped":0,"plugins_matched":2}
+{"at":"2026-07-09T17:58:14Z","session_id":"P1","kind":"user_prompt"}
+{"at":"2026-07-09T17:58:15Z","session_id":"P1","kind":"tool_use","tool":"Bash"}
+{"at":"2026-07-09T17:58:16Z","session_id":"P1","kind":"hook_invocation","hook":"format-check","plugin":"async-plugin","duration_ms":37}
+{"at":"2026-07-09T17:58:40Z","session_id":"P1","kind":"stop"}
 ```
+
+The event kinds fall into three groups by what produces them:
+
+- **Session lifecycle**, keyed off the agent's hook events: `session_start`
+  (agent name, workspace crate count), `user_prompt`, `tool_use` (tool name
+  only), and `stop` (end of a turn).
+- **Sync activity**, captured once per session when symposium syncs skills:
+  `plugin_activation` and `skill_activation` (which plugin or skill applied, and
+  the witness crates that triggered it), plus `sync_run` (skills installed and
+  reaped, plugins matched).
+- **Hook activity**: `hook_invocation` (which hook of which plugin ran, and its
+  duration).
+
+A `crates` list is the set of workspace crates that satisfied the activation's
+predicates. It is omitted when the gate was a wildcard or a non-crate predicate
+(`env`, `shell`, `path`), so a skill that applies for a non-crate reason records
+no `crates` key.
 
 Files older than `RETENTION_DAYS` (30) are rolled off — deleted on the next
 `SessionStart`.
@@ -57,6 +81,18 @@ telemetry?") and can be toggled later with `cargo agents telemetry enable` /
 - `cargo agents telemetry enable` / `disable` — toggle the opt-in.
 - `cargo agents telemetry show [--count N]` — print recent events for
   inspection (the data the user would share).
+
+## Scope: symposium's own activity
+
+Every activation, sync, and hook event is computed from symposium's own plugin
+registry (the configured plugin sources), not by scanning an agent's installed
+skill directory. A skill or plugin that symposium did not install (a
+hand-authored agent skill, or one from another source) is never in that
+registry, so it produces no telemetry. A symposium skill gated on a non-crate
+predicate is still recorded, since symposium activated it, with an empty
+`crates` field. The `user_prompt` and `tool_use` events count session activity
+as a whole but carry no skill or plugin name, so they never attribute unrelated
+work to symposium.
 
 ## What we deliberately do *not* record
 
