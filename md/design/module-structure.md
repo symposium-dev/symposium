@@ -8,6 +8,8 @@ Everything hangs off the `Symposium` struct, which wraps the parsed `Config` wit
 
 Defines the user-wide `Config` (stored at `~/.symposium/config.toml`) with `[[agent]]` entries, logging, plugin sources, defaults, and `auto-update` (off/warn/on, default on). User config is deserialized through `RawConfig` and validated into the runtime `Config`; runtime code does not deserialize `Config` directly. Provides `plugin_sources()` to resolve the effective list of plugin source directories. The `workspace_deps(cwd)` factory is the standard way to create a `WorkspaceDeps` — it wires in `cargo_override` and `cache_dir` so callers get both the `SYMPOSIUM_CARGO` override and cross-invocation disk caching.
 
+`record_telemetry(session_id, kind)` is the only place `config.telemetry.enabled` is checked: it records the event via [telemetry](./telemetry.md) when enabled and does nothing otherwise. Callers therefore emit unconditionally. It is best-effort (a write failure never breaks a hook) and returns nothing.
+
 ### `agents.rs` — agent abstraction
 
 Centralizes agent-specific knowledge: hook registration file paths, skill installation directories, and hook registration logic for each supported agent (Claude Code, GitHub Copilot, Gemini CLI, Codex CLI, Kiro, OpenCode, Goose). Handles the differences between agents — e.g., Claude Code uses `.claude/skills/` and Kiro uses `.kiro/skills/`, while Copilot, Gemini, Codex, OpenCode, and Goose use the vendor-neutral `.agents/skills/`. OpenCode and Goose are skills-only agents (no hook registration).

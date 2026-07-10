@@ -4,6 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::Level;
 
+use crate::telemetry;
+
 // ---------------------------------------------------------------------------
 // User configuration (~/.symposium/config.toml)
 // ---------------------------------------------------------------------------
@@ -451,6 +453,18 @@ impl Symposium {
         &self.home_dir
     }
 
+    /// Record a telemetry event, if the user opted in.
+    ///
+    /// The only place `config.telemetry.enabled` is checked, so callers emit
+    /// unconditionally. Best-effort like the rest of `telemetry` (a write failure
+    /// must never break a hook), so there is nothing to return.
+    pub fn record_telemetry(&self, session_id: Option<String>, kind: telemetry::EventKind) {
+        if !self.config.telemetry.enabled {
+            return;
+        }
+        telemetry::record_kind(self.config_dir(), session_id, kind);
+    }
+
     /// Returns the effective list of plugin sources, including built-in defaults.
     pub fn plugin_sources(&self) -> Vec<ResolvedPluginSource> {
         let mut sources = Vec::new();
@@ -728,6 +742,32 @@ mod tests {
             !serialized.contains("[telemetry]"),
             "default (off) telemetry should not be written to config.toml: {serialized}"
         );
+    }
+
+    #[test]
+    fn record_telemetry_writes_nothing_when_disabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(tmp.path()); // telemetry off by default
+        assert!(!sym.config.telemetry.enabled);
+
+        sym.record_telemetry(Some("s1".into()), crate::telemetry::EventKind::UserPrompt);
+
+        // The gate must produce no event log at all when the user hasn't opted in.
+        assert!(crate::telemetry::read_events(sym.config_dir()).is_empty());
+    }
+
+    #[test]
+    fn record_telemetry_writes_when_enabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut sym = Symposium::from_dir(tmp.path());
+        sym.config.telemetry.enabled = true;
+
+        sym.record_telemetry(Some("s1".into()), crate::telemetry::EventKind::UserPrompt);
+
+        let events = crate::telemetry::read_events(sym.config_dir());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind_name(), "user_prompt");
+        assert_eq!(events[0].session_id.as_deref(), Some("s1"));
     }
 
     #[test]
