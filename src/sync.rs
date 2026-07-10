@@ -269,9 +269,25 @@ async fn resolve_custom_predicate_entries(
     entries
 }
 
+/// Returned so the hook pipeline can emit telemetry from it; the standalone
+/// `cargo agents sync` command discards it. `installed` counts plugin installs
+/// plus user-authored propagations.
+#[derive(Debug)]
+pub struct SyncSummary {
+    pub plugins: Vec<skills::PluginActivation>,
+    pub skills: Vec<skills::SkillActivation>,
+    pub installed: usize,
+    pub reaped: usize,
+    pub crate_count: usize,
+}
+
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
-pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel) -> Result<()> {
+pub async fn sync(
+    sym: &Symposium,
+    deps: &mut WorkspaceDeps,
+    update: UpdateLevel,
+) -> Result<SyncSummary> {
     let out = &Output::quiet();
     let loaded = deps
         .load()
@@ -304,7 +320,8 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
 
     // Find all applicable skills
     let applicable =
-        skills::skills_applicable_to(sym, &registry, &workspace, custom_entries, update).await;
+        skills::resolve_applicable(sym, &registry, &workspace, custom_entries, update).await;
+    let plugin_activations = applicable.plugins;
 
     // Dedup by `(skill_name, SkillOrigin)`: two `Crate` origins with the
     // same (name, version) collapse (the skills are the same logical bytes
@@ -317,10 +334,12 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
     let mut name_counts: std::collections::BTreeMap<String, usize> =
         std::collections::BTreeMap::new();
 
-    for entry in &applicable {
+    let mut skill_activations: Vec<skills::SkillActivation> = Vec::new();
+    for entry in &applicable.skills {
         let name = entry.skill.name().to_string();
         if seen.insert((name.clone(), entry.origin.clone())) {
             *name_counts.entry(name.clone()).or_default() += 1;
+            skill_activations.push(entry.activation());
             to_install.push((name, entry.origin.clone(), &entry.skill.path));
         }
     }
@@ -361,12 +380,19 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
                 message: "no agents configured, run `cargo agents init` to add one".into(),
             },
         );
-        return Ok(());
+        return Ok(SyncSummary {
+            plugins: plugin_activations,
+            skills: skill_activations,
+            installed: 0,
+            reaped: 0,
+            crate_count: workspace.len(),
+        });
     }
 
     // Track every skill directory we (re)install during this sync. Anything
     // we find later that has the marker file but isn't in this set is stale.
     let mut installed_dirs: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut reaped_count = 0usize;
 
     for agent_name in &agent_names {
         let agent = Agent::from_config_name(agent_name)?;
@@ -488,6 +514,7 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
             }
             match fs::remove_dir_all(&path) {
                 Ok(()) => {
+                    reaped_count += 1;
                     tracing::info!(
                         report = %crate::report::ReportEvent::SkillRemoved {
                             path: display_path(&path),
@@ -521,7 +548,13 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
         );
     }
 
-    Ok(())
+    Ok(SyncSummary {
+        plugins: plugin_activations,
+        skills: skill_activations,
+        installed: installed_dirs.len(),
+        reaped: reaped_count,
+        crate_count: workspace.len(),
+    })
 }
 
 /// Register global hooks for all configured agents.

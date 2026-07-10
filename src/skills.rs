@@ -4,6 +4,8 @@
 //! and live inside plugin directories under `skills/*/SKILL.md`.
 
 use std::collections::BTreeMap;
+#[cfg(test)]
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -133,11 +135,53 @@ impl SkillOrigin {
 ///
 /// The plugin-, group-, and skill-level predicate sets are all evaluated during
 /// collection; only skills whose every level holds end up here.
+#[derive(Debug)]
 pub struct SkillWithGroupContext {
     pub skill: Skill,
     /// Where the skill was discovered. Drives install-path disambiguation
     /// and dedup at sync time.
     pub origin: SkillOrigin,
+    /// `None` for a standalone SKILL.md that no plugin vends.
+    pub plugin: Option<String>,
+    /// Unioned across the plugin, group, and skill predicate levels; empty for wildcard / non-crate gates.
+    pub crates: Vec<String>,
+}
+
+impl SkillWithGroupContext {
+    /// Project to the lean [`SkillActivation`] kept in a sync summary.
+    pub fn activation(&self) -> SkillActivation {
+        SkillActivation {
+            name: self.skill.name().to_string(),
+            plugin: self.plugin.clone(),
+            crates: self.crates.clone(),
+        }
+    }
+}
+
+/// A plugin that matched the workspace during resolution.
+#[derive(Debug, Clone)]
+pub struct PluginActivation {
+    pub name: String,
+    pub crates: Vec<String>,
+}
+
+/// A matched skill projected for a sync summary: name, owning plugin, and the
+/// crates that activated it.
+#[derive(Debug, Clone)]
+pub struct SkillActivation {
+    pub name: String,
+    /// `None` for a standalone SKILL.md that no plugin vends.
+    pub plugin: Option<String>,
+    pub crates: Vec<String>,
+}
+
+/// The applicable skills plus the plugins that matched. Plugins are tracked
+/// separately because one can match the workspace yet vend no applicable skill,
+/// and that match still needs recording.
+#[derive(Debug)]
+pub struct ApplicableSkills {
+    pub skills: Vec<SkillWithGroupContext>,
+    pub plugins: Vec<PluginActivation>,
 }
 
 /// Resolve all applicable skills from the registry.
@@ -147,14 +191,15 @@ pub struct SkillWithGroupContext {
 /// `for_crates` is the set of crate name/version pairs to match against.
 /// For `crate --list`, this is the full workspace deps.
 /// For `crate <name>`, this is a single-element slice with the resolved crate.
-pub async fn skills_applicable_to(
+pub async fn resolve_applicable(
     sym: &Symposium,
     registry: &PluginRegistry,
     workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
     custom_predicate_entries: std::collections::HashMap<String, predicate::ResolvedPredicateEntry>,
     update: UpdateLevel,
-) -> Vec<SkillWithGroupContext> {
+) -> ApplicableSkills {
     let mut results = Vec::new();
+    let mut plugins = Vec::new();
 
     let for_crates = crate::crate_sources::crate_pairs(workspace_crates);
     let mut ctx = PredicateContext::with_custom_predicates(&for_crates, custom_predicate_entries);
@@ -164,10 +209,10 @@ pub async fn skills_applicable_to(
     // is extra logic.
     for parsed in &registry.plugins {
         let plugin = &parsed.plugin;
-        // Plugin-level predicates gate everything below. Evaluated before
-        // group fetching to avoid wasted work. Goes through the ParsedPlugin
-        // so the plugin's provenance is stamped for `workspace-member()`.
-        if !parsed.applies(&mut ctx) {
+        // Plugin-level predicates gate everything below. We take the witness
+        // through the ParsedPlugin (so `workspace-member()` provenance is
+        // stamped) rather than a bool, so matched crates attribute to the plugin.
+        let Some(plugin_witness) = parsed.witness(&mut ctx) else {
             tracing::debug!(
                 report = %crate::report::ReportEvent::PluginConsidered {
                     plugin: plugin.name.clone(),
@@ -176,7 +221,7 @@ pub async fn skills_applicable_to(
                 },
             );
             continue;
-        }
+        };
 
         tracing::debug!(
             report = %crate::report::ReportEvent::PluginConsidered {
@@ -186,11 +231,26 @@ pub async fn skills_applicable_to(
             },
         );
 
+        plugins.push(PluginActivation {
+            name: plugin.name.clone(),
+            crates: crate_names(&plugin_witness),
+        });
+
         for group in &plugin.skills {
-            let skills =
+            let (skills, group_witness) =
                 load_skills_for_group(sym, parsed, group, workspace_crates, &mut ctx, update).await;
             for (skill, origin) in skills {
-                collect_skill_applicable_to(skill, origin, &plugin.name, &mut ctx, &mut results);
+                collect_skill_applicable_to(
+                    skill,
+                    origin,
+                    &GroupContext {
+                        plugin: Some(&plugin.name),
+                        plugin_witness: &plugin_witness,
+                        group_witness: &group_witness,
+                    },
+                    &mut ctx,
+                    &mut results,
+                );
             }
         }
     }
@@ -213,13 +273,41 @@ pub async fn skills_applicable_to(
         collect_skill_applicable_to(
             entry.skill.clone(),
             entry.origin.clone(),
-            "(standalone skills)",
+            &GroupContext {
+                plugin: None,
+                plugin_witness: &[],
+                group_witness: &[],
+            },
             &mut ctx,
             &mut results,
         );
     }
 
-    results
+    ApplicableSkills {
+        skills: results,
+        plugins,
+    }
+}
+
+/// Skills-only view of [`resolve_applicable`], used by tests that don't need
+/// the matched-plugin list.
+#[cfg(test)]
+pub async fn skills_applicable_to(
+    sym: &Symposium,
+    registry: &PluginRegistry,
+    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
+    custom_predicate_entries: HashMap<String, predicate::ResolvedPredicateEntry>,
+    update: UpdateLevel,
+) -> Vec<SkillWithGroupContext> {
+    resolve_applicable(
+        sym,
+        registry,
+        workspace_crates,
+        custom_predicate_entries,
+        update,
+    )
+    .await
+    .skills
 }
 
 /// Discover and load skills for a group, applying pre-fetch filtering.
@@ -243,7 +331,7 @@ async fn load_skills_for_group(
     workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
     ctx: &mut PredicateContext<'_>,
     update: UpdateLevel,
-) -> Vec<(Skill, SkillOrigin)> {
+) -> (Vec<(Skill, SkillOrigin)>, Vec<(String, semver::Version)>) {
     let plugin = &parsed.plugin;
     let plugin_path = parsed.path.as_path();
 
@@ -259,7 +347,7 @@ async fn load_skills_for_group(
         .join(", ");
     let predicates_display = (!predicates_display.is_empty()).then_some(predicates_display);
 
-    if !group.predicates.evaluate(ctx) {
+    let Some(group_witness) = group.predicates.witness(ctx) else {
         tracing::debug!(plugin = %plugin_path.display(), "skill group predicates failed, skipping");
         tracing::debug!(
             report = %crate::report::ReportEvent::SkillGroupConsidered {
@@ -271,8 +359,8 @@ async fn load_skills_for_group(
                 reason: Some("group predicates not satisfied".into()),
             },
         );
-        return Vec::new();
-    }
+        return (Vec::new(), Vec::new());
+    };
 
     let skills = match &group.source {
         PluginSource::Crate => load_crate_skills(plugin, group, workspace_crates, ctx).await,
@@ -300,7 +388,7 @@ async fn load_skills_for_group(
         },
     );
 
-    skills
+    (skills, group_witness)
 }
 
 /// Resolve crate source predicates, fetch each matched crate, read its
@@ -813,38 +901,75 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
     Ok(skill)
 }
 
+/// Deduplicated, sorted crate names from the given predicate witnesses.
+fn crate_names<'a>(
+    witnesses: impl IntoIterator<Item = &'a (String, semver::Version)>,
+) -> Vec<String> {
+    witnesses
+        .into_iter()
+        .map(|(name, _)| name.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+/// Context inherited from the plugin and group levels when collecting a skill:
+/// the owning plugin (if any) and those levels' predicate witnesses, which are
+/// folded into each skill's `crates` so the activating crates can be attributed.
+struct GroupContext<'a> {
+    plugin: Option<&'a str>,
+    plugin_witness: &'a [(String, semver::Version)],
+    group_witness: &'a [(String, semver::Version)],
+}
+
 /// Evaluate the skill-level predicate set and collect the skill if it holds.
 ///
 /// Plugin- and group-level predicates have already been evaluated by callers as
-/// a pre-filter, so only the skill-level set is checked here.
+/// a pre-filter, so only the skill-level set is checked here. `cx` carries those
+/// levels' already-computed witnesses, unioned with this level's.
 fn collect_skill_applicable_to(
     skill: Skill,
     origin: SkillOrigin,
-    plugin_name: &str,
+    cx: &GroupContext,
     ctx: &mut PredicateContext,
     results: &mut Vec<SkillWithGroupContext>,
 ) {
-    if !skill.predicates.evaluate(ctx) {
+    // `SkillConsidered` has no pluginless variant; standalone skills log here.
+    let plugin_label = cx.plugin.unwrap_or("(standalone skills)");
+    let Some(skill_witness) = skill.predicates.witness(ctx) else {
         tracing::debug!(
             report = %crate::report::ReportEvent::SkillConsidered {
                 skill: skill.name().to_string(),
-                plugin: plugin_name.to_string(),
+                plugin: plugin_label.to_string(),
                 matched: false,
                 reason: Some("skill-level predicates not satisfied".into()),
             },
         );
         return;
-    }
+    };
 
     tracing::debug!(
         report = %crate::report::ReportEvent::SkillConsidered {
             skill: skill.name().to_string(),
-            plugin: plugin_name.to_string(),
+            plugin: plugin_label.to_string(),
             matched: true,
             reason: None,
         },
     );
-    results.push(SkillWithGroupContext { skill, origin });
+
+    let crates = crate_names(
+        cx.plugin_witness
+            .iter()
+            .chain(cx.group_witness)
+            .chain(&skill_witness),
+    );
+
+    results.push(SkillWithGroupContext {
+        skill,
+        origin,
+        plugin: cx.plugin.map(str::to_string),
+        crates,
+    });
 }
 
 /// Raw frontmatter fields extracted from a SKILL.md file.
@@ -1601,6 +1726,89 @@ mod tests {
             "Should find one skill when all levels match"
         );
         assert_eq!(skills[0].skill.name(), "serde-basics");
+    }
+
+    #[tokio::test]
+    async fn resolve_applicable_attributes_witness_crates_to_plugin_and_skill() {
+        use crate::plugins::{ParsedPlugin, Plugin, PluginRegistry, PluginSource, SkillGroup};
+        use std::fs;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let sym = crate::config::Symposium::from_dir(tmp.path());
+
+        // A wildcard skill: it carries no crate predicate of its own, so it can
+        // only "ride in" on the plugin's `crate(acme-core)` gate.
+        let skill_dir = tmp.path().join("acme-skill");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: acme-basics
+                description: Basic acme usage
+                crates: '*'
+                ---
+
+                Use the derive macros.
+            "},
+        )
+        .unwrap();
+
+        // Plugin gated on a concrete crate; the group is a wildcard.
+        let plugin = Plugin {
+            name: "acme-plugin".to_string(),
+            predicates: pred_set("acme-core"),
+            hooks: vec![],
+            skills: vec![SkillGroup {
+                predicates: pred_set("*"),
+                source: PluginSource::Path(skill_dir.to_path_buf()),
+            }],
+            mcp_servers: vec![],
+            installations: Vec::new(),
+            subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
+        };
+
+        let registry = PluginRegistry {
+            plugins: vec![ParsedPlugin {
+                path: tmp.path().join("plugin.toml"),
+                plugin,
+                source_name: "test".to_string(),
+                source_dir: tmp.path().to_path_buf(),
+            }],
+            standalone_skills: vec![],
+            warnings: vec![],
+            custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
+        };
+
+        let workspace_crates = vec![symposium_sdk::workspace::WorkspaceCrate::new(
+            "acme-core".to_string(),
+            semver::Version::new(1, 0, 0),
+            None,
+        )];
+
+        let applicable = resolve_applicable(
+            &sym,
+            &registry,
+            &workspace_crates,
+            std::collections::HashMap::new(),
+            UpdateLevel::None,
+        )
+        .await;
+
+        // The plugin matched, attributed to the crate that satisfied its gate.
+        assert_eq!(applicable.plugins.len(), 1);
+        assert_eq!(applicable.plugins[0].name, "acme-plugin");
+        assert_eq!(applicable.plugins[0].crates, vec!["acme-core".to_string()]);
+
+        // The wildcard skill rode in on the plugin: its own gate contributes no
+        // crate, so the witness union is exactly the plugin's `[acme-core]`.
+        assert_eq!(applicable.skills.len(), 1);
+        let skill = &applicable.skills[0];
+        assert_eq!(skill.skill.name(), "acme-basics");
+        assert_eq!(skill.plugin.as_deref(), Some("acme-plugin"));
+        assert_eq!(skill.crates, vec!["acme-core".to_string()]);
     }
 
     #[tokio::test]
