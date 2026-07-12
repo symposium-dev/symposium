@@ -134,6 +134,32 @@ async fn init_creates_config() {
     .unwrap();
 }
 
+/// A workspace with a bare `skills/` directory defines a workspace plugin;
+/// `sync` installs its skills without any configured plugin source or
+/// dependency gate.
+#[tokio::test]
+async fn sync_installs_workspace_plugin_skills() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["workspace-plugin0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+            let skill_dir = find_installed_skill(&skills_dir, "ws-hello");
+            assert!(
+                skill_dir.join(".symposium").exists(),
+                "workspace skill should install as symposium-managed"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// `sync` installs skill files into the agent's expected location.
 #[tokio::test]
 async fn sync_installs_skills() {

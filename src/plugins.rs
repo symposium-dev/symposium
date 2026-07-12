@@ -821,11 +821,48 @@ struct RawCustomPredicate {
     args: Vec<String>,
 }
 
+/// `[defaults]` section: opt-outs for the default content added to
+/// workspace plugin manifests (and, later, crate-embedded plugins).
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawDefaults {
+    /// Add the default `[[skills]] source.path = "skills"` group.
+    #[serde(default = "default_skills_flag")]
+    skills: bool,
+}
+
+fn default_skills_flag() -> bool {
+    true
+}
+
+impl Default for RawDefaults {
+    fn default() -> Self {
+        Self {
+            skills: default_skills_flag(),
+        }
+    }
+}
+
+/// Where a plugin manifest came from, for validation rules that differ by
+/// origin: a registry manifest must carry its own `name` and must reference
+/// at least one dependency; a workspace-member manifest is already gated by
+/// workspace membership, so both are relaxed (the name defaults to the
+/// directory name) and default content applies.
+enum ManifestOrigin<'a> {
+    Registry,
+    WorkspaceMember { dir_name: &'a str },
+}
+
 /// Raw TOML manifest deserialized from a plugin `.toml` file.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawPluginManifest {
-    name: String,
+    /// Required for registry plugins; defaults to the directory name for
+    /// workspace plugins.
+    name: Option<String>,
+    /// Default-content opt-outs. Only meaningful for workspace plugins.
+    #[serde(default)]
+    defaults: Option<RawDefaults>,
     #[serde(default, rename = "depends-on")]
     depends_on: crate::predicate::DependsOnList,
     /// Rejected: renamed to `depends-on`.
@@ -950,12 +987,16 @@ pub async fn ensure_plugin_sources(sym: &Symposium, update: UpdateLevel) {
     }
 }
 
-/// Load all plugins from all configured plugin source directories,
-/// discarding load errors with warnings.
+/// Load all plugins from all configured plugin source directories plus the
+/// active workspace, discarding load errors with warnings.
 ///
-/// Use `load_registry()` instead if you also need standalone skills.
-pub fn load_all_plugins(sym: &Symposium) -> Vec<ParsedPlugin> {
-    load_registry(sym).plugins
+/// Use `load_registry_with_workspace()` instead if you also need standalone
+/// skills.
+pub fn load_all_plugins(
+    sym: &Symposium,
+    workspace: Option<&symposium_sdk::workspace::LoadedWorkspace>,
+) -> Vec<ParsedPlugin> {
+    load_registry_impl(sym, workspace).plugins
 }
 
 /// Sync plugin sources.
@@ -1150,7 +1191,28 @@ async fn fetch_plugin_source(
 ///
 /// Discovers TOML plugin manifests and standalone skill directories,
 /// then loads both into a `PluginRegistry`.
+///
+/// This form loads plugin sources only; workspace-scoped callers use
+/// [`load_registry_with_workspace`] to also pick up plugins defined by the
+/// active workspace.
 pub fn load_registry(sym: &Symposium) -> PluginRegistry {
+    load_registry_impl(sym, None)
+}
+
+/// [`load_registry`] plus the plugins defined by the active workspace (the
+/// workspace root and every member directory), stamped as workspace
+/// members. `None` (not in a workspace) degrades to plugin sources only.
+pub fn load_registry_with_workspace(
+    sym: &Symposium,
+    workspace: Option<&symposium_sdk::workspace::LoadedWorkspace>,
+) -> PluginRegistry {
+    load_registry_impl(sym, workspace)
+}
+
+fn load_registry_impl(
+    sym: &Symposium,
+    workspace: Option<&symposium_sdk::workspace::LoadedWorkspace>,
+) -> PluginRegistry {
     let sources = sym.plugin_sources();
     let mut plugins = Vec::new();
     let mut standalone_skills = Vec::new();
@@ -1201,6 +1263,12 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
         }
     }
 
+    if let Some(ws) = workspace {
+        let (ws_plugins, ws_warnings) = workspace_plugins(&ws.root, &ws.members);
+        plugins.extend(ws_plugins);
+        warnings.extend(ws_warnings);
+    }
+
     tracing::debug!(
         plugins = plugins.len(),
         standalone_skills = standalone_skills.len(),
@@ -1215,6 +1283,81 @@ pub fn load_registry(sym: &Symposium) -> PluginRegistry {
         warnings,
         custom_predicates,
     }
+}
+
+/// Display name workspace plugins are attributed to. Parenthesized so it
+/// can't collide with a configured plugin-source name.
+const WORKSPACE_SOURCE_NAME: &str = "(workspace)";
+
+/// Load the plugins defined by the active workspace: the workspace root
+/// plus every member package directory.
+///
+/// A directory defines a workspace plugin when it has a `SYMPOSIUM.toml`
+/// manifest (whose `name` defaults to the directory name) or a `skills/`
+/// directory (a manifest-less plugin whose only content is the default
+/// skills group). Default content — the `[[skills]] source.path = "skills"`
+/// group — is appended unless the manifest opts out with
+/// `[defaults] skills = false`.
+///
+/// Workspace plugins are stamped `workspace_member = true` (the producer of
+/// the `workspace-member()` predicate) and attributed to the
+/// `"(workspace)"` source with skill paths relative to the workspace root,
+/// so equal-named skills in different members stay distinct.
+pub fn workspace_plugins(
+    root: &Path,
+    members: &[PathBuf],
+) -> (Vec<ParsedPlugin>, Vec<LoadWarning>) {
+    let mut seen = std::collections::HashSet::new();
+    let mut plugins = Vec::new();
+    let mut warnings = Vec::new();
+    for dir in std::iter::once(&root.to_path_buf()).chain(members.iter()) {
+        let dir = fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
+        if !seen.insert(dir.clone()) {
+            continue;
+        }
+        match workspace_plugin_for_dir(root, &dir) {
+            Ok(Some(parsed)) => plugins.push(parsed),
+            Ok(None) => {}
+            Err(e) => {
+                tracing::warn!(dir = %dir.display(), error = %e, "failed to load workspace plugin");
+                warnings.push(LoadWarning {
+                    path: dir.join("SYMPOSIUM.toml"),
+                    message: format!("failed to load workspace plugin: {e}"),
+                });
+            }
+        }
+    }
+    (plugins, warnings)
+}
+
+/// Interpret one workspace directory as a plugin, or `None` when the
+/// directory defines nothing (no manifest, no `skills/`).
+fn workspace_plugin_for_dir(workspace_root: &Path, dir: &Path) -> Result<Option<ParsedPlugin>> {
+    let manifest_path = dir.join("SYMPOSIUM.toml");
+    let raw: RawPluginManifest = if manifest_path.is_file() {
+        toml::from_str(&fs::read_to_string(&manifest_path)?)?
+    } else if dir.join(CRATE_DEFAULT_SKILLS_PATH).is_dir() {
+        // Bare convention: a `skills/` directory with no manifest is an
+        // all-defaults plugin.
+        toml::from_str("").expect("empty manifest parses")
+    } else {
+        return Ok(None);
+    };
+
+    let dir_name = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("workspace");
+    let plugin = validate_manifest(raw, ManifestOrigin::WorkspaceMember { dir_name })
+        .with_context(|| format!("validating `{}`", manifest_path.display()))?;
+
+    Ok(Some(ParsedPlugin {
+        path: manifest_path,
+        plugin,
+        source_name: WORKSPACE_SOURCE_NAME.to_string(),
+        source_dir: workspace_root.to_path_buf(),
+        workspace_member: true,
+    }))
 }
 
 /// Scan a plugin source directory for TOML plugin manifests and standalone skills.
@@ -1511,7 +1654,7 @@ pub fn load_plugin(
 ) -> Result<ParsedPlugin> {
     let content = fs::read_to_string(manifest_path)?;
     let manifest: RawPluginManifest = toml::from_str(&content)?;
-    let plugin = validate_manifest(manifest)
+    let plugin = validate_manifest(manifest, ManifestOrigin::Registry)
         .with_context(|| format!("validating `{}`", manifest_path.display()))?;
     Ok(ParsedPlugin {
         path: manifest_path.to_path_buf(),
@@ -1530,7 +1673,31 @@ pub fn load_plugin(
 /// declaration order. Inline references on installations and hooks are
 /// promoted into synthetic entries appended to the same list so that every
 /// validated reference is a plain name.
-fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
+fn validate_manifest(
+    mut manifest: RawPluginManifest,
+    origin: ManifestOrigin<'_>,
+) -> Result<Plugin> {
+    let name = match (manifest.name.take(), &origin) {
+        (Some(n), _) => n,
+        (None, ManifestOrigin::WorkspaceMember { dir_name }) => dir_name.to_string(),
+        (None, ManifestOrigin::Registry) => bail!("plugin manifest is missing `name`"),
+    };
+    match &origin {
+        ManifestOrigin::Registry => {
+            if manifest.defaults.is_some() {
+                bail!("`[defaults]` is only supported in workspace plugin manifests");
+            }
+        }
+        ManifestOrigin::WorkspaceMember { .. } => {
+            let defaults = manifest.defaults.take().unwrap_or_default();
+            if defaults.skills {
+                let group: RawSkillGroup =
+                    toml::from_str(r#"source.path = "skills""#).expect("static default group");
+                manifest.skills.push(group);
+            }
+        }
+    }
+
     let mut names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for entry in &manifest.installations {
         if !names.insert(entry.name.clone()) {
@@ -1617,31 +1784,33 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
         .map(RawPluginMcpServer::validate)
         .collect::<Result<Vec<_>>>()?;
 
-    // Every plugin must reference at least one dependency (or custom
-    // predicate) somewhere — at the plugin, skill-group, hook, or MCP-server
-    // level — via `depends-on` or a `depends-on(...)` predicate. Otherwise it
-    // would never apply to any project.
-    let has_custom_predicate = predicates
-        .predicates
-        .iter()
-        .any(|p| matches!(p, crate::predicate::Predicate::Custom { .. }));
-    let mentions_dep = has_custom_predicate
-        || predicates.mentions_dep()
-        || skills.iter().any(|g| g.predicates.mentions_dep())
-        || hooks.iter().any(|h| h.predicates.mentions_dep())
-        || mcp_servers.iter().any(|m| m.predicates.mentions_dep());
-    if !mentions_dep {
-        bail!(
-            "plugin `{}` references no dependency — add `depends-on = [...]` or a \
-             `depends-on(...)` predicate at the plugin, `[[skills]]`, or `[[mcp_servers]]` level",
-            manifest.name
-        );
+    // Every registry plugin must reference at least one dependency (or
+    // custom predicate) somewhere — at the plugin, skill-group, hook, or
+    // MCP-server level — via `depends-on`, a `depends-on(...)` predicate, or
+    // a custom predicate. Otherwise it would never apply to any project.
+    // Workspace plugins are exempt: being in the workspace is their gate.
+    if matches!(origin, ManifestOrigin::Registry) {
+        let has_custom_predicate = predicates
+            .predicates
+            .iter()
+            .any(|p| matches!(p, crate::predicate::Predicate::Custom { .. }));
+        let mentions_dep = has_custom_predicate
+            || predicates.mentions_dep()
+            || skills.iter().any(|g| g.predicates.mentions_dep())
+            || hooks.iter().any(|h| h.predicates.mentions_dep())
+            || mcp_servers.iter().any(|m| m.predicates.mentions_dep());
+        if !mentions_dep {
+            bail!(
+                "plugin `{name}` references no dependency — add `depends-on = [...]` or a \
+                 `depends-on(...)` predicate at the plugin, `[[skills]]`, or `[[mcp_servers]]` level"
+            );
+        }
     }
 
     validate_skill_groups(&predicates, &skills)?;
 
     Ok(Plugin {
-        name: manifest.name,
+        name,
         predicates,
         installations,
         hooks,
@@ -1845,7 +2014,7 @@ mod tests {
 
     fn from_str(s: &str) -> Result<Plugin> {
         let manifest: RawPluginManifest = toml::from_str(s)?;
-        validate_manifest(manifest)
+        validate_manifest(manifest, ManifestOrigin::Registry)
     }
 
     const SAMPLE: &str = indoc! {r#"
@@ -2485,6 +2654,102 @@ mod tests {
             custom_predicates: vec![],
         };
         assert!(!plugin_version.applies(&mut ctx(&workspace_crates)));
+    }
+
+    #[test]
+    fn workspace_plugins_interpret_member_dirs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        // Root: manifest without a name — name falls back to the dir name,
+        // default skills group is appended.
+        std::fs::write(root.join("SYMPOSIUM.toml"), "").unwrap();
+
+        // member-bare: no manifest, but a skills/ dir — bare convention.
+        let bare = root.join("member-bare");
+        std::fs::create_dir_all(bare.join("skills")).unwrap();
+
+        // member-optout: manifest opting out of default content.
+        let optout = root.join("member-optout");
+        std::fs::create_dir_all(&optout).unwrap();
+        std::fs::write(
+            optout.join("SYMPOSIUM.toml"),
+            indoc! {r#"
+                name = "explicit-name"
+
+                [defaults]
+                skills = false
+            "#},
+        )
+        .unwrap();
+
+        // member-empty: neither manifest nor skills/ — defines nothing.
+        let empty = root.join("member-empty");
+        std::fs::create_dir_all(&empty).unwrap();
+
+        let members = vec![bare.clone(), optout.clone(), empty.clone()];
+        let (plugins, warnings) = workspace_plugins(root, &members);
+        assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
+
+        let names: Vec<&str> = plugins.iter().map(|p| p.plugin.name.as_str()).collect();
+        let root_name = root.file_name().unwrap().to_str().unwrap();
+        assert_eq!(names, vec![root_name, "member-bare", "explicit-name"]);
+
+        for parsed in &plugins {
+            assert!(parsed.workspace_member);
+            assert_eq!(parsed.source_name, WORKSPACE_SOURCE_NAME);
+            assert_eq!(parsed.source_dir, root);
+        }
+
+        // Root and bare member each get exactly the default skills group.
+        assert_eq!(plugins[0].plugin.skills.len(), 1);
+        assert_eq!(
+            plugins[1].plugin.skills[0].source,
+            PluginSource::Path(PathBuf::from("skills"))
+        );
+        // The opt-out member has no groups.
+        assert!(plugins[2].plugin.skills.is_empty());
+    }
+
+    #[test]
+    fn workspace_manifest_may_omit_dependency_gate() {
+        // A registry manifest without any depends-on is rejected; the same
+        // manifest is fine as a workspace plugin (membership is the gate).
+        let manifest: RawPluginManifest = toml::from_str(indoc! {r#"
+                name = "gateless"
+
+                [[skills]]
+                source.path = "extra-skills"
+            "#})
+        .unwrap();
+        let err = validate_manifest(manifest, ManifestOrigin::Registry).unwrap_err();
+        assert!(err.to_string().contains("references no dependency"));
+
+        let manifest: RawPluginManifest = toml::from_str(indoc! {r#"
+                name = "gateless"
+
+                [[skills]]
+                source.path = "extra-skills"
+            "#})
+        .unwrap();
+        let plugin =
+            validate_manifest(manifest, ManifestOrigin::WorkspaceMember { dir_name: "d" }).unwrap();
+        // Explicit group plus the appended default group.
+        assert_eq!(plugin.skills.len(), 2);
+    }
+
+    #[test]
+    fn registry_manifest_rejects_defaults_section() {
+        let manifest: RawPluginManifest = toml::from_str(indoc! {r#"
+                name = "p"
+                depends-on = ["*"]
+
+                [defaults]
+                skills = false
+            "#})
+        .unwrap();
+        let err = validate_manifest(manifest, ManifestOrigin::Registry).unwrap_err();
+        assert!(err.to_string().contains("[defaults]"));
     }
 
     #[test]

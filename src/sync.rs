@@ -301,11 +301,12 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
         .ok_or_else(|| anyhow::anyhow!("not in a Rust workspace"))?;
     let project_root = loaded.root.clone();
     let workspace: Vec<_> = loaded.crates.clone();
+    let loaded = loaded.clone();
     let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
-    // Load plugin registry
-    let registry = plugins::load_registry(sym);
+    // Load plugin registry (registry sources + workspace plugins)
+    let registry = plugins::load_registry_with_workspace(sym, Some(&loaded));
 
     for warning in &registry.warnings {
         tracing::info!(

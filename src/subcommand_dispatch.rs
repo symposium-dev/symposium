@@ -96,11 +96,11 @@ pub async fn dispatch_external(
         .context("subcommand name must be valid UTF-8")?;
     let forwarded = argv.collect::<Vec<_>>();
 
-    let registry = plugins::load_registry(sym);
     let mut deps = sym.workspace_deps(cwd);
-    let workspace = deps.crates();
+    let workspace = deps.load().cloned();
+    let registry = plugins::load_registry_with_workspace(sym, workspace.as_deref());
 
-    let (plugin, subcommand) = find_subcommand(&registry, name, workspace)?
+    let (plugin, subcommand) = find_subcommand(&registry, name, deps.crates())?
         .with_context(|| format!("no plugin defines subcommand `{name}`"))?;
 
     let installation = plugin

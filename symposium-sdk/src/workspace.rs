@@ -37,7 +37,7 @@ impl WorkspaceCrate {
     }
 }
 
-/// The resolved workspace: root path + dependency list.
+/// The resolved workspace: root path + dependency list + member directories.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadedWorkspace {
@@ -45,14 +45,19 @@ pub struct LoadedWorkspace {
     pub root: PathBuf,
     /// Direct dependencies of all workspace members.
     pub crates: Vec<WorkspaceCrate>,
+    /// Manifest directories of the workspace's member packages. Backs
+    /// workspace-plugin discovery (a member directory may define a plugin).
+    pub members: Vec<PathBuf>,
 }
 
-/// On-disk cache format.
+/// On-disk cache format. Adding a field is a compatible cache bump: an old
+/// cache file fails to deserialize, reads as a miss, and is rebuilt.
 #[derive(Serialize, Deserialize)]
 struct DiskCache {
     lock_mtime: u64,
     root: PathBuf,
     crates: Vec<WorkspaceCrate>,
+    members: Vec<PathBuf>,
 }
 
 /// In-process cache for workspace dependency resolution.
@@ -156,6 +161,7 @@ impl WorkspaceDeps {
         Some(LoadedWorkspace {
             root: cached.root,
             crates: cached.crates,
+            members: cached.members,
         })
     }
 
@@ -172,6 +178,7 @@ impl WorkspaceDeps {
             lock_mtime: mtime,
             root: loaded.root.clone(),
             crates: loaded.crates.clone(),
+            members: loaded.members.clone(),
         };
 
         let _ = fs::create_dir_all(ws_cache_dir);
@@ -289,5 +296,18 @@ fn load_workspace(cwd: &Path, cargo_path: Option<&Path>) -> Option<LoadedWorkspa
     crates.sort_by(|a, b| a.name.cmp(&b.name));
     crates.dedup_by(|a, b| a.name == b.name);
 
-    Some(LoadedWorkspace { root, crates })
+    let mut members: Vec<PathBuf> = metadata
+        .packages
+        .iter()
+        .filter(|p| ws_members.contains(&p.id))
+        .filter_map(|p| p.manifest_path.parent().map(|dir| dir.into()))
+        .collect();
+    members.sort();
+    members.dedup();
+
+    Some(LoadedWorkspace {
+        root,
+        crates,
+        members,
+    })
 }

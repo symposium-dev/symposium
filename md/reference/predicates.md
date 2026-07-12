@@ -17,7 +17,7 @@ The available predicate functions are:
 | `path_exists(<arg>)` | `<arg>` resolves to an existing path. An argument with a path separator is checked on the filesystem (cwd-relative or absolute). A bare name with no separator is checked against the cwd and then searched on `$PATH`, so it matches either a local entry (`path_exists(.git)`) or an installed binary (`path_exists(rg)`). |
 | `env(<name>)` | The environment variable `<name>` is set (to any value). |
 | `env(<name>=<value>)` | `<name>` is set and equals `<value>` exactly. Only the first `=` separates name from value, so `env(KEY=a=b)` matches the value `a=b`. |
-| `workspace-member()` | The plugin this predicate belongs to is defined by a member of the active workspace. Takes no argument. |
+| `workspace-member()` | The plugin this predicate belongs to is defined by a member of the active workspace (a [workspace plugin](../workspace-skills.md)). Takes no argument. |
 | `not(<predicate>)` | The inner predicate does **not** hold. The only way to express absence. |
 | `any(<p>, <p>, …)` | At least one inner predicate holds (logical **OR**). |
 | `all(<p>, <p>, …)` | Every inner predicate holds (logical **AND**). |
