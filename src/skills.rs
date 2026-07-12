@@ -165,8 +165,9 @@ pub async fn skills_applicable_to(
     for parsed in &registry.plugins {
         let plugin = &parsed.plugin;
         // Plugin-level predicates gate everything below. Evaluated before
-        // group fetching to avoid wasted work.
-        if !plugin.predicates.evaluate(&mut ctx) {
+        // group fetching to avoid wasted work. Goes through the ParsedPlugin
+        // so the plugin's provenance is stamped for `workspace-member()`.
+        if !parsed.applies(&mut ctx) {
             tracing::debug!(
                 report = %crate::report::ReportEvent::PluginConsidered {
                     plugin: plugin.name.clone(),
@@ -205,6 +206,9 @@ pub async fn skills_applicable_to(
             },
         );
     }
+    // Standalone skills have no defining plugin; they never count as
+    // workspace members (clear any stamp left by the plugin loop).
+    ctx.set_workspace_member(false);
     for entry in &registry.standalone_skills {
         collect_skill_applicable_to(
             entry.skill.clone(),
@@ -1335,6 +1339,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
+                workspace_member: false,
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1391,6 +1396,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
+                workspace_member: false,
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1465,6 +1471,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
+                workspace_member: false,
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1544,6 +1551,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: PathBuf::from(".".to_string()),
+                workspace_member: false,
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1624,6 +1632,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: PathBuf::from(".".to_string()),
+                workspace_member: false,
             }],
             standalone_skills: vec![],
             warnings: vec![],

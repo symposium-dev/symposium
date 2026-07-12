@@ -352,7 +352,7 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
     let mut ctx = crate::predicate::PredicateContext::new(&semver_pairs);
     let mut mcp_servers: Vec<sacp::schema::McpServer> = Vec::new();
     for p in &registry.plugins {
-        if p.plugin.applies(&mut ctx) {
+        if p.applies(&mut ctx) {
             mcp_servers.extend(p.plugin.applicable_mcp_servers(&mut ctx));
         }
     }

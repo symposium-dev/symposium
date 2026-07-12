@@ -420,7 +420,7 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &mut WorkspaceDeps) {
     let mut ctx = crate::predicate::PredicateContext::new(&pairs);
 
     for parsed in &plugins {
-        if !parsed.plugin.applies(&mut ctx) {
+        if !parsed.applies(&mut ctx) {
             continue;
         }
         for hook in &parsed.plugin.hooks {
@@ -750,7 +750,7 @@ fn dispatched_hooks_for_payload(
     for parsed_plugin in plugins {
         // Plugin-level predicates gate every hook in the plugin. Evaluated once
         // per plugin per dispatch — keep them cheap.
-        if !parsed_plugin.plugin.applies(ctx) {
+        if !parsed_plugin.applies(ctx) {
             tracing::debug!(
                 plugin = %parsed_plugin.plugin.name,
                 "plugin predicates failed, skipping hooks"
@@ -1056,6 +1056,7 @@ mod tests {
             plugin,
             source_name: "test-source".to_string(),
             source_dir: PathBuf::from(".".to_string()),
+            workspace_member: false,
         }
     }
 

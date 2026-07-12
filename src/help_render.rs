@@ -215,6 +215,7 @@ mod tests {
             },
             source_name: "test".into(),
             source_dir: PathBuf::from("/test"),
+            workspace_member: false,
         }
     }
 

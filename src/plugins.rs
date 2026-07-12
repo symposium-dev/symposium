@@ -314,6 +314,25 @@ pub struct ParsedPlugin {
     /// The plugin source's root directory on disk. Used as the base for
     /// computing the `skill_path` field on `SkillOrigin::Source`.
     pub source_dir: PathBuf,
+
+    /// Whether this plugin is defined by a member of the active workspace.
+    /// Provenance, stamped by the loader: registry sources stamp `false`;
+    /// the workspace-plugin loader (workspace-local extensions) will stamp
+    /// `true`. Backs the `workspace-member()` predicate.
+    pub workspace_member: bool,
+}
+
+impl ParsedPlugin {
+    /// Evaluate the plugin-level predicate set, stamping this plugin's
+    /// provenance into the context first. Use this — not
+    /// `plugin.applies()` directly — when iterating loaded plugins, so
+    /// `workspace-member()` sees the right plugin's provenance. The stamp
+    /// carries over to the plugin's nested component evaluations (groups,
+    /// skills, hooks, MCP servers, subcommands) on the same context.
+    pub fn applies(&self, ctx: &mut crate::predicate::PredicateContext) -> bool {
+        ctx.set_workspace_member(self.workspace_member);
+        self.plugin.applies(ctx)
+    }
 }
 
 /// A loaded, *validated* plugin manifest.
@@ -1499,6 +1518,9 @@ pub fn load_plugin(
         plugin,
         source_name: source_name.to_string(),
         source_dir: source_dir.to_path_buf(),
+        // Registry sources are never workspace members; the workspace-plugin
+        // loader is the only place that stamps true.
+        workspace_member: false,
     })
 }
 
@@ -2463,6 +2485,34 @@ mod tests {
             custom_predicates: vec![],
         };
         assert!(!plugin_version.applies(&mut ctx(&workspace_crates)));
+    }
+
+    #[test]
+    fn parsed_plugin_applies_stamps_workspace_member() {
+        let plugin = Plugin {
+            name: "ws-plugin".to_string(),
+            predicates: PredicateSet {
+                predicates: vec![crate::predicate::Predicate::WorkspaceMember],
+            },
+            hooks: vec![],
+            skills: vec![],
+            mcp_servers: vec![],
+            installations: Vec::new(),
+            subcommands: BTreeMap::new(),
+            custom_predicates: vec![],
+        };
+        let mut parsed = ParsedPlugin {
+            path: PathBuf::from("/test/SYMPOSIUM.toml"),
+            plugin,
+            source_name: "test".into(),
+            source_dir: PathBuf::from("/test"),
+            workspace_member: false,
+        };
+        let deps: Vec<(String, semver::Version)> = Vec::new();
+        let mut c = ctx(&deps);
+        assert!(!parsed.applies(&mut c));
+        parsed.workspace_member = true;
+        assert!(parsed.applies(&mut c));
     }
 
     #[test]
@@ -4022,6 +4072,7 @@ mod tests {
             },
             source_name: "test".into(),
             source_dir: std::path::PathBuf::from("/test"),
+            workspace_member: false,
         }
     }
 

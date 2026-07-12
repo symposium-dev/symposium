@@ -40,6 +40,7 @@ pub const BUILTIN_PREDICATE_NAMES: &[&str] = &[
     "shell",
     "path_exists",
     "env",
+    "workspace-member",
     "not",
     "any",
     "all",
@@ -54,6 +55,11 @@ pub const BUILTIN_PREDICATE_NAMES: &[&str] = &[
 #[derive(Debug)]
 pub struct PredicateContext<'a> {
     pub deps: &'a [(String, semver::Version)],
+    /// Whether the plugin currently being evaluated is defined by a member
+    /// of the active workspace. This is *provenance*, not a workspace fact:
+    /// the loader stamps it per plugin (via `ParsedPlugin::applies`) before
+    /// that plugin's predicate sets are evaluated.
+    workspace_member: bool,
     custom_entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
     custom_cache: std::collections::HashMap<(String, String), CustomPredicateResult>,
 }
@@ -62,6 +68,7 @@ impl<'a> PredicateContext<'a> {
     pub fn new(deps: &'a [(String, semver::Version)]) -> Self {
         Self {
             deps,
+            workspace_member: false,
             custom_entries: std::collections::HashMap::new(),
             custom_cache: std::collections::HashMap::new(),
         }
@@ -73,9 +80,18 @@ impl<'a> PredicateContext<'a> {
     ) -> Self {
         Self {
             deps,
+            workspace_member: false,
             custom_entries: entries,
             custom_cache: std::collections::HashMap::new(),
         }
+    }
+
+    /// Stamp whether the plugin about to be evaluated arrived via workspace
+    /// membership. Call before evaluating each plugin's predicate sets; the
+    /// value applies to all of that plugin's nested components (groups,
+    /// skills, hooks, MCP servers, subcommands).
+    pub fn set_workspace_member(&mut self, workspace_member: bool) {
+        self.workspace_member = workspace_member;
     }
 
     /// Evaluate a custom predicate by name and argument, returning the cached
@@ -123,6 +139,11 @@ pub enum Predicate {
     PathExists(String),
     /// `env(<name>)` / `env(<name>=<value>)` — env var presence / equality.
     Env(String, Option<String>),
+    /// `workspace-member()` — the plugin being evaluated is defined by a
+    /// member of the active workspace (provenance, stamped by the loader).
+    /// Selects content by audience: gate a component on it to activate only
+    /// for people developing the defining package, not for dependents.
+    WorkspaceMember,
     /// `not(<p>)` — passes when the inner predicate does not.
     Not(Box<Predicate>),
     /// `any(<p>, …)` — passes when at least one inner predicate does.
@@ -151,6 +172,7 @@ impl Predicate {
             Predicate::Shell(cmd) => run_shell(cmd),
             Predicate::PathExists(arg) => path_exists(arg),
             Predicate::Env(name, expected) => env_matches(name, expected.as_deref()),
+            Predicate::WorkspaceMember => ctx.workspace_member,
             Predicate::Not(inner) => !inner.evaluate(ctx),
             Predicate::Any(children) => children.iter().any(|p| p.evaluate(ctx)),
             Predicate::All(children) => children.iter().all(|p| p.evaluate(ctx)),
@@ -184,6 +206,7 @@ impl Predicate {
             Predicate::Shell(cmd) => run_shell(cmd).then(Vec::new),
             Predicate::PathExists(arg) => path_exists(arg).then(Vec::new),
             Predicate::Env(name, expected) => env_matches(name, expected.as_deref()).then(Vec::new),
+            Predicate::WorkspaceMember => ctx.workspace_member.then(Vec::new),
             Predicate::Not(inner) => match inner.witness(ctx) {
                 Some(_) => None,
                 None => Some(Vec::new()),
@@ -516,6 +539,12 @@ fn parse(input: &str) -> Result<Predicate> {
         "shell" => Ok(Predicate::Shell(arg.to_string())),
         "path_exists" => Ok(Predicate::PathExists(arg.to_string())),
         "env" => parse_env(arg),
+        "workspace-member" => {
+            if !arg.is_empty() {
+                bail!("`workspace-member()` takes no argument, got {arg:?}");
+            }
+            Ok(Predicate::WorkspaceMember)
+        }
         "not" => Ok(Predicate::Not(Box::new(parse(arg)?))),
         "any" => {
             let preds = parse_comma_separated(arg)?;
@@ -790,6 +819,7 @@ impl std::fmt::Display for Predicate {
             Predicate::PathExists(arg) => write!(f, "path_exists({arg})"),
             Predicate::Env(name, None) => write!(f, "env({name})"),
             Predicate::Env(name, Some(value)) => write!(f, "env({name}={value})"),
+            Predicate::WorkspaceMember => write!(f, "workspace-member()"),
             Predicate::Not(inner) => write!(f, "not({inner})"),
             Predicate::Any(preds) => write!(f, "any({})", join(preds)),
             Predicate::All(preds) => write!(f, "all({})", join(preds)),
@@ -989,6 +1019,37 @@ mod tests {
             .iter()
             .map(|(n, ver)| (n.to_string(), v(ver)))
             .collect()
+    }
+
+    // --- workspace-member ---
+
+    #[test]
+    fn workspace_member_parses_and_roundtrips() {
+        let p = parse("workspace-member()").unwrap();
+        assert_eq!(p, Predicate::WorkspaceMember);
+        assert_eq!(p.to_string(), "workspace-member()");
+        // No-argument predicate: an argument is a parse error.
+        assert!(parse("workspace-member(foo)").is_err());
+        // Reserved: a custom predicate can't claim the name.
+        assert!(validate_custom_predicate_name("workspace-member").is_err());
+    }
+
+    #[test]
+    fn workspace_member_follows_context_stamp() {
+        let deps = ws(&[]);
+        let mut c = ctx(&deps);
+        let p = Predicate::WorkspaceMember;
+        assert!(!p.evaluate(&mut c));
+        assert_eq!(p.witness(&mut c), None);
+
+        c.set_workspace_member(true);
+        assert!(p.evaluate(&mut c));
+        assert_eq!(p.witness(&mut c), Some(Vec::new()));
+        // Composes with combinators.
+        assert!(!Predicate::Not(Box::new(Predicate::WorkspaceMember)).evaluate(&mut c));
+
+        c.set_workspace_member(false);
+        assert!(!p.evaluate(&mut c));
     }
 
     // --- crate-atom parsing ---

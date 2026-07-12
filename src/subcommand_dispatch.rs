@@ -13,7 +13,7 @@ use symposium_sdk::workspace::WorkspaceCrate;
 use crate::{
     config::Symposium,
     installation::{acquire_installation, resolve_runnable},
-    plugins::{self, ParsedPlugin, Plugin, PluginRegistry, Subcommand},
+    plugins::{self, Plugin, PluginRegistry, Subcommand},
 };
 use anyhow::{Context, Result, bail};
 use semver::Version;
@@ -28,8 +28,9 @@ pub fn applicable_subcommands<'a>(
 ) -> Vec<(&'a Plugin, &'a str, &'a Subcommand)> {
     let mut ctx = crate::predicate::PredicateContext::new(deps);
     let mut results = Vec::new();
-    for ParsedPlugin { plugin, .. } in &registry.plugins {
-        if !plugin.applies(&mut ctx) {
+    for parsed in &registry.plugins {
+        let plugin = &parsed.plugin;
+        if !parsed.applies(&mut ctx) {
             continue;
         }
         for (name, subcommand) in &plugin.subcommands {
@@ -158,6 +159,7 @@ fn exit_byte_from(status: ExitStatus) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::ParsedPlugin;
     use crate::{plugins::Audience, predicate::PredicateSet};
     use std::{collections::BTreeMap, path::PathBuf};
 
@@ -188,6 +190,7 @@ mod tests {
             },
             source_name: "test".into(),
             source_dir: PathBuf::from("/test"),
+            workspace_member: false,
         }
     }
 
