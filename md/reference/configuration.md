@@ -37,24 +37,30 @@ path = "my-plugins"
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `auto-sync` | bool | `true` | Automatically run `cargo agents sync` during hook invocations. When enabled, skills are kept in sync with workspace dependencies without manual intervention. |
-| `agents-syncing` | bool | `true` | Propagate user-authored skills from `.agents/skills/` into the per-agent skill directories of any configured agent that does not natively use `.agents/skills/` (such as `.claude/skills/` or `.kiro/skills/`). Skills that symposium itself installed — identified by the `.symposium` marker file — are not propagated. See [Workspace skills](../workspace-skills.md) for the user-guide overview, or [Agents syncing](#agents-syncing-mirror-user-authored-skills) below for details. |
+| `agents-syncing` | bool | `true` | Include each workspace plugin's `.agents/skills/` default skill group, so skills you author there install into every configured agent's skill directory (such as `.claude/skills/` or `.kiro/skills/`). Skills that symposium itself installed — identified by the `.symposium` marker file — are never treated as sources. See [Workspace skills](../workspace-skills.md) for the user-guide overview, or [Agents syncing](#agents-syncing-mirror-user-authored-skills) below for details. |
 | `hook-scope` | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace. |
 | `auto-update` | string | `"on"` | Controls automatic update behavior. `"off"` disables update checks entirely. `"warn"` checks the registry (at most once per 24 hours) and prints a message when a newer version is available. `"on"` automatically installs the update via `cargo install` and re-executes the command with the new binary. |
 
 ### Agents syncing: mirror user-authored skills
 
-Agents such as Copilot, Gemini, Codex, Goose, and OpenCode all read skills from the vendor-neutral `.agents/skills/` directory, but Claude Code and Kiro use their own paths (`.claude/skills/` and `.kiro/skills/`). When `agents-syncing` is enabled, `cargo agents sync` mirrors any skill that *you* put in `.agents/skills/` into each configured agent's own skill directory, so a single authored copy is visible to every agent.
+Agents such as Copilot, Gemini, Codex, Goose, and OpenCode all read skills from the vendor-neutral `.agents/skills/` directory, but Claude Code and Kiro use their own paths (`.claude/skills/` and `.kiro/skills/`). When `agents-syncing` is enabled, every [workspace plugin](../workspace-skills.md) — the workspace root and each member directory — carries a second default skill group, gated by the `workspace-member()` predicate:
 
-A skill is treated as user-authored when its directory contains `SKILL.md` but does *not* contain the `.symposium` marker. Symposium never writes a marker into source skills, so the distinction between "user content" and "a copy symposium made" is unambiguous.
+```toml
+[[skills]]
+predicates = ["workspace-member()"]
+source.path = ".agents/skills"
+```
 
-Propagated destinations receive the same `.symposium` marker and `*` `.gitignore` that plugin-installed skills get, which means:
+Skills you author in `.agents/skills/` therefore flow through the same pipeline as every other skill and install into each configured agent's own skill directory, so a single authored copy is visible to every agent. The `workspace-member()` gate is what keeps these maintainer skills from installing for *dependents* of a published crate — they apply only while working in the workspace itself.
 
-- Updates to the source (`.agents/skills/<name>/`) are re-copied on each sync.
-- Removing the source removes the propagated copies on the next sync (via the normal stale-skill reap).
-- Disabling `agents-syncing = false` also removes previously propagated copies on the next sync.
-- A pre-existing, user-managed file in the target directory (no marker) is never overwritten.
+Two `.symposium`-marker rules keep sources and copies distinct (symposium never writes a marker into a source, only into directories it installs):
 
-When the only configured agents use `.agents/skills/` directly, the feature is a no-op (the source and target are the same directory).
+- Skill discovery skips marker-bearing directories, so copies symposium installed into `.agents/skills/` (for agents that read it natively) are never re-discovered as sources.
+- For an agent whose skill directory *is* `.agents/skills/`, a skill whose source already sits at its install slot is left in place — nothing is copied.
+
+Installed copies receive the same marker and `*` `.gitignore` that plugin-installed skills get, which means: updates to the source are re-copied on each sync; removing the source removes the copies on the next sync (the normal stale-skill reap); disabling `agents-syncing = false` does the same; and a pre-existing user-managed directory in a target is never overwritten (the skill installs under a suffixed name instead).
+
+Because these are real skills now, `SKILL.md` frontmatter must carry `name` and `description` like any other [skill definition](./skill-definition.md).
 
 ### Hook scope: control whether Symposium activates in all projects or only those you select
 

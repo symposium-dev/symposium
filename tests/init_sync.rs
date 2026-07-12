@@ -1192,6 +1192,17 @@ async fn agents_syncing_noop_when_only_agents_path_used() {
             // No other agent's skills dir should have been created.
             assert!(!workspace_root.join(".claude/skills").exists());
             assert!(!workspace_root.join(".kiro/skills").exists());
+            // And no suffixed duplicate next to the source: the in-place
+            // source is this agent's install, not a collision to resolve.
+            let dupes: Vec<_> = std::fs::read_dir(workspace_root.join(".agents/skills"))?
+                .flatten()
+                .filter(|e| {
+                    e.file_name()
+                        .to_string_lossy()
+                        .starts_with("user-authored-skill-")
+                })
+                .collect();
+            assert!(dupes.is_empty(), "no suffixed duplicate: {dupes:?}");
             Ok(())
         },
     )
@@ -1292,6 +1303,30 @@ async fn agents_syncing_disabling_removes_previously_propagated_skills() {
     .unwrap();
 }
 
+/// A member crate's `.agents/skills/` installs for everyone working in the
+/// workspace — the maintainer-skills default group applies per member, not
+/// just at the workspace root.
+#[tokio::test]
+async fn agents_syncing_installs_member_agents_skills() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["member-agents-skills0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            find_installed_skill(&workspace_root.join(".claude/skills"), "tool-maintainer");
+            // Workspace skills are informal: no frontmatter needed, the
+            // directory name is the skill name.
+            find_installed_skill(&workspace_root.join(".claude/skills"), "plain-notes");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// A pre-existing, user-managed directory in the target (no `.symposium`
 /// marker) is not overwritten even when a same-named skill exists in
 /// `.agents/skills/`.
@@ -1350,7 +1385,7 @@ async fn agents_syncing_detects_modified_source_skill() {
             // Modify the source skill.
             std::fs::write(
                 &source,
-                "---\nname: user-authored-skill\n---\n\n# Updated content\n",
+                "---\nname: user-authored-skill\ndescription: updated\n---\n\n# Updated content\n",
             )?;
 
             // Re-sync — should detect the change and update the destination.

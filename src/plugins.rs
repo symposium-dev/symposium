@@ -150,6 +150,11 @@ impl RawPluginSource {
 /// Default subdirectory used when no `[package.metadata.symposium]` is present.
 pub const CRATE_DEFAULT_SKILLS_PATH: &str = "skills";
 
+/// Default location for skills that apply while *maintaining* a workspace
+/// (as opposed to using its published crates): the `workspace-member()`-gated
+/// second default skill group.
+pub const AGENTS_SKILLS_PATH: &str = ".agents/skills";
+
 impl serde::Serialize for PluginSource {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
@@ -185,6 +190,12 @@ pub struct SkillGroup {
     /// Remote source for skills.
     #[serde(default)]
     pub source: PluginSource,
+    /// The group is defined by a workspace-member plugin. Provenance, stamped
+    /// during manifest validation, not manifest content: workspace skills are
+    /// informal, so their SKILL.md `name` defaults to the skill directory's
+    /// name and `description` (with the frontmatter itself) is optional.
+    #[serde(skip)]
+    pub workspace_member: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -211,6 +222,7 @@ impl RawSkillGroup {
                 .map(RawPluginSource::validate)
                 .transpose()?
                 .unwrap_or_default(),
+            workspace_member: false,
         })
     }
 }
@@ -850,7 +862,12 @@ impl Default for RawDefaults {
 /// directory name) and default content applies.
 enum ManifestOrigin<'a> {
     Registry,
-    WorkspaceMember { dir_name: &'a str },
+    WorkspaceMember {
+        dir_name: &'a str,
+        /// Append the `workspace-member()`-gated `.agents/skills` default
+        /// group (the `agents-syncing` config knob).
+        agents_skills: bool,
+    },
 }
 
 /// Raw TOML manifest deserialized from a plugin `.toml` file.
@@ -1264,7 +1281,8 @@ fn load_registry_impl(
     }
 
     if let Some(ws) = workspace {
-        let (ws_plugins, ws_warnings) = workspace_plugins(&ws.root, &ws.members);
+        let (ws_plugins, ws_warnings) =
+            workspace_plugins(&ws.root, &ws.members, sym.config.agents_syncing);
         plugins.extend(ws_plugins);
         warnings.extend(ws_warnings);
     }
@@ -1306,6 +1324,7 @@ const WORKSPACE_SOURCE_NAME: &str = "(workspace)";
 pub fn workspace_plugins(
     root: &Path,
     members: &[PathBuf],
+    agents_skills: bool,
 ) -> (Vec<ParsedPlugin>, Vec<LoadWarning>) {
     let mut seen = std::collections::HashSet::new();
     let mut plugins = Vec::new();
@@ -1315,7 +1334,7 @@ pub fn workspace_plugins(
         if !seen.insert(dir.clone()) {
             continue;
         }
-        match workspace_plugin_for_dir(root, &dir) {
+        match workspace_plugin_for_dir(root, &dir, agents_skills) {
             Ok(Some(parsed)) => plugins.push(parsed),
             Ok(None) => {}
             Err(e) => {
@@ -1332,13 +1351,19 @@ pub fn workspace_plugins(
 
 /// Interpret one workspace directory as a plugin, or `None` when the
 /// directory defines nothing (no manifest, no `skills/`).
-fn workspace_plugin_for_dir(workspace_root: &Path, dir: &Path) -> Result<Option<ParsedPlugin>> {
+fn workspace_plugin_for_dir(
+    workspace_root: &Path,
+    dir: &Path,
+    agents_skills: bool,
+) -> Result<Option<ParsedPlugin>> {
     let manifest_path = dir.join("SYMPOSIUM.toml");
+    let bare_convention = dir.join(CRATE_DEFAULT_SKILLS_PATH).is_dir()
+        || (agents_skills && dir.join(AGENTS_SKILLS_PATH).is_dir());
     let raw: RawPluginManifest = if manifest_path.is_file() {
         toml::from_str(&fs::read_to_string(&manifest_path)?)?
-    } else if dir.join(CRATE_DEFAULT_SKILLS_PATH).is_dir() {
-        // Bare convention: a `skills/` directory with no manifest is an
-        // all-defaults plugin.
+    } else if bare_convention {
+        // Bare convention: a `skills/` (or `.agents/skills/`) directory with
+        // no manifest is an all-defaults plugin.
         toml::from_str("").expect("empty manifest parses")
     } else {
         return Ok(None);
@@ -1348,8 +1373,14 @@ fn workspace_plugin_for_dir(workspace_root: &Path, dir: &Path) -> Result<Option<
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("workspace");
-    let plugin = validate_manifest(raw, ManifestOrigin::WorkspaceMember { dir_name })
-        .with_context(|| format!("validating `{}`", manifest_path.display()))?;
+    let plugin = validate_manifest(
+        raw,
+        ManifestOrigin::WorkspaceMember {
+            dir_name,
+            agents_skills,
+        },
+    )
+    .with_context(|| format!("validating `{}`", manifest_path.display()))?;
 
     Ok(Some(ParsedPlugin {
         path: manifest_path,
@@ -1679,7 +1710,7 @@ fn validate_manifest(
 ) -> Result<Plugin> {
     let name = match (manifest.name.take(), &origin) {
         (Some(n), _) => n,
-        (None, ManifestOrigin::WorkspaceMember { dir_name }) => dir_name.to_string(),
+        (None, ManifestOrigin::WorkspaceMember { dir_name, .. }) => dir_name.to_string(),
         (None, ManifestOrigin::Registry) => bail!("plugin manifest is missing `name`"),
     };
     match &origin {
@@ -1688,12 +1719,20 @@ fn validate_manifest(
                 bail!("`[defaults]` is only supported in workspace plugin manifests");
             }
         }
-        ManifestOrigin::WorkspaceMember { .. } => {
+        ManifestOrigin::WorkspaceMember { agents_skills, .. } => {
             let defaults = manifest.defaults.take().unwrap_or_default();
             if defaults.skills {
                 let group: RawSkillGroup =
                     toml::from_str(r#"source.path = "skills""#).expect("static default group");
                 manifest.skills.push(group);
+                if *agents_skills {
+                    let group: RawSkillGroup = toml::from_str(indoc::indoc! {r#"
+                        predicates = ["workspace-member()"]
+                        source.path = ".agents/skills"
+                    "#})
+                    .expect("static default group");
+                    manifest.skills.push(group);
+                }
             }
         }
     }
@@ -1773,11 +1812,16 @@ fn validate_manifest(
     reject_crates_field(&manifest.crates)?;
     let predicates =
         crate::predicate::PredicateSet::merged(Some(manifest.depends_on), manifest.predicates);
-    let skills = manifest
+    let mut skills = manifest
         .skills
         .into_iter()
         .map(RawSkillGroup::validate)
         .collect::<Result<Vec<_>>>()?;
+    if matches!(origin, ManifestOrigin::WorkspaceMember { .. }) {
+        for group in &mut skills {
+            group.workspace_member = true;
+        }
+    }
     let mcp_servers = manifest
         .mcp_servers
         .into_iter()
@@ -2688,7 +2732,7 @@ mod tests {
         std::fs::create_dir_all(&empty).unwrap();
 
         let members = vec![bare.clone(), optout.clone(), empty.clone()];
-        let (plugins, warnings) = workspace_plugins(root, &members);
+        let (plugins, warnings) = workspace_plugins(root, &members, true);
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
         let names: Vec<&str> = plugins.iter().map(|p| p.plugin.name.as_str()).collect();
@@ -2699,16 +2743,45 @@ mod tests {
             assert!(parsed.workspace_member);
             assert_eq!(parsed.source_name, WORKSPACE_SOURCE_NAME);
             assert_eq!(parsed.source_dir, root);
+            // Groups carry the provenance too: workspace skills load with
+            // lenient frontmatter rules.
+            assert!(parsed.plugin.skills.iter().all(|g| g.workspace_member));
         }
 
-        // Root and bare member each get exactly the default skills group.
-        assert_eq!(plugins[0].plugin.skills.len(), 1);
+        // Root and bare member each get the two default groups: `skills/`
+        // and the `workspace-member()`-gated `.agents/skills`.
+        assert_eq!(plugins[0].plugin.skills.len(), 2);
         assert_eq!(
             plugins[1].plugin.skills[0].source,
             PluginSource::Path(PathBuf::from("skills"))
         );
+        assert_eq!(
+            plugins[1].plugin.skills[1].source,
+            PluginSource::Path(PathBuf::from(".agents/skills"))
+        );
+        assert!(!plugins[1].plugin.skills[1].predicates.predicates.is_empty());
         // The opt-out member has no groups.
         assert!(plugins[2].plugin.skills.is_empty());
+    }
+
+    #[test]
+    fn agents_syncing_disabled_omits_agents_skills_group() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("skills")).unwrap();
+        // A member defined only by `.agents/skills/`.
+        let member = root.join("member");
+        std::fs::create_dir_all(member.join(".agents/skills")).unwrap();
+        let members = vec![member.clone()];
+
+        let (plugins, _) = workspace_plugins(root, &members, true);
+        let names: Vec<&str> = plugins.iter().map(|p| p.plugin.name.as_str()).collect();
+        assert!(names.contains(&"member"), "{names:?}");
+
+        let (plugins, _) = workspace_plugins(root, &members, false);
+        let names: Vec<&str> = plugins.iter().map(|p| p.plugin.name.as_str()).collect();
+        assert!(!names.contains(&"member"), "{names:?}");
+        assert_eq!(plugins[0].plugin.skills.len(), 1);
     }
 
     #[test]
@@ -2732,10 +2805,16 @@ mod tests {
                 source.path = "extra-skills"
             "#})
         .unwrap();
-        let plugin =
-            validate_manifest(manifest, ManifestOrigin::WorkspaceMember { dir_name: "d" }).unwrap();
-        // Explicit group plus the appended default group.
-        assert_eq!(plugin.skills.len(), 2);
+        let plugin = validate_manifest(
+            manifest,
+            ManifestOrigin::WorkspaceMember {
+                dir_name: "d",
+                agents_skills: true,
+            },
+        )
+        .unwrap();
+        // Explicit group plus the two appended default groups.
+        assert_eq!(plugin.skills.len(), 3);
     }
 
     #[test]

@@ -79,13 +79,6 @@ pub enum ReportEvent {
     /// A hook was registered for an agent.
     HookRegistered { agent: String, hook: String },
 
-    /// A user-authored skill was propagated to an agent.
-    SkillPropagated {
-        skill: String,
-        agent: String,
-        dest: String,
-    },
-
     /// An MCP server was registered for an agent.
     McpServerRegistered { agent: String, server: String },
 
@@ -209,9 +202,6 @@ impl ReportEvent {
             }
             Self::SkillRemoved { path } => {
                 format!("➖ removed {path}")
-            }
-            Self::SkillPropagated { skill, agent, dest } => {
-                format!("✅ propagated skill {skill} for {agent} → {dest}")
             }
             Self::HookRegistered { agent, hook } => {
                 format!("🟢 {hook}: hooks registered for {agent}")
