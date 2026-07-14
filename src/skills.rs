@@ -27,8 +27,8 @@ fn source_display(source: &PluginSource) -> String {
 pub struct Skill {
     /// Frontmatter fields as key-value pairs (name, description, license, etc.).
     pub frontmatter: BTreeMap<String, String>,
-    /// Skill-level activation predicates: the frontmatter `crates` (lowered to
-    /// `any(crate(...))`) merged with `predicates`. ANDed with the plugin- and
+    /// Skill-level activation predicates: the frontmatter `depends-on` (lowered to
+    /// `any(depends-on(...))`) merged with `predicates`. ANDed with the plugin- and
     /// group-level sets.
     pub predicates: PredicateSet,
     /// The body content (everything after frontmatter).
@@ -220,7 +220,7 @@ pub async fn skills_applicable_to(
 
 /// Discover and load skills for a group, applying pre-fetch filtering.
 ///
-/// Checks group-level `crates` predicates against `for_crates` before
+/// Checks group-level `depends-on` predicates against `for_crates` before
 /// fetching git sources, to avoid unnecessary downloads. Each returned
 /// skill is paired with the `SkillOrigin` it was discovered through:
 ///
@@ -304,15 +304,15 @@ async fn load_skills_for_group(
 /// recursively with cycle detection.
 ///
 /// The crates to fetch are the *witness* of the plugin- and group-level
-/// predicate sets: the concrete crates that participate in satisfying the gate
-/// (see [`predicate::union_matched_crates`]).
+/// predicate sets: the concrete packages that participate in satisfying the
+/// gate (see [`predicate::union_matched_packages`]).
 async fn load_crate_skills(
     plugin: &crate::plugins::Plugin,
     group: &SkillGroup,
     workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
     ctx: &mut PredicateContext<'_>,
 ) -> Vec<(Skill, SkillOrigin)> {
-    let matched = predicate::union_matched_crates(&[&plugin.predicates, &group.predicates], ctx);
+    let matched = predicate::union_matched_packages(&[&plugin.predicates, &group.predicates], ctx);
     let mut skills = Vec::new();
     for (name, _version) in &matched {
         let mut visited = std::collections::HashSet::new();
@@ -683,15 +683,15 @@ pub(crate) fn prune_nested_skills(paths: &mut Vec<PathBuf>) {
 
 /// Load a standalone skill from a SKILL.md file (no plugin group context).
 ///
-/// Standalone skills must be self-contained: all metadata (crates)
+/// Standalone skills must be self-contained: all metadata (`depends-on`)
 /// comes from the SKILL.md frontmatter.
-/// Returns an error if `crates` is missing (standalone skills have
+/// Returns an error if `depends-on` is missing (standalone skills have
 /// no group to inherit from).
 pub fn load_standalone_skill(skill_md_path: &Path) -> Result<Skill> {
     let skill = load_skill(skill_md_path, &SkillGroup::default())?;
-    if !skill.predicates.mentions_crate() {
+    if !skill.predicates.mentions_dep() {
         bail!(
-            "standalone skill `{}` is missing `crates` in frontmatter \
+            "standalone skill `{}` is missing `depends-on` in frontmatter \
              (standalone skills have no plugin group to inherit from)",
             skill.name()
         );
@@ -701,9 +701,9 @@ pub fn load_standalone_skill(skill_md_path: &Path) -> Result<Skill> {
 
 /// Load a single skill from a SKILL.md file.
 ///
-/// A skill should have `crates` at either the skill level or
+/// A skill should have `depends-on` at either the skill level or
 /// the group level (or both). If neither provides it, a warning is logged
-/// but loading succeeds (the skill simply won't match any crate query).
+/// but loading succeeds (the skill simply won't match any dependency query).
 fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
     let content = std::fs::read_to_string(skill_md_path)
         .with_context(|| format!("failed to read {}", skill_md_path.display()))?;
@@ -740,26 +740,26 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
         );
     }
 
-    // Merge the skill-level `crates` (crate atoms, OR-combined) with the
-    // frontmatter `predicates` (function-call syntax) into one set, ANDed with
-    // the plugin- and group-level sets at match time.
-    let crates = match fm.crates.as_deref() {
-        Some(s) => Some(crate::predicate::CrateList::parse(s)?),
+    // Merge the skill-level `depends-on` (dependency atoms, OR-combined) with
+    // the frontmatter `predicates` (function-call syntax) into one set, ANDed
+    // with the plugin- and group-level sets at match time.
+    let depends_on = match fm.depends_on.as_deref() {
+        Some(s) => Some(crate::predicate::DependsOnList::parse(s)?),
         None => None,
     };
     let extra = match fm.predicates.as_deref() {
         Some(s) => PredicateSet::parse(s)?,
         None => PredicateSet::default(),
     };
-    let predicates = PredicateSet::merged(crates, extra);
+    let predicates = PredicateSet::merged(depends_on, extra);
 
-    // Warn if no crate is referenced at either level — the skill won't match
-    // any crate query, but we don't fail so a misconfigured plugin can't bring
-    // down the tool.
-    if !predicates.mentions_crate() && !group.predicates.mentions_crate() {
+    // Warn if no dependency is referenced at either level — the skill won't
+    // match any dependency query, but we don't fail so a misconfigured plugin
+    // can't bring down the tool.
+    if !predicates.mentions_dep() && !group.predicates.mentions_dep() {
         tracing::warn!(
             skill = %name,
-            "skill references no crate in SKILL.md frontmatter or its plugin [[skills]] group"
+            "skill references no dependency in SKILL.md frontmatter or its plugin [[skills]] group"
         );
     }
 
@@ -808,12 +808,12 @@ fn collect_skill_applicable_to(
 }
 
 /// Raw frontmatter fields extracted from a SKILL.md file.
-/// `crates` is comma-separated on a single line.
+/// `depends-on` is comma-separated on a single line.
 #[derive(Debug)]
 struct RawFrontmatter {
     fields: BTreeMap<String, String>,
-    /// Raw `crates` value (comma-separated predicate string).
-    crates: Option<String>,
+    /// Raw `depends-on` value (comma-separated predicate string).
+    depends_on: Option<String>,
     /// Raw `predicates` value (comma-separated predicate expressions).
     predicates: Option<String>,
     body: String,
@@ -850,7 +850,7 @@ fn parse_frontmatter(content: &str) -> Result<RawFrontmatter> {
         .context("SKILL.md frontmatter must be a YAML mapping")?;
 
     let mut fields = BTreeMap::new();
-    let mut crates = None;
+    let mut depends_on = None;
     let mut predicates = None;
 
     for (key, value) in mapping {
@@ -863,7 +863,10 @@ fn parse_frontmatter(content: &str) -> Result<RawFrontmatter> {
         };
 
         match key {
-            "crates" => crates = Some(value.to_string()),
+            "depends-on" => depends_on = Some(value.to_string()),
+            "crates" => {
+                bail!("the `crates` frontmatter field has been renamed; use `depends-on` instead")
+            }
             "predicates" => predicates = Some(value.to_string()),
             _ => {
                 fields.insert(key.to_string(), value.to_string());
@@ -873,7 +876,7 @@ fn parse_frontmatter(content: &str) -> Result<RawFrontmatter> {
 
     Ok(RawFrontmatter {
         fields,
-        crates,
+        depends_on,
         predicates,
         body: body.to_string(),
     })
@@ -887,9 +890,9 @@ mod tests {
 
     use crate::predicate::Predicate;
 
-    /// Build a predicate set from crate atoms (the `crates` field form).
+    /// Build a predicate set from dependency atoms (the `depends-on` field form).
     fn pred_set(s: &str) -> PredicateSet {
-        PredicateSet::from_crates(s).unwrap()
+        PredicateSet::from_depends_on(s).unwrap()
     }
 
     fn ctx(crates: &[(String, semver::Version)]) -> PredicateContext<'_> {
@@ -990,7 +993,7 @@ mod tests {
             ---
             name: my-skill
             description: A test skill
-            crates: serde
+            depends-on: serde
             ---
 
             # Body content
@@ -1000,23 +1003,44 @@ mod tests {
         let fm = parse_frontmatter(content).unwrap();
         assert_eq!(fm.fields.get("name").unwrap(), "my-skill");
         assert_eq!(fm.fields.get("description").unwrap(), "A test skill");
-        assert_eq!(fm.crates.as_deref(), Some("serde"));
+        assert_eq!(fm.depends_on.as_deref(), Some("serde"));
         assert!(fm.body.contains("# Body content"));
         assert!(fm.body.contains("Some instructions here."));
     }
 
     #[test]
-    fn parse_frontmatter_comma_separated_crates() {
+    fn parse_frontmatter_comma_separated_depends_on() {
         let content = indoc! {"
             ---
             name: multi
-            crates: serde, serde_json>=1.0, toml
+            depends-on: serde, serde_json>=1.0, toml
             ---
 
             Body.
         "};
         let fm = parse_frontmatter(content).unwrap();
-        assert_eq!(fm.crates.as_deref(), Some("serde, serde_json>=1.0, toml"));
+        assert_eq!(
+            fm.depends_on.as_deref(),
+            Some("serde, serde_json>=1.0, toml")
+        );
+    }
+
+    #[test]
+    fn parse_frontmatter_rejects_renamed_crates_field() {
+        let content = indoc! {"
+            ---
+            name: old-spelling
+            description: Old spelling
+            crates: serde
+            ---
+
+            Body.
+        "};
+        let err = parse_frontmatter(content).unwrap_err();
+        assert!(
+            err.to_string().contains("use `depends-on` instead"),
+            "expected migration hint, got: {err}"
+        );
     }
 
     #[test]
@@ -1080,7 +1104,7 @@ mod tests {
                 ---
                 name: test-skill
                 description: Test
-                crates: serde
+                depends-on: serde
                 ---
 
                 Use serde like this.
@@ -1092,7 +1116,7 @@ mod tests {
         let skill = load_skill(&skill_md, &defaults).unwrap();
 
         assert_eq!(skill.frontmatter.get("name").unwrap(), "test-skill");
-        assert!(skill.predicates.references_crate("serde"));
+        assert!(skill.predicates.references_dep("serde"));
         assert!(skill.body.contains("Use serde like this."));
     }
 
@@ -1106,7 +1130,7 @@ mod tests {
                 ---
                 name: multi-crate
                 description: Multi-crate skill
-                crates: serde, tokio>=1.0
+                depends-on: serde, tokio>=1.0
                 ---
 
                 Body.
@@ -1116,8 +1140,8 @@ mod tests {
 
         let defaults = SkillGroup::default();
         let skill = load_skill(&skill_md, &defaults).unwrap();
-        assert!(skill.predicates.references_crate("serde"));
-        assert!(skill.predicates.references_crate("tokio"));
+        assert!(skill.predicates.references_dep("serde"));
+        assert!(skill.predicates.references_dep("tokio"));
     }
 
     #[test]
@@ -1158,7 +1182,7 @@ mod tests {
                 ---
                 name: override
                 description: Override skill
-                crates: serde
+                depends-on: serde
                 ---
 
                 Body.
@@ -1173,8 +1197,8 @@ mod tests {
         let skill = load_skill(&skill_md, &defaults).unwrap();
 
         // Skill-level crates specializes (ANDs with) plugin defaults
-        assert!(skill.predicates.references_crate("serde"));
-        assert!(!skill.predicates.references_crate("tokio"));
+        assert!(skill.predicates.references_dep("serde"));
+        assert!(!skill.predicates.references_dep("tokio"));
     }
 
     #[test]
@@ -1185,8 +1209,8 @@ mod tests {
             &skill_md,
             indoc! {"
                 ---
-                name: no-crates
-                description: Missing crates
+                name: no-depends-on
+                description: Missing depends-on
                 ---
 
                 Body.
@@ -1240,7 +1264,7 @@ mod tests {
                 ---
                 name: my-standalone
                 description: A standalone skill
-                crates: serde
+                depends-on: serde
                 ---
 
                 Standalone body.
@@ -1250,12 +1274,12 @@ mod tests {
 
         let skill = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap();
         assert_eq!(skill.name(), "my-standalone");
-        assert!(skill.predicates.references_crate("serde"));
+        assert!(skill.predicates.references_dep("serde"));
         assert!(skill.body.contains("Standalone body."));
     }
 
     #[test]
-    fn validate_standalone_skill_bad_crates() {
+    fn validate_standalone_skill_bad_depends_on() {
         let tmp = tempfile::tempdir().unwrap();
         let skill_dir = tmp.path().join("bad-skill");
         fs::create_dir_all(&skill_dir).unwrap();
@@ -1264,8 +1288,8 @@ mod tests {
             indoc! {"
                 ---
                 name: bad
-                description: Bad crates skill
-                crates: \">=not_valid!!\"
+                description: Bad depends-on skill
+                depends-on: \">=not_valid!!\"
                 ---
 
                 Body.
@@ -1275,7 +1299,7 @@ mod tests {
 
         let err = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap_err();
         assert!(
-            err.to_string().contains("crate predicate"),
+            err.to_string().contains("depends-on predicate"),
             "expected parse error, got: {err}"
         );
     }
@@ -1412,7 +1436,7 @@ mod tests {
                 ---
                 name: serde-basics
                 description: Basic serde usage
-                crates: serde
+                depends-on: serde
                 ---
 
                 Use derive macros.
@@ -1486,7 +1510,7 @@ mod tests {
                 ---
                 name: serde-basics
                 description: Basic serde usage
-                crates: serde
+                depends-on: serde
                 ---
 
                 Use derive macros.
@@ -1499,7 +1523,7 @@ mod tests {
             name: "p".into(),
             predicates: PredicateSet {
                 predicates: vec![
-                    Predicate::Crate("serde".into(), None),
+                    Predicate::DependsOn("serde".into(), None),
                     Predicate::Shell("false".into()),
                 ],
             },
@@ -1562,7 +1586,7 @@ mod tests {
                 ---
                 name: serde-basics
                 description: Basic serde usage
-                crates: serde
+                depends-on: serde
                 ---
 
                 Body.
@@ -1574,7 +1598,7 @@ mod tests {
             name: "p".into(),
             predicates: PredicateSet {
                 predicates: vec![
-                    Predicate::Crate("serde".into(), None),
+                    Predicate::DependsOn("serde".into(), None),
                     Predicate::Shell("true".into()),
                 ],
             },
@@ -1582,7 +1606,7 @@ mod tests {
             skills: vec![SkillGroup {
                 predicates: PredicateSet {
                     predicates: vec![
-                        Predicate::Crate("serde".into(), None),
+                        Predicate::DependsOn("serde".into(), None),
                         Predicate::Shell("true".into()),
                     ],
                 },
@@ -1632,7 +1656,7 @@ mod tests {
                 ---
                 name: with-env
                 description: A skill with runtime predicates
-                crates: serde
+                depends-on: serde
                 predicates: shell(command -v rg), path_exists(Cargo.toml)
                 ---
 
@@ -1642,12 +1666,12 @@ mod tests {
         .unwrap();
 
         let skill = load_skill(&skill_md, &SkillGroup::default()).unwrap();
-        // `crates: serde` lowers to a leading `crate(serde)`, then the two
+        // `depends-on: serde` lowers to a leading `depends-on(serde)`, then the two
         // function-call predicates.
         assert_eq!(
             skill.predicates.predicates,
             vec![
-                Predicate::Crate("serde".into(), None),
+                Predicate::DependsOn("serde".into(), None),
                 Predicate::Shell("command -v rg".into()),
                 Predicate::PathExists("Cargo.toml".into()),
             ]
@@ -1663,7 +1687,7 @@ mod tests {
             skill_dir.join("SKILL.md"),
             indoc! {"
                 ---
-                crates: serde
+                depends-on: serde
                 ---
 
                 Body.
@@ -1679,16 +1703,16 @@ mod tests {
     }
 
     #[test]
-    fn standalone_skill_requires_crates() {
+    fn standalone_skill_requires_depends_on() {
         let tmp = tempfile::tempdir().unwrap();
-        let skill_dir = tmp.path().join("no-crates");
+        let skill_dir = tmp.path().join("no-depends-on");
         fs::create_dir_all(&skill_dir).unwrap();
         fs::write(
             skill_dir.join("SKILL.md"),
             indoc! {"
                 ---
-                name: no-crates
-                description: Missing crates
+                name: no-depends-on
+                description: Missing depends-on
                 ---
 
                 Body.
@@ -1698,8 +1722,8 @@ mod tests {
 
         let err = load_standalone_skill(&skill_dir.join("SKILL.md")).unwrap_err();
         assert!(
-            err.to_string().contains("missing `crates`"),
-            "expected crates error, got: {err}"
+            err.to_string().contains("missing `depends-on`"),
+            "expected depends-on error, got: {err}"
         );
     }
 
@@ -1716,7 +1740,7 @@ mod tests {
                 ---
                 name: standalone-serde
                 description: Standalone serde skill
-                crates: serde
+                depends-on: serde
                 ---
 
                 Body.
@@ -1754,7 +1778,7 @@ mod tests {
         .await;
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].skill.name(), "standalone-serde");
-        assert!(results[0].skill.predicates.references_crate("serde"));
+        assert!(results[0].skill.predicates.references_dep("serde"));
     }
 
     // --- Discovery ---
@@ -1773,7 +1797,7 @@ mod tests {
                 ---
                 name: my-skill
                 description: A discovered skill
-                crates: serde
+                depends-on: serde
                 ---
 
                 Discovered body.
@@ -1803,7 +1827,7 @@ mod tests {
                 ---
                 name: nested-skill
                 description: Nested skill
-                crates: tokio
+                depends-on: tokio
                 ---
 
                 Nested body.
@@ -1833,7 +1857,7 @@ mod tests {
                 ---
                 name: shallow
                 description: Shallow skill
-                crates: serde
+                depends-on: serde
                 ---
 
                 Shallow.
@@ -1850,7 +1874,7 @@ mod tests {
                 ---
                 name: nested
                 description: Nested skill
-                crates: serde
+                depends-on: serde
                 ---
 
                 Nested.
@@ -1867,7 +1891,7 @@ mod tests {
                 ---
                 name: sibling
                 description: Sibling skill
-                crates: tokio
+                depends-on: tokio
                 ---
 
                 Sibling.
@@ -1903,7 +1927,7 @@ mod tests {
         semver::Version::parse(s).unwrap()
     }
 
-    /// Each level's `crates` lowers to one predicate set; the skill applies when
+    /// Each level's `depends-on` lowers to one predicate set; the skill applies when
     /// every level's set holds (AND across levels).
     fn applies(levels: &[&str], ws: &[(String, semver::Version)]) -> bool {
         levels

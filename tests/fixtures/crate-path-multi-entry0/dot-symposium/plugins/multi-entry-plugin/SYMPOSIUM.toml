@@ -1,5 +1,5 @@
 name = "multi-entry-plugin"
-crates = ["crate-m"]
+depends-on = ["crate-m"]
 
 [[skills]]
 source = "crate"

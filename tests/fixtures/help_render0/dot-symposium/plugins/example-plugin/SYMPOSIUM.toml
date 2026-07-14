@@ -1,5 +1,5 @@
 name = "example-plugin"
-crates = ["*"]
+depends-on = ["*"]
 
 [[installations]]
 name = "example-tool-install"

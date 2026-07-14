@@ -1,5 +1,5 @@
 name = "diamond-plugin"
-crates = ["crate-a", "crate-b"]
+depends-on = ["crate-a", "crate-b"]
 
 [[skills]]
 source = "crate"

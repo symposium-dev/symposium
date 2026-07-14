@@ -1,6 +1,6 @@
 name = "transitive-plugin"
-crates = ["*"]
+depends-on = ["*"]
 
 [[skills]]
-crates = ["mio"]
+depends-on = ["mio"]
 source.path = "skills"

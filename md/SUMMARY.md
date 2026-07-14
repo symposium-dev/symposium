@@ -53,7 +53,7 @@
   - [Plugin definition](./reference/plugin-definition.md)
   - [Symposium hook events](./reference/hook-events.md)
   - [Skill definition](./reference/skill-definition.md)
-  - [Crate predicates](./reference/crate-predicates.md)
+  - [Dependency predicates (`depends-on`)](./reference/depends-on.md)
   - [Predicates](./reference/predicates.md)
 - [Contribution guide](./design/welcome.md)
   - [Tenets](./design/tenets.md)

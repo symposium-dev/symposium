@@ -22,7 +22,7 @@ A `SKILL.md` file has YAML frontmatter followed by a markdown body:
 ---
 name: serde-basics
 description: Basic guidance for serde usage
-crates: serde
+depends-on: serde
 ---
 
 Prefer deriving `Serialize` and `Deserialize` on data types.
@@ -34,7 +34,7 @@ Prefer deriving `Serialize` and `Deserialize` on data types.
 |-------|------|----------|-------------|
 | `name` | string | yes | Skill identifier. |
 | `description` | string | yes | Short description shown in skill listings. |
-| `crates` | string | no | Comma-separated crate atoms this skill is about (e.g., `crates: serde, tokio>=1.0`). Narrows the enclosing `[[skills]]` group scope — cannot widen it. |
+| `depends-on` | string | no | Comma-separated dependency atoms this skill is about (e.g., `depends-on: serde, tokio>=1.0`). Narrows the enclosing `[[skills]]` group scope — cannot widen it. |
 | `predicates` | string | no | Comma-separated predicates (`crate`, `shell`, `path_exists`, `env`, `not`, `any`, `all`); all must hold for the skill to activate. ANDed with plugin- and group-level predicates. See [Predicates](./predicates.md). |
 
 ## Crate atoms
@@ -51,8 +51,8 @@ Crate atoms specify a crate name with an optional version constraint:
 - `serde=1.0` — compatible-with-1.0 (equivalent to `^1.0`)
 - `serde==1.0.219` — exact version
 
-See [Crate predicates](./crate-predicates.md) for the full syntax.
+See [Crate predicates](./depends-on.md) for the full syntax.
 
 ## Scope composition
 
-`crates` can be declared at the `[[skills]]` group level (in the plugin TOML) and at the individual skill level (in SKILL.md frontmatter). They compose as AND: both layers must match for a skill to activate. A skill-level `crates` narrows the group's scope — it does not widen it.
+`depends-on` can be declared at the `[[skills]]` group level (in the plugin TOML) and at the individual skill level (in SKILL.md frontmatter). They compose as AND: both layers must match for a skill to activate. A skill-level `depends-on` narrows the group's scope — it does not widen it.

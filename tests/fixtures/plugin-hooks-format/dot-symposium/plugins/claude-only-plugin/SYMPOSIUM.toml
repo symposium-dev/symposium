@@ -1,5 +1,5 @@
 name = "claude-only-plugin"
-crates = ["*"]
+depends-on = ["*"]
 
 # Only a Claude hook — no symposium fallback.
 # Should fire on Claude, should NOT fire on other agents.

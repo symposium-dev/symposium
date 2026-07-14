@@ -18,7 +18,7 @@ fn main() {
         skill_dir.join("SKILL.md"),
         r#"---
 name: my-skill
-crates: serde
+depends-on: serde
 ---
 
 Test skill."#,
@@ -30,7 +30,7 @@ Test skill."#,
         mixed_dir.join("SKILL.md"),
         r#"---
 name: mixed-skill
-crates: tokio
+depends-on: tokio
 ---
 
 Mixed skill."#,

@@ -1,5 +1,5 @@
 name = "hyphen-plugin"
-crates = ["crate-foo"]
+depends-on = ["crate-foo"]
 
 [[skills]]
 source = "crate"

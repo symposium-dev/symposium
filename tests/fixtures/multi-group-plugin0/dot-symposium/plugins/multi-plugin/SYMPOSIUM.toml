@@ -1,10 +1,10 @@
 name = "multi-plugin"
-crates = ["serde"]
+depends-on = ["serde"]
 
 [[skills]]
-crates = ["serde"]
+depends-on = ["serde"]
 source.path = "group-a"
 
 [[skills]]
-crates = ["serde"]
+depends-on = ["serde"]
 source.path = "group-b"

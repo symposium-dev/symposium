@@ -412,10 +412,7 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &mut WorkspaceDeps) {
 
     // Resolving the workspace runs cargo, so only do it when some hook's
     // gating references a concrete crate (mirrors dispatch).
-    let pairs = if plugins
-        .iter()
-        .any(|p| p.plugin.hooks_need_crate_resolution())
-    {
+    let pairs = if plugins.iter().any(|p| p.plugin.hooks_need_dep_resolution()) {
         crate::crate_sources::crate_pairs(deps.crates())
     } else {
         Vec::new()
@@ -575,12 +572,9 @@ pub async fn dispatch_plugin_hooks(
     let plugins = crate::plugins::load_all_plugins(sym);
 
     // Resolving the workspace means running cargo, so only do it when some
-    // plugin's hook gating actually references a concrete crate (a `crate(*)`
+    // plugin's hook gating actually references a concrete crate (a `depends-on(*)`
     // wildcard or env/shell/path predicate never needs the crate graph).
-    let pairs = if plugins
-        .iter()
-        .any(|p| p.plugin.hooks_need_crate_resolution())
-    {
+    let pairs = if plugins.iter().any(|p| p.plugin.hooks_need_dep_resolution()) {
         crate::crate_sources::crate_pairs(deps.crates())
     } else {
         Vec::new()
@@ -1037,8 +1031,8 @@ mod tests {
                     .collect(),
             },
         };
-        // Plugin gate: `crate(*)` (always applies) plus the shell predicates.
-        let plugin_predicates = std::iter::once(crate::predicate::Predicate::CrateWildcard)
+        // Plugin gate: `depends-on(*)` (always applies) plus the shell predicates.
+        let plugin_predicates = std::iter::once(crate::predicate::Predicate::DependsOnWildcard)
             .chain(
                 plugin_shell
                     .into_iter()
@@ -1112,13 +1106,13 @@ mod tests {
 
     /// A plugin gated on a concrete crate must not dispatch its hooks in a
     /// workspace that lacks the crate (regression: hooks used to fire for every
-    /// plugin regardless of its `crates`).
+    /// plugin regardless of its `depends-on`).
     #[test]
     fn dispatch_respects_plugin_crate_gate() {
-        // Replace the wildcard plugin gate with a concrete `crate(serde)`.
+        // Replace the wildcard plugin gate with a concrete `depends-on(serde)`.
         let mut plugin = plugin_with_hook(vec![], vec![]);
         plugin.plugin.predicates = crate::predicate::PredicateSet {
-            predicates: vec![crate::predicate::Predicate::Crate("serde".into(), None)],
+            predicates: vec![crate::predicate::Predicate::DependsOn("serde".into(), None)],
         };
 
         // No serde in the workspace → the hook is skipped.

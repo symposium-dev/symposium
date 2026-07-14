@@ -1,5 +1,5 @@
 name = "test-plugin"
-crates = ["*"]
+depends-on = ["*"]
 
 # A reusable installation referenced by name. No source — `script` points to a
 # file on disk (variable-expanded by the fixture loader).

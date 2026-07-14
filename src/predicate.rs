@@ -4,12 +4,13 @@
 //! dependency graph and the live environment. Two surface syntaxes lower to the
 //! same [`Predicate`] tree:
 //!
-//! - The `crates` field uses **crate-atom** syntax (`serde`, `serde>=1.0`, `*`)
-//!   and lowers to `crate(...)` / `crate(*)` predicates, OR-combined into a
-//!   single `any(...)` that is appended to the same predicate list.
+//! - The `depends-on` field uses **dependency-atom** syntax (`serde`,
+//!   `serde>=1.0`, `*`) and lowers to `depends-on(...)` / `depends-on(*)`
+//!   predicates, OR-combined into a single `any(...)` that is appended to the
+//!   same predicate list.
 //! - The `predicates` field uses **function-call** syntax:
-//!   - `crate(<atom>)` — a workspace dependency is present (and its version
-//!     satisfies the optional requirement); `crate(*)` matches any workspace.
+//!   - `depends-on(<atom>)` — a workspace dependency is present (and its version
+//!     satisfies the optional requirement); `depends-on(*)` matches any workspace.
 //!   - `shell(<command>)` — `sh -c <command>` exits 0.
 //!   - `path_exists(<arg>)` — `<arg>` exists on disk, falling back to a `$PATH`
 //!     lookup for bare names.
@@ -21,47 +22,57 @@
 //! Within a [`PredicateSet`] the entries are ANDed.
 //!
 //! Besides the boolean gate ([`PredicateSet::evaluate`]), predicates carry a
-//! **witness**: the set of workspace crates that participate in a satisfying
+//! **witness**: the set of workspace packages that participate in a satisfying
 //! evaluation. This drives `source = "crate"` skill resolution — see
-//! [`PredicateSet::witness`] and [`union_matched_crates`].
+//! [`PredicateSet::witness`] and [`union_matched_packages`].
 
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-/// Names reserved for builtin predicates. Custom predicates must not use these.
-pub const BUILTIN_PREDICATE_NAMES: &[&str] =
-    &["crate", "shell", "path_exists", "env", "not", "any", "all"];
+/// Names reserved for builtin predicates. Custom predicates must not use
+/// these. `crate` is retired syntax but stays reserved so a custom predicate
+/// can never squat on it.
+pub const BUILTIN_PREDICATE_NAMES: &[&str] = &[
+    "depends-on",
+    "crate",
+    "shell",
+    "path_exists",
+    "env",
+    "not",
+    "any",
+    "all",
+];
 
 /// The evaluation environment a predicate is checked against.
 ///
-/// The crate graph is passed explicitly; the OS environment (`shell`,
-/// `path_exists`, `env`) is read ambiently at evaluation time. Custom
+/// The workspace dependency list is passed explicitly; the OS environment
+/// (`shell`, `path_exists`, `env`) is read ambiently at evaluation time. Custom
 /// (plugin-defined) predicates are resolved entries whose results are cached
 /// for the lifetime of the context.
 #[derive(Debug)]
 pub struct PredicateContext<'a> {
-    pub crates: &'a [(String, semver::Version)],
+    pub deps: &'a [(String, semver::Version)],
     custom_entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
     custom_cache: std::collections::HashMap<(String, String), CustomPredicateResult>,
 }
 
 impl<'a> PredicateContext<'a> {
-    pub fn new(crates: &'a [(String, semver::Version)]) -> Self {
+    pub fn new(deps: &'a [(String, semver::Version)]) -> Self {
         Self {
-            crates,
+            deps,
             custom_entries: std::collections::HashMap::new(),
             custom_cache: std::collections::HashMap::new(),
         }
     }
 
     pub fn with_custom_predicates(
-        crates: &'a [(String, semver::Version)],
+        deps: &'a [(String, semver::Version)],
         entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
     ) -> Self {
         Self {
-            crates,
+            deps,
             custom_entries: entries,
             custom_cache: std::collections::HashMap::new(),
         }
@@ -102,10 +113,10 @@ impl<'a> PredicateContext<'a> {
 /// A single predicate node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Predicate {
-    /// `crate(<name>)` / `crate(<name><req>)` — a workspace dep matches.
-    Crate(String, Option<semver::VersionReq>),
-    /// `crate(*)` / bare `*` — matches any workspace (even with zero deps).
-    CrateWildcard,
+    /// `depends-on(<name>)` / `depends-on(<name><req>)` — a workspace dep matches.
+    DependsOn(String, Option<semver::VersionReq>),
+    /// `depends-on(*)` / bare `*` — matches any workspace (even with zero deps).
+    DependsOnWildcard,
     /// `shell(<command>)` — passes when `sh -c <command>` exits 0.
     Shell(String),
     /// `path_exists(<arg>)` — passes when `<arg>` exists (disk, then `$PATH`).
@@ -131,10 +142,12 @@ impl Predicate {
     /// needed.
     pub fn evaluate(&self, ctx: &mut PredicateContext) -> bool {
         match self {
-            Predicate::Crate(name, version_req) => ctx.crates.iter().any(|(dep_name, dep_ver)| {
-                dep_name == name && version_req.as_ref().is_none_or(|req| req.matches(dep_ver))
-            }),
-            Predicate::CrateWildcard => true,
+            Predicate::DependsOn(name, version_req) => {
+                ctx.deps.iter().any(|(dep_name, dep_ver)| {
+                    dep_name == name && version_req.as_ref().is_none_or(|req| req.matches(dep_ver))
+                })
+            }
+            Predicate::DependsOnWildcard => true,
             Predicate::Shell(cmd) => run_shell(cmd),
             Predicate::PathExists(arg) => path_exists(arg),
             Predicate::Env(name, expected) => env_matches(name, expected.as_deref()),
@@ -147,16 +160,17 @@ impl Predicate {
 
     /// Evaluate, returning `None` when false and `Some(witness)` when true.
     ///
-    /// The witness is the set of workspace crates that participate in the
-    /// satisfying evaluation: `crate(c)` contributes `c` when present, `any`
-    /// unions the witnesses of its *true* children, `all` unions all children's
-    /// witnesses (when all hold), and `not` contributes nothing (negation is
-    /// about absence). Non-crate leaves contribute an empty witness.
+    /// The witness is the set of workspace packages that participate in the
+    /// satisfying evaluation: `depends-on(d)` contributes `d` when present,
+    /// `any` unions the witnesses of its *true* children, `all` unions all
+    /// children's witnesses (when all hold), and `not` contributes nothing
+    /// (negation is about absence). Non-dependency leaves contribute an empty
+    /// witness.
     pub fn witness(&self, ctx: &mut PredicateContext) -> Option<Vec<(String, semver::Version)>> {
         match self {
-            Predicate::Crate(name, version_req) => {
+            Predicate::DependsOn(name, version_req) => {
                 let hits: Vec<_> = ctx
-                    .crates
+                    .deps
                     .iter()
                     .filter(|(dep_name, dep_ver)| {
                         dep_name == name
@@ -166,7 +180,7 @@ impl Predicate {
                     .collect();
                 if hits.is_empty() { None } else { Some(hits) }
             }
-            Predicate::CrateWildcard => Some(Vec::new()),
+            Predicate::DependsOnWildcard => Some(Vec::new()),
             Predicate::Shell(cmd) => run_shell(cmd).then(Vec::new),
             Predicate::PathExists(arg) => path_exists(arg).then(Vec::new),
             Predicate::Env(name, expected) => env_matches(name, expected.as_deref()).then(Vec::new),
@@ -203,71 +217,74 @@ impl Predicate {
         }
     }
 
-    /// Returns true if this predicate references the given crate name anywhere
-    /// (including inside combinators and negations).
-    pub fn references_crate(&self, name: &str) -> bool {
+    /// Returns true if this predicate references the given dependency name
+    /// anywhere (including inside combinators and negations).
+    pub fn references_dep(&self, name: &str) -> bool {
         match self {
-            Predicate::Crate(n, _) => n == name,
-            Predicate::Not(p) => p.references_crate(name),
-            Predicate::Any(v) | Predicate::All(v) => v.iter().any(|p| p.references_crate(name)),
+            Predicate::DependsOn(n, _) => n == name,
+            Predicate::Not(p) => p.references_dep(name),
+            Predicate::Any(v) | Predicate::All(v) => v.iter().any(|p| p.references_dep(name)),
             Predicate::Custom { .. } => false,
             _ => false,
         }
     }
 
-    /// True if this predicate mentions any crate (concrete or `crate(*)`).
-    pub fn mentions_crate(&self) -> bool {
+    /// True if this predicate mentions any dependency (concrete or
+    /// `depends-on(*)`).
+    pub fn mentions_dep(&self) -> bool {
         match self {
-            Predicate::Crate(..) | Predicate::CrateWildcard => true,
-            Predicate::Not(p) => p.mentions_crate(),
-            Predicate::Any(v) | Predicate::All(v) => v.iter().any(Predicate::mentions_crate),
+            Predicate::DependsOn(..) | Predicate::DependsOnWildcard => true,
+            Predicate::Not(p) => p.mentions_dep(),
+            Predicate::Any(v) | Predicate::All(v) => v.iter().any(Predicate::mentions_dep),
             Predicate::Custom { .. } => false,
             _ => false,
         }
     }
 
-    /// True if this predicate names a *concrete* crate (`crate(serde)`), as
-    /// opposed to only `crate(*)`. Non-allocating — used on the hook hot path.
-    pub fn has_concrete_crate(&self) -> bool {
+    /// True if this predicate names a *concrete* dependency
+    /// (`depends-on(serde)`), as opposed to only `depends-on(*)`.
+    /// Non-allocating — used on the hook hot path.
+    pub fn has_concrete_dep(&self) -> bool {
         match self {
-            Predicate::Crate(..) => true,
-            Predicate::Not(p) => p.has_concrete_crate(),
-            Predicate::Any(v) | Predicate::All(v) => v.iter().any(Predicate::has_concrete_crate),
+            Predicate::DependsOn(..) => true,
+            Predicate::Not(p) => p.has_concrete_dep(),
+            Predicate::Any(v) | Predicate::All(v) => v.iter().any(Predicate::has_concrete_dep),
             Predicate::Custom { .. } => false,
             _ => false,
         }
     }
 
-    /// True if this predicate names a concrete crate in a position that can
-    /// appear in a [`witness`](Self::witness) — i.e. a `crate(serde)` not under
-    /// any `not(...)`. A crate beneath a negation never contributes a crate to
-    /// fetch from (the `Not` arm of `witness` discards its inner witness), so
-    /// it cannot anchor a `source = "crate"` group. Custom predicates may
-    /// produce witnesses at runtime, so they count as fetchable.
-    pub fn has_fetchable_crate(&self) -> bool {
+    /// True if this predicate names a concrete dependency in a position that
+    /// can appear in a [`witness`](Self::witness) — i.e. a `depends-on(serde)`
+    /// not under any `not(...)`. A dependency beneath a negation never
+    /// contributes a package to fetch from (the `Not` arm of `witness`
+    /// discards its inner witness), so it cannot anchor a `source = "crate"`
+    /// group. Custom predicates may produce witnesses at runtime, so they
+    /// count as fetchable.
+    pub fn has_fetchable_dep(&self) -> bool {
         match self {
-            Predicate::Crate(..) => true,
+            Predicate::DependsOn(..) => true,
             Predicate::Custom { .. } => true,
             Predicate::Not(_) => false,
-            Predicate::Any(v) | Predicate::All(v) => v.iter().any(Predicate::has_fetchable_crate),
+            Predicate::Any(v) | Predicate::All(v) => v.iter().any(Predicate::has_fetchable_dep),
             _ => false,
         }
     }
 
-    /// Collect every crate name referenced anywhere in this predicate.
+    /// Collect every dependency name referenced anywhere in this predicate.
     ///
     /// Used for crates.io existence validation, so it ignores tree position
-    /// (a crate named under `not(...)` is still validated). Custom predicates
-    /// are a no-op — their crate names are dynamic.
-    pub fn collect_crate_names(&self, out: &mut std::collections::BTreeSet<String>) {
+    /// (a dependency named under `not(...)` is still validated). Custom
+    /// predicates are a no-op — their names are dynamic.
+    pub fn collect_dep_names(&self, out: &mut std::collections::BTreeSet<String>) {
         match self {
-            Predicate::Crate(name, _) => {
+            Predicate::DependsOn(name, _) => {
                 out.insert(name.clone());
             }
-            Predicate::Not(p) => p.collect_crate_names(out),
+            Predicate::Not(p) => p.collect_dep_names(out),
             Predicate::Any(v) | Predicate::All(v) => {
                 for p in v {
-                    p.collect_crate_names(out);
+                    p.collect_dep_names(out);
                 }
             }
             Predicate::Custom { .. } => {}
@@ -290,23 +307,23 @@ impl PredicateSet {
         })
     }
 
-    /// Build a set from **crate-atom** syntax (the `crates` field), lowering the
-    /// OR-combined atoms into a single `any(...)` predicate. Empty input yields
-    /// an empty set.
-    pub fn from_crates(input: &str) -> Result<Self> {
+    /// Build a set from **dependency-atom** syntax (the `depends-on` field),
+    /// lowering the OR-combined atoms into a single `any(...)` predicate.
+    /// Empty input yields an empty set.
+    pub fn from_depends_on(input: &str) -> Result<Self> {
         Ok(Self {
-            predicates: CrateList::parse(input)?
+            predicates: DependsOnList::parse(input)?
                 .into_predicate()
                 .into_iter()
                 .collect(),
         })
     }
 
-    /// Combine a lowered `crates` field with a `predicates` field into one set.
-    /// The `crates` atoms become a single leading `any(...)` predicate.
-    pub fn merged(crates: Option<CrateList>, predicates: PredicateSet) -> PredicateSet {
+    /// Combine a lowered `depends-on` field with a `predicates` field into one
+    /// set. The `depends-on` atoms become a single leading `any(...)` predicate.
+    pub fn merged(depends_on: Option<DependsOnList>, predicates: PredicateSet) -> PredicateSet {
         let mut list = Vec::new();
-        if let Some(p) = crates.and_then(CrateList::into_predicate) {
+        if let Some(p) = depends_on.and_then(DependsOnList::into_predicate) {
             list.push(p);
         }
         list.extend(predicates.predicates);
@@ -321,51 +338,52 @@ impl PredicateSet {
     /// Witness for the whole set (treated as one big `all(...)`): `None` if any
     /// predicate is false, otherwise the deduplicated union of witnesses.
     pub fn witness(&self, ctx: &mut PredicateContext) -> Option<Vec<(String, semver::Version)>> {
-        let mut crates = Vec::new();
+        let mut packages = Vec::new();
         for p in &self.predicates {
-            crates.extend(p.witness(ctx)?);
+            packages.extend(p.witness(ctx)?);
         }
-        Some(dedup_crates(crates))
+        Some(dedup_packages(packages))
     }
 
     pub fn is_empty(&self) -> bool {
         self.predicates.is_empty()
     }
 
-    pub fn collect_crate_names(&self, out: &mut std::collections::BTreeSet<String>) {
+    pub fn collect_dep_names(&self, out: &mut std::collections::BTreeSet<String>) {
         for p in &self.predicates {
-            p.collect_crate_names(out);
+            p.collect_dep_names(out);
         }
     }
 
-    /// True if any `crate(...)` predicate (non-wildcard) appears anywhere.
-    pub fn has_concrete_crate(&self) -> bool {
-        self.predicates.iter().any(Predicate::has_concrete_crate)
+    /// True if any `depends-on(...)` predicate (non-wildcard) appears anywhere.
+    pub fn has_concrete_dep(&self) -> bool {
+        self.predicates.iter().any(Predicate::has_concrete_dep)
     }
 
-    /// True if a concrete crate appears in a fetchable (non-negated) position.
-    /// Gates `source = "crate"` validation: such a group must name at least one
-    /// crate it can actually fetch skills from.
-    pub fn has_fetchable_crate(&self) -> bool {
-        self.predicates.iter().any(Predicate::has_fetchable_crate)
+    /// True if a concrete dependency appears in a fetchable (non-negated)
+    /// position. Gates `source = "crate"` validation: such a group must name
+    /// at least one dependency it can actually fetch skills from.
+    pub fn has_fetchable_dep(&self) -> bool {
+        self.predicates.iter().any(Predicate::has_fetchable_dep)
     }
 
-    /// True if any crate predicate (including `crate(*)`) appears anywhere.
-    pub fn mentions_crate(&self) -> bool {
-        self.predicates.iter().any(Predicate::mentions_crate)
+    /// True if any dependency predicate (including `depends-on(*)`) appears
+    /// anywhere.
+    pub fn mentions_dep(&self) -> bool {
+        self.predicates.iter().any(Predicate::mentions_dep)
     }
 
-    /// True if any predicate references the given crate name.
-    pub fn references_crate(&self, name: &str) -> bool {
-        self.predicates.iter().any(|p| p.references_crate(name))
+    /// True if any predicate references the given dependency name.
+    pub fn references_dep(&self, name: &str) -> bool {
+        self.predicates.iter().any(|p| p.references_dep(name))
     }
 }
 
-/// Union the witnesses of several predicate sets, deduplicated by crate name.
+/// Union the witnesses of several predicate sets, deduplicated by name.
 ///
 /// A set whose gate is false contributes nothing. Drives `source = "crate"`
-/// resolution: the concrete crates whose source trees to fetch skills from.
-pub fn union_matched_crates(
+/// resolution: the concrete packages whose source trees to fetch skills from.
+pub fn union_matched_packages(
     sets: &[&PredicateSet],
     ctx: &mut PredicateContext,
 ) -> Vec<(String, semver::Version)> {
@@ -383,30 +401,30 @@ pub fn union_matched_crates(
     result
 }
 
-fn dedup_crates(crates: Vec<(String, semver::Version)>) -> Vec<(String, semver::Version)> {
+fn dedup_packages(packages: Vec<(String, semver::Version)>) -> Vec<(String, semver::Version)> {
     let mut seen = std::collections::HashSet::new();
-    crates
+    packages
         .into_iter()
         .filter(|(name, _)| seen.insert(name.clone()))
         .collect()
 }
 
-// --- the `crates` field: a list of crate atoms, OR-combined ---
+// --- the `depends-on` field: a list of dependency atoms, OR-combined ---
 
-/// The parsed `crates = [...]` field — a list of crate atoms. Lowers to a
+/// The parsed `depends-on = [...]` field — a list of crate atoms. Lowers to a
 /// single `any(...)` predicate appended to the enclosing predicate list.
 #[derive(Debug, Clone, Default, PartialEq)]
-pub struct CrateList(pub Vec<Predicate>);
+pub struct DependsOnList(pub Vec<Predicate>);
 
 #[derive(Debug, serde::Deserialize)]
 #[serde(untagged)]
-enum RawCrateList {
+enum RawDependsOnList {
     One(String),
     Many(Vec<String>),
 }
 
-impl CrateList {
-    /// Parse comma-separated crate atoms (`serde, tokio>=1.0, *`).
+impl DependsOnList {
+    /// Parse comma-separated dependency atoms (`serde, tokio>=1.0, *`).
     ///
     /// Commas inside balanced parentheses are preserved so that custom
     /// predicates like `battery_pack(a, b)` are not split incorrectly.
@@ -416,8 +434,8 @@ impl CrateList {
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .map(|s| {
-                parse_crate_atom(s)
-                    .with_context(|| format!("failed to parse crate predicate: {s:?}"))
+                parse_dep_atom(s)
+                    .with_context(|| format!("failed to parse depends-on predicate: {s:?}"))
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self(atoms))
@@ -434,17 +452,17 @@ impl CrateList {
     }
 }
 
-impl<'de> serde::Deserialize<'de> for CrateList {
+impl<'de> serde::Deserialize<'de> for DependsOnList {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        // Accept either a single string (`crates = "serde"`) or a sequence
-        // (`crates = ["serde", "tokio>=1.0"]`).
-        let atoms = match RawCrateList::deserialize(deserializer)? {
-            RawCrateList::One(s) => vec![s],
-            RawCrateList::Many(v) => v,
+        // Accept either a single string (`depends-on = "serde"`) or a sequence
+        // (`depends-on = ["serde", "tokio>=1.0"]`).
+        let atoms = match RawDependsOnList::deserialize(deserializer)? {
+            RawDependsOnList::One(s) => vec![s],
+            RawDependsOnList::Many(v) => v,
         };
         let predicates = atoms
             .iter()
-            .map(|s| parse_crate_atom(s.trim()))
+            .map(|s| parse_dep_atom(s.trim()))
             .collect::<Result<Vec<_>>>()
             .map_err(serde::de::Error::custom)?;
         Ok(Self(predicates))
@@ -493,7 +511,8 @@ fn parse(input: &str) -> Result<Predicate> {
     let arg = trimmed[open + 1..trimmed.len() - 1].trim();
 
     match name {
-        "crate" => parse_crate_atom(arg),
+        "depends-on" => parse_dep_atom(arg),
+        "crate" => bail!("`crate({arg})` is no longer supported; use `depends-on({arg})` instead"),
         "shell" => Ok(Predicate::Shell(arg.to_string())),
         "path_exists" => Ok(Predicate::PathExists(arg.to_string())),
         "env" => parse_env(arg),
@@ -574,16 +593,17 @@ fn split_top_level(input: &str) -> Vec<String> {
     out
 }
 
-// --- crate-atom parsing (`serde`, `serde>=1.0`, `*`) ---
+// --- dependency-atom parsing (`serde`, `serde>=1.0`, `*`) ---
 
-/// Parse a single crate atom into a `Crate` / `CrateWildcard` predicate.
-pub fn parse_crate_atom(input: &str) -> Result<Predicate> {
+/// Parse a single dependency atom into a `DependsOn` / `DependsOnWildcard`
+/// predicate.
+pub fn parse_dep_atom(input: &str) -> Result<Predicate> {
     let input = input.trim();
     if input.is_empty() {
-        bail!("empty crate predicate");
+        bail!("empty depends-on predicate");
     }
     if input == "*" {
-        return Ok(Predicate::CrateWildcard);
+        return Ok(Predicate::DependsOnWildcard);
     }
     let mut parser = AtomParser::new(input);
     let pred = parser.parse_atom()?;
@@ -622,7 +642,7 @@ impl<'a> AtomParser<'a> {
         self.skip_whitespace();
         let start = self.pos;
 
-        // Consume crate name: [a-zA-Z0-9_-]+
+        // Consume dependency name: [a-zA-Z0-9_-]+
         while self.pos < self.input.len() {
             let c = self.input.as_bytes()[self.pos];
             if c.is_ascii_alphanumeric() || c == b'_' || c == b'-' {
@@ -635,19 +655,19 @@ impl<'a> AtomParser<'a> {
         let name = &self.input[start..self.pos];
         if name.is_empty() {
             bail!(
-                "expected crate name at position {}: {:?}",
+                "expected dependency name at position {}: {:?}",
                 start,
                 self.remaining()
             );
         }
 
-        // Function-call syntax is NOT valid in crate-atom position. The
-        // `crates` field accepts only bare names + optional version constraints.
-        // Full predicate expressions (including custom predicates) belong in the
-        // `predicates` field.
+        // Function-call syntax is NOT valid in dependency-atom position. The
+        // `depends-on` field accepts only bare names + optional version
+        // constraints. Full predicate expressions (including custom
+        // predicates) belong in the `predicates` field.
         if self.pos < self.input.len() && self.input.as_bytes()[self.pos] == b'(' {
             bail!(
-                "function-call syntax `{name}(...)` is not valid in the `crates` field; \
+                "function-call syntax `{name}(...)` is not valid in the `depends-on` field; \
                  use the `predicates` field instead"
             );
         }
@@ -681,7 +701,7 @@ impl<'a> AtomParser<'a> {
             None
         };
 
-        Ok(Predicate::Crate(name.to_string(), version_req))
+        Ok(Predicate::DependsOn(name.to_string(), version_req))
     }
 }
 
@@ -763,9 +783,9 @@ impl<'de> serde::Deserialize<'de> for PredicateSet {
 impl std::fmt::Display for Predicate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Predicate::Crate(name, None) => write!(f, "crate({name})"),
-            Predicate::Crate(name, Some(req)) => write!(f, "crate({name}{req})"),
-            Predicate::CrateWildcard => write!(f, "crate(*)"),
+            Predicate::DependsOn(name, None) => write!(f, "depends-on({name})"),
+            Predicate::DependsOn(name, Some(req)) => write!(f, "depends-on({name}{req})"),
+            Predicate::DependsOnWildcard => write!(f, "depends-on(*)"),
             Predicate::Shell(cmd) => write!(f, "shell({cmd})"),
             Predicate::PathExists(arg) => write!(f, "path_exists({arg})"),
             Predicate::Env(name, None) => write!(f, "env({name})"),
@@ -976,40 +996,42 @@ mod tests {
     #[test]
     fn parse_crate_atom_bare_and_versioned() {
         assert_eq!(
-            parse_crate_atom("serde").unwrap(),
-            Predicate::Crate("serde".into(), None)
+            parse_dep_atom("serde").unwrap(),
+            Predicate::DependsOn("serde".into(), None)
         );
         assert_eq!(
-            parse_crate_atom("serde>=1.0").unwrap(),
-            Predicate::Crate(
+            parse_dep_atom("serde>=1.0").unwrap(),
+            Predicate::DependsOn(
                 "serde".into(),
                 Some(semver::VersionReq::parse(">=1.0").unwrap())
             )
         );
-        assert_eq!(parse_crate_atom("*").unwrap(), Predicate::CrateWildcard);
+        assert_eq!(parse_dep_atom("*").unwrap(), Predicate::DependsOnWildcard);
     }
 
     #[test]
     fn crate_list_lowers_to_any() {
-        assert_eq!(CrateList::parse("").unwrap().into_predicate(), None);
+        assert_eq!(DependsOnList::parse("").unwrap().into_predicate(), None);
         assert_eq!(
-            CrateList::parse("serde").unwrap().into_predicate(),
-            Some(Predicate::Crate("serde".into(), None))
+            DependsOnList::parse("serde").unwrap().into_predicate(),
+            Some(Predicate::DependsOn("serde".into(), None))
         );
         assert_eq!(
-            CrateList::parse("serde, tokio").unwrap().into_predicate(),
+            DependsOnList::parse("serde, tokio")
+                .unwrap()
+                .into_predicate(),
             Some(Predicate::Any(vec![
-                Predicate::Crate("serde".into(), None),
-                Predicate::Crate("tokio".into(), None),
+                Predicate::DependsOn("serde".into(), None),
+                Predicate::DependsOn("tokio".into(), None),
             ]))
         );
-        // Function-call syntax is rejected in the `crates` field.
-        assert!(CrateList::parse("bp(cli, web)").is_err());
-        assert!(CrateList::parse("serde, bp(a, b)").is_err());
-        assert!(CrateList::parse("all()").is_err());
-        assert!(CrateList::parse("crate(serde)").is_err());
-        assert!(CrateList::parse("not(serde)").is_err());
-        assert!(CrateList::parse("shell(true)").is_err());
+        // Function-call syntax is rejected in the `depends-on` field.
+        assert!(DependsOnList::parse("bp(cli, web)").is_err());
+        assert!(DependsOnList::parse("serde, bp(a, b)").is_err());
+        assert!(DependsOnList::parse("all()").is_err());
+        assert!(DependsOnList::parse("depends-on(serde)").is_err());
+        assert!(DependsOnList::parse("not(serde)").is_err());
+        assert!(DependsOnList::parse("shell(true)").is_err());
     }
 
     // --- function-call parsing ---
@@ -1023,25 +1045,37 @@ mod tests {
     }
 
     #[test]
+    fn parse_rejects_renamed_crate_predicate() {
+        let err = parse("crate(serde)").unwrap_err();
+        assert!(
+            err.to_string().contains("use `depends-on(serde)` instead"),
+            "expected migration hint, got: {err}"
+        );
+    }
+
+    #[test]
     fn parse_function_calls() {
         assert_eq!(
-            parse("crate(serde)").unwrap(),
-            Predicate::Crate("serde".into(), None)
+            parse("depends-on(serde)").unwrap(),
+            Predicate::DependsOn("serde".into(), None)
         );
-        assert_eq!(parse("crate(*)").unwrap(), Predicate::CrateWildcard);
+        assert_eq!(
+            parse("depends-on(*)").unwrap(),
+            Predicate::DependsOnWildcard
+        );
         assert_eq!(
             parse("shell(command -v rg)").unwrap(),
             Predicate::Shell("command -v rg".into())
         );
         assert_eq!(parse("env(CI)").unwrap(), Predicate::Env("CI".into(), None));
         assert_eq!(
-            parse("not(crate(serde))").unwrap(),
-            Predicate::Not(Box::new(Predicate::Crate("serde".into(), None)))
+            parse("not(depends-on(serde))").unwrap(),
+            Predicate::Not(Box::new(Predicate::DependsOn("serde".into(), None)))
         );
         assert_eq!(
-            parse("any(crate(a), path_exists(rg))").unwrap(),
+            parse("any(depends-on(a), path_exists(rg))").unwrap(),
             Predicate::Any(vec![
-                Predicate::Crate("a".into(), None),
+                Predicate::DependsOn("a".into(), None),
                 Predicate::PathExists("rg".into()),
             ])
         );
@@ -1061,22 +1095,26 @@ mod tests {
     #[test]
     fn evaluate_crate_and_wildcard() {
         let w = ws(&[("serde", "1.0.0")]);
-        assert!(parse("crate(serde)").unwrap().evaluate(&mut ctx(&w)));
-        assert!(!parse("crate(tokio)").unwrap().evaluate(&mut ctx(&w)));
-        assert!(parse("crate(*)").unwrap().evaluate(&mut ctx(&[])));
+        assert!(parse("depends-on(serde)").unwrap().evaluate(&mut ctx(&w)));
+        assert!(!parse("depends-on(tokio)").unwrap().evaluate(&mut ctx(&w)));
+        assert!(parse("depends-on(*)").unwrap().evaluate(&mut ctx(&[])));
     }
 
     #[test]
     fn evaluate_combinators() {
         let w = ws(&[("serde", "1.0.0")]);
-        assert!(parse("not(crate(tokio))").unwrap().evaluate(&mut ctx(&w)));
         assert!(
-            parse("any(crate(tokio), crate(serde))")
+            parse("not(depends-on(tokio))")
                 .unwrap()
                 .evaluate(&mut ctx(&w))
         );
         assert!(
-            !parse("all(crate(serde), crate(tokio))")
+            parse("any(depends-on(tokio), depends-on(serde))")
+                .unwrap()
+                .evaluate(&mut ctx(&w))
+        );
+        assert!(
+            !parse("all(depends-on(serde), depends-on(tokio))")
                 .unwrap()
                 .evaluate(&mut ctx(&w))
         );
@@ -1088,14 +1126,14 @@ mod tests {
         // `witness(...).is_some()` for every shape.
         let w = ws(&[("serde", "1.0.0")]);
         for input in [
-            "crate(serde)",
-            "crate(tokio)",
-            "crate(*)",
-            "not(crate(tokio))",
-            "any(crate(tokio), shell(true))",
-            "all(crate(serde), env(PATH))",
-            "all(crate(serde), crate(tokio))",
-            "not(any(crate(serde), env(PATH)))",
+            "depends-on(serde)",
+            "depends-on(tokio)",
+            "depends-on(*)",
+            "not(depends-on(tokio))",
+            "any(depends-on(tokio), shell(true))",
+            "all(depends-on(serde), env(PATH))",
+            "all(depends-on(serde), depends-on(tokio))",
+            "not(any(depends-on(serde), env(PATH)))",
         ] {
             let p = parse(input).unwrap();
             assert_eq!(
@@ -1116,8 +1154,9 @@ mod tests {
 
     #[test]
     fn witness_example_one_all_gates_crate2() {
-        // any(crate(c1), all(crate(c2), env(USE_C2)))
-        let p = parse("any(crate(c1), all(crate(c2), env(SYMPOSIUM_TEST_UNSET_XYZ)))").unwrap();
+        // any(depends-on(c1), all(depends-on(c2), env(USE_C2)))
+        let p = parse("any(depends-on(c1), all(depends-on(c2), env(SYMPOSIUM_TEST_UNSET_XYZ)))")
+            .unwrap();
         let w = ws(&[("c1", "1.0.0"), ("c2", "1.0.0")]);
         // env unset -> all(...) is a dead branch -> only c1
         let names: Vec<_> = p
@@ -1131,10 +1170,10 @@ mod tests {
 
     #[test]
     fn witness_example_three_not_excludes_crate2() {
-        // any(crate(c1), all(not(env(SKIP)), crate(c2))) with SKIP "set"
+        // any(depends-on(c1), all(not(env(SKIP)), depends-on(c2))) with SKIP "set"
         // Model "SKIP set" by asserting against an env-equality we force true via
         // a value compare on an unset var is false; instead use a present var.
-        let p = parse("any(crate(c1), all(not(env(PATH)), crate(c2)))").unwrap();
+        let p = parse("any(depends-on(c1), all(not(env(PATH)), depends-on(c2)))").unwrap();
         let w = ws(&[("c1", "1.0.0"), ("c2", "1.0.0")]);
         // PATH is set -> not(env(PATH)) false -> all dead -> only c1
         let names: Vec<_> = p
@@ -1148,9 +1187,9 @@ mod tests {
 
     #[test]
     fn witness_unions_all_true_branches() {
-        // any(crate(c1), any(env(PATH), crate(c2))) — both c1 and c2 present and
-        // their crate(...) branches are independently true.
-        let p = parse("any(crate(c1), any(env(PATH), crate(c2)))").unwrap();
+        // any(depends-on(c1), any(env(PATH), depends-on(c2))) — both c1 and c2 present and
+        // their depends-on(...) branches are independently true.
+        let p = parse("any(depends-on(c1), any(env(PATH), depends-on(c2)))").unwrap();
         let w = ws(&[("c1", "1.0.0"), ("c2", "1.0.0")]);
         let mut names: Vec<_> = p
             .witness(&mut ctx(&w))
@@ -1164,16 +1203,16 @@ mod tests {
 
     #[test]
     fn witness_false_gate_is_none() {
-        let p = parse("crate(absent)").unwrap();
+        let p = parse("depends-on(absent)").unwrap();
         assert!(p.witness(&mut ctx(&[])).is_none());
     }
 
     #[test]
     fn union_matched_crates_dedups_across_sets() {
-        let plugin = PredicateSet::from_crates("serde").unwrap();
-        let group = PredicateSet::from_crates("serde, tokio").unwrap();
+        let plugin = PredicateSet::from_depends_on("serde").unwrap();
+        let group = PredicateSet::from_depends_on("serde, tokio").unwrap();
         let w = ws(&[("serde", "1.0.0"), ("tokio", "1.0.0")]);
-        let result = union_matched_crates(&[&plugin, &group], &mut ctx(&w));
+        let result = union_matched_packages(&[&plugin, &group], &mut ctx(&w));
         let mut names: Vec<_> = result.into_iter().map(|(n, _)| n).collect();
         names.sort();
         assert_eq!(names, vec!["serde", "tokio"]);
@@ -1183,56 +1222,60 @@ mod tests {
 
     #[test]
     fn collect_and_references_walk_the_tree() {
-        let p = parse("any(crate(serde), not(crate(tokio)))").unwrap();
+        let p = parse("any(depends-on(serde), not(depends-on(tokio)))").unwrap();
         let mut names = std::collections::BTreeSet::new();
-        p.collect_crate_names(&mut names);
+        p.collect_dep_names(&mut names);
         assert_eq!(
             names.into_iter().collect::<Vec<_>>(),
             vec!["serde", "tokio"]
         );
-        assert!(p.references_crate("serde"));
-        assert!(p.references_crate("tokio"));
-        assert!(!p.references_crate("anyhow"));
+        assert!(p.references_dep("serde"));
+        assert!(p.references_dep("tokio"));
+        assert!(!p.references_dep("anyhow"));
     }
 
     #[test]
-    fn has_concrete_crate() {
+    fn has_concrete_dep() {
         assert!(
-            PredicateSet::from_crates("serde")
+            PredicateSet::from_depends_on("serde")
                 .unwrap()
-                .has_concrete_crate()
+                .has_concrete_dep()
         );
-        assert!(!PredicateSet::from_crates("*").unwrap().has_concrete_crate());
+        assert!(
+            !PredicateSet::from_depends_on("*")
+                .unwrap()
+                .has_concrete_dep()
+        );
         assert!(
             !PredicateSet::parse("shell(true)")
                 .unwrap()
-                .has_concrete_crate()
+                .has_concrete_dep()
         );
     }
 
     #[test]
-    fn has_fetchable_crate() {
-        let fetchable = |s: &str| PredicateSet::parse(s).unwrap().has_fetchable_crate();
+    fn has_fetchable_dep() {
+        let fetchable = |s: &str| PredicateSet::parse(s).unwrap().has_fetchable_dep();
         // A crate in a positive position is fetchable...
-        assert!(fetchable("crate(serde)"));
-        assert!(fetchable("any(crate(serde), not(crate(legacy)))"));
-        assert!(fetchable("all(crate(serde), env(USE_SERDE))"));
+        assert!(fetchable("depends-on(serde)"));
+        assert!(fetchable("any(depends-on(serde), not(depends-on(legacy)))"));
+        assert!(fetchable("all(depends-on(serde), env(USE_SERDE))"));
         assert!(
-            PredicateSet::from_crates("serde")
+            PredicateSet::from_depends_on("serde")
                 .unwrap()
-                .has_fetchable_crate()
+                .has_fetchable_dep()
         );
         // ...but a crate only under `not(...)` is not (its witness is empty).
-        assert!(!fetchable("not(crate(legacy))"));
-        assert!(!fetchable("all(not(crate(a)), env(X))"));
-        // `not(not(crate(a)))` still cannot fetch: `Not` always yields an empty
+        assert!(!fetchable("not(depends-on(legacy))"));
+        assert!(!fetchable("all(not(depends-on(a)), env(X))"));
+        // `not(not(depends-on(a)))` still cannot fetch: `Not` always yields an empty
         // witness regardless of nesting depth.
-        assert!(!fetchable("not(not(crate(a)))"));
+        assert!(!fetchable("not(not(depends-on(a)))"));
         // Wildcards and non-crate leaves are never fetchable.
         assert!(
-            !PredicateSet::from_crates("*")
+            !PredicateSet::from_depends_on("*")
                 .unwrap()
-                .has_fetchable_crate()
+                .has_fetchable_dep()
         );
         assert!(!fetchable("shell(true)"));
     }
@@ -1242,16 +1285,16 @@ mod tests {
     #[test]
     fn display_round_trip() {
         for input in [
-            "crate(serde)",
-            "crate(serde>=1.0)",
-            "crate(*)",
+            "depends-on(serde)",
+            "depends-on(serde>=1.0)",
+            "depends-on(*)",
             "shell(command -v rg)",
             "path_exists(rg)",
             "env(CI)",
             "env(MODE=debug)",
-            "not(crate(serde))",
-            "any(crate(a), path_exists(b))",
-            "all(crate(a), not(env(CI)))",
+            "not(depends-on(serde))",
+            "any(depends-on(a), path_exists(b))",
+            "all(depends-on(a), not(env(CI)))",
         ] {
             let p = parse(input).unwrap();
             assert_eq!(p.to_string(), input, "display drift: {input}");
@@ -1265,22 +1308,25 @@ mod tests {
     fn toml_fields_deserialize() {
         #[derive(serde::Deserialize)]
         struct Container {
-            #[serde(default)]
-            crates: CrateList,
+            #[serde(default, rename = "depends-on")]
+            depends_on: DependsOnList,
             #[serde(default)]
             predicates: PredicateSet,
         }
         let c: Container = toml::from_str(
-            r#"crates = ["serde", "tokio>=1.0"]
-               predicates = ["path_exists(jq)", "not(crate(foo))"]"#,
+            r#"depends-on = ["serde", "tokio>=1.0"]
+               predicates = ["path_exists(jq)", "not(depends-on(foo))"]"#,
         )
         .unwrap();
-        assert_eq!(c.crates.0.len(), 2);
+        assert_eq!(c.depends_on.0.len(), 2);
         assert_eq!(c.predicates.predicates.len(), 2);
 
-        // single-string crates form
-        let c2: Container = toml::from_str(r#"crates = "serde""#).unwrap();
-        assert_eq!(c2.crates.0, vec![Predicate::Crate("serde".into(), None)]);
+        // single-string depends-on form
+        let c2: Container = toml::from_str(r#"depends-on = "serde""#).unwrap();
+        assert_eq!(
+            c2.depends_on.0,
+            vec![Predicate::DependsOn("serde".into(), None)]
+        );
     }
 
     // --- Custom predicate parsing tests ---
@@ -1350,8 +1396,8 @@ mod tests {
 
     #[test]
     fn custom_not_confused_with_builtin() {
-        let p = parse("crate(serde)").unwrap();
-        assert_eq!(p, Predicate::Crate("serde".into(), None));
+        let p = parse("depends-on(serde)").unwrap();
+        assert_eq!(p, Predicate::DependsOn("serde".into(), None));
     }
 
     #[test]
@@ -1360,7 +1406,7 @@ mod tests {
             name: "foo".into(),
             arg: "x".into(),
         };
-        assert!(!p.has_concrete_crate());
+        assert!(!p.has_concrete_dep());
     }
 
     #[test]
@@ -1369,7 +1415,7 @@ mod tests {
             name: "foo".into(),
             arg: "x".into(),
         };
-        assert!(p.has_fetchable_crate());
+        assert!(p.has_fetchable_dep());
     }
 
     #[test]
@@ -1378,7 +1424,7 @@ mod tests {
             name: "foo".into(),
             arg: "x".into(),
         };
-        assert!(!p.mentions_crate());
+        assert!(!p.mentions_dep());
     }
 
     #[test]
@@ -1387,8 +1433,8 @@ mod tests {
             name: "foo".into(),
             arg: "x".into(),
         };
-        assert!(!p.references_crate("foo"));
-        assert!(!p.references_crate("x"));
+        assert!(!p.references_dep("foo"));
+        assert!(!p.references_dep("x"));
     }
 
     #[test]
@@ -1398,7 +1444,7 @@ mod tests {
             arg: "x".into(),
         };
         let mut names = std::collections::BTreeSet::new();
-        p.collect_crate_names(&mut names);
+        p.collect_dep_names(&mut names);
         assert!(names.is_empty());
     }
 
