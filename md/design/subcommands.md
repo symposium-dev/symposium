@@ -18,7 +18,7 @@ This means a plugin author writes installation logic once and shares it across h
 
 ```toml
 name = "demo-plugin"
-crates = ["example-crate"]
+depends-on = ["example-crate"]
 
 [[installations]]
 name = "example-tool"
@@ -38,7 +38,7 @@ command = "example-tool"
 | `description` | string | yes | Shown in `cargo agents --help`. Capped at 1024 chars. |
 | `audience` | `"humans"` \| `"agents"` | no, defaults to `"agents"` | Controls grouping in `cargo agents --help`. |
 | `command` | string or table | yes | A string names an `[[installations]]` entry; a table is an inline installation, promoted to a synthetic entry named after the subcommand. Same shape as `[[hooks]].command`. |
-| `crates` | string or array | no | Subcommand-level crate predicate, AND-combined with the plugin-level `crates`. |
+| `depends-on` | string or array | no | Subcommand-level dependency predicate, AND-combined with the plugin-level `depends-on`. |
 
 Reserved names that cannot be used as subcommand keys: `init`, `sync`, `hook`, `plugin`, `crate-info`, `help`. A plugin cannot shadow a built-in.
 
@@ -61,7 +61,7 @@ The inline table is promoted to a synthetic installation named after the subcomm
 Symposium does not own the subcommand's argument grammar. The plugin's binary owns its own `--help`, validation, and exit codes. What symposium contributes is mechanical:
 
 1. Name registration and lookup.
-2. Workspace-aware filtering (the subcommand only appears for projects matching the plugin's crate predicates).
+2. Workspace-aware filtering (the subcommand only appears for projects matching the plugin's dependency predicates).
 3. A short description shown in `cargo agents --help`.
 4. Resolution of `command` through the installation pipeline to a concrete `(executable, base_args)`.
 5. Forwarding the user's trailing CLI args verbatim, appended after the installation's `args`.
@@ -73,7 +73,7 @@ This boundary keeps the manifest small, keeps plugins authoritative about their 
 `cargo-agents`'s top-level CLI uses clap's `allow_external_subcommands`: unknown subcommands are not errors but are routed to a catch-all variant. The binary then:
 
 1. Loads the plugin registry and the active workspace's crates.
-2. Walks active plugins for one whose `subcommands` map contains the typed name *and* whose subcommand-level `crates` predicate (if any) also matches.
+2. Walks active plugins for one whose `subcommands` map contains the typed name *and* whose subcommand-level `depends-on` predicate (if any) also matches.
 3. Resolves the subcommand's `command` through the installation pipeline — acquiring the binary if it isn't already cached, running any `install_commands`, processing `requirements`.
 4. Execs the resolved `(executable, base_args ++ user_args)`, inheriting stdio.
 5. Returns the child's exit code as the `cargo agents` exit code. A signal-killed child becomes a generic failure.
@@ -88,9 +88,9 @@ If no plugin matches the typed name, dispatch fails with a clear error pointing 
 
 Plugin filtering is workspace-aware in two places: help rendering and dispatch.
 
-**Inside a Cargo workspace.** Symposium reads the workspace's resolved dependencies. A subcommand appears in `cargo agents --help` and is dispatchable only if both the plugin-level and subcommand-level `crates` predicates match. Built-in subcommands always appear.
+**Inside a Cargo workspace.** Symposium reads the workspace's resolved dependencies. A subcommand appears in `cargo agents --help` and is dispatchable only if both the plugin-level and subcommand-level `depends-on` predicates match. Built-in subcommands always appear.
 
-**Outside a Cargo workspace** (no discoverable `Cargo.toml` upward). Only built-ins and plugins with `crates = ["*"]` appear. Invoking a crate-specific subcommand from outside a workspace produces an error explaining which crate it needs.
+**Outside a Cargo workspace** (no discoverable `Cargo.toml` upward). Only built-ins and plugins with `depends-on = ["*"]` appear. Invoking a crate-specific subcommand from outside a workspace produces an error explaining which crate it needs.
 
 This rule keeps `cargo agents --help` outside a workspace limited to globally-applicable commands, rather than listing every installed plugin.
 
@@ -121,7 +121,7 @@ The hint shares `SessionStart`'s `additionalContext` with the [update nudge](./h
 
 ## Conflict resolution
 
-Two plugins may declare the same subcommand name. Rather than silently picking one, dispatch fails with an error listing every plugin that defined the name, leaving the user to disambiguate (typically by tightening one of the plugin's `crates` predicates or removing one of the plugin sources).
+Two plugins may declare the same subcommand name. Rather than silently picking one, dispatch fails with an error listing every plugin that defined the name, leaving the user to disambiguate (typically by tightening one of the plugin's `depends-on` predicates or removing one of the plugin sources).
 
 The strict-error stance trades silence for clarity: subcommand names tend to mirror crate names (which are unique on crates.io), so a collision usually signals a real configuration mistake rather than an intended override.
 

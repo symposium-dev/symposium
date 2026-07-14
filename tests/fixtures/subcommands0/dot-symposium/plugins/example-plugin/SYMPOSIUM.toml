@@ -1,5 +1,5 @@
 name = "example-plugin"
-crates = ["*"]
+depends-on = ["*"]
 
 # A subcommand whose installation runs a known cross-platform binary
 # (`rustc` is always on PATH inside `cargo test`). The test invokes

@@ -166,19 +166,19 @@ mod tests {
     }
 
     fn crate_set(spec: &str) -> PredicateSet {
-        PredicateSet::from_crates(spec).unwrap()
+        PredicateSet::from_depends_on(spec).unwrap()
     }
 
     fn plugin_with(
         name: &str,
-        crates: &str,
+        depends_on: &str,
         subcommands: BTreeMap<String, Subcommand>,
     ) -> ParsedPlugin {
         ParsedPlugin {
             path: PathBuf::from(format!("/test/{name}.toml")),
             plugin: Plugin {
                 name: name.into(),
-                predicates: crate_set(crates),
+                predicates: crate_set(depends_on),
                 installations: vec![],
                 hooks: vec![],
                 skills: vec![],
@@ -191,12 +191,12 @@ mod tests {
         }
     }
 
-    fn subcommand(command: &str, crates: Option<&str>) -> Subcommand {
+    fn subcommand(command: &str, depends_on: Option<&str>) -> Subcommand {
         Subcommand {
             description: "test".into(),
             audience: Audience::default(),
             command: command.into(),
-            predicates: crates.map(crate_set).unwrap_or_default(),
+            predicates: depends_on.map(crate_set).unwrap_or_default(),
         }
     }
 

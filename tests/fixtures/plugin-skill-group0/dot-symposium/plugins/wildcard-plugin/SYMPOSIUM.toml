@@ -1,5 +1,5 @@
 name = "wildcard-plugin"
-crates = ["*"]
+depends-on = ["*"]
 
 [[skills]]
 source.path = "."

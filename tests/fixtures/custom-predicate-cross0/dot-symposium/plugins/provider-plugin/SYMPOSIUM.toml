@@ -1,5 +1,5 @@
 name = "provider-plugin"
-crates = ["*"]
+depends-on = ["*"]
 
 [[installations]]
 name = "my-checker"

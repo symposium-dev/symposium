@@ -1,7 +1,7 @@
 ---
 name: my-skill
 description: Foo flavor of my-skill
-crates: serde
+depends-on: serde
 ---
 
 Foo body.

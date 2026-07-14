@@ -16,7 +16,7 @@ pub type McpServerEntry = McpServer;
 
 /// An MCP server entry with optional activation predicates.
 ///
-/// The server's `crates` and `predicates` fields are merged into one
+/// The server's `depends-on` and `predicates` fields are merged into one
 /// [`PredicateSet`](crate::predicate::PredicateSet); the server is only
 /// registered when that set holds (ANDed with the plugin-level set).
 #[derive(Debug, Clone, Serialize)]
@@ -32,8 +32,11 @@ pub struct PluginMcpServer {
 
 #[derive(Debug, Deserialize)]
 struct RawPluginMcpServer {
+    #[serde(default, rename = "depends-on")]
+    depends_on: Option<crate::predicate::DependsOnList>,
+    /// Rejected: renamed to `depends-on`.
     #[serde(default)]
-    crates: Option<crate::predicate::CrateList>,
+    crates: Option<toml::Value>,
     #[serde(default)]
     predicates: crate::predicate::PredicateSet,
     #[serde(flatten)]
@@ -41,12 +44,21 @@ struct RawPluginMcpServer {
 }
 
 impl RawPluginMcpServer {
-    fn validate(self) -> PluginMcpServer {
-        PluginMcpServer {
-            predicates: crate::predicate::PredicateSet::merged(self.crates, self.predicates),
+    fn validate(self) -> Result<PluginMcpServer> {
+        reject_crates_field(&self.crates)?;
+        Ok(PluginMcpServer {
+            predicates: crate::predicate::PredicateSet::merged(self.depends_on, self.predicates),
             server: self.server,
-        }
+        })
     }
+}
+
+/// Shared rejection for the retired `crates` field, with a migration hint.
+fn reject_crates_field(crates: &Option<toml::Value>) -> Result<()> {
+    if crates.is_some() {
+        bail!("the `crates` field has been renamed; use `depends-on` instead");
+    }
+    Ok(())
 }
 
 use symposium_install::UpdateLevel;
@@ -160,7 +172,7 @@ impl serde::Serialize for PluginSource {
 
 /// A `[[skills]]` entry from a plugin manifest.
 ///
-/// The group's `crates` and `predicates` fields are merged into one
+/// The group's `depends-on` and `predicates` fields are merged into one
 /// [`PredicateSet`](crate::predicate::PredicateSet) that gates the group and,
 /// for `source = "crate"`, locates the crate sources to fetch from.
 #[derive(Debug, Clone, Default, Serialize)]
@@ -178,8 +190,11 @@ pub struct SkillGroup {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawSkillGroup {
+    #[serde(default, rename = "depends-on")]
+    depends_on: Option<crate::predicate::DependsOnList>,
+    /// Rejected: renamed to `depends-on`.
     #[serde(default)]
-    crates: Option<crate::predicate::CrateList>,
+    crates: Option<toml::Value>,
     #[serde(default)]
     predicates: crate::predicate::PredicateSet,
     #[serde(default)]
@@ -188,8 +203,9 @@ struct RawSkillGroup {
 
 impl RawSkillGroup {
     fn validate(self) -> Result<SkillGroup> {
+        reject_crates_field(&self.crates)?;
         Ok(SkillGroup {
-            predicates: crate::predicate::PredicateSet::merged(self.crates, self.predicates),
+            predicates: crate::predicate::PredicateSet::merged(self.depends_on, self.predicates),
             source: self
                 .source
                 .map(RawPluginSource::validate)
@@ -308,10 +324,10 @@ pub struct ParsedPlugin {
 #[derive(Debug, Clone, Serialize)]
 pub struct Plugin {
     pub name: String,
-    /// Activation predicates for this plugin — the plugin's `crates` (lowered to
-    /// `any(crate(...))`) merged with its `predicates`. Holds when every entry
-    /// holds. Evaluated at sync time (for skills/MCP), at subcommand lookup, and
-    /// at hook dispatch.
+    /// Activation predicates for this plugin — the plugin's `depends-on`
+    /// (lowered to `any(depends-on(...))`) merged with its `predicates`. Holds
+    /// when every entry holds. Evaluated at sync time (for skills/MCP), at
+    /// subcommand lookup, and at hook dispatch.
     pub predicates: crate::predicate::PredicateSet,
     /// Named installation entries available to hooks in this plugin.
     /// Order matches declaration order in the manifest.
@@ -342,11 +358,11 @@ impl Plugin {
 
     /// True if gating this plugin's hooks (plugin-level plus hook-level
     /// predicates) needs the workspace crate graph — i.e. some predicate names a
-    /// concrete crate, not just `crate(*)`. Lets hook dispatch skip the cargo
+    /// concrete crate, not just `depends-on(*)`. Lets hook dispatch skip the cargo
     /// query when no crate is actually referenced.
-    pub fn hooks_need_crate_resolution(&self) -> bool {
-        self.predicates.has_concrete_crate()
-            || self.hooks.iter().any(|h| h.predicates.has_concrete_crate())
+    pub fn hooks_need_dep_resolution(&self) -> bool {
+        self.predicates.has_concrete_dep()
+            || self.hooks.iter().any(|h| h.predicates.has_concrete_dep())
     }
 
     /// Return MCP servers whose own predicates hold in `ctx`.
@@ -386,7 +402,7 @@ pub struct Subcommand {
     pub description: String,
     pub audience: Audience,
     pub command: String,
-    /// Activation predicates for this subcommand (its `crates` lowered and
+    /// Activation predicates for this subcommand (its `depends-on` lowered and
     /// merged with its `predicates`). ANDed with the plugin-level set.
     #[serde(
         default,
@@ -791,8 +807,11 @@ struct RawCustomPredicate {
 #[serde(deny_unknown_fields)]
 struct RawPluginManifest {
     name: String,
+    #[serde(default, rename = "depends-on")]
+    depends_on: crate::predicate::DependsOnList,
+    /// Rejected: renamed to `depends-on`.
     #[serde(default)]
-    crates: crate::predicate::CrateList,
+    crates: Option<toml::Value>,
     #[serde(default)]
     predicates: crate::predicate::PredicateSet,
     #[serde(default)]
@@ -840,8 +859,11 @@ struct RawSubcommand {
     /// Named installation (`"my-install"`) or inline installation table —
     /// same shape as `RawHook.command`.
     command: RawInstallationRef,
+    #[serde(default, rename = "depends-on")]
+    depends_on: Option<crate::predicate::DependsOnList>,
+    /// Rejected: renamed to `depends-on`.
     #[serde(default)]
-    crates: Option<crate::predicate::CrateList>,
+    crates: Option<toml::Value>,
     #[serde(default)]
     predicates: crate::predicate::PredicateSet,
 }
@@ -1415,7 +1437,7 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
 
 /// Collect all crate names referenced in predicates across a plugin source directory.
 ///
-/// Scans TOML plugin manifests (skill group `crates`) and
+/// Scans TOML plugin manifests (skill group `depends-on`) and
 /// standalone SKILL.md files, returning deduplicated crate names.
 /// Items that fail to load are silently skipped.
 pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
@@ -1426,18 +1448,18 @@ pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
         plugin_result
             .plugin
             .predicates
-            .collect_crate_names(&mut names);
+            .collect_dep_names(&mut names);
         for group in &plugin_result.plugin.skills {
-            group.predicates.collect_crate_names(&mut names);
+            group.predicates.collect_dep_names(&mut names);
         }
         for mcp in &plugin_result.plugin.mcp_servers {
-            mcp.predicates.collect_crate_names(&mut names);
+            mcp.predicates.collect_dep_names(&mut names);
         }
     }
 
     for skill_md in contents.skill_files {
         if let Ok(skill) = crate::skills::load_standalone_skill(&skill_md) {
-            skill.predicates.collect_crate_names(&mut names);
+            skill.predicates.collect_dep_names(&mut names);
         }
     }
 
@@ -1559,8 +1581,9 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
         )?);
     }
 
+    reject_crates_field(&manifest.crates)?;
     let predicates =
-        crate::predicate::PredicateSet::merged(Some(manifest.crates), manifest.predicates);
+        crate::predicate::PredicateSet::merged(Some(manifest.depends_on), manifest.predicates);
     let skills = manifest
         .skills
         .into_iter()
@@ -1570,25 +1593,25 @@ fn validate_manifest(manifest: RawPluginManifest) -> Result<Plugin> {
         .mcp_servers
         .into_iter()
         .map(RawPluginMcpServer::validate)
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>>>()?;
 
-    // Every plugin must reference at least one crate (or custom predicate)
-    // somewhere — at the plugin, skill-group, hook, or MCP-server level — via
-    // `crates`, a `crate(...)` predicate, or a custom predicate. Otherwise it
+    // Every plugin must reference at least one dependency (or custom
+    // predicate) somewhere — at the plugin, skill-group, hook, or MCP-server
+    // level — via `depends-on` or a `depends-on(...)` predicate. Otherwise it
     // would never apply to any project.
     let has_custom_predicate = predicates
         .predicates
         .iter()
         .any(|p| matches!(p, crate::predicate::Predicate::Custom { .. }));
-    let mentions_crate = has_custom_predicate
-        || predicates.mentions_crate()
-        || skills.iter().any(|g| g.predicates.mentions_crate())
-        || hooks.iter().any(|h| h.predicates.mentions_crate())
-        || mcp_servers.iter().any(|m| m.predicates.mentions_crate());
-    if !mentions_crate {
+    let mentions_dep = has_custom_predicate
+        || predicates.mentions_dep()
+        || skills.iter().any(|g| g.predicates.mentions_dep())
+        || hooks.iter().any(|h| h.predicates.mentions_dep())
+        || mcp_servers.iter().any(|m| m.predicates.mentions_dep());
+    if !mentions_dep {
         bail!(
-            "plugin `{}` references no crate — add `crates = [...]` or a `crate(...)` predicate \
-             at the plugin, `[[skills]]`, or `[[mcp_servers]]` level",
+            "plugin `{}` references no dependency — add `depends-on = [...]` or a \
+             `depends-on(...)` predicate at the plugin, `[[skills]]`, or `[[mcp_servers]]` level",
             manifest.name
         );
     }
@@ -1653,9 +1676,11 @@ fn validate_subcommand(
         description,
         audience,
         command: raw_command,
+        depends_on,
         crates,
         predicates,
     } = raw;
+    reject_crates_field(&crates)?;
 
     if description.len() > MAX_SUBCOMMAND_DESCRIPTION_LEN {
         bail!("subcommand `{name}` description exceeds {MAX_SUBCOMMAND_DESCRIPTION_LEN} chars");
@@ -1673,7 +1698,7 @@ fn validate_subcommand(
         description,
         audience,
         command,
-        predicates: crate::predicate::PredicateSet::merged(crates, predicates),
+        predicates: crate::predicate::PredicateSet::merged(depends_on, predicates),
     })
 }
 
@@ -1750,26 +1775,26 @@ fn build_custom_predicate_registry(
 /// contributes a crate to fetch (its witness is always empty).
 ///
 /// Valid:
-///   crates = ["serde"]              + source = "crate"  → fetch serde
-///   crates = ["*"], group ["serde"] + source = "crate"  → fetch serde
-///   crates = ["*", "serde"]         + source = "crate"  → fetch serde
-///   predicates = ["any(crate(a), crate(b))"]            → fetch a and/or b
+///   depends-on = ["serde"]              + source = "crate"  → fetch serde
+///   depends-on = ["*"], group ["serde"] + source = "crate"  → fetch serde
+///   depends-on = ["*", "serde"]         + source = "crate"  → fetch serde
+///   predicates = ["any(depends-on(a), depends-on(b))"]            → fetch a and/or b
 ///
 /// Invalid:
-///   crates = ["*"]                  + source = "crate"  → no concrete crate
-///   crates = ["*"], group ["*"]     + source = "crate"  → no concrete crate
-///   predicates = ["not(crate(legacy))"]                 → no fetchable crate
+///   depends-on = ["*"]                  + source = "crate"  → no concrete crate
+///   depends-on = ["*"], group ["*"]     + source = "crate"  → no concrete crate
+///   predicates = ["not(depends-on(legacy))"]                 → no fetchable crate
 fn validate_skill_groups(
     plugin_predicates: &crate::predicate::PredicateSet,
     skills: &[SkillGroup],
 ) -> Result<()> {
     for (i, group) in skills.iter().enumerate() {
         if group.source == PluginSource::Crate {
-            let has_fetchable_crate =
-                plugin_predicates.has_fetchable_crate() || group.predicates.has_fetchable_crate();
-            if !has_fetchable_crate {
+            let has_fetchable_dep =
+                plugin_predicates.has_fetchable_dep() || group.predicates.has_fetchable_dep();
+            if !has_fetchable_dep {
                 bail!(
-                    "skills group {i} uses source = \"crate\" but no concrete `crate(...)` \
+                    "skills group {i} uses source = \"crate\" but no concrete `depends-on(...)` \
                      predicate is reachable in a fetchable position (plugin-level or \
                      group-level, not under `not(...)`) — at least one is required to \
                      resolve a crate to fetch skills from"
@@ -1789,7 +1814,7 @@ mod tests {
     use crate::predicate::PredicateSet;
 
     fn pred_set(s: &str) -> PredicateSet {
-        PredicateSet::from_crates(s).unwrap()
+        PredicateSet::from_depends_on(s).unwrap()
     }
 
     fn ctx(crates: &[(String, semver::Version)]) -> crate::predicate::PredicateContext<'_> {
@@ -1803,7 +1828,7 @@ mod tests {
 
     const SAMPLE: &str = indoc! {r#"
         name = "example-plugin"
-        crates = ["*"]
+        depends-on = ["*"]
 
         [[installations]]
         name = "tool"
@@ -1828,17 +1853,17 @@ mod tests {
     fn parse_manifest_with_source_git_under_skills() {
         let toml = indoc! {r#"
             name = "remote-plugin"
-            crates = ["serde"]
+            depends-on = ["serde"]
 
             [[skills]]
-            crates = ["serde"]
+            depends-on = ["serde"]
             source.git = "https://github.com/org/repo/tree/main/serde"
         "#};
         let plugin = from_str(toml).expect("parse");
         assert_eq!(plugin.name, "remote-plugin");
         assert_eq!(plugin.skills.len(), 1);
         let group = &plugin.skills[0];
-        assert!(group.predicates.references_crate("serde"));
+        assert!(group.predicates.references_dep("serde"));
         assert!(
             matches!(
                 &group.source,
@@ -1853,20 +1878,20 @@ mod tests {
     fn parse_predicates_top_level() {
         let toml = indoc! {r#"
             name = "env-pred-plugin"
-            crates = ["*"]
+            depends-on = ["*"]
             predicates = ["shell(command -v rg)", "path_exists(Cargo.toml)"]
 
             [[skills]]
-            crates = ["serde"]
+            depends-on = ["serde"]
         "#};
         let plugin = from_str(toml).expect("parse");
-        // `crates = ["*"]` lowers to a leading `crate(*)`, then the two
+        // `depends-on = ["*"]` lowers to a leading `depends-on(*)`, then the two
         // function-call predicates.
         use crate::predicate::Predicate;
         assert_eq!(
             plugin.predicates.predicates,
             vec![
-                Predicate::CrateWildcard,
+                Predicate::DependsOnWildcard,
                 Predicate::Shell("command -v rg".into()),
                 Predicate::PathExists("Cargo.toml".into()),
             ]
@@ -1877,19 +1902,19 @@ mod tests {
     fn parse_predicates_on_skill_group() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[skills]]
-            crates = ["serde"]
+            depends-on = ["serde"]
             predicates = ["shell(command -v jq)"]
         "#};
         let plugin = from_str(toml).expect("parse");
-        // group `crates = ["serde"]` lowers to `crate(serde)`, plus the shell predicate.
+        // group `depends-on = ["serde"]` lowers to `depends-on(serde)`, plus the shell predicate.
         use crate::predicate::Predicate;
         assert_eq!(
             plugin.skills[0].predicates.predicates,
             vec![
-                Predicate::Crate("serde".into(), None),
+                Predicate::DependsOn("serde".into(), None),
                 Predicate::Shell("command -v jq".into()),
             ]
         );
@@ -1899,7 +1924,7 @@ mod tests {
     fn parse_predicates_on_hook() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[hooks]]
             name = "h"
@@ -1913,28 +1938,77 @@ mod tests {
 
     #[test]
     fn predicates_default_empty() {
-        // With no `predicates`, the plugin gate is just the lowered `crates`
-        // (here `crate(*)`), and hooks default to no predicates.
+        // With no `predicates`, the plugin gate is just the lowered `depends-on`
+        // (here `depends-on(*)`), and hooks default to no predicates.
         let plugin = from_str(SAMPLE).expect("parse");
         assert_eq!(
             plugin.predicates.predicates,
-            vec![crate::predicate::Predicate::CrateWildcard]
+            vec![crate::predicate::Predicate::DependsOnWildcard]
         );
         assert!(plugin.hooks[0].predicates.is_empty());
     }
 
     #[test]
-    fn parse_manifest_crates_as_array() {
+    fn parse_manifest_depends_on_as_array() {
         let toml = indoc! {r#"
-            name = "array-crates"
-            crates = ["*"]
+            name = "array-depends-on"
+            depends-on = ["*"]
 
             [[skills]]
-            crates = ["serde"]
+            depends-on = ["serde"]
         "#};
         let plugin = from_str(toml).expect("parse");
         let group = &plugin.skills[0];
-        assert!(group.predicates.predicates[0].references_crate("serde"));
+        assert!(group.predicates.predicates[0].references_dep("serde"));
+    }
+
+    #[test]
+    fn parse_manifest_rejects_renamed_crates_field() {
+        // Plugin level, group level, and MCP-server level all reject the old
+        // `crates` spelling with a migration hint.
+        for toml in [
+            indoc! {r#"
+                name = "old-spelling"
+                crates = ["serde"]
+            "#},
+            indoc! {r#"
+                name = "old-spelling"
+                depends-on = ["*"]
+
+                [[skills]]
+                crates = ["serde"]
+            "#},
+            indoc! {r#"
+                name = "old-spelling"
+                depends-on = ["*"]
+
+                [[mcp_servers]]
+                name = "server"
+                command = "/usr/bin/true"
+                args = ["--stdio"]
+                env = []
+                crates = ["serde"]
+            "#},
+        ] {
+            let err = from_str(toml).unwrap_err();
+            assert!(
+                err.to_string().contains("use `depends-on` instead"),
+                "expected migration hint, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_manifest_rejects_renamed_crate_predicate() {
+        let toml = indoc! {r#"
+            name = "old-predicate"
+            predicates = ["crate(serde)"]
+        "#};
+        let err = from_str(toml).unwrap_err();
+        assert!(
+            err.to_string().contains("use `depends-on(serde)` instead"),
+            "expected migration hint, got: {err}"
+        );
     }
 
     #[test]
@@ -1945,7 +2019,7 @@ mod tests {
                 "my-plugin/SYMPOSIUM.toml",
                 indoc! {r#"
                 name = "my-plugin"
-                crates = ["*"]
+                depends-on = ["*"]
 
                 [[hooks]]
                 name = "test"
@@ -1959,7 +2033,7 @@ mod tests {
                 ---
                 name: assert-struct
                 description: Check struct layout
-                crates: serde
+                depends-on: serde
                 ---
 
                 Use this skill.
@@ -2002,7 +2076,7 @@ mod tests {
             indoc! {"
                 ---
                 name: root-skill
-                crates: serde
+                depends-on: serde
                 ---
 
                 Root level skill.
@@ -2024,7 +2098,7 @@ mod tests {
             "SYMPOSIUM.toml",
             indoc! {r#"
                 name = "root-plugin"
-                crates = ["*"]
+                depends-on = ["*"]
             "#},
         )]);
 
@@ -2044,7 +2118,7 @@ mod tests {
                 "mixed/SYMPOSIUM.toml",
                 indoc! {r#"
                 name = "mixed-plugin"
-                crates = ["*"]
+                depends-on = ["*"]
             "#},
             ),
             File(
@@ -2052,7 +2126,7 @@ mod tests {
                 indoc! {"
                 ---
                 name: ignored-skill
-                crates: serde
+                depends-on: serde
                 ---
 
                 This should be ignored.
@@ -2075,7 +2149,7 @@ mod tests {
                 "precedence-test/SYMPOSIUM.toml",
                 indoc! {r#"
                 name = "preferred-plugin"
-                crates = ["*"]
+                depends-on = ["*"]
             "#},
             ),
             File(
@@ -2101,7 +2175,7 @@ mod tests {
                 "foo/SYMPOSIUM.toml",
                 indoc! {r#"
                 name = "foo-plugin"
-                crates = ["*"]
+                depends-on = ["*"]
             "#},
             ),
             File(
@@ -2109,7 +2183,7 @@ mod tests {
                 indoc! {"
                 ---
                 name: foo-bar-skill
-                crates: serde
+                depends-on: serde
                 ---
 
                 Should be pruned.
@@ -2120,7 +2194,7 @@ mod tests {
                 indoc! {"
                 ---
                 name: baz-skill
-                crates: tokio
+                depends-on: tokio
                 ---
 
                 Should be found.
@@ -2130,7 +2204,7 @@ mod tests {
                 "baz/qux/SYMPOSIUM.toml",
                 indoc! {r#"
                 name = "qux-plugin"
-                crates = ["*"]
+                depends-on = ["*"]
             "#},
             ),
             File(
@@ -2138,7 +2212,7 @@ mod tests {
                 indoc! {"
                 ---
                 name: qux-skill
-                crates: anyhow
+                depends-on: anyhow
                 ---
 
                 Should be pruned.
@@ -2162,7 +2236,7 @@ mod tests {
                 "good-plugin/SYMPOSIUM.toml",
                 indoc! {r#"
                 name = "good-plugin"
-                crates = ["serde"]
+                depends-on = ["serde"]
             "#},
             ),
             File("bad-plugin/SYMPOSIUM.toml", "not valid toml {{{"),
@@ -2172,7 +2246,7 @@ mod tests {
                 ---
                 name: my-skill
                 description: A skill
-                crates: serde
+                depends-on: serde
                 ---
 
                 Body.
@@ -2183,7 +2257,7 @@ mod tests {
                 indoc! {"
                 ---
                 description: No name
-                crates: serde
+                depends-on: serde
                 ---
 
                 Body.
@@ -2208,7 +2282,7 @@ mod tests {
                 ---
                 name: rust-best-practice
                 description: [Critical] Best practice for Rust coding.
-                crates: serde
+                depends-on: serde
                 ---
 
                 Body.
@@ -2231,10 +2305,10 @@ mod tests {
                 "my-plugin/SYMPOSIUM.toml",
                 indoc! {r#"
                 name = "my-plugin"
-                crates = ["*"]
+                depends-on = ["*"]
 
                 [[skills]]
-                crates = ["serde", "serde_json>=1.0"]
+                depends-on = ["serde", "serde_json>=1.0"]
             "#},
             ),
             File(
@@ -2243,7 +2317,7 @@ mod tests {
                 ---
                 name: my-skill
                 description: A skill
-                crates: anyhow
+                depends-on: anyhow
                 ---
 
                 Body.
@@ -2267,7 +2341,7 @@ mod tests {
                 ---
                 name: good
                 description: Good skill
-                crates: serde
+                depends-on: serde
                 ---
 
                 Body.
@@ -2300,7 +2374,7 @@ mod tests {
     fn path_at_wrong_level_is_rejected() {
         let toml = indoc! {r#"
             name = "Symposium"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[skills]]
             path = "."
@@ -2316,19 +2390,19 @@ mod tests {
     fn parse_manifest_with_multiple_skill_groups() {
         let toml = indoc! {r#"
             name = "multi-group"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[skills]]
-            crates = ["serde"]
+            depends-on = ["serde"]
 
             [[skills]]
-            crates = ["tokio"]
+            depends-on = ["tokio"]
         "#};
         let plugin = from_str(toml).expect("parse");
         assert_eq!(plugin.name, "multi-group");
         assert_eq!(plugin.skills.len(), 2);
-        assert!(plugin.skills[0].predicates.predicates[0].references_crate("serde"));
-        assert!(plugin.skills[1].predicates.predicates[0].references_crate("tokio"));
+        assert!(plugin.skills[0].predicates.predicates[0].references_dep("serde"));
+        assert!(plugin.skills[1].predicates.predicates[0].references_dep("tokio"));
     }
 
     #[test]
@@ -2410,7 +2484,7 @@ mod tests {
                 "good-plugin/SYMPOSIUM.toml",
                 indoc! {r#"
                 name = "good-plugin"
-                crates = ["serde"]
+                depends-on = ["serde"]
 
                 [[hooks]]
                 name = "some-hook"
@@ -2510,7 +2584,7 @@ mod tests {
     fn cargo_install_used_as_hook() {
         let toml = indoc! {r#"
             name = "cargo-as-hook"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "rg"
@@ -2539,7 +2613,7 @@ mod tests {
     fn rtk_requirement_plus_github_command() {
         let toml = indoc! {r#"
             name = "rtk-plugin"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "rtk"
@@ -2572,7 +2646,7 @@ mod tests {
     fn github_script_on_installation_is_used() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "g"
@@ -2595,7 +2669,7 @@ mod tests {
     fn missing_named_installation_errors() {
         let toml = indoc! {r#"
             name = "bad-plugin"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[hooks]]
             name = "rewrite"
@@ -2614,7 +2688,7 @@ mod tests {
     fn executable_and_script_together_errors() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "x"
@@ -2634,7 +2708,7 @@ mod tests {
     fn executable_set_on_both_layers_errors() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "g"
@@ -2662,7 +2736,7 @@ mod tests {
     fn executable_install_with_hook_script_errors() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "g"
@@ -2689,7 +2763,7 @@ mod tests {
     fn script_set_on_both_layers_errors() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "g"
@@ -2716,7 +2790,7 @@ mod tests {
     fn script_install_with_hook_executable_errors() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "g"
@@ -2743,7 +2817,7 @@ mod tests {
     fn hook_executable_and_script_together_errors() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "setup"
@@ -2770,7 +2844,7 @@ mod tests {
     fn hook_script_against_bare_installation_is_ok() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "setup"
@@ -2794,7 +2868,7 @@ mod tests {
     fn cargo_git_without_executable_errors() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "tool"
@@ -2819,7 +2893,7 @@ mod tests {
     fn args_set_on_both_layers_is_error() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "rg"
@@ -2846,7 +2920,7 @@ mod tests {
     fn hook_inherits_installation_args() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "rg"
@@ -2869,7 +2943,7 @@ mod tests {
     fn inline_installation_in_command() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[hooks]]
             name = "inline"
@@ -2899,7 +2973,7 @@ mod tests {
     fn inline_no_source_executable() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[hooks]]
             name = "h"
@@ -2922,7 +2996,7 @@ mod tests {
     fn inline_command_name_clash_errors() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "h"
@@ -2943,7 +3017,7 @@ mod tests {
     fn inline_command_with_hook_args_errors() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[hooks]]
             name = "h"
@@ -2963,7 +3037,7 @@ mod tests {
     fn install_commands_field_is_carried_through() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "rg"
@@ -2990,7 +3064,7 @@ mod tests {
     fn install_commands_on_inline_command() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[hooks]]
             name = "h"
@@ -3012,7 +3086,7 @@ mod tests {
     fn install_commands_on_inline_requirement() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[hooks]]
             name = "h"
@@ -3038,7 +3112,7 @@ mod tests {
     fn hook_command_must_resolve_to_runnable() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "setup"
@@ -3059,7 +3133,7 @@ mod tests {
     fn cargo_without_executable_is_ok() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "rg"
@@ -3079,7 +3153,7 @@ mod tests {
     fn cargo_global_field_round_trips() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "rg"
@@ -3112,7 +3186,7 @@ mod tests {
     fn cargo_global_without_executable_errors() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "rg"
@@ -3138,7 +3212,7 @@ mod tests {
     fn cargo_git_field_round_trips() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "tool"
@@ -3172,7 +3246,7 @@ mod tests {
     fn inline_installation_can_have_requirements() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "rtk"
@@ -3197,7 +3271,7 @@ mod tests {
     fn pure_install_commands_installation_is_ok() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "setup"
@@ -3225,7 +3299,7 @@ mod tests {
     fn duplicate_installation_name_errors() {
         let toml = indoc! {r#"
             name = "dup"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "x"
@@ -3248,7 +3322,7 @@ mod tests {
     fn requirements_named_and_inline() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "rtk"
@@ -3283,7 +3357,7 @@ mod tests {
     fn installation_requirements_propagate_to_hook() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "rtk"
@@ -3313,7 +3387,7 @@ mod tests {
     fn installation_requirements_propagate_via_named_hook_requirement() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "a"
@@ -3342,7 +3416,7 @@ mod tests {
     fn installation_requirements_can_be_inline() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "rtk-hooks"
@@ -3375,7 +3449,7 @@ mod tests {
     fn installation_requirement_unknown_name_errors() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "x"
@@ -3394,7 +3468,7 @@ mod tests {
     fn requirements_unknown_named_errors() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[hooks]]
             name = "h"
@@ -3415,7 +3489,7 @@ mod tests {
     fn parse_source_crate_shorthand() {
         let toml = indoc! {r#"
             name = "crate-shorthand"
-            crates = ["serde"]
+            depends-on = ["serde"]
 
             [[skills]]
             source = "crate"
@@ -3428,7 +3502,7 @@ mod tests {
     fn parse_source_crate_path_is_error() {
         let toml = indoc! {r#"
             name = "bad"
-            crates = ["serde"]
+            depends-on = ["serde"]
 
             [[skills]]
             source.crate_path = "skills"
@@ -3444,7 +3518,7 @@ mod tests {
     fn parse_source_crate_table_is_error() {
         let toml = indoc! {r#"
             name = "bad"
-            crates = ["serde"]
+            depends-on = ["serde"]
 
             [[skills]]
             source.crate = { name = "foo" }
@@ -3460,7 +3534,7 @@ mod tests {
     fn parse_source_unknown_string_is_error() {
         let toml = indoc! {r#"
             name = "bad"
-            crates = ["serde"]
+            depends-on = ["serde"]
 
             [[skills]]
             source = "magic"
@@ -3476,7 +3550,7 @@ mod tests {
     fn reject_path_and_git() {
         let toml = indoc! {r#"
             name = "bad"
-            crates = ["serde"]
+            depends-on = ["serde"]
 
             [[skills]]
             source.path = "."
@@ -3492,7 +3566,7 @@ mod tests {
     fn crate_valid_with_plugin_non_wildcard() {
         let toml = indoc! {r#"
             name = "ok"
-            crates = ["serde"]
+            depends-on = ["serde"]
 
             [[skills]]
             source = "crate"
@@ -3502,9 +3576,9 @@ mod tests {
 
     #[test]
     fn crate_reference_on_hook_satisfies_requirement() {
-        // A plugin whose only crate reference is a `crate(...)` predicate on a
-        // hook is valid — the hook is crate-gated even with no plugin-level
-        // `crates`.
+        // A plugin whose only dependency reference is a `depends-on(...)`
+        // predicate on a hook is valid — the hook is dependency-gated even
+        // with no plugin-level `depends-on`.
         let toml = indoc! {r#"
             name = "hook-crate"
 
@@ -3512,20 +3586,20 @@ mod tests {
             name = "h"
             event = "PreToolUse"
             command = { script = "scripts/x.sh" }
-            predicates = ["crate(serde)"]
+            predicates = ["depends-on(serde)"]
         "#};
         let plugin = from_str(toml).expect("should be valid");
-        assert!(plugin.hooks[0].predicates.references_crate("serde"));
+        assert!(plugin.hooks[0].predicates.references_dep("serde"));
     }
 
     #[test]
     fn crate_valid_with_group_non_wildcard() {
         let toml = indoc! {r#"
             name = "ok"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[skills]]
-            crates = ["serde"]
+            depends-on = ["serde"]
             source = "crate"
         "#};
         from_str(toml).expect("should be valid");
@@ -3535,7 +3609,7 @@ mod tests {
     fn crate_valid_with_mixed_wildcard_and_concrete() {
         let toml = indoc! {r#"
             name = "ok"
-            crates = ["*", "serde"]
+            depends-on = ["*", "serde"]
 
             [[skills]]
             source = "crate"
@@ -3547,10 +3621,10 @@ mod tests {
     fn crate_reject_all_wildcards() {
         let toml = indoc! {r#"
             name = "bad"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[skills]]
-            crates = ["*"]
+            depends-on = ["*"]
             source = "crate"
         "#};
         let err = from_str(toml).unwrap_err();
@@ -3561,7 +3635,7 @@ mod tests {
     fn crate_reject_wildcard_plugin_no_group_crates() {
         let toml = indoc! {r#"
             name = "bad"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[skills]]
             source = "crate"
@@ -3580,7 +3654,7 @@ mod tests {
 
             [[skills]]
             source = "crate"
-            predicates = ["not(crate(legacy))"]
+            predicates = ["not(depends-on(legacy))"]
         "#};
         let err = from_str(toml).unwrap_err();
         assert!(err.to_string().contains("fetchable"), "{err}");
@@ -3595,7 +3669,7 @@ mod tests {
 
             [[skills]]
             source = "crate"
-            predicates = ["any(crate(serde), not(crate(legacy)))"]
+            predicates = ["any(depends-on(serde), not(depends-on(legacy)))"]
         "#};
         from_str(toml).expect("should be valid");
     }
@@ -3611,7 +3685,7 @@ mod tests {
     fn roundtrip_source_crate() {
         let plugin = from_str(indoc! {r#"
             name = "rt"
-            crates = ["serde"]
+            depends-on = ["serde"]
 
             [[skills]]
             source = "crate"
@@ -3625,7 +3699,7 @@ mod tests {
     fn roundtrip_source_path() {
         let plugin = from_str(indoc! {r#"
             name = "rt"
-            crates = ["serde"]
+            depends-on = ["serde"]
 
             [[skills]]
             source.path = "skills/v1"
@@ -3646,7 +3720,7 @@ mod tests {
     fn roundtrip_source_git() {
         let plugin = from_str(indoc! {r#"
             name = "rt"
-            crates = ["serde"]
+            depends-on = ["serde"]
 
             [[skills]]
             source.git = "https://github.com/org/repo/tree/main/skills"
@@ -3667,10 +3741,10 @@ mod tests {
     fn roundtrip_source_none() {
         let plugin = from_str(indoc! {r#"
             name = "rt"
-            crates = ["serde"]
+            depends-on = ["serde"]
 
             [[skills]]
-            crates = ["serde"]
+            depends-on = ["serde"]
         "#})
         .unwrap();
         let rt = roundtrip(&plugin);
@@ -3685,7 +3759,7 @@ mod tests {
     fn serialize_crate_uses_string_form() {
         let plugin = from_str(indoc! {r#"
             name = "rt"
-            crates = ["serde"]
+            depends-on = ["serde"]
 
             [[skills]]
             source = "crate"
@@ -3702,7 +3776,7 @@ mod tests {
     fn parse_subcommand_minimal_named() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "tool"
@@ -3725,7 +3799,7 @@ mod tests {
     fn parse_subcommand_audience_humans() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "tool"
@@ -3745,7 +3819,7 @@ mod tests {
     fn parse_subcommand_inline_command_is_promoted() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [subcommand.foo]
             description = "Run foo"
@@ -3767,7 +3841,7 @@ mod tests {
     fn parse_subcommand_rejects_unknown_field() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [subcommand.foo]
             description = "Run foo"
@@ -3783,7 +3857,7 @@ mod tests {
     fn parse_subcommand_rejects_reserved_name() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "tool"
@@ -3803,7 +3877,7 @@ mod tests {
     fn parse_subcommand_rejects_invalid_name_chars() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "tool"
@@ -3825,7 +3899,7 @@ mod tests {
         let toml = format!(
             r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "tool"
@@ -3846,7 +3920,7 @@ mod tests {
     fn parse_subcommand_unknown_command_reference_fails() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [subcommand.foo]
             description = "..."
@@ -3864,7 +3938,7 @@ mod tests {
             "demo-plugin/SYMPOSIUM.toml",
             indoc! {r#"
                 name = "demo-plugin"
-                crates = ["example-crate"]
+                depends-on = ["example-crate"]
 
                 [[installations]]
                 name = "example-tool"
@@ -3902,7 +3976,7 @@ mod tests {
     fn parse_subcommand_with_crates_predicate() {
         let toml = indoc! {r#"
             name = "p"
-            crates = ["*"]
+            depends-on = ["*"]
 
             [[installations]]
             name = "tool"
@@ -3912,11 +3986,11 @@ mod tests {
             [subcommand.foo]
             description = "Only for serde projects"
             command = "tool"
-            crates = ["serde"]
+            depends-on = ["serde"]
         "#};
         let plugin = from_str(toml).expect("parse");
         let sub = &plugin.subcommands["foo"];
-        assert!(sub.predicates.references_crate("serde"));
+        assert!(sub.predicates.references_dep("serde"));
     }
 
     // --- custom predicate collision tests ---

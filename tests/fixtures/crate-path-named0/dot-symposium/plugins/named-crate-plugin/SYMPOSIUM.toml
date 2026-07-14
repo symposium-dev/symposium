@@ -1,5 +1,5 @@
 name = "named-crate-plugin"
-crates = ["crate-a"]
+depends-on = ["crate-a"]
 
 [[skills]]
 source = "crate"

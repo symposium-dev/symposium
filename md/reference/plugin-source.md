@@ -7,7 +7,7 @@ A **plugin source** is a directory or repository containing plugins and standalo
 Symposium scans a plugin source recursively to find plugins and standalone skills:
 
 * A [plugin](./plugin-definition.md) is a directory that contains a `SYMPOSIUM.toml` file;
-* A [standalone skill](./skill-definition.md) is a directory that contains a `SKILL.md` and does not contain a `SYMPOSIUM.toml` file. Standalone skills must have `crates` metadata in their frontmatter.
+* A [standalone skill](./skill-definition.md) is a directory that contains a `SKILL.md` and does not contain a `SYMPOSIUM.toml` file. Standalone skills must have `depends-on` metadata in their frontmatter.
 
 **We do not allow plugins or standalone skills to be nested within one another.** When we find a directory that is either a plugin or a skill, we do not search its contents any further.
 

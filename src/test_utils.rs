@@ -14,7 +14,7 @@ pub struct File<'a>(pub &'a str, pub &'a str);
 ///
 /// ```ignore
 /// let tmp = instantiate_fixture(&[
-///     File("foo/SYMPOSIUM.toml", r#"name = "foo"\ncrates = ["*"]"#),
+///     File("foo/SYMPOSIUM.toml", r#"name = "foo"\ndepends-on = ["*"]"#),
 ///     File("bar/SKILL.md", "---\nname: bar\n---\nBody."),
 /// ]);
 /// let root = tmp.path();

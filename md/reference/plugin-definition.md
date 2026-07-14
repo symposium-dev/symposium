@@ -22,7 +22,7 @@ where `myplugin/SYMPOSIUM.toml` is as follows:
 
 ```toml
 name = "example"
-crates = ["*"]
+depends-on = ["*"]
 
 [[skills]]
 source.path = "skills"
@@ -33,7 +33,7 @@ source.path = "skills"
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Plugin name. Used in logs and CLI output. |
-| `crates` | string or array | no | Which crates this plugin applies to. Use `["*"]` for all crates. See [Plugin-level filtering](#plugin-level-filtering). |
+| `depends-on` | string or array | no | Which crates this plugin applies to. Use `["*"]` for all crates. See [Plugin-level filtering](#plugin-level-filtering). |
 | `predicates` | array of strings | no | Predicates (`crate`, `shell`, `path_exists`, `env`, `not`, `any`, `all`) that must all hold for the plugin to apply. See [Predicates](./predicates.md). |
 | `installations` | array of tables | no | Named installation declarations (`[[installations]]`). Hooks reference these by name. See [Installations](#installations). |
 | `skills` | array of tables | no | Skill groups (`[[skills]]`). |
@@ -41,18 +41,18 @@ source.path = "skills"
 | `predicate` | array of tables | no | Custom predicate definitions (`[[predicate]]`). See [Custom predicates](#predicate). |
 | `mcp_servers` | array of tables | no | MCP server registrations (`[[mcp_servers]]`). |
 
-**Note**: Every plugin must reference at least one crate somewhere — at the plugin level, in `[[skills]]` groups, or in `[[mcp_servers]]` entries — via a `crates` list or a `crate(...)` [predicate](./predicates.md). Plugins without any crate targeting will fail validation.
+**Note**: Every plugin must reference at least one crate somewhere — at the plugin level, in `[[skills]]` groups, or in `[[mcp_servers]]` entries — via a `depends-on` list or a `depends-on(...)` [predicate](./predicates.md). Plugins without any crate targeting will fail validation.
 
 ## Plugin-level filtering
 
-The top-level `crates` field controls when the entire plugin is active:
+The top-level `depends-on` field controls when the entire plugin is active:
 
 ```toml
 name = "my-plugin"
-crates = ["serde", "tokio"]  # Only active in projects using serde OR tokio
+depends-on = ["serde", "tokio"]  # Only active in projects using serde OR tokio
 
 # OR use wildcard to always apply
-crates = ["*"]
+depends-on = ["*"]
 ```
 
 Plugin-level filtering is combined with skill group filtering using AND logic — both must match for skills to be available.
@@ -63,7 +63,7 @@ Each `[[skills]]` entry declares a group of skills.
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `crates` | string or array | Which crates this group advises on. Accepts a single string (`"serde"`) or array (`["serde", "tokio>=1.0"]`). See [Crate predicates](./crate-predicates.md) for syntax. |
+| `depends-on` | string or array | Which crates this group advises on. Accepts a single string (`"serde"`) or array (`["serde", "tokio>=1.0"]`). See [Crate predicates](./depends-on.md) for syntax. |
 | `predicates` | array of strings | Predicates (`crate`, `shell`, `path_exists`, `env`, `not`, `any`, `all`) that must all hold for the group to install. See [Predicates](./predicates.md). |
 | `source.path` | string | Local directory containing skill subdirectories. Resolved relative to the manifest file. |
 | `source.git` | string | GitHub URL pointing to a directory in a repository (e.g., `https://github.com/org/repo/tree/main/skills`). Symposium downloads the tarball, extracts the subdirectory, and caches it. |
@@ -79,13 +79,13 @@ This is the recommended way for crate authors to ship skills alongside their cra
 
 ```toml
 name = "serde-plugin"
-crates = ["serde"]
+depends-on = ["serde"]
 
 [[skills]]
 source = "crate"
 ```
 
-At least one non-wildcard crate predicate must be present (at either the plugin or group level) so that Symposium knows which crate sources to fetch. See [Matched crate set](./crate-predicates.md#matched-crate-set) for details.
+At least one non-wildcard crate predicate must be present (at either the plugin or group level) so that Symposium knows which crate sources to fetch. See [Matched crate set](./depends-on.md#matched-crate-set) for details.
 
 #### Skill layout in crate source
 
@@ -108,7 +108,7 @@ If your plugin lists multiple crates, then skills will be loaded from whichever 
 
 ```toml
 name = "my-plugin"
-crates = ["foo", "bar", "baz"]
+depends-on = ["foo", "bar", "baz"]
 
 [[skills]]
 source = "crate"
@@ -128,22 +128,22 @@ crate = { name = "dial9-viewer" }
 
 This means the plugin just needs `source = "crate"` and the crate itself controls where skills are fetched from. Redirects are followed recursively (with cycle detection and a depth limit of 10).
 
-#### Semantics of `crates` predicates at multiple levels
+#### Semantics of `depends-on` predicates at multiple levels
 
-When you apply the `crates` predicate at multiple levels, all levels must match. This can be used to narrow the set of crates that have skills versus the set that activates your plugin overall.
+When you apply the `depends-on` predicate at multiple levels, all levels must match. This can be used to narrow the set of crates that have skills versus the set that activates your plugin overall.
 
 ```toml
 name = "my-plugin"
 
 # Any of these crates activates the plugin
-crates = ["foo", "bar", "baz"]
+depends-on = ["foo", "bar", "baz"]
 
 [[skills]]
-crates = ["foo", "bar"] # ... but this block applies only to "foo" and "bar"
+depends-on = ["foo", "bar"] # ... but this block applies only to "foo" and "bar"
 source = "crate" # ...which get their skills from their sources
 
 [[skills]]
-crates = ["baz"] # ... this block applies to "baz"
+depends-on = ["baz"] # ... this block applies to "baz"
 source = "crate" # ... baz's Cargo.toml metadata controls where skills come from
 ```
 
@@ -492,7 +492,7 @@ The argument is trimmed of leading/trailing whitespace before being passed. An e
 
 ### Witness output (stdout JSON)
 
-On success (exit 0), the command may write a JSON object to stdout. If present and valid, the `selectedCrates` field drives `source = "crate"` skill resolution — the named crates are fetched for skills, just as if they'd been matched by a `crate(...)` predicate.
+On success (exit 0), the command may write a JSON object to stdout. If present and valid, the `selectedCrates` field drives `source = "crate"` skill resolution — the named crates are fetched for skills, just as if they'd been matched by a `depends-on(...)` predicate.
 
 ```json
 {
@@ -531,7 +531,7 @@ env = []
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Server name as it appears in the agent's MCP config. |
-| `crates` | string or array | Which crates this server applies to. Optional if plugin has top-level `crates`. |
+| `depends-on` | string or array | Which crates this server applies to. Optional if plugin has top-level `depends-on`. |
 | `predicates` | array of strings | Predicates (`crate`, `shell`, `path_exists`, `env`, `not`, `any`, `all`) that must all hold for the server to register. See [Predicates](./predicates.md). |
 | `command` | string | Path to the server binary. |
 | `args` | array of strings | Arguments passed to the binary. |
@@ -553,7 +553,7 @@ headers = []
 |-------|------|-------------|
 | `type` | string | Must be `"http"`. |
 | `name` | string | Server name as it appears in the agent's MCP config. |
-| `crates` | string or array | Which crates this server applies to. Optional if plugin has top-level `crates`. |
+| `depends-on` | string or array | Which crates this server applies to. Optional if plugin has top-level `depends-on`. |
 | `url` | string | HTTP endpoint URL. |
 | `headers` | array of objects | HTTP headers to set when making requests. |
 
@@ -571,7 +571,7 @@ headers = []
 |-------|------|-------------|
 | `type` | string | Must be `"sse"`. |
 | `name` | string | Server name as it appears in the agent's MCP config. |
-| `crates` | string or array | Which crates this server applies to. Optional if plugin has top-level `crates`. |
+| `depends-on` | string or array | Which crates this server applies to. Optional if plugin has top-level `depends-on`. |
 | `url` | string | SSE endpoint URL. |
 | `headers` | array of objects | HTTP headers to set when making requests. |
 
@@ -600,16 +600,16 @@ All supported agents have MCP server configuration. Symposium handles the format
 
 ```toml
 name = "widgetlib"
-crates = ["widgetlib"]
+depends-on = ["widgetlib"]
 
 # Skills shipped inside the widgetlib crate source (in skills/)
 [[skills]]
-crates = ["widgetlib"]
+depends-on = ["widgetlib"]
 source = "crate"
 
 # Additional skills hosted in a git repo
 [[skills]]
-crates = ["widgetlib=1.0"]
+depends-on = ["widgetlib=1.0"]
 source.git = "https://github.com/org/widgetlib/tree/main/symposium/serde-skills"
 
 [[hooks]]

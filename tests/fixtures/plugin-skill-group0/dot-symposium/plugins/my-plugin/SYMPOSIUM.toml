@@ -1,6 +1,6 @@
 name = "my-plugin"
-crates = ["serde"]
+depends-on = ["serde"]
 
 [[skills]]
-crates = ["serde"]
+depends-on = ["serde"]
 source.path = "."

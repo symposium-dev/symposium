@@ -90,8 +90,8 @@ cargo agents sync
 
 Symposium reads the workspace dependency graph and evaluates each plugin's and skill's predicates against it. An extension is installed only when its predicates match.
 
-- The `crates` field matches by crate name and version requirement (`serde`, `serde >= 1.0`, `*`).
-- The `predicates` field uses function-call syntax (`crate(...)`, `shell(...)`, `path_exists(...)`, `env(...)`), combined with `not`, `any`, and `all`.
+- The `depends-on` field matches by crate name and version requirement (`serde`, `serde >= 1.0`, `*`).
+- The `predicates` field uses function-call syntax (`depends-on(...)`, `shell(...)`, `path_exists(...)`, `env(...)`), combined with `not`, `any`, and `all`.
 
 When a skill group declares `source = "crate"`, Symposium fetches the matched crate's source (from the local path, the cargo registry cache, or crates.io), reads `[package.metadata.symposium]` from its `Cargo.toml` to locate the skills, and follows crate-to-crate redirects. See the [predicates reference](https://symposium.dev/reference/predicates.html).
 

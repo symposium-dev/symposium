@@ -1,5 +1,5 @@
 name = "format-plugin"
-crates = ["*"]
+depends-on = ["*"]
 
 # Claude-specific hook — should fire on Claude, be skipped on other agents.
 [[hooks]]

@@ -385,7 +385,7 @@ async fn add_agent_is_additive() {
     .unwrap();
 }
 
-/// `sync` filters MCP servers by their `crates` predicates.
+/// `sync` filters MCP servers by their `depends-on` predicates.
 #[tokio::test]
 async fn sync_filters_mcp_servers_by_crates() {
     with_fixture(
@@ -399,12 +399,12 @@ async fn sync_filters_mcp_servers_by_crates() {
             let settings_path = workspace_root.join(".claude/settings.json");
             let settings = std::fs::read_to_string(&settings_path)?;
 
-            // always-server (crates = ["*"]) → registered
+            // always-server (depends-on = ["*"]) → registered
             assert!(
                 settings.contains("always-server"),
                 "wildcard MCP server should be registered"
             );
-            // serde-server (crates = ["serde"]) → registered (serde is in workspace0)
+            // serde-server (depends-on = ["serde"]) → registered (serde is in workspace0)
             assert!(
                 settings.contains("serde-server"),
                 "serde MCP server should be registered"
@@ -414,7 +414,7 @@ async fn sync_filters_mcp_servers_by_crates() {
                 settings.contains("inherited-server"),
                 "inherited MCP server should be registered"
             );
-            // missing-crate-server (crates = ["reqwest"]) → NOT registered
+            // missing-crate-server (depends-on = ["reqwest"]) → NOT registered
             assert!(
                 !settings.contains("missing-crate-server"),
                 "reqwest MCP server should NOT be registered"
@@ -476,7 +476,7 @@ async fn sync_installs_plugin_skill_group() {
     .unwrap();
 }
 
-/// `sync` installs skills from a plugin with `crates = ["*"]`.
+/// `sync` installs skills from a plugin with `depends-on = ["*"]`.
 /// Wildcard predicates should match any workspace.
 #[tokio::test]
 async fn sync_installs_wildcard_plugin_skill() {
@@ -1894,7 +1894,7 @@ async fn auto_sync_always_runs_on_session_start() {
 
 /// Crate metadata redirects: `crate-a` declares a redirect to `crate-b` via
 /// `[package.metadata.symposium]`. The plugin activates based on plugin-level
-/// `crates = ["crate-a"]` and discovers `crate-b`'s skills via redirect.
+/// `depends-on = ["crate-a"]` and discovers `crate-b`'s skills via redirect.
 #[tokio::test]
 async fn sync_installs_skill_from_named_crate_source() {
     with_fixture(

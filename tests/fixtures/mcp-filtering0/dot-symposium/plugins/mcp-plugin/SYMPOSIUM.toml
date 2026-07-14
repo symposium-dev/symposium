@@ -1,23 +1,23 @@
 name = "mcp-plugin"
-crates = ["*"]
+depends-on = ["*"]
 
 [[mcp_servers]]
 name = "always-server"
-crates = ["*"]
+depends-on = ["*"]
 command = "/usr/bin/true"
 args = ["--stdio"]
 env = []
 
 [[mcp_servers]]
 name = "serde-server"
-crates = ["serde"]
+depends-on = ["serde"]
 command = "/usr/bin/true"
 args = ["--stdio"]
 env = []
 
 [[mcp_servers]]
 name = "missing-crate-server"
-crates = ["reqwest"]
+depends-on = ["reqwest"]
 command = "/usr/bin/true"
 args = ["--stdio"]
 env = []

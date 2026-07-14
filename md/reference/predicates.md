@@ -1,18 +1,18 @@
 # Predicates
 
-A **predicate** decides whether a plugin, skill group, skill, hook, MCP server, or subcommand is active, evaluated against the workspace's crate graph and the live environment. There is one predicate model, written two ways:
+A **predicate** decides whether a plugin, skill group, skill, hook, MCP server, or subcommand is active, evaluated against the workspace's dependency graph and the live environment. There is one predicate model, written two ways:
 
-- The **`crates`** field uses crate-atom syntax (see [crate predicates](./crate-predicates.md)) and is **sugar**: `crates = ["serde", "tokio"]` lowers to a single `any(crate(serde), crate(tokio))` predicate.
+- The **`depends-on`** field uses dependency-atom syntax (see [dependency predicates](./depends-on.md)) and is **sugar**: `depends-on = ["serde", "tokio"]` lowers to a single `any(depends-on(serde), depends-on(tokio))` predicate.
 - The **`predicates`** field uses the function-call syntax below.
 
-Both fields are merged into one list that is ANDed together, so `crates` and `predicates` compose with **AND**. A `crate(...)` predicate is available in `predicates` too — `crates` just makes the common case terse.
+Both fields are merged into one list that is ANDed together, so `depends-on` and `predicates` compose with **AND**. A `depends-on(...)` predicate is available in `predicates` too — the field just makes the common case terse.
 
 The available predicate functions are:
 
 | Predicate | Holds when |
 |-----------|------------|
-| `crate(<name>)` / `crate(<name><req>)` | A workspace dependency named `<name>` is present (and its version satisfies `<req>`, e.g. `crate(serde>=1.0)`). |
-| `crate(*)` | Any workspace matches (even one with zero dependencies). The lowered form of `*`. |
+| `depends-on(<name>)` / `depends-on(<name><req>)` | A workspace dependency named `<name>` is present (and its version satisfies `<req>`, e.g. `depends-on(serde>=1.0)`). |
+| `depends-on(*)` | Any workspace matches (even one with zero dependencies). The lowered form of `*`. |
 | `shell(<command>)` | `<command>` run via `sh -c` exits `0`. Any other exit (including spawn failure) fails. |
 | `path_exists(<arg>)` | `<arg>` resolves to an existing path. An argument with a path separator is checked on the filesystem (cwd-relative or absolute). A bare name with no separator is checked against the cwd and then searched on `$PATH`, so it matches either a local entry (`path_exists(.git)`) or an installed binary (`path_exists(rg)`). |
 | `env(<name>)` | The environment variable `<name>` is set (to any value). |
@@ -23,17 +23,19 @@ The available predicate functions are:
 
 Predicates compose with **AND** semantics within a list: every entry must hold. `any(...)` gives OR within a single entry, `all(...)` gives an explicit AND group, and `not(...)` gives negation — together they form full boolean logic. They also compose with **AND** across levels (plugin ∧ group ∧ skill).
 
-The argument of a leaf predicate (`crate`, `shell`, `path_exists`, `env`) is taken **verbatim** between the parentheses — it is *not* quoted. `shell(command -v rg)` runs `command -v rg`; do not wrap the argument in quotes (they would become part of the command). An inner `)` is fine as long as parentheses balance, so `shell(echo $(date))` works. The combinators `not`, `any`, and `all` take nested predicates as their arguments and may be nested arbitrarily, e.g. `not(any(env(CI), path_exists(.skip)))`.
+The argument of a leaf predicate (`depends-on`, `shell`, `path_exists`, `env`) is taken **verbatim** between the parentheses — it is *not* quoted. `shell(command -v rg)` runs `command -v rg`; do not wrap the argument in quotes (they would become part of the command). An inner `)` is fine as long as parentheses balance, so `shell(echo $(date))` works. The combinators `not`, `any`, and `all` take nested predicates as their arguments and may be nested arbitrarily, e.g. `not(any(env(CI), path_exists(.skip)))`.
+
+> `crate(...)` is the retired spelling of `depends-on(...)` and is rejected at parse time with a migration hint.
 
 ## Crate-sourced skills and the witness
 
-For a `[[skills]]` group with `source = "crate"`, the `crate(...)` predicates do double duty: they gate the group **and** name which crates' source trees to fetch skills from. The fetch set is the predicate's **witness** — the crates that participate in a *satisfying* evaluation: `crate(c)` contributes `c` when present, `any` contributes its true branches, `all` contributes all branches when it holds, and `not(...)` contributes nothing. So `all(crate(serde), env(USE_SERDE))` only fetches `serde` when `USE_SERDE` is set, while `any(crate(fd), crate(fdfind))` fetches whichever are present.
+For a `[[skills]]` group with `source = "crate"`, the `depends-on(...)` predicates do double duty: they gate the group **and** name which crates' source trees to fetch skills from. The fetch set is the predicate's **witness** — the packages that participate in a *satisfying* evaluation: `depends-on(c)` contributes `c` when present, `any` contributes its true branches, `all` contributes all branches when it holds, and `not(...)` contributes nothing. So `all(depends-on(serde), env(USE_SERDE))` only fetches `serde` when `USE_SERDE` is set, while `any(depends-on(fd), depends-on(fdfind))` fetches whichever are present.
 
-A group using `source = "crate"` must name at least one concrete crate in a **fetchable position** — somewhere (plugin- or group-level) that can appear in a witness. `crate(*)` alone is rejected since there is nothing concrete to fetch, and a crate named *only* under `not(...)` is rejected too: `not(crate(legacy))` gates the group but, having an empty witness, names no crate to fetch from. Put the crate positively (e.g. `crate(serde)`, or `any(crate(serde), not(crate(legacy)))`).
+A group using `source = "crate"` must name at least one concrete dependency in a **fetchable position** — somewhere (plugin- or group-level) that can appear in a witness. `depends-on(*)` alone is rejected since there is nothing concrete to fetch, and a dependency named *only* under `not(...)` is rejected too: `not(depends-on(legacy))` gates the group but, having an empty witness, names no crate to fetch from. Put the dependency positively (e.g. `depends-on(serde)`, or `any(depends-on(serde), not(depends-on(legacy)))`).
 
 ## When predicates are evaluated
 
-Predicates are evaluated at the same point the workspace's crate predicates are evaluated for that item:
+Predicates are evaluated at the same point the workspace's dependency predicates are evaluated for that item:
 
 | Level | Evaluated |
 |-------|-----------|
@@ -53,11 +55,11 @@ Hook-level predicates run at dispatch (not sync) so they observe live state — 
 
 ```toml
 name = "my-plugin"
-crates = ["*"]
+depends-on = ["*"]
 predicates = ["path_exists(rg)", "shell(test -f Cargo.toml)"]
 
 [[skills]]
-crates = ["serde"]
+depends-on = ["serde"]
 predicates = ["path_exists(jq)"]
 source = "crate"
 
@@ -77,13 +79,13 @@ predicates = ["path_exists(tool)"]
 
 ### Skill frontmatter (YAML)
 
-Like `crates`, `predicates` is **comma-separated** on a single line in SKILL.md frontmatter. Commas inside `(...)` are not treated as separators, so a `shell(...)` command may itself contain commas:
+Like `depends-on`, `predicates` is **comma-separated** on a single line in SKILL.md frontmatter. Commas inside `(...)` are not treated as separators, so a `shell(...)` command may itself contain commas:
 
 ```yaml
 ---
 name: my-skill
 description: Skill that depends on ripgrep
-crates: serde
+depends-on: serde
 predicates: path_exists(rg), shell(test -f Cargo.toml)
 ---
 ```
@@ -92,7 +94,7 @@ predicates: path_exists(rg), shell(test -f Cargo.toml)
 
 ```toml
 name = "uses-jq"
-crates = ["*"]
+depends-on = ["*"]
 predicates = ["path_exists(jq)"]
 
 [[hooks]]
@@ -105,7 +107,7 @@ The hook here only registers if `jq` is on the user's `$PATH`. No error, no warn
 
 ## Combining predicates
 
-`crate`, `env`, `not`, `any`, and `all` cover the cases plain `crates` lists can't:
+`depends-on`, `env`, `not`, `any`, and `all` cover the cases plain `depends-on` lists can't:
 
 ```toml
 # Opt-in: only when a flag is set.
@@ -117,17 +119,17 @@ predicates = ["not(path_exists(.skip-hooks))", "not(env(CI))"]
 # Tool packaged under different names across distros.
 predicates = ["any(path_exists(fd), path_exists(fdfind))"]
 
-# A crate gate that also requires an env flag (vs. the bare `crates = ["serde"]`).
-predicates = ["all(crate(serde), env(USE_SERDE))"]
+# A dependency gate that also requires an env flag (vs. the bare `depends-on = ["serde"]`).
+predicates = ["all(depends-on(serde), env(USE_SERDE))"]
 
-# Apply only when a crate is absent (impossible with `crates`).
-predicates = ["not(crate(legacy-thing))"]
+# Apply only when a dependency is absent (impossible with `depends-on`).
+predicates = ["not(depends-on(legacy-thing))"]
 ```
 
-These are equivalent — `crates` is just the terse form for the common case:
+These are equivalent — `depends-on` is just the terse form for the common case:
 
 ```toml
-crates = ["serde", "tokio"]
+depends-on = ["serde", "tokio"]
 # is exactly
-predicates = ["any(crate(serde), crate(tokio))"]
+predicates = ["any(depends-on(serde), depends-on(tokio))"]
 ```

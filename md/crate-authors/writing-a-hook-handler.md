@@ -60,7 +60,7 @@ In your `SYMPOSIUM.toml`, reference the built binary as a hook command:
 
 ```toml
 name = "my-crate"
-crates = ["my-crate"]
+depends-on = ["my-crate"]
 
 [[hooks]]
 name = "check-usage"

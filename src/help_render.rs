@@ -193,12 +193,12 @@ mod tests {
     }
 
     fn crate_set(spec: &str) -> PredicateSet {
-        PredicateSet::from_crates(spec).unwrap()
+        PredicateSet::from_depends_on(spec).unwrap()
     }
 
     fn plugin_with(
         name: &str,
-        crates: &str,
+        depends_on: &str,
         subcommands: BTreeMap<String, Subcommand>,
     ) -> ParsedPlugin {
         ParsedPlugin {
@@ -206,7 +206,7 @@ mod tests {
             plugin: Plugin {
                 name: name.into(),
                 hooks: vec![],
-                predicates: crate_set(crates),
+                predicates: crate_set(depends_on),
                 skills: vec![],
                 mcp_servers: vec![],
                 subcommands,
@@ -218,12 +218,12 @@ mod tests {
         }
     }
 
-    fn subcommand(description: &str, audience: Audience, crates: Option<&str>) -> Subcommand {
+    fn subcommand(description: &str, audience: Audience, depends_on: Option<&str>) -> Subcommand {
         Subcommand {
             description: description.into(),
             audience,
             command: "ignored".into(),
-            predicates: crates.map(crate_set).unwrap_or_default(),
+            predicates: depends_on.map(crate_set).unwrap_or_default(),
         }
     }
 

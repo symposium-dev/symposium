@@ -9,10 +9,10 @@ Every plugin starts with a `SYMPOSIUM.toml` manifest uploaded to the [central re
 ```toml
 # `my-crate/SYMPOSIUM.toml` on the symposium-dev/recommendations repository
 name = "my-crate"
-crates = ["my-crate"]
+depends-on = ["my-crate"]
 ```
 
-The `crates` field controls when the plugin is active — it will only load for projects that depend on the listed crates. Use `["*"]` to apply to all projects.
+The `depends-on` field controls when the plugin is active — it will only load for projects that depend on the listed crates. Use `["*"]` to apply to all projects.
 
 See the [plugin definition reference](../reference/plugin-definition.md) for the full manifest schema.
 
@@ -63,7 +63,7 @@ my-crate/
 ```toml
 # `my-crate/SYMPOSIUM.toml` on the symposium-dev/recommendations repository
 name = "my-crate"
-crates = ["my-crate"]
+depends-on = ["my-crate"]
 
 [[skills]]
 source = "crate"
@@ -102,19 +102,19 @@ And point the manifest at the local directory:
 
 ```toml
 name = "my-crate"
-crates = ["my-crate"]
+depends-on = ["my-crate"]
 
 [[skills]]
 source.path = "."
 ```
 
-Standalone skills **must** include `crates` in their frontmatter so Symposium knows which crate they apply to:
+Standalone skills **must** include `depends-on` in their frontmatter so Symposium knows which crate they apply to:
 
 ```markdown
 ---
 name: widgetlib-basics
 description: Basic guidance for widgetlib usage
-crates: widgetlib=1.0
+depends-on: widgetlib=1.0
 ---
 
 Guidance body here.
