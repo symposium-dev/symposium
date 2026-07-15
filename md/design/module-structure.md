@@ -47,6 +47,10 @@ Defines `Source` (the `source = "..."`-tagged enum: `cargo`, `github`) and `acqu
 
 Validates skill group source constraints during manifest validation: mutual exclusivity of `source.path`/`source.git`/`source = "crate"`, and the requirement that `source = "crate"` has at least one non-wildcard predicate.
 
+### `pm/` — package managers
+
+The in-process seam from the [registry-centric plugin distribution RFD](../rfds/registry-centric-plugins/README.md). A `PackageId` is the canonical `(pm, name, version)` tuple; `version` may still be a requirement (a semver range, or `*` for "no requirement"), and `fetch` canonicalizes it — a `FetchedPackage` carries the exact resolved id plus the content directory. The `PackageManager` trait has one operation today, `fetch`, and one implementation: `CargoPm` (`pm/cargo.rs`), which delegates to `crate_sources::RustCrateFetch` (path-dependency override, workspace pin, registry). Consumers: crate-source skill resolution in `skills.rs` and `crate_command.rs` build ids with `CargoPm::id_for` and fetch through the trait. The RFD's other operations (`resolve`/`list_plugins`, `search`, `list_deps`) are not routed through the seam yet.
+
 ### `crate_metadata.rs` — parse Cargo.toml metadata
 
 Parses `[package.metadata.symposium]` from crate `Cargo.toml` files. Crate authors embed skill layout metadata so Symposium knows where to find skills (or which other crate to redirect to). Returns `SkillSource::Path(subdir)` or `SkillSource::Crate { name, version }` for redirects.
@@ -62,7 +66,7 @@ Each gated struct (plugin, skill group, skill, hook, MCP server, subcommand) sto
 
 ### `skills.rs` — skill resolution and matching
 
-Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates dependency predicates at each level (plugin, group, skill) to determine which skills apply. For `source = "crate"` groups, resolves predicates to a matched crate set, fetches each crate's source via `RustCrateFetch`, reads `[package.metadata.symposium]` to determine skill paths, and follows redirects recursively with cycle detection and a depth limit of 10.
+Given a `PluginRegistry` and workspace dependencies, this module resolves skill group sources (fetching from git if needed), discovers `SKILL.md` files, and evaluates dependency predicates at each level (plugin, group, skill) to determine which skills apply. For `source = "crate"` groups, resolves predicates to a matched crate set, fetches each crate's source through the [package-manager layer](#pm--package-managers) (`CargoPm::fetch`), reads `[package.metadata.symposium]` to determine skill paths, and follows redirects recursively with cycle detection and a depth limit of 10.
 
 Each applicable skill carries a `SkillOrigin` describing *where its bytes live*, used at sync time for dedup and install-path disambiguation. What matters for identity is the on-disk location of the skill, not which plugin manifest pointed at it — two plugins in the same source pointing at the same skill bundle dedupe.
 - `Crate { name, version }` — from a crate-source resolution (`source = "crate"`). Two `Crate` origins with the same `(name, version)` are the same logical skill, regardless of which plugin pointed at them.

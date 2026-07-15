@@ -11,6 +11,7 @@ use symposium_install::UpdateLevel;
 
 use crate::config::Symposium;
 use crate::plugins::{ParsedPlugin, PluginRegistry, PluginSource, SkillGroup};
+use crate::pm::PackageManager as _;
 use crate::predicate::{self, PredicateContext, PredicateSet};
 
 fn source_display(source: &PluginSource) -> String {
@@ -364,12 +365,8 @@ async fn fetch_and_resolve_skills(
         return;
     }
 
-    let mut fetcher = crate::crate_sources::RustCrateFetch::new(crate_name, workspace_crates);
-    if let Some(vs) = version_spec {
-        fetcher = fetcher.version(vs);
-    }
-
-    let result = match fetcher.fetch().await {
+    let id = crate::pm::CargoPm::id_for(crate_name, version_spec);
+    let result = match crate::pm::CargoPm.fetch(&id, workspace_crates).await {
         Ok(r) => r,
         Err(e) => {
             tracing::warn!(
@@ -381,12 +378,12 @@ async fn fetch_and_resolve_skills(
         }
     };
 
-    let version = match semver::Version::parse(&result.version) {
+    let version = match semver::Version::parse(&result.id.version) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(
                 crate_name = %crate_name,
-                version = %result.version,
+                version = %result.id.version,
                 error = %e,
                 "skipping crate-source skills: unparseable version"
             );
@@ -395,11 +392,11 @@ async fn fetch_and_resolve_skills(
     };
 
     let origin = SkillOrigin::Crate {
-        name: result.name.clone(),
+        name: result.id.name.clone(),
         version,
     };
 
-    let cargo_toml_path = result.path.join("Cargo.toml");
+    let cargo_toml_path = result.root.join("Cargo.toml");
     let metadata = match crate::crate_metadata::parse_crate_metadata(&cargo_toml_path) {
         Ok(m) => m,
         Err(e) => {
@@ -414,7 +411,7 @@ async fn fetch_and_resolve_skills(
 
     match metadata {
         None => {
-            let dir = result.path.join(crate::plugins::CRATE_DEFAULT_SKILLS_PATH);
+            let dir = result.root.join(crate::plugins::CRATE_DEFAULT_SKILLS_PATH);
             let discovered = discover_skills(&dir, group);
             tracing::debug!(
                 report = %crate::report::ReportEvent::SkillSourceSearched {
@@ -439,7 +436,7 @@ async fn fetch_and_resolve_skills(
             for source in &meta.skills {
                 match source {
                     crate::crate_metadata::SkillSource::Path(p) => {
-                        let dir = result.path.join(p);
+                        let dir = result.root.join(p);
                         let discovered = discover_skills(&dir, group);
                         tracing::debug!(
                             report = %crate::report::ReportEvent::SkillSourceSearched {
