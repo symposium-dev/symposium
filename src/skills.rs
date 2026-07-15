@@ -165,8 +165,9 @@ pub async fn skills_applicable_to(
     for parsed in &registry.plugins {
         let plugin = &parsed.plugin;
         // Plugin-level predicates gate everything below. Evaluated before
-        // group fetching to avoid wasted work.
-        if !plugin.predicates.evaluate(&mut ctx) {
+        // group fetching to avoid wasted work. Goes through the ParsedPlugin
+        // so the plugin's provenance is stamped for `workspace-member()`.
+        if !parsed.applies(&mut ctx) {
             tracing::debug!(
                 report = %crate::report::ReportEvent::PluginConsidered {
                     plugin: plugin.name.clone(),
@@ -205,6 +206,9 @@ pub async fn skills_applicable_to(
             },
         );
     }
+    // Standalone skills have no defining plugin; they never count as
+    // workspace members (clear any stamp left by the plugin loop).
+    ctx.set_workspace_member(false);
     for entry in &registry.standalone_skills {
         collect_skill_applicable_to(
             entry.skill.clone(),
@@ -647,7 +651,15 @@ pub(crate) fn discover_skills(skills_dir: &Path, group: &SkillGroup) -> Vec<Resu
 }
 
 /// Recursively walk a directory collecting paths to `SKILL.md` files.
+///
+/// Directories carrying the `.symposium` marker are skipped: the marker means
+/// symposium itself installed the directory, and installed copies are never
+/// sources. This matters for `.agents/skills/`, which is both a workspace
+/// skill-group source and the install destination for vendor-neutral agents.
 pub(crate) fn find_skill_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+    if dir.join(crate::sync::MARKER_FILE).exists() {
+        return;
+    }
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -704,12 +716,27 @@ pub fn load_standalone_skill(skill_md_path: &Path) -> Result<Skill> {
 /// A skill should have `depends-on` at either the skill level or
 /// the group level (or both). If neither provides it, a warning is logged
 /// but loading succeeds (the skill simply won't match any dependency query).
+///
+/// Workspace-member groups load leniently: the frontmatter (and its `name`
+/// and `description` fields) is optional — `name` falls back to the skill
+/// directory's name. Workspace skills are the maintainers' own informal
+/// notes; the agentskills.io contract applies to published skills.
 fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
     let content = std::fs::read_to_string(skill_md_path)
         .with_context(|| format!("failed to read {}", skill_md_path.display()))?;
 
-    let fm = parse_frontmatter(&content)
-        .with_context(|| format!("failed to parse frontmatter in {}", skill_md_path.display()))?;
+    let fm = if group.workspace_member && !content.trim_start().starts_with("---") {
+        RawFrontmatter {
+            fields: BTreeMap::new(),
+            depends_on: None,
+            predicates: None,
+            body: content,
+        }
+    } else {
+        parse_frontmatter(&content).with_context(|| {
+            format!("failed to parse frontmatter in {}", skill_md_path.display())
+        })?
+    };
 
     let mut frontmatter = fm.fields;
 
@@ -720,24 +747,37 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
         *name = unquoted.to_string();
     }
 
+    if group.workspace_member
+        && !frontmatter.contains_key("name")
+        && let Some(dir_name) = skill_md_path
+            .parent()
+            .and_then(|dir| dir.file_name())
+            .and_then(|name| name.to_str())
+    {
+        frontmatter.insert("name".to_string(), dir_name.to_string());
+    }
+
     let name = frontmatter
         .get("name")
         .context("SKILL.md frontmatter missing required `name` field")?;
 
     // Validate description per agentskills.io spec
     // (https://agentskills.io/specification.md): required, non-empty, max 1024 chars.
-    let desc = frontmatter
-        .get("description")
-        .context("SKILL.md frontmatter missing required `description` field")?;
-    let trimmed_desc = desc.trim();
-    if trimmed_desc.is_empty() {
-        bail!("SKILL.md `description` must not be empty");
-    }
-    if trimmed_desc.len() > 1024 {
-        bail!(
-            "SKILL.md `description` exceeds 1024 characters ({} chars)",
-            trimmed_desc.len()
-        );
+    match frontmatter.get("description") {
+        None if group.workspace_member => {}
+        None => bail!("SKILL.md frontmatter missing required `description` field"),
+        Some(desc) => {
+            let trimmed_desc = desc.trim();
+            if trimmed_desc.is_empty() {
+                bail!("SKILL.md `description` must not be empty");
+            }
+            if trimmed_desc.len() > 1024 {
+                bail!(
+                    "SKILL.md `description` exceeds 1024 characters ({} chars)",
+                    trimmed_desc.len()
+                );
+            }
+        }
     }
 
     // Merge the skill-level `depends-on` (dependency atoms, OR-combined) with
@@ -1279,6 +1319,70 @@ mod tests {
     }
 
     #[test]
+    fn workspace_group_skill_needs_no_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("release-notes");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "Plain maintainer notes.\n").unwrap();
+
+        let workspace_group = SkillGroup {
+            workspace_member: true,
+            ..SkillGroup::default()
+        };
+        let skill = load_skill(&skill_dir.join("SKILL.md"), &workspace_group).unwrap();
+        assert_eq!(skill.name(), "release-notes");
+        assert!(!skill.frontmatter.contains_key("description"));
+        assert_eq!(skill.body, "Plain maintainer notes.\n");
+
+        // Registry groups keep the agentskills.io contract.
+        let err = load_skill(&skill_dir.join("SKILL.md"), &SkillGroup::default()).unwrap_err();
+        assert!(err.to_string().contains("frontmatter"), "{err}");
+    }
+
+    #[test]
+    fn workspace_group_skill_frontmatter_fields_stay_optional() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_dir = tmp.path().join("style");
+        fs::create_dir_all(&skill_dir).unwrap();
+        // Frontmatter present, but neither name nor description: the name
+        // falls back to the directory, other fields still parse.
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                depends-on: serde
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+
+        let workspace_group = SkillGroup {
+            workspace_member: true,
+            ..SkillGroup::default()
+        };
+        let skill = load_skill(&skill_dir.join("SKILL.md"), &workspace_group).unwrap();
+        assert_eq!(skill.name(), "style");
+        assert!(skill.predicates.references_dep("serde"));
+
+        // An explicit name still wins over the directory fallback.
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            indoc! {"
+                ---
+                name: explicit
+                ---
+
+                Body.
+            "},
+        )
+        .unwrap();
+        let skill = load_skill(&skill_dir.join("SKILL.md"), &workspace_group).unwrap();
+        assert_eq!(skill.name(), "explicit");
+    }
+
+    #[test]
     fn validate_standalone_skill_bad_depends_on() {
         let tmp = tempfile::tempdir().unwrap();
         let skill_dir = tmp.path().join("bad-skill");
@@ -1322,6 +1426,7 @@ mod tests {
             skills: vec![SkillGroup {
                 predicates: pred_set("serde"), // Group targets serde
                 source: PluginSource::default(),
+                workspace_member: false,
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
@@ -1335,6 +1440,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
+                workspace_member: false,
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1378,6 +1484,7 @@ mod tests {
             skills: vec![SkillGroup {
                 predicates: pred_set("other-crate"), // But group targets other-crate
                 source: PluginSource::default(),
+                workspace_member: false,
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
@@ -1391,6 +1498,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
+                workspace_member: false,
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1452,6 +1560,7 @@ mod tests {
             skills: vec![SkillGroup {
                 predicates: pred_set("serde"), // Group also targets serde
                 source: PluginSource::Path(skill_dir.to_path_buf()),
+                workspace_member: false,
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
@@ -1465,6 +1574,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
+                workspace_member: false,
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1531,6 +1641,7 @@ mod tests {
             skills: vec![SkillGroup {
                 predicates: pred_set("serde"),
                 source: PluginSource::Path(skill_dir.to_path_buf()),
+                workspace_member: false,
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
@@ -1544,6 +1655,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: PathBuf::from(".".to_string()),
+                workspace_member: false,
             }],
             standalone_skills: vec![],
             warnings: vec![],
@@ -1611,6 +1723,7 @@ mod tests {
                     ],
                 },
                 source: PluginSource::Path(skill_dir.to_path_buf()),
+                workspace_member: false,
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
@@ -1624,6 +1737,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: PathBuf::from(".".to_string()),
+                workspace_member: false,
             }],
             standalone_skills: vec![],
             warnings: vec![],

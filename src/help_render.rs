@@ -16,7 +16,7 @@ use symposium_sdk::workspace::WorkspaceCrate;
 use crate::{
     cli::{Cli, Commands, builtin_audience},
     config::Symposium,
-    plugins::{Audience, PluginRegistry, load_registry},
+    plugins::{Audience, PluginRegistry, load_registry_with_workspace},
     subcommand_dispatch::applicable_subcommands,
 };
 
@@ -89,10 +89,10 @@ pub fn subcommand_help(args: &[String]) -> Option<String> {
 }
 
 pub fn render_help(sym: &Symposium, cwd: &Path) -> String {
-    let registry = load_registry(sym);
     let mut deps = sym.workspace_deps(cwd);
-    let workspace = deps.crates();
-    render(&registry, workspace)
+    let workspace = deps.load().cloned();
+    let registry = load_registry_with_workspace(sym, workspace.as_deref());
+    render(&registry, deps.crates())
 }
 
 fn render(registry: &PluginRegistry, workspace: &[WorkspaceCrate]) -> String {
@@ -215,6 +215,7 @@ mod tests {
             },
             source_name: "test".into(),
             source_dir: PathBuf::from("/test"),
+            workspace_member: false,
         }
     }
 

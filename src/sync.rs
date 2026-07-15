@@ -24,7 +24,7 @@ use symposium_sdk::workspace::WorkspaceDeps;
 /// Cleanup walks each agent's skills parent dir and removes any subdir
 /// containing this marker that isn't in the freshly-installed set, leaving
 /// user-managed skill directories (which lack the marker) untouched.
-const MARKER_FILE: &str = ".symposium";
+pub(crate) const MARKER_FILE: &str = ".symposium";
 
 /// Create `path` and any missing ancestors up to `boundary`.
 ///
@@ -74,29 +74,6 @@ fn mark_generated_skill_directory(dir: &Path) -> Result<()> {
 /// directory symposium did not create.
 fn has_symposium_marker(dir: &Path) -> bool {
     dir.join(MARKER_FILE).exists()
-}
-
-/// Discover user-authored skills in `<project_root>/.agents/skills/`.
-///
-/// A skill is user-authored iff its directory contains `SKILL.md` and does
-/// *not* contain the `.symposium` marker. Symposium never writes markers
-/// into source skills, so this unambiguously separates user content from
-/// copies symposium put there itself.
-fn discover_user_authored_skills(project_root: &Path) -> Vec<PathBuf> {
-    let agents_skills_dir = project_root.join(".agents").join("skills");
-    let Ok(entries) = fs::read_dir(&agents_skills_dir) else {
-        return Vec::new();
-    };
-
-    let mut skills: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir())
-        .filter(|p| p.join("SKILL.md").is_file())
-        .filter(|p| !has_symposium_marker(p))
-        .collect();
-    skills.sort();
-    skills
 }
 
 /// Recursively copy the contents of `src` into `dst`. Creates `dst` if
@@ -301,11 +278,12 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
         .ok_or_else(|| anyhow::anyhow!("not in a Rust workspace"))?;
     let project_root = loaded.root.clone();
     let workspace: Vec<_> = loaded.crates.clone();
+    let loaded = loaded.clone();
     let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
-    // Load plugin registry
-    let registry = plugins::load_registry(sym);
+    // Load plugin registry (registry sources + workspace plugins)
+    let registry = plugins::load_registry_with_workspace(sym, Some(&loaded));
 
     for warning in &registry.warnings {
         tracing::info!(
@@ -352,7 +330,7 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
     let mut ctx = crate::predicate::PredicateContext::new(&semver_pairs);
     let mut mcp_servers: Vec<sacp::schema::McpServer> = Vec::new();
     for p in &registry.plugins {
-        if p.plugin.applies(&mut ctx) {
+        if p.applies(&mut ctx) {
             mcp_servers.extend(p.plugin.applicable_mcp_servers(&mut ctx));
         }
     }
@@ -419,6 +397,19 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
                 }
             };
 
+            // The skill's source already sits at this agent's install slot
+            // (a workspace `.agents/skills/` skill, on an agent that reads
+            // that same directory) — it is in place as user content, not
+            // something to copy.
+            let plain_dir = agent.project_skill_dir(&project_root, skill_name);
+            let in_place = match (source_dir.canonicalize(), plain_dir.canonicalize()) {
+                (Ok(a), Ok(b)) => a == b,
+                _ => false,
+            };
+            if in_place {
+                continue;
+            }
+
             // Pick the install dir name for this skill on *this* agent:
             // - If exactly one origin claims the name and the un-suffixed
             //   slot is "available" (nonexistent or symposium-managed),
@@ -427,7 +418,6 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
             //   distinct origins coexist and we never clobber a
             //   user-managed directory.
             let unique_name = name_counts.get(skill_name).copied().unwrap_or(0) == 1;
-            let plain_dir = agent.project_skill_dir(&project_root, skill_name);
             let plain_available = !plain_dir.exists() || has_symposium_marker(&plain_dir);
             let dir_name = if unique_name && plain_available {
                 skill_name.clone()
@@ -471,73 +461,6 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
                             message: format!("failed to install skill {dir_name}: {e}"),
                         },
                     );
-                }
-            }
-        }
-    }
-
-    // Propagate user-authored skills from `.agents/skills/` into every
-    // configured agent that reads skills from a different directory. Skills
-    // are "user-authored" when they lack the `.symposium` marker — symposium
-    // never writes that marker into a source, so this never re-propagates
-    // symposium's own installs. See the agents-syncing feature docs.
-    if sym.config.agents_syncing {
-        let user_authored = discover_user_authored_skills(&project_root);
-        if !user_authored.is_empty() {
-            tracing::debug!(
-                count = user_authored.len(),
-                "propagating user-authored skills from .agents/skills/"
-            );
-            for agent_name in &agent_names {
-                let agent = Agent::from_config_name(agent_name)?;
-                for source_dir in &user_authored {
-                    let name = match source_dir.file_name().and_then(|n| n.to_str()) {
-                        Some(n) => n,
-                        None => continue,
-                    };
-                    let dest_dir = agent.project_skill_dir(&project_root, name);
-
-                    if dest_dir == *source_dir {
-                        continue;
-                    }
-                    if dest_dir.exists() && !has_symposium_marker(&dest_dir) {
-                        tracing::info!(
-                            report = %crate::report::ReportEvent::Warning {
-                                message: format!(
-                                    "skipping propagation to {}: user-managed skill already present",
-                                    display_path(&dest_dir)
-                                ),
-                            },
-                        );
-                        continue;
-                    }
-
-                    match sync_skill_dir(source_dir, &dest_dir, &project_root, debounce) {
-                        Ok(true) => {
-                            installed_dirs.insert(dest_dir.clone());
-                            tracing::info!(
-                                report = %crate::report::ReportEvent::SkillPropagated {
-                                    skill: name.to_string(),
-                                    agent: agent_name.clone(),
-                                    dest: display_path(&dest_dir),
-                                },
-                            );
-                        }
-                        Ok(false) => {
-                            // Debounced or unchanged — still record as
-                            // installed so stale-cleanup doesn't remove it.
-                            if dest_dir.exists() {
-                                installed_dirs.insert(dest_dir.clone());
-                            }
-                        }
-                        Err(e) => {
-                            tracing::info!(
-                                report = %crate::report::ReportEvent::Warning {
-                                    message: format!("failed to propagate skill {name} to {}: {e}", display_path(&dest_dir)),
-                                },
-                            );
-                        }
-                    }
                 }
             }
         }

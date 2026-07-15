@@ -19,7 +19,6 @@ use crate::{
 use crate::{
     help_render::{AGENTS_HEADING, HUMANS_HEADING},
     hook_schema::symposium::{OutputEvent, SessionStartInput},
-    plugins::load_registry,
     subcommand_dispatch::applicable_subcommands,
 };
 use symposium_sdk::workspace::WorkspaceDeps;
@@ -408,7 +407,8 @@ async fn run_auto_sync(sym: &Symposium, deps: &mut WorkspaceDeps, session_start:
 /// lazily when the hook first fires) — `SessionStart` updates installed tools
 /// but never installs eagerly. Best-effort: failures are logged and skipped.
 async fn prewarm_hook_sources(sym: &Symposium, deps: &mut WorkspaceDeps) {
-    let plugins = crate::plugins::load_all_plugins(sym);
+    let workspace = deps.load().cloned();
+    let plugins = crate::plugins::load_all_plugins(sym, workspace.as_deref());
 
     // Resolving the workspace runs cargo, so only do it when some hook's
     // gating references a concrete crate (mirrors dispatch).
@@ -420,7 +420,7 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &mut WorkspaceDeps) {
     let mut ctx = crate::predicate::PredicateContext::new(&pairs);
 
     for parsed in &plugins {
-        if !parsed.plugin.applies(&mut ctx) {
+        if !parsed.applies(&mut ctx) {
             continue;
         }
         for hook in &parsed.plugin.hooks {
@@ -494,7 +494,8 @@ fn handle_session_start(
 /// Suggest `cargo agents --help` when the active workspace exposes crate-aware plugin subcommands.
 /// Reuses the help renderer's `applicable_subcommands`, so the hint fires only when there is actually something to discover; `None` otherwise.
 fn discovery_hint(sym: &Symposium, deps: &mut WorkspaceDeps) -> Option<String> {
-    let registry = load_registry(sym);
+    let workspace = deps.load().cloned();
+    let registry = crate::plugins::load_registry_with_workspace(sym, workspace.as_deref());
     let pairs = crate::crate_sources::crate_pairs(deps.crates());
 
     let any_subcommand = !applicable_subcommands(&registry, &pairs).is_empty();
@@ -569,7 +570,8 @@ pub async fn dispatch_plugin_hooks(
     prior_output: serde_json::Value,
     deps: &mut WorkspaceDeps,
 ) -> Result<serde_json::Value, Vec<u8>> {
-    let plugins = crate::plugins::load_all_plugins(sym);
+    let workspace = deps.load().cloned();
+    let plugins = crate::plugins::load_all_plugins(sym, workspace.as_deref());
 
     // Resolving the workspace means running cargo, so only do it when some
     // plugin's hook gating actually references a concrete crate (a `depends-on(*)`
@@ -750,7 +752,7 @@ fn dispatched_hooks_for_payload(
     for parsed_plugin in plugins {
         // Plugin-level predicates gate every hook in the plugin. Evaluated once
         // per plugin per dispatch — keep them cheap.
-        if !parsed_plugin.plugin.applies(ctx) {
+        if !parsed_plugin.applies(ctx) {
             tracing::debug!(
                 plugin = %parsed_plugin.plugin.name,
                 "plugin predicates failed, skipping hooks"
@@ -1056,6 +1058,7 @@ mod tests {
             plugin,
             source_name: "test-source".to_string(),
             source_dir: PathBuf::from(".".to_string()),
+            workspace_member: false,
         }
     }
 
