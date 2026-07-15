@@ -3,10 +3,11 @@
 //!
 //! A [`PackageId`] names a package as a `(pm, name, version)` tuple, and a
 //! [`PackageManager`] resolves ids of its ecosystem to content on disk.
-//! Cargo is the only package manager today and fetching the only operation
-//! routed through the seam: callers that used to construct a
-//! [`RustCrateFetch`](crate::crate_sources::RustCrateFetch) directly go
-//! through [`CargoPm`] instead.
+//! Cargo is the only package manager today, and both of its existing
+//! operations route through the seam: `fetch` (callers that used to
+//! construct a [`RustCrateFetch`](crate::crate_sources::RustCrateFetch)
+//! directly go through [`CargoPm`] instead) and `list_deps` (the workspace
+//! dependency list that predicate evaluation consumes).
 
 use std::path::PathBuf;
 
@@ -71,4 +72,7 @@ pub trait PackageManager {
     /// `workspace` supplies the active workspace's dependency resolution:
     /// path-dependency overrides and version pins.
     async fn fetch(&self, id: &PackageId, workspace: &[WorkspaceCrate]) -> Result<FetchedPackage>;
+
+    /// The workspace's dependencies, as ids of this PM's ecosystem.
+    fn list_deps(&self, workspace: &[WorkspaceCrate]) -> Vec<PackageId>;
 }

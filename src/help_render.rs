@@ -9,7 +9,6 @@
 use std::{fmt::Write as _, path::Path};
 
 use clap::{Command, CommandFactory};
-use semver::Version;
 
 use symposium_sdk::workspace::WorkspaceCrate;
 
@@ -17,6 +16,7 @@ use crate::{
     cli::{Cli, Commands, builtin_audience},
     config::Symposium,
     plugins::{Audience, PluginRegistry, load_registry_with_workspace},
+    pm::{PackageId, PackageManager as _},
     subcommand_dispatch::applicable_subcommands,
 };
 
@@ -108,7 +108,7 @@ fn render(registry: &PluginRegistry, workspace: &[WorkspaceCrate]) -> String {
     let header = &full[..commands_idx];
     let options = &full[options_idx..];
 
-    let deps = crate::crate_sources::crate_pairs(workspace);
+    let deps = crate::pm::CargoPm.list_deps(workspace);
 
     let humans = collect_section(&cmd, registry, &deps, Audience::Humans);
     let agents = collect_section(&cmd, registry, &deps, Audience::Agents);
@@ -146,7 +146,7 @@ fn render(registry: &PluginRegistry, workspace: &[WorkspaceCrate]) -> String {
 fn collect_section(
     cmd: &Command,
     registry: &PluginRegistry,
-    deps: &[(String, Version)],
+    deps: &[PackageId],
     target: Audience,
 ) -> Vec<(String, String)> {
     let mut builtins = cmd

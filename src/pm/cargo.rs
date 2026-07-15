@@ -31,4 +31,11 @@ impl PackageManager for CargoPm {
             root: result.path,
         })
     }
+
+    fn list_deps(&self, workspace: &[WorkspaceCrate]) -> Vec<PackageId> {
+        workspace
+            .iter()
+            .map(|c| PackageId::new(CARGO_PM, c.name.clone(), c.version.to_string()))
+            .collect()
+    }
 }

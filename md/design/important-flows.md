@@ -6,7 +6,7 @@ This section describes the logic of each `cargo agents` command.
 
 When a skill group uses `source = "crate"`, the sync flow takes an additional path:
 
-1. `predicate::union_matched_packages()` resolves plugin-level and group-level predicates against the workspace to produce a set of concrete crate name/version pairs.
+1. `predicate::union_matched_packages()` resolves plugin-level and group-level predicates against the workspace to produce a set of concrete package ids (`depends-on` witnesses).
 2. For each crate in the set, the [cargo package manager](./module-structure.md#pm--package-managers) fetches the source: `CargoPm::fetch` delegates to `RustCrateFetch`, which checks path overrides (for local path deps), then the cargo registry cache, then crates.io. The fetched id carries the exact resolved version.
 3. `crate_metadata::parse_crate_metadata()` reads `[package.metadata.symposium]` from the crate's `Cargo.toml`:
    - **No metadata** — fall back to the default `skills/` subdirectory.

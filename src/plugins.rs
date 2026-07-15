@@ -2052,8 +2052,8 @@ mod tests {
         PredicateSet::from_depends_on(s).unwrap()
     }
 
-    fn ctx(crates: &[(String, semver::Version)]) -> crate::predicate::PredicateContext<'_> {
-        crate::predicate::PredicateContext::new(crates)
+    fn ctx(deps: &[crate::pm::PackageId]) -> crate::predicate::PredicateContext<'_> {
+        crate::predicate::PredicateContext::new(deps)
     }
 
     fn from_str(s: &str) -> Result<Plugin> {
@@ -2643,8 +2643,8 @@ mod tests {
     #[test]
     fn plugin_crate_filtering() {
         let workspace_crates = vec![
-            ("serde".to_string(), semver::Version::new(1, 0, 0)),
-            ("tokio".to_string(), semver::Version::new(1, 0, 0)),
+            crate::pm::PackageId::new(crate::pm::CARGO_PM, "serde", "1.0.0"),
+            crate::pm::PackageId::new(crate::pm::CARGO_PM, "tokio", "1.0.0"),
         ];
 
         // Plugin with wildcard - should apply to all
@@ -2852,7 +2852,7 @@ mod tests {
             source_dir: PathBuf::from("/test"),
             workspace_member: false,
         };
-        let deps: Vec<(String, semver::Version)> = Vec::new();
+        let deps: Vec<crate::pm::PackageId> = Vec::new();
         let mut c = ctx(&deps);
         assert!(!parsed.applies(&mut c));
         parsed.workspace_member = true;

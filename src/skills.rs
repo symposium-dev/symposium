@@ -157,7 +157,7 @@ pub async fn skills_applicable_to(
 ) -> Vec<SkillWithGroupContext> {
     let mut results = Vec::new();
 
-    let for_crates = crate::crate_sources::crate_pairs(workspace_crates);
+    let for_crates = crate::pm::CargoPm.list_deps(workspace_crates);
     let mut ctx = PredicateContext::with_custom_predicates(&for_crates, custom_predicate_entries);
 
     // Skills from plugin manifests. We iterate these separately
@@ -319,10 +319,10 @@ async fn load_crate_skills(
 ) -> Vec<(Skill, SkillOrigin)> {
     let matched = predicate::union_matched_packages(&[&plugin.predicates, &group.predicates], ctx);
     let mut skills = Vec::new();
-    for (name, _version) in &matched {
+    for id in &matched {
         let mut visited = std::collections::HashSet::new();
         fetch_and_resolve_skills(
-            name,
+            &id.name,
             None,
             workspace_crates,
             group,
@@ -932,8 +932,15 @@ mod tests {
         PredicateSet::from_depends_on(s).unwrap()
     }
 
-    fn ctx(crates: &[(String, semver::Version)]) -> PredicateContext<'_> {
-        PredicateContext::new(crates)
+    fn ctx(deps: &[crate::pm::PackageId]) -> PredicateContext<'_> {
+        PredicateContext::new(deps)
+    }
+
+    fn ws(pairs: &[(&str, &str)]) -> Vec<crate::pm::PackageId> {
+        pairs
+            .iter()
+            .map(|(n, ver)| crate::pm::PackageId::new(crate::pm::CARGO_PM, *n, *ver))
+            .collect()
     }
 
     // --- SkillOrigin identity ---
@@ -2034,39 +2041,35 @@ mod tests {
 
     // --- AND composition across levels (plugin ∧ group ∧ skill) ---
 
-    fn v(s: &str) -> semver::Version {
-        semver::Version::parse(s).unwrap()
-    }
-
     /// Each level's `depends-on` lowers to one predicate set; the skill applies when
     /// every level's set holds (AND across levels).
-    fn applies(levels: &[&str], ws: &[(String, semver::Version)]) -> bool {
+    fn applies(levels: &[&str], deps: &[crate::pm::PackageId]) -> bool {
         levels
             .iter()
-            .all(|spec| pred_set(spec).evaluate(&mut ctx(ws)))
+            .all(|spec| pred_set(spec).evaluate(&mut ctx(deps)))
     }
 
     #[test]
     fn and_across_levels_all_satisfied() {
-        let ws = vec![("serde".into(), v("1.0.0")), ("tokio".into(), v("1.0.0"))];
-        assert!(applies(&["serde", "tokio"], &ws));
+        let w = ws(&[("serde", "1.0.0"), ("tokio", "1.0.0")]);
+        assert!(applies(&["serde", "tokio"], &w));
     }
 
     #[test]
     fn and_across_levels_one_missing() {
-        let ws = vec![("serde".into(), v("1.0.0"))];
-        assert!(!applies(&["serde", "tokio"], &ws));
+        let w = ws(&[("serde", "1.0.0")]);
+        assert!(!applies(&["serde", "tokio"], &w));
     }
 
     #[test]
     fn and_across_levels_empty_is_vacuously_true() {
-        let ws = vec![("serde".into(), v("1.0.0"))];
-        assert!(applies(&[], &ws));
+        let w = ws(&[("serde", "1.0.0")]);
+        assert!(applies(&[], &w));
     }
 
     #[test]
     fn wildcard_level_matches_any() {
-        let ws = vec![("serde".into(), v("1.0.0"))];
-        assert!(applies(&["*", "serde"], &ws));
+        let w = ws(&[("serde", "1.0.0")]);
+        assert!(applies(&["*", "serde"], &w));
     }
 }
