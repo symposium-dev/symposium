@@ -2,15 +2,14 @@ use std::{
     io::{Read, Write},
     path::PathBuf,
     process::{Command, ExitCode, Stdio},
+    time::Instant,
 };
 
 use symposium_install::Runnable;
 
-use crate::installation::{
-    AcquiredInstallation, AcquiredRunnable, acquire_installation, refresh_installation_if_present,
-    resolve_runnable,
-};
 use crate::plugins::{HookFormat, Installation};
+use crate::sync;
+use crate::telemetry::EventKind;
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
@@ -20,6 +19,13 @@ use crate::{
     help_render::{AGENTS_HEADING, HUMANS_HEADING},
     hook_schema::symposium::{OutputEvent, SessionStartInput},
     subcommand_dispatch::applicable_subcommands,
+};
+use crate::{
+    installation::{
+        AcquiredInstallation, AcquiredRunnable, acquire_installation,
+        refresh_installation_if_present, resolve_runnable,
+    },
+    sync::sync,
 };
 use symposium_sdk::workspace::WorkspaceDeps;
 
@@ -243,7 +249,7 @@ pub async fn execute_hook(
         // Auto-sync: install applicable skills into agent dirs (non-fatal).
         // SessionStart refreshes source caches and syncs unconditionally.
         let session_start = event == HookEvent::SessionStart;
-        run_auto_sync(sym, &mut deps, session_start).await;
+        let sync_summary = run_auto_sync(sym, &mut deps, session_start).await;
 
         // SessionStart (once per session) also refreshes every hook's already-
         // cached source, so later events dispatch fresh binaries without per-
@@ -258,7 +264,10 @@ pub async fn execute_hook(
         let prior_output = builtin_agent_output.to_hook_output();
 
         // Plugin dispatch with format routing
-        let final_output = dispatch_plugin_hooks(
+        let DispatchOutcome {
+            invocations,
+            result,
+        } = dispatch_plugin_hooks(
             sym,
             agent,
             event,
@@ -267,8 +276,23 @@ pub async fn execute_hook(
             prior_output,
             &mut deps,
         )
-        .await
-        .map_err(|stderr| {
+        .await;
+
+        // Emit before propagating a block: the tool ran and the hooks that
+        // completed ran, so a blocked pass must not be a telemetry hole.
+        let events = telemetry_events(agent, &sym_input, sync_summary, invocations);
+
+        if !events.is_empty() {
+            let session_id = sym_input.session_id().map(str::to_string);
+            sym.record_telemetry_batch(session_id, events);
+        }
+
+        // Enforce telemetry retention once per session.
+        if session_start {
+            sym.roll_off_telemetry();
+        }
+
+        let final_output = result.map_err(|stderr| {
             anyhow::anyhow!("plugin blocked: {}", String::from_utf8_lossy(&stderr))
         })?;
 
@@ -279,6 +303,94 @@ pub async fn execute_hook(
         // Agent doesn't support this event
         anyhow::bail!("agent {agent:?} does not support hook event {event:?}")
     }
+}
+
+/// Map a completed hook pass to its telemetry events. Pure: no I/O, no opt-in check so it is unit-testable.
+///
+/// Consumes `sync_summary` and `hooks` so their strings move into the events rather than being cloned.
+/// `session_id` is not produced here; it rides on the `TelemetryEvent` envelope,
+/// so the caller pairs each returned kind with the wire input's session id.
+fn telemetry_events(
+    agent: HookAgent,
+    sym_input: &symposium::InputEvent,
+    sync_summary: Option<sync::SyncSummary>,
+    hooks: Vec<HookInvocation>,
+) -> Vec<EventKind> {
+    let session_start = matches!(sym_input, symposium::InputEvent::SessionStart(_));
+
+    let mut events = Vec::new();
+    if let Some(kind) = wire_event(agent, sym_input, sync_summary.as_ref()) {
+        events.push(kind);
+    }
+
+    if let Some(summary) = sync_summary {
+        events.extend(sync_events(summary, session_start));
+    }
+
+    events.extend(hooks.into_iter().map(|hk| EventKind::HookInvocation {
+        hook: hk.hook,
+        plugin: hk.plugin,
+        duration_ms: hk.duration_ms,
+        exit_code: hk.exit_code,
+    }));
+
+    events
+}
+
+/// The wire-funnel event for this hook event, if any. `PreToolUse` maps to `None` so
+/// a tool is counted once (on `PostToolUse`), not twice.
+fn wire_event(
+    agent: HookAgent,
+    sym_input: &symposium::InputEvent,
+    sync_summary: Option<&sync::SyncSummary>,
+) -> Option<EventKind> {
+    Some(match sym_input {
+        symposium::InputEvent::SessionStart(_) => EventKind::SessionStart {
+            agent: agent.as_str().to_string(),
+            crate_count: sync_summary.map(|ss| ss.crate_count),
+        },
+        symposium::InputEvent::UserPromptSubmit(_) => EventKind::UserPrompt,
+        symposium::InputEvent::PostToolUse(ptui) => EventKind::ToolUse {
+            tool: ptui.tool_name.clone(),
+        },
+        symposium::InputEvent::Stop(_) => EventKind::Stop,
+        _ => return None,
+    })
+}
+
+/// The sync-pass events: `sync_run` whenever the body ran, plus the plugin/skills activation
+/// snapshot only on the SessionStart sync (recorded once per session).
+fn sync_events(summary: sync::SyncSummary, session_start: bool) -> Vec<EventKind> {
+    let mut events = vec![EventKind::SyncRun {
+        installed: summary.installed,
+        reaped: summary.reaped,
+        plugins_matched: summary.plugins.len(),
+    }];
+
+    if session_start {
+        events.extend(
+            summary
+                .plugins
+                .into_iter()
+                .map(|pa| EventKind::PluginActivation {
+                    plugin: pa.name,
+                    crates: pa.crates,
+                }),
+        );
+
+        events.extend(
+            summary
+                .skills
+                .into_iter()
+                .map(|ska| EventKind::SkillActivation {
+                    skill: ska.name,
+                    plugin: ska.plugin,
+                    crates: ska.crates,
+                }),
+        );
+    }
+
+    events
 }
 
 /// CLI entry point: read payload from stdin, dispatch, print output.
@@ -350,10 +462,14 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, output: &[u
 /// every source cache (`UpdateLevel::Check`) and sync unconditionally, ignoring
 /// the `Cargo.lock` freshness gate — upstream skill changes land even when the
 /// workspace's dependencies are unchanged.
-async fn run_auto_sync(sym: &Symposium, deps: &mut WorkspaceDeps, session_start: bool) {
+async fn run_auto_sync(
+    sym: &Symposium,
+    deps: &mut WorkspaceDeps,
+    session_start: bool,
+) -> Option<sync::SyncSummary> {
     if !sym.config.auto_sync {
         tracing::debug!("auto-sync disabled, skipping");
-        return;
+        return None;
     }
 
     let cwd = deps.cwd().to_path_buf();
@@ -369,7 +485,7 @@ async fn run_auto_sync(sym: &Symposium, deps: &mut WorkspaceDeps, session_start:
         let state = crate::workspace_state::WorkspaceState::load(sym, root);
         if state.sync_is_fresh(root) {
             tracing::debug!("auto-sync skipped: Cargo.lock unchanged since last sync");
-            return;
+            return None;
         }
     }
 
@@ -380,10 +496,13 @@ async fn run_auto_sync(sym: &Symposium, deps: &mut WorkspaceDeps, session_start:
     };
 
     tracing::debug!("auto-sync running");
-    if let Err(e) = crate::sync::sync(sym, deps, update).await {
-        tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
-        return;
-    }
+    let summary = match sync(sym, deps, update).await {
+        Ok(summary) => summary,
+        Err(err) => {
+            tracing::warn!(error = %err, "auto-sync during hook failed (continuing)");
+            return None;
+        }
+    };
 
     // Record successful sync. If we didn't find the root earlier,
     // try again now (sync may have created Cargo.lock).
@@ -394,6 +513,8 @@ async fn run_auto_sync(sym: &Symposium, deps: &mut WorkspaceDeps, session_start:
         state.workspace_root = Some(root.clone());
         state.save(sym, root);
     }
+
+    Some(summary)
 }
 
 /// Refresh the source cache for every hook the workspace could fire this
@@ -554,13 +675,26 @@ pub enum PluginHookOutput {
     Failure(Vec<u8>),
 }
 
+/// One plugin hook that ran during dispatch, with how long it took.
+/// A plain record kept out of the telemetry types so dispatch stays decoupled from the
+/// wire schema; `execute_hook` maps it to a `telemetry::EventKind`.
+#[derive(Debug, Clone)]
+pub struct HookInvocation {
+    pub plugin: String,
+    pub hook: String,
+    pub duration_ms: u64,
+    /// `None` when the hook was killed by a signal.
+    pub exit_code: Option<i32>,
+}
+
 /// Dispatch plugin hooks with format routing.
 ///
 /// Accumulates output as `serde_json::Value` in the host agent's wire format.
 /// When a plugin's format matches the host agent, input/output pass through directly.
 /// When formats differ, conversion goes through symposium canonical types.
 ///
-/// Returns `Ok(json)` on success, `Err(stderr)` on exit code 2.
+/// Dispatch stops at the first hook that blocks, but still reports the hooks
+/// that already ran.
 pub async fn dispatch_plugin_hooks(
     sym: &Symposium,
     host_agent: HookAgent,
@@ -569,145 +703,241 @@ pub async fn dispatch_plugin_hooks(
     original_input: &dyn AgentHookInput,
     prior_output: serde_json::Value,
     deps: &mut WorkspaceDeps,
-) -> Result<serde_json::Value, Vec<u8>> {
+) -> DispatchOutcome {
+    let hooks = select_dispatch_hooks(sym, host_agent, sym_input, deps);
+
+    let mut output = prior_output;
+    let mut invocations = Vec::new();
+    for hook in hooks {
+        match run_plugin_hook(sym, host_agent, event, sym_input, original_input, &hook).await {
+            HookRun::Ran {
+                invocation,
+                to_merge,
+            } => {
+                invocations.push(invocation);
+                if let Some(json) = to_merge {
+                    merge(&mut output, json);
+                }
+            }
+            HookRun::Blocked { invocation, stderr } => {
+                invocations.push(invocation);
+                return DispatchOutcome {
+                    invocations,
+                    result: Err(stderr),
+                };
+            }
+            HookRun::Skipped => {}
+        }
+    }
+    DispatchOutcome {
+        invocations,
+        result: Ok(output),
+    }
+}
+
+/// Load the plugins and resolve which of their hooks apply to this event.
+fn select_dispatch_hooks(
+    sym: &Symposium,
+    host_agent: HookAgent,
+    sym_input: &symposium::InputEvent,
+    deps: &mut WorkspaceDeps,
+) -> Vec<ResolvedHook> {
     let workspace = deps.load().cloned();
     let plugins = crate::plugins::load_all_plugins(sym, workspace.as_deref());
 
     // Resolving the workspace means running cargo, so only do it when some
     // plugin's hook gating actually references a concrete crate (a `depends-on(*)`
     // wildcard or env/shell/path predicate never needs the crate graph).
-    let pairs = if plugins.iter().any(|p| p.plugin.hooks_need_dep_resolution()) {
+    let pairs = if plugins
+        .iter()
+        .any(|pplugin| pplugin.plugin.hooks_need_dep_resolution())
+    {
         crate::crate_sources::crate_pairs(deps.crates())
     } else {
         Vec::new()
     };
     let mut ctx = crate::predicate::PredicateContext::new(&pairs);
-    let hooks = dispatched_hooks_for_payload(&plugins, sym_input, host_agent, &mut ctx);
+    dispatched_hooks_for_payload(&plugins, sym_input, host_agent, &mut ctx)
+}
 
-    let mut output = prior_output;
+/// Outcome of running one plugin hook.
+enum HookRun {
+    /// The hook ran; `to_merge` is its output to fold into the aggregate, if any.
+    Ran {
+        invocation: HookInvocation,
+        to_merge: Option<serde_json::Value>,
+    },
+    /// The hook ran and blocked the tool (exit 2 or killed). It still carries an
+    /// invocation: it ran, and a blocked pass must not be a telemetry hole.
+    Blocked {
+        invocation: HookInvocation,
+        stderr: Vec<u8>,
+    },
+    /// The hook did not run (serialize / prepare / spawn / wait failure, already
+    /// logged), so there is nothing to record or merge.
+    Skipped,
+}
 
-    for hook in hooks {
-        tracing::info!(
-            plugin = %hook.plugin_name,
-            hook = %hook.hook_name,
-            format = ?hook.format,
-            "running plugin hook"
-        );
+/// What one dispatch pass produced.
+pub struct DispatchOutcome {
+    /// Every hook that ran, including one that blocked. Collected independently
+    /// of `result` so a blocked pass still reports the work that happened.
+    pub invocations: Vec<HookInvocation>,
+    /// The merged output, or the blocking hook's stderr (exit 2 / killed).
+    pub result: Result<serde_json::Value, Vec<u8>>,
+}
 
-        // Determine stdin for the plugin based on its declared format.
-        // After format selection, the only two cases are:
-        // - native (matches host agent) → pass through original input
-        // - symposium → deliver canonical format
-        let hook_agent = hook.format.as_agent();
-        let hook_input: &dyn AgentHookInput = if hook_agent == Some(host_agent) {
-            original_input
-        } else {
-            sym_input
-        };
-        let stdin_str = match hook_input.to_string() {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::error!(plugin = %hook.plugin_name, hook = %hook.hook_name, error = %e, "failed to serialize hook input");
-                continue;
-            }
-        };
+/// Run one plugin hook end to end: route its stdin by declared format, spawn it,
+/// time it, and interpret its output.
+async fn run_plugin_hook(
+    sym: &Symposium,
+    host_agent: HookAgent,
+    event: HookEvent,
+    sym_input: &symposium::InputEvent,
+    original_input: &dyn AgentHookInput,
+    hook: &ResolvedHook,
+) -> HookRun {
+    tracing::info!(
+        plugin = %hook.plugin_name,
+        hook = %hook.hook_name,
+        format = ?hook.format,
+        "running plugin hook"
+    );
 
-        let spawn_res = match build_spawn_spec(sym, &hook).await {
-            Ok(spec) => spawn_from_spec(spec),
-            Err(e) => {
-                tracing::warn!(error = %e, "failed to prepare hook command");
-                continue;
-            }
-        };
-
-        match spawn_res {
-            Ok(mut child) => {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(stdin_str.as_bytes());
-                }
-
-                let child_out = match child.wait_with_output() {
-                    Ok(o) => o,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed waiting for hook process");
-                        continue;
-                    }
-                };
-
-                tracing::trace!(?child_out, "hook finished");
-
-                let exit_code = child_out.status.code();
-                tracing::debug!(
-                    report = %crate::report::ReportEvent::HookDispatched {
-                        plugin: hook.plugin_name.clone(),
-                        hook: hook.hook_name.clone(),
-                        exit_code,
-                        error: None,
-                    },
-                );
-                match exit_code {
-                    None | Some(2) => return Err(child_out.stderr),
-                    Some(0) if child_out.stdout.is_empty() => continue,
-                    Some(0) => {
-                        // Parse output and convert to host agent format.
-                        // Two cases: native (same as host) or symposium.
-                        let host_handler = host_agent.event(event);
-                        let Some(host_h) = host_handler else { continue };
-
-                        let host_json = if hook_agent == Some(host_agent) {
-                            // Native format — parse as host agent output
-                            match host_h.parse_output(&child_out.stdout) {
-                                Ok(o) => o.to_hook_output(),
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "failed to parse hook output");
-                                    continue;
-                                }
-                            }
-                        } else {
-                            // Symposium format — parse and convert to host agent
-                            match serde_json::from_slice::<serde_json::Value>(&child_out.stdout) {
-                                Ok(v) => {
-                                    if let Ok(sym_out) =
-                                        serde_json::from_value::<symposium::OutputEvent>(v.clone())
-                                    {
-                                        let host_out = host_h.translate_output(&sym_out);
-                                        host_out.to_hook_output()
-                                    } else {
-                                        v
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::warn!(error = %e, "failed to parse hook output");
-                                    continue;
-                                }
-                            }
-                        };
-
-                        merge(&mut output, host_json);
-                    }
-                    Some(code) => {
-                        tracing::warn!(
-                            exit_code = code,
-                            "plugin hook exited with non-zero (continuing)"
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::debug!(
-                    report = %crate::report::ReportEvent::HookDispatched {
-                        plugin: hook.plugin_name.clone(),
-                        hook: hook.hook_name.clone(),
-                        exit_code: None,
-                        error: Some(e.to_string()),
-                    },
-                );
-                tracing::warn!(error = %e, "failed to spawn hook command");
-            }
+    // Route stdin by the hook's declared format: native (matches the host agent)
+    // gets the original input, otherwise the canonical symposium format.
+    let hook_agent = hook.format.as_agent();
+    let hook_input: &dyn AgentHookInput = if hook_agent == Some(host_agent) {
+        original_input
+    } else {
+        sym_input
+    };
+    let stdin_str = match hook_input.to_string() {
+        Ok(hook_output) => hook_output,
+        Err(err) => {
+            tracing::error!(plugin = %hook.plugin_name, hook = %hook.hook_name, error = %err, "failed to serialize hook input");
+            return HookRun::Skipped;
         }
+    };
+
+    let spawn_res = match build_spawn_spec(sym, hook).await {
+        Ok(spec) => spawn_from_spec(spec),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to prepare hook command");
+            return HookRun::Skipped;
+        }
+    };
+
+    let mut child = match spawn_res {
+        Ok(child) => child,
+        Err(err) => {
+            tracing::debug!(
+                report = %crate::report::ReportEvent::HookDispatched {
+                    plugin: hook.plugin_name.clone(),
+                    hook: hook.hook_name.clone(),
+                    exit_code: None,
+                    error: Some(err.to_string()),
+                },
+            );
+            tracing::warn!(error = %err, "failed to spawn hook command");
+            return HookRun::Skipped;
+        }
+    };
+
+    let start = Instant::now();
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(stdin_str.as_bytes());
     }
 
-    Ok(output)
+    let child_out = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(err) => {
+            tracing::warn!(error = %err, "failed waiting for hook process");
+            return HookRun::Skipped;
+        }
+    };
+
+    tracing::trace!(?child_out, "hook finished");
+
+    let invocation = HookInvocation {
+        plugin: hook.plugin_name.clone(),
+        hook: hook.hook_name.clone(),
+        duration_ms: start.elapsed().as_millis() as u64,
+        exit_code: child_out.status.code(),
+    };
+    tracing::debug!(
+        report = %crate::report::ReportEvent::HookDispatched {
+            plugin: hook.plugin_name.clone(),
+            hook: hook.hook_name.clone(),
+            exit_code: child_out.status.code(),
+            error: None,
+        },
+    );
+
+    match interpret_hook_output(host_agent, event, hook_agent, child_out) {
+        Ok(to_merge) => HookRun::Ran {
+            invocation,
+            to_merge,
+        },
+        Err(stderr) => HookRun::Blocked { invocation, stderr },
+    }
+}
+
+/// Interpret a finished hook's exit code and stdout into the JSON to merge.
+/// `Err(stderr)` signals a block (exit 2 or killed); `Ok(None)` means the hook
+/// produced nothing to merge.
+fn interpret_hook_output(
+    host_agent: HookAgent,
+    event: HookEvent,
+    hook_agent: Option<HookAgent>,
+    child_out: std::process::Output,
+) -> Result<Option<serde_json::Value>, Vec<u8>> {
+    match child_out.status.code() {
+        None | Some(2) => Err(child_out.stderr),
+        Some(0) if child_out.stdout.is_empty() => Ok(None),
+        Some(0) => {
+            // Parse the hook's stdout and convert it to host-agent format. Two
+            // cases: native (same as host) or the canonical symposium format.
+            let Some(host_h) = host_agent.event(event) else {
+                return Ok(None);
+            };
+
+            let host_json = if hook_agent == Some(host_agent) {
+                match host_h.parse_output(&child_out.stdout) {
+                    Ok(output) => output.to_hook_output(),
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to parse hook output");
+                        return Ok(None);
+                    }
+                }
+            } else {
+                match serde_json::from_slice::<serde_json::Value>(&child_out.stdout) {
+                    Ok(value) => {
+                        if let Ok(sym_out) =
+                            serde_json::from_value::<symposium::OutputEvent>(value.clone())
+                        {
+                            host_h.translate_output(&sym_out).to_hook_output()
+                        } else {
+                            value
+                        }
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "failed to parse hook output");
+                        return Ok(None);
+                    }
+                }
+            };
+
+            Ok(Some(host_json))
+        }
+        Some(code) => {
+            tracing::warn!(
+                exit_code = code,
+                "plugin hook exited with non-zero (continuing)"
+            );
+            Ok(None)
+        }
+    }
 }
 
 /// Recursively merge two JSON objects, with `b` taking precedence over `a`.
@@ -852,6 +1082,191 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::*;
+
+    // --- telemetry_events mapping ---
+
+    #[test]
+    fn telemetry_events_session_start_emits_funnel_and_activations() {
+        let input = symposium::InputEvent::SessionStart(symposium::SessionStartInput::new(
+            Some("s1".into()),
+            None,
+        ));
+        let summary = sync::SyncSummary {
+            plugins: vec![crate::skills::PluginActivation {
+                name: "example-plugin".into(),
+                crates: vec!["acme-core".into()],
+            }],
+            skills: vec![crate::skills::SkillActivation {
+                name: "example-skill".into(),
+                plugin: Some("example-plugin".into()),
+                crates: vec!["acme-core".into()],
+            }],
+            installed: 2,
+            reaped: 1,
+            crate_count: 5,
+        };
+        let events = telemetry_events(HookAgent::Claude, &input, Some(summary), vec![]);
+
+        assert_eq!(events.len(), 4);
+        match &events[0] {
+            EventKind::SessionStart { agent, crate_count } => {
+                assert_eq!(agent, "claude");
+                assert_eq!(*crate_count, Some(5));
+            }
+            other => panic!("expected session_start, got {other:?}"),
+        }
+        assert!(matches!(
+            events[1],
+            EventKind::SyncRun {
+                installed: 2,
+                reaped: 1,
+                plugins_matched: 1
+            }
+        ));
+        assert!(matches!(events[2], EventKind::PluginActivation { .. }));
+        assert!(matches!(events[3], EventKind::SkillActivation { .. }));
+    }
+
+    #[test]
+    fn telemetry_events_non_session_sync_records_sync_run_but_no_activations() {
+        let input = symposium::InputEvent::PostToolUse(symposium::PostToolUseInput::new(
+            "Bash".into(),
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            Some("s1".into()),
+            None,
+        ));
+        let summary = sync::SyncSummary {
+            plugins: vec![crate::skills::PluginActivation {
+                name: "example-plugin".into(),
+                crates: vec![],
+            }],
+            skills: vec![],
+            installed: 0,
+            reaped: 0,
+            crate_count: 3,
+        };
+        let events = telemetry_events(HookAgent::Claude, &input, Some(summary), vec![]);
+
+        // tool_use + sync_run, but the activation snapshot is SessionStart-only.
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], EventKind::ToolUse { .. }));
+        assert!(matches!(events[1], EventKind::SyncRun { .. }));
+        assert!(!events.iter().any(|e| matches!(
+            e,
+            EventKind::PluginActivation { .. } | EventKind::SkillActivation { .. }
+        )));
+    }
+
+    #[test]
+    fn telemetry_events_pre_tool_use_is_silent() {
+        let input = symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
+            "Bash".into(),
+            serde_json::Value::Null,
+            Some("s1".into()),
+            None,
+        ));
+        let events = telemetry_events(HookAgent::Claude, &input, None, vec![]);
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn telemetry_events_pre_tool_use_still_records_hook_invocations() {
+        // "PreToolUse is silent" means only the wire funnel event; a hook that
+        // ran on a PreToolUse pass must still be counted.
+        let input = symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
+            "Bash".into(),
+            serde_json::Value::Null,
+            Some("s1".into()),
+            None,
+        ));
+        let hooks = vec![HookInvocation {
+            plugin: "example-plugin".into(),
+            hook: "format-check".into(),
+            duration_ms: 3,
+            exit_code: Some(0),
+        }];
+        let events = telemetry_events(HookAgent::Claude, &input, None, hooks);
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0],
+            EventKind::HookInvocation { duration_ms: 3, .. }
+        ));
+    }
+
+    #[test]
+    fn telemetry_events_maps_hook_invocations() {
+        let input = symposium::InputEvent::PostToolUse(symposium::PostToolUseInput::new(
+            "Edit".into(),
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            None,
+            None,
+        ));
+        let hooks = vec![HookInvocation {
+            plugin: "example-plugin".into(),
+            hook: "format-check".into(),
+            duration_ms: 7,
+            exit_code: Some(1),
+        }];
+        let events = telemetry_events(HookAgent::Claude, &input, None, hooks);
+
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            EventKind::ToolUse { tool } => assert_eq!(tool, "Edit"),
+            other => panic!("expected tool_use, got {other:?}"),
+        }
+        assert!(matches!(
+            events[1],
+            EventKind::HookInvocation { duration_ms: 7, .. }
+        ));
+    }
+
+    // --- interpret_hook_output: exit-code handling ---
+
+    /// A finished-process `Output` with a chosen exit code and stderr, built
+    /// without spawning so the block path is testable on every OS.
+    ///
+    /// Unix `ExitStatus::from_raw` wants the raw `waitpid` status, which carries
+    /// the exit code in the second byte, so the code is shifted left by 8.
+    #[cfg(unix)]
+    fn output_with_code(code: i32, stderr: &[u8]) -> std::process::Output {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::Output {
+            status: std::process::ExitStatus::from_raw(code << 8),
+            stdout: Vec::new(),
+            stderr: stderr.to_vec(),
+        }
+    }
+
+    #[cfg(windows)]
+    fn output_with_code(code: i32, stderr: &[u8]) -> std::process::Output {
+        use std::os::windows::process::ExitStatusExt;
+        std::process::Output {
+            status: std::process::ExitStatus::from_raw(code as u32),
+            stdout: Vec::new(),
+            stderr: stderr.to_vec(),
+        }
+    }
+
+    #[test]
+    fn interpret_hook_output_blocks_on_exit_2() {
+        // Exit 2 is the block signal: dispatch surfaces the hook's stderr as the
+        // deny reason (Err) rather than merging any output.
+        let out = output_with_code(2, b"denied by policy");
+        let result = interpret_hook_output(HookAgent::Claude, HookEvent::PreToolUse, None, out);
+        assert_eq!(result, Err(b"denied by policy".to_vec()));
+    }
+
+    #[test]
+    fn interpret_hook_output_does_not_block_on_other_nonzero() {
+        // Only exit 2 blocks. Any other non-zero code is a soft failure that
+        // continues with nothing to merge.
+        let out = output_with_code(1, b"just a warning");
+        let result = interpret_hook_output(HookAgent::Claude, HookEvent::PreToolUse, None, out);
+        assert_eq!(result, Ok(None));
+    }
 
     #[test]
     fn env_safe_sanitizes_punctuation() {

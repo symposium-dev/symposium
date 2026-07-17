@@ -1,0 +1,4 @@
+# Skills symposium syncs in are generated; ignore them, keep hand-authored ones.
+/*
+!/.gitignore
+!/authoring-rfds/

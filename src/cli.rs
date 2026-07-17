@@ -211,7 +211,9 @@ pub async fn run(
             init::init(sym, out, &opts).await
         }
 
-        Commands::Sync => sync::sync(sym, &mut sym.workspace_deps(cwd), update).await,
+        Commands::Sync => sync::sync(sym, &mut sym.workspace_deps(cwd), update)
+            .await
+            .map(drop),
 
         Commands::SelfUpdate => self_update::self_update(sym, out),
 

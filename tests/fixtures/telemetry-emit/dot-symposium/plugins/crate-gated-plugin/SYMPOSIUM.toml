@@ -1,0 +1,5 @@
+name = "crate-gated-plugin"
+depends-on = ["tokio"]
+
+[[skills]]
+source.path = "."

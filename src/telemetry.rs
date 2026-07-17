@@ -26,6 +26,10 @@ pub const RETENTION_DAYS: i64 = 30;
 pub struct TelemetryEvent {
     /// When the event occurred (UTC).
     pub at: DateTime<Utc>,
+    /// The session this event belongs to. Common to every kind, so it rides on
+    /// the envelope; `None` when the agent supplies no id (e.g. Copilot).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
     /// The kind-tagged payload. Flattened so a line reads
     /// `{"at": "...", "kind": "tool_use", ...}`.
     #[serde(flatten)]
@@ -36,36 +40,71 @@ pub struct TelemetryEvent {
 ///
 /// Anonymous by construction: no prompt text, command lines, or file paths are
 /// recorded — only counts and coarse metadata.
+///
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EventKind {
     /// An agent session began.
     SessionStart {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        session_id: Option<String>,
         agent: String,
-        /// Plugins applicable to the workspace at session start.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        plugins: Vec<String>,
+        /// `None` when no sync ran (auto-sync off): we record the absence
+        /// rather than guess a count.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        crate_count: Option<usize>,
     },
     /// The user submitted a prompt.
-    UserPrompt {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        session_id: Option<String>,
-    },
+    UserPrompt,
     /// The agent invoked a tool (named, but with no arguments captured).
-    ToolUse {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        session_id: Option<String>,
-        tool: String,
+    ToolUse { tool: String },
+    /// A plugin applied to the workspace.
+    PluginActivation {
+        plugin: String,
+        /// Only the crates that satisfied the plugin's predicates, so this is
+        /// empty for wildcard / env / shell gates.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        crates: Vec<String>,
     },
+    /// A skill applied to the workspace.
+    SkillActivation {
+        skill: String,
+        /// `None` for a standalone SKILL.md that no plugin vends.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plugin: Option<String>,
+        /// Unioned across the plugin, group, and skill predicate levels; empty
+        /// for wildcard gates.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        crates: Vec<String>,
+    },
+    /// A plugin hook ran in response to an event.
+    HookInvocation {
+        hook: String,
+        plugin: String,
+        duration_ms: u64,
+        /// `None` when the hook was killed by a signal. `default` so lines
+        /// written before this field existed still deserialize.
+        #[serde(default)]
+        exit_code: Option<i32>,
+    },
+    /// A sync pass over the workspace skills.
+    SyncRun {
+        installed: usize,
+        reaped: usize,
+        plugins_matched: usize,
+    },
+    /// The agent finished a turn (end of response).
+    Stop,
+    /// A kind this (older) reader does not recognize. `#[serde(other)]` keeps the
+    /// line instead of dropping it, but cannot retain the payload.
+    #[serde(other)]
+    Unknown,
 }
 
 impl TelemetryEvent {
     /// Build an event stamped at the current time.
-    pub fn now(kind: EventKind) -> Self {
+    pub fn now(session_id: Option<String>, kind: EventKind) -> Self {
         Self {
             at: Utc::now(),
+            session_id,
             kind,
         }
     }
@@ -74,8 +113,14 @@ impl TelemetryEvent {
     pub fn kind_name(&self) -> &'static str {
         match self.kind {
             EventKind::SessionStart { .. } => "session_start",
-            EventKind::UserPrompt { .. } => "user_prompt",
+            EventKind::UserPrompt => "user_prompt",
             EventKind::ToolUse { .. } => "tool_use",
+            EventKind::PluginActivation { .. } => "plugin_activation",
+            EventKind::SkillActivation { .. } => "skill_activation",
+            EventKind::HookInvocation { .. } => "hook_invocation",
+            EventKind::SyncRun { .. } => "sync_run",
+            EventKind::Stop => "stop",
+            EventKind::Unknown => "unknown",
         }
     }
 }
@@ -91,35 +136,49 @@ fn file_for(dir: &Path, at: DateTime<Utc>) -> PathBuf {
 
 /// Append one event to today's log file. Best-effort.
 pub fn record(config_dir: &Path, event: &TelemetryEvent) {
+    record_all(config_dir, std::slice::from_ref(event));
+}
+
+/// Append a batch of events, opening each day's file once rather than per event.
+/// Best-effort.
+///
+/// One `write_all` per event keeps a single line the unit of append, so
+/// concurrent writers cannot interleave a partial line.
+pub fn record_all(config_dir: &Path, events: &[TelemetryEvent]) {
+    if events.is_empty() {
+        return;
+    }
     let dir = telemetry_dir(config_dir);
     if let Err(e) = fs::create_dir_all(&dir) {
         tracing::debug!(error = %e, "telemetry: failed to create telemetry dir");
         return;
     }
-    let line = match serde_json::to_string(event) {
-        Ok(mut s) => {
-            s.push('\n');
-            s
-        }
-        Err(e) => {
-            tracing::debug!(error = %e, "telemetry: failed to serialize event");
-            return;
-        }
-    };
-    let path = file_for(&dir, event.at);
-    match OpenOptions::new().create(true).append(true).open(&path) {
-        Ok(mut f) => {
-            if let Err(e) = f.write_all(line.as_bytes()) {
-                tracing::debug!(error = %e, "telemetry: failed to append event");
+
+    // Events arrive in chronological order, so same-day events are contiguous:
+    // open each day's file once and append that day's lines to it.
+    for day in events.chunk_by(|prev, next| prev.at.date_naive() == next.at.date_naive()) {
+        let path = file_for(&dir, day[0].at);
+        let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
+            Ok(file) => file,
+            Err(err) => {
+                tracing::debug!(error = %err, "telemetry: failed to open event file");
+                continue;
+            }
+        };
+        for event in day {
+            let mut line = match serde_json::to_string(event) {
+                Ok(line) => line,
+                Err(err) => {
+                    tracing::debug!(error = %err, "telemetry: failed to serialize event");
+                    continue;
+                }
+            };
+            line.push('\n');
+            if let Err(err) = file.write_all(line.as_bytes()) {
+                tracing::debug!(error = %err, "telemetry: failed to append event");
             }
         }
-        Err(e) => tracing::debug!(error = %e, "telemetry: failed to open event file"),
     }
-}
-
-/// Convenience: stamp `kind` with the current time and record it.
-pub fn record_kind(config_dir: &Path, kind: EventKind) {
-    record(config_dir, &TelemetryEvent::now(kind));
 }
 
 /// Parse the date out of an `events-YYYY-MM-DD.jsonl` filename.
@@ -173,8 +232,11 @@ pub fn read_events(config_dir: &Path) -> Vec<TelemetryEvent> {
             if line.trim().is_empty() {
                 continue;
             }
-            if let Ok(event) = serde_json::from_str::<TelemetryEvent>(line) {
-                events.push(event);
+            match serde_json::from_str::<TelemetryEvent>(line) {
+                Ok(event) => events.push(event),
+                Err(e) => {
+                    tracing::debug!(error = %e, "telemetry: skipping unparseable event line")
+                }
             }
         }
     }
@@ -276,42 +338,139 @@ mod tests {
             at: DateTime::parse_from_rfc3339("2026-06-23T10:00:00Z")
                 .unwrap()
                 .with_timezone(&Utc),
+            session_id: Some("s1".into()),
             kind: EventKind::ToolUse {
-                session_id: Some("s1".into()),
                 tool: "Bash".into(),
             },
         };
         let line = serde_json::to_string(&event).unwrap();
         assert!(line.contains(r#""kind":"tool_use""#), "line = {line}");
         assert!(line.contains(r#""tool":"Bash""#));
+        assert!(line.contains(r#""session_id":"s1""#), "line = {line}");
         let back: TelemetryEvent = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.session_id.as_deref(), Some("s1"));
         assert_eq!(back.kind_name(), "tool_use");
+    }
+
+    #[test]
+    fn skill_activation_round_trips_with_witness_crates() {
+        let event = TelemetryEvent {
+            at: DateTime::parse_from_rfc3339("2026-07-09T10:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            session_id: Some("s1".into()),
+            kind: EventKind::SkillActivation {
+                skill: "example-skill".into(),
+                plugin: Some("example-plugin".into()),
+                crates: vec!["acme-core".into(), "acme-io".into()],
+            },
+        };
+        let line = serde_json::to_string(&event).unwrap();
+        assert!(
+            line.contains(r#""kind":"skill_activation""#),
+            "line = {line}"
+        );
+        assert!(line.contains(r#""crates":["acme-core","acme-io"]"#));
+        let back: TelemetryEvent = serde_json::from_str(&line).unwrap();
+        assert_eq!(back.kind_name(), "skill_activation");
+    }
+
+    #[test]
+    fn every_kind_round_trips_with_matching_tag() {
+        let kinds = [
+            EventKind::SessionStart {
+                agent: "claude".into(),
+                crate_count: Some(1),
+            },
+            EventKind::SessionStart {
+                agent: "copilot".into(),
+                crate_count: None,
+            },
+            EventKind::UserPrompt,
+            EventKind::ToolUse {
+                tool: "Bash".into(),
+            },
+            EventKind::PluginActivation {
+                plugin: "example-plugin".into(),
+                crates: vec!["acme-core".into()],
+            },
+            EventKind::SkillActivation {
+                skill: "example-skill".into(),
+                plugin: None,
+                crates: vec![],
+            },
+            EventKind::HookInvocation {
+                hook: "format-check".into(),
+                plugin: "example-plugin".into(),
+                duration_ms: 5,
+                exit_code: Some(0),
+            },
+            EventKind::SyncRun {
+                installed: 1,
+                reaped: 0,
+                plugins_matched: 2,
+            },
+            EventKind::Stop,
+        ];
+        for kind in kinds {
+            let event = TelemetryEvent::now(Some("s1".into()), kind);
+            let value = serde_json::to_value(&event).unwrap();
+            assert_eq!(
+                value["kind"].as_str(),
+                Some(event.kind_name()),
+                "kind_name() drifted from the serde tag: {value}"
+            );
+            let line = serde_json::to_string(&event).unwrap();
+            let back: TelemetryEvent = serde_json::from_str(&line).unwrap();
+            assert_eq!(back.kind_name(), event.kind_name(), "line = {line}");
+            assert_eq!(back.session_id.as_deref(), Some("s1"), "line = {line}");
+        }
+    }
+
+    #[test]
+    fn empty_witness_crates_are_omitted() {
+        // A wildcard skill (empty witness) should serialize without a `crates`
+        // key at all, not as `"crates":[]`.
+        let event = TelemetryEvent::now(
+            None,
+            EventKind::SkillActivation {
+                skill: "wildcard-skill".into(),
+                plugin: None,
+                crates: vec![],
+            },
+        );
+        let line = serde_json::to_string(&event).unwrap();
+        assert!(!line.contains("crates"), "line = {line}");
+        assert!(!line.contains("plugin"), "line = {line}");
+        assert!(!line.contains("session_id"), "line = {line}");
     }
 
     #[test]
     fn records_append_and_read_back() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        record_kind(
+        record(
             dir,
-            EventKind::SessionStart {
-                session_id: Some("s1".into()),
-                agent: "claude".into(),
-                plugins: vec!["tokio-plugin".into()],
-            },
+            &TelemetryEvent::now(
+                Some("s1".into()),
+                EventKind::SessionStart {
+                    agent: "claude".into(),
+                    crate_count: Some(3),
+                },
+            ),
         );
-        record_kind(
+        record(
             dir,
-            EventKind::UserPrompt {
-                session_id: Some("s1".into()),
-            },
+            &TelemetryEvent::now(Some("s1".into()), EventKind::UserPrompt),
         );
-        record_kind(
+        record(
             dir,
-            EventKind::ToolUse {
-                session_id: Some("s1".into()),
-                tool: "Bash".into(),
-            },
+            &TelemetryEvent::now(
+                Some("s1".into()),
+                EventKind::ToolUse {
+                    tool: "Bash".into(),
+                },
+            ),
         );
 
         let events = read_events(dir);
@@ -323,6 +482,66 @@ mod tests {
         assert_eq!(u.files, 1);
         assert_eq!(u.events, 3);
         assert!(u.bytes > 0);
+    }
+
+    #[test]
+    fn record_all_appends_batch_to_one_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let events = vec![
+            TelemetryEvent::now(
+                Some("s1".into()),
+                EventKind::SessionStart {
+                    agent: "claude".into(),
+                    crate_count: Some(1),
+                },
+            ),
+            TelemetryEvent::now(Some("s1".into()), EventKind::UserPrompt),
+            TelemetryEvent::now(Some("s1".into()), EventKind::Stop),
+        ];
+        record_all(dir, &events);
+
+        let back = read_events(dir);
+        assert_eq!(back.len(), 3);
+        assert_eq!(back[0].kind_name(), "session_start");
+        assert_eq!(back[2].kind_name(), "stop");
+        assert_eq!(usage(dir).files, 1);
+    }
+
+    #[test]
+    fn read_events_skips_unparseable_lines() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = telemetry_dir(tmp.path());
+        fs::create_dir_all(&dir).unwrap();
+        let file = file_for(&dir, Utc::now());
+        // A good line, a corrupt one, and a blank one: only the good line reads.
+        fs::write(
+            &file,
+            "{\"at\":\"2026-07-09T10:00:00Z\",\"kind\":\"user_prompt\"}\nnot json\n\n",
+        )
+        .unwrap();
+
+        let events = read_events(tmp.path());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind_name(), "user_prompt");
+    }
+
+    #[test]
+    fn unknown_kind_is_preserved_not_dropped() {
+        // A kind from a newer writer must survive an older reader, not vanish.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = telemetry_dir(tmp.path());
+        fs::create_dir_all(&dir).unwrap();
+        let file = file_for(&dir, Utc::now());
+        fs::write(
+            &file,
+            "{\"at\":\"2026-07-09T10:00:00Z\",\"kind\":\"from_the_future\",\"rating\":5}\n",
+        )
+        .unwrap();
+
+        let events = read_events(tmp.path());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind_name(), "unknown");
     }
 
     #[test]
@@ -350,7 +569,7 @@ mod tests {
         assert!(empty.contains("Telemetry: disabled"));
         assert!(empty.contains("nothing yet"));
 
-        record_kind(dir, EventKind::UserPrompt { session_id: None });
+        record(dir, &TelemetryEvent::now(None, EventKind::UserPrompt));
         let filled = status_text(dir, true);
         assert!(filled.contains("Telemetry: enabled"));
         assert!(filled.contains("1 event(s)"));

@@ -345,6 +345,16 @@ impl ParsedPlugin {
         ctx.set_workspace_member(self.workspace_member);
         self.plugin.applies(ctx)
     }
+
+    /// Like [`Self::applies`] but returns the matched crates (the witness) so
+    /// they attribute to the plugin and its skills. Stamps provenance the same way.
+    pub fn witness(
+        &self,
+        ctx: &mut crate::predicate::PredicateContext,
+    ) -> Option<Vec<(String, semver::Version)>> {
+        ctx.set_workspace_member(self.workspace_member);
+        self.plugin.witness(ctx)
+    }
 }
 
 /// A loaded, *validated* plugin manifest.
@@ -380,6 +390,15 @@ impl Plugin {
     /// Check if this plugin's activation predicates hold in `ctx`.
     pub fn applies(&self, ctx: &mut crate::predicate::PredicateContext) -> bool {
         self.predicates.evaluate(ctx)
+    }
+
+    /// Like [`Self::applies`], but returns the matched crates when the
+    /// predicates hold.
+    pub fn witness(
+        &self,
+        ctx: &mut crate::predicate::PredicateContext,
+    ) -> Option<Vec<(String, semver::Version)>> {
+        self.predicates.witness(ctx)
     }
 
     /// Look up a named installation on this plugin.
