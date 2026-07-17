@@ -1,5 +1,5 @@
 name = "hooks-plugin"
-crates = ["*"]
+depends-on = ["*"]
 
 [[hooks]]
 name = "example-hook"

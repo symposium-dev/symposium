@@ -1,5 +1,5 @@
 name = "crate-gated-plugin"
-crates = ["tokio"]
+depends-on = ["tokio"]
 
 [[skills]]
 source.path = "."

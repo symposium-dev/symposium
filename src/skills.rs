@@ -1747,7 +1747,7 @@ mod tests {
                 ---
                 name: acme-basics
                 description: Basic acme usage
-                crates: '*'
+                depends-on: '*'
                 ---
 
                 Use the derive macros.
@@ -1763,6 +1763,7 @@ mod tests {
             skills: vec![SkillGroup {
                 predicates: pred_set("*"),
                 source: PluginSource::Path(skill_dir.to_path_buf()),
+                workspace_member: false,
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
@@ -1776,6 +1777,7 @@ mod tests {
                 plugin,
                 source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
+                workspace_member: false,
             }],
             standalone_skills: vec![],
             warnings: vec![],
