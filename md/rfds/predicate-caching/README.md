@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Predicates (especially custom predicates) spawn processes on every sync. This RFD lets them emit watch declarations via JSONL events. Symposium caches results and skips re-evaluation while watched files/env vars are unchanged. No watch declaration = never cached.
+Predicates, especially custom predicates, spawn processes on every sync. This RFD lets custom predicates emit `Watch` JSONL events for files and environment variables. Symposium caches their results and skips reevaluation while the union of watched inputs is unchanged. No watch hints means cached indefinitely; `Volatile` means never cached.
 
 ## Problem
 
@@ -10,81 +10,76 @@ Auto-sync means predicates re-evaluate on every agent session start. A workspace
 
 ## Design
 
-Custom predicates already emit JSONL events to stdout. We add a `Watch` event variant:
+Custom predicates already emit JSONL events to stdout. We add two variants:
 
 ```rust
 #[derive(Serialize, Deserialize)]
 enum CustomPredicateEvent {
-    // ... existing variants (e.g. SelectedCrates) ...
+    // ... existing variants ...
     Watch {
         files: Vec<PathBuf>,
         env: HashMap<String, String>,
-    }
+    },
+    Volatile {},
 }
 ```
 
-Emitted as a JSONL line:
+A predicate can emit multiple watch hints:
 
 ```jsonl
-{"watch": {"files": ["CargoBrazil.toml"], "env": {"LAMBDA_ENV": "prod"}}}
+{"watch": {"files": ["CargoBrazil.toml"]}}
+{"watch": {"files": ["Config"]}}
+{"watch": {"env": {"LAMBDA_ENV": "prod"}}}
 ```
 
-The predicate result still comes from exit status — the watch event is just a cache hint. Predicates that don't emit a `Watch` event are never cached (current behavior preserved).
+Symposium unions these into one watch set. A change to any watched input causes one reevaluation. Files are relative to the workspace root.
 
-Both `files` and `env` are optional (either alone is sufficient to enable caching). Files are relative to workspace root.
+The process exit status determines the predicate result. `Watch` and `Volatile` events only control caching. No `Watch` events means the result is cached indefinitely and predicates must report every changing input or Symposium may reuse a stale result. `Volatile` disables caching and takes precedence over watch hints.
+
+```jsonl
+{"volatile": {}}
+```
 
 ## SDK helper
 
-The `symposium-sdk` crate provides a helper that reads env vars and automatically emits the cache line:
+The `symposium-sdk` crate provides a helper that reads an environment variable and emits its watch event:
 
 ```rust
-// In a custom predicate binary:
 let val = symposium_sdk::env::var("LAMBDA_ENV")?;
-// ^ reads the var AND emits {"watch": {"env": {"LAMBDA_ENV": "prod"}}}
+// Emits {"watch": {"env": {"LAMBDA_ENV": "prod"}}}.
 ```
 
-This way predicate authors get caching for free when they use the SDK.
+Multiple helper calls emit multiple events, which Symposium unions.
 
 ## How it works
 
-Fingerprint for files is `mtime + size` (same model as Cargo). A missing file is a valid fingerprint state — invalidates when the file appears. Env fingerprint is the literal string value (or absent).
+File fingerprints use `mtime + size`; missing is a valid state. Environment fingerprints use the current value or absent state.
 
-Cache lives at `~/.symposium/cache/predicates.json`, keyed by the normalized predicate string. No workspace-root keying needed — watch paths are resolved relative to the current workspace root at stat time, so different workspaces naturally produce different fingerprints.
+Cache lives at `~/.symposium/cache/predicates.json`.
 
-Algorithm:
-
-1. Look up predicate in cache
-2. If found and all watched files + env vars match fingerprints → use cached result
-3. Otherwise → evaluate, store result + watch if declared
-4. On write, prune entries for predicates no longer in any manifest
+1. Look up the predicate in the cache.
+2. If all watched inputs match, use the cached result. An empty watch set always matches.
+3. Otherwise, evaluate the predicate and obtain its result from the exit status.
+4. If it emitted `Volatile`, do not cache the result. Otherwise, store the result with the union of its watch hints.
 
 Cache is discarded on Symposium version upgrade.
 
 ## Built-in predicates
 
-- `workspace-member()` → no cache needed (already cheap, in-memory)
-- `path_exists(path)` → cached, watches the path itself
-- `depends-on(name)` → cached, watches PM manifest (e.g. `Cargo.lock`)
-- `env(FOO=BAR)` → cached, watches env value of `FOO`
-- `shell(cmd)` / custom predicates → cached only when they emit a `Watch` event
+- `workspace-member()` requires no cache because it is already cheap and evaluated in memory.
+- `path_exists(path)` watches the path itself.
+- `env(FOO=BAR)` watches the value of `FOO`.
+- `shell(cmd)` is volatile because its inputs are unknown.
+- Caching `depends-on(name)` is deferred to the PM interface work.
 
 ## PM integration
 
-`list_deps` return type expands to include optional watch paths:
-
-```rust
-struct DepsResult {
-    ids: Vec<PackageId>,
-    watch: Option<Vec<PathBuf>>,
-}
-```
-
-`CargoPm` returns `[Cargo.lock]`. This is a return-type change, not a new method.
+Changes to `list_deps` and PM-derived caching are deferred to the PM interface work.
 
 ## Implementation steps
 
-1. Add `Watch` variant to `CustomPredicateEvent`. Parse it from predicate stdout. No caching yet — just capture the data.
-2. Cache storage in `~/.symposium/cache/predicates.json`: read/write, fingerprint comparison, dead-entry pruning.
-3. Wire built-in predicates: `path_exists` emits file watch, `env` emits env watch, `depends-on` uses PM watch paths.
-4. Add `symposium_sdk::env::var()` helper that auto-emits the cache event.
-5. PM `list_deps` watch support (coordinate with pm-split).
+1. Add and parse `Watch` and `Volatile` events while keeping the exit status as the predicate result.
+2. Union watch hints, cache an empty watch set indefinitely, and give `Volatile` precedence.
+3. Add cache storage and fingerprint comparison.
+4. Wire `path_exists`, `env`, and volatile `shell` behavior.
+5. Add `symposium_sdk::env::var()` to emit environment watch events.
