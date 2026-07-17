@@ -270,13 +270,16 @@ async fn resolve_custom_predicate_entries(
 }
 
 /// Returned so the hook pipeline can emit telemetry from it; the standalone
-/// `cargo agents sync` command discards it. `installed` counts plugin installs
-/// plus user-authored propagations.
+/// `cargo agents sync` command discards it.
 #[derive(Debug)]
 pub struct SyncSummary {
     pub plugins: Vec<skills::PluginActivation>,
     pub skills: Vec<skills::SkillActivation>,
+    /// Distinct skills created or updated this pass, counted once per skill
+    /// regardless of agent count. A delta, so a steady-state sync reports 0;
+    /// count `skills` for how many apply.
     pub installed: usize,
+    /// Stale skill directories removed, counted per directory.
     pub reaped: usize,
     pub crate_count: usize,
 }
@@ -392,6 +395,9 @@ pub async fn sync(
     // Track every skill directory we (re)install during this sync. Anything
     // we find later that has the marker file but isn't in this set is stale.
     let mut installed_dirs: BTreeSet<PathBuf> = BTreeSet::new();
+    // Separate from `installed_dirs`, which also holds unchanged dirs (so
+    // stale-cleanup keeps them) and is per-agent rather than per-skill.
+    let mut changed_skills: BTreeSet<String> = BTreeSet::new();
     let mut reaped_count = 0usize;
 
     for agent_name in &agent_names {
@@ -468,6 +474,7 @@ pub async fn sync(
             match sync_skill_dir(source_dir, &dest_dir, &project_root, debounce) {
                 Ok(true) => {
                     installed_dirs.insert(dest_dir.clone());
+                    changed_skills.insert(dir_name.clone());
                     tracing::info!(
                         report = %crate::report::ReportEvent::SkillInstalled {
                             skill: dir_name.clone(),
@@ -551,7 +558,7 @@ pub async fn sync(
     Ok(SyncSummary {
         plugins: plugin_activations,
         skills: skill_activations,
-        installed: installed_dirs.len(),
+        installed: changed_skills.len(),
         reaped: reaped_count,
         crate_count: workspace.len(),
     })

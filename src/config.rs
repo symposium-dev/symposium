@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use tracing::Level;
 
 use crate::telemetry;
+use crate::telemetry::EventKind;
+use crate::telemetry::RETENTION_DAYS;
+use crate::telemetry::TelemetryEvent;
 
 // ---------------------------------------------------------------------------
 // User configuration (~/.symposium/config.toml)
@@ -453,16 +456,35 @@ impl Symposium {
         &self.home_dir
     }
 
-    /// Record a telemetry event, if the user opted in.
+    /// Record a hook pass's telemetry events, if the user opted in.
     ///
-    /// The only place `config.telemetry.enabled` is checked, so callers emit
-    /// unconditionally. Best-effort like the rest of `telemetry` (a write failure
-    /// must never break a hook), so there is nothing to return.
-    pub fn record_telemetry(&self, session_id: Option<String>, kind: telemetry::EventKind) {
-        if !self.config.telemetry.enabled {
+    /// The only opt-in gate, so callers emit unconditionally. Best-effort: a write failure must never break a hook
+    pub fn record_telemetry_batch(&self, session_id: Option<String>, kinds: Vec<EventKind>) {
+        if !self.config.telemetry.enabled || kinds.is_empty() {
             return;
         }
-        telemetry::record_kind(self.config_dir(), session_id, kind);
+
+        let events = kinds
+            .into_iter()
+            .map(|kind| TelemetryEvent::now(session_id.clone(), kind))
+            .collect::<Vec<TelemetryEvent>>();
+
+        telemetry::record_all(self.config_dir(), &events);
+    }
+
+    /// Record a single telemetry event. Convenience wrapper over
+    /// [`Self::record_telemetry_batch`]; same opt-in gate.
+    pub fn record_telemetry(&self, session_id: Option<String>, kind: EventKind) {
+        self.record_telemetry_batch(session_id, vec![kind]);
+    }
+
+    /// Delete telemetry older than [`RETENTION_DAYS`].
+    /// Best-effort; call once per session (on `SessionStart`).
+    ///
+    /// Deliberately not gated on `telemetry.enabled`: retention is disk hygiene,
+    /// so date recorded before a user opted out must still age out.
+    pub fn roll_off_telemetry(&self) {
+        telemetry::roll_off(self.config_dir(), RETENTION_DAYS);
     }
 
     /// Returns the effective list of plugin sources, including built-in defaults.
@@ -750,10 +772,10 @@ mod tests {
         let sym = Symposium::from_dir(tmp.path()); // telemetry off by default
         assert!(!sym.config.telemetry.enabled);
 
-        sym.record_telemetry(Some("s1".into()), crate::telemetry::EventKind::UserPrompt);
+        sym.record_telemetry(Some("s1".into()), telemetry::EventKind::UserPrompt);
 
         // The gate must produce no event log at all when the user hasn't opted in.
-        assert!(crate::telemetry::read_events(sym.config_dir()).is_empty());
+        assert!(telemetry::read_events(sym.config_dir()).is_empty());
     }
 
     #[test]
@@ -762,12 +784,41 @@ mod tests {
         let mut sym = Symposium::from_dir(tmp.path());
         sym.config.telemetry.enabled = true;
 
-        sym.record_telemetry(Some("s1".into()), crate::telemetry::EventKind::UserPrompt);
+        sym.record_telemetry(Some("s1".into()), EventKind::UserPrompt);
 
-        let events = crate::telemetry::read_events(sym.config_dir());
+        let events = telemetry::read_events(sym.config_dir());
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind_name(), "user_prompt");
         assert_eq!(events[0].session_id.as_deref(), Some("s1"));
+    }
+
+    #[test]
+    fn record_telemetry_batch_writes_every_event_with_the_session_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut sym = Symposium::from_dir(tmp.path());
+        sym.config.telemetry.enabled = true;
+
+        sym.record_telemetry_batch(
+            Some("s1".to_string()),
+            vec![
+                EventKind::SessionStart {
+                    agent: "claude".to_string(),
+                    crate_count: Some(2),
+                },
+                EventKind::UserPrompt,
+                EventKind::Stop,
+            ],
+        );
+
+        let events = telemetry::read_events(sym.config_dir());
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].kind_name(), "session_start");
+        assert_eq!(events[2].kind_name(), "stop");
+        assert!(
+            events
+                .iter()
+                .all(|ev| ev.session_id.as_deref() == Some("s1"))
+        )
     }
 
     #[test]

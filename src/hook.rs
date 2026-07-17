@@ -264,7 +264,10 @@ pub async fn execute_hook(
         let prior_output = builtin_agent_output.to_hook_output();
 
         // Plugin dispatch with format routing
-        let (final_output, hook_invocations) = dispatch_plugin_hooks(
+        let DispatchOutcome {
+            invocations,
+            result,
+        } = dispatch_plugin_hooks(
             sym,
             agent,
             event,
@@ -273,22 +276,25 @@ pub async fn execute_hook(
             prior_output,
             &mut deps,
         )
-        .await
-        .map_err(|stderr| {
-            anyhow::anyhow!("plugin blocked: {}", String::from_utf8_lossy(&stderr))
-        })?;
+        .await;
 
-        // Emit telemetry for this pass. A blocking hook (exit 2 / killed) returned
-        // above via `?`, so a blocked pass is never reached here and records no
-        // telemetry: the block path stays free of best-effort work.
-        let events = telemetry_events(agent, &sym_input, sync_summary, hook_invocations);
+        // Emit before propagating a block: the tool ran and the hooks that
+        // completed ran, so a blocked pass must not be a telemetry hole.
+        let events = telemetry_events(agent, &sym_input, sync_summary, invocations);
 
         if !events.is_empty() {
             let session_id = sym_input.session_id().map(str::to_string);
-            for ekind in events {
-                sym.record_telemetry(session_id.clone(), ekind);
-            }
+            sym.record_telemetry_batch(session_id, events);
         }
+
+        // Enforce telemetry retention once per session.
+        if session_start {
+            sym.roll_off_telemetry();
+        }
+
+        let final_output = result.map_err(|stderr| {
+            anyhow::anyhow!("plugin blocked: {}", String::from_utf8_lossy(&stderr))
+        })?;
 
         let serialized = handler.serialize_output(&final_output);
         tracing::trace!(output_len = serialized.len(), "hook output serialized");
@@ -325,6 +331,7 @@ fn telemetry_events(
         hook: hk.hook,
         plugin: hk.plugin,
         duration_ms: hk.duration_ms,
+        exit_code: hk.exit_code,
     }));
 
     events
@@ -676,6 +683,8 @@ pub struct HookInvocation {
     pub plugin: String,
     pub hook: String,
     pub duration_ms: u64,
+    /// `None` when the hook was killed by a signal.
+    pub exit_code: Option<i32>,
 }
 
 /// Dispatch plugin hooks with format routing.
@@ -684,7 +693,8 @@ pub struct HookInvocation {
 /// When a plugin's format matches the host agent, input/output pass through directly.
 /// When formats differ, conversion goes through symposium canonical types.
 ///
-/// Returns `Ok(json)` on success, `Err(stderr)` on exit code 2.
+/// Dispatch stops at the first hook that blocks, but still reports the hooks
+/// that already ran.
 pub async fn dispatch_plugin_hooks(
     sym: &Symposium,
     host_agent: HookAgent,
@@ -693,24 +703,36 @@ pub async fn dispatch_plugin_hooks(
     original_input: &dyn AgentHookInput,
     prior_output: serde_json::Value,
     deps: &mut WorkspaceDeps,
-) -> Result<(serde_json::Value, Vec<HookInvocation>), Vec<u8>> {
+) -> DispatchOutcome {
     let hooks = select_dispatch_hooks(sym, host_agent, sym_input, deps);
 
     let mut output = prior_output;
     let mut invocations = Vec::new();
     for hook in hooks {
-        if let HookRun::Ran {
-            invocation,
-            to_merge,
-        } = run_plugin_hook(sym, host_agent, event, sym_input, original_input, &hook).await?
-        {
-            invocations.push(invocation);
-            if let Some(json) = to_merge {
-                merge(&mut output, json);
+        match run_plugin_hook(sym, host_agent, event, sym_input, original_input, &hook).await {
+            HookRun::Ran {
+                invocation,
+                to_merge,
+            } => {
+                invocations.push(invocation);
+                if let Some(json) = to_merge {
+                    merge(&mut output, json);
+                }
             }
+            HookRun::Blocked { invocation, stderr } => {
+                invocations.push(invocation);
+                return DispatchOutcome {
+                    invocations,
+                    result: Err(stderr),
+                };
+            }
+            HookRun::Skipped => {}
         }
     }
-    Ok((output, invocations))
+    DispatchOutcome {
+        invocations,
+        result: Ok(output),
+    }
 }
 
 /// Load the plugins and resolve which of their hooks apply to this event.
@@ -745,14 +767,28 @@ enum HookRun {
         invocation: HookInvocation,
         to_merge: Option<serde_json::Value>,
     },
+    /// The hook ran and blocked the tool (exit 2 or killed). It still carries an
+    /// invocation: it ran, and a blocked pass must not be a telemetry hole.
+    Blocked {
+        invocation: HookInvocation,
+        stderr: Vec<u8>,
+    },
     /// The hook did not run (serialize / prepare / spawn / wait failure, already
     /// logged), so there is nothing to record or merge.
     Skipped,
 }
 
+/// What one dispatch pass produced.
+pub struct DispatchOutcome {
+    /// Every hook that ran, including one that blocked. Collected independently
+    /// of `result` so a blocked pass still reports the work that happened.
+    pub invocations: Vec<HookInvocation>,
+    /// The merged output, or the blocking hook's stderr (exit 2 / killed).
+    pub result: Result<serde_json::Value, Vec<u8>>,
+}
+
 /// Run one plugin hook end to end: route its stdin by declared format, spawn it,
-/// time it, and interpret its output. `Err(stderr)` is the block signal (exit 2
-/// or killed) and propagates out of dispatch.
+/// time it, and interpret its output.
 async fn run_plugin_hook(
     sym: &Symposium,
     host_agent: HookAgent,
@@ -760,7 +796,7 @@ async fn run_plugin_hook(
     sym_input: &symposium::InputEvent,
     original_input: &dyn AgentHookInput,
     hook: &ResolvedHook,
-) -> Result<HookRun, Vec<u8>> {
+) -> HookRun {
     tracing::info!(
         plugin = %hook.plugin_name,
         hook = %hook.hook_name,
@@ -780,7 +816,7 @@ async fn run_plugin_hook(
         Ok(hook_output) => hook_output,
         Err(err) => {
             tracing::error!(plugin = %hook.plugin_name, hook = %hook.hook_name, error = %err, "failed to serialize hook input");
-            return Ok(HookRun::Skipped);
+            return HookRun::Skipped;
         }
     };
 
@@ -788,7 +824,7 @@ async fn run_plugin_hook(
         Ok(spec) => spawn_from_spec(spec),
         Err(e) => {
             tracing::warn!(error = %e, "failed to prepare hook command");
-            return Ok(HookRun::Skipped);
+            return HookRun::Skipped;
         }
     };
 
@@ -804,7 +840,7 @@ async fn run_plugin_hook(
                 },
             );
             tracing::warn!(error = %err, "failed to spawn hook command");
-            return Ok(HookRun::Skipped);
+            return HookRun::Skipped;
         }
     };
 
@@ -817,7 +853,7 @@ async fn run_plugin_hook(
         Ok(output) => output,
         Err(err) => {
             tracing::warn!(error = %err, "failed waiting for hook process");
-            return Ok(HookRun::Skipped);
+            return HookRun::Skipped;
         }
     };
 
@@ -827,6 +863,7 @@ async fn run_plugin_hook(
         plugin: hook.plugin_name.clone(),
         hook: hook.hook_name.clone(),
         duration_ms: start.elapsed().as_millis() as u64,
+        exit_code: child_out.status.code(),
     };
     tracing::debug!(
         report = %crate::report::ReportEvent::HookDispatched {
@@ -837,11 +874,13 @@ async fn run_plugin_hook(
         },
     );
 
-    let to_merge = interpret_hook_output(host_agent, event, hook_agent, child_out)?;
-    Ok(HookRun::Ran {
-        invocation,
-        to_merge,
-    })
+    match interpret_hook_output(host_agent, event, hook_agent, child_out) {
+        Ok(to_merge) => HookRun::Ran {
+            invocation,
+            to_merge,
+        },
+        Err(stderr) => HookRun::Blocked { invocation, stderr },
+    }
 }
 
 /// Interpret a finished hook's exit code and stdout into the JSON to merge.
@@ -1145,6 +1184,7 @@ mod tests {
             plugin: "example-plugin".into(),
             hook: "format-check".into(),
             duration_ms: 3,
+            exit_code: Some(0),
         }];
         let events = telemetry_events(HookAgent::Claude, &input, None, hooks);
 
@@ -1168,6 +1208,7 @@ mod tests {
             plugin: "example-plugin".into(),
             hook: "format-check".into(),
             duration_ms: 7,
+            exit_code: Some(1),
         }];
         let events = telemetry_events(HookAgent::Claude, &input, None, hooks);
 

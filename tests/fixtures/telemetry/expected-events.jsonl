@@ -1,0 +1,8 @@
+{"at":"2026-07-15T10:00:00Z","session_id":"test-session-id","kind":"session_start","agent":"claude","crate_count":2}
+{"at":"2026-07-15T10:00:01Z","session_id":"test-session-id","kind":"sync_run","installed":1,"reaped":0,"plugins_matched":1}
+{"at":"2026-07-15T10:00:02Z","session_id":"test-session-id","kind":"plugin_activation","plugin":"skills-plugin","crates":["acme-core"]}
+{"at":"2026-07-15T10:00:03Z","session_id":"test-session-id","kind":"skill_activation","skill":"example-skill","plugin":"skills-plugin","crates":["acme-core"]}
+{"at":"2026-07-15T10:00:04Z","session_id":"test-session-id","kind":"user_prompt"}
+{"at":"2026-07-15T10:00:05Z","session_id":"test-session-id","kind":"tool_use","tool":"Bash"}
+{"at":"2026-07-15T10:00:06Z","session_id":"test-session-id","kind":"hook_invocation","hook":"example-hook","plugin":"hooks-plugin","duration_ms":4,"exit_code":0}
+{"at":"2026-07-15T10:00:07Z","session_id":"test-session-id","kind":"stop"}

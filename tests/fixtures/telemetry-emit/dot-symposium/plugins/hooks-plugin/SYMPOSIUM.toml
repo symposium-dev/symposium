@@ -1,0 +1,17 @@
+name = "hooks-plugin"
+crates = ["*"]
+
+[[hooks]]
+name = "example-hook"
+event = "PreToolUse"
+matcher = "Bash"
+format = "claude"
+command = { script = "$TEST_DIR/dot-symposium/plugins/hooks-plugin/scripts/probe.sh" }
+
+# Exit 2 blocks the tool. Matches "Grep" so only the block test triggers it.
+[[hooks]]
+name = "blocking-hook"
+event = "PreToolUse"
+matcher = "Grep"
+format = "claude"
+command = { script = "$TEST_DIR/dot-symposium/plugins/hooks-plugin/scripts/block.sh" }

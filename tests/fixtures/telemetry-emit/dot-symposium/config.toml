@@ -1,0 +1,10 @@
+hook-scope = "project"
+# Keep the run offline and deterministic: no crates.io update check on SessionStart.
+auto-update = "off"
+
+[telemetry]
+enabled = true
+
+[defaults]
+symposium-recommendations = false
+user-plugins = true

@@ -80,6 +80,10 @@ pub enum EventKind {
         hook: String,
         plugin: String,
         duration_ms: u64,
+        /// `None` when the hook was killed by a signal. `default` so lines
+        /// written before this field existed still deserialize.
+        #[serde(default)]
+        exit_code: Option<i32>,
     },
     /// A sync pass over the workspace skills.
     SyncRun {
@@ -89,6 +93,10 @@ pub enum EventKind {
     },
     /// The agent finished a turn (end of response).
     Stop,
+    /// A kind this (older) reader does not recognize. `#[serde(other)]` keeps the
+    /// line instead of dropping it, but cannot retain the payload.
+    #[serde(other)]
+    Unknown,
 }
 
 impl TelemetryEvent {
@@ -112,6 +120,7 @@ impl TelemetryEvent {
             EventKind::HookInvocation { .. } => "hook_invocation",
             EventKind::SyncRun { .. } => "sync_run",
             EventKind::Stop => "stop",
+            EventKind::Unknown => "unknown",
         }
     }
 }
@@ -127,35 +136,49 @@ fn file_for(dir: &Path, at: DateTime<Utc>) -> PathBuf {
 
 /// Append one event to today's log file. Best-effort.
 pub fn record(config_dir: &Path, event: &TelemetryEvent) {
+    record_all(config_dir, std::slice::from_ref(event));
+}
+
+/// Append a batch of events, opening each day's file once rather than per event.
+/// Best-effort.
+///
+/// One `write_all` per event keeps a single line the unit of append, so
+/// concurrent writers cannot interleave a partial line.
+pub fn record_all(config_dir: &Path, events: &[TelemetryEvent]) {
+    if events.is_empty() {
+        return;
+    }
     let dir = telemetry_dir(config_dir);
     if let Err(e) = fs::create_dir_all(&dir) {
         tracing::debug!(error = %e, "telemetry: failed to create telemetry dir");
         return;
     }
-    let line = match serde_json::to_string(event) {
-        Ok(mut s) => {
-            s.push('\n');
-            s
-        }
-        Err(e) => {
-            tracing::debug!(error = %e, "telemetry: failed to serialize event");
-            return;
-        }
-    };
-    let path = file_for(&dir, event.at);
-    match OpenOptions::new().create(true).append(true).open(&path) {
-        Ok(mut f) => {
-            if let Err(e) = f.write_all(line.as_bytes()) {
-                tracing::debug!(error = %e, "telemetry: failed to append event");
+
+    // Events arrive in chronological order, so same-day events are contiguous:
+    // open each day's file once and append that day's lines to it.
+    for day in events.chunk_by(|prev, next| prev.at.date_naive() == next.at.date_naive()) {
+        let path = file_for(&dir, day[0].at);
+        let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
+            Ok(file) => file,
+            Err(err) => {
+                tracing::debug!(error = %err, "telemetry: failed to open event file");
+                continue;
+            }
+        };
+        for event in day {
+            let mut line = match serde_json::to_string(event) {
+                Ok(line) => line,
+                Err(err) => {
+                    tracing::debug!(error = %err, "telemetry: failed to serialize event");
+                    continue;
+                }
+            };
+            line.push('\n');
+            if let Err(err) = file.write_all(line.as_bytes()) {
+                tracing::debug!(error = %err, "telemetry: failed to append event");
             }
         }
-        Err(e) => tracing::debug!(error = %e, "telemetry: failed to open event file"),
     }
-}
-
-/// Convenience: stamp `kind` with the current time and record it.
-pub fn record_kind(config_dir: &Path, session_id: Option<String>, kind: EventKind) {
-    record(config_dir, &TelemetryEvent::now(session_id, kind));
 }
 
 /// Parse the date out of an `events-YYYY-MM-DD.jsonl` filename.
@@ -380,6 +403,7 @@ mod tests {
                 hook: "format-check".into(),
                 plugin: "example-plugin".into(),
                 duration_ms: 5,
+                exit_code: Some(0),
             },
             EventKind::SyncRun {
                 installed: 1,
@@ -425,21 +449,28 @@ mod tests {
     fn records_append_and_read_back() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
-        record_kind(
+        record(
             dir,
-            Some("s1".into()),
-            EventKind::SessionStart {
-                agent: "claude".into(),
-                crate_count: Some(3),
-            },
+            &TelemetryEvent::now(
+                Some("s1".into()),
+                EventKind::SessionStart {
+                    agent: "claude".into(),
+                    crate_count: Some(3),
+                },
+            ),
         );
-        record_kind(dir, Some("s1".into()), EventKind::UserPrompt);
-        record_kind(
+        record(
             dir,
-            Some("s1".into()),
-            EventKind::ToolUse {
-                tool: "Bash".into(),
-            },
+            &TelemetryEvent::now(Some("s1".into()), EventKind::UserPrompt),
+        );
+        record(
+            dir,
+            &TelemetryEvent::now(
+                Some("s1".into()),
+                EventKind::ToolUse {
+                    tool: "Bash".into(),
+                },
+            ),
         );
 
         let events = read_events(dir);
@@ -451,6 +482,30 @@ mod tests {
         assert_eq!(u.files, 1);
         assert_eq!(u.events, 3);
         assert!(u.bytes > 0);
+    }
+
+    #[test]
+    fn record_all_appends_batch_to_one_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let events = vec![
+            TelemetryEvent::now(
+                Some("s1".into()),
+                EventKind::SessionStart {
+                    agent: "claude".into(),
+                    crate_count: Some(1),
+                },
+            ),
+            TelemetryEvent::now(Some("s1".into()), EventKind::UserPrompt),
+            TelemetryEvent::now(Some("s1".into()), EventKind::Stop),
+        ];
+        record_all(dir, &events);
+
+        let back = read_events(dir);
+        assert_eq!(back.len(), 3);
+        assert_eq!(back[0].kind_name(), "session_start");
+        assert_eq!(back[2].kind_name(), "stop");
+        assert_eq!(usage(dir).files, 1);
     }
 
     #[test]
@@ -469,6 +524,24 @@ mod tests {
         let events = read_events(tmp.path());
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind_name(), "user_prompt");
+    }
+
+    #[test]
+    fn unknown_kind_is_preserved_not_dropped() {
+        // A kind from a newer writer must survive an older reader, not vanish.
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = telemetry_dir(tmp.path());
+        fs::create_dir_all(&dir).unwrap();
+        let file = file_for(&dir, Utc::now());
+        fs::write(
+            &file,
+            "{\"at\":\"2026-07-09T10:00:00Z\",\"kind\":\"from_the_future\",\"rating\":5}\n",
+        )
+        .unwrap();
+
+        let events = read_events(tmp.path());
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind_name(), "unknown");
     }
 
     #[test]
@@ -496,7 +569,7 @@ mod tests {
         assert!(empty.contains("Telemetry: disabled"));
         assert!(empty.contains("nothing yet"));
 
-        record_kind(dir, None, EventKind::UserPrompt);
+        record(dir, &TelemetryEvent::now(None, EventKind::UserPrompt));
         let filled = status_text(dir, true);
         assert!(filled.contains("Telemetry: enabled"));
         assert!(filled.contains("1 event(s)"));
