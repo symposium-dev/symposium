@@ -8,7 +8,7 @@ use crate::config::Symposium;
 use crate::hook::HookEvent;
 use crate::hook_schema::HookAgent;
 use crate::pm::{ANY_VERSION, PackageId};
-use crate::skills::hash_origin_key;
+use crate::skills::skill_origin_hash;
 use symposium_install::Source;
 
 use sacp::schema::McpServer;
@@ -1383,7 +1383,7 @@ fn load_registry_impl(
                 for skill_md in contents.skill_files {
                     match crate::skills::load_standalone_skill(&skill_md) {
                         Ok(skill) => {
-                            let origin_hash = hash_origin_key(&(skill_md.to_string_lossy()));
+                            let origin_hash = skill_origin_hash(&skill_md);
                             standalone_skills.push(StandaloneSkill { skill, origin_hash });
                         }
                         Err(e) => {

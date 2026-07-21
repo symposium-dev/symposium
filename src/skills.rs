@@ -47,20 +47,23 @@ impl Skill {
 
 // Install-path disambiguator identifying *where a skill's bytes live*.
 //
-// A skill's origin is just the on-disk path of its `SKILL.md`, hashed. Two
-// references that resolve to the same file — the same crate reached through two
-// chained plugins, or a `source.path` group and the standalone walk landing on
-// the same bundle — produce the same hash and dedupe at sync time; skills at
-// different paths stay distinct. Group discovery canonicalizes its scan dir
-// before walking (the standalone walk hashes the raw path), so equivalent paths
-// collapse to one string.
+// A skill's origin is the *canonical* on-disk path of its `SKILL.md`, hashed.
+// Two references that resolve to the same file — the same crate reached through
+// two chained plugins, or a `source.path` group and the standalone walk landing
+// on the same bundle — produce the same hash and dedupe at sync time; skills at
+// different paths stay distinct.
+//
+// Canonicalizing is what makes that hold. Group discovery walks a canonicalized
+// scan dir, while the standalone registry walk uses the configured source path
+// verbatim; on a platform whose temp prefix is a symlink (macOS `/var` ->
+// `/private/var`) the same file would otherwise hash two ways and install twice.
 //
 // This is deliberately coarser than a structured `(pm, plugin, skill_path)`
 // identity: the hash *is* both the dedup key and the disambiguating suffix, so
 // only a string — not a structured origin — is carried to the sync layer.
 
 /// 8-hex-char prefix of SHA-256 over the JSON-serialized origin key.
-pub(crate) fn hash_origin_key<T: serde::Serialize>(key: &T) -> String {
+fn hash_origin_key<T: serde::Serialize>(key: &T) -> String {
     use sha2::{Digest, Sha256};
     let bytes = serde_json::to_vec(key).expect("origin key always serializes");
     let digest = Sha256::digest(&bytes);
@@ -70,6 +73,15 @@ pub(crate) fn hash_origin_key<T: serde::Serialize>(key: &T) -> String {
         write!(out, "{byte:02x}").unwrap();
     }
     out
+}
+
+/// Origin hash for a skill, keyed on its `SKILL.md`'s canonical path so that the
+/// same file reached two ways hashes identically. Falls back to the given path
+/// when it can't be canonicalized.
+pub(crate) fn skill_origin_hash(skill_md: &Path) -> String {
+    let canonical = skill_md.canonicalize();
+    let path = canonical.as_deref().unwrap_or(skill_md);
+    hash_origin_key(&path.to_string_lossy())
 }
 
 /// An applicable skill paired with the origin it was discovered through.
@@ -267,7 +279,7 @@ struct ResolvedSkillDir {
 /// land on a directory to walk; the only difference is whether the base is local
 /// (`Path`) or fetched (`Git` via a git cache). Skill identity is not decided
 /// here — every discovered skill's origin is the hash of its on-disk `SKILL.md`
-/// path (see the module-level note above `hash_origin_key`).
+/// path (see the module-level note above `skill_origin_hash`).
 async fn resolve_group_dirs(
     sym: &Symposium,
     parsed: &ParsedPlugin,
@@ -460,7 +472,7 @@ fn collect_skills_from_dirs(
         for result in discovered {
             match result {
                 Ok(skill) => {
-                    let origin_hash = hash_origin_key(&(skill.path.to_string_lossy()));
+                    let origin_hash = skill_origin_hash(&skill.path);
                     skills.push((skill, origin_hash));
                 }
                 Err(e) => tracing::warn!(
@@ -814,6 +826,31 @@ mod tests {
     /// Build a predicate set from dependency atoms (the `depends-on` field form).
     fn pred_set(s: &str) -> PredicateSet {
         PredicateSet::from_depends_on(s).unwrap()
+    }
+
+    /// Reaching one SKILL.md through a symlinked prefix must yield one origin.
+    /// This is the macOS `/var` -> `/private/var` case: group discovery walks a
+    /// canonicalized dir while the standalone walk uses the configured path
+    /// verbatim, so without canonicalizing here the file installs twice.
+    #[test]
+    #[cfg(unix)]
+    fn skill_origin_hash_is_stable_across_symlinked_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        fs::create_dir_all(real.join("my-skill")).unwrap();
+        let skill_md = real.join("my-skill/SKILL.md");
+        fs::write(&skill_md, "# skill").unwrap();
+
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let via_link = link.join("my-skill/SKILL.md");
+
+        assert_ne!(skill_md, via_link, "paths should differ textually");
+        assert_eq!(
+            skill_origin_hash(&skill_md),
+            skill_origin_hash(&via_link),
+            "same file reached through a symlink must hash to one origin"
+        );
     }
 
     fn ctx(deps: &[crate::pm::PackageId]) -> PredicateContext<'_> {
