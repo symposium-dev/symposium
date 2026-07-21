@@ -14,9 +14,9 @@ use crate::{
     config::Symposium,
     installation::{acquire_installation, resolve_runnable},
     plugins::{self, Plugin, PluginRegistry, Subcommand},
+    pm::{CargoPm, PackageId, PackageManager as _},
 };
 use anyhow::{Context, Result, bail};
-use semver::Version;
 use symposium_install::{Runnable, UpdateLevel};
 use tokio::process::Command;
 
@@ -24,7 +24,7 @@ use tokio::process::Command;
 /// apply to `deps`. Shared between dispatch (name lookup) and help rendering (audience grouping).
 pub fn applicable_subcommands<'a>(
     registry: &'a PluginRegistry,
-    deps: &[(String, Version)],
+    deps: &[PackageId],
 ) -> Vec<(&'a Plugin, &'a str, &'a Subcommand)> {
     let mut ctx = crate::predicate::PredicateContext::new(deps);
     let mut results = Vec::new();
@@ -53,7 +53,7 @@ pub fn find_subcommand<'a>(
     name: &str,
     workspace: &[WorkspaceCrate],
 ) -> Result<Option<(&'a Plugin, &'a Subcommand)>> {
-    let deps = crate::crate_sources::crate_pairs(workspace);
+    let deps = CargoPm.list_deps(workspace);
 
     let matches: Vec<_> = applicable_subcommands(registry, &deps)
         .into_iter()

@@ -11,6 +11,7 @@ use crate::installation::{
     resolve_runnable,
 };
 use crate::plugins::{HookFormat, Installation};
+use crate::pm::PackageManager as _;
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
@@ -412,12 +413,12 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &mut WorkspaceDeps) {
 
     // Resolving the workspace runs cargo, so only do it when some hook's
     // gating references a concrete crate (mirrors dispatch).
-    let pairs = if plugins.iter().any(|p| p.plugin.hooks_need_dep_resolution()) {
-        crate::crate_sources::crate_pairs(deps.crates())
+    let dep_ids = if plugins.iter().any(|p| p.plugin.hooks_need_dep_resolution()) {
+        crate::pm::CargoPm.list_deps(deps.crates())
     } else {
         Vec::new()
     };
-    let mut ctx = crate::predicate::PredicateContext::new(&pairs);
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids);
 
     for parsed in &plugins {
         if !parsed.applies(&mut ctx) {
@@ -496,9 +497,9 @@ fn handle_session_start(
 fn discovery_hint(sym: &Symposium, deps: &mut WorkspaceDeps) -> Option<String> {
     let workspace = deps.load().cloned();
     let registry = crate::plugins::load_registry_with_workspace(sym, workspace.as_deref());
-    let pairs = crate::crate_sources::crate_pairs(deps.crates());
+    let dep_ids = crate::pm::CargoPm.list_deps(deps.crates());
 
-    let any_subcommand = !applicable_subcommands(&registry, &pairs).is_empty();
+    let any_subcommand = !applicable_subcommands(&registry, &dep_ids).is_empty();
 
     any_subcommand.then(|| {
         format!(
@@ -576,12 +577,12 @@ pub async fn dispatch_plugin_hooks(
     // Resolving the workspace means running cargo, so only do it when some
     // plugin's hook gating actually references a concrete crate (a `depends-on(*)`
     // wildcard or env/shell/path predicate never needs the crate graph).
-    let pairs = if plugins.iter().any(|p| p.plugin.hooks_need_dep_resolution()) {
-        crate::crate_sources::crate_pairs(deps.crates())
+    let dep_ids = if plugins.iter().any(|p| p.plugin.hooks_need_dep_resolution()) {
+        crate::pm::CargoPm.list_deps(deps.crates())
     } else {
         Vec::new()
     };
-    let mut ctx = crate::predicate::PredicateContext::new(&pairs);
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids);
     let hooks = dispatched_hooks_for_payload(&plugins, sym_input, host_agent, &mut ctx);
 
     let mut output = prior_output;
@@ -1131,7 +1132,11 @@ mod tests {
         );
 
         // serde present → the hook fires.
-        let deps = vec![("serde".to_string(), semver::Version::new(1, 0, 0))];
+        let deps = vec![crate::pm::PackageId::new(
+            crate::pm::CARGO_PM,
+            "serde",
+            "1.0.0",
+        )];
         let matched = dispatched_hooks_for_payload(
             &[plugin],
             &pre_tool_use_input(),

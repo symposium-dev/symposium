@@ -8,6 +8,7 @@ pub mod hook_schema;
 pub(crate) mod installation;
 pub mod output;
 pub mod plugins;
+pub mod pm;
 pub mod report;
 pub mod self_update;
 pub mod state;

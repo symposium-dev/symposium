@@ -3,7 +3,7 @@
 use std::path::Path;
 
 use crate::config::Symposium;
-use crate::crate_sources;
+use crate::pm::{CargoPm, PackageManager as _};
 
 /// Result of dispatching a command.
 pub enum DispatchResult {
@@ -22,18 +22,14 @@ pub async fn dispatch_crate(
     tracing::debug!(%name, ?version, "crate-info dispatched");
     let mut deps = sym.workspace_deps(cwd);
     let workspace = deps.crates();
-    let mut fetch = crate_sources::RustCrateFetch::new(name, workspace);
-    if let Some(v) = version {
-        fetch = fetch.version(v);
-    }
-
-    match fetch.fetch().await {
+    let id = CargoPm::id_for(name, version);
+    match CargoPm.fetch(&id, workspace).await {
         Ok(result) => {
             let output = format!(
                 "Crate: {}\nVersion: {}\nSource: {}\n",
-                result.name,
-                result.version,
-                result.path.display()
+                result.id.name,
+                result.id.version,
+                result.root.display()
             );
             tracing::trace!(%output, "crate-info output");
             DispatchResult::Ok(output)

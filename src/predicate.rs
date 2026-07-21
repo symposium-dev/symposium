@@ -31,6 +31,8 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
+use crate::pm::{CARGO_PM, PackageId};
+
 /// Names reserved for builtin predicates. Custom predicates must not use
 /// these. `crate` is retired syntax but stays reserved so a custom predicate
 /// can never squat on it.
@@ -54,7 +56,7 @@ pub const BUILTIN_PREDICATE_NAMES: &[&str] = &[
 /// for the lifetime of the context.
 #[derive(Debug)]
 pub struct PredicateContext<'a> {
-    pub deps: &'a [(String, semver::Version)],
+    pub deps: &'a [PackageId],
     /// Whether the plugin currently being evaluated is defined by a member
     /// of the active workspace. This is *provenance*, not a workspace fact:
     /// the loader stamps it per plugin (via `ParsedPlugin::applies`) before
@@ -65,7 +67,7 @@ pub struct PredicateContext<'a> {
 }
 
 impl<'a> PredicateContext<'a> {
-    pub fn new(deps: &'a [(String, semver::Version)]) -> Self {
+    pub fn new(deps: &'a [PackageId]) -> Self {
         Self {
             deps,
             workspace_member: false,
@@ -75,7 +77,7 @@ impl<'a> PredicateContext<'a> {
     }
 
     pub fn with_custom_predicates(
-        deps: &'a [(String, semver::Version)],
+        deps: &'a [PackageId],
         entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
     ) -> Self {
         Self {
@@ -163,11 +165,10 @@ impl Predicate {
     /// needed.
     pub fn evaluate(&self, ctx: &mut PredicateContext) -> bool {
         match self {
-            Predicate::DependsOn(name, version_req) => {
-                ctx.deps.iter().any(|(dep_name, dep_ver)| {
-                    dep_name == name && version_req.as_ref().is_none_or(|req| req.matches(dep_ver))
-                })
-            }
+            Predicate::DependsOn(name, version_req) => ctx
+                .deps
+                .iter()
+                .any(|dep| dep_matches(dep, name, version_req.as_ref())),
             Predicate::DependsOnWildcard => true,
             Predicate::Shell(cmd) => run_shell(cmd),
             Predicate::PathExists(arg) => path_exists(arg),
@@ -188,16 +189,13 @@ impl Predicate {
     /// children's witnesses (when all hold), and `not` contributes nothing
     /// (negation is about absence). Non-dependency leaves contribute an empty
     /// witness.
-    pub fn witness(&self, ctx: &mut PredicateContext) -> Option<Vec<(String, semver::Version)>> {
+    pub fn witness(&self, ctx: &mut PredicateContext) -> Option<Vec<PackageId>> {
         match self {
             Predicate::DependsOn(name, version_req) => {
                 let hits: Vec<_> = ctx
                     .deps
                     .iter()
-                    .filter(|(dep_name, dep_ver)| {
-                        dep_name == name
-                            && version_req.as_ref().is_none_or(|req| req.matches(dep_ver))
-                    })
+                    .filter(|dep| dep_matches(dep, name, version_req.as_ref()))
                     .cloned()
                     .collect();
                 if hits.is_empty() { None } else { Some(hits) }
@@ -231,11 +229,13 @@ impl Predicate {
             }
             Predicate::Custom { name, arg } => {
                 let witness = ctx.custom_witness(name, arg)?;
-                let pairs = witness
+                let ids = witness
                     .iter()
-                    .map(|wc| (wc.crate_name.clone(), wc.version.clone()))
+                    .map(|wc| {
+                        PackageId::new(CARGO_PM, wc.crate_name.clone(), wc.version.to_string())
+                    })
                     .collect();
-                Some(pairs)
+                Some(ids)
             }
         }
     }
@@ -360,7 +360,7 @@ impl PredicateSet {
 
     /// Witness for the whole set (treated as one big `all(...)`): `None` if any
     /// predicate is false, otherwise the deduplicated union of witnesses.
-    pub fn witness(&self, ctx: &mut PredicateContext) -> Option<Vec<(String, semver::Version)>> {
+    pub fn witness(&self, ctx: &mut PredicateContext) -> Option<Vec<PackageId>> {
         let mut packages = Vec::new();
         for p in &self.predicates {
             packages.extend(p.witness(ctx)?);
@@ -409,14 +409,14 @@ impl PredicateSet {
 pub fn union_matched_packages(
     sets: &[&PredicateSet],
     ctx: &mut PredicateContext,
-) -> Vec<(String, semver::Version)> {
+) -> Vec<PackageId> {
     let mut seen = std::collections::HashSet::new();
     let mut result = Vec::new();
     for set in sets {
         if let Some(matched) = set.witness(ctx) {
-            for pair in matched {
-                if seen.insert(pair.0.clone()) {
-                    result.push(pair);
+            for id in matched {
+                if seen.insert(id.name.clone()) {
+                    result.push(id);
                 }
             }
         }
@@ -424,12 +424,20 @@ pub fn union_matched_packages(
     result
 }
 
-fn dedup_packages(packages: Vec<(String, semver::Version)>) -> Vec<(String, semver::Version)> {
+fn dedup_packages(packages: Vec<PackageId>) -> Vec<PackageId> {
     let mut seen = std::collections::HashSet::new();
     packages
         .into_iter()
-        .filter(|(name, _)| seen.insert(name.clone()))
+        .filter(|id| seen.insert(id.name.clone()))
         .collect()
+}
+
+/// A dependency id satisfies a `depends-on` atom when the name matches
+/// exactly and, when the atom carries a version requirement, the id's
+/// version component parses as semver and satisfies it.
+fn dep_matches(dep: &PackageId, name: &str, req: Option<&semver::VersionReq>) -> bool {
+    dep.name == name
+        && req.is_none_or(|req| semver::Version::parse(&dep.version).is_ok_and(|v| req.matches(&v)))
 }
 
 // --- the `depends-on` field: a list of dependency atoms, OR-combined ---
@@ -1006,18 +1014,14 @@ fn parse_witness_stdout(predicate_name: &str, stdout: &[u8]) -> Option<Vec<Selec
 mod tests {
     use super::*;
 
-    fn v(s: &str) -> semver::Version {
-        semver::Version::parse(s).unwrap()
+    fn ctx<'a>(deps: &'a [PackageId]) -> PredicateContext<'a> {
+        PredicateContext::new(deps)
     }
 
-    fn ctx<'a>(crates: &'a [(String, semver::Version)]) -> PredicateContext<'a> {
-        PredicateContext::new(crates)
-    }
-
-    fn ws(pairs: &[(&str, &str)]) -> Vec<(String, semver::Version)> {
+    fn ws(pairs: &[(&str, &str)]) -> Vec<PackageId> {
         pairs
             .iter()
-            .map(|(n, ver)| (n.to_string(), v(ver)))
+            .map(|(n, ver)| PackageId::new(CARGO_PM, *n, *ver))
             .collect()
     }
 
@@ -1224,7 +1228,7 @@ mod tests {
             .witness(&mut ctx(&w))
             .unwrap()
             .into_iter()
-            .map(|(n, _)| n)
+            .map(|id| id.name)
             .collect();
         assert_eq!(names, vec!["c1"]);
     }
@@ -1241,7 +1245,7 @@ mod tests {
             .witness(&mut ctx(&w))
             .unwrap()
             .into_iter()
-            .map(|(n, _)| n)
+            .map(|id| id.name)
             .collect();
         assert_eq!(names, vec!["c1"]);
     }
@@ -1256,7 +1260,7 @@ mod tests {
             .witness(&mut ctx(&w))
             .unwrap()
             .into_iter()
-            .map(|(n, _)| n)
+            .map(|id| id.name)
             .collect();
         names.sort();
         assert_eq!(names, vec!["c1", "c2"]);
@@ -1274,7 +1278,7 @@ mod tests {
         let group = PredicateSet::from_depends_on("serde, tokio").unwrap();
         let w = ws(&[("serde", "1.0.0"), ("tokio", "1.0.0")]);
         let result = union_matched_packages(&[&plugin, &group], &mut ctx(&w));
-        let mut names: Vec<_> = result.into_iter().map(|(n, _)| n).collect();
+        let mut names: Vec<_> = result.into_iter().map(|id| id.name).collect();
         names.sort();
         assert_eq!(names, vec!["serde", "tokio"]);
     }
@@ -1754,8 +1758,8 @@ mod tests {
         };
         let witness = pred.witness(&mut ctx).unwrap();
         assert_eq!(witness.len(), 1);
-        assert_eq!(witness[0].0, "cli-battery-pack");
-        assert_eq!(witness[0].1, semver::Version::parse("0.3.1").unwrap());
+        assert_eq!(witness[0].name, "cli-battery-pack");
+        assert_eq!(witness[0].version, "0.3.1");
     }
 
     #[test]
@@ -1818,9 +1822,9 @@ mod tests {
         };
         let witness = pred.witness(&mut ctx).unwrap();
         assert_eq!(witness.len(), 3);
-        assert_eq!(witness[0].0, "a");
-        assert_eq!(witness[1].0, "b");
-        assert_eq!(witness[2].0, "c");
+        assert_eq!(witness[0].name, "a");
+        assert_eq!(witness[1].name, "b");
+        assert_eq!(witness[2].name, "c");
     }
 
     #[test]
@@ -1836,7 +1840,7 @@ mod tests {
         };
         let witness = pred.witness(&mut ctx).unwrap();
         assert_eq!(witness.len(), 1);
-        assert_eq!(witness[0].0, "serde");
+        assert_eq!(witness[0].name, "serde");
     }
 
     #[test]
@@ -1863,7 +1867,7 @@ mod tests {
         };
         let witness = pred.witness(&mut ctx).unwrap();
         assert_eq!(witness.len(), 1);
-        assert_eq!(witness[0].0, "tokio");
+        assert_eq!(witness[0].name, "tokio");
     }
 
     #[test]
