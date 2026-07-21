@@ -807,11 +807,12 @@ async fn sync_installations_are_gitignored() {
 }
 
 // ---------------------------------------------------------------------------
-// SkillOrigin dedup
+// Origin-hash dedup
 // ---------------------------------------------------------------------------
 
 /// Two plugins both with `source = "crate"` pointing at the same crate
-/// produce the same `SkillOrigin::Crate { name, version }`, so the skill
+/// produce the same crate origin hash (over `(name, version, skill_path)` —
+/// the skill resolves to the same path within the crate both times), so it
 /// installs exactly once.
 #[tokio::test]
 async fn sync_dedups_same_crate_origin_across_plugins() {
@@ -848,13 +849,13 @@ async fn sync_dedups_same_crate_origin_across_plugins() {
 
 /// Two plugins in the same registry source whose `source.path` groups
 /// resolve to the same on-disk skill bundle produce the same
-/// `SkillOrigin::Source` and dedupe to a single install.
+/// origin hash and dedupe to a single install.
 ///
-/// Identity is `(source_name, skill-path-relative-to-source-root)`, so
-/// the path the SKILL.md actually lives at is what matters — not the
-/// plugin name that pointed at it. Standalone discovery of the same
-/// SKILL.md (the registry walk also surfaces it as a standalone since
-/// nothing claims its parent) collapses to that same origin too.
+/// Identity is the SKILL.md's on-disk path, so the path it actually lives
+/// at is what matters — not the plugin name that pointed at it. Standalone
+/// discovery of the same SKILL.md (the registry walk also surfaces it as a
+/// standalone since nothing claims its parent) collapses to that same
+/// origin too.
 #[tokio::test]
 async fn sync_dedups_same_source_path_across_plugins() {
     with_fixture(
@@ -887,8 +888,9 @@ async fn sync_dedups_same_source_path_across_plugins() {
 }
 
 /// Two plugins each contributing a skill named `code-review` from their
-/// own `source.path` produce distinct `SkillOrigin::Plugin { plugin_name }`
-/// values, so both install — under separate hashed directory names.
+/// own `source.path` live at distinct on-disk paths, so they produce
+/// distinct origin hashes (keyed on the SKILL.md path) and both install —
+/// under separate hashed directory names.
 #[tokio::test]
 async fn sync_keeps_distinct_plugin_origins_with_same_skill_name() {
     with_fixture(
@@ -1157,8 +1159,8 @@ async fn sync_keeps_distinct_groups_within_one_plugin() {
 
 /// Two standalone skills both named `my-skill` but living at different
 /// paths within the registry source (`foo/my-skill/SKILL.md` and
-/// `bar/my-skill/SKILL.md`) produce distinct origins (the relative path
-/// is part of the `SkillOrigin::Plugin` identifier), so both install.
+/// `bar/my-skill/SKILL.md`) produce distinct origin hashes (the SKILL.md
+/// path is what's hashed), so both install.
 #[tokio::test]
 async fn sync_keeps_distinct_standalone_origins_at_different_paths() {
     with_fixture(
@@ -2239,7 +2241,7 @@ async fn sync_crate_metadata_redirect_target_optout() {
 }
 
 /// Diamond redirect: both crate-a and crate-b redirect to crate-c. The shared
-/// skill should be installed exactly once (dedup via SkillOrigin).
+/// skill should be installed exactly once (dedup via the crate origin hash).
 #[tokio::test]
 async fn sync_crate_metadata_diamond_dedup() {
     with_fixture(

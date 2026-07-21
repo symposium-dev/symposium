@@ -307,22 +307,23 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
     let applicable =
         skills::skills_applicable_to(sym, &registry, &workspace, custom_entries, update).await;
 
-    // Dedup by `(skill_name, SkillOrigin)`: two `Crate` origins with the
-    // same (name, version) collapse (the skills are the same logical bytes
-    // from the same crate source); two `Plugin` origins always survive
-    // independently. Skills that survive dedup are recorded with both
-    // their plain name and their origin so we can decide later whether
-    // each one needs an `<name>-<hash>` suffix to avoid collisions.
-    let mut seen: BTreeSet<(String, skills::SkillOrigin)> = BTreeSet::new();
-    let mut to_install: Vec<(String, skills::SkillOrigin, &std::path::Path)> = Vec::new();
+    // Dedup by `(skill_name, origin_hash)`: two crate origins with the same
+    // (name, version, skill-path-within-crate) collapse (the same skill bytes
+    // reached through two plugins); skills from genuinely different locations —
+    // including two skills at different paths within one crate — survive
+    // independently. Skills that survive dedup are recorded with both their
+    // plain name and their origin hash so we can decide later whether each one
+    // needs an `<name>-<hash>` suffix to avoid collisions.
+    let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut to_install: Vec<(String, String, &std::path::Path)> = Vec::new();
     let mut name_counts: std::collections::BTreeMap<String, usize> =
         std::collections::BTreeMap::new();
 
     for entry in &applicable {
         let name = entry.skill.name().to_string();
-        if seen.insert((name.clone(), entry.origin.clone())) {
+        if seen.insert((name.clone(), entry.origin_hash.clone())) {
             *name_counts.entry(name.clone()).or_default() += 1;
-            to_install.push((name, entry.origin.clone(), &entry.skill.path));
+            to_install.push((name, entry.origin_hash.clone(), &entry.skill.path));
         }
     }
 
@@ -385,7 +386,7 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
             .register_global_mcp_servers(&hook_root, &mcp_servers, out)
             .context("failed to register MCP servers")?;
 
-        for (skill_name, origin, skill_source) in &to_install {
+        for (skill_name, origin_hash, skill_source) in &to_install {
             // `skill_source` is the path to the SKILL.md file; the skill
             // directory is its parent.
             let source_dir = match skill_source.parent() {
@@ -423,7 +424,7 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
             let dir_name = if unique_name && plain_available {
                 skill_name.clone()
             } else {
-                format!("{skill_name}-{}", origin.short_hash())
+                format!("{skill_name}-{}", origin_hash)
             };
             let dest_dir = agent.project_skill_dir(&project_root, &dir_name);
 

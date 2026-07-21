@@ -25,9 +25,9 @@ impl CargoPm {
     /// `SYMPOSIUM.toml` at the source root — layered over the crate defaults
     /// (see [`load_crate_manifest`](crate::plugins::load_crate_manifest)). The
     /// plugin is stamped with the resolved crate id as its
-    /// [`canonical`](ParsedPlugin::canonical) identity, so its skills' origins
-    /// key on the crate version. A crate with no manifest sources still yields
-    /// a plugin whose only content is the default `skills/` group.
+    /// [`canonical`](ParsedPlugin::canonical) identity (which keys chained-plugin
+    /// cycle detection). A crate with no manifest sources still yields a plugin
+    /// whose only content is the default `skills/` group.
     ///
     /// Returns `None` only when the crate can't be fetched or the merged
     /// manifest fails validation (both logged); the caller then contributes no
@@ -91,11 +91,10 @@ impl CargoPm {
 
         Some(ParsedPlugin {
             path: manifest_path,
-            source_name: format!("crate:{}", fetched.id.name),
             source_dir: fetched.root,
             plugin,
             workspace_member: false,
-            canonical: Some(fetched.id),
+            canonical: fetched.id,
         })
     }
 }
