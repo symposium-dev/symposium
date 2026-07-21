@@ -28,17 +28,13 @@
 //!
 //! # Custom predicates
 //!
-//! A custom predicate binary receives its argument via CLI args, and signals
-//! pass/fail via exit code. To participate in crate-sourced skill resolution,
-//! it emits JSON Lines records to stdout using [`PredicateEmitter`]:
+//! A custom predicate binary receives its argument via CLI args and signals
+//! pass/fail via exit code — that is the whole contract today.
 //!
-//! ```no_run
-//! use symposium_sdk::predicate::PredicateEmitter;
-//!
-//! PredicateEmitter::stdout()
-//!     .selected_crate("my-crate", &semver::Version::new(1, 0, 0))
-//!     .unwrap();
-//! ```
+//! FIXME: [`predicate::PredicateEmitter`] is a reserved stdout channel for a
+//! custom predicate to set fields on the plugin (or component) it gates. It was
+//! originally built to name crates for the retired `source = "crate"`
+//! resolution and is currently ignored; see the [`predicate`] module docs.
 
 pub mod dirs;
 pub mod hook;

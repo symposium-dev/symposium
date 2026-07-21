@@ -1,0 +1,7 @@
+# crate-m ships its own plugin manifest. Its skills live in `agent-docs/`,
+# NOT the default `skills/` — so this file being honored is what makes
+# `m-guidance` reachable. (The metadata / default-`skills/` fallback would
+# find nothing here.) `name` defaults to the crate and `depends-on` is waived,
+# since the chained reference that reaches this manifest is the gate.
+[[skills]]
+source.path = "agent-docs"

@@ -212,10 +212,12 @@ mod tests {
                 subcommands,
                 installations: vec![],
                 custom_predicates: vec![],
+                chained: vec![],
             },
             source_name: "test".into(),
             source_dir: PathBuf::from("/test"),
             workspace_member: false,
+            canonical: None,
         }
     }
 

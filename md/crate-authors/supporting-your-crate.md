@@ -10,29 +10,28 @@ See [Authoring a plugin](./authoring-a-plugin.md) for the full walkthrough.
 
 ## Skill layout metadata
 
-You can control where Symposium looks for skills (and redirect to other crates) by adding `[package.metadata.symposium]` to your `Cargo.toml`:
+By default Symposium looks in your crate's `skills/` directory. To customize the layout — a different subdirectory, named groups, a git source, or delegating to another crate — you describe your crate's plugin inline under `[package.metadata.symposium]` in `Cargo.toml`. **This block uses the exact same schema as a [`SYMPOSIUM.toml` plugin manifest](../reference/plugin-definition.md)** — it is just that manifest embedded in `Cargo.toml`:
 
 ```toml
 # Optional — absence means "look in skills/ by default"
 [[package.metadata.symposium.skills]]
-path = "guidance"   # custom subdirectory for skills
-
-[[package.metadata.symposium.skills]]
-crate = { name = "other-crate", version = ">=1.0" }  # redirect to another crate
+source.path = "guidance"   # custom subdirectory for skills
 ```
 
-Each `[[package.metadata.symposium.skills]]` entry specifies either `path` (a subdirectory of your crate source) or `crate` (a redirect to another crate). The two are mutually exclusive within a single entry.
+Because it is a plugin manifest, the same rules apply as for a crate-embedded `SYMPOSIUM.toml`: `name` defaults to the crate, a top-level `depends-on` is unnecessary (the reference that reached your crate is the gate), and the default `skills/` group is appended unless you opt out with `[package.metadata.symposium.defaults] skills = false`.
+
+If you ship *both* a `[package.metadata.symposium]` block and a `SYMPOSIUM.toml`, they are combined — list entries (skill groups, chained references, …) from both are kept; where the two set the same scalar, the `SYMPOSIUM.toml` file wins.
 
 ### Resolution rules
 
-1. **No metadata section** — Symposium falls back to the default `skills/` subdirectory.
-2. **Metadata present but `skills = []`** — no skills from this crate (NOT a fallback to `skills/`).
-3. **`path` entries** — look in that subdirectory of your crate's source.
-4. **`crate` entries** — fetch that crate's source and follow its metadata recursively.
+1. **No metadata section and no `SYMPOSIUM.toml`** — Symposium uses the default `skills/` subdirectory.
+2. **Opt out of the default group** — `[package.metadata.symposium.defaults] skills = false` and declare no skill groups → no skills from this crate.
+3. **`source.path` groups** — look in that subdirectory of your crate's source.
+4. **`[[package.metadata.symposium.plugins]]` chained references** — load another crate's plugin (see [Delegating to another crate](#delegating-to-another-crate)).
 
-### Redirects
+### Delegating to another crate
 
-Redirects allow a crate to delegate skill hosting to another crate. This is useful when:
+A `[[package.metadata.symposium.plugins]]` chained reference lets your crate delegate skill hosting to another crate — the replacement for the old `crate = {..}` redirect. This is useful when:
 
 - Your main crate is small but skills live in a larger companion package.
 - Multiple crates in a workspace want to share a single set of skills.
@@ -40,19 +39,19 @@ Redirects allow a crate to delegate skill hosting to another crate. This is usef
 
 ```toml
 # In dial9-tokio-telemetry/Cargo.toml
-[[package.metadata.symposium.skills]]
-crate = { name = "dial9-viewer" }
+[[package.metadata.symposium.plugins]]
+source.cargo = "dial9-viewer"   # or { name = "dial9-viewer", version = ">=1.0" }
 ```
 
-Redirects can target any crate, not just workspace dependencies. If the target isn't in the workspace, Symposium fetches it from the registry using the specified version constraint (or latest if omitted).
+A chained reference can target any crate, not just workspace dependencies. The referenced crate is itself resolved as a plugin (its own metadata / `SYMPOSIUM.toml` / default `skills/`), so delegation composes transitively.
 
-Cycle detection prevents infinite loops (A → B → A stops and warns). Redirect chains are capped at 10 hops. Crate name comparison is hyphen/underscore-insensitive (`my-crate` and `my_crate` are the same crate for cycle detection purposes).
+Cycle detection prevents infinite loops (A → B → A stops and warns). Chains are capped at 10 hops. Crate name comparison is hyphen/underscore-insensitive (`my-crate` and `my_crate` are the same crate).
 
 ### Edge cases
 
-- **Malformed metadata** — If `[package.metadata.symposium]` is present but unparseable (wrong types, missing fields), Symposium logs a warning and falls back to the default `skills/` subdirectory. Fix any warnings to ensure your intended layout is respected.
-- **Missing path directory** — If a `path` entry references a directory that doesn't exist, Symposium silently produces zero skills for that entry. Other entries in the same metadata section are still processed.
-- **Diamond redirects** — If multiple crates in the workspace all redirect to the same target crate, the target's skills are installed once (deduplication is based on crate name + version, not who redirected).
+- **Malformed metadata** — If `[package.metadata.symposium]` is present but doesn't parse as a valid manifest (wrong types, unknown fields), Symposium logs a warning and ignores that layer, still resolving the remaining layers (a `SYMPOSIUM.toml`, at minimum the default `skills/` group). Fix any warnings to ensure your intended layout is respected.
+- **Missing path directory** — If a `source.path` group references a directory that doesn't exist, Symposium silently produces zero skills for that group. Other groups are still processed.
+- **Diamond references** — If multiple crates all delegate to the same target crate, the target's skills are installed once (deduplication is based on crate name + version, not who referenced it).
 
 ## Want to write a skill for someone else's crate?
 

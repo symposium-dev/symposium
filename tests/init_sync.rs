@@ -558,6 +558,75 @@ async fn sync_installs_skill_from_crate_path() {
     .unwrap();
 }
 
+/// `sync` loads a crate's skills through a `[[plugins]]` chained reference.
+///
+/// Fixture layout:
+/// - `chained-host` depends on `crate-w` (path dep)
+/// - `vouch-plugin` gates on `crate-w` and carries `[[plugins]] source.cargo
+///   = "crate-w"` but *no* skill group of its own
+/// - `crate-w` ships `skills/w-guidance/SKILL.md`
+///
+/// So `w-guidance` is reachable *only* via the chained edge — its presence
+/// proves the edge expanded and loaded crate-w as a (skill-providing) plugin.
+#[tokio::test]
+async fn sync_installs_skill_via_chained_plugin() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["chained-crate0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            let w_dir = find_installed_skill(&skills_dir, "w-guidance");
+            let content = std::fs::read_to_string(w_dir.join("SKILL.md"))?;
+            assert!(content.contains("Use crate-w like this"));
+            assert!(w_dir.join(".symposium").exists());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `sync` loads a crate that ships its own `SYMPOSIUM.toml` as a first-class
+/// plugin through a `[[plugins]]` chained reference.
+///
+/// Fixture layout:
+/// - `manifest-host` depends on `crate-m` (path dep)
+/// - `vouch-m` gates on `crate-m` and carries `[[plugins]] source.cargo =
+///   "crate-m"` but *no* skill group of its own
+/// - `crate-m` ships a `SYMPOSIUM.toml` whose skills live in `agent-docs/`
+///   (NOT the default `skills/`), plus `agent-docs/m-guidance/SKILL.md`
+///
+/// `m-guidance` sits at a non-default path, so it is reachable *only* if the
+/// crate's own manifest was parsed and its `source.path` group honored — the
+/// metadata / default-`skills/` fallback would find nothing.
+#[tokio::test]
+async fn sync_installs_skill_via_crate_manifest() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-manifest0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+
+            let m_dir = find_installed_skill(&skills_dir, "m-guidance");
+            let content = std::fs::read_to_string(m_dir.join("SKILL.md"))?;
+            assert!(content.contains("Use crate-m via the manifest"));
+            assert!(m_dir.join(".symposium").exists());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// `crate-info` resolves a `[patch.crates-io]` crate to its local path.
 ///
 /// Fixture layout:

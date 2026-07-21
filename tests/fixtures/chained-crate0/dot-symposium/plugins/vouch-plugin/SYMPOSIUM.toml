@@ -1,0 +1,7 @@
+name = "vouch-plugin"
+depends-on = ["crate-w"]
+
+# No skill groups of its own — it vouches for crate-w's plugin, which is
+# loaded (and its skills discovered) through this chained reference.
+[[plugins]]
+source.cargo = "crate-w"

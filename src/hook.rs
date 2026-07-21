@@ -1053,6 +1053,7 @@ mod tests {
             mcp_servers: vec![],
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            chained: vec![],
         };
         crate::plugins::ParsedPlugin {
             path: std::path::PathBuf::from("test.toml"),
@@ -1060,6 +1061,7 @@ mod tests {
             source_name: "test-source".to_string(),
             source_dir: PathBuf::from(".".to_string()),
             workspace_member: false,
+            canonical: None,
         }
     }
 
