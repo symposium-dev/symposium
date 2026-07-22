@@ -58,6 +58,11 @@ pub struct PredicateContext<'a> {
     /// the loader stamps it per plugin (via `ParsedPlugin::applies`) before
     /// that plugin's predicate sets are evaluated.
     workspace_member: bool,
+    /// Plugin names enabled by the applicable `[plugins] use` entries,
+    /// normalized. A plugin with no gate of its own
+    /// ([`Plugin::requires_use`](crate::plugins::Plugin::requires_use)) is
+    /// dormant unless it is named here.
+    used_names: std::collections::HashSet<String>,
     custom_entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
     custom_cache: std::collections::HashMap<(String, String), CustomPredicateResult>,
 }
@@ -67,6 +72,7 @@ impl<'a> PredicateContext<'a> {
         Self {
             deps,
             workspace_member: false,
+            used_names: std::collections::HashSet::new(),
             custom_entries: std::collections::HashMap::new(),
             custom_cache: std::collections::HashMap::new(),
         }
@@ -77,11 +83,27 @@ impl<'a> PredicateContext<'a> {
         entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
     ) -> Self {
         Self {
-            deps,
-            workspace_member: false,
             custom_entries: entries,
-            custom_cache: std::collections::HashMap::new(),
+            ..Self::new(deps)
         }
+    }
+
+    /// Record the plugin names the applicable `[plugins] use` entries enable.
+    /// Matching is hyphen/underscore-insensitive, like every other name
+    /// comparison against user-typed config.
+    pub fn with_used_names<S: AsRef<str>>(mut self, names: &[S]) -> Self {
+        self.used_names.extend(
+            names
+                .iter()
+                .map(|n| crate::crate_sources::normalize_crate_name(n.as_ref())),
+        );
+        self
+    }
+
+    /// Is the named plugin enabled by a `use` entry in this context?
+    pub fn is_used(&self, plugin_name: &str) -> bool {
+        self.used_names
+            .contains(&crate::crate_sources::normalize_crate_name(plugin_name))
     }
 
     /// Stamp whether the plugin about to be evaluated arrived via workspace

@@ -4,7 +4,7 @@ This section describes the logic of each `cargo agents` command.
 
 ## Crate-sourced skill resolution
 
-A plugin loads a crate as a plugin by naming that crate in a `[[plugins]]` chained reference (`source.cargo = "..."`). When the owning plugin is active and the edge's predicates hold, sync resolves the crate. A single path handles every crate — a crate is always a first-class plugin, whether it describes itself with a `SYMPOSIUM.toml`, with `[package.metadata.symposium]`, with both, or with neither:
+A plugin loads a crate as a plugin by naming that crate in a `[[plugins]]` chained reference (`source.cargo = "..."`); the user can also load one directly by enabling the dependency it lives in (see [enablement](#dependency-enablement) below). When the owning plugin is active and the edge's predicates hold, sync resolves the crate. A single path handles every crate — a crate is always a first-class plugin, whether it describes itself with a `SYMPOSIUM.toml`, with `[package.metadata.symposium]`, with both, or with neither:
 
 1. `skills_applicable_to` runs `expand_chained_plugins` over the active plugin's `plugin.chained` edges; each edge whose predicates hold (evaluated against the *owning* plugin's provenance) names a crate directly.
 2. For that crate, `expand_chained_plugins` calls `CargoPm::load_plugin(name, workspace)`:
@@ -14,7 +14,19 @@ A plugin loads a crate as a plugin by naming that crate in a `[[plugins]]` chain
 
 A skill's install identity is the hash of its on-disk `SKILL.md` path, so a crate reached two ways dedupes to one install. The edge's version requirement is recorded but not yet enforced — the crate resolves against the workspace (pin / path override).
 
-The key code paths are in `pm/cargo.rs` (`CargoPm::load_plugin`), `plugins.rs` (`load_crate_manifest`, `RawPluginManifest::merge`, `ManifestOrigin::Crate`, `ParsedPlugin::canonical`), `skills.rs` (`expand_chained_plugins`, `hash_origin_key`), `crate_metadata.rs` (`symposium_metadata`), and `crate_sources/mod.rs` (`RustCrateFetch`, `WorkspaceCrate`).
+The key code paths are in `pm/cargo.rs` (`CargoPm::load_plugin`), `plugins.rs` (`load_crate_manifest`, `RawPluginManifest::merge`, `ManifestOrigin::Crate`, `ParsedPlugin::canonical`), `skills.rs` (`expand_chained_plugins`, `expand_crate_plugin`, `hash_origin_key`), `crate_metadata.rs` (`symposium_metadata`), and `crate_sources/mod.rs` (`RustCrateFetch`, `WorkspaceCrate`).
+
+## Dependency enablement
+
+A dependency's own plugin content — a `SYMPOSIUM.toml`, `[package.metadata.symposium]`, or a `skills/` directory — is reachable without any manifest pointing at it, but only with the user's consent: dependencies are not a trust root.
+
+1. `discovery::discover` lists the workspace's dependencies, asks every PM instance what it offers (`list_plugins`, cache-only), and keeps the offers whose `recommends` names one of those dependencies. `CargoPm` supplies the dependency-embedded offers; a recommendations registry supplies its `cargo/<name>/` entries. Each is classified against `[plugins]` — enabled by `use`, enabled by the offering registry's trust, auto-enabled, declined, or an undecided candidate. This is a read: nothing is fetched, prompted, or written.
+2. At sync time, `skills::skills_applicable_to` asks `discovery::enabled_dependencies` which dependency names `[plugins] auto-enable` or an applicable `use` entry covers, and runs each through `expand_crate_plugin` — the same path a chained reference takes, so the crate's manifest sources, skill groups, and its own `[[plugins]]` edges are all honored. This reads config rather than the offer list, so a registry dependency can be enabled before its source has ever been fetched.
+3. Independently, a registry plugin with no dependency gate anywhere loads *dormant* (`Plugin::requires_use`) and activates only when a `use` entry names it. The gate rides the `PredicateContext` (`with_used_names` / `is_used`), so skill resolution, hook dispatch, subcommand lookup, help, and MCP filtering all agree.
+
+The consent prompt and the `use` / `search` / `status` commands that record decisions are not implemented yet — today the `[plugins]` config is edited by hand.
+
+The key code paths are in `discovery.rs`, `config.rs` (`PluginsConfig`, `UseEntry`), `pm/cargo.rs` (`list_plugins`), `plugins.rs` (`Plugin::requires_use`), `predicate.rs` (`PredicateContext::is_used`), and `skills.rs` (`expand_crate_plugin`).
 
 ## Help rendering
 

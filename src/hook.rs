@@ -417,7 +417,11 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &mut WorkspaceDeps) {
     } else {
         Vec::new()
     };
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids);
+    let used_names = workspace
+        .as_ref()
+        .map(|ws| sym.config.plugins.used_names_in(&ws.root))
+        .unwrap_or_default();
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used_names(&used_names);
 
     for parsed in &plugins {
         if !parsed.applies(&mut ctx) {
@@ -500,7 +504,11 @@ async fn discovery_hint(sym: &Symposium, deps: &mut WorkspaceDeps) -> Option<Str
     let registry = crate::plugins::load_registry_with_workspace(sym, workspace.as_deref()).await;
     let dep_ids = crate::pm::workspace_dep_ids(sym, deps.crates()).await;
 
-    let any_subcommand = !applicable_subcommands(&registry, &dep_ids).is_empty();
+    let used = workspace
+        .as_ref()
+        .map(|ws| sym.config.plugins.used_names_in(&ws.root))
+        .unwrap_or_default();
+    let any_subcommand = !applicable_subcommands(&registry, &dep_ids, &used).is_empty();
 
     any_subcommand.then(|| {
         format!(
@@ -583,7 +591,11 @@ pub async fn dispatch_plugin_hooks(
     } else {
         Vec::new()
     };
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids);
+    let used_names = workspace
+        .as_ref()
+        .map(|ws| sym.config.plugins.used_names_in(&ws.root))
+        .unwrap_or_default();
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used_names(&used_names);
     let hooks = dispatched_hooks_for_payload(&plugins, sym_input, host_agent, &mut ctx);
 
     let mut output = prior_output;
@@ -1057,6 +1069,7 @@ mod tests {
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
             chained: vec![],
+            requires_use: false,
         };
         crate::plugins::ParsedPlugin {
             path: std::path::PathBuf::from("test.toml"),

@@ -94,10 +94,14 @@ pub async fn render_help(sym: &Symposium, cwd: &Path) -> String {
     let workspace = deps.load().cloned();
     let registry = load_registry_with_workspace(sym, workspace.as_deref()).await;
     let dep_ids = crate::pm::workspace_dep_ids(sym, deps.crates()).await;
-    render(&registry, &dep_ids)
+    let used = workspace
+        .as_ref()
+        .map(|ws| sym.config.plugins.used_names_in(&ws.root))
+        .unwrap_or_default();
+    render(&registry, &dep_ids, &used)
 }
 
-fn render(registry: &PluginRegistry, deps: &[PackageId]) -> String {
+fn render(registry: &PluginRegistry, deps: &[PackageId], used: &[&str]) -> String {
     let mut cmd = Cli::command();
     let full = cmd.render_help().to_string();
 
@@ -110,8 +114,8 @@ fn render(registry: &PluginRegistry, deps: &[PackageId]) -> String {
     let header = &full[..commands_idx];
     let options = &full[options_idx..];
 
-    let humans = collect_section(&cmd, registry, deps, Audience::Humans);
-    let agents = collect_section(&cmd, registry, deps, Audience::Agents);
+    let humans = collect_section(&cmd, registry, deps, used, Audience::Humans);
+    let agents = collect_section(&cmd, registry, deps, used, Audience::Agents);
 
     let col_width = humans
         .iter()
@@ -147,6 +151,7 @@ fn collect_section(
     cmd: &Command,
     registry: &PluginRegistry,
     deps: &[PackageId],
+    used: &[&str],
     target: Audience,
 ) -> Vec<(String, String)> {
     let mut builtins = cmd
@@ -162,7 +167,7 @@ fn collect_section(
 
     builtins.sort();
 
-    let mut plugins = applicable_subcommands(registry, deps)
+    let mut plugins = applicable_subcommands(registry, deps, used)
         .into_iter()
         .filter(|(_, _, subcommand)| subcommand.audience == target)
         .map(|(_, name, subcommand)| (name.to_string(), subcommand.description.clone()))
@@ -214,6 +219,7 @@ mod tests {
                 installations: vec![],
                 custom_predicates: vec![],
                 chained: vec![],
+                requires_use: false,
             },
             source_dir: PathBuf::from("/test"),
             workspace_member: false,
@@ -283,7 +289,7 @@ mod tests {
               -h, --help             Print help
               -V, --version          Print version
         "#]]
-             .assert_eq(&redact(render(&reg, &ws)));
+             .assert_eq(&redact(render(&reg, &ws, &[])));
     }
 
     #[test]
@@ -296,7 +302,7 @@ mod tests {
         let reg = registry(vec![plugin_with("example-plugin", "*", subs)]);
         let ws = vec![workspace_crate("example-crate", "1.0.0")];
 
-        let out = render(&reg, &ws);
+        let out = render(&reg, &ws, &[]);
         let humans = extract_section(&out, "Commands for humans:");
         assert!(
             humans.contains("example-tool"),
@@ -321,7 +327,7 @@ mod tests {
         let reg = registry(vec![plugin_with("example-plugin", "*", subs)]);
         let ws = vec![workspace_crate("example-crate", "1.0.0")];
 
-        let out = render(&reg, &ws);
+        let out = render(&reg, &ws, &[]);
         let agents = extract_section(&out, "Commands for agents:");
         assert!(
             agents.contains("example-tool"),
@@ -350,7 +356,7 @@ mod tests {
         let reg = registry(vec![plugin_with("example-plugin", "*", subs)]);
         let ws = vec![workspace_crate("other-crate-sources", "1.0.0")];
 
-        let out = render(&reg, &ws);
+        let out = render(&reg, &ws, &[]);
         assert!(
             !out.contains("example-tool"),
             "example-tool should be filtered when workspace lacks example-crate:\n{out}"
@@ -372,7 +378,7 @@ mod tests {
         let reg = registry(vec![plugin_with("example-plugin", "*", subs)]);
         let ws = vec![workspace_crate("example-crate", "1.0.0")];
 
-        let out = render(&reg, &ws);
+        let out = render(&reg, &ws, &[]);
         let agents = extract_section(&out, "Commands for agents:");
         let bar_pos = agents.find("bar-tool").expect("bar-tool present");
         let foo_pos = agents.find("foo-tool").expect("foo-tool present");

@@ -92,6 +92,10 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "TelemetryConfig::is_default")]
     pub telemetry: TelemetryConfig,
 
+    /// Which discovered plugins the user has consented to.
+    #[serde(default, skip_serializing_if = "PluginsConfig::is_default")]
+    pub plugins: PluginsConfig,
+
     /// Agents configured for this user.
     #[serde(default, rename = "agent")]
     pub agents: Vec<AgentEntry>,
@@ -107,6 +111,113 @@ pub struct Config {
     /// `plugin-source` is the retired spelling, still accepted.
     #[serde(default, rename = "registry", alias = "plugin-source")]
     pub registries: Vec<RegistryConfig>,
+}
+
+/// The `[plugins]` section: enablement, the consent axis.
+///
+/// Activation predicates answer *when* a plugin applies; enablement answers
+/// *whether it may run at all*. The workspace and the configured registries
+/// are trust roots — what they define needs no per-plugin consent. A
+/// dependency is deliberately not a trust root: depending on a crate means
+/// compiling its code, not letting its author inject agent context. So a
+/// plugin embedded in a dependency runs only once the user consents, either
+/// ahead of time (`auto-enable`) or by name (`use`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginsConfig {
+    /// Dependency names whose embedded plugins load without being asked
+    /// about; `"*"` pre-consents to every dependency. Matched
+    /// hyphen/underscore-insensitively, like crate names.
+    #[serde(default, rename = "auto-enable", skip_serializing_if = "Vec::is_empty")]
+    pub auto_enable: Vec<String>,
+
+    /// Plugins enabled deliberately, the durable record `cargo agents use`
+    /// writes. Unlike `auto-enable` (consent for what a dependency already
+    /// carries), a used plugin is enabled whether or not any dependency
+    /// references it — it is also what wakes a dormant registry plugin.
+    #[serde(default, rename = "use", skip_serializing_if = "Vec::is_empty")]
+    pub used: Vec<UseEntry>,
+
+    /// Plugin names pruned from enablement, and the record of declined
+    /// discoveries (so they are not offered again).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disable: Vec<String>,
+}
+
+impl PluginsConfig {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Names enabled by `use` entries that apply while working in
+    /// `workspace_root`.
+    pub fn used_names_in(&self, workspace_root: &Path) -> Vec<&str> {
+        self.used
+            .iter()
+            .filter(|entry| entry.applies_in(workspace_root))
+            .map(UseEntry::name)
+            .collect()
+    }
+
+    /// Does `name` appear in `auto-enable` (directly or via `"*"`)?
+    pub fn is_auto_enabled(&self, name: &str) -> bool {
+        self.auto_enable
+            .iter()
+            .any(|entry| name_matches(entry, name))
+    }
+
+    /// Does `name` appear in `disable`?
+    pub fn is_disabled(&self, name: &str) -> bool {
+        self.disable.iter().any(|entry| name_matches(entry, name))
+    }
+
+    /// Is `name` enabled by a `use` entry applicable in `workspace_root`?
+    pub fn is_used_in(&self, name: &str, workspace_root: &Path) -> bool {
+        self.used_names_in(workspace_root)
+            .iter()
+            .any(|entry| name_matches(entry, name))
+    }
+}
+
+/// Does a configured entry name `name`? `"*"` matches everything; otherwise
+/// the comparison is hyphen/underscore-insensitive, since these entries are
+/// user-typed package names.
+fn name_matches(entry: &str, name: &str) -> bool {
+    entry == "*"
+        || crate::crate_sources::normalize_crate_name(entry)
+            == crate::crate_sources::normalize_crate_name(name)
+}
+
+/// One `[plugins] use` entry: a plugin name enabled deliberately, scoped
+/// either to a single workspace or to every workspace.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum UseEntry {
+    /// `use = ["name"]` — enabled in every workspace.
+    Global(String),
+    /// `use = [{ name = "...", workspace = "/path" }]` — enabled while
+    /// working in the named workspace root.
+    Workspace { name: String, workspace: PathBuf },
+}
+
+impl UseEntry {
+    pub fn name(&self) -> &str {
+        match self {
+            UseEntry::Global(name) => name,
+            UseEntry::Workspace { name, .. } => name,
+        }
+    }
+
+    /// Does this entry apply while working in `workspace_root`?
+    pub fn applies_in(&self, workspace_root: &Path) -> bool {
+        match self {
+            UseEntry::Global(_) => true,
+            UseEntry::Workspace { workspace, .. } => {
+                let canon = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+                canon(workspace) == canon(workspace_root)
+            }
+        }
+    }
 }
 
 /// An `[[agent]]` entry — just identifies an agent by name.
@@ -158,6 +269,7 @@ impl Default for Config {
             hook_scope: HookScope::default(),
             auto_update: AutoUpdate::default(),
             telemetry: TelemetryConfig::default(),
+            plugins: PluginsConfig::default(),
             agents: Vec::new(),
             logging: LoggingConfig::default(),
             defaults: DefaultsConfig::default(),
@@ -181,6 +293,8 @@ struct RawConfig {
     auto_update: AutoUpdate,
     #[serde(default)]
     telemetry: TelemetryConfig,
+    #[serde(default)]
+    plugins: PluginsConfig,
     #[serde(default, rename = "agent")]
     agents: Vec<AgentEntry>,
     #[serde(default)]
@@ -206,6 +320,7 @@ impl RawConfig {
             hook_scope: self.hook_scope,
             auto_update: self.auto_update,
             telemetry: self.telemetry,
+            plugins: self.plugins,
             agents: self.agents,
             logging: self.logging,
             defaults: self.defaults,
@@ -223,6 +338,7 @@ impl From<Config> for RawConfig {
             hook_scope: config.hook_scope,
             auto_update: config.auto_update,
             telemetry: config.telemetry,
+            plugins: config.plugins,
             agents: config.agents,
             logging: config.logging,
             defaults: config.defaults,
@@ -822,6 +938,69 @@ mod tests {
             agents-syncing = false
         "});
         assert!(!config.agents_syncing);
+    }
+
+    #[test]
+    fn parse_plugins_defaults_are_empty() {
+        let config = parse_config("");
+        assert!(config.plugins.auto_enable.is_empty());
+        assert!(config.plugins.used.is_empty());
+        assert!(config.plugins.disable.is_empty());
+
+        // An all-default section is not written back out.
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        assert!(
+            !serialized.contains("[plugins]"),
+            "default enablement config should not be written: {serialized}"
+        );
+    }
+
+    #[test]
+    fn parse_plugins_enablement() {
+        let config = parse_config(indoc! {r#"
+            [plugins]
+            auto-enable = ["widget-lib"]
+            disable = ["noisy-crate"]
+            use = ["everywhere", { name = "scoped", workspace = "/ws/a" }]
+        "#});
+
+        assert!(config.plugins.is_auto_enabled("widget_lib"));
+        assert!(!config.plugins.is_auto_enabled("other"));
+        assert!(config.plugins.is_disabled("noisy-crate"));
+
+        assert_eq!(
+            config.plugins.used,
+            vec![
+                UseEntry::Global("everywhere".into()),
+                UseEntry::Workspace {
+                    name: "scoped".into(),
+                    workspace: PathBuf::from("/ws/a"),
+                },
+            ]
+        );
+        assert_eq!(
+            config.plugins.used_names_in(Path::new("/ws/a")),
+            vec!["everywhere", "scoped"]
+        );
+        assert_eq!(
+            config.plugins.used_names_in(Path::new("/ws/other")),
+            vec!["everywhere"]
+        );
+        assert!(config.plugins.is_used_in("scoped", Path::new("/ws/a")));
+        assert!(!config.plugins.is_used_in("scoped", Path::new("/ws/other")));
+
+        // Entries survive a round trip through the config file.
+        let reparsed = parse_config(&toml::to_string_pretty(&config).unwrap());
+        assert_eq!(reparsed.plugins, config.plugins);
+    }
+
+    #[test]
+    fn auto_enable_wildcard_matches_every_name() {
+        let config = parse_config(indoc! {r#"
+            [plugins]
+            auto-enable = ["*"]
+        "#});
+        assert!(config.plugins.is_auto_enabled("anything"));
     }
 
     #[test]

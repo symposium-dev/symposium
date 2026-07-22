@@ -99,21 +99,78 @@ impl CargoPm {
     }
 }
 
+/// What plugin content a crate source tree at `dir` embeds, as a short
+/// human-readable phrase — or `None` when it embeds none. Mirrors what
+/// [`CargoPm::load_plugin`] would build a plugin from: a `SYMPOSIUM.toml`,
+/// `[package.metadata.symposium]`, or the default `skills/` directory.
+fn embedded_plugin_kind(dir: &std::path::Path) -> Option<&'static str> {
+    if dir.join("SYMPOSIUM.toml").is_file() {
+        return Some("plugin manifest (SYMPOSIUM.toml)");
+    }
+    if matches!(
+        crate::crate_metadata::symposium_metadata(&dir.join("Cargo.toml")),
+        Ok(Some(_))
+    ) {
+        return Some("embedded plugin ([package.metadata.symposium])");
+    }
+    contains_skill_md(&dir.join(crate::plugins::CRATE_DEFAULT_SKILLS_PATH))
+        .then_some("embedded skills (skills/)")
+}
+
+/// Is there a `SKILL.md` anywhere under `dir`?
+fn contains_skill_md(dir: &std::path::Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        if path.is_dir() {
+            contains_skill_md(&path)
+        } else {
+            path.file_name().is_some_and(|f| f == "SKILL.md")
+        }
+    })
+}
+
 #[async_trait::async_trait]
 impl PackageManager for CargoPm {
     fn name(&self) -> &str {
         CARGO_PM
     }
 
-    /// Cargo surfaces dependency-matched plugins through `[[plugins]]` chained
-    /// references today, not through this list; dependency discovery will fill
-    /// it in.
+    /// Offer every workspace dependency whose source tree on disk embeds
+    /// plugin content. Each offer `recommends` the dependency itself — a
+    /// dependency-embedded plugin is a plugin *for* the crate carrying it —
+    /// which is what [`discovery`](crate::discovery) matches against the
+    /// workspace.
+    ///
+    /// Read-only by construction: only dependencies whose sources are already
+    /// on disk (path dependencies) can be inspected without a fetch, so a
+    /// registry dependency is never offered here. Enabling one still works —
+    /// [`discovery::enabled_dependencies`](crate::discovery::enabled_dependencies)
+    /// consults the config, not this list — it just isn't *discoverable*
+    /// until its source has been fetched.
+    ///
+    /// Offers are consent-gated by the caller: the PM offers, the
+    /// `[plugins]` config enables.
     async fn list_plugins(
         &self,
         _deps: &[PackageId],
-        _cx: &PmContext<'_>,
+        cx: &PmContext<'_>,
     ) -> Result<Vec<PluginInfo>> {
-        Ok(Vec::new())
+        Ok(cx
+            .workspace_crates
+            .iter()
+            .filter_map(|wc| {
+                let kind = embedded_plugin_kind(wc.path.as_deref()?)?;
+                Some(PluginInfo {
+                    id: PackageId::new(CARGO_PM, &wc.name, wc.version.to_string()),
+                    description: Some(kind.to_string()),
+                    subpath: None,
+                    recommends: Some(wc.name.clone()),
+                })
+            })
+            .collect())
     }
 
     /// Searching crates.io lands with the `search` command.
@@ -151,5 +208,65 @@ impl PackageManager for CargoPm {
     /// registry cache, download), so it can't be answered from the id alone.
     fn cached_root(&self, _id: &PackageId, _cx: &PmContext<'_>) -> Option<PathBuf> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use symposium_install::InstallContext;
+    use symposium_sdk::workspace::WorkspaceCrate;
+
+    fn dep(name: &str, path: Option<PathBuf>) -> WorkspaceCrate {
+        WorkspaceCrate::new(name.to_string(), semver::Version::new(1, 0, 0), path)
+    }
+
+    #[tokio::test]
+    async fn offers_dependencies_whose_sources_embed_plugin_content() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let with_skills = tmp.path().join("with-skills");
+        std::fs::create_dir_all(with_skills.join("skills/guidance")).unwrap();
+        std::fs::write(with_skills.join("skills/guidance/SKILL.md"), "").unwrap();
+
+        let with_manifest = tmp.path().join("with-manifest");
+        std::fs::create_dir_all(&with_manifest).unwrap();
+        std::fs::write(with_manifest.join("SYMPOSIUM.toml"), "").unwrap();
+
+        let plain = tmp.path().join("plain");
+        std::fs::create_dir_all(plain.join("src")).unwrap();
+
+        let crates = vec![
+            dep("with-skills", Some(with_skills)),
+            dep("with-manifest", Some(with_manifest)),
+            dep("plain", Some(plain)),
+            // A registry dependency: no source on disk to inspect.
+            dep("serde", None),
+        ];
+        let cx = PmContext {
+            install: InstallContext::new(tmp.path().to_path_buf()),
+            workspace_crates: &crates,
+        };
+
+        let offers = CargoPm.list_plugins(&[], &cx).await.unwrap();
+        let got: Vec<(&str, Option<&str>)> = offers
+            .iter()
+            .map(|o| (o.id.name.as_str(), o.recommends.as_deref()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("with-skills", Some("with-skills")),
+                ("with-manifest", Some("with-manifest")),
+            ]
+        );
+        assert!(offers.iter().all(|o| o.id.pm == CARGO_PM));
+        assert!(
+            offers[0]
+                .description
+                .as_deref()
+                .unwrap()
+                .contains("skills/")
+        );
     }
 }

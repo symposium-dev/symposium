@@ -101,17 +101,26 @@ pub struct SkillWithGroupContext {
 /// `for_crates` is the set of crate name/version pairs to match against.
 /// For `crate --list`, this is the full workspace deps.
 /// For `crate <name>`, this is a single-element slice with the resolved crate.
+///
+/// `workspace_root` scopes the `[plugins] use` entries that apply, which
+/// decide both which dormant plugins wake up and which dependency-embedded
+/// plugins load. `None` (no workspace) means no entry applies.
 pub async fn skills_applicable_to(
     sym: &Symposium,
     registry: &PluginRegistry,
     workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
+    workspace_root: Option<&Path>,
     custom_predicate_entries: std::collections::HashMap<String, predicate::ResolvedPredicateEntry>,
     update: UpdateLevel,
 ) -> Vec<SkillWithGroupContext> {
     let mut results = Vec::new();
 
     let for_crates = crate::pm::workspace_dep_ids(sym, workspace_crates).await;
-    let mut ctx = PredicateContext::with_custom_predicates(&for_crates, custom_predicate_entries);
+    let used_names = workspace_root
+        .map(|root| sym.config.plugins.used_names_in(root))
+        .unwrap_or_default();
+    let mut ctx = PredicateContext::with_custom_predicates(&for_crates, custom_predicate_entries)
+        .with_used_names(&used_names);
 
     // Skills from plugin manifests. We iterate these separately
     // because we lazily load skill groups, so there
@@ -171,6 +180,28 @@ pub async fn skills_applicable_to(
             &mut results,
         )
         .await;
+    }
+
+    // Dependency-embedded plugins: a dependency the user enabled loads as a
+    // plugin in its own right, with no manifest anywhere pointing at it. The
+    // consent check lives here rather than in the cargo PM — the PM offers,
+    // the config enables.
+    if let Some(root) = workspace_root {
+        let enabled = crate::discovery::enabled_dependencies(sym, &for_crates, root);
+        let mut visited = std::collections::HashSet::new();
+        for name in enabled {
+            expand_crate_plugin(
+                sym,
+                name,
+                workspace_crates,
+                &mut ctx,
+                update,
+                &mut visited,
+                0,
+                &mut results,
+            )
+            .await;
+        }
     }
 
     // Standalone skills already carry their own origin hash (computed
@@ -390,62 +421,94 @@ async fn expand_chained_plugins(
 
     for chained in &owner.plugin.chained {
         // Edge predicates evaluate against the owning plugin's provenance; the
-        // crate plugin's own `applies` (below) restamps its own — never a
-        // workspace member — so reset before each edge's gate.
+        // crate plugin's own `applies` restamps its own — never a workspace
+        // member — so reset before each edge's gate.
         ctx.set_workspace_member(owner.workspace_member);
         if !chained.predicates.evaluate(ctx) {
             continue;
         }
 
-        let pm_cx = crate::pm::PmContext::new(sym, workspace_crates);
-        let Some(crate_plugin) = crate::pm::CargoPm.load_plugin(&chained.name, &pm_cx).await else {
-            continue;
-        };
-
-        // Cycle / diamond detection on the resolved crate identity, normalized
-        // so hyphen/underscore spellings of one crate collapse.
-        let key = crate::crate_sources::normalize_crate_name(&crate_plugin.canonical.name);
-        if !visited.insert(key) {
-            tracing::debug!(
-                crate_name = %chained.name,
-                "chained plugin already loaded on this chain; skipping (cycle or diamond)"
-            );
-            continue;
-        }
-
-        // Honor the crate plugin's own plugin-level predicates (which stamp its
-        // provenance: never a workspace member) before doing anything with it —
-        // an inactive crate plugin shouldn't warn about undispatched features.
-        if !crate_plugin.applies(ctx) {
-            continue;
-        }
-        warn_undispatched_crate_features(&crate_plugin);
-
-        for group in &crate_plugin.plugin.skills {
-            let skills = load_skills_for_group(sym, &crate_plugin, group, ctx, update).await;
-            for (skill, origin_hash) in skills {
-                collect_skill_applicable_to(
-                    skill,
-                    origin_hash,
-                    &crate_plugin.plugin.name,
-                    ctx,
-                    results,
-                );
-            }
-        }
-
-        Box::pin(expand_chained_plugins(
+        expand_crate_plugin(
             sym,
-            &crate_plugin,
+            &chained.name,
             workspace_crates,
             ctx,
             update,
             visited,
-            depth + 1,
+            depth,
             results,
-        ))
+        )
         .await;
     }
+}
+
+/// Load one crate as a plugin and contribute its skills, then expand its own
+/// `[[plugins]]` edges.
+///
+/// The shared tail of the two ways a crate becomes a plugin: a `[[plugins]]`
+/// chained reference naming it, or the user enabling the dependency it lives
+/// in. Skipped when the crate can't be loaded, when `visited` has already
+/// seen it (a cycle or a diamond), or when its own plugin-level predicates
+/// don't hold.
+#[allow(clippy::too_many_arguments)]
+async fn expand_crate_plugin(
+    sym: &Symposium,
+    crate_name: &str,
+    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
+    ctx: &mut PredicateContext<'_>,
+    update: UpdateLevel,
+    visited: &mut std::collections::HashSet<String>,
+    depth: usize,
+    results: &mut Vec<SkillWithGroupContext>,
+) {
+    let pm_cx = crate::pm::PmContext::new(sym, workspace_crates);
+    let Some(crate_plugin) = crate::pm::CargoPm.load_plugin(crate_name, &pm_cx).await else {
+        return;
+    };
+
+    // Cycle / diamond detection on the resolved crate identity, normalized
+    // so hyphen/underscore spellings of one crate collapse.
+    let key = crate::crate_sources::normalize_crate_name(&crate_plugin.canonical.name);
+    if !visited.insert(key) {
+        tracing::debug!(
+            crate_name = %crate_name,
+            "crate plugin already loaded on this chain; skipping (cycle or diamond)"
+        );
+        return;
+    }
+
+    // Honor the crate plugin's own plugin-level predicates (which stamp its
+    // provenance: never a workspace member) before doing anything with it —
+    // an inactive crate plugin shouldn't warn about undispatched features.
+    if !crate_plugin.applies(ctx) {
+        return;
+    }
+    warn_undispatched_crate_features(&crate_plugin);
+
+    for group in &crate_plugin.plugin.skills {
+        let skills = load_skills_for_group(sym, &crate_plugin, group, ctx, update).await;
+        for (skill, origin_hash) in skills {
+            collect_skill_applicable_to(
+                skill,
+                origin_hash,
+                &crate_plugin.plugin.name,
+                ctx,
+                results,
+            );
+        }
+    }
+
+    Box::pin(expand_chained_plugins(
+        sym,
+        &crate_plugin,
+        workspace_crates,
+        ctx,
+        update,
+        visited,
+        depth + 1,
+        results,
+    ))
+    .await;
 }
 
 /// Discover skills in each resolved base dir and stamp origins. The single
@@ -1250,6 +1313,7 @@ mod tests {
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
             chained: vec![],
+            requires_use: false,
         };
 
         let registry = PluginRegistry {
@@ -1275,6 +1339,7 @@ mod tests {
             &sym,
             &registry,
             &workspace_crates,
+            None,
             std::collections::HashMap::new(),
             UpdateLevel::None,
         )
@@ -1309,6 +1374,7 @@ mod tests {
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
             chained: vec![],
+            requires_use: false,
         };
 
         let registry = PluginRegistry {
@@ -1334,6 +1400,7 @@ mod tests {
             &sym,
             &registry,
             &workspace_crates,
+            None,
             std::collections::HashMap::new(),
             UpdateLevel::None,
         )
@@ -1386,6 +1453,7 @@ mod tests {
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
             chained: vec![],
+            requires_use: false,
         };
 
         let registry = PluginRegistry {
@@ -1410,6 +1478,7 @@ mod tests {
             &sym,
             &registry,
             &workspace_crates,
+            None,
             std::collections::HashMap::new(),
             UpdateLevel::None,
         )
@@ -1468,6 +1537,7 @@ mod tests {
             subcommands: Default::default(),
             custom_predicates: vec![],
             chained: vec![],
+            requires_use: false,
         };
 
         let registry = PluginRegistry {
@@ -1492,6 +1562,7 @@ mod tests {
             &sym,
             &registry,
             &workspace,
+            None,
             std::collections::HashMap::new(),
             UpdateLevel::None,
         )
@@ -1551,6 +1622,7 @@ mod tests {
             subcommands: Default::default(),
             custom_predicates: vec![],
             chained: vec![],
+            requires_use: false,
         };
 
         let registry = PluginRegistry {
@@ -1575,6 +1647,7 @@ mod tests {
             &sym,
             &registry,
             &workspace,
+            None,
             std::collections::HashMap::new(),
             UpdateLevel::None,
         )
@@ -1705,6 +1778,7 @@ mod tests {
             &sym,
             &registry,
             &workspace,
+            None,
             std::collections::HashMap::new(),
             UpdateLevel::None,
         )

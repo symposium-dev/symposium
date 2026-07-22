@@ -1,0 +1,6 @@
+name = "gateless-plugin"
+
+# No `depends-on` anywhere: nothing to infer a gate from, so this plugin
+# loads dormant and activates only when a `[plugins] use` entry names it.
+[[skills]]
+source.path = "skills"

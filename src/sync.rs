@@ -303,8 +303,15 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
     let custom_entries = resolve_custom_predicate_entries(sym, &registry, update).await;
 
     // Find all applicable skills
-    let applicable =
-        skills::skills_applicable_to(sym, &registry, &workspace, custom_entries, update).await;
+    let applicable = skills::skills_applicable_to(
+        sym,
+        &registry,
+        &workspace,
+        Some(&project_root),
+        custom_entries,
+        update,
+    )
+    .await;
 
     // Dedup by `(skill_name, origin_hash)`: two crate origins with the same
     // (name, version, skill-path-within-crate) collapse (the same skill bytes
@@ -328,7 +335,8 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
 
     // Collect MCP servers from applicable plugins, filtered by workspace deps
     let dep_ids = crate::pm::workspace_dep_ids(sym, &workspace).await;
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids);
+    let used_names = sym.config.plugins.used_names_in(&project_root);
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used_names(&used_names);
     let mut mcp_servers: Vec<sacp::schema::McpServer> = Vec::new();
     for p in &registry.plugins {
         if p.applies(&mut ctx) {

@@ -41,7 +41,7 @@ source.path = "skills"
 | `predicate` | array of tables | no | Custom predicate definitions (`[[predicate]]`). See [Custom predicates](#predicate). |
 | `mcp_servers` | array of tables | no | MCP server registrations (`[[mcp_servers]]`). |
 
-**Note**: Every plugin must reference at least one crate somewhere — at the plugin level, in `[[skills]]` groups, or in `[[mcp_servers]]` entries — via a `depends-on` list or a `depends-on(...)` [predicate](./predicates.md). Plugins without any crate targeting will fail validation.
+**Note**: A plugin that references no dependency anywhere — at the plugin level, in `[[skills]]` groups, `[[mcp_servers]]` entries, or `[[plugins]]` entries — via a `depends-on` list or a `depends-on(...)` [predicate](./predicates.md) is **dormant**: it loads, but it never activates until the user enables it by name in the [`[plugins] use`](./configuration.md#plugins) config. Use `depends-on = ["*"]` for a plugin that should always be active. (Plugins whose position supplies a gate are unaffected: a recommendations `cargo/<name>/` entry implies `depends-on(<name>)`, and workspace membership gates a workspace plugin.)
 
 ## Plugin-level filtering
 

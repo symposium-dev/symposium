@@ -558,6 +558,84 @@ async fn sync_installs_skill_from_crate_path() {
     .unwrap();
 }
 
+/// A dependency's embedded skills stay out until the user consents, and load
+/// as soon as `[plugins] auto-enable` names the dependency.
+///
+/// Fixture layout: `auto-enable-host` depends on `crate-a` (path dep), which
+/// ships `skills/a-guidance/SKILL.md`. No plugin manifest anywhere points at
+/// it — dependencies are not a trust root, so consent is the only way in.
+#[tokio::test]
+async fn auto_enable_admits_a_dependencys_embedded_skills() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+            assert!(
+                find_installed_skills(&skills_dir, "a-guidance").is_empty(),
+                "an unconsented dependency plugin must not install anything"
+            );
+
+            ctx.sym.config.plugins.auto_enable.push("crate-a".into());
+            ctx.sym.save_config()?;
+            ctx.symposium(&["sync"]).await?;
+
+            let a_dir = find_installed_skill(&skills_dir, "a-guidance");
+            let content = std::fs::read_to_string(a_dir.join("SKILL.md"))?;
+            assert!(content.contains("Use crate-a like this"));
+            assert!(a_dir.join(".symposium").exists());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// A registry plugin that names no dependency is installed but dormant: it
+/// contributes nothing until a `[plugins] use` entry enables it by name.
+#[tokio::test]
+async fn dormant_plugin_activates_only_once_used() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["dormant-plugin0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            let skills_dir = workspace_root.join(".claude/skills");
+            assert!(
+                find_installed_skills(&skills_dir, "gateless-guidance").is_empty(),
+                "a dormant plugin must not install anything"
+            );
+
+            // It is nonetheless loaded and known — dormant, not invalid.
+            let found = symposium::plugins::find_plugin(&ctx.sym, "gateless-plugin").await;
+            assert!(found.is_some_and(|p| p.plugin.requires_use));
+
+            ctx.sym
+                .config
+                .plugins
+                .used
+                .push(symposium::config::UseEntry::Global(
+                    "gateless-plugin".into(),
+                ));
+            ctx.sym.save_config()?;
+            ctx.symposium(&["sync"]).await?;
+
+            let dir = find_installed_skill(&skills_dir, "gateless-guidance");
+            assert!(dir.join(".symposium").exists());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// `sync` loads a crate's skills through a `[[plugins]]` chained reference.
 ///
 /// Fixture layout:

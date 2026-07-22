@@ -475,6 +475,18 @@ pub struct Plugin {
     /// too. Expanded during skill resolution by `skills::expand_chained_plugins`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chained: Vec<ChainedPlugin>,
+    /// A registry plugin whose manifest references no dependency anywhere
+    /// has nothing to infer a gate from, so it is *dormant*: installed and
+    /// known, but never active until the user enables it by name (a
+    /// `[plugins] use` entry). `depends-on = ["*"]` is the explicit
+    /// always-active spelling.
+    ///
+    /// Never set for the positional origins, whose gate is implied by where
+    /// they were found: a recommendations entry implies `depends-on(<entry>)`,
+    /// a crate plugin is reached through a reference to its own crate, and a
+    /// workspace plugin is gated by workspace membership.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub requires_use: bool,
 }
 
 /// A validated `[[plugins]]` chained reference: whenever the owning plugin is
@@ -495,8 +507,13 @@ pub struct ChainedPlugin {
 }
 
 impl Plugin {
-    /// Check if this plugin's activation predicates hold in `ctx`.
+    /// Check if this plugin's activation predicates hold in `ctx`. A dormant
+    /// plugin ([`requires_use`](Self::requires_use)) applies only when an
+    /// applicable `[plugins] use` entry names it.
     pub fn applies(&self, ctx: &mut crate::predicate::PredicateContext) -> bool {
+        if self.requires_use && !ctx.is_used(&self.name) {
+            return false;
+        }
         self.predicates.evaluate(ctx)
     }
 
@@ -974,9 +991,10 @@ impl Default for RawDefaults {
 }
 
 /// Where a plugin manifest came from, for validation rules that differ by
-/// origin: a registry manifest must carry its own `name` and must reference
-/// at least one dependency; a workspace-member manifest is already gated by
-/// workspace membership, and a crate-embedded manifest is already gated by
+/// origin: a registry manifest must carry its own `name`, and one that
+/// references no dependency is stamped dormant
+/// ([`Plugin::requires_use`]); a workspace-member manifest is already gated
+/// by workspace membership, and a crate-embedded manifest is already gated by
 /// the chained reference that reached it, so both are relaxed (the name
 /// defaults to a fallback) and default content applies.
 enum ManifestOrigin<'a> {
@@ -1705,11 +1723,20 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
             }
         }
 
+        let warning = plugin.as_ref().and_then(|parsed| {
+            parsed.plugin.requires_use.then(|| {
+                format!(
+                    "plugin `{name}` references no dependency; it stays dormant until enabled \
+                     with `cargo agents use {name}`",
+                    name = parsed.plugin.name,
+                )
+            })
+        });
         results.push(ValidationResult {
             path: path.clone(),
             kind: ValidationKind::Plugin,
             result,
-            warning: None,
+            warning,
             children,
         });
     }
@@ -2031,35 +2058,32 @@ fn validate_manifest(
         .map(RawPluginMcpServer::validate)
         .collect::<Result<Vec<_>>>()?;
 
-    // Every registry plugin must reference at least one dependency (or
-    // custom predicate) somewhere — at the plugin, skill-group, hook, or
-    // MCP-server level — via `depends-on`, a `depends-on(...)` predicate, or
-    // a custom predicate. Otherwise it would never apply to any project.
-    // Workspace plugins are exempt: being in the workspace is their gate, as
-    // is the implied `depends-on` of a recommendations entry.
-    if matches!(origin, ManifestOrigin::Registry) {
-        let has_custom_predicate = predicates
-            .predicates
-            .iter()
-            .any(|p| matches!(p, crate::predicate::Predicate::Custom { .. }));
-        let mentions_dep = has_custom_predicate
-            || predicates.mentions_dep()
-            || skills.iter().any(|g| g.predicates.mentions_dep())
-            || hooks.iter().any(|h| h.predicates.mentions_dep())
-            || mcp_servers.iter().any(|m| m.predicates.mentions_dep());
-        if !mentions_dep {
-            bail!(
-                "plugin `{name}` references no dependency — add `depends-on = [...]` or a \
-                 `depends-on(...)` predicate at the plugin, `[[skills]]`, or `[[mcp_servers]]` level"
-            );
-        }
-    }
-
     let chained = manifest
         .plugins
         .into_iter()
         .map(RawChainedPlugin::validate)
         .collect::<Result<Vec<_>>>()?;
+
+    // A registry plugin that references no dependency anywhere — at the
+    // plugin, skill-group, hook, MCP-server, or chain-edge level, via
+    // `depends-on`, a `depends-on(...)` predicate, or a custom predicate —
+    // has no gate to infer, so it loads dormant: known, but inactive until
+    // a `[plugins] use` entry names it. The positional origins are exempt
+    // because their gate comes from where they were found (workspace
+    // membership, the implied `depends-on` of a recommendations entry, the
+    // reference that reached a crate).
+    let requires_use = matches!(origin, ManifestOrigin::Registry) && {
+        let has_custom_predicate = predicates
+            .predicates
+            .iter()
+            .any(|p| matches!(p, crate::predicate::Predicate::Custom { .. }));
+        !(has_custom_predicate
+            || predicates.mentions_dep()
+            || skills.iter().any(|g| g.predicates.mentions_dep())
+            || hooks.iter().any(|h| h.predicates.mentions_dep())
+            || mcp_servers.iter().any(|m| m.predicates.mentions_dep())
+            || chained.iter().any(|c| c.predicates.mentions_dep()))
+    };
 
     Ok(Plugin {
         name,
@@ -2071,6 +2095,7 @@ fn validate_manifest(
         subcommands,
         custom_predicates,
         chained,
+        requires_use,
     })
 }
 
@@ -3128,6 +3153,7 @@ mod tests {
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
             chained: vec![],
+            requires_use: false,
         };
         assert!(plugin_wildcard.applies(&mut ctx(&workspace_crates)));
 
@@ -3142,6 +3168,7 @@ mod tests {
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
             chained: vec![],
+            requires_use: false,
         };
         assert!(plugin_serde.applies(&mut ctx(&workspace_crates)));
 
@@ -3156,6 +3183,7 @@ mod tests {
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
             chained: vec![],
+            requires_use: false,
         };
         assert!(!plugin_other.applies(&mut ctx(&workspace_crates)));
 
@@ -3170,6 +3198,7 @@ mod tests {
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
             chained: vec![],
+            requires_use: false,
         };
         assert!(!plugin_version.applies(&mut ctx(&workspace_crates)));
     }
@@ -3259,8 +3288,9 @@ mod tests {
 
     #[test]
     fn workspace_manifest_may_omit_dependency_gate() {
-        // A registry manifest without any depends-on is rejected; the same
-        // manifest is fine as a workspace plugin (membership is the gate).
+        // A registry manifest without any depends-on loads dormant; the same
+        // manifest is fully active as a workspace plugin (membership is the
+        // gate).
         let manifest: RawPluginManifest = toml::from_str(indoc! {r#"
                 name = "gateless"
 
@@ -3268,8 +3298,8 @@ mod tests {
                 source.path = "extra-skills"
             "#})
         .unwrap();
-        let err = validate_manifest(manifest, ManifestOrigin::Registry).unwrap_err();
-        assert!(err.to_string().contains("references no dependency"));
+        let dormant = validate_manifest(manifest, ManifestOrigin::Registry).unwrap();
+        assert!(dormant.requires_use);
 
         let manifest: RawPluginManifest = toml::from_str(indoc! {r#"
                 name = "gateless"
@@ -3288,6 +3318,53 @@ mod tests {
         .unwrap();
         // Explicit group plus the two appended default groups.
         assert_eq!(plugin.skills.len(), 3);
+        assert!(!plugin.requires_use);
+    }
+
+    /// A gate anywhere in the manifest — including on a `[[plugins]]` chain
+    /// edge — keeps a registry plugin out of dormancy.
+    #[test]
+    fn dormancy_honors_gates_at_every_level() {
+        let dormant_if = |manifest: &str| {
+            let raw: RawPluginManifest = toml::from_str(manifest).unwrap();
+            validate_manifest(raw, ManifestOrigin::Registry)
+                .unwrap()
+                .requires_use
+        };
+
+        assert!(dormant_if(r#"name = "p""#));
+        assert!(!dormant_if(indoc! {r#"
+            name = "p"
+            depends-on = ["*"]
+        "#}));
+        assert!(!dormant_if(indoc! {r#"
+            name = "p"
+
+            [[skills]]
+            depends-on = ["serde"]
+            source.path = "skills"
+        "#}));
+        assert!(!dormant_if(indoc! {r#"
+            name = "p"
+
+            [[plugins]]
+            depends-on = ["serde"]
+            source.cargo = "serde-skills"
+        "#}));
+    }
+
+    /// A dormant plugin activates only when a `[plugins] use` entry names it.
+    #[test]
+    fn dormant_plugin_applies_only_when_used() {
+        let manifest: RawPluginManifest = toml::from_str(r#"name = "gate-less""#).unwrap();
+        let plugin = validate_manifest(manifest, ManifestOrigin::Registry).unwrap();
+        assert!(plugin.requires_use);
+
+        let deps: Vec<PackageId> = Vec::new();
+        assert!(!plugin.applies(&mut ctx(&deps)));
+        assert!(!plugin.applies(&mut ctx(&deps).with_used_names(&["something-else"])));
+        // Hyphen/underscore spellings name the same plugin.
+        assert!(plugin.applies(&mut ctx(&deps).with_used_names(&["gate_less"])));
     }
 
     #[test]
@@ -3318,6 +3395,7 @@ mod tests {
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
             chained: vec![],
+            requires_use: false,
         };
         let mut parsed = ParsedPlugin {
             path: PathBuf::from("/test/SYMPOSIUM.toml"),
@@ -3334,7 +3412,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_source_dir_enforces_crates_requirement() {
+    fn validate_source_dir_warns_that_gateless_plugins_are_dormant() {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
             File(
@@ -3365,13 +3443,16 @@ mod tests {
         let results = validate_source_dir(tmp.path()).unwrap();
         assert_eq!(results.len(), 2);
 
-        let ok_count = results.iter().filter(|r| r.result.is_ok()).count();
-        let err_count = results.iter().filter(|r| r.result.is_err()).count();
-        assert_eq!(ok_count, 1, "Plugin with crates should pass");
-        assert_eq!(
-            err_count, 1,
-            "Plugin without crates should fail TOML parsing"
-        );
+        // Both manifests are valid; the gateless one is merely dormant, which
+        // is reported as a warning rather than a failure.
+        assert!(results.iter().all(|r| r.result.is_ok()));
+        let warnings: Vec<&str> = results
+            .iter()
+            .filter_map(|r| r.warning.as_deref())
+            .collect();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("no-crates-plugin"), "{warnings:?}");
+        assert!(warnings[0].contains("dormant"), "{warnings:?}");
     }
 
     #[test]
@@ -4768,6 +4849,7 @@ mod tests {
                     args: vec![],
                 }],
                 chained: vec![],
+                requires_use: false,
             },
             source_dir: std::path::PathBuf::from("/test"),
             workspace_member: false,
