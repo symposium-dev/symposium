@@ -16,7 +16,6 @@ use crate::agents::Agent;
 use crate::config::Symposium;
 use crate::output::{Output, display_path};
 use crate::plugins;
-use crate::pm::PackageManager as _;
 use crate::skills;
 use symposium_sdk::workspace::WorkspaceDeps;
 
@@ -328,7 +327,7 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
     }
 
     // Collect MCP servers from applicable plugins, filtered by workspace deps
-    let dep_ids = crate::pm::CargoPm.list_deps(&workspace);
+    let dep_ids = crate::pm::workspace_dep_ids(sym, &workspace).await;
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids);
     let mut mcp_servers: Vec<sacp::schema::McpServer> = Vec::new();
     for p in &registry.plugins {

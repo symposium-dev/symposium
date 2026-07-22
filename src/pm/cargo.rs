@@ -2,13 +2,17 @@
 //! graph, resolved by [`RustCrateFetch`] (path-dependency override, then the
 //! cargo registry cache, then crates.io).
 
+use std::path::PathBuf;
+
 use anyhow::Result;
-use symposium_sdk::workspace::WorkspaceCrate;
+use symposium_install::UpdateLevel;
 
 use crate::crate_sources::RustCrateFetch;
 use crate::plugins::ParsedPlugin;
 
-use super::{ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager};
+use super::{
+    ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, PmContext,
+};
 
 pub struct CargoPm;
 
@@ -32,13 +36,9 @@ impl CargoPm {
     /// Returns `None` only when the crate can't be fetched or the merged
     /// manifest fails validation (both logged); the caller then contributes no
     /// skills for this reference.
-    pub async fn load_plugin(
-        &self,
-        name: &str,
-        workspace: &[WorkspaceCrate],
-    ) -> Option<ParsedPlugin> {
+    pub async fn load_plugin(&self, name: &str, cx: &PmContext<'_>) -> Option<ParsedPlugin> {
         let id = Self::id_for(name, None);
-        let fetched = match self.fetch(&id, workspace).await {
+        let fetched = match self.fetch(&id, cx, UpdateLevel::None).await {
             Ok(f) => f,
             Err(e) => {
                 tracing::warn!(crate_name = %name, error = %e, "failed to fetch crate for plugin");
@@ -99,10 +99,36 @@ impl CargoPm {
     }
 }
 
+#[async_trait::async_trait]
 impl PackageManager for CargoPm {
-    async fn fetch(&self, id: &PackageId, workspace: &[WorkspaceCrate]) -> Result<FetchedPackage> {
+    fn name(&self) -> &'static str {
+        CARGO_PM
+    }
+
+    /// Cargo surfaces dependency-matched plugins through `[[plugins]]` chained
+    /// references today, not through this list; dependency discovery will fill
+    /// it in.
+    async fn list_plugins(
+        &self,
+        _deps: &[PackageId],
+        _cx: &PmContext<'_>,
+    ) -> Result<Vec<PluginInfo>> {
+        Ok(Vec::new())
+    }
+
+    /// Searching crates.io lands with the `search` command.
+    async fn search(&self, _query: &str, _cx: &PmContext<'_>) -> Result<Vec<PluginInfo>> {
+        Ok(Vec::new())
+    }
+
+    async fn fetch(
+        &self,
+        id: &PackageId,
+        cx: &PmContext<'_>,
+        _update: UpdateLevel,
+    ) -> Result<FetchedPackage> {
         debug_assert_eq!(id.pm, CARGO_PM);
-        let mut fetch = RustCrateFetch::new(&id.name, workspace);
+        let mut fetch = RustCrateFetch::new(&id.name, cx.workspace_crates);
         if id.version != ANY_VERSION {
             fetch = fetch.version(&id.version);
         }
@@ -113,10 +139,17 @@ impl PackageManager for CargoPm {
         })
     }
 
-    fn list_deps(&self, workspace: &[WorkspaceCrate]) -> Vec<PackageId> {
-        workspace
+    async fn list_deps(&self, cx: &PmContext<'_>) -> Result<Vec<PackageId>> {
+        Ok(cx
+            .workspace_crates
             .iter()
             .map(|c| PackageId::new(CARGO_PM, c.name.clone(), c.version.to_string()))
-            .collect()
+            .collect())
+    }
+
+    /// A crate's cache location depends on how it resolved (path override,
+    /// registry cache, download), so it can't be answered from the id alone.
+    fn cached_root(&self, _id: &PackageId, _cx: &PmContext<'_>) -> Option<PathBuf> {
+        None
     }
 }

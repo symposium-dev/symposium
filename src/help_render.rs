@@ -10,13 +10,12 @@ use std::{fmt::Write as _, path::Path};
 
 use clap::{Command, CommandFactory};
 
-use symposium_sdk::workspace::WorkspaceCrate;
 
 use crate::{
     cli::{Cli, Commands, builtin_audience},
     config::Symposium,
     plugins::{Audience, PluginRegistry, load_registry_with_workspace},
-    pm::{PackageId, PackageManager as _},
+    pm::PackageId,
     subcommand_dispatch::applicable_subcommands,
 };
 
@@ -33,7 +32,7 @@ pub const AGENTS_HEADING: &str = "Commands for agents";
 /// - no subcommand, or the bare `help` keyword -> top-level
 /// - `<built-in> --help` (incl. nested and required-arg commands) -> clap's own per command help, re-rendered;
 /// - a plugin-vended `<name> --help` -> `None`, so dispatch forwards `--help` to the child.
-pub fn help_text(
+pub async fn help_text(
     parse: Result<&Cli, &clap::Error>,
     args: &[String],
     sym: &Symposium,
@@ -44,12 +43,15 @@ pub fn help_text(
             let help_keyword = matches!(&cli.command, Some(Commands::External(argv)) if argv.first().and_then(|fst| fst.to_str()) == Some("help"));
 
             if cli.command.is_none() || help_keyword {
-                return Some(render_help(sym, cwd));
+                return Some(render_help(sym, cwd).await);
             }
 
             if cli.help {
                 // `<built-in> --help`; fall back to top-level if the target is a plugin (External) or `--help` come before any subcommand name.
-                return Some(subcommand_help(args).unwrap_or_else(|| render_help(sym, cwd)));
+                return match subcommand_help(args) {
+                    Some(text) => Some(text),
+                    None => Some(render_help(sym, cwd).await),
+                };
             }
 
             None
@@ -88,14 +90,15 @@ pub fn subcommand_help(args: &[String]) -> Option<String> {
     })
 }
 
-pub fn render_help(sym: &Symposium, cwd: &Path) -> String {
+pub async fn render_help(sym: &Symposium, cwd: &Path) -> String {
     let mut deps = sym.workspace_deps(cwd);
     let workspace = deps.load().cloned();
     let registry = load_registry_with_workspace(sym, workspace.as_deref());
-    render(&registry, deps.crates())
+    let dep_ids = crate::pm::workspace_dep_ids(sym, deps.crates()).await;
+    render(&registry, &dep_ids)
 }
 
-fn render(registry: &PluginRegistry, workspace: &[WorkspaceCrate]) -> String {
+fn render(registry: &PluginRegistry, deps: &[PackageId]) -> String {
     let mut cmd = Cli::command();
     let full = cmd.render_help().to_string();
 
@@ -108,10 +111,8 @@ fn render(registry: &PluginRegistry, workspace: &[WorkspaceCrate]) -> String {
     let header = &full[..commands_idx];
     let options = &full[options_idx..];
 
-    let deps = crate::pm::CargoPm.list_deps(workspace);
-
-    let humans = collect_section(&cmd, registry, &deps, Audience::Humans);
-    let agents = collect_section(&cmd, registry, &deps, Audience::Agents);
+    let humans = collect_section(&cmd, registry, deps, Audience::Humans);
+    let agents = collect_section(&cmd, registry, deps, Audience::Agents);
 
     let col_width = humans
         .iter()
@@ -189,8 +190,8 @@ mod tests {
 
     use super::*;
 
-    fn workspace_crate(name: &str, version: &str) -> WorkspaceCrate {
-        WorkspaceCrate::new(name.into(), semver::Version::parse(version).unwrap(), None)
+    fn workspace_crate(name: &str, version: &str) -> PackageId {
+        PackageId::new(crate::pm::CARGO_PM, name, version)
     }
 
     fn crate_set(spec: &str) -> PredicateSet {
@@ -259,7 +260,7 @@ mod tests {
     #[test]
     fn renders_with_no_plugin_subs() {
         let reg = registry(vec![]);
-        let ws: Vec<WorkspaceCrate> = vec![];
+        let ws: Vec<PackageId> = vec![];
         expect![[r#"
             AI the Rust Way
 

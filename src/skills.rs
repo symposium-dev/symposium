@@ -11,7 +11,6 @@ use symposium_install::UpdateLevel;
 
 use crate::config::Symposium;
 use crate::plugins::{ParsedPlugin, PluginRegistry, PluginSource, SkillGroup};
-use crate::pm::PackageManager as _;
 use crate::predicate::{self, PredicateContext, PredicateSet};
 
 fn source_display(source: &PluginSource) -> String {
@@ -111,7 +110,7 @@ pub async fn skills_applicable_to(
 ) -> Vec<SkillWithGroupContext> {
     let mut results = Vec::new();
 
-    let for_crates = crate::pm::CargoPm.list_deps(workspace_crates);
+    let for_crates = crate::pm::workspace_dep_ids(sym, workspace_crates).await;
     let mut ctx = PredicateContext::with_custom_predicates(&for_crates, custom_predicate_entries);
 
     // Skills from plugin manifests. We iterate these separately
@@ -398,8 +397,9 @@ async fn expand_chained_plugins(
             continue;
         }
 
+        let pm_cx = crate::pm::PmContext::new(sym, workspace_crates);
         let Some(crate_plugin) = crate::pm::CargoPm
-            .load_plugin(&chained.name, workspace_crates)
+            .load_plugin(&chained.name, &pm_cx)
             .await
         else {
             continue;

@@ -26,6 +26,7 @@ pkg-fmt = "zip"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
+async-trait = "0.1"
 cargo_metadata = "0.18"
 chrono = "0.4"
 crates_io_api = { version = "0.12", default-features = false, features = ["rustls"] }

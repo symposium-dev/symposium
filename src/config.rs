@@ -381,6 +381,14 @@ impl Symposium {
         }
     }
 
+    /// The active package-manager set: the fixed ecosystem transports plus one
+    /// instance per configured registry. Registry instances arrive with the
+    /// `path` / `recommendations` package managers; today this is
+    /// transports-only.
+    pub fn package_managers(&self) -> crate::pm::PmRegistry {
+        crate::pm::PmRegistry::new(Vec::new())
+    }
+
     /// Override the cargo binary path (test-only).
     #[doc(hidden)]
     pub fn set_cargo_override(&mut self, path: PathBuf) {

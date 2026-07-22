@@ -8,13 +8,12 @@
 
 use std::{ffi::OsString, path::Path, process::ExitStatus};
 
-use symposium_sdk::workspace::WorkspaceCrate;
 
 use crate::{
     config::Symposium,
     installation::{acquire_installation, resolve_runnable},
     plugins::{self, Plugin, PluginRegistry, Subcommand},
-    pm::{CargoPm, PackageId, PackageManager as _},
+    pm::PackageId,
 };
 use anyhow::{Context, Result, bail};
 use symposium_install::{Runnable, UpdateLevel};
@@ -51,11 +50,9 @@ pub fn applicable_subcommands<'a>(
 pub fn find_subcommand<'a>(
     registry: &'a PluginRegistry,
     name: &str,
-    workspace: &[WorkspaceCrate],
+    deps: &[PackageId],
 ) -> Result<Option<(&'a Plugin, &'a Subcommand)>> {
-    let deps = CargoPm.list_deps(workspace);
-
-    let matches: Vec<_> = applicable_subcommands(registry, &deps)
+    let matches: Vec<_> = applicable_subcommands(registry, deps)
         .into_iter()
         .filter(|(_, n, _)| *n == name)
         .map(|(plugin, _, subcmd)| (plugin, subcmd))
@@ -100,7 +97,8 @@ pub async fn dispatch_external(
     let workspace = deps.load().cloned();
     let registry = plugins::load_registry_with_workspace(sym, workspace.as_deref());
 
-    let (plugin, subcommand) = find_subcommand(&registry, name, deps.crates())?
+    let dep_ids = crate::pm::workspace_dep_ids(sym, deps.crates()).await;
+    let (plugin, subcommand) = find_subcommand(&registry, name, &dep_ids)?
         .with_context(|| format!("no plugin defines subcommand `{name}`"))?;
 
     let installation = plugin
@@ -164,8 +162,8 @@ mod tests {
     use crate::{plugins::Audience, predicate::PredicateSet};
     use std::{collections::BTreeMap, path::PathBuf};
 
-    fn ws_crate(name: &str, version: &str) -> WorkspaceCrate {
-        WorkspaceCrate::new(name.into(), semver::Version::parse(version).unwrap(), None)
+    fn ws_crate(name: &str, version: &str) -> PackageId {
+        PackageId::new(crate::pm::CARGO_PM, name, version)
     }
 
     fn crate_set(spec: &str) -> PredicateSet {
