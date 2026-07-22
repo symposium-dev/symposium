@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/symposium-dev/symposium/compare/symposium-v0.4.0...symposium-v0.5.0) - 2026-07-22
+
+### Added
+
+- *(hook)* suggest `cargo agents --help` at session start
+- *(help)* audience-grouped --help listing plugin-vended subcommands.
+- *(plugins)* add subcommand manifest schema
+- move skill layout to [package.metadata.symposium] in crate Cargo.toml
+
+### Fixed
+
+- add `self-update` to reserved subcommand names and fix typo
+- make crate_metadata module pub(crate)
+- address review nits on source.crate
+
+### Other
+
+- Canonicalize skill path consistently
+- Simplify skill origin to the SKILL.md path hash
+- Load crates as plugins via [[plugins]] chained references
+- Dependency lists are PackageIds: CargoPm::list_deps replaces crate_pairs
+- Introduce PackageId and a fetch-only PackageManager, cargo first
+- Unify .agents/skills into the plugin pipeline
+- Workspace plugins: the workspace's own dirs define plugins
+- Add the workspace-member() predicate
+- Rename crates to depends-on
+- Merge pull request #253 from nikomatsakis/register-centric-plugins-rfd
+- Merge pull request #254 from nikomatsakis/config-normalization
+- Merge pull request #247 from abusch/push-yzlulwltuttq
+- Add link in summary
+- Minor updates to the blog post
+- Add draft of next blog post
+- Add basic telemetry infra. Add Stop hook event.
+- Add RFD process with tooling and CI enforcement
+- Make WorkspaceCrate and LoadedWorkspace non-exhaustive
+- Address PR review feedback
+- Use symposium-sdk types directly instead of re-exporting
+- Require SymposiumDirs when constructing WorkspaceDeps
+- Add SymposiumDirs to symposium-sdk for shared path resolution
+- Add WorkspaceDeps with in-process and disk caching
+- Introduce symposium-sdk crate and refactor main crate to use it
+- Make sync debounce configurable; add change-detection test
+- change debounce to 5sec
+- Update tests and docs for sync_skill_dir changes
+- Unify skill installation into sync_skill_dir
+- Document that custom predicates are globally available across plugins
+- Introduce CustomPredicateRegistry newtype
+- Add integration tests for argument passing and witness-driven crate source
+- Document and test that empty/whitespace args are not passed
+- Fail predicate on any malformed witness entry
+- Fail predicate when stdout is non-empty but not valid witness JSON
+- Add integration tests for argument passing and witness-driven crate source
+- Fix CI: replace /bin/true with script-based test helpers
+- Add tests for field syntax boundary enforcement
+- Reject function-call syntax in the `crates` field
+- Consolidate predicate name validation and fix CrateList comma parsing
+- Integrate custom predicate evaluator into PredicateContext
+- Add custom predicate extensions via [[predicate]]
+- Validate skills with negated crate
+- Add crate predicate and lower crates field to it
+- Change from shell predicates to more general predicates
+- Add shell_predicates field
+- Merge pull request #234 from nikomatsakis/cargo-agents-sync-verbose
+- Add a sentence about global use case
+- Add global install option for cargo and add env vars
+- pacify the merciless fmt
+- add Plugin::get_installation, capture subcommand output, snapshot tests
+- pacify the merciless cargo fmt
+- *(help)* hoist section headings into shared constants
+- Agent help guidance:
+- add the built-in dispatch step to hook-flow.md, an "Agent
+- document the --help renderer and reclassify crate-info
+- dispatch external `cargo agents <name>` via clap catch-all
+- *(plugins)* pass empty source_name to scan_source_dir
+- *(installation)* lift hook resolver into shared module
+- Merge pull request #236 from nikomatsakis/skills-from-specific-crate
+- make init and sync modules pub(crate)
+- redesign source.crate as a nested table
+- apply fmt
+- improve docs
+- Add `source.crate` field to decouple skill fetch target from activation predicates
+- pacify the merciless fmt
+- fix macOS CI test failure (symlink canonicalization)
+- Also watch battery-pack.toml for sync staleness
+- pacify the merciless fmt
+- Skip auto-sync when Cargo.lock is unchanged
+- pacify the merciless fmt
+- Add user-facing hook documentation and SDK guide
+- Add design tenets and hook architecture docs
+- Implement per-plugin hook format selection
+- Introduce symposium-hook SDK crate
+- Change default crate skills path from `.symposium/skills` to `skills`
+
 ## [0.4.0](https://github.com/symposium-dev/symposium/compare/symposium-v0.3.0...symposium-v0.4.0) - 2026-05-14
 
 ### Added
