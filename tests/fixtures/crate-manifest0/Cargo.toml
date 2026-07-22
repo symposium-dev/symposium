@@ -1,7 +1,7 @@
 [package]
-name = "test-workspace"
+name = "manifest-host"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-bp-crate = { path = "bp-crate" }
+crate-m = { path = "crate-m" }

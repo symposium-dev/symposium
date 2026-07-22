@@ -160,6 +160,7 @@ fn exit_byte_from(status: ExitStatus) -> u8 {
 mod tests {
     use super::*;
     use crate::plugins::ParsedPlugin;
+    use crate::pm::ANY_VERSION;
     use crate::{plugins::Audience, predicate::PredicateSet};
     use std::{collections::BTreeMap, path::PathBuf};
 
@@ -177,6 +178,7 @@ mod tests {
         subcommands: BTreeMap<String, Subcommand>,
     ) -> ParsedPlugin {
         ParsedPlugin {
+            canonical: PackageId::new("test", name, ANY_VERSION),
             path: PathBuf::from(format!("/test/{name}.toml")),
             plugin: Plugin {
                 name: name.into(),
@@ -187,8 +189,8 @@ mod tests {
                 mcp_servers: vec![],
                 subcommands,
                 custom_predicates: vec![],
+                chained: vec![],
             },
-            source_name: "test".into(),
             source_dir: PathBuf::from("/test"),
             workspace_member: false,
         }

@@ -1,5 +1,5 @@
 name = "optout-plugin"
 depends-on = ["crate-opt"]
 
-[[skills]]
-source = "crate"
+[[plugins]]
+source.cargo = "crate-opt"

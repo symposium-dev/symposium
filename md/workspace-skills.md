@@ -33,6 +33,7 @@ The second group is how the `.agents/skills` convention works: it is gated by th
 Two details specific to workspace manifests:
 
 - `name` may be omitted; it defaults to the directory name.
+- No top-level `depends-on` is required — a workspace plugin is always active in its own workspace, so the usual "every plugin must name a dependency" rule is waived.
 
 Components that should apply only to people developing the workspace (not to dependents of a published crate) can be gated with the [`workspace-member()` predicate](./reference/predicates.md).
 

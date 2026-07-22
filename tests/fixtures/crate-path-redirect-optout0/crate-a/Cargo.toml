@@ -3,5 +3,5 @@ name = "crate-a"
 version = "0.1.0"
 edition = "2021"
 
-[[package.metadata.symposium.skills]]
-crate = { name = "crate-b" }
+[[package.metadata.symposium.plugins]]
+source.cargo = "crate-b"

@@ -1,5 +1,5 @@
 name = "missing-dir-plugin"
 depends-on = ["crate-miss"]
 
-[[skills]]
-source = "crate"
+[[plugins]]
+source.cargo = "crate-miss"

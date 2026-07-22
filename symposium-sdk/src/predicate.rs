@@ -1,14 +1,17 @@
 //! Types for custom predicate output.
 //!
+//! FIXME: this witness/emitter channel is currently **unused**. It was built to
+//! let a custom predicate name crates to fetch for the retired `source =
+//! "crate"` skill resolution; custom predicates are now a boolean gate only
+//! (pass/fail via exit code), and Symposium ignores their stdout. The intended
+//! future use is to let a custom predicate **set fields on the plugin (or
+//! component) it gates** — contributing values back into the manifest — through
+//! a channel like this. Until that lands, [`PredicateEmitter`] / [`SelectedCrate`]
+//! have no effect.
+//!
 //! A custom predicate binary communicates its result via:
 //! - **Exit code**: 0 = pass, non-zero = fail.
-//! - **Stdout** (optional): JSON Lines output, one record per line, naming
-//!   crates that should be fetched for `source = "crate"` skill resolution.
-//!
-//! Each line is a tagged JSON object with exactly one key identifying the
-//! record type. Unknown record types are warned and skipped (forward
-//! compatibility). Malformed lines cause the predicate to be treated as
-//! failed.
+//! - **Stdout**: reserved for the future use above; currently ignored.
 //!
 //! Use [`PredicateEmitter`] to write records from a Rust predicate binary.
 
@@ -16,7 +19,8 @@ use std::io::{self, Write};
 
 use serde::{Deserialize, Serialize};
 
-/// A crate selected by a custom predicate's witness output.
+/// A crate named by a custom predicate's witness output. Currently unused — see
+/// the module-level FIXME.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectedCrate {
     pub crate_name: String,
@@ -81,8 +85,9 @@ impl<W: Write> PredicateEmitter<W> {
         Self { writer }
     }
 
-    /// Emitting this record causes Symposium to fetch `name@version` as a
-    /// crate source for `source = "crate"` skill groups.
+    /// Historically caused Symposium to fetch `name@version` for `source =
+    /// "crate"` skill groups; that resolution was retired, so this record is
+    /// currently ignored (see the module-level FIXME).
     pub fn selected_crate(
         &mut self,
         name: &str,

@@ -28,11 +28,15 @@ The argument of a leaf predicate (`depends-on`, `shell`, `path_exists`, `env`) i
 
 > `crate(...)` is the retired spelling of `depends-on(...)` and is rejected at parse time with a migration hint.
 
-## Crate-sourced skills and the witness
+## Loading a crate's skills
 
-For a `[[skills]]` group with `source = "crate"`, the `depends-on(...)` predicates do double duty: they gate the group **and** name which crates' source trees to fetch skills from. The fetch set is the predicate's **witness** — the packages that participate in a *satisfying* evaluation: `depends-on(c)` contributes `c` when present, `any` contributes its true branches, `all` contributes all branches when it holds, and `not(...)` contributes nothing. So `all(depends-on(serde), env(USE_SERDE))` only fetches `serde` when `USE_SERDE` is set, while `any(depends-on(fd), depends-on(fdfind))` fetches whichever are present.
+A predicate is purely a boolean gate — it decides *whether* an item activates, not *which* crate to fetch. To load a crate's own skills, name that crate in a [`[[plugins]]` chained reference](./plugin-definition.md#chained-plugins) (`source.cargo = "..."`) and gate the edge as you like:
 
-A group using `source = "crate"` must name at least one concrete dependency in a **fetchable position** — somewhere (plugin- or group-level) that can appear in a witness. `depends-on(*)` alone is rejected since there is nothing concrete to fetch, and a dependency named *only* under `not(...)` is rejected too: `not(depends-on(legacy))` gates the group but, having an empty witness, names no crate to fetch from. Put the dependency positively (e.g. `depends-on(serde)`, or `any(depends-on(serde), not(depends-on(legacy)))`).
+```toml
+[[plugins]]
+depends-on = ["serde"]      # only when serde is a dependency
+source.cargo = "serde"      # load serde's plugin (its skills)
+```
 
 ## When predicates are evaluated
 
@@ -62,7 +66,7 @@ predicates = ["path_exists(rg)", "shell(test -f Cargo.toml)"]
 [[skills]]
 depends-on = ["serde"]
 predicates = ["path_exists(jq)"]
-source = "crate"
+source.path = "skills"
 
 [[hooks]]
 name = "h"

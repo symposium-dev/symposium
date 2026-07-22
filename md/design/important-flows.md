@@ -4,18 +4,17 @@ This section describes the logic of each `cargo agents` command.
 
 ## Crate-sourced skill resolution
 
-When a skill group uses `source = "crate"`, the sync flow takes an additional path:
+A plugin loads a crate as a plugin by naming that crate in a `[[plugins]]` chained reference (`source.cargo = "..."`). When the owning plugin is active and the edge's predicates hold, sync resolves the crate. A single path handles every crate — a crate is always a first-class plugin, whether it describes itself with a `SYMPOSIUM.toml`, with `[package.metadata.symposium]`, with both, or with neither:
 
-1. `predicate::union_matched_packages()` resolves plugin-level and group-level predicates against the workspace to produce a set of concrete package ids (`depends-on` witnesses).
-2. For each crate in the set, the [cargo package manager](./module-structure.md#pm--package-managers) fetches the source: `CargoPm::fetch` delegates to `RustCrateFetch`, which checks path overrides (for local path deps), then the cargo registry cache, then crates.io. The fetched id carries the exact resolved version.
-3. `crate_metadata::parse_crate_metadata()` reads `[package.metadata.symposium]` from the crate's `Cargo.toml`:
-   - **No metadata** — fall back to the default `skills/` subdirectory.
-   - **`skills = []`** — no skills from this crate.
-   - **`path = "..."` entries** — scan that subdirectory for skills.
-   - **`crate = { name, version? }` entries** — redirect: fetch the target crate and follow its metadata recursively (with cycle detection and a depth limit of 10).
-4. `discover_skills()` scans each resolved directory for `SKILL.md` files.
+1. `skills_applicable_to` runs `expand_chained_plugins` over the active plugin's `plugin.chained` edges; each edge whose predicates hold (evaluated against the *owning* plugin's provenance) names a crate directly.
+2. For that crate, `expand_chained_plugins` calls `CargoPm::load_plugin(name, workspace)`:
+   - `CargoPm::fetch` resolves the source via `RustCrateFetch` (path overrides for local path deps, then the cargo registry cache, then crates.io). The fetched id carries the exact resolved version.
+   - `plugins::load_crate_manifest` builds the plugin definition by layering three sources (merge order: crate defaults → `[package.metadata.symposium]` from `Cargo.toml` → `SYMPOSIUM.toml` file). Both manifest sources use the ordinary plugin-manifest schema and are parsed **leniently** (a malformed layer is logged and dropped). Validation runs under `ManifestOrigin::Crate` (name defaults to the crate, `depends-on` is waived, `[defaults]` accepted, default `skills/` group appended unless `[defaults] skills = false`). The result is a `ParsedPlugin` whose `canonical` id is the resolved crate. A crate with no manifest sources still yields one whose only content is that default `skills/` group.
+3. Back in `expand_chained_plugins`, the crate plugin's own plugin-level predicates are honored (`applies`, which stamps its provenance — never a workspace member), its skill groups run through the ordinary `load_skills_for_group` pipeline — honoring named groups, group predicates, and `source.path`/`source.git`, with each discovered skill's origin hashed from its on-disk `SKILL.md` path — and **its own `[[plugins]]` edges are expanded in turn**. This is how a `[package.metadata.symposium]` redirect (now a `[[plugins]] source.cargo` chained reference to the target crate) is followed. A per-top-level-plugin `visited` set keyed on the normalized crate name collapses diamonds (a crate reached two ways loads once) and breaks cycles; `MAX_CHAIN_DEPTH` (10) is a backstop. The crate plugin's hooks/MCP/subcommands are parsed but not yet dispatched (a `warn_undispatched_crate_features` notice fires when present).
 
-The key code paths are in `skills.rs` (`load_crate_skills`, `fetch_and_resolve_skills`), `crate_metadata.rs` (`parse_crate_metadata`), `predicate.rs` (`witness`, `union_matched_packages`), `pm/cargo.rs` (`CargoPm`), and `crate_sources/mod.rs` (`RustCrateFetch`, `WorkspaceCrate`).
+A skill's install identity is the hash of its on-disk `SKILL.md` path, so a crate reached two ways dedupes to one install. The edge's version requirement is recorded but not yet enforced — the crate resolves against the workspace (pin / path override).
+
+The key code paths are in `pm/cargo.rs` (`CargoPm::load_plugin`), `plugins.rs` (`load_crate_manifest`, `RawPluginManifest::merge`, `ManifestOrigin::Crate`, `ParsedPlugin::canonical`), `skills.rs` (`expand_chained_plugins`, `hash_origin_key`), `crate_metadata.rs` (`symposium_metadata`), and `crate_sources/mod.rs` (`RustCrateFetch`, `WorkspaceCrate`).
 
 ## Help rendering
 

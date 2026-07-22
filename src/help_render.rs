@@ -183,6 +183,7 @@ mod tests {
 
     use crate::{
         plugins::{ParsedPlugin, Plugin, Subcommand},
+        pm::ANY_VERSION,
         predicate::PredicateSet,
     };
 
@@ -212,10 +213,11 @@ mod tests {
                 subcommands,
                 installations: vec![],
                 custom_predicates: vec![],
+                chained: vec![],
             },
-            source_name: "test".into(),
             source_dir: PathBuf::from("/test"),
             workspace_member: false,
+            canonical: PackageId::new("test", name, ANY_VERSION),
         }
     }
 

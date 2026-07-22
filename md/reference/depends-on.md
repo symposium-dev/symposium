@@ -55,22 +55,7 @@ If there are multiple `depends-on` declarations in scope, all of them must match
 * If a skill-group within a plugin defines `depends-on`, that predicate must match before the skills themselves will be fetched.
 * If the skills define `depends-on` in their front-matter, those dependencies must match before the skills will be added to the project.
 
-## Matched crate set
-
-When a skill group uses `source = "crate"`, predicates serve a second purpose beyond filtering: they determine **which crate sources to fetch**.
-
-Each non-wildcard atom that matches a workspace dependency contributes that dependency's name and version to the *matched crate set*. Symposium then fetches the source for each crate in the set and looks for skills inside it.
-
-- `"serde"` against a workspace with `serde 1.0.210` → matched set: `{serde@1.0.210}`
-- `"serde"` against a workspace without serde → no match, plugin skipped
-- `"*"` → matches, but contributes no concrete crates to the set
-- `["serde", "tokio"]` with both in workspace → `{serde@1.0.210, tokio@1.38.0}`
-
-Predicates from both the plugin level and the group level are unioned together to form the matched set.
-
-Because wildcards contribute no concrete crates, **at least one non-wildcard atom must be present** (at either the plugin or group level) when using crate-sourced skills. A manifest with only wildcards and `source = "crate"` is rejected at parse time.
-
-When the gate uses combinators (`any`, `all`, `not`) or mixes `depends-on(...)` with other predicates, the matched set generalizes to the predicate's **witness** — the concrete crates that participate in a satisfying evaluation. See [Crate-sourced skills and the witness](./predicates.md#crate-sourced-skills-and-the-witness).
+`depends-on` is purely a gate — it decides *whether* an item activates, not which crate to fetch. To load a crate's own skills, name that crate explicitly in a [`[[plugins]]` chained reference](./plugin-definition.md#chained-plugins) (`source.cargo = "..."`), gating the edge with `depends-on` as usual.
 
 ## Migration from `crates`
 

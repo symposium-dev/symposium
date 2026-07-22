@@ -852,6 +852,8 @@ fn dispatched_hooks_for_payload(
 mod tests {
     use std::collections::BTreeMap;
 
+    use crate::pm::{ANY_VERSION, PackageId};
+
     use super::*;
 
     #[test]
@@ -1053,13 +1055,14 @@ mod tests {
             mcp_servers: vec![],
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            chained: vec![],
         };
         crate::plugins::ParsedPlugin {
             path: std::path::PathBuf::from("test.toml"),
             plugin,
-            source_name: "test-source".to_string(),
             source_dir: PathBuf::from(".".to_string()),
             workspace_member: false,
+            canonical: PackageId::new("test", "test-plugin", ANY_VERSION),
         }
     }
 

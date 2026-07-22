@@ -1,5 +1,10 @@
 name = "diamond-plugin"
 depends-on = ["crate-a", "crate-b"]
 
-[[skills]]
-source = "crate"
+[[plugins]]
+depends-on = ["crate-a"]
+source.cargo = "crate-a"
+
+[[plugins]]
+depends-on = ["crate-b"]
+source.cargo = "crate-b"

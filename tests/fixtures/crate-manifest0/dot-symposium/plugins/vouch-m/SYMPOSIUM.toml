@@ -1,0 +1,7 @@
+name = "vouch-m"
+depends-on = ["crate-m"]
+
+# No skill groups of its own — it vouches for crate-m's plugin, which ships
+# its own SYMPOSIUM.toml and is loaded through this chained reference.
+[[plugins]]
+source.cargo = "crate-m"

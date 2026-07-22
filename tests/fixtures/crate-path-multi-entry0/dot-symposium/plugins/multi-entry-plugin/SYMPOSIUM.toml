@@ -1,5 +1,5 @@
 name = "multi-entry-plugin"
 depends-on = ["crate-m"]
 
-[[skills]]
-source = "crate"
+[[plugins]]
+source.cargo = "crate-m"

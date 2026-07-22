@@ -16,10 +16,8 @@ use crate::predicate::{self, PredicateContext, PredicateSet};
 
 fn source_display(source: &PluginSource) -> String {
     match source {
-        PluginSource::None => "none".into(),
         PluginSource::Path(p) => format!("path:{}", p.display()),
         PluginSource::Git(url) => format!("git:{url}"),
-        PluginSource::Crate => "crate".into(),
     }
 }
 
@@ -47,87 +45,43 @@ impl Skill {
     }
 }
 
-/// Where a skill came from.
-///
-/// Two skills with equal `SkillOrigin` and equal name install to the same
-/// directory and dedupe; everything else installs independently. This lets
-/// two plugins that legitimately both supply a same-named skill from
-/// different sources coexist, while collapsing the case where two plugins
-/// just happen to point at the same logical bundle.
-///
-/// What matters for identity is *where the skill bytes live*, not which
-/// plugin manifest pointed at them. Two plugins in the same registry
-/// source that both reference the same on-disk skill therefore dedupe.
-///
-/// - `Crate { name, version }` — the skill came from walking the source tree
-///   of a specific crate version (`source = "crate"`).
-///   Identity is `(name, version)` only: two plugins targeting the same
-///   crate version produce the same logical skills regardless of which
-///   plugin pointed at them.
-/// - `Git { source, commit_sha, skill_path }` — the skill came from a
-///   `source.git` group. Identity is `(source, commit_sha, skill_path)`:
-///   `source` is the parsed [`GitSource`](symposium_install::git::GitSource)
-///   which normalizes equivalent URLs to the same value, the commit SHA
-///   is the resolved hash that was actually fetched, and `skill_path` is
-///   the SKILL.md's path within the repo tree. Two URLs that refer to
-///   the same repository normalize to the same `GitSource` and therefore
-///   deduplicate. Different SKILL.md files within one repo stay distinct.
-/// - `Source { source_name, skill_path }` — the skill came from a
-///   plugin's `source.path` group, or from a standalone `SKILL.md` in
-///   a registry source. `source_name` is the registry source's
-///   display name (e.g. `"user-plugins"`); `skill_path` is the
-///   SKILL.md's parent directory relative to the source root, with
-///   forward slashes. Two plugins in the same source pointing at the
-///   same on-disk skill bundle therefore produce the same origin.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
-pub enum SkillOrigin {
-    Crate {
-        name: String,
-        version: semver::Version,
-    },
-    Git {
-        /// The parsed git source (carries normalized repo identity).
-        source: symposium_install::git::GitSource,
-        /// Commit SHA actually fetched (from the cache meta).
-        commit_sha: String,
-        /// SKILL.md's path within the repo tree, normalized to forward
-        /// slashes.
-        skill_path: String,
-    },
-    Source {
-        /// Registry source's display name from the user config.
-        source_name: String,
-        /// SKILL.md's parent directory, relative to the source root,
-        /// normalized to forward slashes.
-        skill_path: String,
-    },
+// Install-path disambiguator identifying *where a skill's bytes live*.
+//
+// A skill's origin is the *canonical* on-disk path of its `SKILL.md`, hashed.
+// Two references that resolve to the same file — the same crate reached through
+// two chained plugins, or a `source.path` group and the standalone walk landing
+// on the same bundle — produce the same hash and dedupe at sync time; skills at
+// different paths stay distinct.
+//
+// Canonicalizing is what makes that hold. Group discovery walks a canonicalized
+// scan dir, while the standalone registry walk uses the configured source path
+// verbatim; on a platform whose temp prefix is a symlink (macOS `/var` ->
+// `/private/var`) the same file would otherwise hash two ways and install twice.
+//
+// This is deliberately coarser than a structured `(pm, plugin, skill_path)`
+// identity: the hash *is* both the dedup key and the disambiguating suffix, so
+// only a string — not a structured origin — is carried to the sync layer.
+
+/// 8-hex-char prefix of SHA-256 over the JSON-serialized origin key.
+fn hash_origin_key<T: serde::Serialize>(key: &T) -> String {
+    use sha2::{Digest, Sha256};
+    let bytes = serde_json::to_vec(key).expect("origin key always serializes");
+    let digest = Sha256::digest(&bytes);
+    let mut out = String::with_capacity(8);
+    for byte in &digest[..4] {
+        use std::fmt::Write;
+        write!(out, "{byte:02x}").unwrap();
+    }
+    out
 }
 
-impl SkillOrigin {
-    /// Short, readable disambiguator embedded into install paths.
-    ///
-    /// For `Crate` we expand to `<name>-<version>` — readable on disk
-    /// and already collision-free within a workspace. The other
-    /// variants don't have a clean printable form, so we hash:
-    /// 8-hex-char prefix of SHA-256 over the JSON-serialized origin.
-    /// Hash collisions there would manifest as a name clash at install
-    /// time, not silent data loss.
-    pub fn short_hash(&self) -> String {
-        match self {
-            SkillOrigin::Crate { name, version } => format!("{name}-{version}"),
-            SkillOrigin::Git { .. } | SkillOrigin::Source { .. } => {
-                use sha2::{Digest, Sha256};
-                let bytes = serde_json::to_vec(self).expect("SkillOrigin always serializes");
-                let digest = Sha256::digest(&bytes);
-                let mut out = String::with_capacity(8);
-                for byte in &digest[..4] {
-                    use std::fmt::Write;
-                    write!(out, "{byte:02x}").unwrap();
-                }
-                out
-            }
-        }
-    }
+/// Origin hash for a skill, keyed on its `SKILL.md`'s canonical path so that the
+/// same file reached two ways hashes identically. Falls back to the given path
+/// when it can't be canonicalized.
+pub(crate) fn skill_origin_hash(skill_md: &Path) -> String {
+    let canonical = skill_md.canonicalize();
+    let path = canonical.as_deref().unwrap_or(skill_md);
+    hash_origin_key(&path.to_string_lossy())
 }
 
 /// An applicable skill paired with the origin it was discovered through.
@@ -136,9 +90,9 @@ impl SkillOrigin {
 /// collection; only skills whose every level holds end up here.
 pub struct SkillWithGroupContext {
     pub skill: Skill,
-    /// Where the skill was discovered. Drives install-path disambiguation
+    /// The hash of where the skill was discovered. Drives install-path disambiguation
     /// and dedup at sync time.
-    pub origin: SkillOrigin,
+    pub origin_hash: String,
 }
 
 /// Resolve all applicable skills from the registry.
@@ -188,16 +142,40 @@ pub async fn skills_applicable_to(
         );
 
         for group in &plugin.skills {
-            let skills =
-                load_skills_for_group(sym, parsed, group, workspace_crates, &mut ctx, update).await;
-            for (skill, origin) in skills {
-                collect_skill_applicable_to(skill, origin, &plugin.name, &mut ctx, &mut results);
+            let skills = load_skills_for_group(sym, parsed, group, &mut ctx, update).await;
+            for (skill, origin_hash) in skills {
+                collect_skill_applicable_to(
+                    skill,
+                    origin_hash,
+                    &plugin.name,
+                    &mut ctx,
+                    &mut results,
+                );
             }
         }
+
+        // `[[plugins]]` chained references: whenever this plugin is active and
+        // an edge's own predicates hold, the referenced crate is loaded as a
+        // first-class plugin and its skills contributed. Expansion recurses
+        // into the loaded crate's own chained edges — a crate that names
+        // another crate (the reschema'd `[package.metadata.symposium]`
+        // redirect) is followed transitively — with per-plugin cycle detection.
+        let mut visited = std::collections::HashSet::new();
+        expand_chained_plugins(
+            sym,
+            parsed,
+            workspace_crates,
+            &mut ctx,
+            update,
+            &mut visited,
+            0,
+            &mut results,
+        )
+        .await;
     }
 
-    // Standalone skills already carry their own `SkillOrigin` (computed
-    // from the plugin source name and the skill's path within that source).
+    // Standalone skills already carry their own origin hash (computed
+    // from the SKILL.md's on-disk path, like every other skill).
     if !registry.standalone_skills.is_empty() {
         tracing::debug!(
             report = %crate::report::ReportEvent::PluginConsidered {
@@ -213,7 +191,7 @@ pub async fn skills_applicable_to(
     for entry in &registry.standalone_skills {
         collect_skill_applicable_to(
             entry.skill.clone(),
-            entry.origin.clone(),
+            entry.origin_hash.clone(),
             "(standalone skills)",
             &mut ctx,
             &mut results,
@@ -226,25 +204,17 @@ pub async fn skills_applicable_to(
 /// Discover and load skills for a group, applying pre-fetch filtering.
 ///
 /// Checks group-level `depends-on` predicates against `for_crates` before
-/// fetching git sources, to avoid unnecessary downloads. Each returned
-/// skill is paired with the `SkillOrigin` it was discovered through:
-///
-/// - `CratePath` → `SkillOrigin::Crate { name, version }`, one per
-///   matched crate (canonical name/version from the fetch result).
-/// - `Git` → `SkillOrigin::Git { source, commit_sha, skill_path }`, one
-///   per discovered SKILL.md (path varies per skill within the group).
-/// - `Path` → `SkillOrigin::Source { source_name, skill_path }`, with
-///   `skill_path` computed per discovered SKILL.md relative to the
-///   plugin source root. Two plugins in the same source pointing at
-///   the same on-disk skill therefore produce the same origin.
+/// fetching git sources, to avoid unnecessary downloads. Each returned skill is
+/// paired with the origin hash it was discovered through — its group's origin
+/// key combined
+/// with the SKILL.md's path within that origin, one per discovered SKILL.md.
 async fn load_skills_for_group(
     sym: &Symposium,
     parsed: &ParsedPlugin,
     group: &SkillGroup,
-    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
     ctx: &mut PredicateContext<'_>,
     update: UpdateLevel,
-) -> Vec<(Skill, SkillOrigin)> {
+) -> Vec<(Skill, String)> {
     let plugin = &parsed.plugin;
     let plugin_path = parsed.path.as_path();
 
@@ -275,20 +245,8 @@ async fn load_skills_for_group(
         return Vec::new();
     }
 
-    let skills = match &group.source {
-        PluginSource::Crate => load_crate_skills(plugin, group, workspace_crates, ctx).await,
-        PluginSource::Git(url) => load_git_skills(sym, group, url, update).await,
-        PluginSource::Path(p) => {
-            let plugin_dir = plugin_path.parent().unwrap_or(plugin_path);
-            let dir = plugin_dir.join(p);
-            load_path_skills(&dir, group, parsed)
-        }
-        PluginSource::None => {
-            // No source — nothing to discover. Kept distinct from the
-            // path branch so we don't synthesize a bogus skill dir.
-            Vec::new()
-        }
-    };
+    let resolved = resolve_group_dirs(sym, parsed, group, update).await;
+    let skills = collect_skills_from_dirs(resolved, group);
 
     tracing::debug!(
         report = %crate::report::ReportEvent::SkillGroupConsidered {
@@ -304,301 +262,228 @@ async fn load_skills_for_group(
     skills
 }
 
-/// Resolve crate source predicates, fetch each matched crate, read its
-/// `[package.metadata.symposium]`, and discover skills. Follows redirects
-/// recursively with cycle detection.
-///
-/// The crates to fetch are the *witness* of the plugin- and group-level
-/// predicate sets: the concrete packages that participate in satisfying the
-/// gate (see [`predicate::union_matched_packages`]).
-async fn load_crate_skills(
-    plugin: &crate::plugins::Plugin,
+/// A base directory resolved for a skill group, with the report labels for the
+/// skills discovered inside it. Both `source` variants reduce to this: `Path` is
+/// already on disk; `Git` is fetched via the git cache. (A crate is not a group
+/// source — it becomes a plugin through a `[[plugins]]` chained reference; see
+/// [`expand_chained_plugins`].)
+struct ResolvedSkillDir {
+    dir: PathBuf,
+    /// `SkillSourceSearched` report `plugin` label.
+    plugin_label: String,
+    /// `SkillSourceSearched` report `source` label.
+    source_label: String,
+}
+
+/// Resolve a group's `source` to the base directories to scan. Both variants
+/// land on a directory to walk; the only difference is whether the base is local
+/// (`Path`) or fetched (`Git` via a git cache). Skill identity is not decided
+/// here — every discovered skill's origin is the hash of its on-disk `SKILL.md`
+/// path (see the module-level note above `skill_origin_hash`).
+async fn resolve_group_dirs(
+    sym: &Symposium,
+    parsed: &ParsedPlugin,
     group: &SkillGroup,
+    update: UpdateLevel,
+) -> Vec<ResolvedSkillDir> {
+    let plugin = &parsed.plugin;
+    let plugin_path = parsed.path.as_path();
+
+    match &group.source {
+        PluginSource::Path(p) => {
+            let plugin_dir = plugin_path.parent().unwrap_or(plugin_path);
+            let dir = plugin_dir.join(p);
+            let dir = dir.canonicalize().unwrap_or(dir);
+            let rel = dir
+                .strip_prefix(&parsed.source_dir)
+                .unwrap_or(&dir)
+                .display()
+                .to_string();
+
+            vec![ResolvedSkillDir {
+                dir,
+                plugin_label: plugin.name.clone(),
+                source_label: format!("path:{rel}"),
+            }]
+        }
+        PluginSource::Git(url) => {
+            let Some((cache_dir, source, _commit_sha)) =
+                fetch_git_skill_source(sym, url, update).await
+            else {
+                return Vec::new();
+            };
+            vec![ResolvedSkillDir {
+                dir: cache_dir,
+                plugin_label: source.repo_id(),
+                source_label: format!("git:{url}"),
+            }]
+        }
+    }
+}
+
+/// Depth limit for `[[plugins]]` chained-reference expansion, bounding both
+/// intentional chains and redirect loops that slip past cycle detection.
+const MAX_CHAIN_DEPTH: usize = 10;
+
+/// Warn when a crate-embedded plugin declares extension types the chained
+/// path doesn't dispatch yet. A crate plugin's *skills* and its own further
+/// `[[plugins]]` edges are wired in; its hooks, MCP servers, subcommands, and
+/// custom predicates are parsed and carried but not yet routed into their
+/// dispatch paths.
+fn warn_undispatched_crate_features(parsed: &ParsedPlugin) {
+    let p = &parsed.plugin;
+    let mut kinds = Vec::new();
+    if !p.hooks.is_empty() {
+        kinds.push("hooks");
+    }
+    if !p.mcp_servers.is_empty() {
+        kinds.push("mcp_servers");
+    }
+    if !p.subcommands.is_empty() {
+        kinds.push("subcommands");
+    }
+    if !p.custom_predicates.is_empty() {
+        kinds.push("predicates");
+    }
+    if !kinds.is_empty() {
+        tracing::warn!(
+            plugin = %p.name,
+            features = %kinds.join(", "),
+            "crate-embedded plugin declares extension types that are not yet dispatched \
+             (only its skills and chained references are loaded today)"
+        );
+    }
+}
+
+/// Expand an active plugin's `[[plugins]]` chained references, recursively.
+///
+/// For each edge whose predicates hold (evaluated against the *owning* plugin's
+/// provenance), the referenced crate is loaded as a first-class plugin via
+/// [`CargoPm::load_plugin`], its own plugin-level predicates are honored, and
+/// its skills are contributed with crate-origin identity. The loaded
+/// crate's own chained edges are then expanded in turn — this is how a crate
+/// that names another crate (a reschema'd `[package.metadata.symposium]`
+/// redirect) is followed.
+///
+/// `visited` holds the normalized crate names already loaded on this owning
+/// plugin's chain; it collapses diamonds (a crate reached two ways loads once)
+/// and breaks cycles. It is scoped per top-level plugin — cross-plugin dedup
+/// stays the sync layer's job (via the origin hash). `depth`/[`MAX_CHAIN_DEPTH`]
+/// is a backstop.
+#[allow(clippy::too_many_arguments)]
+async fn expand_chained_plugins(
+    sym: &Symposium,
+    owner: &ParsedPlugin,
     workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
     ctx: &mut PredicateContext<'_>,
-) -> Vec<(Skill, SkillOrigin)> {
-    let matched = predicate::union_matched_packages(&[&plugin.predicates, &group.predicates], ctx);
-    let mut skills = Vec::new();
-    for id in &matched {
-        let mut visited = std::collections::HashSet::new();
-        fetch_and_resolve_skills(
-            &id.name,
-            None,
+    update: UpdateLevel,
+    visited: &mut std::collections::HashSet<String>,
+    depth: usize,
+    results: &mut Vec<SkillWithGroupContext>,
+) {
+    if depth >= MAX_CHAIN_DEPTH {
+        tracing::warn!(
+            plugin = %owner.plugin.name,
+            "chained plugin expansion exceeded depth limit ({MAX_CHAIN_DEPTH}); stopping"
+        );
+        return;
+    }
+
+    for chained in &owner.plugin.chained {
+        // Edge predicates evaluate against the owning plugin's provenance; the
+        // crate plugin's own `applies` (below) restamps its own — never a
+        // workspace member — so reset before each edge's gate.
+        ctx.set_workspace_member(owner.workspace_member);
+        if !chained.predicates.evaluate(ctx) {
+            continue;
+        }
+
+        let Some(crate_plugin) = crate::pm::CargoPm
+            .load_plugin(&chained.name, workspace_crates)
+            .await
+        else {
+            continue;
+        };
+
+        // Cycle / diamond detection on the resolved crate identity, normalized
+        // so hyphen/underscore spellings of one crate collapse.
+        let key = crate::crate_sources::normalize_crate_name(&crate_plugin.canonical.name);
+        if !visited.insert(key) {
+            tracing::debug!(
+                crate_name = %chained.name,
+                "chained plugin already loaded on this chain; skipping (cycle or diamond)"
+            );
+            continue;
+        }
+
+        // Honor the crate plugin's own plugin-level predicates (which stamp its
+        // provenance: never a workspace member) before doing anything with it —
+        // an inactive crate plugin shouldn't warn about undispatched features.
+        if !crate_plugin.applies(ctx) {
+            continue;
+        }
+        warn_undispatched_crate_features(&crate_plugin);
+
+        for group in &crate_plugin.plugin.skills {
+            let skills = load_skills_for_group(sym, &crate_plugin, group, ctx, update).await;
+            for (skill, origin_hash) in skills {
+                collect_skill_applicable_to(
+                    skill,
+                    origin_hash,
+                    &crate_plugin.plugin.name,
+                    ctx,
+                    results,
+                );
+            }
+        }
+
+        Box::pin(expand_chained_plugins(
+            sym,
+            &crate_plugin,
             workspace_crates,
-            group,
-            &mut visited,
-            &mut skills,
-            0,
-        )
+            ctx,
+            update,
+            visited,
+            depth + 1,
+            results,
+        ))
         .await;
     }
-    skills
 }
 
-const MAX_REDIRECT_DEPTH: usize = 10;
-
-/// Recursively fetch a crate and resolve its skills via metadata.
-async fn fetch_and_resolve_skills(
-    crate_name: &str,
-    version_spec: Option<&str>,
-    workspace_crates: &[symposium_sdk::workspace::WorkspaceCrate],
+/// Discover skills in each resolved base dir and stamp origins. The single
+/// path all group sources funnel through, replacing the former per-source
+/// `load_*_skills` functions.
+fn collect_skills_from_dirs(
+    resolved: Vec<ResolvedSkillDir>,
     group: &SkillGroup,
-    visited: &mut std::collections::HashSet<String>,
-    skills: &mut Vec<(Skill, SkillOrigin)>,
-    depth: usize,
-) {
-    if depth >= MAX_REDIRECT_DEPTH {
-        tracing::warn!(
-            crate_name = %crate_name,
-            "redirect chain exceeded depth limit ({MAX_REDIRECT_DEPTH}); stopping"
-        );
-        return;
-    }
-
-    let normalized = crate::crate_sources::normalize_crate_name(crate_name);
-    let visit_key = format!("{normalized}@{}", version_spec.unwrap_or("*"));
-    if !visited.insert(visit_key) {
-        tracing::warn!(
-            crate_name = %crate_name,
-            "cycle detected in crate skill metadata redirects; skipping"
-        );
-        return;
-    }
-
-    let id = crate::pm::CargoPm::id_for(crate_name, version_spec);
-    let result = match crate::pm::CargoPm.fetch(&id, workspace_crates).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(
-                crate_name = %crate_name,
-                error = %e,
-                "failed to fetch crate source for skills"
-            );
-            return;
-        }
-    };
-
-    let version = match semver::Version::parse(&result.id.version) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(
-                crate_name = %crate_name,
-                version = %result.id.version,
-                error = %e,
-                "skipping crate-source skills: unparseable version"
-            );
-            return;
-        }
-    };
-
-    let origin = SkillOrigin::Crate {
-        name: result.id.name.clone(),
-        version,
-    };
-
-    let cargo_toml_path = result.root.join("Cargo.toml");
-    let metadata = match crate::crate_metadata::parse_crate_metadata(&cargo_toml_path) {
-        Ok(m) => m,
-        Err(e) => {
-            tracing::warn!(
-                crate_name = %crate_name,
-                error = %e,
-                "failed to parse crate metadata; falling back to default skills/ path"
-            );
-            None
-        }
-    };
-
-    match metadata {
-        None => {
-            let dir = result.root.join(crate::plugins::CRATE_DEFAULT_SKILLS_PATH);
-            let discovered = discover_skills(&dir, group);
-            tracing::debug!(
-                report = %crate::report::ReportEvent::SkillSourceSearched {
-                    plugin: format!("crate:{crate_name}"),
-                    source: format!("crate_path:{}", crate::plugins::CRATE_DEFAULT_SKILLS_PATH),
-                    path: dir.display().to_string(),
-                    skills_found: discovered.iter().filter(|r| r.is_ok()).count(),
-                },
-            );
-            for skill_result in discovered {
-                match skill_result {
-                    Ok(skill) => skills.push((skill, origin.clone())),
-                    Err(e) => tracing::warn!(
-                        crate_name = %crate_name,
-                        error = %e,
-                        "failed to load skill from crate source"
-                    ),
-                }
-            }
-        }
-        Some(meta) => {
-            for source in &meta.skills {
-                match source {
-                    crate::crate_metadata::SkillSource::Path(p) => {
-                        let dir = result.root.join(p);
-                        let discovered = discover_skills(&dir, group);
-                        tracing::debug!(
-                            report = %crate::report::ReportEvent::SkillSourceSearched {
-                                plugin: format!("crate:{crate_name}"),
-                                source: format!("crate_path:{p}"),
-                                path: dir.display().to_string(),
-                                skills_found: discovered.iter().filter(|r| r.is_ok()).count(),
-                            },
-                        );
-                        for skill_result in discovered {
-                            match skill_result {
-                                Ok(skill) => skills.push((skill, origin.clone())),
-                                Err(e) => tracing::warn!(
-                                    crate_name = %crate_name,
-                                    path = %p,
-                                    error = %e,
-                                    "failed to load skill from crate source"
-                                ),
-                            }
-                        }
-                    }
-                    crate::crate_metadata::SkillSource::Crate {
-                        name: target_name,
-                        version: target_version,
-                    } => {
-                        Box::pin(fetch_and_resolve_skills(
-                            target_name,
-                            target_version.as_deref(),
-                            workspace_crates,
-                            group,
-                            visited,
-                            skills,
-                            depth + 1,
-                        ))
-                        .await;
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Fetch a `source.git` group's tree and build a per-skill `Git` origin
-/// keyed on `(owner/repo, commit_sha, skill_path-within-repo)` so two
-/// plugins that loaded the same SKILL.md at the same commit collapse —
-/// even if their `source.git` URLs differed.
-async fn load_git_skills(
-    sym: &Symposium,
-    group: &SkillGroup,
-    url: &str,
-    update: UpdateLevel,
-) -> Vec<(Skill, SkillOrigin)> {
-    let Some((cache_dir, source, commit_sha)) = fetch_git_skill_source(sym, url, update).await
-    else {
-        return Vec::new();
-    };
-    let discovered = discover_skills(&cache_dir, group);
-    tracing::debug!(
-        report = %crate::report::ReportEvent::SkillSourceSearched {
-            plugin: source.repo_id(),
-            source: format!("git:{url}"),
-            path: cache_dir.display().to_string(),
-            skills_found: discovered.iter().filter(|r| r.is_ok()).count(),
-        },
-    );
+) -> Vec<(Skill, String)> {
     let mut skills = Vec::new();
-    for result in discovered {
-        match result {
-            Ok(skill) => {
-                let skill_path = skill_path_within_repo(&cache_dir, &skill.path, source.subpath());
-                let origin = SkillOrigin::Git {
-                    source: source.clone(),
-                    commit_sha: commit_sha.clone(),
-                    skill_path,
-                };
-                skills.push((skill, origin));
-            }
-            Err(e) => {
-                tracing::warn!(git = %url, error = %e, "failed to load git-sourced skill");
-            }
-        }
-    }
-    skills
-}
-
-/// Discover skills under a local `source.path` directory and stamp each
-/// with a `Source` origin keyed on `(source_name, skill-path-relative-to-source-root)`.
-/// Two plugins in the same source pointing at the same on-disk skill
-/// therefore produce the same origin.
-fn load_path_skills(
-    dir: &Path,
-    group: &SkillGroup,
-    parsed: &ParsedPlugin,
-) -> Vec<(Skill, SkillOrigin)> {
-    let discovered = discover_skills(dir, group);
-    tracing::debug!(
-        report = %crate::report::ReportEvent::SkillSourceSearched {
-            plugin: parsed.plugin.name.clone(),
-            source: format!("path:{}", dir.strip_prefix(&parsed.source_dir).unwrap_or(dir).display()),
-            path: dir.display().to_string(),
-            skills_found: discovered.iter().filter(|r| r.is_ok()).count(),
-        },
-    );
-    let mut skills = Vec::new();
-    for result in discovered {
-        match result {
-            Ok(skill) => {
-                let origin = SkillOrigin::Source {
-                    source_name: parsed.source_name.clone(),
-                    skill_path: skill_path_relative_to(&parsed.source_dir, &skill.path),
-                };
-                skills.push((skill, origin));
-            }
-            Err(e) => {
-                tracing::warn!(plugin = %parsed.path.display(), error = %e, "failed to load skill")
+    for entry in resolved {
+        let discovered = discover_skills(&entry.dir, group.workspace_member, &group.predicates);
+        tracing::debug!(
+            report = %crate::report::ReportEvent::SkillSourceSearched {
+                plugin: entry.plugin_label.clone(),
+                source: entry.source_label.clone(),
+                path: entry.dir.display().to_string(),
+                skills_found: discovered.iter().filter(|r| r.is_ok()).count(),
+            },
+        );
+        for result in discovered {
+            match result {
+                Ok(skill) => {
+                    let origin_hash = skill_origin_hash(&skill.path);
+                    skills.push((skill, origin_hash));
+                }
+                Err(e) => tracing::warn!(
+                    source = %entry.source_label,
+                    error = %e,
+                    "failed to load skill",
+                ),
             }
         }
     }
     skills
-}
-
-/// SKILL.md's parent directory relative to a given root, normalized to
-/// forward slashes. Canonicalizes both ends first so that two routes
-/// to the same on-disk skill (e.g. `plugin-a/../shared/the-skill` vs.
-/// the standalone walk's direct `shared/the-skill`) collapse to the
-/// same string.
-///
-/// Falls back to the unnormalized path on canonicalization failure
-/// (better than panicking) — that just degrades dedup to per-route
-/// without losing correctness.
-fn skill_path_relative_to(root: &Path, skill_md: &Path) -> String {
-    let skill_dir = skill_md.parent().unwrap_or(skill_md);
-    let canonical_skill =
-        std::fs::canonicalize(skill_dir).unwrap_or_else(|_| skill_dir.to_path_buf());
-    let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-    canonical_skill
-        .strip_prefix(&canonical_root)
-        .unwrap_or(&canonical_skill)
-        .to_string_lossy()
-        .replace(std::path::MAIN_SEPARATOR, "/")
-}
-
-/// Compute a SKILL.md's path relative to the *repository root*, using
-/// the cache directory (which holds the subtree the user pointed at via
-/// `tree/<ref>/<subpath>`) and the source's intra-repo subpath.
-///
-/// Returned with forward-slash separators so the value is stable across
-/// platforms — it's part of the `SkillOrigin::Git` identity.
-fn skill_path_within_repo(cache_dir: &Path, skill_md: &Path, source_subpath: &str) -> String {
-    let skill_dir = skill_md.parent().unwrap_or(skill_md);
-    let rel = skill_dir
-        .strip_prefix(cache_dir)
-        .unwrap_or(skill_dir)
-        .to_string_lossy()
-        .replace(std::path::MAIN_SEPARATOR, "/");
-    if source_subpath.is_empty() {
-        rel
-    } else if rel.is_empty() {
-        source_subpath.to_string()
-    } else {
-        format!("{source_subpath}/{rel}")
-    }
 }
 
 /// Fetch a `source.git` group's tarball and look up the resolved commit
@@ -632,7 +517,11 @@ async fn fetch_git_skill_source(
 ///
 /// Recursively searches for `SKILL.md` files, then prunes nested candidates
 /// (if `A/SKILL.md` exists, `A/B/SKILL.md` is excluded — skills don't nest).
-pub(crate) fn discover_skills(skills_dir: &Path, group: &SkillGroup) -> Vec<Result<Skill>> {
+pub(crate) fn discover_skills(
+    skills_dir: &Path,
+    workspace_member: bool,
+    group_predicates: &PredicateSet,
+) -> Vec<Result<Skill>> {
     if !skills_dir.is_dir() {
         return Vec::new();
     }
@@ -643,7 +532,7 @@ pub(crate) fn discover_skills(skills_dir: &Path, group: &SkillGroup) -> Vec<Resu
 
     skill_files
         .into_iter()
-        .map(|skill_md| load_skill(&skill_md, group))
+        .map(|skill_md| load_skill(&skill_md, workspace_member, group_predicates))
         .collect()
 }
 
@@ -697,7 +586,7 @@ pub(crate) fn prune_nested_skills(paths: &mut Vec<PathBuf>) {
 /// Returns an error if `depends-on` is missing (standalone skills have
 /// no group to inherit from).
 pub fn load_standalone_skill(skill_md_path: &Path) -> Result<Skill> {
-    let skill = load_skill(skill_md_path, &SkillGroup::default())?;
+    let skill = load_skill(skill_md_path, false, &PredicateSet::default())?;
     if !skill.predicates.mentions_dep() {
         bail!(
             "standalone skill `{}` is missing `depends-on` in frontmatter \
@@ -718,11 +607,15 @@ pub fn load_standalone_skill(skill_md_path: &Path) -> Result<Skill> {
 /// and `description` fields) is optional — `name` falls back to the skill
 /// directory's name. Workspace skills are the maintainers' own informal
 /// notes; the agentskills.io contract applies to published skills.
-fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
+fn load_skill(
+    skill_md_path: &Path,
+    workspace_member: bool,
+    group_predicates: &PredicateSet,
+) -> Result<Skill> {
     let content = std::fs::read_to_string(skill_md_path)
         .with_context(|| format!("failed to read {}", skill_md_path.display()))?;
 
-    let fm = if group.workspace_member && !content.trim_start().starts_with("---") {
+    let fm = if workspace_member && !content.trim_start().starts_with("---") {
         RawFrontmatter {
             fields: BTreeMap::new(),
             depends_on: None,
@@ -744,7 +637,7 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
         *name = unquoted.to_string();
     }
 
-    if group.workspace_member
+    if workspace_member
         && !frontmatter.contains_key("name")
         && let Some(dir_name) = skill_md_path
             .parent()
@@ -761,7 +654,7 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
     // Validate description per agentskills.io spec
     // (https://agentskills.io/specification.md): required, non-empty, max 1024 chars.
     match frontmatter.get("description") {
-        None if group.workspace_member => {}
+        None if workspace_member => {}
         None => bail!("SKILL.md frontmatter missing required `description` field"),
         Some(desc) => {
             let trimmed_desc = desc.trim();
@@ -793,7 +686,7 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
     // Warn if no dependency is referenced at either level — the skill won't
     // match any dependency query, but we don't fail so a misconfigured plugin
     // can't bring down the tool.
-    if !predicates.mentions_dep() && !group.predicates.mentions_dep() {
+    if !predicates.mentions_dep() && !group_predicates.mentions_dep() {
         tracing::warn!(
             skill = %name,
             "skill references no dependency in SKILL.md frontmatter or its plugin [[skills]] group"
@@ -816,7 +709,7 @@ fn load_skill(skill_md_path: &Path, group: &SkillGroup) -> Result<Skill> {
 /// a pre-filter, so only the skill-level set is checked here.
 fn collect_skill_applicable_to(
     skill: Skill,
-    origin: SkillOrigin,
+    origin_hash: String,
     plugin_name: &str,
     ctx: &mut PredicateContext,
     results: &mut Vec<SkillWithGroupContext>,
@@ -841,7 +734,7 @@ fn collect_skill_applicable_to(
             reason: None,
         },
     );
-    results.push(SkillWithGroupContext { skill, origin });
+    results.push(SkillWithGroupContext { skill, origin_hash });
 }
 
 /// Raw frontmatter fields extracted from a SKILL.md file.
@@ -925,11 +818,39 @@ mod tests {
     use indoc::indoc;
     use std::fs;
 
-    use crate::predicate::Predicate;
+    use crate::{
+        pm::{ANY_VERSION, PackageId},
+        predicate::Predicate,
+    };
 
     /// Build a predicate set from dependency atoms (the `depends-on` field form).
     fn pred_set(s: &str) -> PredicateSet {
         PredicateSet::from_depends_on(s).unwrap()
+    }
+
+    /// Reaching one SKILL.md through a symlinked prefix must yield one origin.
+    /// This is the macOS `/var` -> `/private/var` case: group discovery walks a
+    /// canonicalized dir while the standalone walk uses the configured path
+    /// verbatim, so without canonicalizing here the file installs twice.
+    #[test]
+    #[cfg(unix)]
+    fn skill_origin_hash_is_stable_across_symlinked_prefix() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real = tmp.path().join("real");
+        fs::create_dir_all(real.join("my-skill")).unwrap();
+        let skill_md = real.join("my-skill/SKILL.md");
+        fs::write(&skill_md, "# skill").unwrap();
+
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        let via_link = link.join("my-skill/SKILL.md");
+
+        assert_ne!(skill_md, via_link, "paths should differ textually");
+        assert_eq!(
+            skill_origin_hash(&skill_md),
+            skill_origin_hash(&via_link),
+            "same file reached through a symlink must hash to one origin"
+        );
     }
 
     fn ctx(deps: &[crate::pm::PackageId]) -> PredicateContext<'_> {
@@ -941,92 +862,6 @@ mod tests {
             .iter()
             .map(|(n, ver)| crate::pm::PackageId::new(crate::pm::CARGO_PM, *n, *ver))
             .collect()
-    }
-
-    // --- SkillOrigin identity ---
-
-    #[test]
-    fn skill_origin_git_dedups_when_repo_sha_and_path_match() {
-        // Two `Git` origins that point at the same repo, the same
-        // commit SHA, and the same path within that commit are the
-        // *same* skill regardless of which URL form (or which plugin)
-        // brought us there.
-        let a = SkillOrigin::Git {
-            source: symposium_install::git::GitSource::GitHub {
-                owner: "foo".into(),
-                repo: "bar".into(),
-                git_ref: String::new(),
-                subpath: String::new(),
-            },
-            commit_sha: "deadbeef".into(),
-            skill_path: "skills/code-review".into(),
-        };
-        let b = SkillOrigin::Git {
-            source: symposium_install::git::GitSource::GitHub {
-                owner: "foo".into(),
-                repo: "bar".into(),
-                git_ref: String::new(),
-                subpath: String::new(),
-            },
-            commit_sha: "deadbeef".into(),
-            skill_path: "skills/code-review".into(),
-        };
-        assert_eq!(a, b);
-        assert_eq!(a.short_hash(), b.short_hash());
-    }
-
-    #[test]
-    fn skill_origin_git_distinct_paths_stay_distinct() {
-        let a = SkillOrigin::Git {
-            source: symposium_install::git::GitSource::GitHub {
-                owner: "foo".into(),
-                repo: "bar".into(),
-                git_ref: String::new(),
-                subpath: String::new(),
-            },
-            commit_sha: "deadbeef".into(),
-            skill_path: "skills/a".into(),
-        };
-        let b = SkillOrigin::Git {
-            source: symposium_install::git::GitSource::GitHub {
-                owner: "foo".into(),
-                repo: "bar".into(),
-                git_ref: String::new(),
-                subpath: String::new(),
-            },
-            commit_sha: "deadbeef".into(),
-            skill_path: "skills/b".into(),
-        };
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn skill_origin_kinds_are_distinct() {
-        // Distinct variants must not collide even with similar field values.
-        let c = SkillOrigin::Crate {
-            name: "foo".into(),
-            version: semver::Version::new(1, 0, 0),
-        };
-        let s = SkillOrigin::Source {
-            source_name: "foo".into(),
-            skill_path: "1.0.0".into(),
-        };
-        let g = SkillOrigin::Git {
-            source: symposium_install::git::GitSource::GitHub {
-                owner: "foo".into(),
-                repo: "bar".into(),
-                git_ref: String::new(),
-                subpath: String::new(),
-            },
-            commit_sha: "deadbeef".into(),
-            skill_path: "1.0.0".into(),
-        };
-        assert_ne!(c, s);
-        assert_ne!(c, g);
-        assert_ne!(s, g);
-        assert_ne!(c.short_hash(), s.short_hash());
-        assert_ne!(c.short_hash(), g.short_hash());
-        assert_ne!(s.short_hash(), g.short_hash());
     }
 
     // --- Frontmatter parsing ---
@@ -1156,8 +991,7 @@ mod tests {
         )
         .unwrap();
 
-        let defaults = SkillGroup::default();
-        let skill = load_skill(&skill_md, &defaults).unwrap();
+        let skill = load_skill(&skill_md, false, &PredicateSet::default()).unwrap();
 
         assert_eq!(skill.frontmatter.get("name").unwrap(), "test-skill");
         assert!(skill.predicates.references_dep("serde"));
@@ -1182,8 +1016,7 @@ mod tests {
         )
         .unwrap();
 
-        let defaults = SkillGroup::default();
-        let skill = load_skill(&skill_md, &defaults).unwrap();
+        let skill = load_skill(&skill_md, false, &PredicateSet::default()).unwrap();
         assert!(skill.predicates.references_dep("serde"));
         assert!(skill.predicates.references_dep("tokio"));
     }
@@ -1205,11 +1038,7 @@ mod tests {
         )
         .unwrap();
 
-        let defaults = SkillGroup {
-            predicates: pred_set("tokio"),
-            ..Default::default()
-        };
-        let skill = load_skill(&skill_md, &defaults).unwrap();
+        let skill = load_skill(&skill_md, false, &pred_set("tokio")).unwrap();
 
         // Skill has no crates in frontmatter, so it's empty at skill level.
         // The plugin default provides the crates scope.
@@ -1234,11 +1063,7 @@ mod tests {
         )
         .unwrap();
 
-        let defaults = SkillGroup {
-            predicates: pred_set("tokio"),
-            ..Default::default()
-        };
-        let skill = load_skill(&skill_md, &defaults).unwrap();
+        let skill = load_skill(&skill_md, false, &pred_set("tokio")).unwrap();
 
         // Skill-level crates specializes (ANDs with) plugin defaults
         assert!(skill.predicates.references_dep("serde"));
@@ -1262,9 +1087,8 @@ mod tests {
         )
         .unwrap();
 
-        let defaults = SkillGroup::default();
         // No longer an error — just a warning. The skill loads but won't match anything.
-        let skill = load_skill(&skill_md, &defaults).unwrap();
+        let skill = load_skill(&skill_md, false, &PredicateSet::default()).unwrap();
         assert!(skill.predicates.is_empty());
     }
 
@@ -1286,11 +1110,7 @@ mod tests {
         .unwrap();
 
         // Plugin defaults provide crates, so the skill doesn't need its own
-        let defaults = SkillGroup {
-            predicates: pred_set("serde"),
-            ..Default::default()
-        };
-        let skill = load_skill(&skill_md, &defaults).unwrap();
+        let skill = load_skill(&skill_md, false, &pred_set("serde")).unwrap();
         assert!(skill.predicates.is_empty()); // skill-level is empty
         assert_eq!(skill.frontmatter.get("name").unwrap(), "no-own-crates");
     }
@@ -1329,17 +1149,15 @@ mod tests {
         fs::create_dir_all(&skill_dir).unwrap();
         fs::write(skill_dir.join("SKILL.md"), "Plain maintainer notes.\n").unwrap();
 
-        let workspace_group = SkillGroup {
-            workspace_member: true,
-            ..SkillGroup::default()
-        };
-        let skill = load_skill(&skill_dir.join("SKILL.md"), &workspace_group).unwrap();
+        let skill =
+            load_skill(&skill_dir.join("SKILL.md"), true, &PredicateSet::default()).unwrap();
         assert_eq!(skill.name(), "release-notes");
         assert!(!skill.frontmatter.contains_key("description"));
         assert_eq!(skill.body, "Plain maintainer notes.\n");
 
         // Registry groups keep the agentskills.io contract.
-        let err = load_skill(&skill_dir.join("SKILL.md"), &SkillGroup::default()).unwrap_err();
+        let err =
+            load_skill(&skill_dir.join("SKILL.md"), false, &PredicateSet::default()).unwrap_err();
         assert!(err.to_string().contains("frontmatter"), "{err}");
     }
 
@@ -1362,11 +1180,8 @@ mod tests {
         )
         .unwrap();
 
-        let workspace_group = SkillGroup {
-            workspace_member: true,
-            ..SkillGroup::default()
-        };
-        let skill = load_skill(&skill_dir.join("SKILL.md"), &workspace_group).unwrap();
+        let skill =
+            load_skill(&skill_dir.join("SKILL.md"), true, &PredicateSet::default()).unwrap();
         assert_eq!(skill.name(), "style");
         assert!(skill.predicates.references_dep("serde"));
 
@@ -1382,7 +1197,8 @@ mod tests {
             "},
         )
         .unwrap();
-        let skill = load_skill(&skill_dir.join("SKILL.md"), &workspace_group).unwrap();
+        let skill =
+            load_skill(&skill_dir.join("SKILL.md"), true, &PredicateSet::default()).unwrap();
         assert_eq!(skill.name(), "explicit");
     }
 
@@ -1429,20 +1245,21 @@ mod tests {
             hooks: vec![],
             skills: vec![SkillGroup {
                 predicates: pred_set("serde"), // Group targets serde
-                source: PluginSource::default(),
+                source: PluginSource::Path(PathBuf::from("skills")),
                 workspace_member: false,
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            chained: vec![],
         };
 
         let registry = PluginRegistry {
             plugins: vec![ParsedPlugin {
+                canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
                 path: tmp.path().join("plugin.toml"),
                 plugin,
-                source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
                 workspace_member: false,
             }],
@@ -1487,20 +1304,21 @@ mod tests {
             hooks: vec![],
             skills: vec![SkillGroup {
                 predicates: pred_set("other-crate"), // But group targets other-crate
-                source: PluginSource::default(),
+                source: PluginSource::Path(PathBuf::from("skills")),
                 workspace_member: false,
             }],
             mcp_servers: vec![],
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            chained: vec![],
         };
 
         let registry = PluginRegistry {
             plugins: vec![ParsedPlugin {
+                canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
                 path: tmp.path().join("plugin.toml"),
                 plugin,
-                source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
                 workspace_member: false,
             }],
@@ -1570,13 +1388,14 @@ mod tests {
             installations: Vec::new(),
             subcommands: BTreeMap::new(),
             custom_predicates: vec![],
+            chained: vec![],
         };
 
         let registry = PluginRegistry {
             plugins: vec![ParsedPlugin {
+                canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
                 path: tmp.path().join("plugin.toml"),
                 plugin,
-                source_name: "test".to_string(),
                 source_dir: tmp.path().to_path_buf(),
                 workspace_member: false,
             }],
@@ -1651,13 +1470,14 @@ mod tests {
             installations: Vec::new(),
             subcommands: Default::default(),
             custom_predicates: vec![],
+            chained: vec![],
         };
 
         let registry = PluginRegistry {
             plugins: vec![ParsedPlugin {
+                canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
                 path: tmp.path().join("plugin.toml"),
                 plugin,
-                source_name: "test".to_string(),
                 source_dir: PathBuf::from(".".to_string()),
                 workspace_member: false,
             }],
@@ -1733,13 +1553,14 @@ mod tests {
             installations: Vec::new(),
             subcommands: Default::default(),
             custom_predicates: vec![],
+            chained: vec![],
         };
 
         let registry = PluginRegistry {
             plugins: vec![ParsedPlugin {
+                canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
                 path: tmp.path().join("plugin.toml"),
                 plugin,
-                source_name: "test".to_string(),
                 source_dir: PathBuf::from(".".to_string()),
                 workspace_member: false,
             }],
@@ -1783,7 +1604,7 @@ mod tests {
         )
         .unwrap();
 
-        let skill = load_skill(&skill_md, &SkillGroup::default()).unwrap();
+        let skill = load_skill(&skill_md, false, &PredicateSet::default()).unwrap();
         // `depends-on: serde` lowers to a leading `depends-on(serde)`, then the two
         // function-call predicates.
         assert_eq!(
@@ -1871,10 +1692,7 @@ mod tests {
             plugins: Vec::new(),
             standalone_skills: vec![crate::plugins::StandaloneSkill {
                 skill,
-                origin: SkillOrigin::Source {
-                    source_name: "test".to_string(),
-                    skill_path: "my-skill".to_string(),
-                },
+                origin_hash: "test-myskill".to_string(),
             }],
             warnings: vec![],
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
@@ -1923,8 +1741,7 @@ mod tests {
         )
         .unwrap();
 
-        let defaults = SkillGroup::default();
-        let skills = discover_skills(&plugin_dir.join("skills"), &defaults);
+        let skills = discover_skills(&plugin_dir.join("skills"), false, &PredicateSet::default());
 
         assert_eq!(skills.len(), 1);
         let skill = skills.into_iter().next().unwrap().unwrap();
@@ -1953,8 +1770,7 @@ mod tests {
         )
         .unwrap();
 
-        let defaults = SkillGroup::default();
-        let skills = discover_skills(root, &defaults);
+        let skills = discover_skills(root, false, &PredicateSet::default());
 
         assert_eq!(skills.len(), 1);
         let skill = skills.into_iter().next().unwrap().unwrap();
@@ -2017,8 +1833,7 @@ mod tests {
         )
         .unwrap();
 
-        let defaults = SkillGroup::default();
-        let skills = discover_skills(root, &defaults);
+        let skills = discover_skills(root, false, &PredicateSet::default());
 
         // Should find shallow + sibling, but NOT nested (pruned by shallow)
         let names: Vec<String> = skills
@@ -2034,8 +1849,7 @@ mod tests {
     #[test]
     fn discover_skills_no_skills_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let defaults = SkillGroup::default();
-        let skills = discover_skills(tmp.path(), &defaults);
+        let skills = discover_skills(tmp.path(), false, &PredicateSet::default());
         assert!(skills.is_empty());
     }
 
