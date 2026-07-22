@@ -124,7 +124,11 @@ Defines additional registries — directories or repositories offering plugins. 
 
 Enablement: which plugins are allowed to run at all, as distinct from the [predicates](./predicates.md) that decide *when* an enabled plugin applies.
 
-Symposium trusts two things without asking: the workspace you are in, and the [registries](#registry) you configured — pointing config at a registry is the act of trusting its curation. Your dependency list is deliberately not on that list. Depending on a crate means compiling its code; it should not silently let the crate's author add instructions to your agent. So a plugin embedded in a dependency runs only once you say so, and a registry plugin that names no dependency anywhere is *dormant* — loaded and listed, but inactive — until you enable it by name.
+Symposium trusts two things without asking: the workspace you are in, and the [registries](#registry) it is configured with. A registry exists to curate plugins, so enabling one is the act of accepting its curation. Both built-in registries count here and are on by default — `user-plugins` is your own directory, while `symposium-recommendations` is a list curated by the Symposium project and trusted until you turn it off in [`[defaults]`](#defaults).
+
+Your dependency list is deliberately not a trust root. Depending on a crate means compiling its code; it should not silently let the crate's author add instructions to your agent. So a plugin embedded in a dependency runs only once you say so, and a registry plugin that names no dependency anywhere is *dormant* — loaded and listed, but inactive — until you enable it by name.
+
+Trust follows whoever supplies the *content*, not the package the content is about: a registry entry recommending a plugin for `serde` is the registry's own content and is trusted, while `serde`'s embedded plugin is not. One consequence is worth knowing: a trusted plugin may name a crate with a [`[[plugins]]` chained reference](./plugin-definition.md), and that crate's plugin content then loads without a `[plugins]` entry of its own — the registry is vouching for it.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|

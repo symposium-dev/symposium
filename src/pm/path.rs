@@ -58,6 +58,12 @@ impl PackageManager for PathPm {
         &self.name
     }
 
+    /// A configured directory is a trust root: either the user pointed a
+    /// `[[registry]]` entry at it, or it is their own `~/.symposium/plugins/`.
+    fn trusted(&self) -> bool {
+        true
+    }
+
     /// The registry's entries. `deps` is unused — a local registry's
     /// contents don't vary with the workspace.
     async fn list_plugins(

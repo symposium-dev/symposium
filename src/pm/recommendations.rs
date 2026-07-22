@@ -98,6 +98,13 @@ impl PackageManager for RecommendationsPm {
         &self.name
     }
 
+    /// A recommendations source is a trust root: its entries are curated
+    /// content the source vouches for, not content the recommended
+    /// dependency's author supplied.
+    fn trusted(&self) -> bool {
+        true
+    }
+
     /// `deps` is unused: dependency matching happens through the implied
     /// `depends-on(<name>)` gate each `cargo/<name>/` entry lowers to, so the
     /// offer list stays workspace-independent.

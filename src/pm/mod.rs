@@ -146,6 +146,22 @@ pub trait PackageManager {
     /// instance it is the configured registry's name.
     fn name(&self) -> &str;
 
+    /// Is this PM a trust root — do its offers run without the user
+    /// consenting to each one?
+    ///
+    /// True for a registry instance: a registry exists to curate plugins, and
+    /// enabling one (or leaving a built-in enabled) is the decision to accept
+    /// that curation. False for an ecosystem transport, whose packages the
+    /// user depends on for *code*: depending on a crate must not let its
+    /// author add instructions to the agent, so its offers stay candidates
+    /// until `[plugins]` names them.
+    ///
+    /// Untrusted by default, so a PM added later is a trust root only by
+    /// saying so.
+    fn trusted(&self) -> bool {
+        false
+    }
+
     /// The plugin-bearing packages this PM offers for the given workspace
     /// dependency set. This is the input-less form of the RFD's `resolve`: a
     /// registry instance lists its own source; ecosystem PMs use `deps` to
@@ -299,6 +315,50 @@ mod tests {
     fn package_id_display_is_colon_tuple() {
         let id = PackageId::new("cargo", "serde", "1.0.210");
         assert_eq!(id.to_string(), "cargo:serde:1.0.210");
+    }
+
+    /// A PM is a trust root only by saying so. The guard that matters is the
+    /// default: a transport added later must not become a trust root just by
+    /// not being cargo.
+    #[test]
+    fn trust_is_declared_not_inferred() {
+        struct NewEcosystemPm;
+
+        #[async_trait::async_trait]
+        impl PackageManager for NewEcosystemPm {
+            fn name(&self) -> &str {
+                "npm"
+            }
+            async fn list_plugins(
+                &self,
+                _deps: &[PackageId],
+                _cx: &PmContext<'_>,
+            ) -> Result<Vec<PluginInfo>> {
+                Ok(Vec::new())
+            }
+            async fn search(&self, _q: &str, _cx: &PmContext<'_>) -> Result<Vec<PluginInfo>> {
+                Ok(Vec::new())
+            }
+            async fn fetch(
+                &self,
+                _id: &PackageId,
+                _cx: &PmContext<'_>,
+                _update: UpdateLevel,
+            ) -> Result<FetchedPackage> {
+                anyhow::bail!("unused")
+            }
+            async fn list_deps(&self, _cx: &PmContext<'_>) -> Result<Vec<PackageId>> {
+                Ok(Vec::new())
+            }
+            fn cached_root(&self, _id: &PackageId, _cx: &PmContext<'_>) -> Option<PathBuf> {
+                None
+            }
+        }
+
+        assert!(!NewEcosystemPm.trusted());
+        assert!(!CargoPm.trusted());
+        assert!(PathPm::new("user-plugins", "/tmp").trusted());
+        assert!(RecommendationsPm::new("symposium-recommendations", "/tmp").trusted());
     }
 
     #[tokio::test]

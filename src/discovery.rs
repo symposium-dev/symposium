@@ -22,9 +22,16 @@
 //!
 //! Enablement matters because a dependency is deliberately *not* a trust
 //! root: depending on a crate means compiling its code, not letting its
-//! author inject agent context. Registries are trust roots (pointing config
-//! at one is the act of trusting its curation), so their offers arrive
-//! already enabled.
+//! author inject agent context. Registry instances are trust roots — a
+//! registry exists to curate plugins — so their offers arrive already
+//! enabled.
+//!
+//! Which of those an offer is comes from the *offering instance*
+//! ([`PackageManager::trusted`]), never from the `pm` component of its id:
+//! trust is a property a PM declares, so an ecosystem transport added later
+//! is untrusted by default rather than trusted for not being cargo.
+//!
+//! [`PackageManager::trusted`]: crate::pm::PackageManager::trusted
 //!
 //! [`pm::workspace_dep_ids`]: crate::pm::workspace_dep_ids
 //! [`PackageManager::list_plugins`]: crate::pm::PackageManager::list_plugins
@@ -45,7 +52,9 @@ use crate::report::ReportEvent;
 pub enum Enablement {
     /// Enabled by a `[plugins] use` entry naming it.
     Used,
-    /// Offered by a configured registry, which is a trust root.
+    /// Offered by a PM that declares itself a trust root
+    /// ([`PackageManager::trusted`](crate::pm::PackageManager::trusted)) —
+    /// a registry, whose curation is what is being trusted.
     Registry,
     /// Enabled ahead of time by `[plugins] auto-enable`.
     AutoEnabled,
@@ -133,8 +142,12 @@ pub async fn discover(
             let Some(recommends) = matched_dependency(&offer, &dep_ids) else {
                 continue;
             };
-            let from_registry = offer.id.pm != CARGO_PM;
-            let enablement = decide(sym, consent_name(&offer), workspace_root, from_registry);
+            let enablement = decide(
+                sym,
+                consent_name(&offer),
+                workspace_root,
+                inst.pm.trusted(),
+            );
             let discovered = DiscoveredPlugin {
                 registry: inst.name.clone(),
                 id: offer.id,
@@ -311,13 +324,18 @@ fn matched_dependency(offer: &PluginInfo, dep_ids: &[PackageId]) -> Option<Strin
 /// Classify one offer against the `[plugins]` config. An explicit decision —
 /// `use`, then `disable` — outranks the standing ones, so a name the user
 /// declined stays declined even when a registry offers it.
-fn decide(sym: &Symposium, name: &str, workspace_root: &Path, from_registry: bool) -> Enablement {
+///
+/// `trusted` comes from the offering instance
+/// ([`PackageManager::trusted`](crate::pm::PackageManager::trusted)), not from
+/// the id's `pm` name: a transport added later must not become a trust root
+/// just by not being cargo.
+fn decide(sym: &Symposium, name: &str, workspace_root: &Path, trusted: bool) -> Enablement {
     let plugins = &sym.config.plugins;
     if plugins.is_used_in(name, workspace_root) {
         Enablement::Used
     } else if plugins.is_disabled(name) {
         Enablement::Declined
-    } else if from_registry {
+    } else if trusted {
         Enablement::Registry
     } else if plugins.is_auto_enabled(name) {
         Enablement::AutoEnabled
@@ -372,6 +390,54 @@ mod tests {
         )
         .unwrap();
         Symposium::from_dir(&config_dir)
+    }
+
+    /// A `Symposium` with the built-in recommendations registry enabled and
+    /// its content seeded with one `cargo/<dep>/` entry.
+    fn sym_with_recommendations(root: &Path, dep: &str) -> Symposium {
+        let config_dir = root.join("config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("config.toml"),
+            "[defaults]\nuser-plugins = false\n",
+        )
+        .unwrap();
+        let sym = Symposium::from_dir(&config_dir);
+
+        let recs = sym
+            .registries()
+            .into_iter()
+            .find(|r| r.recommendations)
+            .and_then(|r| r.content_dir(sym.cache_dir()))
+            .expect("built-in recommendations registry");
+        let entry = recs.join("cargo").join(dep);
+        std::fs::create_dir_all(&entry).unwrap();
+        std::fs::write(entry.join("SKILL.md"), "# recommended").unwrap();
+        sym
+    }
+
+    /// The same dependency, offered two ways: a registry curates content for
+    /// it (trusted, so active) while the crate's own embedded plugin stays a
+    /// candidate. Trust follows the offering instance, not the dependency.
+    #[tokio::test]
+    async fn registry_offers_are_trusted_but_dependency_offers_are_not() {
+        let tmp = tempfile::tempdir().unwrap();
+        let crates = workspace(tmp.path());
+        let sym = sym_with_recommendations(tmp.path(), "widget-lib");
+
+        let found = discover(&sym, &crates, tmp.path()).await;
+
+        let active: Vec<(&str, Enablement)> = found
+            .active
+            .iter()
+            .map(|p| (p.recommends.as_str(), p.enablement))
+            .collect();
+        assert_eq!(active, vec![("widget-lib", Enablement::Registry)]);
+        assert_eq!(found.active[0].registry, "symposium-recommendations");
+
+        let candidates: Vec<&str> = found.candidates.iter().map(|c| c.name()).collect();
+        assert_eq!(candidates, vec!["widget-lib"]);
+        assert_eq!(found.candidates[0].registry, CARGO_PM);
     }
 
     #[tokio::test]
