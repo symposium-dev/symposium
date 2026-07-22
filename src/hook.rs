@@ -408,7 +408,7 @@ async fn run_auto_sync(sym: &Symposium, deps: &mut WorkspaceDeps, session_start:
 /// but never installs eagerly. Best-effort: failures are logged and skipped.
 async fn prewarm_hook_sources(sym: &Symposium, deps: &mut WorkspaceDeps) {
     let workspace = deps.load().cloned();
-    let plugins = crate::plugins::load_all_plugins(sym, workspace.as_deref());
+    let plugins = crate::plugins::load_all_plugins(sym, workspace.as_deref()).await;
 
     // Resolving the workspace runs cargo, so only do it when some hook's
     // gating references a concrete crate (mirrors dispatch).
@@ -466,7 +466,9 @@ pub async fn dispatch_builtin(
         symposium::InputEvent::UserPromptSubmit(prompt) => {
             handle_user_prompt_submit(sym, prompt).await
         }
-        symposium::InputEvent::SessionStart(session) => handle_session_start(sym, session, deps).await,
+        symposium::InputEvent::SessionStart(session) => {
+            handle_session_start(sym, session, deps).await
+        }
         _ => symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
     }
 }
@@ -495,7 +497,7 @@ async fn handle_session_start(
 /// Reuses the help renderer's `applicable_subcommands`, so the hint fires only when there is actually something to discover; `None` otherwise.
 async fn discovery_hint(sym: &Symposium, deps: &mut WorkspaceDeps) -> Option<String> {
     let workspace = deps.load().cloned();
-    let registry = crate::plugins::load_registry_with_workspace(sym, workspace.as_deref());
+    let registry = crate::plugins::load_registry_with_workspace(sym, workspace.as_deref()).await;
     let dep_ids = crate::pm::workspace_dep_ids(sym, deps.crates()).await;
 
     let any_subcommand = !applicable_subcommands(&registry, &dep_ids).is_empty();
@@ -571,7 +573,7 @@ pub async fn dispatch_plugin_hooks(
     deps: &mut WorkspaceDeps,
 ) -> Result<serde_json::Value, Vec<u8>> {
     let workspace = deps.load().cloned();
-    let plugins = crate::plugins::load_all_plugins(sym, workspace.as_deref());
+    let plugins = crate::plugins::load_all_plugins(sym, workspace.as_deref()).await;
 
     // Resolving the workspace means running cargo, so only do it when some
     // plugin's hook gating actually references a concrete crate (a `depends-on(*)`

@@ -223,7 +223,7 @@ async fn sync_skips_invalid_skill_frontmatter() {
         &["invalid-skill0", "workspace0"],
         async |mut ctx| {
             ctx.symposium(&["init", "--add-agent", "codex"]).await?;
-            let registry = symposium::plugins::load_registry(&ctx.sym);
+            let registry = symposium::plugins::load_registry(&ctx.sym).await;
             assert!(
                 registry.warnings.iter().any(|warning| {
                     warning.path.ends_with("bad-skill/SKILL.md")

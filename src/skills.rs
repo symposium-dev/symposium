@@ -398,10 +398,7 @@ async fn expand_chained_plugins(
         }
 
         let pm_cx = crate::pm::PmContext::new(sym, workspace_crates);
-        let Some(crate_plugin) = crate::pm::CargoPm
-            .load_plugin(&chained.name, &pm_cx)
-            .await
-        else {
+        let Some(crate_plugin) = crate::pm::CargoPm.load_plugin(&chained.name, &pm_cx).await else {
             continue;
         };
 

@@ -1,5 +1,5 @@
 hook-scope = "project"
 
-[[plugin-source]]
+[[registry]]
 name = "project-local"
 path = "project-plugins"

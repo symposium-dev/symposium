@@ -995,6 +995,13 @@ enum ManifestOrigin<'a> {
     Crate {
         crate_name: &'a str,
     },
+    /// An entry in a recommendations registry's `cargo/<name>/` directory:
+    /// the name defaults to the dependency's, and an implied
+    /// `depends-on(<name>)` gate is appended to the plugin predicates (which
+    /// is also what satisfies the must-reference-a-dependency rule).
+    Recommendations {
+        dep_name: &'a str,
+    },
 }
 
 /// Raw TOML manifest deserialized from a plugin `.toml` file.
@@ -1131,282 +1138,328 @@ struct RawHook {
     predicates: crate::predicate::PredicateSet,
 }
 
-/// Fetch/update git-based plugin sources.
-///
-/// Ensure git-based plugin sources are up to date.
+/// Fetch/update git-based registries.
 ///
 /// `update` controls freshness checking behavior (see `UpdateLevel`).
-/// Only refreshes sources with `auto-update = true` (unless `update` is `Fetch`).
-/// Path-based sources are skipped (no fetching needed).
-pub async fn ensure_plugin_sources(sym: &Symposium, update: UpdateLevel) {
-    let sources = sym.plugin_sources();
-
-    for resolved in &sources {
-        let source = &resolved.source;
-        if !matches!(update, UpdateLevel::Fetch) && !source.auto_update {
-            tracing::debug!(source = %source.name, "skipping (auto-update disabled)");
+/// Only refreshes registries with `auto-update = true` (unless `update` is
+/// `Fetch`). Path-based registries are skipped (no fetching needed).
+pub async fn ensure_registries(sym: &Symposium, update: UpdateLevel) {
+    for resolved in &sym.registries() {
+        let registry = &resolved.registry;
+        if !matches!(update, UpdateLevel::Fetch) && !registry.auto_update {
+            tracing::debug!(registry = %registry.name, "skipping (auto-update disabled)");
             continue;
         }
 
-        let Some(ref git_url) = source.git else {
-            tracing::debug!(source = %source.name, "skipping (can only auto-update git)");
+        let Some(ref git_url) = registry.git else {
+            tracing::debug!(registry = %registry.name, "skipping (can only auto-update git)");
             continue;
         };
 
-        tracing::debug!(source = %source.name, url = %git_url, "ensuring plugin source");
+        tracing::debug!(registry = %registry.name, url = %git_url, "ensuring registry");
 
-        match fetch_plugin_source(sym, git_url, update).await {
+        match fetch_registry(sym, git_url, update).await {
             Ok(path) => {
-                tracing::debug!(source = %source.name, path = %path.display(), "plugin source ready");
+                tracing::debug!(registry = %registry.name, path = %path.display(), "registry ready");
             }
             Err(e) => {
-                tracing::warn!(source = %source.name, git_url = %git_url, error = %e, "failed to fetch plugin source");
+                tracing::warn!(registry = %registry.name, git_url = %git_url, error = %e, "failed to fetch registry");
             }
         }
     }
 }
 
-/// Load all plugins from all configured plugin source directories plus the
-/// active workspace, discarding load errors with warnings.
+/// Load all plugins from all configured registries plus the active
+/// workspace, discarding load errors with warnings.
 ///
 /// Use `load_registry_with_workspace()` instead if you also need standalone
 /// skills.
-pub fn load_all_plugins(
+pub async fn load_all_plugins(
     sym: &Symposium,
     workspace: Option<&symposium_sdk::workspace::LoadedWorkspace>,
 ) -> Vec<ParsedPlugin> {
-    load_registry_impl(sym, workspace).plugins
+    load_registry_impl(sym, workspace).await.plugins
 }
 
-/// Sync plugin sources.
+/// Refresh registry content.
 ///
-/// If `provider` is Some, sync only that provider (ignores auto-update).
-/// If `provider` is None, sync all sources with auto-update = true.
-pub async fn sync_plugin_source(sym: &Symposium, provider: Option<&str>) -> Result<Vec<String>> {
-    let sources = sym.plugin_sources();
+/// If `provider` is Some, sync only that registry (ignores auto-update).
+/// If `provider` is None, sync all registries with auto-update = true.
+pub async fn sync_registries(sym: &Symposium, provider: Option<&str>) -> Result<Vec<String>> {
     let mut synced = Vec::new();
 
-    for resolved in &sources {
-        let source = &resolved.source;
+    for resolved in &sym.registries() {
+        let registry = &resolved.registry;
         if let Some(name) = provider {
-            if source.name != name {
+            if registry.name != name {
                 continue;
             }
-        } else if !source.auto_update {
-            tracing::debug!(source = %source.name, "skipping (auto-update disabled)");
+        } else if !registry.auto_update {
+            tracing::debug!(registry = %registry.name, "skipping (auto-update disabled)");
             continue;
         }
 
-        if let Some(ref git_url) = source.git {
-            tracing::debug!(source = %source.name, url = %git_url, "syncing plugin source");
-            match fetch_plugin_source(sym, git_url, UpdateLevel::Fetch).await {
+        if let Some(ref git_url) = registry.git {
+            tracing::debug!(registry = %registry.name, url = %git_url, "syncing registry");
+            match fetch_registry(sym, git_url, UpdateLevel::Fetch).await {
                 Ok(path) => {
-                    tracing::info!(source = %source.name, path = %path.display(), "synced");
-                    synced.push(source.name.clone());
+                    tracing::info!(registry = %registry.name, path = %path.display(), "synced");
+                    synced.push(registry.name.clone());
                 }
                 Err(e) => {
-                    tracing::warn!(source = %source.name, error = %e, "failed to sync");
+                    tracing::warn!(registry = %registry.name, error = %e, "failed to sync");
                 }
             }
         } else {
-            tracing::debug!(source = %source.name, "skipping path-based source");
+            tracing::debug!(registry = %registry.name, "skipping path-based registry");
         }
     }
 
     Ok(synced)
 }
 
-/// List all providers and their plugins.
-pub fn list_plugins(sym: &Symposium) -> Vec<ProviderInfo> {
-    let sources = sym.plugin_sources();
-    let mut providers = Vec::new();
+/// List all providers and their plugins. Routed through the same package
+/// managers as registry loading, so what `plugin list` shows can't diverge
+/// from what `sync` sees.
+pub async fn list_plugins(sym: &Symposium) -> Vec<ProviderInfo> {
+    let pms = sym.package_managers();
+    let pm_cx = registry_pm_cx(sym);
+    let mut by_registry: std::collections::HashMap<String, Vec<PluginInfo>> =
+        std::collections::HashMap::new();
 
-    for resolved in &sources {
-        let source = &resolved.source;
-        let source_path = resolve_plugin_source_dir(sym, resolved);
-        let plugins: Vec<PluginInfo> = source_path
-            .and_then(|p| scan_source_dir(&p, &source.name).ok())
-            .map(|c| c.plugins)
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|r| r.ok())
-            .map(|p| PluginInfo {
+    let (offers, _warnings) = list_plugin_offers(&pms, &pm_cx).await;
+    for offer in offers {
+        let Some(OfferItem::Plugin(Ok(p))) = load_offer(&offer) else {
+            continue;
+        };
+        by_registry
+            .entry(offer.registry_name.clone())
+            .or_default()
+            .push(PluginInfo {
                 name: p.plugin.name,
                 hooks_count: p.plugin.hooks.len(),
                 skill_groups_count: p.plugin.skills.len(),
-            })
-            .collect();
-
-        providers.push(ProviderInfo {
-            name: source.name.clone(),
-            source_type: if source.git.is_some() { "git" } else { "path" },
-            git_url: source.git.clone(),
-            path: source.path.clone(),
-            plugins,
-        });
+            });
     }
 
-    providers
+    sym.registries()
+        .into_iter()
+        .map(|resolved| {
+            let registry = resolved.registry;
+            ProviderInfo {
+                plugins: by_registry.remove(&registry.name).unwrap_or_default(),
+                name: registry.name,
+                source_type: if registry.git.is_some() {
+                    "git"
+                } else {
+                    "path"
+                },
+                git_url: registry.git,
+                path: registry.path,
+            }
+        })
+        .collect()
 }
 
-/// Find a plugin by name across all sources.
-pub fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
-    let sources = sym.plugin_sources();
-
-    for resolved in &sources {
-        let source_path = resolve_plugin_source_dir(sym, resolved);
-        if let Some(ref path) = source_path
-            && let Ok(contents) = scan_source_dir(path, &resolved.source.name)
+/// Find a plugin by name across all registries. First match wins.
+pub async fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
+    let pms = sym.package_managers();
+    let pm_cx = registry_pm_cx(sym);
+    let (offers, _warnings) = list_plugin_offers(&pms, &pm_cx).await;
+    for offer in offers {
+        if let Some(OfferItem::Plugin(Ok(parsed_plugin))) = load_offer(&offer)
+            && parsed_plugin.plugin.name == name
         {
-            for parsed_plugin in contents.plugins.into_iter().flatten() {
-                if parsed_plugin.plugin.name == name {
-                    return Some(parsed_plugin);
-                }
-            }
+            return Some(*parsed_plugin);
         }
     }
     None
 }
 
-/// Resolve the directories for all configured plugin sources, paired with
-/// each source's display name (used to attribute standalone skills to a
-/// stable origin).
-///
-/// For `path` sources: resolves relative to the source's `base_dir`, or uses absolute paths as-is.
-/// For `git` sources: computes the cache path under `~/.symposium/cache/plugin-sources/`.
-///
-/// Does no network I/O — just computes paths.
-fn resolve_plugin_source_dirs(
-    sym: &Symposium,
-    sources: &[crate::config::ResolvedPluginSource],
-) -> Vec<(String, PathBuf)> {
-    let cache_base = sym.cache_dir().join("plugin-sources");
-
-    let mut dirs = Vec::new();
-    for resolved in sources {
-        if let Some(dir) = resolve_one_source(&resolved.source, &resolved.base_dir, &cache_base) {
-            dirs.push((resolved.source.name.clone(), dir));
-        }
-    }
-    dirs
-}
-
-fn resolve_plugin_source_dir(
-    sym: &Symposium,
-    resolved: &crate::config::ResolvedPluginSource,
-) -> Option<PathBuf> {
-    let cache_base = sym.cache_dir().join("plugin-sources");
-    resolve_one_source(&resolved.source, &resolved.base_dir, &cache_base)
-}
-
-fn resolve_one_source(
-    source: &crate::config::PluginSourceConfig,
-    base_dir: &Path,
-    cache_base: &Path,
-) -> Option<PathBuf> {
-    if let Some(ref path) = source.path {
-        let p = PathBuf::from(path);
-        if p.is_absolute() {
-            return Some(p);
-        } else {
-            return Some(base_dir.join(p));
-        }
-    } else if let Some(ref git_url) = source.git {
-        let cache_mgr = symposium_install::git::GitCacheManager::from_cache_dir(cache_base);
-        match cache_mgr.cache_path_for_url(git_url) {
-            Some(path) => return Some(path),
-            None => {
-                tracing::warn!(source = %source.name, url = %git_url, "bad plugin source URL");
-            }
-        }
-    }
-    None
-}
-
-/// Fetch a plugin source repository, returning the cached directory path.
-async fn fetch_plugin_source(
-    sym: &Symposium,
-    git_url: &str,
-    update: UpdateLevel,
-) -> Result<PathBuf> {
-    let cache_mgr =
-        symposium_install::git::GitCacheManager::new(&sym.install_context(), "plugin-sources");
+/// Fetch a git registry's repository, returning the cached directory path.
+async fn fetch_registry(sym: &Symposium, git_url: &str, update: UpdateLevel) -> Result<PathBuf> {
+    let cache_mgr = symposium_install::git::GitCacheManager::new(
+        &sym.install_context(),
+        crate::config::REGISTRY_CACHE_SUBDIR,
+    );
     cache_mgr.fetch_url(git_url, update).await
 }
 
-/// Scan all configured plugin source directories and load the registry.
+/// PM context for registry operations: these are workspace independent, so
+/// the dependency list is empty.
+fn registry_pm_cx(sym: &Symposium) -> crate::pm::PmContext<'static> {
+    crate::pm::PmContext {
+        install: sym.install_context(),
+        workspace_crates: &[],
+    }
+}
+
+/// One package offered by a PM instance, located on disk: the instance's
+/// display name (origin attribution), the source content root, the package's
+/// directory within it, and — for recommendations entries — the dependency
+/// it recommends a plugin for.
+struct PluginOffer {
+    registry_name: String,
+    /// Registry content root. `ParsedPlugin::source_dir` — the base for a
+    /// plugin's `source.path` groups — is always this, not the entry dir.
+    root: PathBuf,
+    /// The package's directory relative to `root`.
+    subpath: PathBuf,
+    recommends: Option<String>,
+}
+
+impl PluginOffer {
+    /// The directory holding this offer's package.
+    fn dir(&self) -> PathBuf {
+        self.root.join(&self.subpath)
+    }
+}
+
+/// Every package offered by the active PM instances, located on disk, plus
+/// warnings for instances that could not be listed (e.g. a misconfigured
+/// registry whose root is itself a plugin).
 ///
-/// Discovers TOML plugin manifests and standalone skill directories,
-/// then loads both into a `PluginRegistry`.
+/// Does no network I/O — `list_plugins` and `cached_root` both serve from
+/// what is already on disk; a git registry that was never fetched offers
+/// nothing.
+async fn list_plugin_offers(
+    pms: &crate::pm::PmRegistry,
+    pm_cx: &crate::pm::PmContext<'_>,
+) -> (Vec<PluginOffer>, Vec<LoadWarning>) {
+    let mut offers = Vec::new();
+    let mut warnings = Vec::new();
+    for inst in pms.instances() {
+        let infos = match inst.pm.list_plugins(&[], pm_cx).await {
+            Ok(infos) => infos,
+            Err(e) => {
+                tracing::warn!(registry = %inst.name, error = %e, "cannot list registry");
+                warnings.push(LoadWarning {
+                    path: PathBuf::new(),
+                    message: format!("cannot list registry `{}`: {e:#}", inst.name),
+                });
+                continue;
+            }
+        };
+        for info in infos {
+            // Registry loading only consumes positional registry entries;
+            // offers without a subpath (dependency-embedded crates) are the
+            // chained-plugin flow's concern.
+            let Some(subpath) = info.subpath else {
+                continue;
+            };
+            let Some(entry_dir) = inst.pm.cached_root(&info.id, pm_cx) else {
+                tracing::warn!(registry = %inst.name, id = %info.id, "cannot locate plugin package");
+                continue;
+            };
+            // The instance built the entry dir as `<content root>/<subpath>`;
+            // peel the subpath back off to recover the attribution root.
+            let mut root = entry_dir;
+            for _ in subpath.components() {
+                root.pop();
+            }
+            offers.push(PluginOffer {
+                registry_name: inst.name.clone(),
+                root,
+                subpath,
+                recommends: info.recommends,
+            });
+        }
+    }
+    (offers, warnings)
+}
+
+/// One loaded package: a plugin manifest or a standalone skill.
+enum OfferItem {
+    Plugin(Result<Box<ParsedPlugin>>),
+    Skill(PathBuf),
+}
+
+/// Interpret one offer's package. A recommendations entry loads with the
+/// recommended dependency as its gate and default name; any other entry is
+/// an ordinary registry plugin or standalone skill. `None` when the
+/// directory is neither (e.g. it disappeared since it was listed).
+fn load_offer(offer: &PluginOffer) -> Option<OfferItem> {
+    let dir = offer.dir();
+    match crate::pm::layout::classify(&dir)? {
+        crate::pm::layout::EntryKind::Plugin(toml_path) => {
+            let origin = match offer.recommends.as_deref() {
+                Some(dep_name) => ManifestOrigin::Recommendations { dep_name },
+                None => ManifestOrigin::Registry,
+            };
+            Some(OfferItem::Plugin(
+                load_plugin_as(&toml_path, &offer.registry_name, &offer.root, origin)
+                    .map(Box::new)
+                    .with_context(|| format!("loading plugin from `{}`", toml_path.display())),
+            ))
+        }
+        crate::pm::layout::EntryKind::Skill(skill_md) => Some(OfferItem::Skill(skill_md)),
+    }
+}
+
+/// Load the plugin registry from the active package-manager instances.
 ///
-/// This form loads plugin sources only; workspace-scoped callers use
+/// Each registry instance lists the plugin-bearing entries it offers
+/// (`list_plugins`, no network), and each entry is loaded as a plugin
+/// manifest or a standalone skill. Refreshing git registries is a separate
+/// concern ([`ensure_registries`]).
+///
+/// This form loads registries only; workspace-scoped callers use
 /// [`load_registry_with_workspace`] to also pick up plugins defined by the
 /// active workspace.
-pub fn load_registry(sym: &Symposium) -> PluginRegistry {
-    load_registry_impl(sym, None)
+pub async fn load_registry(sym: &Symposium) -> PluginRegistry {
+    load_registry_impl(sym, None).await
 }
 
 /// [`load_registry`] plus the plugins defined by the active workspace (the
 /// workspace root and every member directory), stamped as workspace
-/// members. `None` (not in a workspace) degrades to plugin sources only.
-pub fn load_registry_with_workspace(
+/// members. `None` (not in a workspace) degrades to registries only.
+pub async fn load_registry_with_workspace(
     sym: &Symposium,
     workspace: Option<&symposium_sdk::workspace::LoadedWorkspace>,
 ) -> PluginRegistry {
-    load_registry_impl(sym, workspace)
+    load_registry_impl(sym, workspace).await
 }
 
-fn load_registry_impl(
+async fn load_registry_impl(
     sym: &Symposium,
     workspace: Option<&symposium_sdk::workspace::LoadedWorkspace>,
 ) -> PluginRegistry {
-    let sources = sym.plugin_sources();
+    let pms = sym.package_managers();
+    let pm_cx = registry_pm_cx(sym);
     let mut plugins = Vec::new();
     let mut standalone_skills = Vec::new();
-    let mut warnings = Vec::new();
 
-    for (source_name, dir) in resolve_plugin_source_dirs(sym, &sources) {
-        match scan_source_dir(&dir, &source_name) {
-            Ok(contents) => {
-                for result in contents.plugins {
-                    match result {
-                        Ok(p) => plugins.push(p),
-                        Err(e) => {
-                            tracing::warn!(error = %e, "failed to load plugin");
-                            warnings.push(LoadWarning {
-                                path: dir.join("<unknown>.toml"),
-                                message: format!("failed to load plugin: {e}"),
-                            });
-                        }
-                    }
-                }
-                for skill_md in contents.skill_files {
-                    match crate::skills::load_standalone_skill(&skill_md) {
-                        Ok(skill) => {
-                            let origin_hash = skill_origin_hash(&skill_md);
-                            standalone_skills.push(StandaloneSkill { skill, origin_hash });
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                path = %skill_md.display(),
-                                error = %e,
-                                "failed to load standalone skill"
-                            );
-                            warnings.push(LoadWarning {
-                                path: skill_md,
-                                message: format!("failed to load standalone skill: {e}"),
-                            });
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::warn!(dir = %dir.display(), error = %e, "failed to scan plugin source dir");
+    let (offers, mut warnings) = list_plugin_offers(&pms, &pm_cx).await;
+    for offer in offers {
+        match load_offer(&offer) {
+            Some(OfferItem::Plugin(Ok(p))) => plugins.push(*p),
+            Some(OfferItem::Plugin(Err(e))) => {
+                tracing::warn!(error = %e, "failed to load plugin");
                 warnings.push(LoadWarning {
-                    path: dir,
-                    message: format!("failed to scan plugin source dir: {e}"),
+                    path: offer.dir().join(crate::pm::layout::MANIFEST_FILE),
+                    message: format!("failed to load plugin: {e}"),
                 });
             }
+            Some(OfferItem::Skill(skill_md)) => {
+                match crate::skills::load_standalone_skill(&skill_md) {
+                    Ok(skill) => {
+                        let origin_hash = skill_origin_hash(&skill_md);
+                        standalone_skills.push(StandaloneSkill { skill, origin_hash });
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            path = %skill_md.display(),
+                            error = %e,
+                            "failed to load standalone skill"
+                        );
+                        warnings.push(LoadWarning {
+                            path: skill_md,
+                            message: format!("failed to load standalone skill: {e}"),
+                        });
+                    }
+                }
+            }
+            None => {}
         }
     }
 
@@ -1519,124 +1572,44 @@ fn workspace_plugin_for_dir(
     }))
 }
 
-/// Scan a plugin source directory for TOML plugin manifests and standalone skills.
+/// Scan a directory laid out like a plugin source, loading its plugin
+/// manifests and collecting its standalone skills.
 ///
-/// Discovery rules:
-/// 1. Plugin = directory with `SYMPOSIUM.toml` file
-/// 2. Skill = directory with `SKILL.md` file
-/// 3. Plugin takes precedence over skill in the same directory
-/// 4. Once a directory is claimed as plugin/skill, don't recurse into it
+/// Entry discovery is the [flat layout](crate::pm::layout): a directory with
+/// a `SYMPOSIUM.toml` is a plugin, one with a `SKILL.md` is a standalone
+/// skill (manifest wins when both are present), and a claimed directory is
+/// not recursed into.
 ///
-/// `source_name` is the registry source the directory was reached
-/// through; it becomes each `ParsedPlugin`'s canonical `pm` tag. Callers
-/// that don't care (CLI validation, tests) pass `""`.
+/// This is the *offline* form used by the `plugin validate` CLI, which
+/// points at an arbitrary directory rather than a configured registry.
+/// Registry loading goes through the package-manager instances instead
+/// ([`load_registry`]). `source_name` becomes each `ParsedPlugin`'s
+/// canonical `pm` tag; callers that don't care pass `""`.
 fn scan_source_dir<P: AsRef<Path>>(dir: P, source_name: &str) -> Result<SourceDirContents> {
+    let dir = dir.as_ref();
     let mut plugins = Vec::new();
     let mut skill_files = Vec::new();
 
-    let dir = dir.as_ref();
-
-    // A plugin source should *contain* plugins/skills, not *be* one.
-    if let Some(dir_type) = discover_directory_type(dir)? {
-        match dir_type {
-            DirectoryType::Plugin(_) => anyhow::bail!(
-                "plugin source root contains SYMPOSIUM.toml — it should contain subdirectories with plugins, not be a plugin itself: {}",
-                dir.display()
-            ),
-            DirectoryType::Skill(_) => anyhow::bail!(
-                "plugin source root contains SKILL.md — it should contain subdirectories with skills, not be a skill itself: {}",
-                dir.display()
-            ),
+    for entry in crate::pm::layout::enumerate(dir)? {
+        match crate::pm::layout::classify(&dir.join(&entry.subpath)) {
+            Some(crate::pm::layout::EntryKind::Plugin(toml_path)) => {
+                let plugin = load_plugin(&toml_path, source_name, dir)
+                    .with_context(|| format!("loading plugin from `{}`", toml_path.display()));
+                tracing::debug!(path = %toml_path.display(), plugin = ?plugin, "loaded plugin");
+                plugins.push(plugin);
+            }
+            Some(crate::pm::layout::EntryKind::Skill(skill_md_path)) => {
+                tracing::debug!(path = %skill_md_path.display(), "found standalone skill");
+                skill_files.push(skill_md_path);
+            }
+            None => {}
         }
     }
-
-    discover_in_directory(dir, source_name, dir, &mut plugins, &mut skill_files)?;
 
     Ok(SourceDirContents {
         plugins,
         skill_files,
     })
-}
-
-/// Recursively discover plugins and skills with precedence and pruning.
-///
-/// `source_name` and `source_dir` describe the registry source root —
-/// passed through unchanged on recursion and stamped onto each
-/// discovered `ParsedPlugin`.
-fn discover_in_directory(
-    dir: &Path,
-    source_name: &str,
-    source_dir: &Path,
-    plugins: &mut Vec<Result<ParsedPlugin>>,
-    skill_files: &mut Vec<PathBuf>,
-) -> Result<()> {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return Ok(()),
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-
-        // Check what this directory contains (plugin takes precedence)
-        if let Some(discovered) = discover_directory_type(&path)? {
-            match discovered {
-                DirectoryType::Plugin(toml_path) => {
-                    let plugin = load_plugin(&toml_path, source_name, source_dir)
-                        .with_context(|| format!("loading plugin from `{}`", toml_path.display()));
-
-                    tracing::debug!(
-                        path = %toml_path.display(),
-                        plugin = ?plugin,
-                        "loaded plugin",
-                    );
-
-                    plugins.push(plugin);
-                }
-                DirectoryType::Skill(skill_md_path) => {
-                    tracing::debug!(
-                        path = %skill_md_path.display(),
-                        "found standalone skill",
-                    );
-                    skill_files.push(skill_md_path);
-                }
-            }
-            // Don't recurse - directory is claimed
-        } else {
-            // Directory doesn't contain plugin/skill, recurse into it
-            discover_in_directory(&path, source_name, source_dir, plugins, skill_files)?;
-        }
-    }
-
-    Ok(())
-}
-
-/// What type of directory this is (plugin or skill).
-enum DirectoryType {
-    Plugin(PathBuf), // Path to SYMPOSIUM.toml
-    Skill(PathBuf),  // Path to SKILL.md file
-}
-
-/// Determine if a directory contains a plugin or skill.
-/// Returns None if it contains neither.
-/// SYMPOSIUM.toml takes precedence over SKILL.md.
-fn discover_directory_type(dir: &Path) -> Result<Option<DirectoryType>> {
-    // Check for SYMPOSIUM.toml (the only valid plugin manifest)
-    let symposium_toml = dir.join("SYMPOSIUM.toml");
-    if symposium_toml.is_file() {
-        return Ok(Some(DirectoryType::Plugin(symposium_toml)));
-    }
-
-    // Check for SKILL.md
-    let skill_md = dir.join("SKILL.md");
-    if skill_md.is_file() {
-        return Ok(Some(DirectoryType::Skill(skill_md)));
-    }
-
-    Ok(None)
 }
 
 /// Result of validating a single item in a plugin source directory.
@@ -1814,9 +1787,26 @@ pub fn load_plugin(
     source_name: &str,
     source_dir: &Path,
 ) -> Result<ParsedPlugin> {
+    load_plugin_as(
+        manifest_path,
+        source_name,
+        source_dir,
+        ManifestOrigin::Registry,
+    )
+}
+
+/// [`load_plugin`] with an explicit manifest origin — the entry position
+/// within its registry decides the validation rules (a recommendations
+/// `cargo/<name>/` entry gains an implied gate and default name).
+fn load_plugin_as(
+    manifest_path: &Path,
+    source_name: &str,
+    source_dir: &Path,
+    origin: ManifestOrigin<'_>,
+) -> Result<ParsedPlugin> {
     let content = fs::read_to_string(manifest_path)?;
     let manifest: RawPluginManifest = toml::from_str(&content)?;
-    let plugin = validate_manifest(manifest, ManifestOrigin::Registry)
+    let plugin = validate_manifest(manifest, origin)
         .with_context(|| format!("validating `{}`", manifest_path.display()))?;
     Ok(ParsedPlugin {
         canonical: PackageId::new(source_name, &plugin.name, ANY_VERSION),
@@ -1900,10 +1890,11 @@ fn validate_manifest(
         (Some(n), _) => n,
         (None, ManifestOrigin::WorkspaceMember { dir_name, .. }) => dir_name.to_string(),
         (None, ManifestOrigin::Crate { crate_name }) => crate_name.to_string(),
+        (None, ManifestOrigin::Recommendations { dep_name }) => dep_name.to_string(),
         (None, ManifestOrigin::Registry) => bail!("plugin manifest is missing `name`"),
     };
     match &origin {
-        ManifestOrigin::Registry => {
+        ManifestOrigin::Registry | ManifestOrigin::Recommendations { .. } => {
             if manifest.defaults.is_some() {
                 bail!("`[defaults]` is only supported in workspace and crate plugin manifests");
             }
@@ -2011,8 +2002,19 @@ fn validate_manifest(
     }
 
     reject_crates_field(&manifest.crates)?;
-    let predicates =
+    let mut predicates =
         crate::predicate::PredicateSet::merged(Some(manifest.depends_on), manifest.predicates);
+    if let ManifestOrigin::Recommendations { dep_name } = &origin {
+        // The directory position implies the gate: a `cargo/<name>/` entry
+        // applies when the workspace depends on <name> (version ignored, per
+        // the recommendations convention).
+        predicates
+            .predicates
+            .push(crate::predicate::Predicate::DependsOn(
+                dep_name.to_string(),
+                None,
+            ));
+    }
     let mut skills = manifest
         .skills
         .into_iter()
@@ -2033,7 +2035,8 @@ fn validate_manifest(
     // custom predicate) somewhere — at the plugin, skill-group, hook, or
     // MCP-server level — via `depends-on`, a `depends-on(...)` predicate, or
     // a custom predicate. Otherwise it would never apply to any project.
-    // Workspace plugins are exempt: being in the workspace is their gate.
+    // Workspace plugins are exempt: being in the workspace is their gate, as
+    // is the implied `depends-on` of a recommendations entry.
     if matches!(origin, ManifestOrigin::Registry) {
         let has_custom_predicate = predicates
             .predicates
@@ -2226,6 +2229,51 @@ mod tests {
     fn from_str(s: &str) -> Result<Plugin> {
         let manifest: RawPluginManifest = toml::from_str(s)?;
         validate_manifest(manifest, ManifestOrigin::Registry)
+    }
+
+    fn from_str_as(s: &str, origin: ManifestOrigin<'_>) -> Result<Plugin> {
+        let manifest: RawPluginManifest = toml::from_str(s)?;
+        validate_manifest(manifest, origin)
+    }
+
+    /// A recommendations `cargo/<name>/` entry needs neither `name` nor
+    /// `depends-on`: its directory position supplies both.
+    #[test]
+    fn recommendations_entry_infers_name_and_gate() {
+        let plugin = from_str_as(
+            indoc! {r#"
+                [[skills]]
+                source.path = "skills"
+            "#},
+            ManifestOrigin::Recommendations {
+                dep_name: "widget-lib",
+            },
+        )
+        .unwrap();
+        assert_eq!(plugin.name, "widget-lib");
+        assert!(plugin.applies(&mut ctx(&[PackageId::new("cargo", "widget-lib", "1.0.0")])));
+        assert!(!plugin.applies(&mut ctx(&[PackageId::new("cargo", "serde", "1.0.0")])));
+    }
+
+    /// The implied gate is ANDed with whatever the entry declares itself.
+    #[test]
+    fn recommendations_entry_keeps_its_own_name_and_predicates() {
+        let plugin = from_str_as(
+            indoc! {r#"
+                name = "widget-tools"
+                depends-on = ["serde"]
+            "#},
+            ManifestOrigin::Recommendations {
+                dep_name: "widget-lib",
+            },
+        )
+        .unwrap();
+        assert_eq!(plugin.name, "widget-tools");
+        assert!(!plugin.applies(&mut ctx(&[PackageId::new("cargo", "widget-lib", "1.0.0")])));
+        assert!(plugin.applies(&mut ctx(&[
+            PackageId::new("cargo", "widget-lib", "1.0.0"),
+            PackageId::new("cargo", "serde", "1.0.0"),
+        ])));
     }
 
     #[test]

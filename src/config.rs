@@ -99,13 +99,14 @@ pub struct Config {
     #[serde(default)]
     pub logging: LoggingConfig,
 
-    /// Default plugin sources that are always included unless disabled.
+    /// Default registries that are always included unless disabled.
     #[serde(default)]
     pub defaults: DefaultsConfig,
 
-    /// User-defined plugin sources (git repos or local paths).
-    #[serde(default, rename = "plugin-source")]
-    pub plugin_source: Vec<PluginSourceConfig>,
+    /// User-defined registries (git repos or local paths).
+    /// `plugin-source` is the retired spelling, still accepted.
+    #[serde(default, rename = "registry", alias = "plugin-source")]
+    pub registries: Vec<RegistryConfig>,
 }
 
 /// An `[[agent]]` entry — just identifies an agent by name.
@@ -160,7 +161,7 @@ impl Default for Config {
             agents: Vec::new(),
             logging: LoggingConfig::default(),
             defaults: DefaultsConfig::default(),
-            plugin_source: Vec::new(),
+            registries: Vec::new(),
         }
     }
 }
@@ -186,8 +187,8 @@ struct RawConfig {
     logging: LoggingConfig,
     #[serde(default)]
     defaults: DefaultsConfig,
-    #[serde(default, rename = "plugin-source")]
-    plugin_source: Vec<PluginSourceConfig>,
+    #[serde(default, rename = "registry", alias = "plugin-source")]
+    registries: Vec<RegistryConfig>,
 }
 
 impl Default for RawConfig {
@@ -208,7 +209,7 @@ impl RawConfig {
             agents: self.agents,
             logging: self.logging,
             defaults: self.defaults,
-            plugin_source: self.plugin_source,
+            registries: self.registries,
         }
     }
 }
@@ -225,12 +226,12 @@ impl From<Config> for RawConfig {
             agents: config.agents,
             logging: config.logging,
             defaults: config.defaults,
-            plugin_source: config.plugin_source,
+            registries: config.registries,
         }
     }
 }
 
-/// Controls which built-in plugin sources are enabled.
+/// Controls which built-in registries are enabled.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct DefaultsConfig {
     /// Include the `symposium-dev/recommendations` git source (default: true).
@@ -251,11 +252,13 @@ impl Default for DefaultsConfig {
     }
 }
 
-/// A configured plugin source — either a git repository or a local path.
+/// A configured registry — a git repository or a local path offering plugins.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
-pub struct PluginSourceConfig {
-    /// Display name for this source.
+pub struct RegistryConfig {
+    /// Display name for this registry. Plugins loaded from it are attributed
+    /// to this name, which is also the `pm` component of the ids its package
+    /// manager mints.
     pub name: String,
 
     /// GitHub URL (fetched as tarball, cached locally).
@@ -275,15 +278,55 @@ pub struct PluginSourceConfig {
 // Merged configuration view
 // ---------------------------------------------------------------------------
 
-/// A plugin source together with its base directory for resolving relative paths.
+/// A registry together with its base directory for resolving relative paths.
 #[derive(Debug, Clone)]
-pub struct ResolvedPluginSource {
-    pub source: PluginSourceConfig,
+pub struct ResolvedRegistry {
+    pub registry: RegistryConfig,
     /// Directory to resolve relative `path` values against.
     /// For user sources this is the user config dir; for project sources
     /// this is the project root.
     pub base_dir: PathBuf,
+    /// The registry follows the recommendations convention: pm-named
+    /// namespace directories (`cargo/<name>/` entries implicitly gated on
+    /// `depends-on(<name>)`, `symposium/` entries unconditional) rather than
+    /// a flat tree of plugins. Only the built-in recommendations registry
+    /// sets this today; there is no config surface for it yet.
+    pub recommendations: bool,
 }
+
+impl ResolvedRegistry {
+    /// Where this registry's content lives on disk: the resolved `path`
+    /// (relative entries against `base_dir`), or the git cache directory the
+    /// repository is unpacked into. `None` when the entry names neither, or
+    /// when its URL can't be turned into a cache path.
+    ///
+    /// Does no network I/O — just computes the path. Fetching git content is
+    /// [`plugins::ensure_registries`](crate::plugins::ensure_registries)'s job.
+    pub fn content_dir(&self, cache_dir: &Path) -> Option<PathBuf> {
+        if let Some(path) = &self.registry.path {
+            let p = PathBuf::from(path);
+            return Some(if p.is_absolute() {
+                p
+            } else {
+                self.base_dir.join(p)
+            });
+        }
+        let git_url = self.registry.git.as_ref()?;
+        let cache_mgr = symposium_install::git::GitCacheManager::from_cache_dir(
+            &cache_dir.join(REGISTRY_CACHE_SUBDIR),
+        );
+        match cache_mgr.cache_path_for_url(git_url) {
+            Some(path) => Some(path),
+            None => {
+                tracing::warn!(registry = %self.registry.name, url = %git_url, "bad registry URL");
+                None
+            }
+        }
+    }
+}
+
+/// Cache subdirectory holding git registries' unpacked content.
+pub const REGISTRY_CACHE_SUBDIR: &str = "plugin-sources";
 
 const BUILTIN_RECOMMENDATIONS_URL: &str = "https://github.com/symposium-dev/recommendations";
 
@@ -382,11 +425,31 @@ impl Symposium {
     }
 
     /// The active package-manager set: the fixed ecosystem transports plus one
-    /// instance per configured registry. Registry instances arrive with the
-    /// `path` / `recommendations` package managers; today this is
-    /// transports-only.
+    /// instance per configured registry ([`registries`](Self::registries)).
+    ///
+    /// A recommendations registry gets a
+    /// [`RecommendationsPm`](crate::pm::RecommendationsPm); everything else
+    /// gets a [`PathPm`](crate::pm::PathPm) over its content directory —
+    /// including git registries, whose repository is unpacked into the cache
+    /// before it is read. Each instance is named for its registry, since that
+    /// name is what its plugins are attributed to.
     pub fn package_managers(&self) -> crate::pm::PmRegistry {
-        crate::pm::PmRegistry::new(Vec::new())
+        let instances = self
+            .registries()
+            .into_iter()
+            .filter_map(|resolved| {
+                let dir = resolved.content_dir(self.cache_dir())?;
+                let name = resolved.registry.name;
+                let pm: Box<dyn crate::pm::PackageManager + Send + Sync> =
+                    if resolved.recommendations {
+                        Box::new(crate::pm::RecommendationsPm::new(name.clone(), dir))
+                    } else {
+                        Box::new(crate::pm::PathPm::new(name.clone(), dir))
+                    };
+                Some(crate::pm::PmInstance { name, pm })
+            })
+            .collect();
+        crate::pm::PmRegistry::new(instances)
     }
 
     /// Override the cargo binary path (test-only).
@@ -459,42 +522,45 @@ impl Symposium {
         &self.home_dir
     }
 
-    /// Returns the effective list of plugin sources, including built-in defaults.
-    pub fn plugin_sources(&self) -> Vec<ResolvedPluginSource> {
-        let mut sources = Vec::new();
+    /// Returns the effective list of registries, including built-in defaults.
+    pub fn registries(&self) -> Vec<ResolvedRegistry> {
+        let mut registries = Vec::new();
 
         if self.config.defaults.symposium_recommendations {
-            sources.push(ResolvedPluginSource {
-                source: PluginSourceConfig {
+            registries.push(ResolvedRegistry {
+                registry: RegistryConfig {
                     name: "symposium-recommendations".to_string(),
                     git: Some(BUILTIN_RECOMMENDATIONS_URL.to_string()),
                     path: None,
                     auto_update: true,
                 },
                 base_dir: self.dirs.config_dir.clone(),
+                recommendations: true,
             });
         }
 
         if self.config.defaults.user_plugins {
-            sources.push(ResolvedPluginSource {
-                source: PluginSourceConfig {
+            registries.push(ResolvedRegistry {
+                registry: RegistryConfig {
                     name: "user-plugins".to_string(),
                     git: None,
                     path: Some("plugins".to_string()),
                     auto_update: true,
                 },
                 base_dir: self.dirs.config_dir.clone(),
+                recommendations: false,
             });
         }
 
-        for s in &self.config.plugin_source {
-            sources.push(ResolvedPluginSource {
-                source: s.clone(),
+        for registry in &self.config.registries {
+            registries.push(ResolvedRegistry {
+                registry: registry.clone(),
                 base_dir: self.dirs.config_dir.clone(),
+                recommendations: false,
             });
         }
 
-        sources
+        registries
     }
 
     /// Write the user config to disk.
@@ -586,7 +652,7 @@ mod tests {
         let config = parse_config("");
         assert!(config.defaults.symposium_recommendations);
         assert!(config.defaults.user_plugins);
-        assert!(config.plugin_source.is_empty());
+        assert!(config.registries.is_empty());
     }
 
     #[test]
@@ -610,58 +676,70 @@ mod tests {
     }
 
     #[test]
-    fn parse_plugin_source_git() {
+    fn parse_registry_git() {
         let config = parse_config(indoc! {r#"
-            [[plugin-source]]
+            [[registry]]
             name = "my-org"
             git = "https://github.com/my-org/plugins"
             auto-update = false
         "#});
-        assert_eq!(config.plugin_source.len(), 1);
-        assert_eq!(config.plugin_source[0].name, "my-org");
+        assert_eq!(config.registries.len(), 1);
+        assert_eq!(config.registries[0].name, "my-org");
         assert_eq!(
-            config.plugin_source[0].git.as_deref(),
+            config.registries[0].git.as_deref(),
             Some("https://github.com/my-org/plugins")
         );
-        assert!(!config.plugin_source[0].auto_update);
+        assert!(!config.registries[0].auto_update);
+    }
+
+    /// `[[plugin-source]]` is the retired spelling of `[[registry]]`.
+    #[test]
+    fn parse_retired_plugin_source_spelling() {
+        let config = parse_config(indoc! {r#"
+            [[plugin-source]]
+            name = "my-org"
+            git = "https://github.com/my-org/plugins"
+        "#});
+        assert_eq!(config.registries.len(), 1);
+        assert_eq!(config.registries[0].name, "my-org");
     }
 
     #[test]
-    fn parse_plugin_source_path() {
+    fn parse_registry_path() {
         let config = parse_config(indoc! {r#"
-            [[plugin-source]]
+            [[registry]]
             name = "local"
             path = "my-plugins"
         "#});
-        assert_eq!(config.plugin_source.len(), 1);
-        assert_eq!(config.plugin_source[0].path.as_deref(), Some("my-plugins"));
-        assert!(config.plugin_source[0].auto_update); // default true
+        assert_eq!(config.registries.len(), 1);
+        assert_eq!(config.registries[0].path.as_deref(), Some("my-plugins"));
+        assert!(config.registries[0].auto_update); // default true
     }
 
     #[test]
-    fn parse_multiple_plugin_sources() {
+    fn parse_multiple_registries() {
         let config = parse_config(indoc! {r#"
             [defaults]
             symposium-recommendations = false
 
-            [[plugin-source]]
+            [[registry]]
             name = "org-a"
             git = "https://github.com/a/plugins"
 
-            [[plugin-source]]
+            [[registry]]
             name = "org-b"
             git = "https://github.com/b/plugins"
             auto-update = false
 
-            [[plugin-source]]
+            [[registry]]
             name = "local"
             path = "extras"
         "#});
         assert!(!config.defaults.symposium_recommendations);
-        assert_eq!(config.plugin_source.len(), 3);
-        assert_eq!(config.plugin_source[0].name, "org-a");
-        assert_eq!(config.plugin_source[1].name, "org-b");
-        assert_eq!(config.plugin_source[2].name, "local");
+        assert_eq!(config.registries.len(), 3);
+        assert_eq!(config.registries[0].name, "org-a");
+        assert_eq!(config.registries[1].name, "org-b");
+        assert_eq!(config.registries[2].name, "local");
     }
 
     #[test]

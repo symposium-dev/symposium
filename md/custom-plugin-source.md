@@ -15,15 +15,15 @@ Custom plugin sources are useful for:
 
 ## Adding your own custom sources
 
-You can also define a custom plugin source in a git repository or at another path on your system.
+You can also define a custom plugin source in a git repository or at another path on your system. Each one is a `[[registry]]` entry (`[[plugin-source]]` is the retired spelling of the same table, still accepted).
 
 ### Git repository
 
-Add a remote Git repository as a plugin source:
+Add a remote Git repository as a registry:
 
 ```toml
 # In ~/.symposium/config.toml
-[[plugin-source]]
+[[registry]]
 name = "my-company"
 git = "https://github.com/mycompany/symposium-plugins"
 auto-update = true
@@ -33,10 +33,10 @@ We recommend creating a CI tool that runs [`cargo agents plugin validate`](./ref
 
 ### Local directory
 
-Add a local directory as a plugin source:
+Add a local directory as a registry:
 
 ```toml
-[[plugin-source]]
+[[registry]]
 name = "local-dev"
 path = "./my-plugins"
 auto-update = false

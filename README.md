@@ -118,7 +118,7 @@ Configuration is a single user-wide file at `~/.symposium/config.toml`, created 
 | `hook-scope` | `"global"` | Install hooks in the home directory (`global`) or the project (`project`). |
 | `auto-update` | `"on"` | `off`, `warn` (notify when a newer version exists), or `on` (install and re-exec). |
 
-`[[agent]]` entries list your agents, `[[plugin-source]]` adds git or local plugin sources, and `[defaults]` toggles the two built-in sources. User data lives under `~/.symposium/` (overridable via `SYMPOSIUM_HOME` or the XDG variables). See the [configuration reference](https://symposium.dev/reference/configuration.html).
+`[[agent]]` entries list your agents, `[[registry]]` adds git or local plugin sources, and `[defaults]` toggles the two built-in registries. User data lives under `~/.symposium/` (overridable via `SYMPOSIUM_HOME` or the XDG variables). See the [configuration reference](https://symposium.dev/reference/configuration.html).
 
 ## Supported agents
 

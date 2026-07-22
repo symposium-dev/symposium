@@ -6,14 +6,20 @@
 //!
 //! A `PackageManager` value is an *instance*, not just an ecosystem. A
 //! **transport** ([`CargoPm`]) can `fetch` any id of its ecosystem, because the
-//! id carries the source; a **registry instance** fronts one configured source
-//! and enumerates the packages it contains. [`PmRegistry`] holds both tiers:
-//! transports are dispatched by [`PackageId::pm`] for `fetch` / `cached_root` /
-//! `list_deps`, while discovery (`list_plugins` / `search`) iterates everything.
+//! id carries the source; a **registry instance** ([`PathPm`],
+//! [`RecommendationsPm`]) fronts one configured source and enumerates the
+//! packages it contains. [`PmRegistry`] holds both tiers: transports are
+//! dispatched by [`PackageId::pm`] for `fetch` / `cached_root` / `list_deps`,
+//! while discovery (`list_plugins` / `search`) iterates everything.
 //!
-//! Cargo is the only package manager today; `path` and `recommendations`
-//! registries follow. In-process for now — when PMs move out of process,
-//! [`PmRegistry`] becomes the seam that spawns and talks to them.
+//! A registry instance's [`PackageManager::name`] is the *configured registry
+//! name* (`user-plugins`, `symposium-recommendations`, …), which is also the
+//! `pm` component of every id it mints and the name its plugins are attributed
+//! to. Registry instances resolve their own ids, so those ids are never routed
+//! through the ecosystem transports.
+//!
+//! In-process for now — when PMs move out of process, [`PmRegistry`] becomes
+//! the seam that spawns and talks to them.
 
 use std::path::PathBuf;
 
@@ -22,7 +28,12 @@ use symposium_install::{InstallContext, UpdateLevel};
 use symposium_sdk::workspace::WorkspaceCrate;
 
 mod cargo;
+pub mod layout;
+mod path;
+mod recommendations;
 pub use cargo::CargoPm;
+pub use path::PathPm;
+pub use recommendations::RecommendationsPm;
 
 /// The `pm` component of cargo package ids.
 pub const CARGO_PM: &str = "cargo";
@@ -130,8 +141,10 @@ impl<'a> PmContext<'a> {
 /// plugin distribution RFD).
 #[async_trait::async_trait]
 pub trait PackageManager {
-    /// The PM's registry name — the `pm` component of every id it owns.
-    fn name(&self) -> &'static str;
+    /// The PM's registry name — the `pm` component of every id it owns. For
+    /// an ecosystem transport this is the ecosystem (`cargo`); for a registry
+    /// instance it is the configured registry's name.
+    fn name(&self) -> &str;
 
     /// The plugin-bearing packages this PM offers for the given workspace
     /// dependency set. This is the input-less form of the RFD's `resolve`: a

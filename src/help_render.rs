@@ -10,7 +10,6 @@ use std::{fmt::Write as _, path::Path};
 
 use clap::{Command, CommandFactory};
 
-
 use crate::{
     cli::{Cli, Commands, builtin_audience},
     config::Symposium,
@@ -93,7 +92,7 @@ pub fn subcommand_help(args: &[String]) -> Option<String> {
 pub async fn render_help(sym: &Symposium, cwd: &Path) -> String {
     let mut deps = sym.workspace_deps(cwd);
     let workspace = deps.load().cloned();
-    let registry = load_registry_with_workspace(sym, workspace.as_deref());
+    let registry = load_registry_with_workspace(sym, workspace.as_deref()).await;
     let dep_ids = crate::pm::workspace_dep_ids(sym, deps.crates()).await;
     render(&registry, &dep_ids)
 }

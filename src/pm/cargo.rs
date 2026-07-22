@@ -101,7 +101,7 @@ impl CargoPm {
 
 #[async_trait::async_trait]
 impl PackageManager for CargoPm {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         CARGO_PM
     }
 

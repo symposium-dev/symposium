@@ -115,7 +115,7 @@ async fn main() -> ExitCode {
         }
         _ => cli.update,
     };
-    plugins::ensure_plugin_sources(&sym, source_update).await;
+    plugins::ensure_registries(&sym, source_update).await;
 
     // Auto-update = "on": check for updates and re-exec if a new binary was
     // installed.  Skipped for self-update (which always checks explicitly)
@@ -181,7 +181,7 @@ async fn main() -> ExitCode {
 async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) -> ExitCode {
     match command {
         PluginCommand::Sync { provider } => {
-            match plugins::sync_plugin_source(sym, provider.as_deref()).await {
+            match plugins::sync_registries(sym, provider.as_deref()).await {
                 Ok(synced) => {
                     if synced.is_empty() {
                         if let Some(ref p) = provider {
@@ -203,7 +203,7 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
             }
         }
         PluginCommand::List => {
-            let providers = plugins::list_plugins(sym);
+            let providers = plugins::list_plugins(sym).await;
             for provider in &providers {
                 tracing::info!(
                     report = %report::ReportEvent::ProviderListed {
@@ -293,7 +293,7 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                 }
             }
         }
-        PluginCommand::Show { plugin } => match plugins::find_plugin(sym, &plugin) {
+        PluginCommand::Show { plugin } => match plugins::find_plugin(sym, &plugin).await {
             Some(p) => {
                 println!("# Source: {}", p.path.display());
                 println!();

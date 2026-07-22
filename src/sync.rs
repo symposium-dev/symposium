@@ -283,7 +283,7 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
     // Load plugin registry (registry sources + workspace plugins)
-    let registry = plugins::load_registry_with_workspace(sym, Some(&loaded));
+    let registry = plugins::load_registry_with_workspace(sym, Some(&loaded)).await;
 
     for warning in &registry.warnings {
         tracing::info!(
@@ -528,8 +528,8 @@ pub async fn sync(sym: &Symposium, deps: &mut WorkspaceDeps, update: UpdateLevel
 /// Register global hooks for all configured agents.
 /// Register hooks for all configured agents. Uses `home_dir` (global scope).
 /// Called from `init` after writing the user config.
-pub fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
-    let registry = plugins::load_registry(sym);
+pub async fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
+    let registry = plugins::load_registry(sym).await;
     let mcp_servers: Vec<sacp::schema::McpServer> = registry
         .plugins
         .iter()

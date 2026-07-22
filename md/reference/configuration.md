@@ -23,11 +23,11 @@ level = "info"
 symposium-recommendations = true
 user-plugins = true
 
-[[plugin-source]]
+[[registry]]
 name = "my-org"
 git = "https://github.com/my-org/symposium-plugins"
 
-[[plugin-source]]
+[[registry]]
 name = "local-dev"
 path = "my-plugins"
 ```
@@ -102,23 +102,23 @@ enabled = true
 
 ## `[defaults]`
 
-Controls the two built-in plugin sources. Both are enabled by default.
+Controls the two built-in registries. Both are enabled by default.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `symposium-recommendations` | bool | `true` | Fetch plugins from the [symposium-dev/recommendations](https://github.com/symposium-dev/recommendations) repository. |
 | `user-plugins` | bool | `true` | Scan `~/.symposium/plugins/` for user-defined plugins. |
 
-## `[[plugin-source]]`
+## `[[registry]]`
 
-Defines additional plugin sources. Each entry must have exactly one of `git` or `path`.
+Defines additional registries — directories or repositories offering plugins. Each entry must have exactly one of `git` or `path`. `[[plugin-source]]` is the retired spelling of this table and is still accepted.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `name` | string | *(required)* | A name for this source (used in logs and cache paths). |
-| `git` | string | — | Repository URL. Fetched and cached under `~/.symposium/cache/plugin-sources/`. |
+| `name` | string | *(required)* | A name for this registry. Used in logs and cache paths, and to attribute the plugins loaded from it. |
+| `git` | string | — | Repository URL. Fetched and cached under `~/.symposium/cache/plugin-sources/`, then read as a local directory. |
 | `path` | string | — | Local directory containing plugins. Relative paths are resolved from `~/.symposium/`. |
-| `auto-update` | bool | `true` | Check for updates on startup. Only applies to `git` sources. |
+| `auto-update` | bool | `true` | Check for updates on startup. Only applies to `git` registries. |
 
 ## Directory resolution
 
