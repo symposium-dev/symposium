@@ -485,10 +485,14 @@ async fn handle_session_start(
     _payload: &SessionStartInput,
     deps: &mut WorkspaceDeps,
 ) -> OutputEvent {
-    let fragments = [discovery_hint(sym, deps).await, update_nudge(sym)]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<String>>();
+    let fragments = [
+        discovery_hint(sym, deps).await,
+        consent_hint(sym, deps).await,
+        update_nudge(sym),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<String>>();
 
     if fragments.is_empty() {
         OutputEvent::empty_for(HookEvent::SessionStart)
@@ -518,6 +522,24 @@ async fn discovery_hint(sym: &Symposium, deps: &mut WorkspaceDeps) -> Option<Str
              explicitly asks you to run one from '{HUMANS_HEADING}'."
         )
     })
+}
+
+/// Surface dependency plugins awaiting consent. A hook runs on the agent's
+/// behalf, so it must never block on stdin — the candidates are reported as
+/// context, with a pointer at the interactive command that can actually ask.
+/// `None` when nothing is pending.
+async fn consent_hint(sym: &Symposium, deps: &mut WorkspaceDeps) -> Option<String> {
+    let names = crate::discovery::pending_candidates(sym, deps).await;
+    if names.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "These dependencies ship agent plugins that are not enabled yet: {}. \
+         They stay off until the user consents — tell the user to run \
+         `cargo agents sync` (which asks about each one) or \
+         `cargo agents use <name>`. Do not enable them yourself.",
+        names.join(", ")
+    ))
 }
 
 /// Nudge the user to update. Gated by `auto-update = \"warn\"`, the 25h throttle,

@@ -51,6 +51,21 @@ impl Output {
         self.quiet
     }
 
+    /// May we block on stdin to ask the user a question?
+    ///
+    /// Only a non-quiet, non-capturing output attached to a terminal on both
+    /// ends qualifies. Hook dispatch and the library test harness both use
+    /// quiet/capturing outputs, so neither can ever reach a prompt — the TTY
+    /// check alone would not guarantee that, since `cargo test` inherits the
+    /// developer's terminal.
+    pub fn is_interactive(&self) -> bool {
+        use std::io::IsTerminal;
+        !self.quiet
+            && self.capture.is_none()
+            && std::io::stdin().is_terminal()
+            && std::io::stdout().is_terminal()
+    }
+
     fn emit(&self, msg: String) {
         if self.quiet {
             return;

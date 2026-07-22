@@ -8,6 +8,9 @@
 |---------|-------------|
 | [`cargo agents init`](./cargo-agents-init.md) | Set up user-wide configuration |
 | [`cargo agents sync`](./cargo-agents-sync.md) | Synchronize skills with workspace dependencies |
+| [`cargo agents search`](./cargo-agents-search.md) | Search configured registries for plugins |
+| [`cargo agents use`](./cargo-agents-use.md) | Enable a plugin by name (`--remove` to disable) |
+| [`cargo agents status`](./cargo-agents-status.md) | Show which plugins are enabled for this workspace, and why |
 | [`cargo agents plugin`](./cargo-agents-plugin.md) | Manage plugin sources |
 | [`cargo agents self-update`](./cargo-agents-self-update.md) | Update symposium to the latest version |
 | [`cargo agents crate-info`](./cargo-agents-crate-info.md) | Find crate sources (agent-facing) |

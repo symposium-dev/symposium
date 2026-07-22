@@ -123,6 +123,37 @@ pub enum ReportEvent {
         warning: Option<String>,
     },
 
+    // ── Enablement events (`search` / `use` / `status`) ──────────────
+    /// One `cargo agents search` hit.
+    SearchMatch {
+        /// The instance the hit came from: a configured registry's name, a
+        /// package-manager transport, or `(workspace)`.
+        origin: String,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+
+    /// A `[plugins] use` entry was recorded by `cargo agents use`.
+    PluginEnabled { name: String, global: bool },
+
+    /// A `[plugins] use` entry was dropped by `cargo agents use --remove`.
+    PluginRemoved { name: String, global: bool },
+
+    /// One line of the `cargo agents status` enablement report.
+    PluginStatus {
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+        /// Why the entry is in the state it is: its enablement root, or the
+        /// reason it will not load.
+        root: String,
+        /// `active`, `dormant`, `candidate`, or `declined`.
+        state: String,
+    },
+
     /// A provider was listed with its plugins.
     ProviderListed {
         name: String,
@@ -264,6 +295,59 @@ impl ReportEvent {
                     format!("  ✗ {path} ({item_kind}): {e}")
                 }
             }
+            // The origin is carried for the JSON form; the human form is
+            // printed under a per-origin heading, so repeating it would be
+            // noise.
+            Self::SearchMatch {
+                origin: _,
+                name,
+                version,
+                description,
+            } => {
+                let mut line = format!("  {name}");
+                if let Some(v) = version {
+                    line.push_str(&format!(" {v}"));
+                }
+                if let Some(d) = description {
+                    line.push_str(&format!("\n      {d}"));
+                }
+                line
+            }
+            Self::PluginEnabled { name, global } => {
+                let scope = if *global {
+                    "every workspace"
+                } else {
+                    "this workspace"
+                };
+                format!("✅ enabled {name} for {scope}")
+            }
+            Self::PluginRemoved { name, global } => {
+                let scope = if *global {
+                    "every workspace"
+                } else {
+                    "this workspace"
+                };
+                format!("➖ removed the {name} enablement for {scope}")
+            }
+            Self::PluginStatus {
+                name,
+                version,
+                root,
+                state,
+            } => {
+                let marker = match state.as_str() {
+                    "active" => "✅",
+                    "dormant" => "💤",
+                    "candidate" => "❓",
+                    _ => "➖",
+                };
+                let version = version
+                    .as_deref()
+                    .map(|v| format!(" {v}"))
+                    .unwrap_or_default();
+                format!("{marker} {name}{version} — {root}")
+            }
+
             Self::ProviderListed {
                 name,
                 source_type,

@@ -143,6 +143,8 @@ use = ["standalone-plugin", { name = "team-tools", workspace = "/home/me/work/se
 
 `use` is what wakes a dormant plugin, and it also enables a plugin whether or not any dependency references it. `auto-enable` is narrower: it is consent for what a dependency you already have carries with it.
 
+You rarely edit this section by hand. [`cargo agents use`](./cargo-agents-use.md) writes and removes `use` entries; the [consent prompt](./cargo-agents-sync.md#consent-prompt) in an interactive `cargo agents sync` writes `auto-enable` and `disable`; and [`cargo agents status`](./cargo-agents-status.md) reports what the section currently decides.
+
 ## Directory resolution
 
 User-wide data lives under `~/.symposium/` by default. Override with environment variables:

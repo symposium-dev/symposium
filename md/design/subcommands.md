@@ -98,7 +98,7 @@ This rule keeps `cargo agents --help` outside a workspace limited to globally-ap
 
 `cargo agents --help` is rendered in two sections:
 
-- **Commands for humans** — operational commands a user runs themselves: `init`, `plugin`, `self-update`, `sync`, plus any plugin-vended subcommand with `audience = "humans"`.
+- **Commands for humans** — operational commands a user runs themselves: `init`, `plugin`, `search`, `self-update`, `status`, `sync`, `telemetry`, `use`, plus any plugin-vended subcommand with `audience = "humans"`.
 - **Commands for agents** — discovery and analysis tools for the agent to invoke: `crate-info` and plugin-vended subcommands with `audience = "agents"` (the default).
 
 The default of `audience = "agents"` reflects the expected shape of plugin-vended commands: most are analysis or context-fetching tools surfaced to agents, not workflows for humans. The exceptional case explicitly opts in.
@@ -113,7 +113,9 @@ The renderer reads the active plugin registry filtered by workspace, so the help
 
 `cargo agents --help` is a *pull* surface — an agent only sees the crate-aware subcommands if it already knows to run it. To *push* that affordance, the built-in `SessionStart` hook injects a one-line hint suggesting `cargo agents --help` whenever the active workspace exposes at least one applicable plugin-vended subcommand. The trigger reuses the same workspace-filtered set as the help renderer (`applicable_subcommands`), so the hint stays silent in projects with nothing to discover.
 
-The hint shares `SessionStart`'s `additionalContext` with the [update nudge](./hook-flow.md); each fragment is computed independently, and the discovery hint is not gated behind the update-check throttle. Agents without hook registration (OpenCode, Goose) don't receive it; for them `cargo agents --help` is the only discovery surface.
+The hint shares `SessionStart`'s `additionalContext` with the [update nudge](./hook-flow.md) and the pending-consent hint; each fragment is computed independently, and only the nudge is gated behind the update-check throttle. Agents without hook registration (OpenCode, Goose) don't receive it; for them `cargo agents --help` is the only discovery surface.
+
+The consent hint is the same pattern applied to enablement. A hook runs on the agent's behalf and must never block on stdin, so when dependency discovery finds plugins awaiting consent, `SessionStart` names them as context and points at `cargo agents sync` (which asks interactively) or `cargo agents use <name>` — explicitly telling the agent not to enable them itself. The interactive prompt lives only in the `sync` command's own CLI arm, gated on `Output::is_interactive()`.
 
 ## Audience as metadata, not enforcement
 

@@ -274,9 +274,12 @@ mod tests {
             Commands for humans:
             init         Set up user-wide configuration
             plugin       Manage plugins
+            search       Search configured registries for plugins
             self-update  Update symposium to the latest version
+            status       Show which plugins are enabled for this workspace, and why
             sync         Synchronize skills with workspace dependencies
             telemetry    Manage opt-in usage telemetry (status, enable, disable, show)
+            use          Enable a plugin by name and sync it into the workspace
 
             Commands for agents:
             crate-info   Find crate sources

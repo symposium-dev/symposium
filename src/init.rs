@@ -1,7 +1,5 @@
 //! Init command: `cargo agents init`.
 
-use std::io::IsTerminal;
-
 use anyhow::{Context, Result};
 use dialoguer::MultiSelect;
 
@@ -22,7 +20,7 @@ pub struct InitOpts {
 
 /// Whether we can prompt the user interactively.
 fn interactive(out: &Output) -> bool {
-    !out.is_quiet() && std::io::stdin().is_terminal()
+    out.is_interactive()
 }
 
 /// Resolve which agents to configure. Priority:

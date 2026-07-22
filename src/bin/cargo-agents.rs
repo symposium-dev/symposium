@@ -73,6 +73,13 @@ async fn main() -> ExitCode {
     match &cli.command {
         Some(Commands::Init { .. }) => tracing::info!("cargo agents init"),
         Some(Commands::Sync) => tracing::info!("cargo agents sync"),
+        Some(Commands::Search { query }) => tracing::info!(%query, "cargo agents search"),
+        Some(Commands::Use {
+            name,
+            global,
+            remove,
+        }) => tracing::info!(%name, global, remove, "cargo agents use"),
+        Some(Commands::Status) => tracing::info!("cargo agents status"),
         Some(Commands::Plugin { command }) => {
             tracing::info!(subcommand = ?command, "cargo agents plugin");
         }

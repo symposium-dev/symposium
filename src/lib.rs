@@ -11,10 +11,13 @@ pub mod output;
 pub mod plugins;
 pub mod pm;
 pub mod report;
+pub mod search_command;
 pub mod self_update;
 pub mod state;
+pub mod status_command;
 pub mod subcommand_dispatch;
 pub mod telemetry;
+pub mod use_command;
 pub mod workspace_state;
 
 pub(crate) mod crate_metadata;

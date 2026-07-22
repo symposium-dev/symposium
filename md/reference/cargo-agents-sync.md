@@ -28,6 +28,25 @@ Must be run from within a Rust workspace. Performs the following steps:
 
 7. **Register hooks** — ensures hooks and MCP servers are registered for all configured agents. Registers both global hooks (for all projects) and project-specific hooks (for the current project). Unregisters hooks for agents no longer in the config.
 
+## Consent prompt
+
+Before syncing, an interactive `cargo agents sync` asks about each dependency
+whose source embeds an agent plugin that you have not decided about yet.
+Depending on a crate means compiling its code, not letting its author inject
+agent context, so these stay off until you say otherwise. Three answers:
+
+- **Ask me later** (the default) — records nothing; you are asked again next time.
+- **Enable** — recorded in `[plugins] auto-enable`, and installed by this same sync.
+- **No — don't ask again** — recorded in `[plugins] disable`.
+
+Only explicit answers are recorded, so hitting Enter through the prompt never
+permanently declines anything. Escape leaves the remaining questions undecided.
+
+The prompt only runs in a real terminal session. The automatic sync below —
+and anything else an agent triggers — never prompts; there, pending candidates
+are named in the `SessionStart` context instead, and
+[`cargo agents status`](./cargo-agents-status.md) lists them as `candidate`.
+
 ## Automatic sync
 
 By default (`auto-sync = true`), `cargo agents sync` runs automatically during hook invocations. This keeps skills in sync with workspace dependencies without manual intervention. Set `auto-sync = false` in the user config to disable this and sync manually.

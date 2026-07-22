@@ -11,8 +11,14 @@
 //!
 //! Each surviving offer is then classified against the `[plugins]` config:
 //! already enabled, auto-enabled, declined, or a candidate still awaiting
-//! consent. Nothing here prompts, fetches, or writes — the consent prompt and
-//! the commands that record decisions are a separate concern.
+//! consent. Discovery itself neither fetches nor writes.
+//!
+//! On top of that read side sits the consent write side:
+//! [`prompt_for_consent`] asks about each candidate and [`apply_consent`]
+//! records the answers. The prompt is inert unless its [`Output`] is
+//! interactive, so hook dispatch — and anything else an agent triggers —
+//! can never block on stdin; those contexts get [`pending_candidates`] as a
+//! `SessionStart` hint instead.
 //!
 //! Enablement matters because a dependency is deliberately *not* a trust
 //! root: depending on a crate means compiling its code, not letting its
@@ -25,11 +31,14 @@
 
 use std::path::Path;
 
-use symposium_sdk::workspace::WorkspaceCrate;
+use anyhow::{Context, Result};
+use symposium_sdk::workspace::{WorkspaceCrate, WorkspaceDeps};
 
 use crate::config::Symposium;
 use crate::crate_sources::normalize_crate_name;
+use crate::output::Output;
 use crate::pm::{CARGO_PM, PackageId, PluginInfo, PmContext};
+use crate::report::ReportEvent;
 
 /// Why a discovered offer is (or is not) enabled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +176,124 @@ pub fn enabled_dependencies<'a>(
         })
         .map(|id| id.name.as_str())
         .collect()
+}
+
+/// Run [`discover`] for the workspace `deps` points at, or an empty
+/// [`Discovery`] when there is no workspace.
+pub async fn discover_for(sym: &Symposium, deps: &mut WorkspaceDeps) -> Discovery {
+    let Some(ws) = deps.load().cloned() else {
+        return Discovery::default();
+    };
+    discover(sym, &ws.crates, &ws.root).await
+}
+
+/// The names of the discovered offers still awaiting consent, deduplicated
+/// and sorted — what a consent prompt would ask about, and what the
+/// non-interactive hint names.
+pub async fn pending_candidates(sym: &Symposium, deps: &mut WorkspaceDeps) -> Vec<String> {
+    let mut names: Vec<String> = discover_for(sym, deps)
+        .await
+        .candidates
+        .into_iter()
+        .map(|c| c.id.name)
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Record consent decisions: approvals into `[plugins] auto-enable`,
+/// declines into `[plugins] disable`, then save the config.
+///
+/// Split out from the prompt so the decision recording is testable without a
+/// terminal, and so other entry points can record the same way.
+pub fn apply_consent(sym: &mut Symposium, approved: &[String], declined: &[String]) -> Result<()> {
+    if approved.is_empty() && declined.is_empty() {
+        return Ok(());
+    }
+    let plugins = &mut sym.config.plugins;
+    for name in approved {
+        if !plugins.is_auto_enabled(name) {
+            plugins.auto_enable.push(name.clone());
+        }
+    }
+    for name in declined {
+        if !plugins.is_disabled(name) {
+            plugins.disable.push(name.clone());
+        }
+    }
+    sym.save_config().context("failed to write user config")?;
+
+    if !approved.is_empty() {
+        tracing::info!(
+            report = %ReportEvent::Info {
+                message: format!("enabled dependency plugins: {}", approved.join(", ")),
+            },
+        );
+    }
+    if !declined.is_empty() {
+        tracing::info!(
+            report = %ReportEvent::Info {
+                message: format!(
+                    "declined dependency plugins (recorded in `[plugins] disable`): {}",
+                    declined.join(", ")
+                ),
+            },
+        );
+    }
+    Ok(())
+}
+
+/// Ask the user about each undecided offer, then record the answers.
+///
+/// **Never prompts unless `out` is interactive** ([`Output::is_interactive`]):
+/// hook dispatch and anything an agent triggers use a quiet or capturing
+/// output, so they return here immediately without touching stdin. In those
+/// contexts the candidates surface as a `SessionStart` hint instead (see
+/// [`pending_candidates`]).
+///
+/// Only explicit answers are recorded — the default ("ask me later") leaves
+/// the dependency undecided, so reflexively hitting Enter never permanently
+/// declines anything, and Escape leaves the remaining offers undecided too.
+pub async fn prompt_for_consent(
+    sym: &mut Symposium,
+    deps: &mut WorkspaceDeps,
+    out: &Output,
+) -> Result<()> {
+    if !out.is_interactive() {
+        return Ok(());
+    }
+    let candidates = discover_for(sym, deps).await.candidates;
+    if candidates.is_empty() {
+        return Ok(());
+    }
+
+    let mut approved = Vec::new();
+    let mut declined = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for candidate in candidates {
+        let name = candidate.id.name;
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        let what = candidate
+            .description
+            .as_deref()
+            .unwrap_or("embedded agent plugin");
+        let answer = dialoguer::Select::new()
+            .with_prompt(format!("Dependency `{name}` has an {what}. Enable it?"))
+            .items(["Ask me later", "Enable", "No — don't ask again"])
+            .default(0)
+            .interact_opt()
+            .context("consent prompt failed")?;
+        match answer {
+            Some(1) => approved.push(name),
+            Some(2) => declined.push(name),
+            Some(_) => {}  // ask me later — record nothing
+            None => break, // Esc — leave the rest undecided
+        }
+    }
+    apply_consent(sym, &approved, &declined)
 }
 
 /// Which workspace dependency an offer recommends a plugin for, if the
