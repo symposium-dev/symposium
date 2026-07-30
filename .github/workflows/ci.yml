@@ -78,6 +78,13 @@ jobs:
         with:
           targets: ${{ matrix.target || '' }}
 
+      # The generated TypeScript declarations are type-checked with `tsc`.
+      # That test skips when no Node is reachable, so it must not skip here.
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Install musl tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |

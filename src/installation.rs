@@ -14,18 +14,42 @@ use symposium_install::{Runnable, acquire_source, make_executable};
 
 /// Run a list of post-install shell commands sequentially. Stops at the first
 /// failure.
+///
+/// Output is captured, not inherited: under `mcp-serve` stdout is the
+/// JSON-RPC channel, and a warmup as ordinary as `npx -y <server> --help`
+/// prints there.
 pub async fn run_install_commands(commands: &[String]) -> Result<()> {
     for cmd in commands {
-        let status = tokio::process::Command::new("sh")
+        let output = tokio::process::Command::new("sh")
             .arg("-c")
             .arg(cmd)
-            .status()
+            .output()
             .await?;
-        if !status.success() {
-            bail!("install command `{cmd}` exited with {status}");
+        if !output.status.success() {
+            let status = output.status;
+            match failure_tail(&output) {
+                Some(tail) => bail!("install command `{cmd}` exited with {status}: {tail}"),
+                None => bail!("install command `{cmd}` exited with {status}"),
+            }
         }
     }
     Ok(())
+}
+
+/// Trailing output from a failed install command: stderr first, stdout as
+/// fallback, bounded so a verbose build does not become the error message.
+fn failure_tail(output: &std::process::Output) -> Option<String> {
+    const MAX: usize = 2000;
+    let pick = [&output.stderr, &output.stdout]
+        .into_iter()
+        .map(|stream| String::from_utf8_lossy(stream).trim().to_string())
+        .find(|text| !text.is_empty())?;
+
+    let mut start = pick.len().saturating_sub(MAX);
+    while start > 0 && !pick.is_char_boundary(start) {
+        start += 1;
+    }
+    Some(pick[start..].to_string())
 }
 
 /// Per-installation snapshot the dispatcher builds for the command and each
@@ -177,4 +201,44 @@ pub fn resolve_runnable(installation: AcquiredInstallation, label: &str) -> Resu
         AcquiredRunnable::GlobalExec { path } => Runnable::Exec(path),
     };
     Ok(runnable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What a failing command printed is the only account of why.
+    #[tokio::test]
+    async fn a_failing_install_command_reports_its_stderr() {
+        let err = run_install_commands(&["echo trouble-here >&2; exit 3".to_string()])
+            .await
+            .expect_err("a non-zero exit must fail");
+        let message = err.to_string();
+        assert!(message.contains("trouble-here"), "got: {message}");
+    }
+
+    #[tokio::test]
+    async fn a_failing_install_command_falls_back_to_stdout() {
+        let err = run_install_commands(&["echo only-on-stdout; exit 1".to_string()])
+            .await
+            .expect_err("a non-zero exit must fail");
+        assert!(err.to_string().contains("only-on-stdout"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn a_silent_failure_still_names_the_command() {
+        let err = run_install_commands(&["exit 7".to_string()])
+            .await
+            .expect_err("a non-zero exit must fail");
+        assert!(err.to_string().contains("exit 7"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn commands_stop_at_the_first_failure() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let marker = dir.path().join("second-ran");
+        let commands = vec!["exit 1".to_string(), format!("touch {}", marker.display())];
+        assert!(run_install_commands(&commands).await.is_err());
+        assert!(!marker.exists(), "the second command should not have run");
+    }
 }

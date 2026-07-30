@@ -92,6 +92,10 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "TelemetryConfig::is_default")]
     pub telemetry: TelemetryConfig,
 
+    /// MCP meta-server settings.
+    #[serde(default, skip_serializing_if = "McpConfig::is_default")]
+    pub mcp: McpConfig,
+
     /// Agents configured for this user.
     #[serde(default, rename = "agent")]
     pub agents: Vec<AgentEntry>,
@@ -148,6 +152,121 @@ impl Default for LoggingConfig {
     }
 }
 
+/// Settings for the MCP meta-server (`cargo agents mcp-serve`).
+///
+/// Two groups of knobs with different owners. The sandbox limits
+/// (`script-*`, `max-*`) protect the user's session from a runaway
+/// agent-authored script, so a plugin may not raise its own ceiling. The
+/// server timings (`server-startup-timeout-secs`, `tool-call-timeout-secs`)
+/// describe a backing server, so plugins may override those per entry.
+///
+/// `#[serde(default)]` on the container means every missing key falls back to
+/// the value in [`McpConfig::default`], which is the single source of truth.
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct McpConfig {
+    /// Register the meta-server and serve `mcp-serve`.
+    pub enabled: bool,
+
+    /// Wall-clock ceiling for one `execute` call.
+    ///
+    /// Bounds everything inside it, so it must exceed
+    /// `tool-call-timeout-secs` or that knob can never fire.
+    #[serde(rename = "script-timeout-secs")]
+    pub script_timeout_secs: u64,
+
+    /// Memory ceiling for the JS runtime.
+    #[serde(rename = "script-memory-limit-mb")]
+    pub script_memory_limit_mb: u64,
+
+    /// Stack ceiling for the JS runtime. The engine thread's own stack is
+    /// sized above this, so deep recursion throws rather than segfaulting.
+    #[serde(rename = "script-stack-limit-kb")]
+    pub script_stack_limit_kb: u64,
+
+    /// Maximum backing-server tool calls one `execute` may make.
+    #[serde(rename = "max-tool-calls")]
+    pub max_tool_calls: u32,
+
+    /// Ceiling on a serialized `execute` return value. Oversized results are
+    /// truncated with a marker rather than rejected, so a script that already
+    /// performed side effects does not lose its work.
+    #[serde(rename = "max-result-bytes")]
+    pub max_result_bytes: usize,
+
+    /// Ceiling on captured `console` output for one `execute`.
+    #[serde(rename = "max-console-bytes")]
+    pub max_console_bytes: usize,
+
+    /// Ceiling on spawning a backing server and completing its handshake.
+    #[serde(rename = "server-startup-timeout-secs")]
+    pub server_startup_timeout_secs: u64,
+
+    /// Ceiling on a single backing-server tool call.
+    #[serde(rename = "tool-call-timeout-secs")]
+    pub tool_call_timeout_secs: u64,
+
+    /// Restart attempts before a backing server is marked permanently failed.
+    #[serde(rename = "max-server-restarts")]
+    pub max_server_restarts: u32,
+
+    /// How long a backing server must stay connected before its restart
+    /// counter resets. Without this a server that dies rarely still exhausts
+    /// its budget eventually.
+    #[serde(rename = "restart-stable-reset-secs")]
+    pub restart_stable_reset_secs: u64,
+
+    /// How long a backing server gets to exit gracefully before its process
+    /// group is killed.
+    #[serde(rename = "shutdown-grace-secs")]
+    pub shutdown_grace_secs: u64,
+
+    /// Expose only tools annotated `readOnlyHint`, and reject the rest at
+    /// dispatch. The annotation is self-declared by the backing server, so
+    /// this is a guardrail against agent mistakes, not a security boundary.
+    #[serde(rename = "read-only")]
+    pub read_only: bool,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            script_timeout_secs: 120,
+            script_memory_limit_mb: 64,
+            script_stack_limit_kb: 1024,
+            max_tool_calls: 100,
+            max_result_bytes: 32 * 1024,
+            max_console_bytes: 8 * 1024,
+            server_startup_timeout_secs: 30,
+            tool_call_timeout_secs: 60,
+            max_server_restarts: 5,
+            restart_stable_reset_secs: 300,
+            shutdown_grace_secs: 5,
+            read_only: false,
+        }
+    }
+}
+
+impl McpConfig {
+    fn is_default(&self) -> bool {
+        *self == McpConfig::default()
+    }
+
+    /// The script deadline bounds every tool call made inside it, so a
+    /// per-call timeout at or above it can never fire.
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.tool_call_timeout_secs >= self.script_timeout_secs {
+            anyhow::bail!(
+                "[mcp] tool-call-timeout-secs ({}) must be less than script-timeout-secs ({})",
+                self.tool_call_timeout_secs,
+                self.script_timeout_secs
+            );
+        }
+        Ok(())
+    }
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -157,6 +276,7 @@ impl Default for Config {
             hook_scope: HookScope::default(),
             auto_update: AutoUpdate::default(),
             telemetry: TelemetryConfig::default(),
+            mcp: McpConfig::default(),
             agents: Vec::new(),
             logging: LoggingConfig::default(),
             defaults: DefaultsConfig::default(),
@@ -180,6 +300,8 @@ struct RawConfig {
     auto_update: AutoUpdate,
     #[serde(default)]
     telemetry: TelemetryConfig,
+    #[serde(default)]
+    mcp: McpConfig,
     #[serde(default, rename = "agent")]
     agents: Vec<AgentEntry>,
     #[serde(default)]
@@ -197,19 +319,21 @@ impl Default for RawConfig {
 }
 
 impl RawConfig {
-    fn validate(self) -> Config {
-        Config {
+    fn validate(self) -> anyhow::Result<Config> {
+        self.mcp.validate()?;
+        Ok(Config {
             auto_sync: self.auto_sync,
             agents_syncing: self.agents_syncing,
             sync_debounce_secs: self.sync_debounce_secs,
             hook_scope: self.hook_scope,
             auto_update: self.auto_update,
             telemetry: self.telemetry,
+            mcp: self.mcp,
             agents: self.agents,
             logging: self.logging,
             defaults: self.defaults,
             plugin_source: self.plugin_source,
-        }
+        })
     }
 }
 
@@ -222,6 +346,7 @@ impl From<Config> for RawConfig {
             hook_scope: config.hook_scope,
             auto_update: config.auto_update,
             telemetry: config.telemetry,
+            mcp: config.mcp,
             agents: config.agents,
             logging: config.logging,
             defaults: config.defaults,
@@ -541,15 +666,19 @@ fn resolve_logs_dir(config_dir: &Path) -> PathBuf {
 /// Load config from a config directory.
 fn load_config_from(config_dir: &Path) -> Config {
     let path = config_dir.join("config.toml");
-    match fs::read_to_string(&path) {
-        Ok(contents) => toml::from_str::<RawConfig>(&contents)
-            .unwrap_or_else(|e| {
-                eprintln!("warning: failed to parse {}: {e}", path.display());
-                RawConfig::default()
-            })
-            .validate(),
-        Err(_) => Config::default(),
-    }
+    let Ok(contents) = fs::read_to_string(&path) else {
+        return Config::default();
+    };
+    toml::from_str::<RawConfig>(&contents)
+        .unwrap_or_else(|e| {
+            eprintln!("warning: failed to parse {}: {e}", path.display());
+            RawConfig::default()
+        })
+        .validate()
+        .unwrap_or_else(|e| {
+            eprintln!("warning: invalid config in {}: {e}", path.display());
+            Config::default()
+        })
 }
 
 fn default_true() -> bool {
@@ -570,7 +699,18 @@ mod tests {
     use indoc::indoc;
 
     fn parse_config(toml: &str) -> Config {
-        toml::from_str::<RawConfig>(toml).unwrap().validate()
+        toml::from_str::<RawConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap()
+    }
+
+    fn validate_err(toml: &str) -> String {
+        toml::from_str::<RawConfig>(toml)
+            .unwrap()
+            .validate()
+            .expect_err("config should have been rejected")
+            .to_string()
     }
 
     #[test]
@@ -727,6 +867,126 @@ mod tests {
         assert!(
             !serialized.contains("[telemetry]"),
             "default (off) telemetry should not be written to config.toml: {serialized}"
+        );
+    }
+
+    #[test]
+    fn parse_mcp_defaults() {
+        let config = parse_config("");
+        let mcp = &config.mcp;
+        assert!(mcp.enabled);
+        assert!(!mcp.read_only);
+        assert_eq!(mcp.script_timeout_secs, 120);
+        assert_eq!(mcp.tool_call_timeout_secs, 60);
+        assert_eq!(mcp.server_startup_timeout_secs, 30);
+        assert_eq!(mcp.max_result_bytes, 32 * 1024);
+        assert_eq!(mcp.max_server_restarts, 5);
+        assert_eq!(mcp.shutdown_grace_secs, 5);
+    }
+
+    /// An `[mcp]` table sets only the keys it names; the rest keep their defaults.
+    #[test]
+    fn parse_mcp_partial_table_keeps_other_defaults() {
+        let config = parse_config(indoc! {"
+            [mcp]
+            read-only = true
+            max-tool-calls = 7
+        "});
+        assert!(config.mcp.read_only);
+        assert_eq!(config.mcp.max_tool_calls, 7);
+        assert_eq!(
+            config.mcp.script_timeout_secs,
+            McpConfig::default().script_timeout_secs,
+            "unnamed keys should keep their defaults, got: {:#?}",
+            config.mcp
+        );
+    }
+
+    #[test]
+    fn parse_mcp_disabled() {
+        let config = parse_config(indoc! {"
+            [mcp]
+            enabled = false
+        "});
+        assert!(!config.mcp.enabled);
+    }
+
+    /// A misspelled key is rejected rather than silently ignored.
+    #[test]
+    fn parse_mcp_rejects_unknown_key() {
+        let err = toml::from_str::<RawConfig>(indoc! {"
+            [mcp]
+            script-timout-secs = 30
+        "})
+        .expect_err("misspelled key should not parse");
+        assert!(
+            err.to_string().contains("script-timout-secs"),
+            "error should name the offending key, got: {err}"
+        );
+    }
+
+    /// A per-call timeout at or above the script deadline could never fire,
+    /// so it is rejected rather than silently ignored.
+    #[test]
+    fn mcp_rejects_tool_call_timeout_at_or_above_script_timeout() {
+        for (call, script) in [(60u64, 60u64), (120, 30)] {
+            let err = validate_err(&format!(
+                "[mcp]\nscript-timeout-secs = {script}\ntool-call-timeout-secs = {call}\n"
+            ));
+            assert!(
+                err.contains("tool-call-timeout-secs") && err.contains("script-timeout-secs"),
+                "error should name both knobs for call={call} script={script}, got: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_accepts_tool_call_timeout_below_script_timeout() {
+        let config = parse_config(indoc! {"
+            [mcp]
+            script-timeout-secs = 30
+            tool-call-timeout-secs = 29
+        "});
+        assert_eq!(config.mcp.tool_call_timeout_secs, 29);
+    }
+
+    /// Raising only the per-call timeout must not silently pass by sitting
+    /// under the *default* script deadline the user never touched.
+    #[test]
+    fn mcp_rejects_raised_tool_call_timeout_against_default_script_timeout() {
+        let err = validate_err(indoc! {"
+            [mcp]
+            tool-call-timeout-secs = 600
+        "});
+        assert!(
+            err.contains("600"),
+            "error should quote the offending value, got: {err}"
+        );
+    }
+
+    #[test]
+    fn default_mcp_is_omitted_from_serialized_config() {
+        let config = Config::default();
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        assert!(
+            !serialized.contains("[mcp]"),
+            "default mcp settings should not be written to config.toml: {serialized}"
+        );
+    }
+
+    #[test]
+    fn customized_mcp_is_written_to_serialized_config() {
+        let config = Config {
+            mcp: McpConfig {
+                read_only: true,
+                ..McpConfig::default()
+            },
+            ..Config::default()
+        };
+        let serialized = toml::to_string_pretty(&config).unwrap();
+        assert!(
+            serialized.contains("read-only = true"),
+            "customized mcp settings should round-trip: {serialized}"
         );
     }
 

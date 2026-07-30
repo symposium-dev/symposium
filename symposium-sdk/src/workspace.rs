@@ -230,8 +230,11 @@ pub fn workspace_dir_name(workspace_root: &Path) -> String {
     format!("{tail}-{hash}")
 }
 
-/// Get a file's mtime as seconds since the Unix epoch.
+/// Get a file's mtime as nanoseconds since the Unix epoch.
 /// Returns `None` if the file doesn't exist or its metadata can't be read.
+///
+/// Nanoseconds, not seconds: callers ask "did this change since I last
+/// looked", and an edit followed by a check is well inside one second.
 pub fn file_mtime(path: &Path) -> Option<u64> {
     let meta = fs::metadata(path).ok()?;
     let mtime = meta.modified().ok()?;
@@ -239,7 +242,8 @@ pub fn file_mtime(path: &Path) -> Option<u64> {
         mtime
             .duration_since(SystemTime::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs(),
+            .as_nanos()
+            .min(u64::MAX as u128) as u64,
     )
 }
 

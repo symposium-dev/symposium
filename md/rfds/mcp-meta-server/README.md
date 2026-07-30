@@ -343,3 +343,80 @@ Re-resolve the workspace on `list_tools` when `Cargo.lock` mtime has changed sin
 - [ ] Track `Cargo.lock` mtime at startup
 - [ ] On `list_tools`, check mtime; if changed and auto-sync enabled, re-resolve
 - [ ] Integration test: modify fixture's `Cargo.lock` mid-session, verify index updates
+
+
+# Implementation vs design
+
+Everything here came out of two things, surveying what shipping MCP servers actually emit, and using the feature.
+
+### The capability index moved from `list_tools` to `execute`
+
+As designed, the server inventory lives in `list_tools`'s description, so a model must call `list_tools` before it knows anything at all. It now lives in `execute`'s description instead.
+
+The inventory costs about twenty tokens per server and is what a model needs to decide whether to look further. Putting it on the tool it will actually call removes the discovery round trip entirely for a small workspace, which is the common case.
+
+### `list_tools` returns an index by default, and truncation was dropped
+
+The design truncates the index past a byte budget. Truncation is lossy and varies with the workspace, so the same question gets a different answer in different projects.
+
+Instead `list_tools` answers with a name-and-description index and returns full declarations only when asked, by naming servers or tools, or by an explicit detail level. An index is lossless and strictly smaller than a truncated dump.
+
+The sizing that forces this is that one mainstream server's `tools/list` runs about 49 KB. The extreme case is not many tools but one tool with a very long description, so the reference "sequential thinking" server is 4.6 KB for a single tool.
+
+### Tools are declared as an object, not a namespace
+
+The design shows `declare namespace sqlx { function query(...) }`. Shipped declarations use an object instead: `declare const sqlx: { query(...) }`.
+
+A TypeScript namespace cannot declare a member whose name is not a valid identifier, and hyphenated tool names are ordinary. An object type accepts quoted keys, so a hyphenated tool can be both declared and called. Each such tool is bound under both spellings.
+
+### Results are unwrapped, and return types are `unknown` rather than `any`
+
+The design's own example calls `.rows.map(...)` on a tool result, which only works if the host unwraps MCP's result envelope, but the design never says it does, while declaring return types `any`.
+
+Both halves changed. Results are unwrapped through an explicit ladder that checks the error flag _first_ (a server can report an error _and_ structured content, and checking content first swallows the error), and one popular Python framework's extra result wrapper is unwrapped too, since it survives a proxy hop.
+
+Return types are `Promise<unknown>`. `unknown` forces a model to narrow the value rather than assume a shape; `any` invites the assumption. Typing returns from a server's declared output schema is deliberately not built.
+Adoption is roughly 3 tools in 330 surveyed, and it is bimodal rather than uniformly absent, so the seam is worth keeping and the compiler is not worth writing.
+
+### The type-mapping table
+
+Measured against real captured tool lists, the table in this document sends **well under 2% of schema nodes** to `any`, for several servers, none at all. So motivation is narrower: one generator family, pydantic, systematically emits two constructs the table drops (an optional spelled as a union with null, and named type references), and everything else is a long tail.
+
+One construct absent from the table turned out to matter more than any listed: `additionalProperties: false` is the single most common thing in real schemas, and it must be **ignored**. A naive "unrecognized keyword becomes `unknown`" rule turns every ordinary object from three of the surveyed servers into `unknown`.
+
+### Model-written code normalization before running
+
+The model is handed TypeScript declarations and its output is run in a JavaScript engine that cannot parse a type annotation. Markdown fences, `export default`, a bare expression versus a statement body, and a named function that is never called are all ordinary things a model produces.
+
+Submitted source is normalized before evaluation, using the engine's own parser to decide between an expression and a statement body rather than guessing.
+
+### Timeouts
+
+A memory cap does not stop an infinite loop, and a timeout on the host does not stop a script that is spinning inside the interpreter.
+
+Two layers: an interrupt that fires while the interpreter runs and raises an error the script **cannot catch**, plus an outer deadline for a script blocked awaiting a host call, where the interpreter is idle and the interrupt can never fire. Neither alone is sufficient. Result size and console output are bounded too (an unbounded tool result lands directly in the agent's context, defeating this document's own thesis).
+The default budget is 120 seconds rather than 30. A script that composes several calls against servers that each take seconds is the case the feature exists for.
+
+### A crashed server and duplicate name
+
+The design has a `Dead` state restarted on the next call, which crash-loops forever against a server that cannot start. There is now a restart cap with exponential backoff and a terminal failed state, plus a stability reset so a server that fails rarely is not permanently condemned.
+
+The design also resolves two plugins claiming one server name by first-registered-wins with a warning. That silently drops one plugin's entire server, and a warning on a stdio server's stderr is invisible. Both are now refused by name, as is a server taking a name the meta-server itself uses. Refusals appear in `list_tools` output rather than only in a log, so a real session showed that a refusal nobody can see is no better than the silent drop it replaced.
+
+### v1 is stdio only
+
+The design says the meta-server bridges whatever transport a backing server declares. HTTP and SSE entries parse but are refused with a reason.
+
+Two causes: the Rust SDK has no legacy SSE client, and SSE is still the default for URL-configured servers in most comparable projects; and forwarding credentials to a remote endpoint is an exfiltration surface not considered.
+
+### Symposium owns the plugin manifest shape
+
+Not in the original plan at all, but it came out of using the feature. Every entry needed empty `args` and `env` written out explicitly, and omitting either produced an error that named no field.
+
+The cause was one type doing three jobs: a wire format, a manifest schema, and a config-file schema. Symposium now defines the manifest shape itself giving optional fields default, environment is written as a table rather than a list of pairs, unknown keys are rejected by name, and a server can name an installation to acquire before it starts.
+
+### Registration flips last, not first
+
+The design's first step rewrites agent config to the single meta-server entry, before the meta-server exists. A release cut between that step and a working `mcp-serve` ships broken MCP for every user who takes it.
+
+It is now the last step, gated on a config flag, which also keeps the old behavior measurable against the new one without reverting code.
