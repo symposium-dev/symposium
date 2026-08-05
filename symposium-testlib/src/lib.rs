@@ -468,28 +468,55 @@ impl TestContext {
         Ok(SubmitResult { hooks, response })
     }
 
-    /// Point `cargo` invocations at a mock script for the duration of this test.
-    ///
-    /// Writes the given shell script into the tempdir and configures `Symposium`
-    /// to use it instead of the real `cargo`.  No environment variables are
+    /// Point `cargo` invocations at a mock `sh` script for the duration of this
+    /// test. `script` is a `#!/bin/sh` body. No environment variables are
     /// mutated, so tests can run in parallel without interference.
+    ///
+    /// Windows can't exec a shebang script directly, so the body is run through
+    /// git-bash's `sh` via a one-line `.cmd` shim. Rust spawns `.cmd` files
+    /// through the command interpreter, and production spawns the cargo
+    /// override directly, so this needs no production change. It does require
+    /// `sh` on PATH (the documented Windows dev/CI requirement).
     pub fn set_mock_cargo(&mut self, script: &str) {
-        let script_path = self.tempdir.join("mock-cargo");
-        std::fs::write(&script_path, script).unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        self.sym.set_cargo_override(script_path);
+        let cargo_override = self.write_mock_cargo(script);
+        self.sym.set_cargo_override(cargo_override);
+    }
+
+    /// Write the mock cargo as a directly-spawnable program; return its path.
+    #[cfg(not(windows))]
+    fn write_mock_cargo(&self, script: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = self.tempdir.join("mock-cargo");
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// Windows can't exec a shebang script, so run it through `sh` via a
+    /// one-line `.cmd` shim (Rust spawns `.cmd` through the command interpreter).
+    #[cfg(windows)]
+    fn write_mock_cargo(&self, script: &str) -> PathBuf {
+        let sh_script = self.tempdir.join("mock-cargo.sh");
+        std::fs::write(&sh_script, script).unwrap();
+        let sh_script_fwd = sh_script.to_string_lossy().replace('\\', "/");
+        let cmd_shim = self.tempdir.join("mock-cargo.cmd");
+        std::fs::write(&cmd_shim, format!("@sh \"{sh_script_fwd}\" %*\r\n")).unwrap();
+        cmd_shim
     }
 
     /// Replace variable content with stable placeholders for snapshot tests.
+    /// Backslashes are folded to `/` so path snapshots match on Windows.
     pub fn normalize_paths(&self, output: &str) -> String {
-        let config_dir = self.sym.config_dir().to_string_lossy().to_string();
+        let config_dir = self.sym.config_dir();
+        // `display_path` abbreviates $HOME to `~`, so when the test temp dir
+        // lives under $HOME (always the case on Windows) the printed config
+        // path is home-relative, not absolute. Replace both forms.
+        let abbreviated = symposium::output::display_path(config_dir);
         output
-            .replace(&config_dir, "$CONFIG_DIR")
+            .replace(&abbreviated, "$CONFIG_DIR")
+            .replace(&*config_dir.to_string_lossy(), "$CONFIG_DIR")
             .replace(symposium::state::CURRENT_VERSION, "$VERSION")
+            .replace('\\', "/")
     }
 }
 
@@ -509,10 +536,18 @@ async fn setup_fixture(fixtures: &[&str]) -> TestContext {
     let tempdir = tempfile::tempdir().expect("failed to create tempdir");
     let root = tempdir.path();
 
-    let test_dir = root.to_str().expect("tempdir path is UTF-8");
-    let binary = std::env::var("CARGO_BIN_EXE_cargo-agents").unwrap_or_default();
+    // Forward slashes: these paths are substituted into TOML/JSON string
+    // literals, where a Windows `C:\Users\...` reads as invalid escapes and
+    // fails to parse. Windows accepts `/` in paths, so this is portable.
+    let test_dir = root
+        .to_str()
+        .expect("tempdir path is UTF-8")
+        .replace('\\', "/");
+    let binary = std::env::var("CARGO_BIN_EXE_cargo-agents")
+        .unwrap_or_default()
+        .replace('\\', "/");
 
-    let vars = [("$TEST_DIR", test_dir), ("$BINARY", &binary)];
+    let vars = [("$TEST_DIR", test_dir.as_str()), ("$BINARY", &binary)];
 
     let mut scan = FixtureScanResult {
         config_dirs: Vec::new(),

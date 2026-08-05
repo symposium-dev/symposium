@@ -1,0 +1,22 @@
+# Normalize line endings: store LF in the repo, check out LF on every OS.
+# Keeps shell scripts and shebang'd fixtures runnable on the Windows CI runner.
+* text=auto eol=lf
+
+# Force text + LF on source files, with language-aware diff hunk headers.
+*.rs        text eol=lf diff=rust
+*.toml      text eol=lf diff=toml
+Cargo.lock  text eol=lf
+
+# Binary assets: never touch their bytes.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.ai binary
+*.eps binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary

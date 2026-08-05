@@ -273,8 +273,9 @@ mod tests {
         fs::write(src.join("lib.rs"), "").unwrap();
 
         let sym = Symposium::from_dir(tmp.path());
-        let found = find_workspace_root(&sym, &src);
-        // Canonicalize expected path to handle macOS /var → /private/var symlink.
+        // Canonicalize both sides: macOS resolves /var -> /private/var, and on Windows
+        // canonicalization adds a `\\?\` prefix cargo's output lacks.
+        let found = find_workspace_root(&sym, &src).map(|pth| fs::canonicalize(pth).unwrap());
         let expected = fs::canonicalize(&root).unwrap();
         assert_eq!(found, Some(expected));
     }

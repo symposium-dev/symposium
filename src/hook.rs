@@ -112,17 +112,26 @@ fn build_env(acquired: &[AcquiredInstallation]) -> Vec<(String, String)> {
     // PATH lookup over requirements' bin dirs.
     path_prefix.reverse();
 
-    if !path_prefix.is_empty() {
-        let existing = std::env::var("PATH").unwrap_or_default();
-        let joined = if existing.is_empty() {
-            path_prefix.join(":")
-        } else {
-            format!("{}:{}", path_prefix.join(":"), existing)
-        };
+    if let Some(joined) = prepend_to_path(&path_prefix) {
         env.push(("PATH".to_string(), joined));
     }
 
     env
+}
+
+/// Prepend `dirs` to the current `PATH`, using the platform path-list
+/// separator (`:` on Unix, `;` on Windows). Returns `None` when `dirs` is
+/// empty. `join_paths` picks the separator, so this stays correct on Windows.
+fn prepend_to_path(dirs: &[String]) -> Option<String> {
+    if dirs.is_empty() {
+        return None;
+    }
+    let existing = std::env::var_os("PATH").unwrap_or_default();
+    let mut entries: Vec<PathBuf> = dirs.iter().map(PathBuf::from).collect();
+    entries.extend(std::env::split_paths(&existing).filter(|dir| !dir.as_os_str().is_empty()));
+    std::env::join_paths(entries)
+        .ok()
+        .map(|joined| joined.to_string_lossy().into_owned())
 }
 
 enum SpawnSpec {
@@ -986,6 +995,20 @@ mod tests {
         let path = env.get("PATH").expect("PATH set");
         assert!(path.starts_with("/usr/local/bin"), "PATH = {path}");
         assert!(path.contains("/cache/rtk/1.0/bin"), "PATH = {path}");
+    }
+
+    #[test]
+    fn prepend_to_path_uses_platform_separator() {
+        assert!(prepend_to_path(&[]).is_none(), "empty input yields None");
+
+        let dirs = vec!["/first".to_string(), "/second".to_string()];
+        let joined = prepend_to_path(&dirs).expect("non-empty dirs yield Some");
+
+        let sep = if cfg!(windows) { ';' } else { ':' };
+        assert!(
+            joined.starts_with(&format!("/first{sep}/second")),
+            "prepended dirs come first, joined by the platform separator: {joined}"
+        );
     }
 
     #[test]

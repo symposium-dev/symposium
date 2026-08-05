@@ -5,7 +5,7 @@ predicates = ["battery_pack(cli)"]
 name = "bp-checker"
 # Script generated at runtime by the test — allows tests to vary
 # behavior (exit 0 vs exit 1, witness JSON, etc).
-executable = "$TEST_DIR/bp-checker.sh"
+script = "$TEST_DIR/bp-checker.sh"
 
 [[predicate]]
 name = "battery_pack"

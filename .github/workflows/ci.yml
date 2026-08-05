@@ -9,9 +9,15 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+# Cancel superseded runs on the same ref (e.g. rapid pushes to a PR branch).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   check:
     name: Check compilation
+    timeout-minutes: 20
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -41,6 +47,7 @@ jobs:
   fmt:
     name: Check formatting
     needs: check
+    timeout-minutes: 20
     runs-on: ubuntu-latest
 
     steps:
@@ -57,7 +64,9 @@ jobs:
 
   test:
     name: Run tests (${{ matrix.name }})
+    timeout-minutes: 45
     strategy:
+      fail-fast: false
       matrix:
         include:
           - name: ubuntu
@@ -67,6 +76,8 @@ jobs:
           - name: musl
             os: ubuntu-latest
             target: x86_64-unknown-linux-musl
+          - name: windows
+            os: windows-latest
 
     runs-on: ${{ matrix.os }}
 
@@ -96,7 +107,19 @@ jobs:
           restore-keys: |
             ${{ matrix.name }}-cargo-
 
+      # Tests spawn `sh` to run script-based hooks/predicates. Git for Windows
+      # ships sh.exe in usr/bin, which is not on the runner's PATH by default.
+      - name: Put sh on PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo 'C:\Program Files\Git\usr\bin' >> "$GITHUB_PATH"
+
+      - name: Verify sh is available (Windows)
+        if: runner.os == 'Windows'
+        run: sh --version
+
       - name: Disable agent tests
+        shell: bash
         run: echo 'test-agents = []' > test-agents.toml
 
       - name: Test
@@ -105,6 +128,7 @@ jobs:
   xtask:
     name: Run xtask checks
     needs: check
+    timeout-minutes: 20
     runs-on: ubuntu-latest
 
     steps:

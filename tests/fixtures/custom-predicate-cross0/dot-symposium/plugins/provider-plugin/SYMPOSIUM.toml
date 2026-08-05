@@ -3,7 +3,7 @@ depends-on = ["*"]
 
 [[installations]]
 name = "my-checker"
-executable = "$TEST_DIR/cross-checker.sh"
+script = "$TEST_DIR/cross-checker.sh"
 
 [[predicate]]
 name = "my_check"
