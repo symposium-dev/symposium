@@ -517,6 +517,7 @@ impl Symposium {
         // The cargo transport first — over dependencies, so not a trust root.
         let mut instances = vec![crate::pm::PmInstance {
             name: crate::pm::CARGO_PM.to_string(),
+            kind: crate::pm::OfferKind::Package,
             trusted: false,
             pm: Box::new(crate::pm::CargoPm::new(Arc::clone(workspace))),
         }];
@@ -670,6 +671,7 @@ impl Symposium {
         Some(crate::pm::PmInstance {
             name,
             trusted: true,
+            kind: crate::pm::OfferKind::Registry,
             pm,
         })
     }

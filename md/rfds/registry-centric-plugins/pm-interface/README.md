@@ -362,7 +362,7 @@ Tests: round-trip every manifest fixture in the repo through JSON and assert the
 
 Tests: the existing suite passes unchanged.
 
-- [ ] PR: offer-shaped PM trait
+- [x] PR: offer-shaped PM trait
 
 
 ### Step 3: PM process management

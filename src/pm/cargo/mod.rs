@@ -15,14 +15,15 @@ use anyhow::Result;
 use symposium_install::UpdateLevel;
 
 use crate::crate_sources::RustCrateFetch;
-use crate::plugins::ParsedPlugin;
 
 pub mod workspace;
 pub use workspace::{
     LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
 };
 
-use super::{ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo};
+use super::{
+    ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, PluginOffer,
+};
 
 /// How many crates.io hits a search returns — enough to surface the crate a
 /// user is looking for without flooding the report.
@@ -48,19 +49,15 @@ impl CargoPm {
         PackageId::new(CARGO_PM, name, version.unwrap_or(ANY_VERSION))
     }
 
-    /// Build a first-class [`ParsedPlugin`] from an already-fetched crate
-    /// source, layering its manifest sources — `[package.metadata.symposium]`
-    /// in `Cargo.toml` and a `SYMPOSIUM.toml` at the root — over the crate
-    /// defaults (see
-    /// [`load_crate_manifest`](crate::plugins::load_crate_manifest)) and
-    /// resolving its `source.path` groups to absolute directories. The plugin is
-    /// stamped with the resolved crate id as its
-    /// [`canonical`](ParsedPlugin::canonical) identity. A crate with no manifest
-    /// sources still yields a plugin whose only content is the default `skills/`
-    /// group.
+    /// Build the [`PluginOffer`] for an already-fetched crate, layering its
+    /// manifest sources: `[package.metadata.symposium]` in `Cargo.toml` and a
+    /// `SYMPOSIUM.toml` at the root: via
+    /// [`merge_crate_manifest`](crate::plugins::merge_crate_manifest).
     ///
-    /// `None` only when the merged manifest fails validation (logged).
-    fn build_from_fetched(&self, fetched: FetchedPackage) -> Option<ParsedPlugin> {
+    /// A crate with no manifest sources still yields an offer: an empty
+    /// manifest, which validation turns into a plugin whose only content is the
+    /// default `skills/` group. So this is `Some` for any fetchable crate.
+    fn offer_from_fetched(&self, fetched: FetchedPackage) -> PluginOffer {
         let name = &fetched.id.name;
         let metadata = crate::crate_metadata::symposium_metadata(&fetched.root.join("Cargo.toml"))
             .unwrap_or_else(|e| {
@@ -89,31 +86,8 @@ impl CargoPm {
             None
         };
 
-        let mut plugin = match crate::plugins::load_crate_manifest(
-            metadata,
-            file.as_deref(),
-            &fetched.id.name,
-        ) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(
-                    crate_name = %name,
-                    error = %e,
-                    "failed to build crate plugin manifest"
-                );
-                return None;
-            }
-        };
-
-        // The crate source root is both the base for `source.path` groups and
-        // the attribution root for their labels.
-        crate::plugins::resolve_group_sources(&mut plugin, &fetched.root, &fetched.root);
-
-        Some(ParsedPlugin {
-            plugin,
-            workspace_member: false,
-            canonical: fetched.id,
-        })
+        let manifest = crate::plugins::merge_crate_manifest(metadata, file.as_deref(), name);
+        PluginOffer::new(fetched.id, fetched.root, manifest)
     }
 }
 
@@ -166,7 +140,7 @@ impl PackageManager for CargoPm {
     /// source `cargo metadata` already extracted — no probe, no network — so
     /// registry dependencies are surfaced exactly like path ones. A dependency
     /// whose source can't be served from cache is skipped.
-    async fn active_plugins(&self, deps: &[PackageId]) -> Vec<ParsedPlugin> {
+    async fn active_plugins(&self, deps: &[PackageId]) -> Vec<PluginOffer> {
         let mut out = Vec::new();
         for id in deps.iter().filter(|id| id.pm == CARGO_PM) {
             // Fetch by name only: the concrete version in `id` would make
@@ -184,7 +158,7 @@ impl PackageManager for CargoPm {
             };
             // Only surface dependencies that actually embed plugin content.
             if embedded_plugin_kind(&fetched.root).is_some() {
-                out.extend(self.build_from_fetched(fetched));
+                out.push(self.offer_from_fetched(fetched));
             }
         }
         out
@@ -194,7 +168,7 @@ impl PackageManager for CargoPm {
     /// enabled crate). Unlike `active_plugins`, this loads the named crate
     /// whatever it embeds — any fetchable crate yields at least the default
     /// `skills/` plugin. Fetched cache-only.
-    async fn load_plugin(&self, id: &PackageId) -> Vec<ParsedPlugin> {
+    async fn load_plugin(&self, id: &PackageId) -> Vec<PluginOffer> {
         let fetched = match self.fetch(id, UpdateLevel::None).await {
             Ok(f) => f,
             Err(e) => {
@@ -202,7 +176,7 @@ impl PackageManager for CargoPm {
                 return Vec::new();
             }
         };
-        self.build_from_fetched(fetched).into_iter().collect()
+        vec![self.offer_from_fetched(fetched)]
     }
 
     /// Search crates.io for crates matching `query`.
@@ -307,14 +281,12 @@ mod tests {
         ));
 
         let active = pm.active_plugins(&deps).await;
-        let got: Vec<&str> = active.iter().map(|p| p.canonical.name.as_str()).collect();
+        let got: Vec<&str> = active.iter().map(|o| o.id.name.as_str()).collect();
         // `plain` embeds nothing, so it is not surfaced.
         assert_eq!(got, vec!["with-skills", "registry-embedded"]);
-        assert!(active.iter().all(|p| p.canonical.pm == CARGO_PM));
-        // The default `skills/` group resolved to an absolute directory.
-        assert!(active[0].plugin.skills.iter().any(|g| matches!(
-            &g.source,
-            crate::plugins::PluginSource::Path(d) if d.is_absolute()
-        )));
+        assert!(active.iter().all(|o| o.id.pm == CARGO_PM));
+        // The offer points at the crate source; the default `skills/` group is
+        // added by validation, not by the PM.
+        assert!(active[0].root.join("skills").is_dir());
     }
 }

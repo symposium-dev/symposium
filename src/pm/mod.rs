@@ -43,7 +43,7 @@ pub use path::PathPm;
 
 /// The identity types are the SDK's, since they cross the PM boundary: a
 /// package-manager binary speaks in them too.
-pub use symposium_sdk::pm::{ANY_VERSION, CARGO_PM, PackageId, PluginInfo};
+pub use symposium_sdk::pm::{ANY_VERSION, CARGO_PM, PackageId, PluginInfo, PluginOffer};
 
 /// A fetched package: the exact id it resolved to, plus the directory
 /// holding its content.
@@ -66,10 +66,14 @@ pub struct FetchedPackage {
 /// PM activates for the workspace's dependency set (a registry lists its
 /// entries; the cargo transport surfaces dependency-embedded plugins);
 /// [`load_plugin`](Self::load_plugin) resolves a *specific* id named elsewhere
-/// (a `[[plugins]]` chained reference, an explicitly enabled crate). Both return
-/// fully-resolved [`ParsedPlugin`]s (absolute skill dirs) and are best-effort —
-/// failures are logged and dropped, not surfaced, so one bad plugin never
-/// aborts a sync or hook.
+/// (a `[[plugins]]` chained reference, an explicitly enabled crate). Both
+/// answer with [`PluginOffer`]s: an id, a content directory, and an
+/// *unvalidated* manifest, and are best-effort: failures are logged and
+/// dropped, not surfaced, so one bad plugin never aborts a sync or hook.
+///
+/// Validating an offer into a [`ParsedPlugin`] is [`PmInstance`]'s job, not the
+/// PM's, because the policy depends on where the offer came from rather than
+/// on what it says. That is the whole trust boundary: see [`OfferKind`].
 #[async_trait::async_trait]
 pub trait PackageManager {
     /// The PM's registry name — the `pm` component of every id it owns. For
@@ -81,11 +85,11 @@ pub trait PackageManager {
     /// registry lists its own entries (deps ignored); the cargo transport
     /// surfaces the plugins its dependencies embed. Whether a dependency-embedded
     /// plugin is *trusted* is the caller's decision — see [`PmInstance::trusted`].
-    async fn active_plugins(&self, deps: &[PackageId]) -> Vec<ParsedPlugin>;
+    async fn active_plugins(&self, deps: &[PackageId]) -> Vec<PluginOffer>;
 
     /// The plugin(s) a specific id maps to — zero, one, or many. Used for
     /// `[[plugins]]` chained references and explicitly enabled crates.
-    async fn load_plugin(&self, id: &PackageId) -> Vec<ParsedPlugin>;
+    async fn load_plugin(&self, id: &PackageId) -> Vec<PluginOffer>;
 
     /// The package ids the current workspace depends on. Empty for PMs with no
     /// workspace notion.
@@ -126,9 +130,26 @@ pub enum RegistrySource {
     Path { dir: PathBuf },
 }
 
+/// Which validation policy an instance's offers get.
+///
+/// Symposium's decision, keyed on the kind of instance the offer came from:
+/// never something a package manager states about itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OfferKind {
+    /// A curated registry entry. It must name itself, `[defaults]` is
+    /// rejected, and one that references no dependency anywhere loads
+    /// [dormant](crate::plugins::Plugin::requires_use): there is nothing to
+    /// infer a gate from, and "always on" would fire it in every workspace.
+    Registry,
+    /// A package in an ecosystem. Its id supplies the name, the reference that
+    /// reached it supplies the gate (so dormancy does not apply), and it picks
+    /// up the default `skills/` group.
+    Package,
+}
+
 /// A package-manager instance: its attribution name (the config registry name,
-/// or `cargo` for the transport — the `pm` component of every id it owns), a
-/// trust marker, and the PM itself.
+/// or `cargo` for the transport: the `pm` component of every id it owns), the
+/// policy its offers are validated under, a trust marker, and the PM itself.
 pub struct PmInstance {
     pub name: String,
     /// Whether this instance's [`active_plugins`](PackageManager::active_plugins)
@@ -136,7 +157,42 @@ pub struct PmInstance {
     /// transport is not, since its `active_plugins` are the plugins *embedded in
     /// dependencies*, which run only with the user's consent.
     pub trusted: bool,
+    /// Validation policy for this instance's offers.
+    pub kind: OfferKind,
     pub pm: Box<dyn PackageManager + Send + Sync>,
+}
+
+impl PmInstance {
+    /// This instance's active plugins, validated. An offer that fails
+    /// validation is logged and dropped: best-effort, like the PM layer above.
+    pub async fn active_plugins(&self, deps: &[PackageId]) -> Vec<ParsedPlugin> {
+        self.validate_all(self.pm.active_plugins(deps).await)
+    }
+
+    /// The plugin(s) an id maps to, validated.
+    pub async fn load_plugin(&self, id: &PackageId) -> Vec<ParsedPlugin> {
+        self.validate_all(self.pm.load_plugin(id).await)
+    }
+
+    fn validate_all(&self, offers: Vec<PluginOffer>) -> Vec<ParsedPlugin> {
+        offers
+            .into_iter()
+            .filter_map(|offer| {
+                let id = offer.id.clone();
+                match crate::plugins::validate_offer(offer, self.kind) {
+                    Ok(p) => Some(p),
+                    Err(e) => {
+                        tracing::warn!(
+                            report = %crate::report::ReportEvent::Warning {
+                                message: format!("skipping {id}: {e:#}"),
+                            },
+                        );
+                        None
+                    }
+                }
+            })
+            .collect()
+    }
 }
 
 /// The active set of package-manager instances — one flat collection, the cargo
@@ -181,11 +237,12 @@ impl PmRegistry {
     }
 
     /// Load the plugin(s) an id maps to, asking every instance. Any instance may
-    /// contribute a plugin relevant to the id, so this can return several.
+    /// contribute a plugin relevant to the id, so this can return several. Each
+    /// instance's offers are validated under its own [`OfferKind`].
     pub async fn load_plugin(&self, id: &PackageId) -> Vec<ParsedPlugin> {
         let mut out = Vec::new();
         for inst in &self.instances {
-            out.extend(inst.pm.load_plugin(id).await);
+            out.extend(inst.load_plugin(id).await);
         }
         out
     }

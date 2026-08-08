@@ -8,7 +8,7 @@ use serde::Serialize;
 use crate::config::Symposium;
 use crate::hook::HookEvent;
 use crate::hook_schema::HookAgent;
-use crate::pm::{ANY_VERSION, PackageId};
+use crate::pm::{ANY_VERSION, OfferKind, PackageId, PluginOffer};
 use symposium_install::Source;
 
 pub use symposium_sdk::manifest::{Audience, HookFormat};
@@ -869,7 +869,7 @@ pub async fn list_plugins(sym: &Symposium) -> Vec<ProviderInfo> {
 
     // Trusted instances only: registry entries, not dependency-embedded crates.
     for inst in pms.instances().filter(|i| i.trusted) {
-        for p in inst.pm.active_plugins(&[]).await {
+        for p in inst.active_plugins(&[]).await {
             by_registry
                 .entry(inst.name.clone())
                 .or_default()
@@ -908,7 +908,7 @@ pub async fn list_plugins(sym: &Symposium) -> Vec<ProviderInfo> {
 pub async fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
     let pms = sym.detached_managers();
     for inst in pms.instances().filter(|i| i.trusted) {
-        for parsed in inst.pm.active_plugins(&[]).await {
+        for parsed in inst.active_plugins(&[]).await {
             if parsed.plugin.name == name {
                 return Some(parsed);
             }
@@ -917,26 +917,82 @@ pub async fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
     None
 }
 
-/// Load the plugin at `root/subpath` as a registry entry: a `SYMPOSIUM.toml`
-/// manifest loads as an ordinary registry plugin; a bare `SKILL.md` is
-/// synthesized into a default plugin ([`load_standalone_skill_plugin`]). `None`
-/// when the directory is neither. Called by [`PathPm`](crate::pm::PathPm).
-pub(crate) fn load_entry(
+/// The offer for a registry entry at `root/subpath`: a `SYMPOSIUM.toml`
+/// manifest read as-is, or a bare `SKILL.md` synthesized into one
+/// ([`standalone_skill_manifest`]). `None` when the directory is neither.
+/// Called by [`PathPm`](crate::pm::PathPm).
+///
+/// Skill paths are displayed relative to the registry root, so an entry reads
+/// as `path:<entry>/skills` rather than `path:skills`.
+pub(crate) fn entry_offer(
     root: &Path,
     subpath: &Path,
     source_name: &str,
-) -> Option<Result<ParsedPlugin>> {
+) -> Option<Result<PluginOffer>> {
     let dir = root.join(subpath);
-    match crate::pm::layout::classify(&dir)? {
-        crate::pm::layout::EntryKind::Plugin(toml_path) => Some(
-            load_plugin_as(&toml_path, source_name, root, ManifestOrigin::Registry)
-                .with_context(|| format!("loading plugin from `{}`", toml_path.display())),
-        ),
-        crate::pm::layout::EntryKind::Skill(skill_md) => Some(
-            load_standalone_skill_plugin(&skill_md, source_name, root)
-                .with_context(|| format!("loading skill from `{}`", skill_md.display())),
-        ),
-    }
+    Some(match crate::pm::layout::classify(&dir)? {
+        crate::pm::layout::EntryKind::Plugin(toml_path) => (|| -> Result<PluginOffer> {
+            let content = fs::read_to_string(&toml_path)?;
+            let manifest = RawPluginManifest::parse(&content)?;
+            let base = toml_path.parent().unwrap_or(&dir).to_path_buf();
+            let name = manifest.name.clone().unwrap_or_default();
+            Ok(PluginOffer::new(
+                PackageId::new(source_name, name, ANY_VERSION),
+                base,
+                manifest,
+            )
+            .with_label_root(root))
+        })()
+        .with_context(|| format!("loading plugin from `{}`", toml_path.display())),
+        crate::pm::layout::EntryKind::Skill(skill_md) => (|| -> Result<PluginOffer> {
+            let manifest = standalone_skill_manifest(&skill_md)?;
+            let base = skill_md.parent().unwrap_or(&dir).to_path_buf();
+            let name = manifest.name.clone().unwrap_or_default();
+            Ok(PluginOffer::new(
+                PackageId::new(source_name, name, ANY_VERSION),
+                base,
+                manifest,
+            )
+            .with_label_root(root))
+        })()
+        .with_context(|| format!("loading skill from `{}`", skill_md.display())),
+    })
+}
+
+/// Turn a package manager's [`PluginOffer`] into a validated [`ParsedPlugin`].
+///
+/// This is the seam the whole out-of-process design rests on. A PM produces a
+/// manifest (parsed, translated, or synthesized; Symposium cannot tell) and
+/// everything that decides what the manifest is *allowed to mean* happens
+/// here: schema validation, inline-installation promotion, default content,
+/// dormancy, and resolving `source.path` groups against the offer's root.
+///
+/// `kind` comes from the instance that answered, never from the offer, so a PM
+/// cannot elect its own policy.
+pub(crate) fn validate_offer(offer: PluginOffer, kind: OfferKind) -> Result<ParsedPlugin> {
+    let package_name = offer.id.name.clone();
+    let origin = match kind {
+        OfferKind::Registry => ManifestOrigin::Registry,
+        OfferKind::Package => ManifestOrigin::Crate {
+            crate_name: &package_name,
+        },
+    };
+    let PluginOffer {
+        id,
+        root,
+        manifest,
+        label_root,
+    } = offer;
+    let mut plugin = validate_manifest(manifest, origin)
+        .with_context(|| format!("validating manifest for `{id}`"))?;
+    resolve_group_sources(&mut plugin, &root, label_root.as_deref().unwrap_or(&root));
+    Ok(ParsedPlugin {
+        canonical: id,
+        plugin,
+        // Only the workspace-plugin loader stamps true; nothing a PM offers is
+        // a workspace member.
+        workspace_member: false,
+    })
 }
 
 /// Resolve each `source.path` skill group to an absolute directory and a
@@ -965,19 +1021,17 @@ pub(crate) fn resolve_group_sources(plugin: &mut Plugin, base_dir: &Path, attrib
     }
 }
 
-/// Build a plugin from a bare `SKILL.md` entry (no manifest): a plugin whose
-/// single `source.path = "."` skill group discovers that skill. The plugin is
-/// named for the skill's declared `name` (its identity, falling back to the
-/// entry directory), and the skill's frontmatter `depends-on`/`predicates` are
-/// hoisted to the plugin gate, so the ordinary dormancy rule applies — a skill
-/// that names a dependency activates when present, a bare one is dormant until
-/// `use`d. Skill identity is unchanged (the `SKILL.md` path hash), so a skill
-/// reached this way and via a plugin group dedupes to one install.
-fn load_standalone_skill_plugin(
-    skill_md: &Path,
-    source_name: &str,
-    source_dir: &Path,
-) -> Result<ParsedPlugin> {
+/// Synthesize a manifest for a bare `SKILL.md` entry: a directory holding a
+/// skill and nothing else.
+///
+/// This is the in-tree example of what the PM boundary is for: the entry has no
+/// manifest, so one is made up. The plugin is named for the skill's declared
+/// `name` (falling back to the entry directory), its single `source.path = "."`
+/// group rediscovers that skill, and the skill's frontmatter gates are hoisted
+/// to the plugin level so ordinary registry validation decides dormancy: a
+/// skill naming a dependency activates when it is present, a bare one waits to
+/// be `use`d.
+pub(crate) fn standalone_skill_manifest(skill_md: &Path) -> Result<RawPluginManifest> {
     let (frontmatter_name, predicates) = crate::skills::standalone_skill_meta(skill_md)?;
     let name = frontmatter_name
         .or_else(|| {
@@ -989,37 +1043,13 @@ fn load_standalone_skill_plugin(
         })
         .context("standalone skill has neither a frontmatter `name` nor a named directory")?;
 
-    let has_custom = predicates
-        .predicates
-        .iter()
-        .any(|p| matches!(p, crate::predicate::Predicate::Custom { .. }));
-    let requires_use = !(has_custom || predicates.mentions_dep());
-
-    // A single group scanning the entry directory (the SKILL.md's parent, via
-    // `path`) discovers the skill itself.
-    let group: RawSkillGroup =
-        toml::from_str(r#"source.path = ".""#).expect("static default group");
-    let skills = vec![validate_skill_group(group)?];
-
-    let mut plugin = Plugin {
-        name: name.clone(),
+    let mut manifest = RawPluginManifest {
+        name: Some(name),
         predicates,
-        installations: Vec::new(),
-        hooks: Vec::new(),
-        skills,
-        mcp_servers: Vec::new(),
-        subcommands: std::collections::BTreeMap::new(),
-        custom_predicates: Vec::new(),
-        chained: Vec::new(),
-        requires_use,
+        ..Default::default()
     };
-    let base = skill_md.parent().unwrap_or(source_dir);
-    resolve_group_sources(&mut plugin, base, source_dir);
-    Ok(ParsedPlugin {
-        canonical: PackageId::new(source_name, &name, ANY_VERSION),
-        plugin,
-        workspace_member: false,
-    })
+    manifest.push_skill_group(".", crate::predicate::PredicateSet::default());
+    Ok(manifest)
 }
 
 /// Load the plugin registry from the active package-manager instances.
@@ -1060,7 +1090,7 @@ async fn load_registry_impl(
     // active set through discovery / consent and the driver's `load_plugin`,
     // never here. Each registry instance logs its own load failures.
     for inst in pms.instances().filter(|i| i.trusted) {
-        plugins.extend(inst.pm.active_plugins(&[]).await);
+        plugins.extend(inst.active_plugins(&[]).await);
     }
 
     if let Some(ws) = workspace {
@@ -1311,21 +1341,12 @@ fn scan_source_dir<P: AsRef<Path>>(dir: P, source_name: &str) -> Result<SourceDi
     let mut plugins = Vec::new();
 
     for entry in crate::pm::layout::enumerate(dir)? {
-        match crate::pm::layout::classify(&dir.join(&entry.subpath)) {
-            Some(crate::pm::layout::EntryKind::Plugin(toml_path)) => {
-                let plugin = load_plugin(&toml_path, source_name, dir)
-                    .with_context(|| format!("loading plugin from `{}`", toml_path.display()));
-                tracing::debug!(path = %toml_path.display(), plugin = ?plugin, "loaded plugin");
-                plugins.push(plugin);
-            }
-            Some(crate::pm::layout::EntryKind::Skill(skill_md_path)) => {
-                let plugin = load_standalone_skill_plugin(&skill_md_path, source_name, dir)
-                    .with_context(|| format!("loading skill from `{}`", skill_md_path.display()));
-                tracing::debug!(path = %skill_md_path.display(), "loaded bare skill as plugin");
-                plugins.push(plugin);
-            }
-            None => {}
-        }
+        let Some(offer) = entry_offer(dir, &entry.subpath, source_name) else {
+            continue;
+        };
+        let plugin = offer.and_then(|o| validate_offer(o, OfferKind::Registry));
+        tracing::debug!(subpath = %entry.subpath.display(), ok = plugin.is_ok(), "loaded entry");
+        plugins.push(plugin);
     }
 
     Ok(SourceDirContents { plugins })
@@ -1530,27 +1551,27 @@ fn raw_crate_manifest(content: &str) -> Result<RawPluginManifest> {
     Ok(toml::from_str(content)?)
 }
 
-/// Build a crate's plugin definition by layering its manifest sources.
+/// Merge a crate's two manifest sources into one, for the cargo PM to offer.
 ///
 /// A crate can describe its plugin two ways, and this combines them (later
-/// layers win / append, matching the merge order defaults → Cargo.toml →
-/// `SYMPOSIUM.toml`):
-/// 1. the crate defaults (the default `skills/` group, appended by
-///    [`validate_manifest`] under [`ManifestOrigin::Crate`]) — the base;
-/// 2. `[package.metadata.symposium]` from `Cargo.toml` (`metadata`);
-/// 3. a `SYMPOSIUM.toml` file at the crate root (`file`).
+/// layers win / append):
+/// 1. `[package.metadata.symposium]` from `Cargo.toml` (`metadata`);
+/// 2. a `SYMPOSIUM.toml` file at the crate root (`file`).
 ///
-/// Both `metadata` and `file` use the same schema as any plugin manifest. Each
-/// is parsed independently and **leniently**: a malformed layer is logged and
-/// dropped so the crate still resolves through the remaining layers (and, at
-/// minimum, the default `skills/` group). A crate with neither still becomes a
-/// plugin whose only content is that default group — so `load_plugin` always
-/// yields a plugin for a fetchable crate.
-pub(crate) fn load_crate_manifest(
+/// Both use the same schema as any plugin manifest. Each is parsed
+/// independently and **leniently**: a malformed layer is logged and dropped so
+/// the crate still resolves through the remaining layers. A crate with neither
+/// yields an empty manifest, which validation still turns into a plugin
+/// carrying the default `skills/` group, so any fetchable crate is offerable.
+///
+/// The default group itself is appended by [`validate_manifest`] under
+/// [`ManifestOrigin::Crate`], not here: defaults are policy, and policy is
+/// Symposium's.
+pub(crate) fn merge_crate_manifest(
     metadata: Option<toml::Table>,
     file: Option<&str>,
     crate_name: &str,
-) -> Result<Plugin> {
+) -> RawPluginManifest {
     let meta = metadata.and_then(
         |t| match toml::Value::Table(t).try_into::<RawPluginManifest>() {
             Ok(m) => Some(m),
@@ -1575,12 +1596,11 @@ pub(crate) fn load_crate_manifest(
             None
         }
     });
-    let merged = match (meta, file) {
+    match (meta, file) {
         (Some(a), Some(b)) => a.merge(b),
         (Some(m), None) | (None, Some(m)) => m,
-        (None, None) => raw_crate_manifest("")?,
-    };
-    validate_manifest(merged, ManifestOrigin::Crate { crate_name })
+        (None, None) => RawPluginManifest::default(),
+    }
 }
 
 /// Convert a raw manifest into a validated `Plugin`.
@@ -2013,7 +2033,20 @@ mod tests {
         assert!(!msg.contains(r#""widget1""#), "{msg}");
     }
 
-    // --- Crate-embedded manifests (`load_crate_manifest`) ---
+    // --- Crate-embedded manifests (`merge_crate_manifest` + validation) ---
+
+    /// What the cargo PM offers, put through the validation a package offer
+    /// gets: the pair the PM boundary splits between the two sides.
+    fn load_crate_manifest(
+        metadata: Option<toml::Table>,
+        file: Option<&str>,
+        crate_name: &str,
+    ) -> Result<Plugin> {
+        validate_manifest(
+            merge_crate_manifest(metadata, file, crate_name),
+            ManifestOrigin::Crate { crate_name },
+        )
+    }
 
     #[test]
     fn crate_manifest_name_defaults_to_crate_and_depends_on_waived() {
@@ -2454,9 +2487,10 @@ mod tests {
 
         // A skill that names a dependency: the frontmatter gate is hoisted to
         // the plugin, which takes the skill's declared name and is not dormant.
-        let gated =
-            load_standalone_skill_plugin(&tmp.path().join("gated/SKILL.md"), "recs", tmp.path())
-                .unwrap();
+        let gated = entry_offer(tmp.path(), Path::new("gated"), "recs")
+            .expect("the entry is a bare skill")
+            .and_then(|o| validate_offer(o, OfferKind::Registry))
+            .unwrap();
         assert_eq!(gated.plugin.name, "gated-skill");
         assert!(!gated.plugin.requires_use);
         assert!(gated.plugin.predicates.references_dep("serde"));
@@ -2465,9 +2499,10 @@ mod tests {
 
         // A bare skill names no dependency anywhere, so the ordinary dormancy
         // rule leaves it dormant until `use`d.
-        let bare =
-            load_standalone_skill_plugin(&tmp.path().join("bare/SKILL.md"), "recs", tmp.path())
-                .unwrap();
+        let bare = entry_offer(tmp.path(), Path::new("bare"), "recs")
+            .expect("the entry is a bare skill")
+            .and_then(|o| validate_offer(o, OfferKind::Registry))
+            .unwrap();
         assert_eq!(bare.plugin.name, "bare-skill");
         assert!(bare.plugin.requires_use);
     }

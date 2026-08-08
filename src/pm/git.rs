@@ -11,9 +11,10 @@ use anyhow::Result;
 use symposium_install::UpdateLevel;
 use symposium_install::git::GitCacheManager;
 
-use super::{FetchedPackage, PackageId, PackageManager, PathPm, PluginInfo, RegistrySource};
+use super::{
+    FetchedPackage, PackageId, PackageManager, PathPm, PluginInfo, PluginOffer, RegistrySource,
+};
 use crate::config::REGISTRY_CACHE_SUBDIR;
-use crate::plugins::ParsedPlugin;
 
 /// A git-backed registry: a repository cached on disk, read as a directory.
 pub struct GitPm {
@@ -58,11 +59,11 @@ impl PackageManager for GitPm {
         &self.name
     }
 
-    async fn active_plugins(&self, deps: &[PackageId]) -> Vec<ParsedPlugin> {
+    async fn active_plugins(&self, deps: &[PackageId]) -> Vec<PluginOffer> {
         self.inner.active_plugins(deps).await
     }
 
-    async fn load_plugin(&self, id: &PackageId) -> Vec<ParsedPlugin> {
+    async fn load_plugin(&self, id: &PackageId) -> Vec<PluginOffer> {
         self.inner.load_plugin(id).await
     }
 

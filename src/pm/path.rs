@@ -18,9 +18,9 @@ use anyhow::Result;
 use symposium_install::UpdateLevel;
 
 use super::{
-    ANY_VERSION, FetchedPackage, PackageId, PackageManager, PluginInfo, RegistrySource, layout,
+    ANY_VERSION, FetchedPackage, PackageId, PackageManager, PluginInfo, PluginOffer,
+    RegistrySource, layout,
 };
-use crate::plugins::ParsedPlugin;
 use crate::report::ReportEvent;
 
 /// A configured path registry: one local directory whose tree is a
@@ -50,7 +50,7 @@ impl PackageManager for PathPm {
     /// local registry's contents don't vary with the workspace; whether each
     /// plugin applies is decided later by its own predicates. A registry is a
     /// trust root, so these activate without consent.
-    async fn active_plugins(&self, _deps: &[PackageId]) -> Vec<ParsedPlugin> {
+    async fn active_plugins(&self, _deps: &[PackageId]) -> Vec<PluginOffer> {
         let entries = match layout::enumerate(&self.dir) {
             Ok(e) => e,
             Err(e) => {
@@ -60,7 +60,7 @@ impl PackageManager for PathPm {
         };
         let mut out = Vec::new();
         for entry in entries {
-            match crate::plugins::load_entry(&self.dir, &entry.subpath, &self.name) {
+            match crate::plugins::entry_offer(&self.dir, &entry.subpath, &self.name) {
                 Some(Ok(p)) => out.push(p),
                 Some(Err(e)) => tracing::warn!(
                     report = %ReportEvent::Warning {
@@ -77,11 +77,11 @@ impl PackageManager for PathPm {
     }
 
     /// The entry an id names (`id.name` is the entry's subpath key).
-    async fn load_plugin(&self, id: &PackageId) -> Vec<ParsedPlugin> {
+    async fn load_plugin(&self, id: &PackageId) -> Vec<PluginOffer> {
         if id.pm != self.name {
             return Vec::new();
         }
-        match crate::plugins::load_entry(&self.dir, Path::new(&id.name), &self.name) {
+        match crate::plugins::entry_offer(&self.dir, Path::new(&id.name), &self.name) {
             Some(Ok(p)) => vec![p],
             Some(Err(e)) => {
                 tracing::warn!(registry = %self.name, id = %id, error = %e, "failed to load plugin");
@@ -142,17 +142,27 @@ mod tests {
 
         let pm = PathPm::new("user-plugins", &source);
         let active = pm.active_plugins(&[]).await;
-        let mut names: Vec<&str> = active.iter().map(|p| p.plugin.name.as_str()).collect();
+        let mut names: Vec<&str> = active
+            .iter()
+            .map(|o| o.manifest.name.as_deref().unwrap_or_default())
+            .collect();
         names.sort();
         assert_eq!(names, vec!["style", "tools"]);
-        assert!(active.iter().all(|p| p.canonical.pm == "user-plugins"));
+        assert!(active.iter().all(|o| o.id.pm == "user-plugins"));
+
+        // A bare SKILL.md is synthesized into a manifest with one group.
+        let style = active
+            .iter()
+            .find(|o| o.manifest.name.as_deref() == Some("style"))
+            .expect("the bare skill was offered");
+        assert_eq!(style.manifest.skills.len(), 1);
 
         // load_plugin by the entry's subpath key.
         let one = pm
             .load_plugin(&PackageId::new("user-plugins", "tools", ANY_VERSION))
             .await;
         assert_eq!(one.len(), 1);
-        assert_eq!(one[0].plugin.name, "tools");
+        assert_eq!(one[0].manifest.name.as_deref(), Some("tools"));
 
         let hits = pm.search("too").await.unwrap();
         assert_eq!(hits.len(), 1);

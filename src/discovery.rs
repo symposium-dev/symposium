@@ -128,7 +128,7 @@ pub async fn discover(sym: &Symposium, deps: &Arc<WorkspaceDeps>) -> Discovery {
     // plugins embedded in dependencies, which run only with consent. Classify
     // each against the `[plugins]` config.
     for inst in pms.instances().filter(|i| !i.trusted) {
-        for plugin in inst.pm.active_plugins(&dep_ids).await {
+        for plugin in inst.active_plugins(&dep_ids).await {
             let name = plugin.canonical.name.clone();
             let description = Some(describe_plugin(&plugin.plugin));
             let enablement = decide(sym, &name, &workspace_root);
