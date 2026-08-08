@@ -371,7 +371,7 @@ Newline-delimited JSON-RPC client, the `initialize` handshake, lazy spawn, lifec
 
 Tests: a fixture PM binary that returns canned manifests, driven end to end; plus failure cases: a PM that exits immediately, one that returns malformed JSON, one that never answers.
 
-- [ ] PR: PM process manager + SDK harness
+- [x] PR: PM process manager + SDK harness
 
 
 ### Step 4: Implement `symposium-pm-cargo`

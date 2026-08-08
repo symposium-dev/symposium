@@ -20,8 +20,10 @@
 //! to. Registry instances resolve their own ids, so those ids are never routed
 //! through the ecosystem transports.
 //!
-//! In-process for now — when PMs move out of process, [`PmRegistry`] becomes
-//! the seam that spawns and talks to them.
+//! An instance may be in-process ([`PathPm`], [`GitPm`], [`CargoPm`]) or a
+//! subprocess ([`RemotePm`], which speaks the SDK's JSON-RPC protocol over
+//! stdio). Both implement the same trait, so nothing above this module knows
+//! which it is talking to.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,15 +37,29 @@ mod cargo;
 mod git;
 pub mod layout;
 mod path;
+pub mod remote;
 pub use cargo::{
     CargoPm, LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
 };
 pub use git::GitPm;
 pub use path::PathPm;
+pub use remote::{RemotePm, RemotePmCommand};
 
 /// The identity types are the SDK's, since they cross the PM boundary: a
 /// package-manager binary speaks in them too.
 pub use symposium_sdk::pm::{ANY_VERSION, CARGO_PM, PackageId, PluginInfo, PluginOffer};
+
+/// Translate Symposium's update level to the wire spelling. `UpdateLevel` is
+/// `#[non_exhaustive]`, and a level this build does not know is safest treated
+/// as the cache-only one: it can only under-fetch, never surprise the network.
+pub(crate) fn update_of(update: UpdateLevel) -> symposium_sdk::pm::protocol::Update {
+    use symposium_sdk::pm::protocol::Update;
+    match update {
+        UpdateLevel::Check => Update::Check,
+        UpdateLevel::Fetch => Update::Fetch,
+        _ => Update::None,
+    }
+}
 
 /// A fetched package: the exact id it resolved to, plus the directory
 /// holding its content.

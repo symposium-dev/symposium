@@ -1,16 +1,23 @@
-//! Package-manager identity types.
+//! Package managers: the identity types and the wire protocol.
 //!
-//! A [`PackageId`] names a package as a `(pm, name, version)` tuple — the
-//! canonical identity from the [registry-centric plugin distribution
+//! A [`PackageId`] names a package as a `(pm, name, version)` tuple and a
+//! [`PluginOffer`] is what a PM answers with: the canonical shapes from the
+//! [registry-centric plugin distribution
 //! RFD](https://github.com/symposium-dev/symposium/blob/main/md/rfds/registry-centric-plugins/README.md).
-//! These live in the SDK because they cross the PM boundary: both Symposium
-//! and a package-manager binary speak in them.
+//! They live in the SDK because they cross the PM boundary: both Symposium and
+//! a package-manager binary speak in them.
+//!
+//! [`protocol`] is the JSON-RPC wire format, and [`server`] is the harness that
+//! turns a trait impl into a PM binary.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::manifest::RawPluginManifest;
+
+pub mod protocol;
+pub mod server;
 
 /// The `pm` component of cargo package ids.
 pub const CARGO_PM: &str = "cargo";
