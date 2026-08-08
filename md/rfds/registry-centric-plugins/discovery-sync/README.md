@@ -41,9 +41,9 @@ The core loop:
 
 2. **Call `active_plugins` on all PMs**, passing that dependency set. A registry answers with its own entries, ignoring the deps. An ecosystem transport answers with the plugins its dependencies embed: the crate that ships a `skills/` directory or a `Symposium.toml` of its own. Fetching is cache-only here, so this makes no network calls and a workspace dependency is inspected in the source the PM already extracted.
 
-3. **Split the offers by the source they came from.** A registry is a trust root, so its plugins are loaded straight away and gated by nothing but their own predicates. A dependency is not: depending on a package means compiling its code, not letting its author add to the agent's context, so a plugin embedded in one needs the user's say-so. Only these reach the next step.
+3. **Split the plugins by the source they came from.** A registry is a trust root, so its plugins are loaded straight away and gated by nothing but their own predicates. A dependency is not: depending on a package means compiling its code, not letting its author add to the agent's context, so a plugin embedded in one needs the user's say-so. Only these reach the next step.
 
-4. **Classify each remaining offer against `[plugins]`.** A name may be enabled by `use`, pre-consented by `auto-enable`, previously declined via `disable`, or undecided, which makes it a *candidate*.
+4. **Classify each remaining plugin against `[plugins]`.** A name may be enabled by `use`, pre-consented by `auto-enable`, previously declined via `disable`, or undecided, which makes it a *candidate*.
 
 5. **Prompt the user** about the candidates, and record the answers: approvals into `auto-enable`, declines into `disable`.
 

@@ -332,7 +332,7 @@ So a PM can describe a package that doesn't describe itself. A crate with a bare
 
 It describes content, which is its job. What it does not decide is whether any
 of that runs: validation, defaults, and enablement are applied by Symposium
-after the manifest arrives, from configuration and from the source the offer
+after the manifest arrives, from configuration and from the source the plugin
 came from. See [Enablement](#enablement).
 
 ### Who resolves version requirements — Symposium or the PM?
@@ -362,7 +362,7 @@ Tests: round-trip every manifest fixture in the repo through JSON and assert the
 
 Tests: the existing suite passes unchanged.
 
-- [ ] PR: offer-shaped PM trait
+- [x] PR: unvalidated-plugin PM trait
 
 
 ### Step 3: PM process management

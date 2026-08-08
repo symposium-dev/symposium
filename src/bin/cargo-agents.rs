@@ -295,7 +295,7 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                         ExitCode::SUCCESS
                     }
                     Err(e) => {
-                        eprintln!("{}: {e}", path.display());
+                        eprintln!("{}: {e:#}", path.display());
                         ExitCode::FAILURE
                     }
                 }
@@ -346,7 +346,7 @@ fn emit_validation_results(r: &plugins::ValidationResult) -> usize {
                     path: r.id.clone(),
                     item_kind: r.kind.to_string(),
                     valid: false,
-                    error: Some(e.to_string()),
+                    error: Some(format!("{e:#}")),
                     warning: None,
                 },
             );

@@ -232,15 +232,15 @@ Every PM implements these operations:
 
 | Operation | Input | Output | Used by |
 |-----------|-------|--------|---------|
-| `active_plugins` | the workspace's dependency ids | set of plugin offers | discovery, sync |
-| `load_plugin` | package-id | set of plugin offers | chained references, `use` |
+| `active_plugins` | the workspace's dependency ids | set of unvalidated plugins | discovery, sync |
+| `load_plugin` | package-id | set of unvalidated plugins | chained references, `use` |
 | `search` | partial query string | set of package-ids + metadata | `symposium use`, `symposium search` |
 | `fetch` | package-id | directory with plugin content | sync/install |
 | `list_deps` | (none) | set of package-ids | auto-discovery |
 | `workspace_info` | (none) | workspace root and members | workspace plugins, scoping |
 | `refresh` | update level | whether content was pulled | registry sync |
 
-A plugin *offer* is a resolved id, a content directory, and an unvalidated manifest. Returning a manifest rather than only a directory is what lets a PM synthesize a plugin for a package that ships no manifest, or translate one from its own ecosystem's format, without Symposium learning that ecosystem's conventions. Validation and defaults are applied by Symposium once the manifest arrives. Which plugins actually run is a separate decision, made from the user's `[plugins]` configuration and from the source the offer came from.
+What a PM returns is an *unvalidated plugin*: a resolved id, a content directory, and an unvalidated manifest. Returning a manifest rather than only a directory is what lets a PM synthesize a plugin for a package that ships no manifest, or translate one from its own ecosystem's format, without Symposium learning that ecosystem's conventions. Validation and defaults are applied by Symposium once the manifest arrives. Which plugins actually run is a separate decision, made from the user's `[plugins]` configuration and from the source the plugin came from.
 
 A **package-id** is a tuple `(pm, name, version)` where all three components are PM-defined strings. Examples: `(cargo, serde, 1.0.210)`, `(git, github.com/rtk-ai/rtk, abc123def)`, `(recommendations, cargo/serde, 0.1.0)`. There is no mandated string-serialized format — the tuple is the identity.
 
@@ -338,7 +338,7 @@ The remaining work, roughly in dependency order:
 ## Implementation status
 
 1. **Plugin model.** Plugins, `[defaults]`, predicates, chained plugins, activation roots.
-2. **PM interface and the cargo PM.** The identity tuple, the operation set, the JSON-RPC transport (`symposium_sdk::pm::protocol` and `pm::server` on the PM's side, `pm::RemotePm` on Symposium's), and `symposium-pm-cargo` as a standalone crate and binary. A PM answers with a `PluginOffer`: an id, a content directory, and an unvalidated manifest, so it can synthesize a plugin for a package that has none. `[[package-manager]]` config entries add ecosystems beyond cargo.
+2. **PM interface and the cargo PM.** The identity tuple, the operation set, the JSON-RPC transport (`symposium_sdk::pm::protocol` and `pm::server` on the PM's side, `pm::RemotePm` on Symposium's), and `symposium-pm-cargo` as a standalone crate and binary. A PM answers with an `UnvalidatedPlugin`: an id, a content directory, and an unvalidated manifest, so it can synthesize a plugin for a package that has none. `[[package-manager]]` config entries add ecosystems beyond cargo.
 3. **Discovery and sync.** Dependency-embedded plugin discovery, the consent prompt, and the `[plugins]` config. Recommendations are a flat registry rather than a `search` result (see the note under [the recommendations registry](#example-the-recommendations-registry)).
 4. **User-managed plugins.** `use` / `remove` / `status`, workspace vs. global scope.
 5. **Remaining** — see [Future work](#future-work).
