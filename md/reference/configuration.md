@@ -120,6 +120,33 @@ Defines additional registries — directories or repositories offering plugins. 
 | `path` | string | — | Local directory containing plugins. Relative paths are resolved from `~/.symposium/`. |
 | `auto-update` | bool | `true` | Check for updates on startup. Only applies to `git` registries. |
 
+## `[[package-manager]]`
+
+Adds a package manager for an ecosystem Symposium does not know natively. Each entry names a binary that speaks the [package-manager protocol](../design/module-structure.md#pmremoters--out-of-process-package-managers); Symposium spawns it on first use and talks to it over stdin/stdout.
+
+```toml
+[[package-manager]]
+name = "npm"
+command = "symposium-pm-npm"
+```
+
+The `cargo` package manager is built in and needs no entry. An entry named `cargo` **replaces** it rather than adding a second one, which is how you run the cargo package manager as a separate process:
+
+```toml
+[[package-manager]]
+name = "cargo"
+command = "symposium-pm-cargo"   # installed alongside `cargo-agents`
+```
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `name` | string | *(required)* | The ecosystem this package manager owns. The binary must report the same name when it starts, or it is refused: package ids are routed by this name, so a mismatch would send them to the wrong place. |
+| `command` | string | *(required)* | The binary to run. A bare name is looked up on `PATH`. |
+| `args` | array of strings | `[]` | Extra arguments passed before the protocol takes over. |
+| `env` | table | `{}` | Environment variables set for the process. Nothing else is inherited. |
+
+A package manager reports the plugins embedded in your dependencies, and those are **not** trusted: depending on a package does not let its author add anything to your agent. They go through the same consent as crate dependencies: see [`[plugins]`](#plugins). A package manager that fails to start, or misbehaves, contributes nothing and is logged; it never breaks a sync or a hook.
+
 ## `[plugins]`
 
 Enablement: which plugins are allowed to run at all, as distinct from the [predicates](./predicates.md) that decide *when* an enabled plugin applies.

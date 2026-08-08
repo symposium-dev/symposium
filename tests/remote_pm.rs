@@ -324,3 +324,72 @@ async fn the_cargo_pm_reports_no_workspace_outside_one() {
     assert_eq!(pm.workspace_info().await.unwrap(), None);
     assert_eq!(pm.list_deps().await.unwrap(), vec![]);
 }
+
+// --- `[[package-manager]]` config -------------------------------------------
+
+/// The whole path a configured PM travels: config file → `RemotePm` → a real
+/// subprocess → the workspace facts core reads. Naming the entry `cargo`
+/// replaces the built-in in-process instance, so this also exercises running
+/// the cargo PM out of process end to end.
+#[tokio::test]
+async fn a_configured_package_manager_replaces_the_builtin_cargo_instance() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("ws");
+    let widget = tmp.path().join("widget");
+    std::fs::create_dir_all(&root).unwrap();
+    cargo_workspace(&root, &widget);
+
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config.toml"),
+        format!(
+            "[[package-manager]]\nname = \"cargo\"\ncommand = {:?}\n",
+            env!("CARGO_BIN_EXE_symposium-pm-cargo")
+        ),
+    )
+    .unwrap();
+
+    let sym = symposium::config::Symposium::from_dir(&config_dir);
+    assert_eq!(sym.config.package_managers.len(), 1);
+
+    let ws = sym.workspace(&root);
+    // Exactly one cargo instance: the configured one displaced the built-in.
+    assert_eq!(
+        ws.pms()
+            .instances()
+            .filter(|i| i.name == symposium::pm::CARGO_PM)
+            .count(),
+        1
+    );
+
+    // And it answers, from its own process.
+    assert_eq!(
+        ws.root().await.map(|r| std::fs::canonicalize(r).unwrap()),
+        Some(std::fs::canonicalize(&root).unwrap())
+    );
+    assert!(
+        ws.dep_ids().await.iter().any(|d| d.name == "widget"),
+        "got deps {:?}",
+        ws.dep_ids().await
+    );
+}
+
+#[tokio::test]
+async fn a_configured_package_manager_that_is_missing_degrades() {
+    let tmp = tempfile::tempdir().unwrap();
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config.toml"),
+        "[[package-manager]]\nname = \"npm\"\ncommand = \"/nonexistent/symposium-pm-npm\"\n",
+    )
+    .unwrap();
+
+    let sym = symposium::config::Symposium::from_dir(&config_dir);
+    let ws = sym.workspace(tmp.path());
+    // A broken PM contributes nothing rather than breaking the invocation:
+    // the cargo instance is still there and still answers.
+    assert!(ws.dep_ids().await.is_empty());
+    assert!(ws.pms().instances().any(|i| i.name == "npm"));
+}

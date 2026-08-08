@@ -112,6 +112,11 @@ pub struct Config {
     /// `plugin-source` is the retired spelling, still accepted.
     #[serde(default, rename = "registry", alias = "plugin-source")]
     pub registries: Vec<RegistryConfig>,
+
+    /// Package managers for ecosystems beyond cargo, each a binary speaking
+    /// the PM protocol.
+    #[serde(default, rename = "package-manager")]
+    pub package_managers: Vec<PackageManagerConfig>,
 }
 
 /// The `[plugins]` section: enablement, the consent axis.
@@ -284,6 +289,7 @@ impl Default for Config {
             logging: LoggingConfig::default(),
             defaults: DefaultsConfig::default(),
             registries: Vec::new(),
+            package_managers: Vec::new(),
         }
     }
 }
@@ -313,6 +319,8 @@ struct RawConfig {
     defaults: DefaultsConfig,
     #[serde(default, rename = "registry", alias = "plugin-source")]
     registries: Vec<RegistryConfig>,
+    #[serde(default, rename = "package-manager")]
+    package_managers: Vec<PackageManagerConfig>,
 }
 
 impl Default for RawConfig {
@@ -335,6 +343,7 @@ impl RawConfig {
             logging: self.logging,
             defaults: self.defaults,
             registries: self.registries,
+            package_managers: self.package_managers,
         }
     }
 }
@@ -353,6 +362,7 @@ impl From<Config> for RawConfig {
             logging: config.logging,
             defaults: config.defaults,
             registries: config.registries,
+            package_managers: config.package_managers,
         }
     }
 }
@@ -398,6 +408,38 @@ pub struct RegistryConfig {
     /// Whether to auto-update on startup (git sources only, default: true).
     #[serde(default = "default_true", rename = "auto-update")]
     pub auto_update: bool,
+}
+
+/// A `[[package-manager]]` entry: an ecosystem Symposium does not know natively,
+/// reached by running a binary that speaks the PM protocol.
+///
+/// This is the bootstrap channel for the PM layer. The cargo PM is built in;
+/// anything else (npm, pypi, a private ecosystem) arrives here. An entry
+/// named `cargo` *replaces* the built-in in-process instance, which is how you
+/// run even the cargo PM out of process.
+///
+/// A configured PM is an ecosystem transport, so its `active_plugins` are the
+/// plugins embedded in the workspace's dependencies. Those are **not** trusted,
+/// for the same reason cargo's aren't: depending on a package should not let
+/// its author inject agent context. Consent still applies.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PackageManagerConfig {
+    /// The ecosystem this PM owns: the `pm` component of every id it mints.
+    /// The PM must report the same name at `initialize`, or it is refused:
+    /// ids route by this name, so a mismatch would misroute silently.
+    pub name: String,
+
+    /// The binary to run. A bare name is resolved on `PATH`.
+    pub command: String,
+
+    /// Extra arguments, before the protocol takes over stdio.
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    /// Environment variables to set for the child. Passed explicitly rather
+    /// than inherited, so what a PM sees is what the config says.
+    #[serde(default)]
+    pub env: std::collections::BTreeMap<String, String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -514,18 +556,61 @@ impl Symposium {
         &self,
         workspace: &Arc<crate::pm::WorkspaceDeps>,
     ) -> crate::pm::PmRegistry {
-        // The cargo transport first — over dependencies, so not a trust root.
-        let mut instances = vec![crate::pm::PmInstance {
-            name: crate::pm::CARGO_PM.to_string(),
-            kind: crate::pm::OfferKind::Package,
-            trusted: false,
-            pm: Box::new(crate::pm::LocalPm::new(crate::pm::CargoPm::new(
-                Arc::clone(workspace),
-            ))),
-        }];
+        let mut instances = Vec::new();
+
+        // The ecosystem transports: over dependencies, so not trust roots.
+        // A `[[package-manager]]` named `cargo` replaces the built-in
+        // in-process instance, which is how the cargo PM is run out of process.
+        let configured = &self.config.package_managers;
+        if !configured.iter().any(|pm| pm.name == crate::pm::CARGO_PM) {
+            instances.push(crate::pm::PmInstance {
+                name: crate::pm::CARGO_PM.to_string(),
+                kind: crate::pm::OfferKind::Package,
+                trusted: false,
+                pm: Box::new(crate::pm::LocalPm::new(crate::pm::CargoPm::new(
+                    Arc::clone(workspace),
+                ))),
+            });
+        }
+        for pm in configured {
+            instances.push(self.configured_pm_instance(pm, workspace.cwd()));
+        }
+
         // One registry instance per configured registry — trust roots.
         instances.extend(self.registry_instances());
         crate::pm::PmRegistry::new(instances)
+    }
+
+    /// A `[[package-manager]]` entry as a spawned instance.
+    ///
+    /// The process is not started here: [`RemotePm`](crate::pm::RemotePm)
+    /// spawns lazily, so a configured PM that nothing asks about costs nothing.
+    fn configured_pm_instance(
+        &self,
+        pm: &PackageManagerConfig,
+        cwd: &Path,
+    ) -> crate::pm::PmInstance {
+        let mut command = crate::pm::RemotePmCommand::new(&pm.command)
+            .workspace(Some(cwd.to_path_buf()))
+            .cache_dir(self.dirs.cache_dir.clone());
+        for arg in &pm.args {
+            command = command.arg(arg);
+        }
+        for (key, value) in &pm.env {
+            command = command.env(key, value);
+        }
+        // The cargo binary override is the test harness's channel to a fake
+        // cargo; a spawned PM inherits nothing, so it has to be passed.
+        if let Some(cargo) = &self.dirs.cargo_override {
+            command = command.env("SYMPOSIUM_CARGO", cargo.display().to_string());
+        }
+
+        crate::pm::PmInstance {
+            name: pm.name.clone(),
+            kind: crate::pm::OfferKind::Package,
+            trusted: false,
+            pm: Box::new(crate::pm::RemotePm::new(&pm.name, command)),
+        }
     }
 
     /// The package managers for a workspace-independent operation (registry

@@ -393,7 +393,7 @@ Tests: the existing integration suite, driven through the real subprocess.
 
 The `[[package-manager]]` section and acquisition through the existing installation machinery, replacing the hard-coded lookup from step 3.
 
-- [ ] PR: PM configuration
+- [x] PR: PM configuration
 
 ### Step 6: A non-Rust-ecosystem reference PM
 
