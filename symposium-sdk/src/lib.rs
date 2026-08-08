@@ -35,8 +35,19 @@
 //! report their inputs automatically.
 //!
 //! [`CustomPredicateEvent`]: predicate::CustomPredicateEvent
+//!
+//! # Package managers
+//!
+//! [`manifest`] is the `SYMPOSIUM.toml` schema and [`pm`] the package
+//! identity. Together they are what crosses the package-manager boundary: a PM
+//! answers with a [`pm::PackageId`], a content directory, and a
+//! [`manifest::RawPluginManifest`] it parsed, translated, or synthesized.
+//! Validating that manifest (defaults, dormancy, trust) is Symposium's job,
+//! not the PM's.
 
 pub mod env;
 pub mod fs;
 pub mod hook;
+pub mod manifest;
+pub mod pm;
 pub mod predicate;

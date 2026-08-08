@@ -1,14 +1,26 @@
+use crate::predicate::PredicateEval;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::config::Symposium;
 use crate::hook::HookEvent;
 use crate::hook_schema::HookAgent;
 use crate::pm::{ANY_VERSION, PackageId};
 use symposium_install::Source;
+
+pub use symposium_sdk::manifest::{Audience, HookFormat};
+/// The unvalidated manifest schema lives in the SDK, because it is what
+/// crosses the package-manager boundary. This module owns the other half:
+/// turning one into a validated [`Plugin`]: applying defaults, promoting
+/// inline installations, and deciding dormancy.
+use symposium_sdk::manifest::{
+    RawChainedCargo, RawChainedPlugin, RawCustomPredicate, RawHook, RawInlineInstallation,
+    RawInstallationRef, RawNamedInstallation, RawPluginManifest, RawPluginMcpServer,
+    RawPluginSource, RawSkillGroup, RawSubcommand,
+};
 
 use sacp::schema::McpServer;
 
@@ -31,27 +43,13 @@ pub struct PluginMcpServer {
     pub server: McpServerEntry,
 }
 
-#[derive(Debug, Deserialize)]
-struct RawPluginMcpServer {
-    #[serde(default, rename = "depends-on")]
-    depends_on: Option<crate::predicate::DependsOnList>,
-    /// Rejected: renamed to `depends-on`.
-    #[serde(default)]
-    crates: Option<toml::Value>,
-    #[serde(default)]
-    predicates: crate::predicate::PredicateSet,
-    #[serde(flatten)]
-    server: McpServerEntry,
-}
-
-impl RawPluginMcpServer {
-    fn validate(self) -> Result<PluginMcpServer> {
-        reject_crates_field(&self.crates)?;
-        Ok(PluginMcpServer {
-            predicates: crate::predicate::PredicateSet::merged(self.depends_on, self.predicates),
-            server: self.server,
-        })
-    }
+/// Validate a raw `[[mcp_servers]]` entry.
+fn validate_mcp_server(raw: RawPluginMcpServer) -> Result<PluginMcpServer> {
+    reject_crates_field(&raw.crates)?;
+    Ok(PluginMcpServer {
+        predicates: crate::predicate::PredicateSet::merged(raw.depends_on, raw.predicates),
+        server: raw.server,
+    })
 }
 
 /// Shared rejection for the retired `crates` field, with a migration hint.
@@ -81,31 +79,10 @@ pub enum PluginSource {
     Git(String),
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RawPluginSource {
-    Shorthand(String),
-    Table(RawPluginSourceTable),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawPluginSourceTable {
-    #[serde(default)]
-    path: Option<PathBuf>,
-    #[serde(default)]
-    git: Option<String>,
-    /// Rejected: `source.crate = { ... }` is no longer valid.
-    #[serde(default, rename = "crate")]
-    crate_field: Option<toml::Value>,
-    /// Rejected: `source.crate_path = "..."` is no longer valid.
-    #[serde(default)]
-    crate_path: Option<toml::Value>,
-}
-
-impl RawPluginSource {
-    fn validate(self) -> Result<PluginSource> {
-        match self {
+/// Validate a raw skill-group `source` into a [`PluginSource`].
+fn validate_plugin_source(raw: RawPluginSource) -> Result<PluginSource> {
+    {
+        match raw {
             RawPluginSource::Shorthand(value) => bail!(
                 "`source = \"{value}\"` is no longer supported; a crate now provides a plugin \
                  via a `[[plugins]] source.cargo = \"...\"` reference"
@@ -189,29 +166,16 @@ pub struct SkillGroup {
     pub workspace_member: bool,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawSkillGroup {
-    #[serde(default, rename = "depends-on")]
-    depends_on: Option<crate::predicate::DependsOnList>,
-    /// Rejected: renamed to `depends-on`.
-    #[serde(default)]
-    crates: Option<toml::Value>,
-    #[serde(default)]
-    predicates: crate::predicate::PredicateSet,
-    #[serde(default)]
-    source: Option<RawPluginSource>,
-}
-
-impl RawSkillGroup {
-    fn validate(self) -> Result<SkillGroup> {
-        reject_crates_field(&self.crates)?;
-        let source = self
-            .source
-            .context("a `[[skills]]` group must set `source.path` or `source.git`")?
-            .validate()?;
+/// Validate a raw `[[skills]]` entry.
+fn validate_skill_group(raw: RawSkillGroup) -> Result<SkillGroup> {
+    {
+        reject_crates_field(&raw.crates)?;
+        let source = validate_plugin_source(
+            raw.source
+                .context("a `[[skills]]` group must set `source.path` or `source.git`")?,
+        )?;
         Ok(SkillGroup {
-            predicates: crate::predicate::PredicateSet::merged(self.depends_on, self.predicates),
+            predicates: crate::predicate::PredicateSet::merged(raw.depends_on, raw.predicates),
             source,
             source_label: None,
             workspace_member: false,
@@ -219,59 +183,16 @@ impl RawSkillGroup {
     }
 }
 
-/// A raw `[[plugins]]` entry.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawChainedPlugin {
-    #[serde(default, rename = "depends-on")]
-    depends_on: Option<crate::predicate::DependsOnList>,
-    #[serde(default)]
-    predicates: crate::predicate::PredicateSet,
-    source: RawChainedSource,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawChainedSource {
-    /// Dependency-atom string (`source.cargo = "widget>=1"`) or explicit
-    /// table (`source.cargo = { name = "widget", version = ">=1" }`).
-    #[serde(default)]
-    cargo: Option<RawChainedCargo>,
-    /// Not yet implemented — reserved so the error is a clear message rather
-    /// than an unknown-field parse failure.
-    #[serde(default)]
-    git: Option<toml::Value>,
-    /// Not yet implemented — reserved like `git`.
-    #[serde(default)]
-    path: Option<toml::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RawChainedCargo {
-    Atom(String),
-    Table(RawChainedCargoTable),
-    /// Anything else — rejected with a migration hint.
-    Other(toml::Value),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawChainedCargoTable {
-    name: String,
-    #[serde(default)]
-    version: Option<String>,
-}
-
-impl RawChainedPlugin {
-    fn validate(self) -> Result<ChainedPlugin> {
-        if self.source.git.is_some() || self.source.path.is_some() {
+/// Validate a raw `[[plugins]]` chained reference.
+fn validate_chained_plugin(raw: RawChainedPlugin) -> Result<ChainedPlugin> {
+    {
+        if raw.source.git.is_some() || raw.source.path.is_some() {
             bail!(
                 "[[plugins]] currently supports only `source.cargo`; \
                  git and path chained plugins are not yet implemented"
             );
         }
-        let Some(cargo) = self.source.cargo else {
+        let Some(cargo) = raw.source.cargo else {
             bail!(
                 "[[plugins]] entry needs `source.cargo = \"<crate><version req>\"` \
                  or `source.cargo = {{ name = \"...\", version = \"...\" }}`"
@@ -315,42 +236,11 @@ impl RawChainedPlugin {
             }
         };
         Ok(ChainedPlugin {
-            predicates: crate::predicate::PredicateSet::merged(self.depends_on, self.predicates),
+            predicates: crate::predicate::PredicateSet::merged(raw.depends_on, raw.predicates),
             name,
             version,
         })
     }
-}
-
-/// Raw command reference as it appears in TOML: a string (named installation
-/// reference) or an inline installation table.
-///
-/// Inline forms are promoted at validation time into synthetic
-/// `[[installations]]` entries, so the validated `Plugin` only ever stores
-/// installation references as plain names.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum RawInstallationRef {
-    Named(String),
-    Inline(RawInlineInstallation),
-}
-
-/// Inline installation table. Carries the same fields as a
-/// `[[installations]]` entry minus `name`.
-#[derive(Debug, Deserialize)]
-struct RawInlineInstallation {
-    #[serde(default)]
-    install_commands: Vec<String>,
-    #[serde(default)]
-    requirements: Vec<RawInstallationRef>,
-    #[serde(flatten, default)]
-    source: Option<Source>,
-    #[serde(default)]
-    executable: Option<String>,
-    #[serde(default)]
-    script: Option<String>,
-    #[serde(default)]
-    args: Vec<String>,
 }
 
 /// A `[[installations]]` entry in the validated `Plugin`.
@@ -545,17 +435,6 @@ impl Plugin {
             .map(|s| s.server.clone())
             .collect()
     }
-}
-
-/// Whether a subcommand is intended for human or agent use.
-///
-/// Controls grouping in `cargo agents --help`; does not gate dispatch.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Audience {
-    Humans,
-    #[default]
-    Agents,
 }
 
 /// A validated `[subcommand.<name>]` entry.
@@ -817,42 +696,6 @@ fn validate_installation(install: &Installation) -> Result<()> {
     Ok(())
 }
 
-/// The wire format a plugin hook expects for input/output.
-///
-/// This is distinct from `HookAgent` because:
-/// - `Symposium` is a wire format but not an agent (no CLI invokes hooks
-///   in symposium format natively).
-/// - Not all agents have hook wire formats (e.g., Goose uses MCP extensions,
-///   OpenCode uses JS plugins), so only agents with shell-hook JSON formats
-///   appear here.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum HookFormat {
-    /// Symposium canonical format (default).
-    #[default]
-    Symposium,
-    /// A specific agent's wire format.
-    Claude,
-    Codex,
-    Copilot,
-    Gemini,
-    Kiro,
-}
-
-impl HookFormat {
-    /// Convert to the corresponding HookAgent, if this is an agent format.
-    pub fn as_agent(&self) -> Option<HookAgent> {
-        match self {
-            HookFormat::Symposium => None,
-            HookFormat::Claude => Some(HookAgent::Claude),
-            HookFormat::Codex => Some(HookAgent::Codex),
-            HookFormat::Copilot => Some(HookAgent::Copilot),
-            HookFormat::Gemini => Some(HookAgent::Gemini),
-            HookFormat::Kiro => Some(HookAgent::Kiro),
-        }
-    }
-}
-
 #[derive(Debug, serde::Serialize)]
 pub struct ProviderInfo {
     pub name: String,
@@ -944,39 +787,6 @@ struct SourceDirContents {
     plugins: Vec<Result<ParsedPlugin>>,
 }
 
-/// A `[[predicate]]` entry in the raw TOML manifest.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawCustomPredicate {
-    name: String,
-    /// Named installation or inline installation table.
-    command: RawInstallationRef,
-    #[serde(default)]
-    args: Vec<String>,
-}
-
-/// `[defaults]` section: opt-outs for the default content added to
-/// workspace plugin manifests (and, later, crate-embedded plugins).
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawDefaults {
-    /// Add the default `[[skills]] source.path = "skills"` group.
-    #[serde(default = "default_skills_flag")]
-    skills: bool,
-}
-
-fn default_skills_flag() -> bool {
-    true
-}
-
-impl Default for RawDefaults {
-    fn default() -> Self {
-        Self {
-            skills: default_skills_flag(),
-        }
-    }
-}
-
 /// Where a plugin manifest came from, for validation rules that differ by
 /// origin: a registry manifest must carry its own `name`, and one that
 /// references no dependency is stamped dormant
@@ -1000,140 +810,6 @@ enum ManifestOrigin<'a> {
     Crate {
         crate_name: &'a str,
     },
-}
-
-/// Raw TOML manifest deserialized from a plugin `.toml` file.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawPluginManifest {
-    /// Required for registry plugins; defaults to the directory name for
-    /// workspace plugins.
-    name: Option<String>,
-    /// Default-content opt-outs. Only meaningful for workspace plugins.
-    #[serde(default)]
-    defaults: Option<RawDefaults>,
-    #[serde(default, rename = "depends-on")]
-    depends_on: crate::predicate::DependsOnList,
-    /// Rejected: renamed to `depends-on`.
-    #[serde(default)]
-    crates: Option<toml::Value>,
-    #[serde(default)]
-    predicates: crate::predicate::PredicateSet,
-    #[serde(default)]
-    installations: Vec<RawNamedInstallation>,
-    #[serde(default)]
-    hooks: Vec<RawHook>,
-    #[serde(default)]
-    skills: Vec<RawSkillGroup>,
-    #[serde(default)]
-    mcp_servers: Vec<RawPluginMcpServer>,
-    /// TOML key is singular (`[subcommand.<name>]`); the validated field on
-    /// `Plugin` is plural (`subcommands`).
-    #[serde(default)]
-    subcommand: std::collections::BTreeMap<String, RawSubcommand>,
-    #[serde(default)]
-    predicate: Vec<RawCustomPredicate>,
-    /// Chained plugin references — `[[plugins]]`.
-    #[serde(default)]
-    plugins: Vec<RawChainedPlugin>,
-}
-
-impl RawPluginManifest {
-    /// Layer `over` on top of `self`. List-shaped content (skills, chained
-    /// plugins, hooks, installations, MCP servers, custom predicates) appends
-    /// in `self`-then-`over` order; the `subcommand` map and scalar fields take
-    /// `over` where it sets them; `depends-on` / `predicates` gates AND
-    /// together. Used to combine a crate's `[package.metadata.symposium]` (base)
-    /// with its `SYMPOSIUM.toml` (over).
-    fn merge(mut self, over: RawPluginManifest) -> RawPluginManifest {
-        self.installations.extend(over.installations);
-        self.hooks.extend(over.hooks);
-        self.skills.extend(over.skills);
-        self.mcp_servers.extend(over.mcp_servers);
-        self.predicate.extend(over.predicate);
-        self.plugins.extend(over.plugins);
-        self.subcommand.extend(over.subcommand);
-        self.depends_on.0.extend(over.depends_on.0);
-        self.predicates
-            .predicates
-            .extend(over.predicates.predicates);
-        if over.name.is_some() {
-            self.name = over.name;
-        }
-        if over.defaults.is_some() {
-            self.defaults = over.defaults;
-        }
-        if over.crates.is_some() {
-            self.crates = over.crates;
-        }
-        self
-    }
-}
-
-/// `[[installations]]` entry: a name plus the same fields as a `RawInlineInstallation`.
-#[derive(Debug, Deserialize)]
-struct RawNamedInstallation {
-    name: String,
-    #[serde(default)]
-    requirements: Vec<RawInstallationRef>,
-    #[serde(default)]
-    install_commands: Vec<String>,
-    #[serde(flatten, default)]
-    source: Option<Source>,
-    #[serde(default)]
-    executable: Option<String>,
-    #[serde(default)]
-    script: Option<String>,
-    #[serde(default)]
-    args: Vec<String>,
-}
-
-/// Raw `[subcommand.<name>]` entry. The TOML table-key is the subcommand
-/// name; this struct carries the table body.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawSubcommand {
-    description: String,
-    #[serde(default)]
-    audience: Audience,
-    /// Named installation (`"my-install"`) or inline installation table —
-    /// same shape as `RawHook.command`.
-    command: RawInstallationRef,
-    #[serde(default, rename = "depends-on")]
-    depends_on: Option<crate::predicate::DependsOnList>,
-    /// Rejected: renamed to `depends-on`.
-    #[serde(default)]
-    crates: Option<toml::Value>,
-    #[serde(default)]
-    predicates: crate::predicate::PredicateSet,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawHook {
-    name: String,
-    event: HookEvent,
-    #[serde(default)]
-    agent: Option<HookAgent>,
-    #[serde(default)]
-    matcher: Option<String>,
-    #[serde(default)]
-    requirements: Vec<RawInstallationRef>,
-    /// Named installation (`"my-install"`) or inline installation table.
-    command: RawInstallationRef,
-    /// What to run from the installation. Across hook + installation, at most
-    /// one of `executable` / `script` may be set.
-    #[serde(default)]
-    executable: Option<String>,
-    #[serde(default)]
-    script: Option<String>,
-    /// Invocation arguments. Forbidden when the installation also declares `args`.
-    #[serde(default)]
-    args: Vec<String>,
-    #[serde(default)]
-    format: HookFormat,
-    #[serde(default)]
-    predicates: crate::predicate::PredicateSet,
 }
 
 /// Fetch/update git-based registries.
@@ -1323,7 +999,7 @@ fn load_standalone_skill_plugin(
     // `path`) discovers the skill itself.
     let group: RawSkillGroup =
         toml::from_str(r#"source.path = ".""#).expect("static default group");
-    let skills = vec![group.validate()?];
+    let skills = vec![validate_skill_group(group)?];
 
     let mut plugin = Plugin {
         name: name.clone(),
@@ -2037,7 +1713,7 @@ fn validate_manifest(
     let mut skills = manifest
         .skills
         .into_iter()
-        .map(RawSkillGroup::validate)
+        .map(validate_skill_group)
         .collect::<Result<Vec<_>>>()?;
     if matches!(origin, ManifestOrigin::WorkspaceMember { .. }) {
         for group in &mut skills {
@@ -2047,13 +1723,13 @@ fn validate_manifest(
     let mcp_servers = manifest
         .mcp_servers
         .into_iter()
-        .map(RawPluginMcpServer::validate)
+        .map(validate_mcp_server)
         .collect::<Result<Vec<_>>>()?;
 
     let chained = manifest
         .plugins
         .into_iter()
-        .map(RawChainedPlugin::validate)
+        .map(validate_chained_plugin)
         .collect::<Result<Vec<_>>>()?;
 
     // A registry plugin that references no dependency anywhere — at the

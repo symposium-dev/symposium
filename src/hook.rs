@@ -1,3 +1,4 @@
+use crate::predicate::PredicateEval;
 use std::{
     io::{Read, Write},
     path::PathBuf,
@@ -235,7 +236,7 @@ pub async fn execute_hook(
     event: HookEvent,
     input: &str,
 ) -> anyhow::Result<Vec<u8>> {
-    let event_handler = agent.event(event);
+    let event_handler = crate::hook_schema::agent_event(agent, event);
 
     if let Some(handler) = event_handler {
         let payload = handler.parse_input(input)?;
@@ -744,7 +745,7 @@ pub async fn dispatch_plugin_hooks(
                     Some(0) => {
                         // Parse output and convert to host agent format.
                         // Two cases: native (same as host) or symposium.
-                        let host_handler = host_agent.event(event);
+                        let host_handler = crate::hook_schema::agent_event(host_agent, event);
                         let Some(host_h) = host_handler else { continue };
 
                         let host_json = if hook_agent == Some(host_agent) {

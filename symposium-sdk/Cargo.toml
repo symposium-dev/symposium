@@ -13,7 +13,10 @@ clap = ["dep:clap"]
 anyhow = "1"
 clap = { version = "4", features = ["derive"], optional = true }
 regex = "1"
+sacp = "11"
 semver = { version = "1.0", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+symposium-install = { version = "0.1.0", path = "../symposium-install" }
 tokio = { version = "1", features = ["macros", "rt"] }
+toml = "0.8"

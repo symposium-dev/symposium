@@ -1,7 +1,5 @@
 //! Hook payload types for communication between editor plugins and Symposium.
 
-use serde::{Deserialize, Serialize};
-
 use anyhow::Result;
 use std::{any::Any, fmt::Debug};
 
@@ -14,60 +12,25 @@ pub mod kiro;
 pub mod opencode;
 pub mod symposium;
 
-/// Agents supported by Symposium hooks.
-#[derive(Debug, Copy, Clone, clap::ValueEnum, Serialize, Deserialize, PartialEq, Eq)]
-pub enum HookAgent {
-    #[value(name = "claude")]
-    #[serde(rename = "claude")]
-    Claude,
-    #[value(name = "codex")]
-    #[serde(rename = "codex")]
-    Codex,
-    #[value(name = "copilot")]
-    #[serde(rename = "copilot")]
-    Copilot,
-    #[value(name = "gemini")]
-    #[serde(rename = "gemini")]
-    Gemini,
-    #[value(name = "goose")]
-    #[serde(rename = "goose")]
-    Goose,
-    #[value(name = "kiro")]
-    #[serde(rename = "kiro")]
-    Kiro,
-    #[value(name = "opencode")]
-    #[serde(rename = "opencode")]
-    OpenCode,
-}
+/// [`HookAgent`] and [`HookEvent`] are the SDK's: a plugin manifest names both
+/// (`[[hooks]] agent = "claude"`, `event = "PreToolUse"`), and manifests cross
+/// the package-manager boundary. Only the dispatch below: mapping an agent to
+/// its wire-format handler: needs Symposium's agent modules, so it is a free
+/// function rather than a method.
+pub use symposium_sdk::hook::{HookAgent, HookEvent};
 
-impl HookAgent {
-    /// Canonical lowercase agent name (matches the config `[[agent]]` names).
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            HookAgent::Claude => "claude",
-            HookAgent::Codex => "codex",
-            HookAgent::Copilot => "copilot",
-            HookAgent::Gemini => "gemini",
-            HookAgent::Goose => "goose",
-            HookAgent::Kiro => "kiro",
-            HookAgent::OpenCode => "opencode",
-        }
-    }
-
-    pub fn event(&self, event: HookEvent) -> Option<Box<dyn ErasedAgentHookEvent>> {
-        match self {
-            HookAgent::Claude => claude::ClaudeCode.event(event),
-            HookAgent::Codex => codex::Codex.event(event),
-            HookAgent::Copilot => copilot::Copilot.event(event),
-            HookAgent::Gemini => gemini::Gemini.event(event),
-            HookAgent::Goose => goose::Goose.event(event),
-            HookAgent::Kiro => kiro::Kiro.event(event),
-            HookAgent::OpenCode => opencode::OpenCode.event(event),
-        }
+/// The handler that speaks `agent`'s wire format for `event`, if it has one.
+pub fn agent_event(agent: HookAgent, event: HookEvent) -> Option<Box<dyn ErasedAgentHookEvent>> {
+    match agent {
+        HookAgent::Claude => claude::ClaudeCode.event(event),
+        HookAgent::Codex => codex::Codex.event(event),
+        HookAgent::Copilot => copilot::Copilot.event(event),
+        HookAgent::Gemini => gemini::Gemini.event(event),
+        HookAgent::Goose => goose::Goose.event(event),
+        HookAgent::Kiro => kiro::Kiro.event(event),
+        HookAgent::OpenCode => opencode::OpenCode.event(event),
     }
 }
-
-pub use symposium_sdk::hook::HookEvent;
 
 /// Represents the data sent *from* an agent *to* a hook.
 pub trait AgentHookInput: Debug {

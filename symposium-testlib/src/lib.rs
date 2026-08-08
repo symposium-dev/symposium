@@ -382,8 +382,7 @@ impl TestContext {
             let event = step.event();
             let sym_input = step.to_input_event(cwd);
 
-            let handler = agent
-                .event(event)
+            let handler = symposium::hook_schema::agent_event(agent, event)
                 .ok_or_else(|| anyhow::anyhow!("agent {agent:?} does not support {event:?}"))?;
             let agent_input = handler.translate_input(&sym_input);
             let input_str = agent_input.to_string()?;

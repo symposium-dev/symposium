@@ -3,6 +3,7 @@
 //! Skills follow the [agentskills.io](https://agentskills.io/specification.md) format
 //! and live inside plugin directories under `skills/*/SKILL.md`.
 
+use crate::predicate::PredicateEval;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 

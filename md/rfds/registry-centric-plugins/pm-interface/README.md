@@ -353,7 +353,7 @@ Move the raw `Symposium.toml` schema and the predicate *syntax* types (parsing, 
 
 Tests: round-trip every manifest fixture in the repo through JSON and assert the validated `Plugin` is identical.
 
-- [ ] PR: manifest schema crate
+- [x] PR: manifest schema crate
 
 
 ### Step 2: Reshape the in-process trait to the wire shape

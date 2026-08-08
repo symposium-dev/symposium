@@ -7,11 +7,24 @@
 //!   predicate results.
 //!
 //! Use [`PredicateEmitter`] to write records from a Rust predicate binary.
+//!
+//! The predicate *syntax*: the [`Predicate`] tree, its two surface spellings,
+//! parsing and serde: lives in [`syntax`] and is re-exported here. Evaluating
+//! a predicate needs the workspace dependency graph and the live environment,
+//! so that stays in Symposium; a package manager only ever needs to carry
+//! predicates through a manifest, not check them.
 
 use std::io::{self, Write};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+pub mod syntax;
+
+pub use syntax::{
+    BUILTIN_PREDICATE_NAMES, DependsOnList, Predicate, PredicateSet, parse_comma_separated,
+    parse_dep_atom, parse_predicate, validate_custom_predicate_name,
+};
 
 /// A record emitted by a custom predicate on stdout. Each event describes an
 /// input whose change should invalidate the predicate's cached result.
