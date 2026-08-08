@@ -11,7 +11,7 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
 
-use super::{FetchResult, normalize_crate_name};
+use crate::sources::{FetchResult, normalize_crate_name};
 
 /// Fetch a crate via a temporary dummy cargo package.
 ///

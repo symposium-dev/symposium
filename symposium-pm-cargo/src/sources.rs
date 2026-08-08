@@ -7,17 +7,15 @@
 
 use std::path::PathBuf;
 
-use crate::pm::WorkspaceCrate;
+use crate::workspace::WorkspaceCrate;
 use anyhow::Result;
-
-mod probe;
 
 /// Normalize a crate name for hyphen/underscore-insensitive comparison.
 ///
 /// Cargo treats `foo-bar` and `foo_bar` as the same crate name (published
 /// name on crates.io vs. Rust module identifier), so any name-equality check
 /// against a user-supplied query should go through this normalization.
-pub(crate) fn normalize_crate_name(name: &str) -> String {
+pub fn normalize_crate_name(name: &str) -> String {
     name.replace('-', "_")
 }
 
@@ -84,7 +82,7 @@ impl<'a> RustCrateFetch<'a> {
         }
 
         let (name, version_req) = self.resolve_registry_spec();
-        probe::fetch_via_cargo(&name, &version_req).await
+        crate::probe::fetch_via_cargo(&name, &version_req).await
     }
 
     /// Choose the `(name, version_req)` pair to put in the probe package's

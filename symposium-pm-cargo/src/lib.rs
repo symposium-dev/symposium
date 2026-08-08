@@ -1,30 +1,72 @@
-//! The cargo package manager: crates from the active workspace's dependency
-//! graph, resolved by [`RustCrateFetch`] (path-dependency override, then the
-//! cargo registry cache, then crates.io).
+//! The cargo package manager for Symposium: crates from a Cargo workspace's
+//! dependency graph, resolved by [`RustCrateFetch`] (path-dependency override,
+//! then the cargo registry cache, then crates.io) and offered as plugins.
+//!
+//! This crate knows nothing about Symposium's policy. It answers with
+//! [`PluginOffer`]s: an id, a content directory, and an *unvalidated* manifest
+//!, and what those mean (defaults, dormancy, trust) is decided on the other
+//! side of the boundary. That separation is the point: it is why this can run
+//! in another process, and why a PM cannot grant itself authority.
+//!
+//! Two ways to run it, one implementation:
+//!
+//! - **In-process**, as a library. Symposium adapts it to its own trait.
+//! - **Out-of-process**, as the `symposium-pm-cargo` binary, which is
+//!   [`run`](symposium_sdk::pm::server::run) over this same type.
 //!
 //! The [`workspace`] submodule owns the cargo-workspace resolution — the
-//! `cargo metadata` invocation, its cache, and the [`WorkspaceCrate`] /
-//! [`WorkspaceDeps`] types — since that is cargo's ecosystem, not a generic
-//! concern. A [`CargoPm`] *holds* its [`WorkspaceDeps`] resolver (as an
-//! [`Arc`], so several instances share one lazily-run, cached `cargo metadata`)
-//! and drives it (`self.workspace.crates()`).
+//! `cargo metadata` invocation, its disk cache, and the [`WorkspaceCrate`] /
+//! [`WorkspaceDeps`] types. Those stay private to this crate; what crosses the
+//! boundary is [`WorkspaceInfo`], which says only where the workspace is.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
-use symposium_install::UpdateLevel;
+use symposium_sdk::pm::protocol::{FetchResult, InitializeParams, Update};
+use symposium_sdk::pm::server::PackageManagerServer;
+use symposium_sdk::pm::{ANY_VERSION, CARGO_PM, PackageId, PluginInfo, PluginOffer, WorkspaceInfo};
 
-use crate::crate_sources::RustCrateFetch;
+use crate::sources::RustCrateFetch;
 
+pub mod manifest;
+pub mod metadata;
+pub mod probe;
+pub mod sources;
 pub mod workspace;
 pub use workspace::{
     LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
 };
 
-use super::{
-    ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, PluginOffer,
-    WorkspaceInfo,
-};
+/// The default directory a crate's skills live in when it says nothing else.
+///
+/// The PM only uses this to decide whether a dependency embeds anything worth
+/// surfacing; *adding* the corresponding skill group is validation's job, on
+/// Symposium's side, because a default is policy.
+pub const DEFAULT_SKILLS_DIR: &str = "skills";
+
+/// What the cargo PM needs to resolve its ecosystem.
+///
+/// Out of process this is built from [`InitializeParams`]; in process
+/// Symposium fills it from its own directories. Either way the PM holds it and
+/// takes no ambient context per call.
+#[derive(Debug, Clone, Default)]
+pub struct CargoPmConfig {
+    /// Where to cache the resolved workspace. `None` disables disk caching.
+    pub cache_dir: Option<PathBuf>,
+    /// The cargo binary to run, when not plain `cargo` (`SYMPOSIUM_CARGO`).
+    pub cargo: Option<PathBuf>,
+}
+
+impl CargoPmConfig {
+    /// The configuration carried in an `initialize` handshake.
+    pub fn from_initialize(params: &InitializeParams) -> Self {
+        Self {
+            cache_dir: params.cache_dir.clone(),
+            cargo: params.env.get("SYMPOSIUM_CARGO").map(PathBuf::from),
+        }
+    }
+}
 
 /// How many crates.io hits a search returns — enough to surface the crate a
 /// user is looking for without flooding the report.
@@ -32,17 +74,30 @@ const SEARCH_PAGE_SIZE: u64 = 10;
 
 /// The cargo transport, bound to one workspace's [`WorkspaceDeps`] resolver.
 ///
-/// Holds the resolver as an [`Arc`] so the transport in a [`PmRegistry`] and any
-/// ad-hoc [`CargoPm`] built for crate loading share one lazily-run, cached
-/// `cargo metadata` — the in-process stand-in for a per-workspace PM process.
+/// Holds the resolver as an [`Arc`] so several `CargoPm`s share one lazily-run,
+/// cached `cargo metadata`.
 pub struct CargoPm {
     workspace: Arc<WorkspaceDeps>,
+}
+
+impl Default for CargoPm {
+    /// Detached: answers about no workspace until [`initialize`] supplies one.
+    ///
+    /// [`initialize`]: PackageManagerServer::initialize
+    fn default() -> Self {
+        Self::new(Arc::new(WorkspaceDeps::detached()))
+    }
 }
 
 impl CargoPm {
     /// A transport resolving against `workspace`.
     pub fn new(workspace: Arc<WorkspaceDeps>) -> Self {
         Self { workspace }
+    }
+
+    /// A transport resolving the workspace containing `cwd`.
+    pub fn for_cwd(cwd: impl Into<PathBuf>, config: CargoPmConfig) -> Self {
+        Self::new(Arc::new(WorkspaceDeps::new(cwd, config)))
     }
 
     /// Cargo id for a crate name and optional version requirement.
@@ -53,14 +108,14 @@ impl CargoPm {
     /// Build the [`PluginOffer`] for an already-fetched crate, layering its
     /// manifest sources: `[package.metadata.symposium]` in `Cargo.toml` and a
     /// `SYMPOSIUM.toml` at the root: via
-    /// [`merge_crate_manifest`](crate::plugins::merge_crate_manifest).
+    /// [`manifest::merge`].
     ///
     /// A crate with no manifest sources still yields an offer: an empty
     /// manifest, which validation turns into a plugin whose only content is the
     /// default `skills/` group. So this is `Some` for any fetchable crate.
-    fn offer_from_fetched(&self, fetched: FetchedPackage) -> PluginOffer {
+    fn offer_from_fetched(&self, fetched: FetchResult) -> PluginOffer {
         let name = &fetched.id.name;
-        let metadata = crate::crate_metadata::symposium_metadata(&fetched.root.join("Cargo.toml"))
+        let metadata = crate::metadata::symposium_metadata(&fetched.root.join("Cargo.toml"))
             .unwrap_or_else(|e| {
                 tracing::warn!(
                     crate_name = %name,
@@ -87,7 +142,7 @@ impl CargoPm {
             None
         };
 
-        let manifest = crate::plugins::merge_crate_manifest(metadata, file.as_deref(), name);
+        let manifest = manifest::merge(metadata, file.as_deref(), name);
         PluginOffer::new(fetched.id, fetched.root, manifest)
     }
 }
@@ -101,13 +156,12 @@ fn embedded_plugin_kind(dir: &std::path::Path) -> Option<&'static str> {
         return Some("plugin manifest (SYMPOSIUM.toml)");
     }
     if matches!(
-        crate::crate_metadata::symposium_metadata(&dir.join("Cargo.toml")),
+        crate::metadata::symposium_metadata(&dir.join("Cargo.toml")),
         Ok(Some(_))
     ) {
         return Some("embedded plugin ([package.metadata.symposium])");
     }
-    contains_skill_md(&dir.join(crate::plugins::CRATE_DEFAULT_SKILLS_PATH))
-        .then_some("embedded skills (skills/)")
+    contains_skill_md(&dir.join(DEFAULT_SKILLS_DIR)).then_some("embedded skills (skills/)")
 }
 
 /// Is there a `SKILL.md` anywhere under `dir`?
@@ -126,9 +180,22 @@ fn contains_skill_md(dir: &std::path::Path) -> bool {
 }
 
 #[async_trait::async_trait]
-impl PackageManager for CargoPm {
+impl PackageManagerServer for CargoPm {
     fn name(&self) -> &str {
         CARGO_PM
+    }
+
+    /// Bind to the workspace the caller named. Out of process this is the
+    /// handshake; in process Symposium constructs the PM already bound and
+    /// never calls this.
+    async fn initialize(&mut self, params: &InitializeParams) -> Result<()> {
+        if let Some(cwd) = &params.workspace {
+            self.workspace = Arc::new(WorkspaceDeps::new(
+                cwd.clone(),
+                CargoPmConfig::from_initialize(params),
+            ));
+        }
+        Ok(())
     }
 
     /// The plugins embedded in the workspace's dependencies: every dep in
@@ -136,7 +203,7 @@ impl PackageManager for CargoPm {
     /// `ParsedPlugin`. Whether each is *trusted* (may activate without consent)
     /// is the caller's decision — the cargo transport is marked untrusted.
     ///
-    /// Each dependency is fetched cache-only ([`UpdateLevel::None`]) to locate
+    /// Each dependency is fetched cache-only ([`Update::None`]) to locate
     /// its source, then inspected. A workspace dependency resolves into the
     /// source `cargo metadata` already extracted — no probe, no network — so
     /// registry dependencies are surfaced exactly like path ones. A dependency
@@ -148,7 +215,7 @@ impl PackageManager for CargoPm {
             // `fetch` treat it as an explicit `--version` and probe, bypassing
             // the workspace-source shortcut.
             let fetched = match self
-                .fetch(&Self::id_for(&id.name, None), UpdateLevel::None)
+                .fetch(&Self::id_for(&id.name, None), Update::None)
                 .await
             {
                 Ok(f) => f,
@@ -170,7 +237,7 @@ impl PackageManager for CargoPm {
     /// whatever it embeds — any fetchable crate yields at least the default
     /// `skills/` plugin. Fetched cache-only.
     async fn load_plugin(&self, id: &PackageId) -> Vec<PluginOffer> {
-        let fetched = match self.fetch(id, UpdateLevel::None).await {
+        let fetched = match self.fetch(id, Update::None).await {
             Ok(f) => f,
             Err(e) => {
                 tracing::warn!(id = %id, error = %e, "failed to fetch crate for plugin");
@@ -207,7 +274,7 @@ impl PackageManager for CargoPm {
             .collect())
     }
 
-    async fn fetch(&self, id: &PackageId, _update: UpdateLevel) -> Result<FetchedPackage> {
+    async fn fetch(&self, id: &PackageId, _update: Update) -> Result<FetchResult> {
         debug_assert_eq!(id.pm, CARGO_PM);
         // `crates()` drives the lazy `cargo metadata` resolution — the cargo PM
         // owns the call, resolving against its own workspace.
@@ -216,7 +283,7 @@ impl PackageManager for CargoPm {
             fetch = fetch.version(&id.version);
         }
         let result = fetch.fetch().await?;
-        Ok(FetchedPackage {
+        Ok(FetchResult {
             id: PackageId::new(CARGO_PM, result.name, result.version),
             root: result.path,
         })
@@ -244,7 +311,7 @@ impl PackageManager for CargoPm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pm::WorkspaceCrate;
+    use crate::workspace::WorkspaceCrate;
     use std::path::PathBuf;
 
     /// A path dependency: `source_dir` defaults to its local path.
@@ -285,10 +352,7 @@ mod tests {
             .iter()
             .map(|c| PackageId::new(CARGO_PM, &c.name, c.version.to_string()))
             .collect();
-        let pm = CargoPm::new(crate::pm::WorkspaceDeps::fixture(
-            tmp.path().to_path_buf(),
-            crates,
-        ));
+        let pm = CargoPm::new(WorkspaceDeps::fixture(tmp.path().to_path_buf(), crates));
 
         let active = pm.active_plugins(&deps).await;
         let got: Vec<&str> = active.iter().map(|o| o.id.name.as_str()).collect();

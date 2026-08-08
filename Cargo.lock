@@ -2449,6 +2449,7 @@ dependencies = [
  "serde_yaml_ng",
  "sha2",
  "symposium-install",
+ "symposium-pm-cargo",
  "symposium-sdk",
  "symposium-testlib",
  "tar",
@@ -2476,6 +2477,26 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "symposium-pm-cargo"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "cargo_metadata",
+ "crates_io_api",
+ "indoc",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "symposium-sdk",
+ "tempfile",
+ "tokio",
+ "toml",
  "tracing",
 ]
 

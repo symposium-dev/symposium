@@ -1154,10 +1154,10 @@ pub async fn active_plugins(
         let registry_names: std::collections::HashSet<String> = registry
             .plugins
             .iter()
-            .map(|p| crate::crate_sources::normalize_crate_name(&p.plugin.name))
+            .map(|p| symposium_pm_cargo::sources::normalize_crate_name(&p.plugin.name))
             .collect();
         for name in crate::discovery::enabled_dependencies(sym, ctx.deps, root) {
-            if !registry_names.contains(&crate::crate_sources::normalize_crate_name(&name)) {
+            if !registry_names.contains(&symposium_pm_cargo::sources::normalize_crate_name(&name)) {
                 worklist.push(crate::pm::CargoPm::id_for(&name, None));
             }
         }
@@ -1183,7 +1183,7 @@ fn plugin_key(id: &crate::pm::PackageId) -> String {
     format!(
         "{}/{}",
         id.pm,
-        crate::crate_sources::normalize_crate_name(&id.name)
+        symposium_pm_cargo::sources::normalize_crate_name(&id.name)
     )
 }
 
@@ -1545,62 +1545,6 @@ fn load_plugin_as(
         // loader is the only place that stamps true.
         workspace_member: false,
     })
-}
-
-fn raw_crate_manifest(content: &str) -> Result<RawPluginManifest> {
-    Ok(toml::from_str(content)?)
-}
-
-/// Merge a crate's two manifest sources into one, for the cargo PM to offer.
-///
-/// A crate can describe its plugin two ways, and this combines them (later
-/// layers win / append):
-/// 1. `[package.metadata.symposium]` from `Cargo.toml` (`metadata`);
-/// 2. a `SYMPOSIUM.toml` file at the crate root (`file`).
-///
-/// Both use the same schema as any plugin manifest. Each is parsed
-/// independently and **leniently**: a malformed layer is logged and dropped so
-/// the crate still resolves through the remaining layers. A crate with neither
-/// yields an empty manifest, which validation still turns into a plugin
-/// carrying the default `skills/` group, so any fetchable crate is offerable.
-///
-/// The default group itself is appended by [`validate_manifest`] under
-/// [`ManifestOrigin::Crate`], not here: defaults are policy, and policy is
-/// Symposium's.
-pub(crate) fn merge_crate_manifest(
-    metadata: Option<toml::Table>,
-    file: Option<&str>,
-    crate_name: &str,
-) -> RawPluginManifest {
-    let meta = metadata.and_then(
-        |t| match toml::Value::Table(t).try_into::<RawPluginManifest>() {
-            Ok(m) => Some(m),
-            Err(e) => {
-                tracing::warn!(
-                    crate_name = %crate_name,
-                    error = %e,
-                    "ignoring malformed [package.metadata.symposium]"
-                );
-                None
-            }
-        },
-    );
-    let file = file.and_then(|c| match raw_crate_manifest(c) {
-        Ok(m) => Some(m),
-        Err(e) => {
-            tracing::warn!(
-                crate_name = %crate_name,
-                error = %e,
-                "ignoring malformed crate SYMPOSIUM.toml"
-            );
-            None
-        }
-    });
-    match (meta, file) {
-        (Some(a), Some(b)) => a.merge(b),
-        (Some(m), None) | (None, Some(m)) => m,
-        (None, None) => RawPluginManifest::default(),
-    }
 }
 
 /// Convert a raw manifest into a validated `Plugin`.
@@ -2033,7 +1977,7 @@ mod tests {
         assert!(!msg.contains(r#""widget1""#), "{msg}");
     }
 
-    // --- Crate-embedded manifests (`merge_crate_manifest` + validation) ---
+    // --- Crate-embedded manifests (the PM's merge + validation) ---
 
     /// What the cargo PM offers, put through the validation a package offer
     /// gets: the pair the PM boundary splits between the two sides.
@@ -2043,7 +1987,7 @@ mod tests {
         crate_name: &str,
     ) -> Result<Plugin> {
         validate_manifest(
-            merge_crate_manifest(metadata, file, crate_name),
+            symposium_pm_cargo::manifest::merge(metadata, file, crate_name),
             ManifestOrigin::Crate { crate_name },
         )
     }

@@ -15,6 +15,13 @@ path = "src/lib.rs"
 name = "cargo-agents"
 path = "src/bin/cargo-agents.rs"
 
+# The cargo package manager, as a standalone PM binary. Shipped from this crate
+# so `cargo install symposium` installs it alongside `cargo-agents`: a PM the
+# user has to install separately would be a PM that is usually missing.
+[[bin]]
+name = "symposium-pm-cargo"
+path = "src/bin/symposium-pm-cargo.rs"
+
 [package.metadata.binstall]
 pkg-url = "{ repo }/releases/download/{ name }-v{ version }/cargo-agents-{ target }.tar.gz"
 bin-dir = "cargo-agents{ binary-ext }"
@@ -24,6 +31,7 @@ pkg-url = "{ repo }/releases/download/{ name }-v{ version }/cargo-agents-{ targe
 pkg-fmt = "zip"
 
 [dependencies]
+symposium-pm-cargo = { path = "symposium-pm-cargo", version = "0.1.0" }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 async-trait = "0.1"
@@ -63,4 +71,4 @@ indoc = "2.0.7"
 symposium-testlib = { path = "symposium-testlib" }
 
 [workspace]
-members = [".", "symposium-testlib", "symposium-install", "symposium-sdk", "xtask"]
+members = [".", "symposium-testlib", "symposium-install", "symposium-sdk", "symposium-pm-cargo", "xtask"]

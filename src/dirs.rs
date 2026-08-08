@@ -56,7 +56,13 @@ impl SymposiumDirs {
     /// Create a [`WorkspaceDeps`] with disk caching enabled and the
     /// correct cargo override.
     pub fn workspace_deps(&self, cwd: &Path) -> WorkspaceDeps {
-        WorkspaceDeps::new(cwd, self)
+        WorkspaceDeps::new(
+            cwd,
+            symposium_pm_cargo::CargoPmConfig {
+                cache_dir: Some(self.cache_dir.clone()),
+                cargo: self.cargo_override.clone(),
+            },
+        )
     }
 }
 

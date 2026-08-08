@@ -125,7 +125,7 @@ impl<'a> PredicateContext<'a> {
         self.used_names.extend(
             names
                 .iter()
-                .map(|n| crate::crate_sources::normalize_crate_name(n.as_ref())),
+                .map(|n| symposium_pm_cargo::sources::normalize_crate_name(n.as_ref())),
         );
         self
     }
@@ -133,7 +133,9 @@ impl<'a> PredicateContext<'a> {
     /// Is the named plugin enabled by a `use` entry in this context?
     pub fn is_used(&self, plugin_name: &str) -> bool {
         self.used_names
-            .contains(&crate::crate_sources::normalize_crate_name(plugin_name))
+            .contains(&symposium_pm_cargo::sources::normalize_crate_name(
+                plugin_name,
+            ))
     }
 
     /// Load a persistent cache from disk and attach it to this context.

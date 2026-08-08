@@ -386,7 +386,7 @@ Concretely:
 
 Tests: the existing integration suite, driven through the real subprocess.
 
-- [ ] PR: cargo PM binary + tests
+- [x] PR: cargo PM binary + tests
 
 
 ### Step 5: Configuration surface

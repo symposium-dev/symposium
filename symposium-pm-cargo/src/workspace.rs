@@ -1,8 +1,10 @@
 //! Workspace dependency types and resolution.
 //!
 //! [`WorkspaceDeps`] resolves and caches the crate dependency graph for a Cargo
-//! workspace. Plugin binaries obtain one via
-//! [`SymposiumDirs::workspace_deps`](crate::dirs::SymposiumDirs::workspace_deps).
+//! workspace: the `cargo metadata` invocation, its disk cache, and the types
+//! that come out. This is the cargo PM's private business: nothing outside it
+//! needs a `WorkspaceCrate`, and what does cross the boundary is the much
+//! thinner [`WorkspaceInfo`](symposium_sdk::pm::WorkspaceInfo).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -84,27 +86,26 @@ struct DiskCache {
 /// result is memoized in a [`OnceLock`], so resolution happens at most once per
 /// instance and every method reads through a shared `&self` — which lets a
 /// single resolver be shared (held as an [`Arc`] by a
-/// [`CargoPm`](crate::pm::CargoPm), and read directly by core code that needs
-/// the workspace root or members) rather than each caller resolving its own.
+/// [`CargoPm`](crate::CargoPm)) rather than each caller resolving its own.
 pub struct WorkspaceDeps {
     cwd: PathBuf,
-    dirs: crate::dirs::SymposiumDirs,
+    config: crate::CargoPmConfig,
     cached: OnceLock<Option<Arc<LoadedWorkspace>>>,
 }
 
 impl WorkspaceDeps {
-    pub fn new(cwd: impl Into<PathBuf>, dirs: &crate::dirs::SymposiumDirs) -> Self {
+    pub fn new(cwd: impl Into<PathBuf>, config: crate::CargoPmConfig) -> Self {
         Self {
             cwd: cwd.into(),
-            dirs: dirs.clone(),
+            config,
             cached: OnceLock::new(),
         }
     }
 
     /// A pre-resolved resolver for tests: skips `cargo metadata` and returns
     /// exactly `crates` (rooted at `root`, no members).
-    #[cfg(test)]
-    pub(crate) fn fixture(root: impl Into<PathBuf>, crates: Vec<WorkspaceCrate>) -> Arc<Self> {
+    #[doc(hidden)]
+    pub fn fixture(root: impl Into<PathBuf>, crates: Vec<WorkspaceCrate>) -> Arc<Self> {
         let root = root.into();
         let cached = OnceLock::new();
         let _ = cached.set(Some(Arc::new(LoadedWorkspace {
@@ -114,21 +115,20 @@ impl WorkspaceDeps {
         })));
         Arc::new(Self {
             cwd: root,
-            dirs: crate::dirs::SymposiumDirs::new(PathBuf::new(), PathBuf::new(), None),
+            config: crate::CargoPmConfig::default(),
             cached,
         })
     }
 
     /// A resolver pre-set to "no workspace" — it never runs `cargo metadata`.
-    /// Backs [`detached_managers`](crate::config::Symposium::detached_managers)
-    /// for workspace-independent operations (registry listing, crates.io
+    /// Backs workspace-independent operations (registry listing, crates.io
     /// search).
     pub fn detached() -> Self {
         let cached = OnceLock::new();
         let _ = cached.set(None);
         Self {
             cwd: PathBuf::new(),
-            dirs: crate::dirs::SymposiumDirs::new(PathBuf::new(), PathBuf::new(), None),
+            config: crate::CargoPmConfig::default(),
             cached,
         }
     }
@@ -167,7 +167,7 @@ impl WorkspaceDeps {
             return Some(Arc::new(loaded));
         }
 
-        let loaded = load_workspace(&self.cwd, self.dirs.cargo_override.as_deref())?;
+        let loaded = load_workspace(&self.cwd, self.config.cargo.as_deref())?;
 
         if let Some(dir) = &cache_dir {
             write_disk_cache(dir, &loaded);
@@ -179,11 +179,12 @@ impl WorkspaceDeps {
     /// The workspace-specific cache directory, via `cargo locate-project
     /// --workspace` (~10ms, no dep resolution). `None` when not in a workspace.
     fn workspace_cache_dir(&self) -> Option<PathBuf> {
-        let root = locate_workspace_root(&self.cwd, self.dirs.cargo_override.as_deref())?;
+        let root = locate_workspace_root(&self.cwd, self.config.cargo.as_deref())?;
         let canonical = fs::canonicalize(&root).unwrap_or(root);
         Some(
-            self.dirs
+            self.config
                 .cache_dir
+                .as_ref()?
                 .join("workspaces")
                 .join(workspace_dir_name(&canonical)),
         )

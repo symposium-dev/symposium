@@ -213,3 +213,114 @@ async fn a_missing_binary_contributes_nothing() {
     );
     assert!(pm.active_plugins(&[]).await.is_empty());
 }
+
+// --- The real cargo PM, out of process -------------------------------------
+//
+// The tests above use shell fixtures to exercise the protocol. These drive the
+// actual `symposium-pm-cargo` binary over a real Cargo workspace, which is the
+// only way to know the extraction genuinely holds: that the cargo PM needs
+// nothing from Symposium's process to answer.
+
+/// A minimal cargo workspace whose one dependency ships a skill.
+///
+/// `widget` lives *outside* `root` on purpose: cargo silently promotes a path
+/// dependency inside the workspace directory to a workspace member, and a
+/// member is not a dependency.
+fn cargo_workspace(root: &Path, widget: &Path) {
+    std::fs::write(
+        root.join("Cargo.toml"),
+        "[workspace]\nresolver = \"2\"\nmembers = [\"app\"]\n",
+    )
+    .unwrap();
+
+    std::fs::create_dir_all(root.join("app/src")).unwrap();
+    std::fs::write(
+        root.join("app/Cargo.toml"),
+        format!(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+             [dependencies]\nwidget = {{ path = \"{}\" }}\n",
+            widget.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(root.join("app/src/lib.rs"), "").unwrap();
+
+    std::fs::create_dir_all(widget.join("src")).unwrap();
+    std::fs::create_dir_all(widget.join("skills/usage")).unwrap();
+    std::fs::write(
+        widget.join("Cargo.toml"),
+        "[package]\nname = \"widget\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
+    std::fs::write(widget.join("src/lib.rs"), "").unwrap();
+    std::fs::write(
+        widget.join("skills/usage/SKILL.md"),
+        "---\nname: usage\ndescription: how to use widget\n---\nBody.\n",
+    )
+    .unwrap();
+}
+
+/// The real binary, bound to `workspace` through the `initialize` handshake.
+fn cargo_pm(workspace: &Path, cache: &Path) -> RemotePm {
+    RemotePm::new(
+        "cargo",
+        RemotePmCommand::new(env!("CARGO_BIN_EXE_symposium-pm-cargo"))
+            .workspace(Some(workspace.to_path_buf()))
+            .cache_dir(cache.to_path_buf()),
+    )
+}
+
+#[tokio::test]
+async fn the_cargo_pm_answers_from_its_own_process() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("ws");
+    let widget = tmp.path().join("widget");
+    std::fs::create_dir_all(&root).unwrap();
+    cargo_workspace(&root, &widget);
+
+    let pm = cargo_pm(&root, &tmp.path().join("cache"));
+
+    // Where the workspace is: resolved by the PM, in its own process, from
+    // nothing but the path handed over at `initialize`.
+    let info = pm.workspace_info().await.unwrap().expect("a workspace");
+    assert_eq!(
+        std::fs::canonicalize(&info.root).unwrap(),
+        std::fs::canonicalize(&root).unwrap()
+    );
+    let members: Vec<_> = info
+        .members
+        .iter()
+        .filter_map(|m| m.file_name().and_then(|n| n.to_str()))
+        .collect();
+    assert_eq!(members, vec!["app"], "got members {members:?}");
+
+    // What it depends on.
+    let deps = pm.list_deps().await.unwrap();
+    assert!(
+        deps.iter().any(|d| d.name == "widget" && d.pm == "cargo"),
+        "got deps {deps:?}"
+    );
+
+    // And the plugin that dependency embeds: a crate with no manifest at all,
+    // so the offer carries an empty manifest and its content is the `skills/`
+    // directory that validation will add the default group for.
+    let offers = pm.active_plugins(&deps).await;
+    let widget = offers
+        .iter()
+        .find(|o| o.id.name == "widget")
+        .expect("widget offered");
+    assert!(widget.root.join("skills/usage/SKILL.md").is_file());
+}
+
+#[tokio::test]
+async fn the_cargo_pm_reports_no_workspace_outside_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    let empty = tmp.path().join("not-a-workspace");
+    std::fs::create_dir_all(&empty).unwrap();
+
+    let pm = cargo_pm(&empty, &tmp.path().join("cache"));
+    // Absence is an ordinary answer, not an error: symposium runs outside
+    // Cargo workspaces and must not treat that as a failure.
+    assert_eq!(pm.workspace_info().await.unwrap(), None);
+    assert_eq!(pm.list_deps().await.unwrap(), vec![]);
+}

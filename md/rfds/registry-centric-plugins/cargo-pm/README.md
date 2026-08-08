@@ -138,7 +138,7 @@ Steps here follow the [PM interface plan](../pm-interface/README.md#implementati
 
 Separate workspace resolution, crate fetching, and crate-manifest merging from Symposium's core, so the binary is a thin wrapper. Keeping it a library is also what lets unit tests keep driving it in-process.
 
-- [ ] PR: cargo PM library split
+- [x] PR: cargo PM library split
 
 ### Step 2: Carry workspace information over the protocol
 
@@ -150,7 +150,7 @@ Add the workspace root, member directories, and crate list to the protocol, and 
 
 Wrap the library in the SDK's server harness. Forward the cargo binary override so the test harness's fake cargo still applies.
 
-- [ ] PR: cargo PM binary
+- [x] PR: cargo PM binary
 
 ### Step 4: Switch Symposium to the subprocess
 

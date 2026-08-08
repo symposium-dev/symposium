@@ -40,10 +40,10 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 
 use crate::config::Symposium;
-use crate::crate_sources::normalize_crate_name;
 use crate::output::Output;
 use crate::pm::{CARGO_PM, PackageId};
 use crate::report::ReportEvent;
+use symposium_pm_cargo::sources::normalize_crate_name;
 
 /// Why a discovered offer is (or is not) enabled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

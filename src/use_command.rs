@@ -21,8 +21,8 @@ use anyhow::{Context, Result, bail};
 use symposium_install::UpdateLevel;
 
 use crate::config::{Symposium, UseEntry};
-use crate::crate_sources::normalize_crate_name;
 use crate::report::ReportEvent;
+use symposium_pm_cargo::sources::normalize_crate_name;
 
 /// Record an enablement for `name` and sync so its skills install now.
 pub async fn use_plugin(

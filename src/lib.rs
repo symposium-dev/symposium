@@ -21,11 +21,9 @@ pub mod telemetry;
 pub mod use_command;
 pub mod workspace_state;
 
-pub(crate) mod crate_metadata;
 pub(crate) mod init;
 pub mod sync;
 
-pub(crate) mod crate_sources;
 pub(crate) mod predicate;
 pub(crate) mod predicate_cache;
 pub(crate) mod skills;

@@ -194,8 +194,8 @@ impl PluginsConfig {
 /// user-typed package names.
 fn name_matches(entry: &str, name: &str) -> bool {
     entry == "*"
-        || crate::crate_sources::normalize_crate_name(entry)
-            == crate::crate_sources::normalize_crate_name(name)
+        || symposium_pm_cargo::sources::normalize_crate_name(entry)
+            == symposium_pm_cargo::sources::normalize_crate_name(name)
 }
 
 /// One `[plugins] use` entry: a plugin name enabled deliberately, scoped
@@ -519,7 +519,9 @@ impl Symposium {
             name: crate::pm::CARGO_PM.to_string(),
             kind: crate::pm::OfferKind::Package,
             trusted: false,
-            pm: Box::new(crate::pm::CargoPm::new(Arc::clone(workspace))),
+            pm: Box::new(crate::pm::LocalPm::new(crate::pm::CargoPm::new(
+                Arc::clone(workspace),
+            ))),
         }];
         // One registry instance per configured registry — trust roots.
         instances.extend(self.registry_instances());

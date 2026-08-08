@@ -134,7 +134,7 @@ pub async fn workspace_status(
     // Discovery only sees dependencies, so these are invisible above; surface
     // them from the config the same way sync loads them
     // ([`enabled_dependencies`](crate::discovery::enabled_dependencies)).
-    let normalize = crate::crate_sources::normalize_crate_name;
+    let normalize = symposium_pm_cargo::sources::normalize_crate_name;
     let shown: std::collections::HashSet<String> = registry
         .plugins
         .iter()
