@@ -149,6 +149,16 @@ A package manager reports the plugins embedded in your dependencies, and those a
 
 ## `[plugins]`
 
+Entries name a plugin as a `(pm, name)` pair: which package manager offers it, and the canonical name that manager knows it by. A bare string is shorthand for a cargo package, so `use = ["serde"]` and `use = [{ pm = "cargo", name = "serde" }]` mean the same thing.
+
+The pair matters because a bare name is not an identity: two ecosystems may use the same word, and what a name means is the offering package manager's business (a crate name for cargo, an entry path for a registry). Naming the package manager is also what lets you turn off a plugin from a registry, which would otherwise be on unconditionally:
+
+```toml
+[plugins]
+disable = [{ pm = "symposium-recommendations", name = "rtk" }]
+```
+
+
 Enablement: which plugins are allowed to run at all, as distinct from the [predicates](./predicates.md) that decide *when* an enabled plugin applies.
 
 Symposium trusts two things without asking: the workspace you are in, and the [registries](#registry) it is configured with. A registry exists to curate plugins, so enabling one is the act of accepting its curation. Both built-in registries count here and are on by default — `user-plugins` is your own directory, while `symposium-recommendations` is a list curated by the Symposium project and trusted until you turn it off in [`[defaults]`](#defaults).

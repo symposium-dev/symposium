@@ -42,6 +42,12 @@ pub async fn use_plugin(
         .iter()
         .find(|p| normalize_crate_name(&p.plugin.name) == normalized);
     let dormant = registry_plugin.is_some_and(|p| p.plugin.requires_use);
+    // A dormant registry plugin is named by the registry that offers it;
+    // anything else is a cargo package.
+    let plugin_ref = match registry_plugin.filter(|_| dormant) {
+        Some(p) => crate::config::PluginRef::new(&p.canonical.pm, &p.canonical.name),
+        None => crate::config::PluginRef::new(crate::pm::CARGO_PM, name),
+    };
     let already_trusted = registry_plugin.is_some() && !dormant;
     if already_trusted {
         tracing::info!(
@@ -65,11 +71,8 @@ pub async fn use_plugin(
     }
 
     let entry = match &workspace_root {
-        _ if global => UseEntry::Global(name.to_string()),
-        Some(root) => UseEntry::Workspace {
-            name: name.to_string(),
-            workspace: root.clone(),
-        },
+        _ if global => UseEntry::global(plugin_ref),
+        Some(root) => UseEntry::scoped(plugin_ref, root.clone()),
         None => unreachable!("checked above"),
     };
 
@@ -119,9 +122,10 @@ pub async fn remove_plugin(
         if normalize_crate_name(entry.name()) != normalize_crate_name(name) {
             return true;
         }
-        let in_scope = match entry {
-            UseEntry::Global(_) => global,
-            UseEntry::Workspace { .. } => {
+        let in_scope = if entry.is_global() {
+            global
+        } else {
+            {
                 !global
                     && workspace_root
                         .as_deref()

@@ -110,9 +110,15 @@ async fn use_global_records_unscoped_entry() {
             ctx.symposium(&["use", "--global", "crate-a"]).await?;
 
             let config = read_config(&ctx);
+            // Entries are qualified by the package manager that offers the
+            // plugin, so a name always identifies exactly one thing.
             assert!(
-                config.contains(r#"use = ["crate-a"]"#),
-                "global entry is a plain string: {config}"
+                config.contains(r#"name = "crate-a""#) && config.contains(r#"pm = "cargo""#),
+                "global entry names its package manager: {config}"
+            );
+            assert!(
+                !config.contains("workspace ="),
+                "a global entry carries no workspace scope: {config}"
             );
             Ok(())
         },

@@ -625,7 +625,7 @@ async fn dormant_plugin_activates_only_once_used() {
                 .config
                 .plugins
                 .used
-                .push(symposium::config::UseEntry::Global(
+                .push(symposium::config::UseEntry::global(
                     "gateless-plugin".into(),
                 ));
             ctx.sym.save_config()?;

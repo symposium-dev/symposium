@@ -163,7 +163,8 @@ pub async fn workspace_status(
 
     // Names declined without ever being discovered (a `disable` entry for a
     // dependency whose source isn't on disk, or one added by hand).
-    for name in &sym.config.plugins.disable {
+    for entry in &sym.config.plugins.disable {
+        let name = &entry.name;
         if declined_names.iter().any(|n| n == name) {
             continue;
         }

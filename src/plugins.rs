@@ -1144,7 +1144,13 @@ pub async fn active_plugins(
 
     // Seed with the trust-root plugins (registry + workspace), gated.
     for parsed in &registry.plugins {
-        record_active(parsed.clone(), ctx, &mut active, &mut worklist);
+        record_active(
+            parsed.clone(),
+            &sym.config.plugins,
+            ctx,
+            &mut active,
+            &mut worklist,
+        );
     }
 
     // Enabled crates: consented dependencies and `use`d crates that aren't
@@ -1168,7 +1174,7 @@ pub async fn active_plugins(
     while let Some(id) = worklist.pop() {
         for plugin in pms.load_plugin(&id).await {
             if visited.insert(plugin_key(&plugin.canonical)) {
-                record_active(plugin, ctx, &mut active, &mut worklist);
+                record_active(plugin, &sym.config.plugins, ctx, &mut active, &mut worklist);
             }
         }
     }
@@ -1192,10 +1198,24 @@ fn plugin_key(id: &crate::pm::PackageId) -> String {
 /// onto `worklist`.
 fn record_active(
     plugin: ParsedPlugin,
+    disabled: &crate::config::PluginsConfig,
     ctx: &mut crate::predicate::PredicateContext<'_>,
     active: &mut Vec<ParsedPlugin>,
     worklist: &mut Vec<crate::pm::PackageId>,
 ) {
+    // `disable` names a plugin whatever offers it. A trusted source is what
+    // lets a plugin activate without being asked about, not a claim the user
+    // cannot change their mind.
+    if disabled.is_disabled(&plugin.canonical) {
+        tracing::debug!(
+            report = %crate::report::ReportEvent::PluginConsidered {
+                plugin: plugin.plugin.name.clone(),
+                matched: false,
+                reason: Some("disabled in `[plugins] disable`".into()),
+            },
+        );
+        return;
+    }
     if !plugin.applies(ctx) {
         tracing::debug!(
             report = %crate::report::ReportEvent::PluginConsidered {

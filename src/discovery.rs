@@ -173,16 +173,18 @@ pub fn enabled_dependencies(
     let mut names: Vec<String> = dep_ids
         .iter()
         .filter(|id| id.pm == CARGO_PM)
-        .filter(|id| !plugins.is_disabled(&id.name))
-        .filter(|id| {
-            plugins.is_auto_enabled(&id.name) || plugins.is_used_in(&id.name, workspace_root)
-        })
+        .filter(|id| !plugins.is_disabled(id))
+        .filter(|id| plugins.is_auto_enabled(id) || plugins.is_used_in(id, workspace_root))
         .map(|id| id.name.clone())
         .collect();
 
-    for used in plugins.used_names_in(workspace_root) {
+    for used in plugins.used_in(workspace_root) {
+        if used.pm != CARGO_PM {
+            continue;
+        }
+        let used = used.name.as_str();
         let norm = normalize_crate_name(used);
-        let known = plugins.is_disabled(used)
+        let known = plugins.is_disabled(&crate::pm::PackageId::any_version(CARGO_PM, used))
             || names.iter().any(|n| normalize_crate_name(n) == norm)
             || dep_ids
                 .iter()
@@ -227,13 +229,19 @@ pub fn apply_consent(sym: &mut Symposium, approved: &[String], declined: &[Strin
     }
     let plugins = &mut sym.config.plugins;
     for name in approved {
-        if !plugins.is_auto_enabled(name) {
-            plugins.auto_enable.push(name.clone());
+        let id = crate::pm::PackageId::any_version(CARGO_PM, name);
+        if !plugins.is_auto_enabled(&id) {
+            plugins.auto_enable.push(crate::config::AutoEnable::One(
+                crate::config::PluginRef::new(CARGO_PM, name),
+            ));
         }
     }
     for name in declined {
-        if !plugins.is_disabled(name) {
-            plugins.disable.push(name.clone());
+        let id = crate::pm::PackageId::any_version(CARGO_PM, name);
+        if !plugins.is_disabled(&id) {
+            plugins
+                .disable
+                .push(crate::config::PluginRef::new(CARGO_PM, name));
         }
     }
     sym.save_config().context("failed to write user config")?;
@@ -341,11 +349,12 @@ fn count_phrase(n: usize, singular: &str, plural: &str) -> Option<String> {
 /// user declined stays declined.
 fn decide(sym: &Symposium, name: &str, workspace_root: &Path) -> Enablement {
     let plugins = &sym.config.plugins;
-    if plugins.is_used_in(name, workspace_root) {
+    let id = crate::pm::PackageId::any_version(CARGO_PM, name);
+    if plugins.is_used_in(&id, workspace_root) {
         Enablement::Used
-    } else if plugins.is_disabled(name) {
+    } else if plugins.is_disabled(&id) {
         Enablement::Declined
-    } else if plugins.is_auto_enabled(name) {
+    } else if plugins.is_auto_enabled(&id) {
         Enablement::AutoEnabled
     } else {
         Enablement::Candidate
