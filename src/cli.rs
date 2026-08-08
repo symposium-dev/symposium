@@ -241,7 +241,7 @@ pub async fn run(
         }
 
         Commands::Sync => {
-            let deps = sym.workspace_deps(cwd);
+            let deps = sym.workspace(cwd);
             // The consent prompt belongs to a human running `cargo agents
             // sync`; it is inert unless `out` is interactive, and the
             // hook-triggered auto-sync path calls `sync::sync` directly and

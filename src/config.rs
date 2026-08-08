@@ -533,6 +533,25 @@ impl Symposium {
         self.package_managers(&Arc::new(crate::pm::WorkspaceDeps::detached()))
     }
 
+    /// The workspace context for `cwd`: the package managers plus the workspace
+    /// facts they report, resolved lazily and cached.
+    ///
+    /// This is the single construction point, so one invocation shares one PM
+    /// set, which is what keeps an out-of-process PM to one process per
+    /// invocation rather than one per call site.
+    pub fn workspace(&self, cwd: &Path) -> Arc<crate::pm::Workspace> {
+        let deps = Arc::new(self.workspace_deps(cwd));
+        Arc::new(crate::pm::Workspace::new(cwd, self.package_managers(&deps)))
+    }
+
+    /// The workspace-independent context (registry listing, crates.io search).
+    pub fn detached_workspace(&self) -> Arc<crate::pm::Workspace> {
+        Arc::new(crate::pm::Workspace::new(
+            PathBuf::new(),
+            self.detached_managers(),
+        ))
+    }
+
     /// Override the cargo binary path (test-only).
     #[doc(hidden)]
     pub fn set_cargo_override(&mut self, path: PathBuf) {

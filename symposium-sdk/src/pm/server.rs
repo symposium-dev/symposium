@@ -32,7 +32,7 @@ use serde::de::DeserializeOwned;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use super::protocol::{self, *};
-use super::{PackageId, PluginInfo, PluginOffer};
+use super::{PackageId, PluginInfo, PluginOffer, WorkspaceInfo};
 
 /// What a package-manager binary implements.
 #[async_trait::async_trait]
@@ -59,6 +59,13 @@ pub trait PackageManagerServer: Send + Sync {
     /// The workspace's dependencies in this PM's ecosystem.
     async fn list_deps(&self) -> Result<Vec<PackageId>> {
         Ok(Vec::new())
+    }
+
+    /// Where the workspace is. `None` when this PM found none: the ordinary
+    /// answer outside a workspace, not an error. Only an ecosystem PM with a
+    /// workspace notion answers; a registry has none.
+    async fn workspace_info(&self) -> Result<Option<WorkspaceInfo>> {
+        Ok(None)
     }
 
     /// Packages matching a partial query.
@@ -164,6 +171,10 @@ async fn dispatch<P: PackageManagerServer>(pm: &mut P, request: Request) -> Resp
                 offers: pm.load_plugin(&p.id).await,
             })
         }
+        protocol::WORKSPACE_INFO => match pm.workspace_info().await {
+            Ok(workspace) => reply!(WorkspaceInfoResult { workspace }),
+            Err(e) => Response::err(id, error_code::INVALID_INPUT, format!("{e:#}")),
+        },
         protocol::LIST_DEPS => match pm.list_deps().await {
             Ok(deps) => reply!(ListDepsResult { deps }),
             Err(e) => Response::err(id, error_code::INVALID_INPUT, format!("{e:#}")),

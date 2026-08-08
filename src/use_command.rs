@@ -54,14 +54,14 @@ pub async fn use_plugin(
         return Ok(());
     }
 
-    let deps = sym.workspace_deps(cwd);
-    let workspace_root = deps.load().map(|ws| ws.root.clone());
+    let deps = sym.workspace(cwd);
+    let workspace_root = deps.root().await.map(Path::to_path_buf);
     if !global && workspace_root.is_none() {
         bail!("not in a Rust workspace; pass --global to enable `{name}` everywhere");
     }
 
     if !dormant {
-        resolve_name(sym, &deps, name).await?;
+        resolve_name(&deps, name).await?;
     }
 
     let entry = match &workspace_root {
@@ -110,8 +110,8 @@ pub async fn remove_plugin(
     global: bool,
     update: UpdateLevel,
 ) -> Result<()> {
-    let deps = sym.workspace_deps(cwd);
-    let workspace_root = deps.load().map(|ws| ws.root.clone());
+    let deps = sym.workspace(cwd);
+    let workspace_root = deps.root().await.map(Path::to_path_buf);
 
     let used = &mut sym.config.plugins.used;
     let before = used.len();
@@ -150,23 +150,19 @@ pub async fn remove_plugin(
 
 /// Check that `name` resolves to something before recording it: a workspace
 /// dependency (offline-friendly) or a registry search hit.
-async fn resolve_name(
-    sym: &Symposium,
-    deps: &std::sync::Arc<crate::pm::WorkspaceDeps>,
-    name: &str,
-) -> Result<()> {
+async fn resolve_name(ws: &std::sync::Arc<crate::pm::Workspace>, name: &str) -> Result<()> {
     let normalized = normalize_crate_name(name);
-    let is_workspace_dep = deps.load().is_some_and(|ws| {
-        ws.crates
-            .iter()
-            .any(|c| normalize_crate_name(&c.name) == normalized)
-    });
+    let is_workspace_dep = ws
+        .dep_ids()
+        .await
+        .iter()
+        .any(|id| normalize_crate_name(&id.name) == normalized);
     if is_workspace_dep {
         return Ok(());
     }
 
-    let found = sym
-        .package_managers(deps)
+    let found = ws
+        .pms()
         .search(name)
         .await
         .iter()

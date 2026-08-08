@@ -90,10 +90,10 @@ pub fn subcommand_help(args: &[String]) -> Option<String> {
 }
 
 pub async fn render_help(sym: &Symposium, cwd: &Path) -> String {
-    let deps = sym.workspace_deps(cwd);
-    let workspace = deps.load().cloned();
-    let registry = load_registry_with_workspace(sym, workspace.as_deref()).await;
-    let dep_ids = crate::pm::workspace_dep_ids(sym, &deps).await;
+    let ws = sym.workspace(cwd);
+    let workspace = ws.info().await.cloned();
+    let registry = load_registry_with_workspace(sym, workspace.as_ref()).await;
+    let dep_ids = ws.dep_ids().await.to_vec();
     let used = workspace
         .as_ref()
         .map(|ws| sym.config.plugins.used_names_in(&ws.root))
@@ -101,11 +101,11 @@ pub async fn render_help(sym: &Symposium, cwd: &Path) -> String {
 
     // Resolve the active plugin set so crate-sourced subcommands appear in help.
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used_names(&used);
-    let pms = sym.package_managers(&deps);
+    let pms = ws.pms();
     let active = crate::plugins::active_plugins(
         sym,
         &registry,
-        &pms,
+        pms,
         workspace.as_ref().map(|ws| ws.root.as_path()),
         &mut ctx,
     )

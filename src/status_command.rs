@@ -21,7 +21,7 @@
 
 use std::path::Path;
 
-use crate::pm::WorkspaceDeps;
+use crate::pm::Workspace;
 use anyhow::Result;
 use std::sync::Arc;
 
@@ -70,10 +70,11 @@ pub struct StatusEntry {
 /// Compute the enablement report for the workspace `deps` points at.
 pub async fn workspace_status(
     sym: &Symposium,
-    deps: &Arc<WorkspaceDeps>,
+    workspace: &Arc<Workspace>,
 ) -> Result<Vec<StatusEntry>> {
-    let ws = deps
-        .load()
+    let ws = workspace
+        .info()
+        .await
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("not in a Rust workspace"))?;
 
@@ -83,7 +84,7 @@ pub async fn workspace_status(
     // trust roots, so the only questions are the `use` gate for dormant
     // plugins and whether the predicates hold.
     let registry = crate::plugins::load_registry_with_workspace(sym, Some(&ws)).await;
-    let dep_ids = crate::pm::workspace_dep_ids(sym, deps).await;
+    let dep_ids = workspace.dep_ids().await.to_vec();
     let used_names = sym.config.plugins.used_names_in(&ws.root);
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used_names(&used_names);
     for parsed in &registry.plugins {
@@ -113,7 +114,7 @@ pub async fn workspace_status(
 
     // Dependency-embedded plugins, with the decision the config made about
     // each. This is the same view the consent prompt works from.
-    let discovery = crate::discovery::discover(sym, deps).await;
+    let discovery = crate::discovery::discover(sym, workspace).await;
     let mut declined_names = Vec::new();
     for found in discovery
         .active
@@ -205,7 +206,7 @@ fn entry_for(found: &DiscoveredPlugin) -> StatusEntry {
 
 /// The `cargo agents status` entry point.
 pub async fn status(sym: &Symposium, cwd: &Path) -> Result<()> {
-    let deps = sym.workspace_deps(cwd);
+    let deps = sym.workspace(cwd);
     let entries = workspace_status(sym, &deps).await?;
     if entries.is_empty() {
         tracing::info!(

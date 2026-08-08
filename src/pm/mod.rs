@@ -26,7 +26,6 @@
 //! which it is talking to.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::Result;
 use symposium_install::UpdateLevel;
@@ -47,7 +46,9 @@ pub use remote::{RemotePm, RemotePmCommand};
 
 /// The identity types are the SDK's, since they cross the PM boundary: a
 /// package-manager binary speaks in them too.
-pub use symposium_sdk::pm::{ANY_VERSION, CARGO_PM, PackageId, PluginInfo, PluginOffer};
+pub use symposium_sdk::pm::{
+    ANY_VERSION, CARGO_PM, PackageId, PluginInfo, PluginOffer, WorkspaceInfo,
+};
 
 /// Translate Symposium's update level to the wire spelling. `UpdateLevel` is
 /// `#[non_exhaustive]`, and a level this build does not know is safest treated
@@ -73,7 +74,7 @@ pub struct FetchedPackage {
 /// plugin distribution RFD).
 ///
 /// A PM is self-contained: it holds whatever it needs to resolve its own
-/// ecosystem ([`CargoPm`] owns an [`Arc<WorkspaceDeps>`], [`PathPm`] owns its
+/// ecosystem ([`CargoPm`] owns an [`Arc<WorkspaceDeps>`](std::sync::Arc), [`PathPm`] owns its
 /// directory), so operations take no ambient context. This mirrors the
 /// out-of-process shape — a PM spawned for a workspace answers RPC calls from
 /// its own state, with nothing workspace-shaped threaded per call.
@@ -110,6 +111,17 @@ pub trait PackageManager {
     /// The package ids the current workspace depends on. Empty for PMs with no
     /// workspace notion.
     async fn list_deps(&self) -> Result<Vec<PackageId>>;
+
+    /// Where the workspace is: its root and member directories. `None` when
+    /// this PM found no workspace, which is the ordinary answer outside one and
+    /// not an error; also `None` for a registry, which has no workspace notion.
+    ///
+    /// Deliberately narrow: a PM reports where the workspace *is*, not what it
+    /// contains. Reading those directories stays in Symposium, because the
+    /// workspace is a trust root and that policy is core's.
+    async fn workspace_info(&self) -> Result<Option<WorkspaceInfo>> {
+        Ok(None)
+    }
 
     /// Find packages matching a partial query (backs `use` / `search`). PMs
     /// without a searchable registry return an empty list.
@@ -280,21 +292,106 @@ impl PmRegistry {
     }
 }
 
-/// The workspace's dependency set as package ids — every PM's `list_deps`
-/// unioned. This is what `depends-on` predicates evaluate against
-/// ([`crate::predicate::PredicateContext`]). Failures are logged and yield an
-/// empty list so predicate evaluation degrades to "no deps" rather than
-/// aborting the caller.
-pub async fn workspace_dep_ids(
-    sym: &crate::config::Symposium,
-    deps: &Arc<WorkspaceDeps>,
-) -> Vec<PackageId> {
-    match sym.package_managers(deps).list_deps().await {
-        Ok(deps) => deps,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to list workspace dependencies");
-            Vec::new()
+/// The per-invocation workspace context: the package managers, plus the two
+/// facts about the workspace that everything above `pm/` needs: where it is
+/// and what it depends on.
+///
+/// Both are resolved on first use and cached for the handle's lifetime, which
+/// is what makes the PM set shareable. That mattered less when every PM was
+/// in-process and rebuilding the set was nearly free; with a PM in another
+/// process, building the set per call would spawn a process per call. So it is
+/// threaded as an [`Arc`](std::sync::Arc).
+pub struct Workspace {
+    /// The directory the invocation started in, not the workspace root, which
+    /// may be an ancestor and is [`root`](Self::root).
+    cwd: PathBuf,
+    pms: PmRegistry,
+    info: tokio::sync::OnceCell<Option<WorkspaceInfo>>,
+    dep_ids: tokio::sync::OnceCell<Vec<PackageId>>,
+}
+
+impl Workspace {
+    pub fn new(cwd: impl Into<PathBuf>, pms: PmRegistry) -> Self {
+        Self {
+            cwd: cwd.into(),
+            pms,
+            info: tokio::sync::OnceCell::new(),
+            dep_ids: tokio::sync::OnceCell::new(),
         }
+    }
+
+    /// A context over a pre-resolved cargo workspace, for tests: no
+    /// `cargo metadata`, no registries, exactly `crates` rooted at `root`.
+    #[cfg(test)]
+    pub(crate) fn fixture(
+        root: impl Into<PathBuf>,
+        crates: Vec<WorkspaceCrate>,
+    ) -> std::sync::Arc<Self> {
+        let root = root.into();
+        let deps = WorkspaceDeps::fixture(root.clone(), crates);
+        std::sync::Arc::new(Self::new(
+            root,
+            PmRegistry::new(vec![PmInstance {
+                name: CARGO_PM.to_string(),
+                kind: OfferKind::Package,
+                trusted: false,
+                pm: Box::new(CargoPm::new(deps)),
+            }]),
+        ))
+    }
+
+    /// The directory the invocation started in.
+    pub fn cwd(&self) -> &std::path::Path {
+        &self.cwd
+    }
+
+    /// The package managers active for this workspace.
+    pub fn pms(&self) -> &PmRegistry {
+        &self.pms
+    }
+
+    /// Where the workspace is, from the first PM that claims to have found one.
+    /// `None` outside a workspace.
+    pub async fn info(&self) -> Option<&WorkspaceInfo> {
+        self.info
+            .get_or_init(|| async {
+                for inst in self.pms.instances() {
+                    match inst.pm.workspace_info().await {
+                        Ok(Some(info)) => return Some(info),
+                        Ok(None) => {}
+                        Err(e) => {
+                            tracing::debug!(instance = %inst.name, error = %e, "workspace_info failed");
+                        }
+                    }
+                }
+                None
+            })
+            .await
+            .as_ref()
+    }
+
+    /// The workspace root, or `None` outside a workspace.
+    pub async fn root(&self) -> Option<&std::path::Path> {
+        self.info().await.map(|w| w.root.as_path())
+    }
+
+    /// The workspace's dependency set as package ids — every PM's `list_deps`
+    /// unioned. This is what `depends-on` predicates evaluate against
+    /// ([`crate::predicate::PredicateContext`]). Failures are logged and yield
+    /// an empty list, so predicate evaluation degrades to "no deps" rather than
+    /// aborting the caller.
+    pub async fn dep_ids(&self) -> &[PackageId] {
+        self.dep_ids
+            .get_or_init(|| async {
+                match self.pms.list_deps().await {
+                    Ok(deps) => deps,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to list workspace dependencies");
+                        Vec::new()
+                    }
+                }
+            })
+            .await
     }
 }
 

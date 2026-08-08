@@ -12,7 +12,7 @@ use crate::installation::{
     resolve_runnable,
 };
 use crate::plugins::{HookFormat, Installation};
-use crate::pm::WorkspaceDeps;
+use crate::pm::Workspace;
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
@@ -242,14 +242,15 @@ pub async fn execute_hook(
         let payload = handler.parse_input(input)?;
         let sym_input = payload.to_symposium();
 
-        // Create a shared WorkspaceDeps for the entire hook invocation.
-        // Auto-sync populates it if it runs; later stages reuse the cached result.
+        // One workspace context for the whole hook invocation: one PM set,
+        // one workspace resolution, one dependency list. Auto-sync populates
+        // the caches if it runs; later stages read them.
         let fallback_cwd = std::env::current_dir().unwrap_or_default();
         let cwd = match sym_input.cwd() {
             Some(s) => PathBuf::from(s),
             None => fallback_cwd,
         };
-        let deps = sym.workspace_deps(&cwd);
+        let deps = sym.workspace(&cwd);
 
         // Auto-sync: install applicable skills into agent dirs (non-fatal).
         // SessionStart refreshes source caches and syncs unconditionally.
@@ -361,7 +362,7 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, output: &[u
 /// every source cache (`UpdateLevel::Check`) and sync unconditionally, ignoring
 /// the `Cargo.lock` freshness gate — upstream skill changes land even when the
 /// workspace's dependencies are unchanged.
-async fn run_auto_sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, session_start: bool) {
+async fn run_auto_sync(sym: &Symposium, deps: &Arc<Workspace>, session_start: bool) {
     if !sym.config.auto_sync {
         tracing::debug!("auto-sync disabled, skipping");
         return;
@@ -431,15 +432,15 @@ fn hook_dispatch_needs_deps(sym: &Symposium, registry_plugins: &[ParsedPlugin]) 
 /// Refresh-only: a source that was never acquired is left alone (it installs
 /// lazily when the hook first fires) — `SessionStart` updates installed tools
 /// but never installs eagerly. Best-effort: failures are logged and skipped.
-async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<WorkspaceDeps>) {
-    let workspace = deps.load().cloned();
-    let registry = crate::plugins::load_registry_with_workspace(sym, workspace.as_deref()).await;
+async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<Workspace>) {
+    let workspace = deps.info().await.cloned();
+    let registry = crate::plugins::load_registry_with_workspace(sym, workspace.as_ref()).await;
 
     // Resolving the workspace runs cargo, so only do it when some hook's
     // gating references a concrete crate, or there is crate-plugin expansion to
     // perform (mirrors dispatch).
     let dep_ids = if hook_dispatch_needs_deps(sym, &registry.plugins) {
-        crate::pm::workspace_dep_ids(sym, deps).await
+        deps.dep_ids().await.to_vec()
     } else {
         Vec::new()
     };
@@ -448,11 +449,11 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<WorkspaceDeps>) {
         .map(|ws| sym.config.plugins.used_names_in(&ws.root))
         .unwrap_or_default();
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used_names(&used_names);
-    let pms = sym.package_managers(deps);
+    let pms = deps.pms();
     let plugins = crate::plugins::active_plugins(
         sym,
         &registry,
-        &pms,
+        pms,
         workspace.as_ref().map(|ws| ws.root.as_path()),
         &mut ctx,
     )
@@ -495,7 +496,7 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<WorkspaceDeps>) {
 pub async fn dispatch_builtin(
     sym: &Symposium,
     input: &symposium::InputEvent,
-    deps: &Arc<WorkspaceDeps>,
+    deps: &Arc<Workspace>,
 ) -> symposium::OutputEvent {
     match input {
         symposium::InputEvent::PreToolUse(_) => {
@@ -518,7 +519,7 @@ pub async fn dispatch_builtin(
 async fn handle_session_start(
     sym: &Symposium,
     _payload: &SessionStartInput,
-    deps: &Arc<WorkspaceDeps>,
+    deps: &Arc<Workspace>,
 ) -> OutputEvent {
     let fragments = [
         discovery_hint(sym, deps).await,
@@ -538,21 +539,21 @@ async fn handle_session_start(
 
 /// Suggest `cargo agents --help` when the active workspace exposes crate-aware plugin subcommands.
 /// Reuses the help renderer's `applicable_subcommands`, so the hint fires only when there is actually something to discover; `None` otherwise.
-async fn discovery_hint(sym: &Symposium, deps: &Arc<WorkspaceDeps>) -> Option<String> {
-    let workspace = deps.load().cloned();
-    let registry = crate::plugins::load_registry_with_workspace(sym, workspace.as_deref()).await;
-    let dep_ids = crate::pm::workspace_dep_ids(sym, deps).await;
+async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String> {
+    let workspace = deps.info().await.cloned();
+    let registry = crate::plugins::load_registry_with_workspace(sym, workspace.as_ref()).await;
+    let dep_ids = deps.dep_ids().await.to_vec();
 
     let used = workspace
         .as_ref()
         .map(|ws| sym.config.plugins.used_names_in(&ws.root))
         .unwrap_or_default();
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used_names(&used);
-    let pms = sym.package_managers(deps);
+    let pms = deps.pms();
     let active = crate::plugins::active_plugins(
         sym,
         &registry,
-        &pms,
+        pms,
         workspace.as_ref().map(|ws| ws.root.as_path()),
         &mut ctx,
     )
@@ -573,7 +574,7 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<WorkspaceDeps>) -> Option<St
 /// behalf, so it must never block on stdin — the candidates are reported as
 /// context, with a pointer at the interactive command that can actually ask.
 /// `None` when nothing is pending.
-async fn consent_hint(sym: &Symposium, deps: &Arc<WorkspaceDeps>) -> Option<String> {
+async fn consent_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String> {
     let names = crate::discovery::pending_candidates(sym, deps).await;
     if names.is_empty() {
         return None;
@@ -645,10 +646,10 @@ pub async fn dispatch_plugin_hooks(
     sym_input: &symposium::InputEvent,
     original_input: &dyn AgentHookInput,
     prior_output: serde_json::Value,
-    deps: &Arc<WorkspaceDeps>,
+    deps: &Arc<Workspace>,
 ) -> Result<serde_json::Value, Vec<u8>> {
-    let workspace = deps.load().cloned();
-    let registry = crate::plugins::load_registry_with_workspace(sym, workspace.as_deref()).await;
+    let workspace = deps.info().await.cloned();
+    let registry = crate::plugins::load_registry_with_workspace(sym, workspace.as_ref()).await;
 
     // Resolving the workspace means running cargo, so only do it when some
     // plugin's hook gating references a concrete crate (a `depends-on(*)`
@@ -656,7 +657,7 @@ pub async fn dispatch_plugin_hooks(
     // when there is crate-plugin expansion to perform — that too evaluates
     // predicates against the crate graph.
     let dep_ids = if hook_dispatch_needs_deps(sym, &registry.plugins) {
-        crate::pm::workspace_dep_ids(sym, deps).await
+        deps.dep_ids().await.to_vec()
     } else {
         Vec::new()
     };
@@ -667,11 +668,11 @@ pub async fn dispatch_plugin_hooks(
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used_names(&used_names);
     // Dispatch over the active set — registry plugins plus crate-sourced ones —
     // so a crate plugin's hooks fire exactly like a registry plugin's.
-    let pms = sym.package_managers(deps);
+    let pms = deps.pms();
     let plugins = crate::plugins::active_plugins(
         sym,
         &registry,
-        &pms,
+        pms,
         workspace.as_ref().map(|ws| ws.root.as_path()),
         &mut ctx,
     )
@@ -1051,7 +1052,7 @@ mod tests {
     async fn builtin_pre_tool_use_returns_empty() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        let deps = sym.workspace_deps(tmp.path());
+        let deps = sym.workspace(tmp.path());
         let input = symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
             "Bash".to_string(),
             serde_json::Value::default(),
@@ -1066,7 +1067,7 @@ mod tests {
     async fn builtin_post_tool_use_returns_empty_for_now() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        let deps = sym.workspace_deps(tmp.path());
+        let deps = sym.workspace(tmp.path());
         let input = symposium::InputEvent::PostToolUse(symposium::PostToolUseInput::new(
             "Bash".to_string(),
             serde_json::json!({"command": "ls"}),
@@ -1082,7 +1083,7 @@ mod tests {
     async fn builtin_user_prompt_submit_returns_empty_for_now() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        let deps = sym.workspace_deps(tmp.path());
+        let deps = sym.workspace(tmp.path());
         let input = symposium::InputEvent::UserPromptSubmit(symposium::UserPromptSubmitInput::new(
             "Use tokio for async".to_string(),
             Some("test-session".to_string()),

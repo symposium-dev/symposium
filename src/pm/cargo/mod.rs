@@ -23,6 +23,7 @@ pub use workspace::{
 
 use super::{
     ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, PluginOffer,
+    WorkspaceInfo,
 };
 
 /// How many crates.io hits a search returns — enough to surface the crate a
@@ -219,6 +220,15 @@ impl PackageManager for CargoPm {
             id: PackageId::new(CARGO_PM, result.name, result.version),
             root: result.path,
         })
+    }
+
+    /// The cargo workspace `cargo metadata` resolved: root plus member
+    /// directories. Members are what workspace-plugin discovery walks.
+    async fn workspace_info(&self) -> Result<Option<WorkspaceInfo>> {
+        Ok(self.workspace.load().map(|ws| WorkspaceInfo {
+            root: ws.root.clone(),
+            members: ws.members.clone(),
+        }))
     }
 
     async fn list_deps(&self) -> Result<Vec<PackageId>> {

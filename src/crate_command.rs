@@ -20,10 +20,10 @@ pub async fn dispatch_crate(
     cwd: &Path,
 ) -> DispatchResult {
     tracing::debug!(%name, ?version, "crate-info dispatched");
-    let deps = sym.workspace_deps(cwd);
+    let ws = sym.workspace(cwd);
     let id = CargoPm::id_for(name, version);
-    match sym
-        .package_managers(&deps)
+    match ws
+        .pms()
         .fetch(&id, symposium_install::UpdateLevel::None)
         .await
     {

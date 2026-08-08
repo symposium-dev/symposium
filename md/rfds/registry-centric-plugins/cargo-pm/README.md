@@ -144,7 +144,7 @@ Separate workspace resolution, crate fetching, and crate-manifest merging from S
 
 Add the workspace root, member directories, and crate list to the protocol, and move Symposium's readers onto it.
 
-- [ ] PR: workspace info over the wire
+- [x] PR: workspace info over the wire
 
 ### Step 3: `symposium-pm-cargo` binary
 

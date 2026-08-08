@@ -14,7 +14,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use super::{PackageId, PluginInfo, PluginOffer};
+use super::{PackageId, PluginInfo, PluginOffer, WorkspaceInfo};
 
 /// The protocol version this SDK speaks. Negotiation is strict: Symposium
 /// refuses a PM reporting a version it does not know, and that PM contributes
@@ -25,6 +25,7 @@ pub const INITIALIZE: &str = "initialize";
 pub const ACTIVE_PLUGINS: &str = "active_plugins";
 pub const LOAD_PLUGIN: &str = "load_plugin";
 pub const LIST_DEPS: &str = "list_deps";
+pub const WORKSPACE_INFO: &str = "workspace_info";
 pub const SEARCH: &str = "search";
 pub const FETCH: &str = "fetch";
 pub const REFRESH: &str = "refresh";
@@ -83,6 +84,8 @@ pub mod capability {
     pub const SEARCH: &str = "search";
     /// Implements `list_deps`: i.e. has a notion of a workspace.
     pub const LIST_DEPS: &str = "list_deps";
+    /// Implements `workspace_info`: i.e. can locate the workspace on disk.
+    pub const WORKSPACE_INFO: &str = "workspace_info";
     /// Implements `refresh`: i.e. has remote content to pull.
     pub const REFRESH: &str = "refresh";
 }
@@ -154,6 +157,14 @@ pub struct SearchResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ListDepsResult {
     pub deps: Vec<PackageId>,
+}
+
+/// The result shape of `workspace_info`. `workspace` is absent when the PM
+/// found no workspace: the ordinary answer outside one, not an error.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WorkspaceInfoResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<WorkspaceInfo>,
 }
 
 // --- JSON-RPC envelope ---

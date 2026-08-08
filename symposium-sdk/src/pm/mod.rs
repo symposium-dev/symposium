@@ -133,6 +133,25 @@ impl PluginOffer {
     }
 }
 
+/// Where the workspace is, as the PM that resolved it reports.
+///
+/// Deliberately thin: a root and its member directories, and nothing about what
+/// they *contain*. Reading those directories is Symposium's job: they are
+/// local reads, and the workspace is a trust root whose policy core owns. The
+/// dependency set is not here either; that is [`list_deps`], which every PM
+/// answers.
+///
+/// [`list_deps`]: protocol::LIST_DEPS
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceInfo {
+    /// The workspace root directory.
+    pub root: PathBuf,
+    /// Manifest directories of the workspace's member packages. Each may define
+    /// a plugin, so Symposium walks them.
+    #[serde(default)]
+    pub members: Vec<PathBuf>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1072,14 +1072,14 @@ pub async fn load_registry(sym: &Symposium) -> PluginRegistry {
 /// members. `None` (not in a workspace) degrades to registries only.
 pub async fn load_registry_with_workspace(
     sym: &Symposium,
-    workspace: Option<&crate::pm::LoadedWorkspace>,
+    workspace: Option<&crate::pm::WorkspaceInfo>,
 ) -> PluginRegistry {
     load_registry_impl(sym, workspace).await
 }
 
 async fn load_registry_impl(
     sym: &Symposium,
-    workspace: Option<&crate::pm::LoadedWorkspace>,
+    workspace: Option<&crate::pm::WorkspaceInfo>,
 ) -> PluginRegistry {
     let pms = sym.detached_managers();
     let mut plugins = Vec::new();

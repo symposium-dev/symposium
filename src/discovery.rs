@@ -3,7 +3,7 @@
 //!
 //! Discovery is the read side of the enablement axis. It runs in two phases:
 //!
-//! 1. list the workspace's dependencies ([`pm::workspace_dep_ids`]);
+//! 1. list the workspace's dependencies ([`Workspace::dep_ids`]);
 //! 2. ask each *untrusted* instance — the cargo transport — for the plugins
 //!    its dependencies embed ([`PackageManager::active_plugins`]).
 //!
@@ -30,12 +30,12 @@
 //! [`plugins::load_registry`]: crate::plugins::load_registry
 //! [`Plugin::applies`]: crate::plugins::ParsedPlugin::applies
 //!
-//! [`pm::workspace_dep_ids`]: crate::pm::workspace_dep_ids
+//! [`Workspace::dep_ids`]: crate::pm::Workspace::dep_ids
 //! [`PackageManager::active_plugins`]: crate::pm::PackageManager::active_plugins
 
 use std::path::Path;
 
-use crate::pm::WorkspaceDeps;
+use crate::pm::Workspace;
 use anyhow::{Context, Result};
 use std::sync::Arc;
 
@@ -116,11 +116,11 @@ impl Discovery {
 /// cache-only — for a workspace dependency, into the source `cargo metadata`
 /// already extracted (no probe, no network) — so every dependency-embedded
 /// plugin is discoverable, registry crates included.
-pub async fn discover(sym: &Symposium, deps: &Arc<WorkspaceDeps>) -> Discovery {
-    let Some(workspace_root) = deps.workspace_root().map(Path::to_path_buf) else {
+pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>) -> Discovery {
+    let Some(workspace_root) = ws.root().await.map(Path::to_path_buf) else {
         return Discovery::default();
     };
-    let pms = sym.package_managers(deps);
+    let pms = ws.pms();
     let dep_ids = pms.list_deps().await.unwrap_or_default();
 
     let mut discovery = Discovery::default();
@@ -197,14 +197,14 @@ pub fn enabled_dependencies(
 
 /// Run [`discover`] for the workspace `deps` points at, or an empty
 /// [`Discovery`] when there is no workspace.
-pub async fn discover_for(sym: &Symposium, deps: &Arc<WorkspaceDeps>) -> Discovery {
+pub async fn discover_for(sym: &Symposium, deps: &Arc<Workspace>) -> Discovery {
     discover(sym, deps).await
 }
 
 /// The names of the discovered offers still awaiting consent, deduplicated
 /// and sorted — what a consent prompt would ask about, and what the
 /// non-interactive hint names.
-pub async fn pending_candidates(sym: &Symposium, deps: &Arc<WorkspaceDeps>) -> Vec<String> {
+pub async fn pending_candidates(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<String> {
     let mut names: Vec<String> = discover_for(sym, deps)
         .await
         .candidates
@@ -271,7 +271,7 @@ pub fn apply_consent(sym: &mut Symposium, approved: &[String], declined: &[Strin
 /// declines anything, and Escape leaves the remaining offers undecided too.
 pub async fn prompt_for_consent(
     sym: &mut Symposium,
-    deps: &Arc<WorkspaceDeps>,
+    deps: &Arc<Workspace>,
     out: &Output,
 ) -> Result<()> {
     if !out.is_interactive() {
@@ -362,13 +362,13 @@ mod tests {
     /// A workspace with `widget-lib` as a path dependency carrying skills,
     /// plus a plain registry dependency (an extracted source with no plugin
     /// content, as `cargo metadata` always yields a `source_dir`).
-    fn workspace(root: &Path) -> Arc<WorkspaceDeps> {
+    fn workspace(root: &Path) -> Arc<Workspace> {
         let widget = root.join("widget-lib");
         std::fs::create_dir_all(widget.join("skills/guidance")).unwrap();
         std::fs::write(widget.join("skills/guidance/SKILL.md"), "").unwrap();
         let serde = root.join("serde-src");
         std::fs::create_dir_all(&serde).unwrap();
-        WorkspaceDeps::fixture(
+        Workspace::fixture(
             root.to_path_buf(),
             vec![
                 WorkspaceCrate::new(

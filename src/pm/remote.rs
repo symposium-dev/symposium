@@ -28,7 +28,7 @@ use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 
 use super::update_of;
-use super::{FetchedPackage, PackageId, PackageManager, PluginInfo, PluginOffer};
+use super::{FetchedPackage, PackageId, PackageManager, PluginInfo, PluginOffer, WorkspaceInfo};
 
 /// How long a single request may take before the PM is considered dead.
 const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
@@ -286,6 +286,13 @@ impl PackageManager for RemotePm {
             }
         };
         self.offers(protocol::LOAD_PLUGIN, params).await
+    }
+
+    async fn workspace_info(&self) -> Result<Option<WorkspaceInfo>> {
+        Ok(self
+            .call::<WorkspaceInfoResult>(protocol::WORKSPACE_INFO, serde_json::Value::Null)
+            .await?
+            .workspace)
     }
 
     async fn list_deps(&self) -> Result<Vec<PackageId>> {

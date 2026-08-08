@@ -16,7 +16,7 @@ use crate::agents::Agent;
 use crate::config::Symposium;
 use crate::output::{Output, display_path};
 use crate::plugins;
-use crate::pm::WorkspaceDeps;
+use crate::pm::Workspace;
 use crate::skills;
 use std::sync::Arc;
 
@@ -272,14 +272,15 @@ async fn resolve_custom_predicate_entries(
 
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
-pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLevel) -> Result<()> {
+pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> Result<()> {
     let out = &Output::quiet();
-    let loaded = deps
-        .load()
+    let loaded = ws
+        .info()
+        .await
+        .cloned()
         .ok_or_else(|| anyhow::anyhow!("not in a Rust workspace"))?;
     let project_root = loaded.root.clone();
-    let workspace: Vec<_> = loaded.crates.clone();
-    let loaded = loaded.clone();
+    let dep_ids = ws.dep_ids().await.to_vec();
     let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
@@ -296,7 +297,7 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
 
     tracing::info!(
         report = %crate::report::ReportEvent::Info {
-            message: format!("scanning {} workspace dependencies", workspace.len()),
+            message: format!("scanning {} workspace dependencies", dep_ids.len()),
         },
     );
 
@@ -307,7 +308,6 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     // skill resolution and MCP-server filtering. Attach the on-disk cache so
     // custom predicate results survive across sync runs; results are persisted
     // at the end of this evaluation pass.
-    let dep_ids = crate::pm::workspace_dep_ids(sym, deps).await;
     let used_names = sym.config.plugins.used_names_in(&project_root);
     let predicate_cache_path =
         crate::predicate_cache::PredicateCache::path_for_workspace(sym.cache_dir(), &project_root);
@@ -320,8 +320,8 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     // reached through `[[plugins]]` chained references and dependency
     // enablement. Every facet resolves over this one set, so a crate plugin's
     // skills and MCP servers install exactly like a registry plugin's.
-    let pms = sym.package_managers(deps);
-    let active = plugins::active_plugins(sym, &registry, &pms, Some(&project_root), &mut ctx).await;
+    let pms = ws.pms();
+    let active = plugins::active_plugins(sym, &registry, pms, Some(&project_root), &mut ctx).await;
 
     // Find all applicable skills.
     let applicable = skills::collect_skills(sym, &active, &mut ctx, update).await;
@@ -375,7 +375,7 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     let agent_names: Vec<String> = sym.config.agents.iter().map(|a| a.name.clone()).collect();
 
     tracing::info!(
-        workspace_deps = workspace.len(),
+        workspace_deps = dep_ids.len(),
         agents = agent_names.len(),
         skills = to_install.len(),
         "sync started"
