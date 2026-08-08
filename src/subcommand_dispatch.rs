@@ -6,6 +6,7 @@
 //! spawns it with inherited stdio, propagating the child's exit code.
 //!
 
+use crate::predicate::PredicateEval;
 use std::{ffi::OsString, path::Path, process::ExitStatus};
 
 use crate::{

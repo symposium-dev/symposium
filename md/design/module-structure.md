@@ -2,6 +2,17 @@
 
 Symposium is a Rust crate with both a library (`src/lib.rs`) and a binary (`src/bin/cargo-agents.rs`). The library re-exports all modules so that integration tests can access internals.
 
+### `symposium-sdk`: the shared plugin vocabulary
+
+Depended on by both Symposium and anything that extends it. Beyond the hook handler SDK, it carries what a package manager needs to speak:
+
+- `manifest`: the unvalidated `SYMPOSIUM.toml` schema (the `Raw*` types), `Serialize` as well as `Deserialize` so a manifest can travel on the wire. Retired fields (`crates`, `source.crate`, git/path chained sources) still *parse*, so validation can reject them with a migration hint rather than an unknown-field error.
+- `pm`: `PackageId` and `PluginInfo`, re-exported from Symposium's `pm` module.
+- `predicate::syntax`: the predicate tree and its parsing.
+- `hook::HookAgent`, `manifest::HookFormat`, `manifest::Audience`: named by manifests, so they travel with the schema. Mapping a `HookAgent` to its wire-format handler needs Symposium's agent modules, so that stays behind as `hook_schema::agent_event`.
+
+What deliberately stays in Symposium is *validation*: defaults, inline-installation promotion, dormancy, trust. The schema says what a manifest can contain; Symposium decides what it means.
+
 ### `config.rs` — application context
 
 Everything hangs off the `Symposium` struct, which wraps the parsed `Config` with resolved paths for config, cache, and log directories. Two constructors: `from_environment()` for production and `from_dir()` for tests.
@@ -39,7 +50,7 @@ Two entry points: `sync(sym, cwd)` for standalone CLI use (creates its own `Work
 
 Loads plugin manifests from the configured registries and parses them into `Plugin` structs. Loading goes through the [package-manager layer](#pm--package-managers): `load_registry` asks each **trusted** `PmRegistry` instance (the configured registries — the cargo transport is not a trust root) for its plugins via `active_plugins`. A `PathPm` interprets each entry through `load_entry` as either a `SYMPOSIUM.toml` manifest plugin or a bare `SKILL.md` synthesized into a default plugin (`load_standalone_skill_plugin`); dependency-embedded crate plugins never load here. Refreshing a git registry's content is the `GitPm`'s `refresh` operation, driven by `ensure_registries` (startup) and `sync_registries` (`plugin sync`). `scan_source_dir` remains as the offline form used by the `plugin validate` CLI, which points at an arbitrary directory rather than a configured registry; it walks the same [layout](#pm--package-managers) rules and synthesizes bare skills the same way.
 
-Validation here turns the raw TOML into:
+Validation here turns the raw TOML (parsed into the SDK's `RawPluginManifest`) into:
 - `Installation` entries (optional `source`, optional `executable`/`script`, optional `args`, plus `requirements` and `install_commands`) collected on `Plugin.installations`. Inline installation references on hooks or other installations are *promoted* into synthetic `Installation` entries with derived names (`<hook>` for an inline `command`, `<owner>__req_<i>` for an inline requirement), so all references in the validated form are plain names.
 - `Hook` entries with `command: String` (the name of an `Installation`) plus optional hook-level `executable` / `script` / `args`. Validation guarantees at most one of `executable`/`script` is set across hook + installation, and at most one layer sets `args`.
 - `SkillGroup` and `PluginMcpServer` entries whose `depends-on` sugar and `predicates` list are merged into one runtime `PredicateSet`. Skill group `source` syntax is deserialized as raw string/table forms, then validated into `PluginSource`.
@@ -84,9 +95,11 @@ One registry-instance PM exists today, reading content that is already on disk:
 
 Extracts the `[package.metadata.symposium]` table from a crate `Cargo.toml` and returns it verbatim as a `toml::Table`. That table uses the **same schema as a `SYMPOSIUM.toml` plugin manifest** — a crate can define its plugin inline in `Cargo.toml` instead of (or in addition to) shipping a file. Validation against the manifest schema happens in `plugins::load_crate_manifest`, which deserializes the table and merges it with any `SYMPOSIUM.toml`. There is no longer a separate crate-metadata skill schema: the old `path = "..."` / `crate = {..}` redirect forms are now ordinary `[[skills]] source.path` groups and `[[plugins]] source.cargo` chained references.
 
-### `predicate.rs` — unified activation predicates
+### `predicate.rs`: predicate evaluation
 
-Defines one `Predicate` enum covering both dependency-graph matching and runtime/environment gating, plus `PredicateSet` (a list ANDed together) and `PredicateContext` (the workspace dependency list it evaluates against — `PackageId`s from the [package-manager layer](#pm--package-managers)'s `list_deps` — plus the `use`-enabled plugin names that wake dormant plugins, threaded in with `with_used_names` and read by `is_used`). Two surface syntaxes lower to the same tree:
+The predicate *syntax* (the `Predicate` tree, both surface spellings, parsing, `Display`, and serde) lives in `symposium_sdk::predicate::syntax` and is re-exported here, so `crate::predicate::Predicate` still names the same type. The split lets a manifest carry predicates without linking evaluation. Evaluation is the `PredicateEval` extension trait, an extension trait because the types are foreign.
+
+The syntax covers both dependency-graph matching and runtime/environment gating: one `Predicate` enum, `PredicateSet` (a list ANDed together), and this module's `PredicateContext` (the workspace dependency list it evaluates against — `PackageId`s from the [package-manager layer](#pm--package-managers)'s `list_deps` — plus the `use`-enabled plugin names that wake dormant plugins, threaded in with `with_used_names` and read by `is_used`). Two surface syntaxes lower to the same tree:
 
 - The **`depends-on`** field uses dependency-atom syntax (`serde`, `serde>=1.0`, `*`) and lowers, via `DependsOnList`, to `depends-on(...)` / `depends-on(*)` predicates OR-combined into a single `any(...)` that is appended to the same list. So `depends-on` is sugar — there is no separate dependency-predicate type.
 - The **`predicates`** field uses function-call syntax: `depends-on(<atom>)`, `shell(<cmd>)` (verbatim arg, `sh -c`, exit 0 holds), `path_exists(<arg>)` (disk, then `$PATH` for bare names), `env(<name>[=<value>])`, `workspace-member()` (the plugin is defined by a member of the active workspace — provenance stamped per plugin into `PredicateContext` via `ParsedPlugin::applies`; registry loading stamps false, workspace-plugin loading stamps true), and the combinators `not(<p>)`, `any(<p>, …)`, `all(<p>, …)`. The retired `crate(...)` spelling is rejected with a migration hint, as are the old `crates` fields.

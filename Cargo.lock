@@ -2486,10 +2486,13 @@ dependencies = [
  "anyhow",
  "clap",
  "regex",
+ "sacp",
  "semver",
  "serde",
  "serde_json",
+ "symposium-install",
  "tokio",
+ "toml",
 ]
 
 [[package]]

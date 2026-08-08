@@ -41,67 +41,9 @@ pub use cargo::{
 pub use git::GitPm;
 pub use path::PathPm;
 
-/// The `pm` component of cargo package ids.
-pub const CARGO_PM: &str = "cargo";
-
-/// Version placeholder for "no requirement": the package manager resolves it
-/// (for cargo: a workspace pin, or the newest published version).
-pub const ANY_VERSION: &str = "*";
-
-/// Canonical package coordinates: which package manager, which package,
-/// which version.
-///
-/// `version` may still be a *requirement* (a semver range, or
-/// [`ANY_VERSION`]); [`PackageManager::fetch`] canonicalizes it — the id on
-/// a [`FetchedPackage`] always names the exact resolved version.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct PackageId {
-    pub pm: String,
-    pub name: String,
-    pub version: String,
-}
-
-impl PackageId {
-    pub fn new(pm: impl Into<String>, name: impl Into<String>, version: impl Into<String>) -> Self {
-        Self {
-            pm: pm.into(),
-            name: name.into(),
-            version: version.into(),
-        }
-    }
-
-    /// An id with no version requirement — the PM resolves it at fetch.
-    pub fn any_version(pm: impl Into<String>, name: impl Into<String>) -> Self {
-        Self::new(pm, name, ANY_VERSION)
-    }
-}
-
-impl std::fmt::Display for PackageId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}:{}", self.pm, self.name, self.version)
-    }
-}
-
-/// What [`search`](PackageManager::search) knows about a candidate package
-/// before its content is on disk: its identity and an optional description.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PluginInfo {
-    /// Canonical identity. The version component may still be a requirement
-    /// that fetch canonicalizes.
-    pub id: PackageId,
-    /// Human-oriented description when the PM's registry provides one.
-    pub description: Option<String>,
-}
-
-impl PluginInfo {
-    /// An info with just the identity.
-    pub fn from_id(id: PackageId) -> Self {
-        Self {
-            id,
-            description: None,
-        }
-    }
-}
+/// The identity types are the SDK's, since they cross the PM boundary: a
+/// package-manager binary speaks in them too.
+pub use symposium_sdk::pm::{ANY_VERSION, CARGO_PM, PackageId, PluginInfo};
 
 /// A fetched package: the exact id it resolved to, plus the directory
 /// holding its content.
