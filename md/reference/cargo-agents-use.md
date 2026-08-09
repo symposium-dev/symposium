@@ -11,6 +11,9 @@ cargo agents use <NAME> --remove [--global]
 
 ## Options
 
+`--pm <name>`
+: The package manager offering the plugin. `use` searches every configured package manager for the name; pass this when more than one offers it.
+
 | Flag | Description |
 |------|-------------|
 | `<NAME>` | Plugin or crate name to enable |

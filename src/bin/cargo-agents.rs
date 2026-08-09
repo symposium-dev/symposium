@@ -76,9 +76,10 @@ async fn main() -> ExitCode {
         Some(Commands::Search { query }) => tracing::info!(%query, "cargo agents search"),
         Some(Commands::Use {
             name,
+            pm,
             global,
             remove,
-        }) => tracing::info!(%name, global, remove, "cargo agents use"),
+        }) => tracing::info!(%name, ?pm, global, remove, "cargo agents use"),
         Some(Commands::Status) => tracing::info!("cargo agents status"),
         Some(Commands::Plugin { command }) => {
             tracing::info!(subcommand = ?command, "cargo agents plugin");

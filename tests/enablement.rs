@@ -594,3 +594,28 @@ async fn session_start_hints_pending_candidates() {
     .await
     .unwrap();
 }
+
+/// A name that no package manager offers is rejected before anything is
+/// recorded, and `--pm` narrows to one that does not offer it either.
+#[tokio::test]
+async fn use_with_an_unknown_pm_errors() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let err = ctx
+                .symposium(&["use", "crate-a", "--pm", "npm"])
+                .await
+                .expect_err("no npm package manager is configured");
+            assert!(
+                err.to_string().contains("no package manager `npm`"),
+                "{err}"
+            );
+            assert!(!read_config(&ctx).contains("crate-a"), "nothing recorded");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}

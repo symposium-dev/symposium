@@ -91,6 +91,10 @@ pub enum Commands {
         /// Plugin (crate) name to enable
         name: String,
 
+        /// Package manager offering the plugin, when more than one does
+        #[arg(long)]
+        pm: Option<String>,
+
         /// Enable for every workspace instead of just the current one
         #[arg(long)]
         global: bool,
@@ -254,13 +258,14 @@ pub async fn run(
 
         Commands::Use {
             name,
+            pm,
             global,
             remove,
         } => {
             if remove {
                 use_command::remove_plugin(sym, cwd, &name, global, update).await
             } else {
-                use_command::use_plugin(sym, cwd, &name, global, update).await
+                use_command::use_plugin(sym, cwd, &name, pm.as_deref(), global, update).await
             }
         }
 

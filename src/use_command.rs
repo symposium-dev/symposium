@@ -24,32 +24,114 @@ use crate::config::{Symposium, UseEntry};
 use crate::report::ReportEvent;
 use symposium_pm_cargo::sources::normalize_crate_name;
 
+/// Every plugin a name could mean, across every package manager.
+///
+/// A name is not an identity, so `use` has to look everywhere and then decide.
+/// One match is unambiguous and is used; several is an error the user resolves
+/// with `--pm`.
+async fn candidates(
+    sym: &Symposium,
+    ws: &std::sync::Arc<crate::pm::Workspace>,
+    name: &str,
+) -> Vec<Candidate> {
+    let normalized = normalize_crate_name(name);
+    let mut out: Vec<Candidate> = Vec::new();
+    // Two sources may spell the same package differently (`crate-a` against
+    // `crate_a`), so identity here is the normalized name, as everywhere else.
+    let mut push = |plugin: crate::config::PluginRef, dormant: bool, trusted: bool| {
+        let same = |c: &Candidate| {
+            c.plugin.pm == plugin.pm
+                && normalize_crate_name(&c.plugin.name) == normalize_crate_name(&plugin.name)
+        };
+        if !out.iter().any(same) {
+            out.push(Candidate {
+                plugin,
+                dormant,
+                trusted,
+            });
+        }
+    };
+
+    // Registry plugins, which name themselves.
+    for parsed in &crate::plugins::load_registry(sym).await.plugins {
+        if normalize_crate_name(&parsed.plugin.name) == normalized {
+            push(
+                crate::config::PluginRef::new(&parsed.canonical.pm, &parsed.canonical.name),
+                parsed.plugin.requires_use,
+                true,
+            );
+        }
+    }
+
+    // Workspace dependencies, checked offline before anything reaches out.
+    for id in ws.dep_ids().await {
+        if normalize_crate_name(&id.name) == normalized {
+            push(
+                crate::config::PluginRef::new(&id.pm, &id.name),
+                false,
+                false,
+            );
+        }
+    }
+
+    // Anything a package manager can find that the workspace does not depend
+    // on, which is how `use` names a crate you have not added yet.
+    for (_, info) in ws.pms().search(name).await {
+        if normalize_crate_name(&info.id.name) == normalized {
+            push(
+                crate::config::PluginRef::new(&info.id.pm, &info.id.name),
+                false,
+                false,
+            );
+        }
+    }
+    out
+}
+
+struct Candidate {
+    plugin: crate::config::PluginRef,
+    /// A dormant registry plugin: `use` is exactly its wake-up call.
+    dormant: bool,
+    /// Offered by a trust root, so it is already enabled unless dormant.
+    trusted: bool,
+}
+
 /// Record an enablement for `name` and sync so its skills install now.
+///
+/// `pm` picks between package managers when more than one offers the name.
 pub async fn use_plugin(
     sym: &mut Symposium,
     cwd: &Path,
     name: &str,
+    pm: Option<&str>,
     global: bool,
     update: UpdateLevel,
 ) -> Result<()> {
-    // A configured registry is a trust root: what it offers is already
-    // enabled by configuration, so there is nothing to record. The exception
-    // is a dormant plugin, for which `use` is exactly the wake-up call.
-    let registry = crate::plugins::load_registry(sym).await;
-    let normalized = normalize_crate_name(name);
-    let registry_plugin = registry
-        .plugins
-        .iter()
-        .find(|p| normalize_crate_name(&p.plugin.name) == normalized);
-    let dormant = registry_plugin.is_some_and(|p| p.plugin.requires_use);
-    // A dormant registry plugin is named by the registry that offers it;
-    // anything else is a cargo package.
-    let plugin_ref = match registry_plugin.filter(|_| dormant) {
-        Some(p) => crate::config::PluginRef::new(&p.canonical.pm, &p.canonical.name),
-        None => crate::config::PluginRef::new(crate::pm::CARGO_PM, name),
+    let deps = sym.workspace(cwd);
+    let mut found = candidates(sym, &deps, name).await;
+    if let Some(pm) = pm {
+        found.retain(|c| c.plugin.pm == pm);
+    }
+
+    let chosen = match found.len() {
+        0 => match pm {
+            Some(pm) => bail!("no package manager `{pm}` offers `{name}`"),
+            None => bail!("no crate or plugin named `{name}`; try `cargo agents search {name}`"),
+        },
+        1 => found.remove(0),
+        _ => {
+            let mut msg = format!("`{name}` is offered by more than one package manager:\n");
+            for c in &found {
+                msg.push_str(&format!("  {} (--pm {})\n", c.plugin.pm, c.plugin.pm));
+            }
+            msg.push_str("pick one with `--pm <name>`");
+            bail!(msg);
+        }
     };
-    let already_trusted = registry_plugin.is_some() && !dormant;
-    if already_trusted {
+
+    // A trust root's plugins are already enabled by configuration, so there is
+    // nothing to record. A dormant one is the exception.
+    if chosen.trusted && !chosen.dormant {
         tracing::info!(
             report = %ReportEvent::Info {
                 message: format!(
@@ -60,19 +142,14 @@ pub async fn use_plugin(
         return Ok(());
     }
 
-    let deps = sym.workspace(cwd);
     let workspace_root = deps.root().await.map(Path::to_path_buf);
     if !global && workspace_root.is_none() {
         bail!("not in a Rust workspace; pass --global to enable `{name}` everywhere");
     }
 
-    if !dormant {
-        resolve_name(&deps, name).await?;
-    }
-
     let entry = match &workspace_root {
-        _ if global => UseEntry::global(plugin_ref),
-        Some(root) => UseEntry::scoped(plugin_ref, root.clone()),
+        _ if global => UseEntry::global(chosen.plugin),
+        Some(root) => UseEntry::scoped(chosen.plugin, root.clone()),
         None => unreachable!("checked above"),
     };
 
@@ -150,29 +227,4 @@ pub async fn remove_plugin(
         crate::sync::sync(sym, &deps, update).await?;
     }
     Ok(())
-}
-
-/// Check that `name` resolves to something before recording it: a workspace
-/// dependency (offline-friendly) or a registry search hit.
-async fn resolve_name(ws: &std::sync::Arc<crate::pm::Workspace>, name: &str) -> Result<()> {
-    let normalized = normalize_crate_name(name);
-    let is_workspace_dep = ws
-        .dep_ids()
-        .await
-        .iter()
-        .any(|id| normalize_crate_name(&id.name) == normalized);
-    if is_workspace_dep {
-        return Ok(());
-    }
-
-    let found = ws
-        .pms()
-        .search(name)
-        .await
-        .iter()
-        .any(|(_, info)| normalize_crate_name(&info.id.name) == normalized);
-    if found {
-        return Ok(());
-    }
-    bail!("no crate or plugin named `{name}` found (try `cargo agents search {name}`)")
 }
