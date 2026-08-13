@@ -1,0 +1,733 @@
+//! Deciding which backing servers a workspace makes available.
+//!
+//! The same predicate filtering that decides which skills install decides
+//! which MCP servers are in scope, so a workspace only ever sees tools
+//! belonging to crates it actually depends on. That conditionality is the
+//! thing no MCP primitive can express, and it is why the meta-server exists.
+//!
+//! Nothing is started here. Resolution is a read of the plugin registry;
+//! processes begin on first use.
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+
+use crate::plugins::{McpTransport, StdioCommand};
+
+use crate::config::Symposium;
+use crate::mcp::client::SpawnSpec;
+use crate::mcp::server::{EXECUTE, LIST_TOOLS};
+use crate::plugins::McpServerOverrides;
+
+/// Where a server's executable comes from.
+///
+/// An installation is carried as its definition rather than a path: acquiring
+/// it means downloading or installing, and startup has to stay side-effect
+/// free. The same shape the hook layer uses.
+#[derive(Debug, Clone)]
+pub enum ServerCommand {
+    Path(PathBuf),
+    Installation(Box<crate::plugins::Installation>),
+}
+
+/// A backing server, ready to be started on demand.
+#[derive(Debug, Clone)]
+pub struct ResolvedServer {
+    pub name: String,
+    pub command: ServerCommand,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub cwd: Option<PathBuf>,
+    pub startup_timeout: Duration,
+    /// Ceiling on one call to this server, already reconciled with the
+    /// user's script deadline.
+    pub tool_call_timeout: Duration,
+    pub enabled_tools: Option<Vec<String>>,
+    pub disabled_tools: Option<Vec<String>>,
+    /// Acquired before the server is first started, so a package-runner
+    /// download does not land on the first tool call.
+    pub requirements: Vec<crate::plugins::Installation>,
+}
+
+impl ResolvedServer {
+    /// Acquire what this server needs and produce its spawn spec.
+    ///
+    /// Deferred to first use rather than done at resolve time: a client may
+    /// spawn a throwaway copy of the meta-server to probe it, and startup must
+    /// not download anything.
+    pub async fn spawn_spec(&self, sym: &Symposium) -> anyhow::Result<SpawnSpec> {
+        // Dispatch-time acquisition serves the cache; the SessionStart prewarm
+        // is what forces a freshness check once per session.
+        let update = symposium_install::UpdateLevel::None;
+
+        // Requirements first, so a warmed cache is in place before the command
+        // runs. A failure here only means the cost lands later.
+        for requirement in &self.requirements {
+            if let Err(e) =
+                crate::installation::acquire_installation(sym, requirement, None, None, update)
+                    .await
+            {
+                tracing::warn!(
+                    server = %self.name,
+                    requirement = %requirement.name,
+                    error = %e,
+                    "failed to acquire mcp server requirement"
+                );
+            }
+        }
+
+        let (command, mut args) = match &self.command {
+            ServerCommand::Path(path) => (path.clone(), Vec::new()),
+            ServerCommand::Installation(installation) => {
+                let acquired = crate::installation::acquire_installation(
+                    sym,
+                    installation,
+                    None,
+                    None,
+                    update,
+                )
+                .await?;
+                let label = format!("mcp server `{}`", self.name);
+                match crate::installation::resolve_runnable(acquired, &label)? {
+                    symposium_install::Runnable::Exec(path) => (path, Vec::new()),
+                    // A script is run through a shell, as hooks are.
+                    symposium_install::Runnable::Script(path) => (
+                        PathBuf::from("sh"),
+                        vec![path.to_string_lossy().into_owned()],
+                    ),
+                }
+            }
+        };
+        args.extend(self.args.iter().cloned());
+
+        Ok(SpawnSpec {
+            name: self.name.clone(),
+            command,
+            args,
+            env: self.env.clone(),
+            cwd: self.cwd.clone(),
+            startup_timeout: self.startup_timeout,
+        })
+    }
+
+    /// Whether a plugin's filters let this tool through.
+    pub fn exposes(&self, tool: &str) -> bool {
+        if let Some(allow) = &self.enabled_tools {
+            return allow.iter().any(|t| t == tool);
+        }
+        if let Some(deny) = &self.disabled_tools {
+            return !deny.iter().any(|t| t == tool);
+        }
+        true
+    }
+}
+
+/// What resolution produced, including what it had to refuse.
+#[derive(Debug, Default)]
+pub struct Resolution {
+    pub servers: Vec<ResolvedServer>,
+    /// Servers that could not be used, and why. Reported rather than
+    /// swallowed: a server silently missing looks like a broken workspace.
+    pub rejected: Vec<Rejection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rejection {
+    pub server: String,
+    pub reason: String,
+}
+
+/// Resolve the servers applicable to the workspace containing `cwd`.
+pub async fn resolve(sym: &Symposium, cwd: &Path) -> Resolution {
+    let deps = sym.workspace_deps(cwd);
+    if deps.load().is_none() {
+        // Outside a Rust workspace there is nothing to condition on.
+        return Resolution::default();
+    }
+    resolve_with_deps(sym, &deps).await
+}
+
+/// Resolve against a workspace resolver the caller already holds, so the hook
+/// pipeline shares its one `cargo metadata` result with this pass.
+pub async fn resolve_with_deps(
+    sym: &Symposium,
+    deps: &Arc<crate::pm::WorkspaceDeps>,
+) -> Resolution {
+    let Some(loaded) = deps.load().cloned() else {
+        return Resolution::default();
+    };
+    let registry = crate::plugins::load_registry_with_workspace(sym, Some(&loaded)).await;
+
+    let dep_ids = crate::pm::workspace_dep_ids(sym, deps).await;
+    let used_names = sym.config.plugins.used_names_in(&loaded.root);
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used_names(&used_names);
+
+    // The same active set every other facet resolves over, so a crate-sourced
+    // plugin's servers are reachable exactly like a registry plugin's.
+    let pms = sym.package_managers(deps);
+    let active =
+        crate::plugins::active_plugins(sym, &registry, &pms, Some(&loaded.root), &mut ctx).await;
+
+    let mut entries: Vec<Candidate> = Vec::new();
+    for plugin in &active {
+        if !plugin.applies(&mut ctx) {
+            continue;
+        }
+        for entry in plugin.plugin.applicable_mcp_entries(&mut ctx) {
+            entries.push(Candidate {
+                entry,
+                owner: plugin.plugin.name.clone(),
+                plugin: &plugin.plugin,
+            });
+        }
+    }
+
+    build(entries, &loaded.root, sym.config.mcp.script_timeout_secs)
+}
+
+/// Acquire what applicable servers need, once per session.
+///
+/// Two different intents, treated differently:
+///
+/// * **`requirements`** are acquired eagerly. Declaring one *is* the author
+///   saying "warm this up" — it is how a package-runner server avoids paying
+///   its download on the first tool call.
+/// * **`installation`** commands are only refreshed if already present, as
+///   hooks are. Installing every declared server eagerly would fetch tools a
+///   session may never touch.
+///
+/// Best-effort throughout: a failure here only means the cost lands later.
+pub async fn prewarm(sym: &Symposium, resolution: &Resolution) {
+    let update = symposium_install::UpdateLevel::Check;
+
+    for server in &resolution.servers {
+        for requirement in &server.requirements {
+            if let Err(e) =
+                crate::installation::acquire_installation(sym, requirement, None, None, update)
+                    .await
+            {
+                tracing::debug!(
+                    server = %server.name,
+                    requirement = %requirement.name,
+                    error = %e,
+                    "prewarm: requirement acquisition failed"
+                );
+            }
+        }
+
+        if let ServerCommand::Installation(installation) = &server.command {
+            if let Err(e) =
+                crate::installation::refresh_installation_if_present(sym, installation, None).await
+            {
+                tracing::debug!(
+                    server = %server.name,
+                    error = %e,
+                    "prewarm: command refresh failed"
+                );
+            }
+        }
+    }
+}
+
+/// An applicable entry together with the plugin that declared it, whose
+/// `[[installations]]` its `installation` and `requirements` name.
+struct Candidate<'a> {
+    entry: &'a crate::plugins::PluginMcpServer,
+    owner: String,
+    plugin: &'a crate::plugins::Plugin,
+}
+
+/// Turn applicable manifest entries into runnable servers.
+///
+/// `root` anchors a relative `cwd`: a plugin author cannot know what
+/// directory the agent was launched from.
+fn build(entries: Vec<Candidate<'_>>, root: &Path, script_timeout_secs: u64) -> Resolution {
+    let mut resolution = Resolution::default();
+    // Which plugin claimed each name, so a clash can name both sides.
+    let mut claimed: Vec<(String, String)> = Vec::new();
+
+    for Candidate {
+        entry,
+        owner,
+        plugin,
+    } in entries
+    {
+        let name = entry.name.clone();
+
+        // The meta-server's own tools live in the same namespace as the
+        // servers it exposes; a backing server taking one would shadow it.
+        if name == LIST_TOOLS || name == EXECUTE {
+            resolution.rejected.push(Rejection {
+                server: name,
+                reason: format!("`{owner}` uses a name reserved by the meta-server"),
+            });
+            continue;
+        }
+
+        // First-wins would silently drop one plugin's server, and a warning
+        // on a stdio server's stderr is invisible. Refusing names both.
+        if let Some((_, first)) = claimed.iter().find(|(n, _)| *n == name) {
+            resolution.rejected.push(Rejection {
+                server: name.clone(),
+                reason: format!("declared by both `{first}` and `{owner}`"),
+            });
+            continue;
+        }
+
+        let McpTransport::Stdio(stdio) = &entry.transport else {
+            resolution.rejected.push(Rejection {
+                server: name,
+                reason: "only stdio servers are supported".to_string(),
+            });
+            continue;
+        };
+        let command = match &stdio.command {
+            StdioCommand::Path(path) => ServerCommand::Path(path.clone()),
+            StdioCommand::Installation(installation) => {
+                match plugin.get_installation(installation) {
+                    Some(found) => ServerCommand::Installation(Box::new(found.clone())),
+                    None => {
+                        resolution.rejected.push(Rejection {
+                            server: name,
+                            reason: format!(
+                                "`{owner}` names installation `{installation}`, which it does not declare"
+                            ),
+                        });
+                        continue;
+                    }
+                }
+            }
+        };
+
+        // Named requirements have to exist too, or a warmup silently does
+        // nothing.
+        let mut requirements = Vec::new();
+        let mut missing = None;
+        for requirement in &entry.requirements {
+            match plugin.get_installation(requirement) {
+                Some(found) => requirements.push(found.clone()),
+                None => {
+                    missing = Some(requirement.clone());
+                    break;
+                }
+            }
+        }
+        if let Some(requirement) = missing {
+            resolution.rejected.push(Rejection {
+                server: name,
+                reason: format!(
+                    "`{owner}` names requirement `{requirement}`, which it does not declare"
+                ),
+            });
+            continue;
+        }
+
+        claimed.push((name.clone(), owner));
+        resolution.servers.push(ResolvedServer {
+            name: name.clone(),
+            command,
+            args: stdio.args.clone(),
+            env: stdio
+                .env
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone()))
+                .collect(),
+            cwd: stdio.cwd.as_ref().map(|dir| root.join(dir)),
+            startup_timeout: Duration::from_secs(
+                entry.overrides.startup_timeout_secs.unwrap_or(30),
+            ),
+            tool_call_timeout: call_timeout(&entry.overrides, script_timeout_secs),
+            enabled_tools: entry.overrides.enabled_tools.clone(),
+            disabled_tools: entry.overrides.disabled_tools.clone(),
+            requirements,
+        });
+    }
+
+    resolution.servers.sort_by(|a, b| a.name.cmp(&b.name));
+    resolution
+}
+
+/// Reconcile a plugin's call timeout with the user's script deadline.
+///
+/// A plugin author cannot see the user's configuration, so an override
+/// longer than the whole script budget is clamped rather than rejected —
+/// refusing to load a server because a user lowered their own limit would
+/// punish the wrong person.
+fn call_timeout(overrides: &McpServerOverrides, script_timeout_secs: u64) -> Duration {
+    let requested = overrides.tool_call_timeout_secs.unwrap_or(60);
+    // Leave the script deadline strictly larger, or the call timeout could
+    // never fire.
+    let ceiling = script_timeout_secs.saturating_sub(1).max(1);
+    Duration::from_secs(requested.min(ceiling))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugins::PluginMcpServer;
+
+    fn stdio(name: &str) -> PluginMcpServer {
+        PluginMcpServer {
+            name: name.to_string(),
+            predicates: Default::default(),
+            overrides: McpServerOverrides::default(),
+            transport: McpTransport::Stdio(crate::plugins::StdioServer {
+                command: StdioCommand::Path("/usr/bin/true".into()),
+                args: Vec::new(),
+                env: Default::default(),
+                cwd: None,
+            }),
+            requirements: Vec::new(),
+        }
+    }
+
+    /// A plugin carrying the given entries, so `installation` and
+    /// `requirements` have somewhere to resolve against.
+    fn owner_plugin(installations: Vec<crate::plugins::Installation>) -> crate::plugins::Plugin {
+        crate::plugins::Plugin {
+            name: "db-plugin".to_string(),
+            predicates: Default::default(),
+            installations,
+            hooks: Vec::new(),
+            skills: Vec::new(),
+            mcp_servers: Vec::new(),
+            subcommands: Default::default(),
+            custom_predicates: Vec::new(),
+            chained: Vec::new(),
+            requires_use: false,
+        }
+    }
+
+    fn resolve_with(
+        entries: Vec<&PluginMcpServer>,
+        plugin: &crate::plugins::Plugin,
+        script_secs: u64,
+    ) -> Resolution {
+        build(
+            entries
+                .into_iter()
+                .map(|entry| Candidate {
+                    entry,
+                    owner: plugin.name.clone(),
+                    plugin,
+                })
+                .collect(),
+            Path::new("/ws"),
+            script_secs,
+        )
+    }
+
+    /// Entries paired with the plugin name that declared each, against a
+    /// plugin declaring no installations.
+    fn resolve_all(entries: Vec<(&PluginMcpServer, &str)>, script_secs: u64) -> Resolution {
+        let plugin = owner_plugin(Vec::new());
+        build(
+            entries
+                .into_iter()
+                .map(|(entry, owner)| Candidate {
+                    entry,
+                    owner: owner.to_string(),
+                    plugin: &plugin,
+                })
+                .collect(),
+            Path::new("/ws"),
+            script_secs,
+        )
+    }
+
+    #[test]
+    fn relative_cwd_resolves_against_the_workspace_root() {
+        let mut entry = stdio("sqlx");
+        if let McpTransport::Stdio(s) = &mut entry.transport {
+            s.cwd = Some("crates/db".into());
+        }
+        let out = resolve_all(vec![(&entry, "db-plugin")], 120);
+        assert_eq!(
+            out.servers[0].cwd.as_deref(),
+            Some(Path::new("/ws/crates/db")),
+            "got: {:?}",
+            out.servers[0].cwd
+        );
+    }
+
+    #[test]
+    fn absolute_cwd_is_left_as_written() {
+        let mut entry = stdio("sqlx");
+        if let McpTransport::Stdio(s) = &mut entry.transport {
+            s.cwd = Some("/opt/db".into());
+        }
+        let out = resolve_all(vec![(&entry, "db-plugin")], 120);
+        assert_eq!(out.servers[0].cwd.as_deref(), Some(Path::new("/opt/db")));
+    }
+
+    #[test]
+    fn stdio_servers_become_spawnable() {
+        let entry = stdio("sqlx");
+        let out = resolve_all(vec![(&entry, "db-plugin")], 120);
+
+        assert_eq!(out.servers.len(), 1);
+        assert_eq!(out.servers[0].name, "sqlx");
+        assert!(out.rejected.is_empty());
+    }
+
+    /// A silently missing server looks like a broken workspace, so refusals
+    /// are reported.
+    #[test]
+    fn http_servers_are_refused_with_a_reason() {
+        let entry = PluginMcpServer {
+            name: "remote".to_string(),
+            predicates: Default::default(),
+            overrides: McpServerOverrides::default(),
+            transport: McpTransport::Http(crate::plugins::RemoteServer {
+                url: "http://localhost:8080/mcp".to_string(),
+                headers: Default::default(),
+            }),
+            requirements: Vec::new(),
+        };
+        let out = resolve_all(vec![(&entry, "p")], 120);
+
+        assert!(out.servers.is_empty());
+        assert_eq!(out.rejected.len(), 1);
+        assert!(out.rejected[0].reason.contains("stdio"));
+    }
+
+    /// First-wins would drop one plugin's server silently, and a warning on
+    /// a stdio server's stderr is invisible.
+    #[test]
+    fn duplicate_names_are_refused_naming_both_plugins() {
+        let a = stdio("sqlx");
+        let b = stdio("sqlx");
+        let out = resolve_all(vec![(&a, "first-plugin"), (&b, "second-plugin")], 120);
+
+        assert_eq!(out.servers.len(), 1, "the first still works");
+        assert_eq!(out.rejected.len(), 1);
+        let reason = &out.rejected[0].reason;
+        assert!(
+            reason.contains("first-plugin") && reason.contains("second-plugin"),
+            "both sides should be named, got: {reason}"
+        );
+    }
+
+    /// A backing server called `execute` would shadow the meta-server's own
+    /// tool.
+    #[test]
+    fn reserved_names_are_refused() {
+        for name in [LIST_TOOLS, EXECUTE] {
+            let entry = stdio(name);
+            let out = resolve_all(vec![(&entry, "p")], 120);
+            assert!(out.servers.is_empty(), "{name} should be refused");
+            assert!(out.rejected[0].reason.contains("reserved"));
+        }
+    }
+
+    #[test]
+    fn per_server_timeouts_are_honored() {
+        let mut entry = stdio("slow");
+        entry.overrides.startup_timeout_secs = Some(45);
+        entry.overrides.tool_call_timeout_secs = Some(90);
+        let out = resolve_all(vec![(&entry, "p")], 300);
+
+        assert_eq!(out.servers[0].startup_timeout, Duration::from_secs(45));
+        assert_eq!(out.servers[0].tool_call_timeout, Duration::from_secs(90));
+    }
+
+    /// A plugin author cannot see the user's configuration, so an override
+    /// beyond the script budget is clamped rather than refused.
+    #[test]
+    fn call_timeout_is_clamped_below_the_script_deadline() {
+        let mut entry = stdio("slow");
+        entry.overrides.tool_call_timeout_secs = Some(600);
+        let out = resolve_all(vec![(&entry, "p")], 30);
+
+        assert_eq!(
+            out.servers[0].tool_call_timeout,
+            Duration::from_secs(29),
+            "must stay strictly under the script deadline or it can never fire"
+        );
+    }
+
+    // -- installations --
+
+    fn installation(name: &str, install_commands: Vec<String>) -> crate::plugins::Installation {
+        crate::plugins::Installation {
+            name: name.to_string(),
+            requirements: Vec::new(),
+            install_commands,
+            source: None,
+            executable: Some("/usr/bin/true".to_string()),
+            script: None,
+            args: Vec::new(),
+        }
+    }
+
+    fn installation_backed(
+        name: &str,
+        installation: &str,
+        requirements: &[&str],
+    ) -> PluginMcpServer {
+        PluginMcpServer {
+            name: name.to_string(),
+            predicates: Default::default(),
+            overrides: McpServerOverrides::default(),
+            transport: McpTransport::Stdio(crate::plugins::StdioServer {
+                command: StdioCommand::Installation(installation.to_string()),
+                args: Vec::new(),
+                env: Default::default(),
+                cwd: None,
+            }),
+            requirements: requirements.iter().map(|r| r.to_string()).collect(),
+        }
+    }
+
+    /// The definition is carried, not resolved: acquiring means downloading,
+    /// and that must not happen while resolving.
+    #[test]
+    fn an_installation_backed_server_carries_its_definition() {
+        let entry = installation_backed("sqlx", "sqlx-mcp", &[]);
+        let plugin = owner_plugin(vec![installation("sqlx-mcp", vec![])]);
+        let out = resolve_with(vec![&entry], &plugin, 120);
+
+        assert_eq!(out.servers.len(), 1, "rejected: {:?}", out.rejected);
+        assert!(matches!(
+            out.servers[0].command,
+            ServerCommand::Installation(_)
+        ));
+    }
+
+    #[test]
+    fn an_unknown_installation_is_refused_naming_it() {
+        let entry = installation_backed("sqlx", "missing", &[]);
+        let plugin = owner_plugin(Vec::new());
+        let out = resolve_with(vec![&entry], &plugin, 120);
+
+        assert!(out.servers.is_empty());
+        assert!(
+            out.rejected[0].reason.contains("missing"),
+            "got: {:?}",
+            out.rejected
+        );
+    }
+
+    /// A warmup that names nothing would silently do nothing, so the
+    /// reference has to be checked.
+    #[test]
+    fn an_unknown_requirement_is_refused_naming_it() {
+        let entry = installation_backed("sqlx", "sqlx-mcp", &["not-declared"]);
+        let plugin = owner_plugin(vec![installation("sqlx-mcp", vec![])]);
+        let out = resolve_with(vec![&entry], &plugin, 120);
+
+        assert!(out.servers.is_empty());
+        assert!(
+            out.rejected[0].reason.contains("not-declared"),
+            "got: {:?}",
+            out.rejected
+        );
+    }
+
+    #[test]
+    fn requirements_are_carried_for_acquisition() {
+        let entry = installation_backed("sqlx", "sqlx-mcp", &["warmup"]);
+        let plugin = owner_plugin(vec![
+            installation("sqlx-mcp", vec![]),
+            installation("warmup", vec!["true".to_string()]),
+        ]);
+        let out = resolve_with(vec![&entry], &plugin, 120);
+
+        assert_eq!(out.servers.len(), 1, "rejected: {:?}", out.rejected);
+        assert_eq!(out.servers[0].requirements.len(), 1);
+        assert_eq!(out.servers[0].requirements[0].name, "warmup");
+    }
+
+    /// A declared requirement is acquired eagerly: that is the author asking
+    /// for a warm cache, and the alternative is the download landing on the
+    /// agent's first tool call.
+    #[tokio::test]
+    async fn prewarm_runs_declared_requirements() {
+        let tmp = tempfile::tempdir().unwrap();
+        let marker = tmp.path().join("warmed");
+        let sym = Symposium::from_dir(tmp.path());
+
+        let entry = installation_backed("sqlx", "sqlx-mcp", &["warmup"]);
+        let plugin = owner_plugin(vec![
+            installation("sqlx-mcp", vec![]),
+            installation("warmup", vec![format!("touch {}", marker.display())]),
+        ]);
+        let resolution = resolve_with(vec![&entry], &plugin, 120);
+
+        assert!(!marker.exists(), "resolving must not run anything");
+        prewarm(&sym, &resolution).await;
+        assert!(
+            marker.exists(),
+            "the warmup should have run at prewarm time"
+        );
+    }
+
+    /// A warmup that fails only means the cost lands later, so it must not
+    /// take the session with it.
+    #[tokio::test]
+    async fn prewarm_survives_a_failing_requirement() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(tmp.path());
+
+        let entry = installation_backed("sqlx", "sqlx-mcp", &["warmup"]);
+        let plugin = owner_plugin(vec![
+            installation("sqlx-mcp", vec![]),
+            installation("warmup", vec!["exit 1".to_string()]),
+        ]);
+        let resolution = resolve_with(vec![&entry], &plugin, 120);
+
+        prewarm(&sym, &resolution).await;
+    }
+
+    // -- tool filters --
+
+    #[test]
+    fn an_allow_list_hides_everything_else() {
+        let mut entry = stdio("sqlx");
+        entry.overrides.enabled_tools = Some(vec!["query".into()]);
+        let out = resolve_all(vec![(&entry, "p")], 120);
+
+        assert!(out.servers[0].exposes("query"));
+        assert!(!out.servers[0].exposes("drop_table"));
+    }
+
+    #[test]
+    fn a_deny_list_hides_only_what_it_names() {
+        let mut entry = stdio("sqlx");
+        entry.overrides.disabled_tools = Some(vec!["drop_table".into()]);
+        let out = resolve_all(vec![(&entry, "p")], 120);
+
+        assert!(out.servers[0].exposes("query"));
+        assert!(!out.servers[0].exposes("drop_table"));
+    }
+
+    /// An empty allow-list means nothing, which is different from declaring
+    /// no filter at all.
+    #[test]
+    fn an_empty_allow_list_exposes_nothing() {
+        let mut entry = stdio("sqlx");
+        entry.overrides.enabled_tools = Some(vec![]);
+        let out = resolve_all(vec![(&entry, "p")], 120);
+
+        assert!(!out.servers[0].exposes("query"));
+    }
+
+    #[test]
+    fn without_filters_every_tool_is_exposed() {
+        let entry = stdio("sqlx");
+        let out = resolve_all(vec![(&entry, "p")], 120);
+        assert!(out.servers[0].exposes("anything"));
+    }
+
+    /// Order must not depend on registry iteration, or the inventory shown
+    /// to the model would shift between sessions.
+    #[test]
+    fn servers_are_ordered_by_name() {
+        let b = stdio("b-server");
+        let a = stdio("a-server");
+        let out = resolve_all(vec![(&b, "p"), (&a, "p")], 120);
+
+        let names: Vec<&str> = out.servers.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["a-server", "b-server"]);
+    }
+}

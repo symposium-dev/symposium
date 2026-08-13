@@ -54,6 +54,9 @@ dialoguer = "0.12.0"
 toml_edit = "0.25.11"
 url = "2.5.8"
 symposium-install = { version = "0.1.0", path = "symposium-install", features = ["clap"] }
+rquickjs = { version = "0.12.2", features = ["futures", "macro"] }
+rmcp = { version = "3", features = ["server", "client", "transport-io", "transport-child-process", "macros"] }
+jsonschema = { version = "0.49.9", default-features = false }
 
 
 [dev-dependencies]

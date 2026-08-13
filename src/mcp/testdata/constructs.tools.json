@@ -1,0 +1,181 @@
+{
+  "_comment": "Hand-built, unlike the rest of testdata/. Every construct here is one the captured corpus happens not to contain and the RFD nonetheless cites as motivation for hand-rolling the mapping: $ref/$defs, allOf/anyOf/oneOf, tuples, and type-less schemas. Grouped one tool per construct so a regression names itself.",
+  "tools": [
+    {
+      "name": "pydantic_root_model",
+      "description": "Input is a $ref to a named model, the shape pydantic emits for a root model.",
+      "inputSchema": {
+        "$ref": "#/$defs/SearchInput",
+        "$defs": {
+          "SearchInput": {
+            "type": "object",
+            "properties": {
+              "query": { "type": "string" },
+              "limit": { "type": "integer", "default": 10 }
+            },
+            "required": ["query"]
+          }
+        }
+      }
+    },
+    {
+      "name": "schemars_tagged_enum",
+      "description": "A serde externally-tagged enum, the most common schemars-generated $def.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "shape": { "$ref": "#/definitions/Shape" } },
+        "required": ["shape"],
+        "definitions": {
+          "Shape": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": { "Circle": { "type": "number" } },
+                "required": ["Circle"]
+              },
+              {
+                "type": "object",
+                "properties": { "Square": { "type": "number" } },
+                "required": ["Square"]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "either_path_or_url",
+      "description": "oneOf beside properties: the 'provide one of these' idiom.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "path": { "type": "string" },
+          "url": { "type": "string" }
+        },
+        "oneOf": [{ "required": ["path"] }, { "required": ["url"] }]
+      }
+    },
+    {
+      "name": "all_of_with_siblings",
+      "description": "allOf alongside local properties; both belong in the result.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "local": { "type": "string" } },
+        "required": ["local"],
+        "allOf": [
+          {
+            "type": "object",
+            "properties": { "shared": { "type": "number" } },
+            "required": ["shared"]
+          }
+        ]
+      }
+    },
+    {
+      "name": "config_first",
+      "description": "Defines #/$defs/Config. Generators re-emit $defs per tool, so the name is not unique across a server.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "config": { "$ref": "#/$defs/Config" } },
+        "required": ["config"],
+        "$defs": {
+          "Config": {
+            "type": "object",
+            "properties": { "host": { "type": "string" } },
+            "required": ["host"]
+          }
+        }
+      }
+    },
+    {
+      "name": "config_second",
+      "description": "Defines #/$defs/Config with a different body. Must not collapse into the first.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "config": { "$ref": "#/$defs/Config" } },
+        "required": ["config"],
+        "$defs": {
+          "Config": {
+            "type": "object",
+            "properties": { "retries": { "type": "number" } },
+            "required": ["retries"]
+          }
+        }
+      }
+    },
+    {
+      "name": "no_declared_type",
+      "description": "properties without a type keyword; type is not required by JSON Schema.",
+      "inputSchema": {
+        "properties": {
+          "name": { "type": "string" },
+          "tags": { "items": { "type": "string" } }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "nullable_via_any_of",
+      "description": "The pydantic optional spelling. A control: this one already works.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "revision": { "anyOf": [{ "type": "string" }, { "type": "null" }] }
+        },
+        "required": ["revision"]
+      }
+    },
+    {
+      "name": "tuple_shapes",
+      "description": "Both tuple spellings. zod emits the first on draft-07 targets and the second on 2020-12.",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "draft07": {
+            "type": "array",
+            "items": [{ "type": "string" }, { "type": "number" }]
+          },
+          "modern": {
+            "type": "array",
+            "prefixItems": [{ "type": "string" }, { "type": "number" }],
+            "items": false
+          }
+        }
+      }
+    },
+    {
+      "name": "recursive_defs",
+      "description": "Self-reference through a union, the shape a JSON-value type takes.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "tree": { "$ref": "#/$defs/Json" } },
+        "required": ["tree"],
+        "$defs": {
+          "Json": {
+            "anyOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "$ref": "#/$defs/Json" } }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "merged_object_def",
+      "description": "A $def whose body is an intersection rather than a single object.",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "merged": { "$ref": "#/$defs/Merged" } },
+        "required": ["merged"],
+        "$defs": {
+          "Merged": {
+            "allOf": [
+              { "type": "object", "properties": { "a": { "type": "string" } } },
+              { "type": "object", "properties": { "b": { "type": "number" } } }
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

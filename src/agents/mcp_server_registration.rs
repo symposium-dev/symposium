@@ -33,10 +33,19 @@ fn server_name(server: &McpServer) -> &str {
     }
 }
 
+/// Render name/value pairs as a JSON object.
+fn pairs_to_object<'a>(pairs: impl Iterator<Item = (&'a String, &'a String)>) -> serde_json::Value {
+    serde_json::Value::Object(
+        pairs
+            .map(|(name, value)| (name.clone(), serde_json::Value::String(value.clone())))
+            .collect(),
+    )
+}
+
 /// Convert an McpServer to the JSON value agents expect in their config.
 ///
-/// Stdio: `{"command": "...", "args": [...], "env": [...]}`
-/// Http/Sse: `{"url": "...", "headers": [...]}`
+/// Stdio: `{"command": "...", "args": [...], "env": {...}}`
+/// Http/Sse: `{"url": "...", "headers": {...}}`
 ///
 /// `env` and `headers` are omitted when empty.
 fn server_to_json(server: &McpServer) -> serde_json::Value {
@@ -47,21 +56,24 @@ fn server_to_json(server: &McpServer) -> serde_json::Value {
                 "args": s.args,
             });
             if !s.env.is_empty() {
-                v["env"] = serde_json::to_value(&s.env).unwrap();
+                // A map, not ACP's `[{name, value}]`. Every MCP client reads
+                // `env` as an object, so serializing the wire type directly
+                // produced config none of them could use.
+                v["env"] = pairs_to_object(s.env.iter().map(|e| (&e.name, &e.value)));
             }
             v
         }
         McpServer::Http(s) => {
             let mut v = json!({ "url": s.url });
             if !s.headers.is_empty() {
-                v["headers"] = serde_json::to_value(&s.headers).unwrap();
+                v["headers"] = pairs_to_object(s.headers.iter().map(|h| (&h.name, &h.value)));
             }
             v
         }
         McpServer::Sse(s) => {
             let mut v = json!({ "url": s.url });
             if !s.headers.is_empty() {
-                v["headers"] = serde_json::to_value(&s.headers).unwrap();
+                v["headers"] = pairs_to_object(s.headers.iter().map(|h| (&h.name, &h.value)));
             }
             v
         }
@@ -549,6 +561,29 @@ mod tests {
 
     fn test_server_names() -> Vec<&'static str> {
         vec!["symposium"]
+    }
+
+    /// Every MCP client reads `env` as an object. Serializing ACP's
+    /// `Vec<EnvVariable>` directly produced `[{"name":..,"value":..}]`, which
+    /// none of them understand. Unobservable while the only registered entry
+    /// carries no env, hence the direct test.
+    #[test]
+    fn env_and_headers_are_written_as_objects() {
+        let stdio = McpServer::Stdio(
+            McpServerStdio::new("s", "/bin/true")
+                .env(vec![sacp::schema::EnvVariable::new("API_KEY", "x")]),
+        );
+        assert_eq!(server_to_json(&stdio)["env"], json!({"API_KEY": "x"}));
+
+        let http = McpServer::Http(
+            sacp::schema::McpServerHttp::new("s", "http://localhost/mcp").headers(vec![
+                sacp::schema::HttpHeader::new("Authorization", "Bearer x"),
+            ]),
+        );
+        assert_eq!(
+            server_to_json(&http)["headers"],
+            json!({"Authorization": "Bearer x"})
+        );
     }
 
     // -- Claude MCP (also covers Gemini and Kiro via delegation) --
