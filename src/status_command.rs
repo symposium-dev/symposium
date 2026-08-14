@@ -204,9 +204,50 @@ fn entry_for(found: &DiscoveredPlugin) -> StatusEntry {
 }
 
 /// The `cargo agents status` entry point.
+/// Report each remote MCP server the workspace can reach.
+///
+/// A plugin names these endpoints, so this is where a user can see what a
+/// manifest would have symposium talk to, and which of them hold a token.
+async fn report_remote_mcp_servers(sym: &Symposium, cwd: &Path) {
+    let resolution = crate::mcp::resolve::resolve(sym, cwd).await;
+
+    for server in &resolution.servers {
+        let crate::mcp::resolve::ServerTransport::Http { url, headers } = &server.transport else {
+            continue;
+        };
+
+        let signed_in =
+            crate::mcp::credentials::FileCredentialStore::new(sym.config_dir(), &server.name)
+                .exists();
+        // A server carrying its own credentials needs no login, so calling it
+        // "needs-login" would be wrong.
+        let carries_credentials = headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("authorization"));
+
+        // Whether the server *requires* authorization is deliberately not
+        // claimed: finding out means connecting, which a status report should
+        // not do.
+        let auth = match (signed_in, carries_credentials) {
+            (true, _) => "signed-in",
+            (false, true) => "header-auth",
+            (false, false) => "no-credentials",
+        };
+
+        tracing::info!(
+            report = %ReportEvent::RemoteMcpServer {
+                name: server.name.clone(),
+                url: url.clone(),
+                auth: auth.to_string(),
+            },
+        );
+    }
+}
+
 pub async fn status(sym: &Symposium, cwd: &Path) -> Result<()> {
     let deps = sym.workspace_deps(cwd);
     let entries = workspace_status(sym, &deps).await?;
+    report_remote_mcp_servers(sym, cwd).await;
     if entries.is_empty() {
         tracing::info!(
             report = %ReportEvent::Info {

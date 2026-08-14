@@ -154,6 +154,17 @@ pub enum ReportEvent {
         state: String,
     },
 
+    /// A remote MCP server the workspace can reach, and whether it is signed
+    /// in. Reported so a user can see where tool calls would leave the machine.
+    RemoteMcpServer {
+        name: String,
+        url: String,
+        /// `signed-in`, `header-auth`, or `no-credentials`. Not whether the
+        /// server *requires* authorization: knowing that means connecting to
+        /// it, which a status report should not do.
+        auth: String,
+    },
+
     /// A provider was listed with its plugins.
     ProviderListed {
         name: String,
@@ -346,6 +357,17 @@ impl ReportEvent {
                     .map(|v| format!(" {v}"))
                     .unwrap_or_default();
                 format!("{marker} {name}{version} — {root}")
+            }
+
+            Self::RemoteMcpServer { name, url, auth } => {
+                let marker = if auth == "signed-in" { "🔓" } else { "🌐" };
+                let hint = match auth.as_str() {
+                    "no-credentials" => {
+                        format!("  (if it requires authorization: `cargo agents mcp login {name}`)")
+                    }
+                    _ => String::new(),
+                };
+                format!("{marker} {name} - {url}{hint}")
             }
 
             Self::ProviderListed {

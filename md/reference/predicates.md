@@ -77,8 +77,6 @@ predicates = ["path_exists(.git)"]
 [[mcp_servers]]
 name = "tool"
 command = "/usr/local/bin/tool"
-args = []
-env = []
 predicates = ["path_exists(tool)"]
 ```
 

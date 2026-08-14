@@ -23,6 +23,7 @@ async fn cargo_agents_help_lists_plugin_vended() {
 
                 Commands for humans:
                 init          Set up user-wide configuration
+                mcp           Manage remote MCP servers
                 plugin        Manage plugins
                 search        Search configured registries for plugins
                 self-update   Update symposium to the latest version

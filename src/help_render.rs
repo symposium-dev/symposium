@@ -283,6 +283,7 @@ mod tests {
 
             Commands for humans:
             init         Set up user-wide configuration
+            mcp          Manage remote MCP servers
             plugin       Manage plugins
             search       Search configured registries for plugins
             self-update  Update symposium to the latest version

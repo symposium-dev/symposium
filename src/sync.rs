@@ -347,10 +347,10 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     }
 
     // Collect MCP servers from the same active plugin set.
-    let mut mcp_servers: Vec<sacp::schema::McpServer> = Vec::new();
+    let mut plugin_servers: Vec<sacp::schema::McpServer> = Vec::new();
     for p in &active {
         if p.applies(&mut ctx) {
-            mcp_servers.extend(p.plugin.applicable_mcp_servers(&mut ctx));
+            plugin_servers.extend(p.plugin.applicable_mcp_servers(&mut ctx));
         }
     }
     if let Err(e) = ctx.persist_disk_cache(&predicate_cache_path) {
@@ -361,7 +361,7 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
         );
     }
 
-    let server_names: Vec<&str> = mcp_servers
+    let plugin_server_names: Vec<&str> = plugin_servers
         .iter()
         .map(|s| match s {
             sacp::schema::McpServer::Stdio(s) => s.name.as_str(),
@@ -369,6 +369,28 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
             sacp::schema::McpServer::Sse(s) => s.name.as_str(),
             _ => panic!("unsupported McpServer variant"),
         })
+        .collect();
+
+    // One entry, not one per plugin. The agent then loads two tool schemas
+    // instead of every plugin server's, and the workspace's own tools stay
+    // out of `.claude/` and its equivalents.
+    let mcp_servers = if sym.config.mcp.enabled {
+        vec![meta_server_entry()]
+    } else {
+        plugin_servers.clone()
+    };
+    // Whichever set is not in use has to be removed, or entries written by a
+    // previous configuration linger in agent config forever.
+    let stale_names: Vec<&str> = if sym.config.mcp.enabled {
+        plugin_server_names.clone()
+    } else {
+        vec![META_SERVER_NAME]
+    };
+    // Every name this sync could have written, for reaping dropped agents.
+    let server_names: Vec<&str> = plugin_server_names
+        .iter()
+        .copied()
+        .chain(std::iter::once(META_SERVER_NAME))
         .collect();
 
     // Sync each configured agent
@@ -406,6 +428,7 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
         agent
             .register_hooks(&hook_root, sym, out)
             .context("failed to register hooks")?;
+        let _ = agent.unregister_global_mcp_servers(&hook_root, &stale_names, out);
         agent
             .register_global_mcp_servers(&hook_root, &mcp_servers, out)
             .context("failed to register MCP servers")?;
@@ -550,6 +573,21 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     Ok(())
 }
 
+/// Name of the single entry written into agent configuration.
+pub const META_SERVER_NAME: &str = "symposium";
+
+/// The meta-server as an agent configuration entry.
+///
+/// Named by command rather than absolute path, matching how hooks are
+/// registered: an absolute path breaks the moment the binary is reinstalled
+/// somewhere else.
+fn meta_server_entry() -> sacp::schema::McpServer {
+    sacp::schema::McpServer::Stdio(
+        sacp::schema::McpServerStdio::new(META_SERVER_NAME, "cargo-agents")
+            .args(vec!["mcp-serve".to_string()]),
+    )
+}
+
 /// Register global hooks for all configured agents.
 /// Register hooks for all configured agents. Uses `home_dir` (global scope).
 /// Called from `init` after writing the user config.
@@ -558,7 +596,7 @@ pub async fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
     let mcp_servers: Vec<sacp::schema::McpServer> = registry
         .plugins
         .iter()
-        .flat_map(|p| p.plugin.mcp_servers.iter().map(|s| s.server.clone()))
+        .flat_map(|p| p.plugin.mcp_servers.iter().map(|s| s.to_acp_entry()))
         .collect();
 
     let server_names: Vec<&str> = mcp_servers
