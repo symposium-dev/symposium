@@ -92,7 +92,7 @@ pub async fn use_plugin(
 
     // Install now rather than waiting for the next sync.
     if workspace_root.is_some() {
-        crate::sync::sync(sym, &deps, update).await?;
+        crate::sync::sync(sym, &deps, update, crate::sync::Debounce::Always).await?;
     }
     Ok(())
 }
@@ -143,7 +143,7 @@ pub async fn remove_plugin(
     );
 
     if workspace_root.is_some() {
-        crate::sync::sync(sym, &deps, update).await?;
+        crate::sync::sync(sym, &deps, update, crate::sync::Debounce::Always).await?;
     }
     Ok(())
 }

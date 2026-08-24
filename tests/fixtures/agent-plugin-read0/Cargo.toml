@@ -1,0 +1,11 @@
+[workspace]
+members = ["member"]
+
+[package]
+name = "read-root"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0"
+dep-crate = { path = "dep-crate" }

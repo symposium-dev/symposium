@@ -97,6 +97,10 @@ impl PackageManager for GitPm {
             url: self.git_url.clone(),
         })
     }
+
+    async fn source_readable(&self) -> bool {
+        self.inner.source_readable().await
+    }
 }
 
 #[cfg(test)]

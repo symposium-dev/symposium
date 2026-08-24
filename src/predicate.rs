@@ -289,6 +289,25 @@ impl Predicate {
         }
     }
 
+    /// True when this predicate's value cannot vary by workspace.
+    ///
+    /// Only `depends-on(*)` qualifies, since it holds unconditionally. Every
+    /// other kind is treated as workspace-dependent: `depends-on(<name>)` and
+    /// `workspace-member()` by definition, `shell(...)` and a relative
+    /// `path_exists(...)` because they resolve against the workspace as their
+    /// working directory, and a custom predicate because it is opaque. `not(...)`
+    /// is dependent regardless of its operand — negating an unconditional truth
+    /// is never what a caller wants to install globally.
+    pub fn is_workspace_independent(&self) -> bool {
+        match self {
+            Predicate::DependsOnWildcard => true,
+            Predicate::Any(v) | Predicate::All(v) => {
+                v.iter().all(Predicate::is_workspace_independent)
+            }
+            _ => false,
+        }
+    }
+
     /// True if this predicate names a *concrete* dependency
     /// (`depends-on(serde)`), as opposed to only `depends-on(*)`.
     /// Non-allocating — used on the hook hot path.
@@ -379,6 +398,16 @@ impl PredicateSet {
     /// True if any `depends-on(...)` predicate (non-wildcard) appears anywhere.
     pub fn has_concrete_dep(&self) -> bool {
         self.predicates.iter().any(Predicate::has_concrete_dep)
+    }
+
+    /// True when this whole gate's value cannot vary by workspace, which is what
+    /// makes a global installation sound: the set of globally-installed plugins
+    /// has to be a function of user config alone, or syncing one project would
+    /// reap what another project installed.
+    pub fn is_workspace_independent(&self) -> bool {
+        self.predicates
+            .iter()
+            .all(Predicate::is_workspace_independent)
     }
 
     /// True if any dependency predicate (including `depends-on(*)`) appears

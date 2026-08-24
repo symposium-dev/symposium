@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "portable-tools",
+  "version": "2.1.0",
+  "description": "An externally authored package",
+  "license": "MIT",
+  "extensions": {
+    "dev.symposium": { "depends-on": ["serde"] }
+  }
+}

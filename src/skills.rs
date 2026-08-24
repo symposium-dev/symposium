@@ -69,7 +69,7 @@ impl Skill {
 // only a string — not a structured origin — is carried to the sync layer.
 
 /// 8-hex-char prefix of SHA-256 over the JSON-serialized origin key.
-fn hash_origin_key<T: serde::Serialize>(key: &T) -> String {
+pub(crate) fn hash_origin_key<T: serde::Serialize>(key: &T) -> String {
     use sha2::{Digest, Sha256};
     let bytes = serde_json::to_vec(key).expect("origin key always serializes");
     let digest = Sha256::digest(&bytes);
@@ -99,6 +99,11 @@ pub struct SkillWithGroupContext {
     /// The hash of where the skill was discovered. Drives install-path disambiguation
     /// and dedup at sync time.
     pub origin_hash: String,
+    pub plugin: String,
+    /// Canonical id of the plugin that contributed the skill. Groups skills into
+    /// compiled plugin directories, where the plugin *name* is only a display
+    /// label and two registries can supply the same one.
+    pub plugin_id: crate::pm::PackageId,
 }
 
 /// Resolve all applicable skills from the registry.
@@ -159,13 +164,7 @@ pub(crate) async fn collect_skills(
         for group in &parsed.plugin.skills {
             let skills = load_skills_for_group(sym, parsed, group, ctx, update).await;
             for (skill, origin_hash) in skills {
-                collect_skill_applicable_to(
-                    skill,
-                    origin_hash,
-                    &parsed.plugin.name,
-                    ctx,
-                    &mut results,
-                );
+                collect_skill_applicable_to(skill, origin_hash, parsed, ctx, &mut results);
             }
         }
     }
@@ -292,7 +291,12 @@ fn collect_skills_from_dirs(
 ) -> Vec<(Skill, String)> {
     let mut skills = Vec::new();
     for entry in resolved {
-        let discovered = discover_skills(&entry.dir, group.workspace_member, &group.predicates);
+        let discovered = discover_skills(
+            &entry.dir,
+            group.workspace_member,
+            &group.predicates,
+            group.depth,
+        );
         tracing::debug!(
             report = %crate::report::ReportEvent::SkillSourceSearched {
                 plugin: entry.plugin_label.clone(),
@@ -353,19 +357,59 @@ pub(crate) fn discover_skills(
     skills_dir: &Path,
     workspace_member: bool,
     group_predicates: &PredicateSet,
+    depth: crate::plugins::SkillDepth,
 ) -> Vec<Result<Skill>> {
     if !skills_dir.is_dir() {
         return Vec::new();
     }
 
     let mut skill_files = Vec::new();
-    find_skill_files_recursive(skills_dir, &mut skill_files);
-    prune_nested_skills(&mut skill_files);
+    match depth {
+        crate::plugins::SkillDepth::Recursive => {
+            find_skill_files_recursive(skills_dir, &mut skill_files);
+            prune_nested_skills(&mut skill_files);
+        }
+        crate::plugins::SkillDepth::ImmediateChildren => {
+            find_skill_files_in_children(skills_dir, &mut skill_files)
+        }
+    }
 
     skill_files
         .into_iter()
-        .map(|skill_md| load_skill(&skill_md, workspace_member, group_predicates))
+        .map(|skill_md| {
+            contained_in(skills_dir, &skill_md)?;
+            load_skill(&skill_md, workspace_member, group_predicates)
+        })
         .collect()
+}
+
+/// `SKILL.md` in each direct child of `dir`, and nowhere deeper.
+fn find_skill_files_in_children(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut found: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path().join("SKILL.md"))
+        .filter(|path| path.is_file())
+        .collect();
+    found.sort();
+    out.extend(found);
+}
+
+/// Refuse a skill whose real path leaves the directory it was discovered in.
+///
+/// A symlink pointing outside would otherwise be read here and then silently
+/// dropped at install time, since the copy ignores symlinks — an empty skill
+/// rather than a reported one.
+fn contained_in(base: &Path, skill_md: &Path) -> Result<()> {
+    let (Ok(base), Ok(real)) = (base.canonicalize(), skill_md.canonicalize()) else {
+        return Ok(());
+    };
+    if real.starts_with(&base) {
+        return Ok(());
+    }
+    anyhow::bail!("{} resolves outside {}", skill_md.display(), base.display())
 }
 
 /// Recursively walk a directory collecting paths to `SKILL.md` files.
@@ -552,10 +596,11 @@ fn load_skill(
 fn collect_skill_applicable_to(
     skill: Skill,
     origin_hash: String,
-    plugin_name: &str,
+    parsed: &ParsedPlugin,
     ctx: &mut PredicateContext,
     results: &mut Vec<SkillWithGroupContext>,
 ) {
+    let plugin_name = parsed.plugin.name.as_str();
     if !skill.predicates.evaluate(ctx) {
         tracing::debug!(
             report = %crate::report::ReportEvent::SkillConsidered {
@@ -576,7 +621,12 @@ fn collect_skill_applicable_to(
             reason: None,
         },
     );
-    results.push(SkillWithGroupContext { skill, origin_hash });
+    results.push(SkillWithGroupContext {
+        skill,
+        origin_hash,
+        plugin: plugin_name.to_string(),
+        plugin_id: parsed.canonical.clone(),
+    });
 }
 
 /// Raw frontmatter fields extracted from a SKILL.md file.
@@ -1076,19 +1126,12 @@ mod tests {
         let plugin = Plugin {
             name: "other-crate-plugin".to_string(),
             predicates: pred_set("other-crate"),
-            hooks: vec![],
             skills: vec![SkillGroup {
                 predicates: pred_set("serde"), // Group targets serde
                 source: PluginSource::Path(PathBuf::from("skills")),
-                source_label: None,
-                workspace_member: false,
+                ..Default::default()
             }],
-            mcp_servers: vec![],
-            installations: Vec::new(),
-            subcommands: BTreeMap::new(),
-            custom_predicates: vec![],
-            chained: vec![],
-            requires_use: false,
+            ..Default::default()
         };
 
         let registry = PluginRegistry {
@@ -1098,6 +1141,7 @@ mod tests {
                 workspace_member: false,
             }],
             warnings: vec![],
+            sources_readable: true,
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
@@ -1135,19 +1179,12 @@ mod tests {
         let plugin = Plugin {
             name: "wildcard-plugin".to_string(),
             predicates: pred_set("*"), // Plugin applies to all
-            hooks: vec![],
             skills: vec![SkillGroup {
                 predicates: pred_set("other-crate"), // But group targets other-crate
                 source: PluginSource::Path(PathBuf::from("skills")),
-                source_label: None,
-                workspace_member: false,
+                ..Default::default()
             }],
-            mcp_servers: vec![],
-            installations: Vec::new(),
-            subcommands: BTreeMap::new(),
-            custom_predicates: vec![],
-            chained: vec![],
-            requires_use: false,
+            ..Default::default()
         };
 
         let registry = PluginRegistry {
@@ -1157,6 +1194,7 @@ mod tests {
                 workspace_member: false,
             }],
             warnings: vec![],
+            sources_readable: true,
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
@@ -1212,19 +1250,12 @@ mod tests {
         let plugin = Plugin {
             name: "serde-plugin".to_string(),
             predicates: pred_set("serde"), // Plugin targets serde
-            hooks: vec![],
             skills: vec![SkillGroup {
                 predicates: pred_set("serde"), // Group also targets serde
                 source: PluginSource::Path(skill_dir.to_path_buf()),
-                source_label: None,
-                workspace_member: false,
+                ..Default::default()
             }],
-            mcp_servers: vec![],
-            installations: Vec::new(),
-            subcommands: BTreeMap::new(),
-            custom_predicates: vec![],
-            chained: vec![],
-            requires_use: false,
+            ..Default::default()
         };
 
         let registry = PluginRegistry {
@@ -1234,6 +1265,7 @@ mod tests {
                 workspace_member: false,
             }],
             warnings: vec![],
+            sources_readable: true,
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
@@ -1294,19 +1326,13 @@ mod tests {
                     Predicate::Shell("false".into()),
                 ],
             },
-            hooks: vec![],
             skills: vec![SkillGroup {
                 predicates: pred_set("serde"),
                 source: PluginSource::Path(skill_dir.to_path_buf()),
-                source_label: None,
-                workspace_member: false,
+                ..Default::default()
             }],
-            mcp_servers: vec![],
-            installations: Vec::new(),
             subcommands: Default::default(),
-            custom_predicates: vec![],
-            chained: vec![],
-            requires_use: false,
+            ..Default::default()
         };
 
         let registry = PluginRegistry {
@@ -1316,6 +1342,7 @@ mod tests {
                 workspace_member: false,
             }],
             warnings: vec![],
+            sources_readable: true,
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
@@ -1372,7 +1399,6 @@ mod tests {
                     Predicate::Shell("true".into()),
                 ],
             },
-            hooks: vec![],
             skills: vec![SkillGroup {
                 predicates: PredicateSet {
                     predicates: vec![
@@ -1381,15 +1407,10 @@ mod tests {
                     ],
                 },
                 source: PluginSource::Path(skill_dir.to_path_buf()),
-                source_label: None,
-                workspace_member: false,
+                ..Default::default()
             }],
-            mcp_servers: vec![],
-            installations: Vec::new(),
             subcommands: Default::default(),
-            custom_predicates: vec![],
-            chained: vec![],
-            requires_use: false,
+            ..Default::default()
         };
 
         let registry = PluginRegistry {
@@ -1399,6 +1420,7 @@ mod tests {
                 workspace_member: false,
             }],
             warnings: vec![],
+            sources_readable: true,
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
@@ -1504,21 +1526,15 @@ mod tests {
         let plugin = Plugin {
             name: "my-skill".to_string(),
             predicates: pred_set("serde"),
-            installations: vec![],
-            hooks: vec![],
             skills: vec![SkillGroup {
                 predicates: PredicateSet::default(),
                 // A PM returns absolute skill dirs; the bare-skill group's "."
                 // resolves to the skill's own directory.
                 source: PluginSource::Path(skill_dir.clone()),
-                source_label: None,
-                workspace_member: false,
+                ..Default::default()
             }],
-            mcp_servers: vec![],
             subcommands: Default::default(),
-            custom_predicates: vec![],
-            chained: vec![],
-            requires_use: false,
+            ..Default::default()
         };
         let registry = PluginRegistry {
             plugins: vec![ParsedPlugin {
@@ -1527,6 +1543,7 @@ mod tests {
                 workspace_member: false,
             }],
             warnings: vec![],
+            sources_readable: true,
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
@@ -1574,7 +1591,12 @@ mod tests {
         )
         .unwrap();
 
-        let skills = discover_skills(&plugin_dir.join("skills"), false, &PredicateSet::default());
+        let skills = discover_skills(
+            &plugin_dir.join("skills"),
+            false,
+            &PredicateSet::default(),
+            crate::plugins::SkillDepth::Recursive,
+        );
 
         assert_eq!(skills.len(), 1);
         let skill = skills.into_iter().next().unwrap().unwrap();
@@ -1603,7 +1625,12 @@ mod tests {
         )
         .unwrap();
 
-        let skills = discover_skills(root, false, &PredicateSet::default());
+        let skills = discover_skills(
+            root,
+            false,
+            &PredicateSet::default(),
+            crate::plugins::SkillDepth::Recursive,
+        );
 
         assert_eq!(skills.len(), 1);
         let skill = skills.into_iter().next().unwrap().unwrap();
@@ -1666,7 +1693,12 @@ mod tests {
         )
         .unwrap();
 
-        let skills = discover_skills(root, false, &PredicateSet::default());
+        let skills = discover_skills(
+            root,
+            false,
+            &PredicateSet::default(),
+            crate::plugins::SkillDepth::Recursive,
+        );
 
         // Should find shallow + sibling, but NOT nested (pruned by shallow)
         let names: Vec<String> = skills
@@ -1682,7 +1714,12 @@ mod tests {
     #[test]
     fn discover_skills_no_skills_dir() {
         let tmp = tempfile::tempdir().unwrap();
-        let skills = discover_skills(tmp.path(), false, &PredicateSet::default());
+        let skills = discover_skills(
+            tmp.path(),
+            false,
+            &PredicateSet::default(),
+            crate::plugins::SkillDepth::Recursive,
+        );
         assert!(skills.is_empty());
     }
 

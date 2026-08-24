@@ -278,6 +278,7 @@ impl TestContext {
             &self.sym,
             &self.sym.workspace_deps(&cwd),
             symposium::UpdateLevel::None,
+            symposium::sync::Debounce::Always,
         )
         .await?;
 

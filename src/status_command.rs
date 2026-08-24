@@ -65,6 +65,8 @@ pub struct StatusEntry {
     /// the plugin will not load.
     pub root: String,
     pub state: StatusState,
+    /// Which manifest defined it, for a plugin that has been loaded.
+    pub kind: Option<String>,
 }
 
 /// Compute the enablement report for the workspace `deps` points at.
@@ -97,7 +99,8 @@ pub async fn workspace_status(
         let active = parsed.applies(&mut ctx);
         entries.push(StatusEntry {
             name: parsed.plugin.name.clone(),
-            version: None,
+            version: parsed.plugin.version.clone(),
+            kind: parsed.plugin.kind.label().map(str::to_string),
             root: if active || !parsed.plugin.requires_use {
                 root
             } else {
@@ -155,6 +158,7 @@ pub async fn workspace_status(
         entries.push(StatusEntry {
             name,
             version: None,
+            kind: None,
             root: "`[plugins] use` (not a dependency)".to_string(),
             state: StatusState::Active,
         });
@@ -169,6 +173,7 @@ pub async fn workspace_status(
         entries.push(StatusEntry {
             name: name.clone(),
             version: None,
+            kind: None,
             root: "declined (`[plugins] disable`)".to_string(),
             state: StatusState::Declined,
         });
@@ -198,6 +203,7 @@ fn entry_for(found: &DiscoveredPlugin) -> StatusEntry {
     StatusEntry {
         name: found.name().to_string(),
         version: Some(found.id.version.clone()),
+        kind: found.kind.clone(),
         root,
         state,
     }
@@ -220,6 +226,7 @@ pub async fn status(sym: &Symposium, cwd: &Path) -> Result<()> {
             report = %ReportEvent::PluginStatus {
                 name: entry.name,
                 version: entry.version,
+                plugin_kind: entry.kind,
                 root: entry.root,
                 state: entry.state.as_str().to_string(),
             },

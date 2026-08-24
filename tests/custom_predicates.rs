@@ -14,6 +14,57 @@ fn write_script(path: &Path, content: &str) {
     }
 }
 
+/// Did `skill` reach Claude Code for this workspace?
+///
+/// Claude takes a compiled plugin directory, so a skill it can see is the one
+/// inside `.symposium/plugins/<plugin>/skills/`. The older per-skill location is
+/// still checked, because an agent that cannot take a plugin directory keeps
+/// receiving skills that way and these tests are about predicates, not delivery.
+fn skill_reached_claude(workspace_root: &Path, skill: &str) -> bool {
+    let compiled = workspace_root.join(".symposium").join("plugins");
+    let in_a_plugin = std::fs::read_dir(&compiled).is_ok_and(|entries| {
+        entries.flatten().any(|entry| {
+            entry
+                .path()
+                .join("skills")
+                .join(skill)
+                .join("SKILL.md")
+                .is_file()
+        })
+    });
+    in_a_plugin
+        || workspace_root
+            .join(".claude")
+            .join("skills")
+            .join(skill)
+            .join("SKILL.md")
+            .is_file()
+}
+
+/// Every place a skill could have landed, for assertion messages and for the
+/// "nothing was installed" checks.
+fn delivered_skills(workspace_root: &Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    let compiled = workspace_root.join(".symposium").join("plugins");
+    if let Ok(entries) = std::fs::read_dir(&compiled) {
+        for entry in entries.flatten() {
+            if let Ok(skills) = std::fs::read_dir(entry.path().join("skills")) {
+                found.extend(skills.flatten().map(|s| s.path()));
+            }
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(workspace_root.join(".claude").join("skills")) {
+        found.extend(
+            entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.join("SKILL.md").is_file()),
+        );
+    }
+    found.sort();
+    found
+}
+
 /// `sync` installs a skill when the custom predicate passes (exit 0).
 #[tokio::test]
 async fn sync_custom_predicate_installs_skill() {
@@ -27,20 +78,11 @@ async fn sync_custom_predicate_installs_skill() {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             ctx.symposium(&["sync"]).await?;
 
-            let skills_dir = ctx
-                .workspace_root
-                .as_ref()
-                .unwrap()
-                .join(".claude")
-                .join("skills");
-            let skill_dir = skills_dir.join("bp-skill");
+            let root = ctx.workspace_root.as_ref().unwrap();
             assert!(
-                skill_dir.join("SKILL.md").exists(),
-                "skill should be installed when predicate passes; skills_dir={}, contents={:?}",
-                skills_dir.display(),
-                std::fs::read_dir(&skills_dir)
-                    .ok()
-                    .map(|d| d.flatten().map(|e| e.path()).collect::<Vec<_>>()),
+                skill_reached_claude(root, "bp-skill"),
+                "skill should be delivered when the predicate passes; found {:?}",
+                delivered_skills(root),
             );
             Ok(())
         },
@@ -62,25 +104,12 @@ async fn sync_custom_predicate_fails_skips_skill() {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             ctx.symposium(&["sync"]).await?;
 
-            let skills_dir = ctx
-                .workspace_root
-                .as_ref()
-                .unwrap()
-                .join(".claude")
-                .join("skills");
-            let entries: Vec<_> = std::fs::read_dir(&skills_dir)
-                .ok()
-                .map(|d| {
-                    d.flatten()
-                        .filter(|e| e.path().is_dir())
-                        .filter(|e| e.path().join("SKILL.md").exists())
-                        .collect()
-                })
-                .unwrap_or_default();
+            let root = ctx.workspace_root.as_ref().unwrap();
+            let entries = delivered_skills(root);
             assert!(
                 entries.is_empty(),
                 "no skills should be installed when predicate fails; got: {:?}",
-                entries.iter().map(|e| e.path()).collect::<Vec<_>>(),
+                entries,
             );
             Ok(())
         },
@@ -107,15 +136,11 @@ async fn sync_custom_predicate_receives_correct_argument() {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             ctx.symposium(&["sync"]).await?;
 
-            let skills_dir = ctx
-                .workspace_root
-                .as_ref()
-                .unwrap()
-                .join(".claude")
-                .join("skills");
+            let root = ctx.workspace_root.as_ref().unwrap();
             assert!(
-                skills_dir.join("bp-skill").join("SKILL.md").exists(),
-                "skill should be installed when argument matches 'cli'"
+                skill_reached_claude(root, "bp-skill"),
+                "skill should be delivered when the argument matches 'cli'; found {:?}",
+                delivered_skills(root),
             );
             Ok(())
         },
@@ -141,21 +166,8 @@ async fn sync_custom_predicate_wrong_argument_fails() {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             ctx.symposium(&["sync"]).await?;
 
-            let skills_dir = ctx
-                .workspace_root
-                .as_ref()
-                .unwrap()
-                .join(".claude")
-                .join("skills");
-            let entries: Vec<_> = std::fs::read_dir(&skills_dir)
-                .ok()
-                .map(|d| {
-                    d.flatten()
-                        .filter(|e| e.path().is_dir())
-                        .filter(|e| e.path().join("SKILL.md").exists())
-                        .collect()
-                })
-                .unwrap_or_default();
+            let root = ctx.workspace_root.as_ref().unwrap();
+            let entries = delivered_skills(root);
             assert!(
                 entries.is_empty(),
                 "skill should NOT be installed when argument doesn't match"
@@ -181,14 +193,10 @@ async fn sync_custom_predicate_cross_plugin() {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             ctx.symposium(&["sync"]).await?;
 
-            let skills_dir = ctx
-                .workspace_root
-                .as_ref()
-                .unwrap()
-                .join(".claude")
-                .join("skills");
+            let root = ctx.workspace_root.as_ref().unwrap();
+            let skills_dir = root.join(".claude").join("skills");
             assert!(
-                skills_dir.join("consumer-skill").join("SKILL.md").exists(),
+                skill_reached_claude(root, "consumer-skill"),
                 "consumer plugin skill should install when provider's predicate passes; \
                  skills_dir={}, contents={:?}",
                 skills_dir.display(),
@@ -217,21 +225,8 @@ async fn sync_custom_predicate_cross_plugin_fails() {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             ctx.symposium(&["sync"]).await?;
 
-            let skills_dir = ctx
-                .workspace_root
-                .as_ref()
-                .unwrap()
-                .join(".claude")
-                .join("skills");
-            let entries: Vec<_> = std::fs::read_dir(&skills_dir)
-                .ok()
-                .map(|d| {
-                    d.flatten()
-                        .filter(|e| e.path().is_dir())
-                        .filter(|e| e.path().join("SKILL.md").exists())
-                        .collect()
-                })
-                .unwrap_or_default();
+            let root = ctx.workspace_root.as_ref().unwrap();
+            let entries = delivered_skills(root);
             assert!(
                 entries.is_empty(),
                 "consumer skill should NOT install when provider's predicate fails"

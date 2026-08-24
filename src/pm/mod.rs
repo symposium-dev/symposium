@@ -173,6 +173,16 @@ pub trait PackageManager {
     fn registry_source(&self) -> Option<RegistrySource> {
         None
     }
+
+    /// Whether this instance's source can be read right now.
+    ///
+    /// A source that cannot be listed yields no plugins, exactly like one that
+    /// is genuinely empty. Callers that *remove* things need the difference:
+    /// an unreadable registry must not read as "these plugins no longer apply".
+    /// An absent source is readable — that is an empty registry, not a failure.
+    async fn source_readable(&self) -> bool {
+        true
+    }
 }
 
 /// Where a registry instance's content comes from — the git-vs-path

@@ -1,3 +1,4 @@
+pub mod agent_plugin;
 pub mod agents;
 pub mod cli;
 pub mod config;

@@ -247,7 +247,7 @@ pub async fn run(
             // hook-triggered auto-sync path calls `sync::sync` directly and
             // never reaches here at all.
             discovery::prompt_for_consent(sym, &deps, out).await?;
-            sync::sync(sym, &deps, update).await
+            sync::sync(sym, &deps, update, sync::Debounce::Always).await
         }
 
         Commands::Search { query } => search_command::search(sym, &query).await,

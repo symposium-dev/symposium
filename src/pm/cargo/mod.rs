@@ -72,6 +72,35 @@ impl CargoPm {
                 None
             });
 
+        // A crate whose only plugin content is an agent plugin package is read
+        // in that format. The reference that reached the crate is its gate.
+        if metadata.is_none()
+            && !fetched.root.join("SYMPOSIUM.toml").is_file()
+            && fetched
+                .root
+                .join(crate::pm::layout::AGENT_PLUGIN_FILE)
+                .is_file()
+        {
+            return match crate::agent_plugin::read::load(&fetched.root, true) {
+                Ok(mut plugin) => {
+                    crate::plugins::resolve_group_sources(
+                        &mut plugin,
+                        &fetched.root,
+                        &fetched.root,
+                    );
+                    Some(ParsedPlugin {
+                        canonical: fetched.id.clone(),
+                        plugin,
+                        workspace_member: false,
+                    })
+                }
+                Err(e) => {
+                    tracing::warn!(crate_name = %name, error = %e, "invalid agent plugin package");
+                    None
+                }
+            };
+        }
+
         let manifest_path = fetched.root.join("SYMPOSIUM.toml");
         let file = if manifest_path.is_file() {
             match std::fs::read_to_string(&manifest_path) {
@@ -105,6 +134,12 @@ impl CargoPm {
             }
         };
 
+        // A `plugin.json` beside the TOML supplies identity the TOML omits. The
+        // name stays the crate's, which is a crate's real identity either way.
+        let sibling = crate::agent_plugin::read::sibling_identity(&fetched.root);
+        plugin.version = plugin.version.or(sibling.version);
+        plugin.description = plugin.description.or(sibling.description);
+
         // The crate source root is both the base for `source.path` groups and
         // the attribution root for their labels.
         crate::plugins::resolve_group_sources(&mut plugin, &fetched.root, &fetched.root);
@@ -120,10 +155,14 @@ impl CargoPm {
 /// What plugin content a crate source tree at `dir` embeds, as a short
 /// human-readable phrase — or `None` when it embeds none. Mirrors what
 /// [`CargoPm::load_plugin`] would build a plugin from: a `SYMPOSIUM.toml`,
-/// `[package.metadata.symposium]`, or the default `skills/` directory.
+/// `[package.metadata.symposium]`, a `plugin.json` agent plugin package, or the
+/// default `skills/` directory.
 fn embedded_plugin_kind(dir: &std::path::Path) -> Option<&'static str> {
     if dir.join("SYMPOSIUM.toml").is_file() {
         return Some("plugin manifest (SYMPOSIUM.toml)");
+    }
+    if dir.join(crate::pm::layout::AGENT_PLUGIN_FILE).is_file() {
+        return Some("agent plugin package (plugin.json)");
     }
     if matches!(
         crate::crate_metadata::symposium_metadata(&dir.join("Cargo.toml")),

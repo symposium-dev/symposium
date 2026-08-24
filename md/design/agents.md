@@ -21,13 +21,29 @@ The agent name is stored in `[agent] name` in either the user or project config.
 For each agent, `cargo agents` needs to know how to:
 
 1. **Register hooks** — write the hook configuration so the agent calls `cargo-agents hook` on the right events.
-2. **Install extensions** — place skill files (and eventually workflow/MCP definitions) where the agent expects them.
+2. **Install extensions** — hand each agent the plugins that apply, as a [compiled plugin directory](./module-structure.md#agentsplugin_installrs--handing-a-directory-to-an-agent) where the agent has such a unit, and as individual skill files where it does not.
 
 Where these files go depends on whether the agent is configured at the user level or the project level (see [`sync --agent`](./sync-agent-flow.md)).
 
 ## Extension locations
 
-When installing skills, `cargo agents` prefers vendor-neutral paths where possible:
+### Plugin directories
+
+An agent with a plugin unit receives a compiled directory instead of loose skill files. Only Claude Code can scope one to a project; for the others a project-scoped plugin falls back to the per-skill paths below.
+
+| Agent | How it is given the directory | Project scope |
+|-------|-------------------------------|---------------|
+| Claude Code | marketplace registration in user settings plus `known_marketplaces.json`; enabled via `enabledPlugins` | yes |
+| Codex CLI | `[marketplaces.*]` in `config.toml`, plus a copy in `plugins/cache/` | no |
+| GitHub Copilot | `extraKnownMarketplaces` in `~/.copilot/settings.json`, plus a copy in `installed-plugins/` | no |
+| Gemini CLI | a copy in `~/.gemini/extensions/` — no configuration at all | no |
+| Kiro, OpenCode, Goose | *(no plugin unit)* | n/a |
+
+A skill delivered inside a plugin is namespaced by the agent as `<plugin>:<skill>`.
+
+### Skill paths
+
+When installing individual skills, `cargo agents` prefers vendor-neutral paths where possible:
 
 | Scope | Path | Supported by |
 |-------|------|-------------|

@@ -81,6 +81,12 @@ pub enum PluginSource {
     Git(String),
 }
 
+impl Default for PluginSource {
+    fn default() -> Self {
+        PluginSource::Path(PathBuf::new())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum RawPluginSource {
@@ -161,11 +167,51 @@ impl serde::Serialize for PluginSource {
     }
 }
 
+/// Which manifest format defined a plugin.
+///
+/// Everything downstream treats the two alike; the distinction exists so the
+/// user-facing commands can say where a plugin came from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PluginKind {
+    /// A `SYMPOSIUM.toml` manifest, or a convention symposium infers.
+    #[default]
+    Symposium,
+    /// An externally authored [`plugin.json`](crate::agent_plugin::read) package.
+    AgentPlugin,
+}
+
+fn is_symposium_kind(kind: &PluginKind) -> bool {
+    *kind == PluginKind::Symposium
+}
+
+impl PluginKind {
+    /// How to annotate this kind in command output, or `None` for the ordinary
+    /// case that needs no annotation.
+    pub fn label(&self) -> Option<&'static str> {
+        match self {
+            PluginKind::Symposium => None,
+            PluginKind::AgentPlugin => Some("agent plugin"),
+        }
+    }
+}
+
+/// How deep a skill group's directory is searched.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub enum SkillDepth {
+    /// Walk the whole tree, keeping the shallowest `SKILL.md` on each branch.
+    #[default]
+    Recursive,
+    /// Only direct children hold skills. The Agent Plugins format fixes `skills/`
+    /// at one level, so a package read in that format uses this.
+    ImmediateChildren,
+}
+
 /// A `[[skills]]` entry from a plugin manifest.
 ///
 /// The group's `depends-on` and `predicates` fields are merged into one
 /// [`PredicateSet`](crate::predicate::PredicateSet) that gates the group.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct SkillGroup {
     #[serde(
         default,
@@ -187,6 +233,8 @@ pub struct SkillGroup {
     /// name and `description` (with the frontmatter itself) is optional.
     #[serde(skip)]
     pub workspace_member: bool,
+    #[serde(skip)]
+    pub depth: SkillDepth,
 }
 
 #[derive(Debug, Deserialize)]
@@ -215,6 +263,7 @@ impl RawSkillGroup {
             source,
             source_label: None,
             workspace_member: false,
+            depth: SkillDepth::default(),
         })
     }
 }
@@ -448,9 +497,15 @@ impl ParsedPlugin {
 /// This is a table of contents — it describes what skills and hooks are
 /// available, but does not load skill content. The skills layer handles
 /// discovery and loading.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Plugin {
     pub name: String,
+    #[serde(skip_serializing_if = "is_symposium_kind")]
+    pub kind: PluginKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Activation predicates for this plugin — the plugin's `depends-on`
     /// (lowered to `any(depends-on(...))`) merged with its `predicates`. Holds
     /// when every entry holds. Evaluated at sync time (for skills/MCP), at
@@ -924,6 +979,10 @@ pub struct PluginRegistry {
     pub plugins: Vec<ParsedPlugin>,
     /// Non-fatal load warnings for entries that were skipped.
     pub warnings: Vec<LoadWarning>,
+    /// Whether every trusted source could be read. False means the plugin list
+    /// is incomplete for a reason that says nothing about what still applies,
+    /// so callers must not treat an absence here as a removal.
+    pub sources_readable: bool,
     /// Global custom predicate registry. Built from all plugins' `custom_predicates`.
     pub custom_predicates: CustomPredicateRegistry,
 }
@@ -1009,6 +1068,8 @@ struct RawPluginManifest {
     /// Required for registry plugins; defaults to the directory name for
     /// workspace plugins.
     name: Option<String>,
+    version: Option<String>,
+    description: Option<String>,
     /// Default-content opt-outs. Only meaningful for workspace plugins.
     #[serde(default)]
     defaults: Option<RawDefaults>,
@@ -1059,6 +1120,12 @@ impl RawPluginManifest {
             .extend(over.predicates.predicates);
         if over.name.is_some() {
             self.name = over.name;
+        }
+        if over.version.is_some() {
+            self.version = over.version;
+        }
+        if over.description.is_some() {
+            self.description = over.description;
         }
         if over.defaults.is_some() {
             self.defaults = over.defaults;
@@ -1242,9 +1309,10 @@ pub async fn find_plugin(sym: &Symposium, name: &str) -> Option<ParsedPlugin> {
 }
 
 /// Load the plugin at `root/subpath` as a registry entry: a `SYMPOSIUM.toml`
-/// manifest loads as an ordinary registry plugin; a bare `SKILL.md` is
+/// manifest loads as an ordinary registry plugin, a `plugin.json` as an
+/// [agent plugin package](crate::agent_plugin::read), and a bare `SKILL.md` is
 /// synthesized into a default plugin ([`load_standalone_skill_plugin`]). `None`
-/// when the directory is neither. Called by [`PathPm`](crate::pm::PathPm).
+/// when the directory is none of them. Called by [`PathPm`](crate::pm::PathPm).
 pub(crate) fn load_entry(
     root: &Path,
     subpath: &Path,
@@ -1256,11 +1324,51 @@ pub(crate) fn load_entry(
             load_plugin_as(&toml_path, source_name, root, ManifestOrigin::Registry)
                 .with_context(|| format!("loading plugin from `{}`", toml_path.display())),
         ),
+        crate::pm::layout::EntryKind::AgentPlugin(json_path) => Some(
+            load_agent_plugin_entry(&dir, source_name, root)
+                .with_context(|| format!("loading plugin from `{}`", json_path.display())),
+        ),
         crate::pm::layout::EntryKind::Skill(skill_md) => Some(
             load_standalone_skill_plugin(&skill_md, source_name, root)
                 .with_context(|| format!("loading skill from `{}`", skill_md.display())),
         ),
     }
+}
+
+/// An agent plugin package found by its position in a registry. A registry is
+/// curated, but the format cannot say when a package applies, so the ordinary
+/// dormancy rule decides whether it activates.
+fn load_agent_plugin_entry(
+    dir: &Path,
+    source_name: &str,
+    source_dir: &Path,
+) -> Result<ParsedPlugin> {
+    let mut plugin = crate::agent_plugin::read::load(dir, false)?;
+    resolve_group_sources(&mut plugin, dir, source_dir);
+    let canonical = entry_id(source_name, source_dir, dir, &plugin.name);
+    Ok(ParsedPlugin {
+        canonical,
+        plugin,
+        workspace_member: false,
+    })
+}
+
+/// The canonical id for a registry entry: the entry's subpath within its source.
+///
+/// The subpath, not the plugin's name, because a name is not unique — two bare
+/// `SKILL.md` entries can declare the same frontmatter `name`, and two manifests
+/// can declare the same `name`. Sharing an id would make them one plugin as far
+/// as grouping and dedup are concerned, so the second would overwrite the first.
+/// This is also what [`PathPm::load_plugin`](crate::pm::PathPm) already expects
+/// an id to mean.
+fn entry_id(source_name: &str, source_dir: &Path, entry_dir: &Path, fallback: &str) -> PackageId {
+    let subpath = entry_dir
+        .strip_prefix(source_dir)
+        .ok()
+        .map(crate::pm::layout::subpath_key)
+        .filter(|key| !key.is_empty())
+        .unwrap_or_else(|| fallback.to_string());
+    PackageId::new(source_name, subpath, ANY_VERSION)
 }
 
 /// Resolve each `source.path` skill group to an absolute directory and a
@@ -1289,6 +1397,19 @@ pub(crate) fn resolve_group_sources(plugin: &mut Plugin, base_dir: &Path, attrib
     }
 }
 
+/// Does this gate leave a plugin with nothing to infer activation from?
+///
+/// Such a plugin is *dormant*: known and loaded, but inactive until a
+/// `[plugins] use` entry names it. A custom predicate counts as a gate even
+/// though it names no dependency, since its answer is computed.
+pub(crate) fn dormant_without_gate(predicates: &crate::predicate::PredicateSet) -> bool {
+    let has_custom = predicates
+        .predicates
+        .iter()
+        .any(|p| matches!(p, crate::predicate::Predicate::Custom { .. }));
+    !(has_custom || predicates.mentions_dep())
+}
+
 /// Build a plugin from a bare `SKILL.md` entry (no manifest): a plugin whose
 /// single `source.path = "."` skill group discovers that skill. The plugin is
 /// named for the skill's declared `name` (its identity, falling back to the
@@ -1313,11 +1434,7 @@ fn load_standalone_skill_plugin(
         })
         .context("standalone skill has neither a frontmatter `name` nor a named directory")?;
 
-    let has_custom = predicates
-        .predicates
-        .iter()
-        .any(|p| matches!(p, crate::predicate::Predicate::Custom { .. }));
-    let requires_use = !(has_custom || predicates.mentions_dep());
+    let requires_use = dormant_without_gate(&predicates);
 
     // A single group scanning the entry directory (the SKILL.md's parent, via
     // `path`) discovers the skill itself.
@@ -1327,6 +1444,9 @@ fn load_standalone_skill_plugin(
 
     let mut plugin = Plugin {
         name: name.clone(),
+        kind: PluginKind::Symposium,
+        version: None,
+        description: None,
         predicates,
         installations: Vec::new(),
         hooks: Vec::new(),
@@ -1339,8 +1459,9 @@ fn load_standalone_skill_plugin(
     };
     let base = skill_md.parent().unwrap_or(source_dir);
     resolve_group_sources(&mut plugin, base, source_dir);
+    let canonical = entry_id(source_name, source_dir, base, &name);
     Ok(ParsedPlugin {
-        canonical: PackageId::new(source_name, &name, ANY_VERSION),
+        canonical,
         plugin,
         workspace_member: false,
     })
@@ -1383,7 +1504,12 @@ async fn load_registry_impl(
     // Dependency-embedded crate plugins are not trust roots — they reach the
     // active set through discovery / consent and the driver's `load_plugin`,
     // never here. Each registry instance logs its own load failures.
+    let mut sources_readable = true;
     for inst in pms.instances().filter(|i| i.trusted) {
+        if !inst.pm.source_readable().await {
+            sources_readable = false;
+            tracing::warn!(registry = %inst.name, "registry source unreadable");
+        }
         plugins.extend(inst.pm.active_plugins(&[]).await);
     }
 
@@ -1401,6 +1527,7 @@ async fn load_registry_impl(
     PluginRegistry {
         plugins,
         warnings,
+        sources_readable,
         custom_predicates,
     }
 }
@@ -1584,9 +1711,20 @@ fn workspace_plugin_for_dir(
     agents_skills: bool,
 ) -> Result<Option<ParsedPlugin>> {
     let manifest_path = dir.join("SYMPOSIUM.toml");
+    if !manifest_path.is_file() && dir.join(crate::pm::layout::AGENT_PLUGIN_FILE).is_file() {
+        // Membership is the gate, so the package activates without a `use` entry.
+        let mut plugin = crate::agent_plugin::read::load(dir, true)?;
+        resolve_group_sources(&mut plugin, dir, workspace_root);
+        return Ok(Some(ParsedPlugin {
+            canonical: PackageId::new("local", &plugin.name, ANY_VERSION),
+            plugin,
+            workspace_member: true,
+        }));
+    }
+
     let bare_convention = dir.join(CRATE_DEFAULT_SKILLS_PATH).is_dir()
         || (agents_skills && dir.join(AGENTS_SKILLS_PATH).is_dir());
-    let raw: RawPluginManifest = if manifest_path.is_file() {
+    let mut raw: RawPluginManifest = if manifest_path.is_file() {
         toml::from_str(&fs::read_to_string(&manifest_path)?)?
     } else if bare_convention {
         // Bare convention: a `skills/` (or `.agents/skills/`) directory with
@@ -1596,6 +1734,7 @@ fn workspace_plugin_for_dir(
         return Ok(None);
     };
 
+    apply_sibling_identity(&mut raw, dir);
     let dir_name = dir
         .file_name()
         .and_then(|n| n.to_str())
@@ -1642,6 +1781,13 @@ fn scan_source_dir<P: AsRef<Path>>(dir: P, source_name: &str) -> Result<SourceDi
                 tracing::debug!(path = %toml_path.display(), plugin = ?plugin, "loaded plugin");
                 plugins.push(plugin);
             }
+            Some(crate::pm::layout::EntryKind::AgentPlugin(json_path)) => {
+                let entry_dir = dir.join(&entry.subpath);
+                let plugin = load_agent_plugin_entry(&entry_dir, source_name, dir)
+                    .with_context(|| format!("loading plugin from `{}`", json_path.display()));
+                tracing::debug!(path = %json_path.display(), "loaded agent plugin package");
+                plugins.push(plugin);
+            }
             Some(crate::pm::layout::EntryKind::Skill(skill_md_path)) => {
                 let plugin = load_standalone_skill_plugin(&skill_md_path, source_name, dir)
                     .with_context(|| format!("loading skill from `{}`", skill_md_path.display()));
@@ -1675,6 +1821,7 @@ pub struct ValidationResult {
 #[derive(Debug)]
 pub enum ValidationKind {
     Plugin,
+    AgentPlugin,
     Skill,
 }
 
@@ -1682,6 +1829,7 @@ impl std::fmt::Display for ValidationKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ValidationKind::Plugin => write!(f, "plugin"),
+            ValidationKind::AgentPlugin => write!(f, "agent plugin"),
             ValidationKind::Skill => write!(f, "skill"),
         }
     }
@@ -1702,6 +1850,10 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
             Ok(parsed) => (parsed.canonical.name.clone(), Some(parsed), Ok(())),
             Err(e) => ("<unknown>".to_string(), None, Err(e)),
         };
+        let kind = match plugin.as_ref().map(|p| p.plugin.kind) {
+            Some(PluginKind::AgentPlugin) => ValidationKind::AgentPlugin,
+            _ => ValidationKind::Plugin,
+        };
 
         let mut children = Vec::new();
 
@@ -1714,6 +1866,7 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
                         &skills_dir,
                         group.workspace_member,
                         &group.predicates,
+                        group.depth,
                     );
                     let group_label = group
                         .source_label
@@ -1759,7 +1912,7 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
         });
         results.push(ValidationResult {
             id,
-            kind: ValidationKind::Plugin,
+            kind,
             result,
             warning,
             children,
@@ -1836,18 +1989,38 @@ fn load_plugin_as(
     origin: ManifestOrigin<'_>,
 ) -> Result<ParsedPlugin> {
     let content = fs::read_to_string(manifest_path)?;
-    let manifest: RawPluginManifest = toml::from_str(&content)?;
+    let mut manifest: RawPluginManifest = toml::from_str(&content)?;
+    let base = manifest_path.parent().unwrap_or(source_dir);
+    apply_sibling_identity(&mut manifest, base);
     let mut plugin = validate_manifest(manifest, origin)
         .with_context(|| format!("validating `{}`", manifest_path.display()))?;
-    let base = manifest_path.parent().unwrap_or(source_dir);
     resolve_group_sources(&mut plugin, base, source_dir);
+    let canonical = entry_id(source_name, source_dir, base, &plugin.name);
     Ok(ParsedPlugin {
-        canonical: PackageId::new(source_name, &plugin.name, ANY_VERSION),
+        canonical,
         plugin,
         // Registry sources are never workspace members; the workspace-plugin
         // loader is the only place that stamps true.
         workspace_member: false,
     })
+}
+
+/// Fill identity the TOML leaves out from a `plugin.json` beside it.
+///
+/// A directory carrying both manifests loads as a symposium plugin, since the
+/// TOML is the richer one, but there is no reason to make an author repeat the
+/// name and version they already declared portably.
+fn apply_sibling_identity(raw: &mut RawPluginManifest, dir: &Path) {
+    let identity = crate::agent_plugin::read::sibling_identity(dir);
+    if raw.name.is_none() {
+        raw.name = identity.name;
+    }
+    if raw.version.is_none() {
+        raw.version = identity.version;
+    }
+    if raw.description.is_none() {
+        raw.description = identity.description;
+    }
 }
 
 fn raw_crate_manifest(content: &str) -> Result<RawPluginManifest> {
@@ -2078,6 +2251,9 @@ fn validate_manifest(
 
     Ok(Plugin {
         name,
+        kind: PluginKind::Symposium,
+        version: manifest.version.take(),
+        description: manifest.description.take(),
         predicates,
         installations,
         hooks,
@@ -2230,7 +2406,6 @@ fn build_custom_predicate_registry(
 mod tests {
     use super::*;
     use indoc::indoc;
-    use std::collections::BTreeMap;
 
     use crate::predicate::PredicateSet;
 
@@ -2541,6 +2716,41 @@ mod tests {
         assert_eq!(plugin.name, "example-plugin");
         assert_eq!(plugin.hooks.len(), 1);
         assert!(plugin.skills.is_empty());
+    }
+
+    #[test]
+    fn parse_manifest_version_and_description() {
+        let toml = indoc! {r#"
+            name = "pdf-tools"
+            version = "1.2.0"
+            description = "Table extraction guidance"
+            depends-on = ["lopdf"]
+        "#};
+        let plugin = from_str(toml).expect("parse");
+        assert_eq!(plugin.version.as_deref(), Some("1.2.0"));
+        assert_eq!(
+            plugin.description.as_deref(),
+            Some("Table extraction guidance")
+        );
+
+        let bare = from_str("name = \"bare\"\ndepends-on = [\"serde\"]\n").expect("parse");
+        assert_eq!(bare.version, None);
+        assert_eq!(bare.description, None);
+    }
+
+    #[test]
+    fn crate_manifest_merge_prefers_the_file_layer_for_version_and_description() {
+        let metadata: toml::Table = toml::from_str(indoc! {r#"
+            version = "0.1.0"
+            description = "from Cargo.toml"
+        "#})
+        .expect("metadata");
+        let file = indoc! {r#"
+            version = "0.2.0"
+        "#};
+        let plugin = load_crate_manifest(Some(metadata), Some(file), "widget").expect("merge");
+        assert_eq!(plugin.version.as_deref(), Some("0.2.0"));
+        assert_eq!(plugin.description.as_deref(), Some("from Cargo.toml"));
     }
 
     #[test]
@@ -3174,14 +3384,7 @@ mod tests {
         let plugin_wildcard = Plugin {
             name: "wildcard".to_string(),
             predicates: pred_set("*"),
-            hooks: vec![],
-            skills: vec![],
-            mcp_servers: vec![],
-            installations: Vec::new(),
-            subcommands: BTreeMap::new(),
-            custom_predicates: vec![],
-            chained: vec![],
-            requires_use: false,
+            ..Default::default()
         };
         assert!(plugin_wildcard.applies(&mut ctx(&workspace_crates)));
 
@@ -3189,14 +3392,7 @@ mod tests {
         let plugin_serde = Plugin {
             name: "serde-plugin".to_string(),
             predicates: pred_set("serde"),
-            hooks: vec![],
-            skills: vec![],
-            mcp_servers: vec![],
-            installations: Vec::new(),
-            subcommands: BTreeMap::new(),
-            custom_predicates: vec![],
-            chained: vec![],
-            requires_use: false,
+            ..Default::default()
         };
         assert!(plugin_serde.applies(&mut ctx(&workspace_crates)));
 
@@ -3204,14 +3400,7 @@ mod tests {
         let plugin_other = Plugin {
             name: "other-plugin".to_string(),
             predicates: pred_set("other-crate"),
-            hooks: vec![],
-            skills: vec![],
-            mcp_servers: vec![],
-            installations: Vec::new(),
-            subcommands: BTreeMap::new(),
-            custom_predicates: vec![],
-            chained: vec![],
-            requires_use: false,
+            ..Default::default()
         };
         assert!(!plugin_other.applies(&mut ctx(&workspace_crates)));
 
@@ -3219,14 +3408,7 @@ mod tests {
         let plugin_version = Plugin {
             name: "version-plugin".to_string(),
             predicates: pred_set("tokio>=2.0"),
-            hooks: vec![],
-            skills: vec![],
-            mcp_servers: vec![],
-            installations: Vec::new(),
-            subcommands: BTreeMap::new(),
-            custom_predicates: vec![],
-            chained: vec![],
-            requires_use: false,
+            ..Default::default()
         };
         assert!(!plugin_version.applies(&mut ctx(&workspace_crates)));
     }
@@ -3416,14 +3598,7 @@ mod tests {
             predicates: PredicateSet {
                 predicates: vec![crate::predicate::Predicate::WorkspaceMember],
             },
-            hooks: vec![],
-            skills: vec![],
-            mcp_servers: vec![],
-            installations: Vec::new(),
-            subcommands: BTreeMap::new(),
-            custom_predicates: vec![],
-            chained: vec![],
-            requires_use: false,
+            ..Default::default()
         };
         let mut parsed = ParsedPlugin {
             plugin,
@@ -4864,17 +5039,12 @@ mod tests {
                     requirements: vec![],
                     install_commands: vec![],
                 }],
-                hooks: vec![],
-                skills: vec![],
-                mcp_servers: vec![],
-                subcommands: BTreeMap::new(),
                 custom_predicates: vec![CustomPredicate {
                     name: predicate_name.to_string(),
                     command: "checker".to_string(),
                     args: vec![],
                 }],
-                chained: vec![],
-                requires_use: false,
+                ..Default::default()
             },
             workspace_member: false,
             canonical: PackageId::new("test", plugin_name, ANY_VERSION),

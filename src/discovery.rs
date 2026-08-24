@@ -80,6 +80,8 @@ pub struct DiscoveredPlugin {
     pub description: Option<String>,
     /// How the `[plugins]` config decided this offer.
     pub enablement: Enablement,
+    /// Which manifest defined the offered plugin, for display.
+    pub kind: Option<String>,
 }
 
 impl DiscoveredPlugin {
@@ -138,6 +140,7 @@ pub async fn discover(sym: &Symposium, deps: &Arc<WorkspaceDeps>) -> Discovery {
                 recommends: name,
                 description,
                 enablement,
+                kind: plugin.plugin.kind.label().map(str::to_string),
             };
             match enablement {
                 Enablement::Used => discovery.active.push(discovered),

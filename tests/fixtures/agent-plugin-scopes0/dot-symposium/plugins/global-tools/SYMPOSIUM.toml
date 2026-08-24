@@ -1,0 +1,5 @@
+name = "global-tools"
+depends-on = ["*"]
+
+[[skills]]
+source.path = "."

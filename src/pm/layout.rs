@@ -24,21 +24,34 @@ pub const MANIFEST_FILE: &str = "SYMPOSIUM.toml";
 /// Skill file that marks a directory as a standalone-skill entry.
 pub const SKILL_FILE: &str = "SKILL.md";
 
+/// Manifest that marks a directory as an externally authored
+/// [agent plugin](crate::agent_plugin::read) package.
+pub const AGENT_PLUGIN_FILE: &str = crate::agent_plugin::read::MANIFEST_FILE;
+
 /// What kind of entry a directory is.
 #[derive(Debug)]
 pub enum EntryKind {
     /// A plugin entry; carries the path to its `SYMPOSIUM.toml`.
     Plugin(PathBuf),
+    /// An agent plugin package; carries the path to its `plugin.json`.
+    AgentPlugin(PathBuf),
     /// A standalone-skill entry; carries the path to its `SKILL.md`.
     Skill(PathBuf),
 }
 
-/// Classify a directory as an entry, or `None` when it is neither.
-/// [`MANIFEST_FILE`] takes precedence over [`SKILL_FILE`].
+/// Classify a directory as an entry, or `None` when it is none of them.
+///
+/// Precedence runs [`MANIFEST_FILE`], [`AGENT_PLUGIN_FILE`], [`SKILL_FILE`]:
+/// `SYMPOSIUM.toml` is the richer manifest, so a directory carrying both it and
+/// a `plugin.json` loads as a symposium plugin.
 pub fn classify(dir: &Path) -> Option<EntryKind> {
     let manifest = dir.join(MANIFEST_FILE);
     if manifest.is_file() {
         return Some(EntryKind::Plugin(manifest));
+    }
+    let agent_plugin = dir.join(AGENT_PLUGIN_FILE);
+    if agent_plugin.is_file() {
+        return Some(EntryKind::AgentPlugin(agent_plugin));
     }
     let skill_md = dir.join(SKILL_FILE);
     if skill_md.is_file() {
@@ -61,6 +74,10 @@ pub fn enumerate(root: &Path) -> Result<Vec<RegistryEntry>> {
     match classify(root) {
         Some(EntryKind::Plugin(_)) => anyhow::bail!(
             "plugin source root contains SYMPOSIUM.toml — it should contain subdirectories with plugins, not be a plugin itself: {}",
+            root.display()
+        ),
+        Some(EntryKind::AgentPlugin(_)) => anyhow::bail!(
+            "plugin source root contains {AGENT_PLUGIN_FILE} — it should contain subdirectories with plugins, not be a plugin itself: {}",
             root.display()
         ),
         Some(EntryKind::Skill(_)) => anyhow::bail!(

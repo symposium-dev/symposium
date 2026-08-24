@@ -1,0 +1,5 @@
+name = "project-tools"
+depends-on = ["serde"]
+
+[[skills]]
+source.path = "."

@@ -223,15 +223,9 @@ mod tests {
         ParsedPlugin {
             plugin: Plugin {
                 name: name.into(),
-                hooks: vec![],
                 predicates: crate_set(depends_on),
-                skills: vec![],
-                mcp_servers: vec![],
                 subcommands,
-                installations: vec![],
-                custom_predicates: vec![],
-                chained: vec![],
-                requires_use: false,
+                ..Default::default()
             },
             workspace_member: false,
             canonical: PackageId::new("test", name, ANY_VERSION),
@@ -251,6 +245,7 @@ mod tests {
         PluginRegistry {
             plugins,
             warnings: vec![],
+            sources_readable: true,
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         }
     }

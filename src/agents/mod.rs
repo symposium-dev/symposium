@@ -5,6 +5,9 @@
 //! that knowledge.
 
 mod mcp_server_registration;
+mod plugin_install;
+
+pub use plugin_install::Registration;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -16,7 +19,7 @@ use crate::config::Symposium;
 use crate::output::{Output, display_path};
 
 /// Supported AI agents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Agent {
     Claude,
     Codex,

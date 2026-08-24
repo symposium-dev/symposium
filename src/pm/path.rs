@@ -121,10 +121,25 @@ impl PackageManager for PathPm {
             dir: self.dir.clone(),
         })
     }
+
+    async fn source_readable(&self) -> bool {
+        !self.dir.exists() || std::fs::read_dir(&self.dir).is_ok()
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    /// An absent directory is an empty registry, not an unreadable one. Treating
+    /// it as a failure would stop a fresh install from ever reaping anything.
+    #[tokio::test]
+    async fn an_absent_directory_is_readable() {
+        let dir = tempfile::tempdir().unwrap();
+        let pm = PathPm::new("test", dir.path().join("nope"));
+        assert!(pm.source_readable().await);
+        let pm = PathPm::new("test", dir.path().to_path_buf());
+        assert!(pm.source_readable().await);
+    }
+
     use super::*;
 
     #[tokio::test]

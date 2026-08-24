@@ -390,7 +390,14 @@ async fn run_auto_sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, session_start
     };
 
     tracing::debug!("auto-sync running");
-    if let Err(e) = crate::sync::sync(sym, deps, update).await {
+    // The catch-up pass at session start looks at everything; a per-event sync
+    // stays cheap.
+    let debounce = if session_start {
+        crate::sync::Debounce::Always
+    } else {
+        crate::sync::Debounce::Recent
+    };
+    if let Err(e) = crate::sync::sync(sym, deps, update, debounce).await {
         tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
         return;
     }
@@ -942,7 +949,6 @@ fn dispatched_hooks_for_payload(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
 
     use crate::pm::{ANY_VERSION, PackageId};
 
@@ -1157,12 +1163,7 @@ mod tests {
             },
             installations: vec![install],
             hooks: vec![hook],
-            skills: vec![],
-            mcp_servers: vec![],
-            subcommands: BTreeMap::new(),
-            custom_predicates: vec![],
-            chained: vec![],
-            requires_use: false,
+            ..Default::default()
         };
         crate::plugins::ParsedPlugin {
             plugin,

@@ -29,6 +29,12 @@ pub struct SearchMatch {
     pub name: String,
     pub version: Option<String>,
     pub description: Option<String>,
+    /// Which manifest defined the plugin, when that is known. A hit found by
+    /// searching a package manager has not been loaded, so there is nothing to
+    /// report yet.
+    pub kind: Option<String>,
+    /// Set when the plugin is loaded but inactive until a `use` entry names it.
+    pub dormant: bool,
 }
 
 /// Case-insensitive substring match — the same looseness `cargo search` has.
@@ -46,11 +52,10 @@ pub async fn find_matches(sym: &Symposium, query: &str) -> Vec<SearchMatch> {
             matches.push(SearchMatch {
                 origin: parsed.canonical.pm.clone(),
                 name: parsed.plugin.name.clone(),
-                version: None,
-                description: parsed
-                    .plugin
-                    .requires_use
-                    .then(|| "dormant — enable with `cargo agents use`".to_string()),
+                version: parsed.plugin.version.clone(),
+                description: parsed.plugin.description.clone(),
+                kind: parsed.plugin.kind.label().map(str::to_string),
+                dormant: parsed.plugin.requires_use,
             });
         }
     }
@@ -61,6 +66,10 @@ pub async fn find_matches(sym: &Symposium, query: &str) -> Vec<SearchMatch> {
             name: info.id.name.clone(),
             version: Some(info.id.version.clone()),
             description: info.description,
+            // Found by asking a package manager, so nothing has been loaded and
+            // there is no manifest to report yet.
+            kind: None,
+            dormant: false,
         });
     }
 
@@ -99,6 +108,8 @@ pub async fn search(sym: &Symposium, query: &str) -> Result<()> {
                     name: m.name.clone(),
                     version: m.version.clone(),
                     description: m.description.clone(),
+                    plugin_kind: m.kind.clone(),
+                    dormant: m.dormant,
                 },
             );
         }
