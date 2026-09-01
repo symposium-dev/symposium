@@ -8,6 +8,7 @@ pub mod help_render;
 pub mod hook;
 pub mod hook_schema;
 pub(crate) mod installation;
+pub mod migrations;
 pub mod output;
 pub mod plugins;
 pub mod pm;

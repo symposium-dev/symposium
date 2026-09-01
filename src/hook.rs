@@ -224,7 +224,7 @@ fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
 }
 
 // Re-export hook schema types for convenience.
-pub use crate::hook_schema::{HookAgent, HookEvent};
+pub use crate::hook_schema::{HookAgent, HookAgentArg, HookEvent};
 /// Core hook pipeline: sync → parse → builtin → plugins → serialize.
 ///
 /// Takes the raw agent wire-format input, returns agent wire-format output bytes.
@@ -235,6 +235,18 @@ pub async fn execute_hook(
     event: HookEvent,
     input: &str,
 ) -> anyhow::Result<Vec<u8>> {
+    // Antigravity has no prompt event: `PreInvocation` stands in for it but
+    // fires before every model call, so without this gate a plugin's
+    // user-prompt hooks would run several times in a single turn. Empty stdout
+    // is Antigravity's "no opinion", so returning nothing is safe.
+    if agent == HookAgent::Antigravity
+        && event == HookEvent::UserPromptSubmit
+        && !crate::hook_schema::antigravity::is_first_invocation(input)
+    {
+        tracing::debug!("antigravity: not the first invocation of the turn, skipping prompt event");
+        return Ok(Vec::new());
+    }
+
     let event_handler = agent.event(event);
 
     if let Some(handler) = event_handler {
@@ -863,6 +875,15 @@ fn dispatched_hooks_for_payload(
             if let Some(matcher) = &hook.matcher
                 && !input.matches_matcher(matcher)
             {
+                continue;
+            }
+
+            if hook.format.is_retired() {
+                tracing::warn!(
+                    plugin = %parsed_plugin.plugin.name,
+                    hook = %hook.name,
+                    "hook format names an agent symposium no longer supports; skipping"
+                );
                 continue;
             }
 

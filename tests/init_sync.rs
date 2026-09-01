@@ -103,7 +103,7 @@ async fn init_preserves_existing_hook_scope() {
     with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
         ctx.symposium(&["init", "--add-agent", "claude", "--hook-scope", "project"])
             .await?;
-        ctx.symposium(&["init", "--add-agent", "gemini"]).await?;
+        ctx.symposium(&["init", "--add-agent", "codex"]).await?;
 
         let content = read_user_config(&ctx);
         assert!(
@@ -153,6 +153,61 @@ async fn sync_installs_workspace_plugin_skills() {
                 skill_dir.join(".symposium").exists(),
                 "workspace skill should install as symposium-managed"
             );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Antigravity reads the vendor-neutral skills path, keeps MCP in its own file,
+/// and takes hooks in a named-entry `hooks.json` — none of which share a
+/// location with its global equivalents, so project scope is worth pinning.
+#[tokio::test]
+async fn sync_installs_antigravity_at_project_scope() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&[
+                "init",
+                "--add-agent",
+                "antigravity",
+                "--hook-scope",
+                "project",
+            ])
+            .await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let root = ctx.workspace_root.as_ref().unwrap();
+
+            let skill_dir = find_installed_skill(&root.join(".agents/skills"), "serde-guidance");
+            assert!(
+                skill_dir.join(".symposium").exists(),
+                "skill installs as symposium-managed under .agents/skills"
+            );
+
+            let hooks_path = root.join(".agents/hooks.json");
+            assert!(hooks_path.exists(), "hooks go to .agents/hooks.json");
+            let hooks: Value = serde_json::from_str(&std::fs::read_to_string(&hooks_path)?)?;
+            let entry = &hooks["symposium"];
+            assert_eq!(
+                entry["PreToolUse"][0]["hooks"][0]["command"],
+                "cargo-agents hook antigravity pre-tool-use",
+                "tool events are wrapped in a matcher group"
+            );
+            assert_eq!(
+                entry["SessionStart"][0]["command"], "cargo-agents hook antigravity session-start",
+                "lifecycle events are a flat handler list"
+            );
+
+            // The global locations live under ~/.gemini/config; nothing should
+            // have been rooted at the workspace by mistake.
+            assert!(
+                !root.join(".gemini").exists(),
+                "project scope must not write the global path shape into the repo"
+            );
+
             Ok(())
         },
     )
@@ -344,22 +399,22 @@ async fn removing_agent_removes_hooks() {
             "--add-agent",
             "claude",
             "--add-agent",
-            "gemini",
+            "codex",
         ])
         .await?;
 
         let claude_settings = ctx.sym.home_dir().join(".claude/settings.json");
-        let gemini_settings = ctx.sym.home_dir().join(".gemini/settings.json");
+        let codex_hooks = ctx.sym.home_dir().join(".codex/hooks.json");
         assert!(claude_settings.exists(), "claude settings should exist");
-        assert!(gemini_settings.exists(), "gemini settings should exist");
+        assert!(codex_hooks.exists(), "codex hooks should exist");
         assert!(
-            std::fs::read_to_string(&gemini_settings)
+            std::fs::read_to_string(&codex_hooks)
                 .unwrap()
                 .contains("cargo-agents hook"),
-            "gemini should have symposium hooks"
+            "codex should have symposium hooks"
         );
 
-        ctx.symposium(&["init", "--hook-scope", "global", "--remove-agent", "gemini"])
+        ctx.symposium(&["init", "--hook-scope", "global", "--remove-agent", "codex"])
             .await?;
 
         let contents = std::fs::read_to_string(&claude_settings).unwrap();
@@ -368,10 +423,10 @@ async fn removing_agent_removes_hooks() {
             "claude hooks should remain"
         );
 
-        let contents = std::fs::read_to_string(&gemini_settings).unwrap();
+        let contents = std::fs::read_to_string(&codex_hooks).unwrap();
         assert!(
             !contents.contains("cargo-agents hook"),
-            "gemini hooks should be removed"
+            "codex hooks should be removed"
         );
         Ok(())
     })
@@ -385,7 +440,7 @@ async fn add_agent_is_additive() {
     with_fixture(TestMode::SimulationOnly, &["plugins0"], async |mut ctx| {
         ctx.symposium(&["init", "--hook-scope", "global", "--add-agent", "claude"])
             .await?;
-        ctx.symposium(&["init", "--hook-scope", "global", "--add-agent", "gemini"])
+        ctx.symposium(&["init", "--hook-scope", "global", "--add-agent", "codex"])
             .await?;
 
         let config = symposium::config::Symposium::from_dir(ctx.sym.config_dir());
@@ -395,22 +450,64 @@ async fn add_agent_is_additive() {
             .iter()
             .map(|a| a.name.as_str())
             .collect();
-        assert_eq!(agent_names, vec!["claude", "gemini"]);
+        assert_eq!(agent_names, vec!["claude", "codex"]);
 
         let claude_settings = ctx.sym.home_dir().join(".claude/settings.json");
-        let gemini_settings = ctx.sym.home_dir().join(".gemini/settings.json");
+        let codex_hooks = ctx.sym.home_dir().join(".codex/hooks.json");
         assert!(
             std::fs::read_to_string(&claude_settings)
                 .unwrap()
                 .contains("cargo-agents hook")
         );
         assert!(
-            std::fs::read_to_string(&gemini_settings)
+            std::fs::read_to_string(&codex_hooks)
                 .unwrap()
                 .contains("cargo-agents hook")
         );
         Ok(())
     })
+    .await
+    .unwrap();
+}
+
+/// A config naming an agent symposium has retired keeps working: the entry is
+/// reported and skipped rather than failing the command. A user config outlives
+/// the release that removes an agent, so erroring here would break every command
+/// until the file was edited by hand.
+#[tokio::test]
+async fn retired_agent_in_config_is_ignored_not_fatal() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--hook-scope", "global", "--add-agent", "claude"])
+                .await?;
+
+            let config_path = ctx.sym.config_dir().join("config.toml");
+            let existing = std::fs::read_to_string(&config_path)?;
+            std::fs::write(
+                &config_path,
+                format!("{existing}\n[[agent]]\nname = \"gemini\"\n"),
+            )?;
+
+            // Sync must succeed despite the retired entry.
+            ctx.symposium(&["sync"]).await?;
+
+            let claude_settings = ctx.sym.home_dir().join(".claude/settings.json");
+            assert!(
+                std::fs::read_to_string(&claude_settings)
+                    .unwrap()
+                    .contains("cargo-agents hook"),
+                "the supported agent is still configured"
+            );
+            assert!(
+                !ctx.sym.home_dir().join(".gemini").exists(),
+                "nothing is written for a retired agent"
+            );
+
+            Ok(())
+        },
+    )
     .await
     .unwrap();
 }

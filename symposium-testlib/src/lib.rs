@@ -25,9 +25,9 @@ pub enum TestAgent {
     ClaudeSdk,
     /// ACP agent from the ACP registry (via acpr).
     Acp {
-        /// Agent name in the ACP registry (e.g., "claude-acp", "gemini").
+        /// Agent name in the ACP registry (e.g., "claude-acp", "goose").
         registry_name: String,
-        /// Symposium agent name (e.g., "claude", "gemini").
+        /// Symposium agent name (e.g., "claude", "goose").
         agent_name: String,
     },
     /// ACP agent with a custom command (not in the registry).
@@ -64,7 +64,6 @@ fn infer_agent_name(registry_name: &str) -> &str {
     match registry_name {
         "claude-acp" => "claude",
         "codex-acp" => "codex",
-        "gemini" => "gemini",
         "goose" => "goose",
         "opencode" => "opencode",
         other => other,

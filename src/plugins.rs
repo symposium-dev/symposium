@@ -832,24 +832,39 @@ pub enum HookFormat {
     #[default]
     Symposium,
     /// A specific agent's wire format.
+    Antigravity,
     Claude,
     Codex,
     Copilot,
-    Gemini,
     Kiro,
+    /// A wire format symposium has retired along with its agent.
+    ///
+    /// A published manifest outlives the release that drops an agent, so the
+    /// spelling still deserializes; the hook is skipped rather than failing the
+    /// plugin that carries it.
+    #[serde(rename = "gemini")]
+    Retired,
 }
 
 impl HookFormat {
     /// Convert to the corresponding HookAgent, if this is an agent format.
+    ///
+    /// `None` covers both the symposium format and a retired one, so callers
+    /// deciding whether a hook fires must check `is_retired` first.
     pub fn as_agent(&self) -> Option<HookAgent> {
         match self {
-            HookFormat::Symposium => None,
+            HookFormat::Symposium | HookFormat::Retired => None,
+            HookFormat::Antigravity => Some(HookAgent::Antigravity),
             HookFormat::Claude => Some(HookAgent::Claude),
             HookFormat::Codex => Some(HookAgent::Codex),
             HookFormat::Copilot => Some(HookAgent::Copilot),
-            HookFormat::Gemini => Some(HookAgent::Gemini),
             HookFormat::Kiro => Some(HookAgent::Kiro),
         }
+    }
+
+    /// Whether this names an agent symposium no longer supports.
+    pub fn is_retired(&self) -> bool {
+        matches!(self, HookFormat::Retired)
     }
 }
 

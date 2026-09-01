@@ -14,7 +14,7 @@ auto-update = "on"
 name = "claude"
 
 [[agent]]
-name = "gemini"
+name = "antigravity"
 
 [logging]
 level = "info"
@@ -43,7 +43,7 @@ path = "my-plugins"
 
 ### Agents syncing: mirror user-authored skills
 
-Agents such as Copilot, Gemini, Codex, Goose, and OpenCode all read skills from the vendor-neutral `.agents/skills/` directory, but Claude Code and Kiro use their own paths (`.claude/skills/` and `.kiro/skills/`). When `agents-syncing` is enabled, every [workspace plugin](../workspace-skills.md) — the workspace root and each member directory — carries a second default skill group, gated by the `workspace-member()` predicate:
+Agents such as Antigravity, Copilot, Codex, Goose, and OpenCode all read skills from the vendor-neutral `.agents/skills/` directory, but Claude Code and Kiro use their own paths (`.claude/skills/` and `.kiro/skills/`). When `agents-syncing` is enabled, every [workspace plugin](../workspace-skills.md) — the workspace root and each member directory — carries a second default skill group, gated by the `workspace-member()` predicate:
 
 ```toml
 [[skills]]
@@ -74,7 +74,7 @@ Each `[[agent]]` entry identifies an agent you use. You can configure multiple a
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `name` | string | *(required)* | Agent name: `claude`, `codex`, `copilot`, `gemini`, `goose`, `kiro`, or `opencode`. |
+| `name` | string | *(required)* | Agent name: `antigravity`, `claude`, `codex`, `copilot`, `goose`, `kiro`, or `opencode`. |
 
 ## `[logging]`
 

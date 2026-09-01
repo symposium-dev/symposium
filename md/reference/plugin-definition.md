@@ -228,8 +228,8 @@ Each `[[hooks]]` entry declares a hook that responds to agent events. For the JS
 | `script` | string (optional) | Path to a shell script to run via `sh`. Same exclusivity rule as `executable`. |
 | `args` | array (optional) | Invocation arguments. Forbidden when the installation also declares `args`. |
 | `requirements` | array (optional) | Installations to acquire before running. Same shape as `command` (string name or inline declaration). |
-| `agent` | string (optional) | Restrict the hook to a specific agent (`claude`, `copilot`, `gemini`, `kiro`, …). |
-| `format` | string | Wire format the handler expects on stdin. `symposium` (default): symposium converts the agent's event to its canonical format before delivering. Any agent name (`claude`, `codex`, `copilot`, `gemini`, `kiro`): the handler receives that agent's native wire format. Symposium always intermediates — it never registers plugin hooks directly into agent configs. See [Hooks](../crate-authors/authoring-a-plugin.md#hooks). |
+| `agent` | string (optional) | Restrict the hook to a specific agent (`antigravity`, `claude`, `copilot`, `kiro`, …). |
+| `format` | string | Wire format the handler expects on stdin. `symposium` (default): symposium converts the agent's event to its canonical format before delivering. Any agent name (`antigravity`, `claude`, `codex`, `copilot`, `kiro`): the handler receives that agent's native wire format. Symposium always intermediates — it never registers plugin hooks directly into agent configs. See [Hooks](../crate-authors/authoring-a-plugin.md#hooks). |
 | `predicates` | array (optional) | Predicates (`depends-on`, `shell`, `path_exists`, `env`, `workspace-member`, `not`, `any`, `all`) that must all hold for the hook to dispatch. Evaluated per-dispatch. See [Predicates](./predicates.md). |
 
 ### Examples
@@ -394,9 +394,9 @@ Global cargo installs (`global = true`) don't set `$SYMPOSIUM_DIR_<name>` or aug
 
 ### Agent → hook name mapping
 
-| Tool / Event | Claude (`claude`) | Copilot (`copilot`) | Gemini (`gemini`) |
-|--------------|------------------------------------:|-------------------:|------------------:|
-| `PreToolUse` | `PreToolUse` | `PreToolUse` | `BeforeTool` |
+| Tool / Event | Claude (`claude`) | Copilot (`copilot`) | Antigravity (`antigravity`) |
+|--------------|------------------:|--------------------:|----------------------------:|
+| `PreToolUse` | `PreToolUse` | `PreToolUse` | `PreToolUse` |
 
 ### Hook semantics
 
@@ -417,7 +417,7 @@ Use the CLI to test a hook with sample input:
 echo '{"tool": "Bash", "input": "cargo test"}' | cargo agents hook claude pre-tool-use
 ```
 
-You can also use `copilot`, `gemini`, `codex`, or `kiro` as the agent name.
+You can also use `antigravity`, `copilot`, `codex`, or `kiro` as the agent name.
 
 ## `[[predicate]]`
 
@@ -552,7 +552,6 @@ All supported agents have MCP server configuration. Symposium handles the format
 |-------|----------------|-----|
 | Claude Code | `.claude/settings.json` | `mcpServers.<name>` |
 | GitHub Copilot | `.vscode/mcp.json` | `<name>` (top-level) |
-| Gemini CLI | `.gemini/settings.json` | `mcpServers.<name>` |
 | Codex CLI | `.codex/config.toml` | `[mcp_servers.<name>]` |
 | Kiro | `.kiro/settings/mcp.json` | `mcpServers.<name>` |
 | OpenCode | `opencode.json` | `mcp.<name>` |

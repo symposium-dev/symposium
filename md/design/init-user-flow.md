@@ -4,7 +4,7 @@ Sets up the user-wide configuration.
 
 ## Flow
 
-1. **Prompt for agents** — ask which agents the user uses (e.g., Claude Code, Copilot, Gemini). Multiple agents can be selected.
+1. **Prompt for agents** — ask which agents the user uses (e.g., Antigravity CLI, Claude Code, Copilot). Multiple agents can be selected.
 
 2. **Write user config** — create `~/.symposium/config.toml` with the `[[agent]]` entries populated:
 
@@ -13,7 +13,7 @@ Sets up the user-wide configuration.
    name = "claude"
 
    [[agent]]
-   name = "gemini"
+   name = "antigravity"
    ```
 
 3. **Register hooks** — register global hooks and MCP servers for each selected agent. Also unregisters hooks for any agents that were removed.

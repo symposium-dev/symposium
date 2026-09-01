@@ -31,20 +31,32 @@ fn resolve_agents(
     opts: &InitOpts,
     existing: &[AgentEntry],
     should_prompt: bool,
+    out: &Output,
 ) -> Result<Vec<Agent>> {
     if !opts.agents.is_empty() || !opts.remove_agents.is_empty() {
         let mut names: Vec<String> = existing.iter().map(|e| e.name.clone()).collect();
         for name in &opts.agents {
-            Agent::from_config_name(name)?;
+            // A retired name cannot be added, but naming one is an outdated
+            // request rather than a typo, so it is reported and dropped.
+            if Agent::from_configured_name(name, out)?.is_none() {
+                continue;
+            }
             if !names.contains(name) {
                 names.push(name.clone());
             }
         }
         for name in &opts.remove_agents {
-            Agent::from_config_name(name)?;
+            // Removing a retired name must keep working: that is how a user
+            // clears a stale entry the migration did not reach.
+            if !Agent::is_retired(name) {
+                Agent::from_config_name(name)?;
+            }
             names.retain(|n| n != name);
         }
-        return names.iter().map(|n| Agent::from_config_name(n)).collect();
+        return names
+            .iter()
+            .filter_map(|n| Agent::from_configured_name(n, out).transpose())
+            .collect();
     }
     if should_prompt {
         return prompt_for_agents(existing);
@@ -52,7 +64,7 @@ fn resolve_agents(
     if !existing.is_empty() {
         return existing
             .iter()
-            .map(|e| Agent::from_config_name(&e.name))
+            .filter_map(|e| Agent::from_configured_name(&e.name, out).transpose())
             .collect();
     }
     Ok(vec![Agent::all()[0]])
@@ -71,7 +83,7 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
     let should_prompt = !cli_driven && interactive(out);
 
     // Resolve each setting: CLI flag > interactive prompt > keep existing.
-    let agents = resolve_agents(opts, &sym.config.agents, should_prompt)?;
+    let agents = resolve_agents(opts, &sym.config.agents, should_prompt, out)?;
 
     sym.config.agents = agents
         .iter()

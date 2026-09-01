@@ -233,7 +233,7 @@ impl UseEntry {
 /// An `[[agent]]` entry — just identifies an agent by name.
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AgentEntry {
-    /// Agent name (e.g., "claude", "copilot", "gemini").
+    /// Agent name (e.g., "antigravity", "claude", "copilot").
     pub name: String,
 }
 

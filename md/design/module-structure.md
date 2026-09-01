@@ -16,7 +16,11 @@ The cargo-workspace resolution is **CargoPm's**, so it lives in the cargo PM's m
 
 ### `agents.rs` — agent abstraction
 
-Centralizes agent-specific knowledge: hook registration file paths, skill installation directories, and hook registration logic for each supported agent (Claude Code, GitHub Copilot, Gemini CLI, Codex CLI, Kiro, OpenCode, Goose). Handles the differences between agents — e.g., Claude Code uses `.claude/skills/` and Kiro uses `.kiro/skills/`, while Copilot, Gemini, Codex, OpenCode, and Goose use the vendor-neutral `.agents/skills/`. OpenCode and Goose are skills-only agents (no hook registration).
+Centralizes agent-specific knowledge: hook registration file paths, skill installation directories, and hook registration logic for each supported agent (Antigravity CLI, Claude Code, GitHub Copilot, Codex CLI, Kiro, OpenCode, Goose). Handles the differences between agents — e.g., Claude Code uses `.claude/skills/` and Kiro uses `.kiro/skills/`, while Antigravity, Copilot, Codex, OpenCode, and Goose use the vendor-neutral `.agents/skills/`. OpenCode and Goose are skills-only agents (no hook registration).
+
+An agent symposium drops leaves state behind that nothing would otherwise reap, so `RETIRED_AGENTS` records the names it no longer supports. A retired name in the user config is reported and skipped by `Agent::from_configured_name` rather than failing the command, `HookAgentArg` parses it to nothing to dispatch so a stale hook registration exits cleanly, and `HookFormat::Retired` keeps a plugin manifest naming one loadable with that hook skipped. `migrations.rs` then clears the leftovers once, keyed by id in `state.toml`.
+
+Hook and MCP registration is scope-dispatched: the project and global locations are genuinely different files for some agents (Antigravity writes `.agents/hooks.json` but `~/.gemini/config/hooks.json`; Copilot `.github/hooks/` but `~/.copilot/settings.json`), so `sync` calls the project-scoped functions at project scope rather than rooting the global path at the workspace.
 
 ### `init.rs` — initialization command
 

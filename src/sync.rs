@@ -395,20 +395,35 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     let mut installed_dirs: BTreeSet<PathBuf> = BTreeSet::new();
 
     for agent_name in &agent_names {
-        let agent = Agent::from_config_name(agent_name)?;
-
-        let hook_root = match sym.config.hook_scope {
-            crate::config::HookScope::Global => sym.home_dir().to_path_buf(),
-            crate::config::HookScope::Project => project_root.clone(),
+        let Some(agent) = Agent::from_configured_name(agent_name, out)? else {
+            continue;
         };
 
-        // Register hooks and MCP servers
-        agent
-            .register_hooks(&hook_root, sym, out)
-            .context("failed to register hooks")?;
-        agent
-            .register_global_mcp_servers(&hook_root, &mcp_servers, out)
-            .context("failed to register MCP servers")?;
+        // Register hooks and MCP servers at the configured scope.
+        //
+        // The project and global locations are genuinely different files for
+        // some agents — Antigravity writes `.agents/hooks.json` but
+        // `~/.gemini/config/hooks.json`, and Copilot `.github/hooks/` but
+        // `~/.copilot/settings.json` — so project scope cannot be produced by
+        // rooting the global path at the workspace.
+        match sym.config.hook_scope {
+            crate::config::HookScope::Global => {
+                agent
+                    .register_hooks(sym.home_dir(), sym, out)
+                    .context("failed to register hooks")?;
+                agent
+                    .register_global_mcp_servers(sym.home_dir(), &mcp_servers, out)
+                    .context("failed to register MCP servers")?;
+            }
+            crate::config::HookScope::Project => {
+                agent
+                    .register_project_hooks(&project_root, sym, out)
+                    .context("failed to register hooks")?;
+                agent
+                    .register_project_mcp_servers(&project_root, &mcp_servers, out)
+                    .context("failed to register MCP servers")?;
+            }
+        }
 
         for (skill_name, origin_hash, skill_source) in &to_install {
             // `skill_source` is the path to the SKILL.md file; the skill
@@ -531,11 +546,20 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
         }
     }
 
-    // Unregister hooks/MCP for agents no longer configured
+    // Unregister hooks/MCP for agents no longer configured, at whichever scope
+    // they would have been written to.
     for &agent in Agent::all() {
         if !agent_names.contains(&agent.config_name().to_string()) {
-            agent.unregister_hooks(sym.home_dir(), sym, out);
-            let _ = agent.unregister_global_mcp_servers(sym.home_dir(), &server_names, out);
+            match sym.config.hook_scope {
+                crate::config::HookScope::Global => {
+                    agent.unregister_hooks(sym.home_dir(), sym, out);
+                    let _ = agent.unregister_global_mcp_servers(sym.home_dir(), &server_names, out);
+                }
+                crate::config::HookScope::Project => {
+                    agent.unregister_project_hooks(&project_root, sym, out);
+                    let _ = agent.unregister_project_mcp_servers(&project_root, &server_names, out);
+                }
+            }
         }
     }
 
@@ -574,7 +598,9 @@ pub async fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
     let agent_names: Vec<String> = sym.config.agents.iter().map(|a| a.name.clone()).collect();
 
     for agent_name in &agent_names {
-        let agent = Agent::from_config_name(agent_name)?;
+        let Some(agent) = Agent::from_configured_name(agent_name, out)? else {
+            continue;
+        };
         agent.register_hooks(sym.home_dir(), sym, out)?;
         agent.register_global_mcp_servers(sym.home_dir(), &mcp_servers, out)?;
     }

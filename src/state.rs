@@ -25,6 +25,13 @@ pub struct State {
     /// Last time we checked crates.io for a newer version.
     #[serde(default, rename = "last-update-check")]
     pub last_update_check: Option<DateTime<Utc>>,
+
+    /// Ids of one-shot migrations already applied to this directory.
+    ///
+    /// Recorded by id rather than inferred from `version` so a migration runs
+    /// exactly once regardless of which release the user upgraded from.
+    #[serde(default, rename = "applied-migrations")]
+    pub applied_migrations: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,6 +39,8 @@ struct RawState {
     version: String,
     #[serde(default, rename = "last-update-check")]
     last_update_check: Option<DateTime<Utc>>,
+    #[serde(default, rename = "applied-migrations")]
+    applied_migrations: Vec<String>,
 }
 
 impl RawState {
@@ -39,6 +48,7 @@ impl RawState {
         State {
             version: self.version,
             last_update_check: self.last_update_check,
+            applied_migrations: self.applied_migrations,
         }
     }
 }
@@ -48,6 +58,7 @@ impl Default for State {
         Self {
             version: CURRENT_VERSION.to_string(),
             last_update_check: None,
+            applied_migrations: Vec::new(),
         }
     }
 }
@@ -93,6 +104,20 @@ pub fn ensure_current(config_dir: &Path) -> Option<String> {
     }
 
     prev_version
+}
+
+/// Whether the one-shot migration `id` has already been applied here.
+pub fn migration_applied(config_dir: &Path, id: &str) -> bool {
+    load(config_dir).is_some_and(|s| s.applied_migrations.iter().any(|m| m == id))
+}
+
+/// Record that the one-shot migration `id` has been applied.
+pub fn record_migration(config_dir: &Path, id: &str) {
+    let mut state = load(config_dir).unwrap_or_default();
+    if !state.applied_migrations.iter().any(|m| m == id) {
+        state.applied_migrations.push(id.to_string());
+    }
+    save(config_dir, &state);
 }
 
 /// Whether enough time has elapsed since the last update check.
@@ -146,6 +171,7 @@ mod tests {
         let old = State {
             version: "0.1.0".to_string(),
             last_update_check: None,
+            applied_migrations: Vec::new(),
         };
         fs::write(
             tmp.path().join(STATE_FILE),
@@ -198,5 +224,18 @@ mod tests {
         stamp(tmp.path());
         let after = load(tmp.path()).unwrap().last_update_check;
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn migrations_are_recorded_once() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!migration_applied(tmp.path(), "drop-something"));
+
+        record_migration(tmp.path(), "drop-something");
+        assert!(migration_applied(tmp.path(), "drop-something"));
+
+        record_migration(tmp.path(), "drop-something");
+        let state = load(tmp.path()).unwrap();
+        assert_eq!(state.applied_migrations, vec!["drop-something".to_string()]);
     }
 }

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- support Antigravity CLI (`agy`) as an agent: skills, MCP servers and hooks
+
+### Removed
+
+- drop support for Gemini CLI
+
+  Its consumer sign-in is closed — Google now directs those users to
+  Antigravity. A `gemini` entry in `~/.symposium/config.toml` is reported and
+  skipped rather than failing, a plugin manifest declaring `format = "gemini"`
+  still loads with that hook skipped, and a hook registration left in
+  `.gemini/settings.json` exits cleanly. A one-shot migration drops the config
+  entry, unregisters those hooks, and removes the skill directories symposium
+  installed under `~/.gemini/skills/`.
+
+### Fixed
+
+- register hooks and MCP servers at the configured scope
+
+  `sync` passed the workspace root to the global registration functions, which
+  only produces the right path for agents whose project and global locations
+  share a shape. Copilot's project hooks were going to `.copilot/settings.json`
+  instead of `.github/hooks/`.
+
 ## [0.4.0](https://github.com/symposium-dev/symposium/compare/symposium-v0.3.0...symposium-v0.4.0) - 2026-05-14
 
 ### Added

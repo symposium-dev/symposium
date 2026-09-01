@@ -12,9 +12,28 @@ Copilot sends `toolArgs` as a JSON *string* (not an object). Our `CopilotPreTool
 
 `CopilotPreToolUseOutput::from_hook_output()` never maps `permissionDecision` or `permissionDecisionReason` from the builtin hook output. If a builtin handler wants to deny a tool call, the decision is silently lost in Copilot output.
 
-### Gemini `SessionStart` matcher
+## Antigravity footguns
 
-`ensure_gemini_hook_entry` uses `"matcher": ".*"` for all events including `SessionStart`. Per the Gemini reference, lifecycle events use exact-string matchers, not regex. Likely harmless in practice since `".*"` matches anything.
+Two Antigravity behaviours fail silently rather than loudly, so they are worth
+knowing before debugging a hook that "does nothing".
+
+### `{}` on `PreToolUse` denies the tool call
+
+Antigravity ignores hook exit codes entirely; only stdout decides. On
+`PreToolUse`, an object without a valid `decision` — `{}` included, as well as
+`{"decision": ""}` — is treated as a **denial**, while writing nothing at all
+allows. Symposium's dispatcher returns `{}` whenever no plugin contributed, which
+is the common case, so `AntigravityPreToolUseOutput` keeps `decision` as a plain
+always-serialized field defaulting to `allow`. Making it `Option` or adding
+`skip_serializing_if` would block every tool call.
+
+### Unknown event names and shapes are accepted and never fire
+
+An unrecognised event key in `hooks.json`, or the wrong structure for a known one
+(a flat handler list where a `matcher` group is expected, or vice versa), produces
+no error — the hook simply never runs. `ANTIGRAVITY_EVENTS` and
+`antigravity_is_tool_event` in `agents/mod.rs` are the single source of truth for
+both, and the unit tests assert the shape per event for exactly this reason.
 
 ## Windows portability (tests)
 

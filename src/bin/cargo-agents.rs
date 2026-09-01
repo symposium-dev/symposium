@@ -111,6 +111,10 @@ async fn main() -> ExitCode {
         Output::normal()
     };
 
+    // Clean up after anything a past release installed and this one no longer
+    // maintains. Recorded by id in state.toml, so a no-op after the first run.
+    symposium::migrations::run_pending(&mut sym, &out);
+
     // Ensure git-based plugin sources are up to date (non-blocking on failure).
     // SessionStart runs once per session, so we force a real freshness check
     // there; other invocations use the `--update` level (debounced by default).
@@ -141,7 +145,13 @@ async fn main() -> ExitCode {
 
     match cli.command {
         // Commands that need direct I/O (stdin/stdout) stay in the binary
-        Some(Commands::Hook { agent, event }) => hook::run(&sym, agent, event).await,
+        // A retired agent parses to `None`: a hook registration left behind by
+        // an agent symposium no longer supports exits cleanly instead of failing
+        // in that agent's session on every event.
+        Some(Commands::Hook { agent, event }) => match agent.0 {
+            Some(agent) => hook::run(&sym, agent, event).await,
+            None => ExitCode::SUCCESS,
+        },
 
         Some(Commands::Plugin { command }) => {
             let code = handle_plugin_command(&sym, command).await;

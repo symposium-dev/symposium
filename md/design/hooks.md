@@ -7,7 +7,7 @@ Symposium's hook system is guided by the project [tenets](./tenets.md): symposiu
 A plugin hook declares which wire format its handler expects:
 
 - `format = "symposium"` (default) — the handler receives symposium canonical JSON. This is portable across all agents.
-- `format = "claude"` / `"copilot"` / `"gemini"` / `"codex"` / `"kiro"` — the handler receives that agent's native wire format.
+- `format = "antigravity"` / `"claude"` / `"copilot"` / `"codex"` / `"kiro"` — the handler receives that agent's native wire format.
 
 ## Dispatch rule
 
@@ -17,13 +17,13 @@ When symposium's global handler receives an event from agent A, it loads all plu
 2. Otherwise, if the plugin declares a **symposium-format** hook → convert to symposium canonical and deliver.
 3. Otherwise → nothing fires for this plugin.
 
-Symposium never converts between agent-specific formats. A `format = "claude"` hook will only fire on Claude — it won't be translated for Copilot or Gemini. If you want cross-agent coverage, provide a symposium-format hook as a fallback.
+Symposium never converts between agent-specific formats. A `format = "claude"` hook will only fire on Claude — it won't be translated for Copilot or Antigravity. If you want cross-agent coverage, provide a symposium-format hook as a fallback.
 
 ### Example
 
-A plugin with hooks for `claude`, `gemini`, and `symposium`:
+A plugin with hooks for `claude`, `antigravity`, and `symposium`:
 - On Claude: the `format = "claude"` hook receives Claude's native JSON.
-- On Gemini: the `format = "gemini"` hook receives Gemini's native JSON.
+- On Antigravity: the `format = "antigravity"` hook receives Antigravity's native JSON.
 - On Copilot: no native handler → the `format = "symposium"` hook receives symposium canonical JSON.
 
 A plugin with only `format = "symposium"`:
