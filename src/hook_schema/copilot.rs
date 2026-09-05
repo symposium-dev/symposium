@@ -4,6 +4,28 @@ use crate::hook_schema::{
     Agent, AgentHookEvent, AgentHookInput, AgentHookOutput, erase_agent_hook_event, symposium,
 };
 
+/// Copilot sends `toolArgs` as a JSON-encoded string (per Copilot's hook protocol),
+/// while the canonical `PreToolUseInput.tool_input` is a structured `Value`. Parse
+/// the string into a `Value` when crossing into canonical form. If parsing fails
+/// or the field is already structured, pass it through unchanged.
+fn parse_copilot_tool_args(raw: &serde_json::Value) -> serde_json::Value {
+    if let Some(s) = raw.as_str()
+        && let Ok(v) = serde_json::from_str::<serde_json::Value>(s)
+    {
+        return v;
+    }
+    raw.clone()
+}
+
+/// Inverse of [`parse_copilot_tool_args`]: when writing out to Copilot wire format,
+/// re-encode a structured `Value` back into a JSON string.
+fn stringify_for_copilot(v: &serde_json::Value) -> serde_json::Value {
+    match v {
+        serde_json::Value::String(_) => v.clone(),
+        _ => serde_json::Value::String(v.to_string()),
+    }
+}
+
 pub struct Copilot;
 impl Agent for Copilot {
     fn event(&self, event: super::HookEvent) -> Option<Box<dyn super::ErasedAgentHookEvent>> {
@@ -157,7 +179,7 @@ impl AgentHookInput for CopilotPreToolUseInput {
     fn to_symposium(&self) -> symposium::InputEvent {
         symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
             self.tool_name.clone(),
-            self.tool_args.clone(),
+            parse_copilot_tool_args(&self.tool_args),
             None,
             self.cwd.clone(),
         ))
@@ -170,7 +192,7 @@ impl AgentHookInput for CopilotPreToolUseInput {
             timestamp: None,
             cwd: p.cwd.clone(),
             tool_name: p.tool_name.clone(),
-            tool_args: p.tool_input.clone(),
+            tool_args: stringify_for_copilot(&p.tool_input),
             rest: serde_json::Map::new(),
         }
     }
@@ -223,7 +245,7 @@ impl AgentHookInput for CopilotPostToolUseInput {
     fn to_symposium(&self) -> symposium::InputEvent {
         symposium::InputEvent::PostToolUse(symposium::PostToolUseInput::new(
             self.tool_name.clone(),
-            self.tool_args.clone(),
+            parse_copilot_tool_args(&self.tool_args),
             self.tool_response.clone(),
             None,
             self.cwd.clone(),
@@ -237,7 +259,7 @@ impl AgentHookInput for CopilotPostToolUseInput {
             timestamp: None,
             cwd: p.cwd.clone(),
             tool_name: p.tool_name.clone(),
-            tool_args: p.tool_input.clone(),
+            tool_args: stringify_for_copilot(&p.tool_input),
             tool_response: p.tool_response.clone(),
             rest: serde_json::Map::new(),
         }
@@ -363,3 +385,63 @@ copilot_output_impl!(
     SessionStart,
     SessionStartOutput {}
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pre_tool_use_parses_string_tool_args() {
+        let raw = r#"{"toolName":"bash","toolArgs":"{\"command\":\"ls\"}"}"#;
+        let input: CopilotPreToolUseInput = serde_json::from_str(raw).unwrap();
+        let symposium::InputEvent::PreToolUse(canon) = input.to_symposium() else {
+            panic!("wrong event type")
+        };
+        assert_eq!(canon.tool_input, serde_json::json!({"command": "ls"}));
+    }
+
+    #[test]
+    fn pre_tool_use_round_trips_object_to_copilot_string() {
+        let canon = symposium::InputEvent::PreToolUse(symposium::PreToolUseInput::new(
+            "bash".into(),
+            serde_json::json!({"command": "ls"}),
+            None,
+            None,
+        ));
+        let out = CopilotPreToolUseInput::from_symposium(&canon);
+        let s = out
+            .tool_args
+            .as_str()
+            .expect("toolArgs must be a JSON string on the Copilot wire");
+        let reparsed: serde_json::Value = serde_json::from_str(s).unwrap();
+        assert_eq!(reparsed, serde_json::json!({"command": "ls"}));
+    }
+
+    #[test]
+    fn post_tool_use_parses_string_tool_args() {
+        let raw = r#"{"toolName":"bash","toolArgs":"{\"command\":\"ls\"}","toolResponse":{}}"#;
+        let input: CopilotPostToolUseInput = serde_json::from_str(raw).unwrap();
+        let symposium::InputEvent::PostToolUse(canon) = input.to_symposium() else {
+            panic!("wrong event type")
+        };
+        assert_eq!(canon.tool_input, serde_json::json!({"command": "ls"}));
+    }
+
+    #[test]
+    fn post_tool_use_round_trips_object_to_copilot_string() {
+        let canon = symposium::InputEvent::PostToolUse(symposium::PostToolUseInput::new(
+            "bash".into(),
+            serde_json::json!({"command": "ls"}),
+            serde_json::json!({"exit_code": 0}),
+            None,
+            None,
+        ));
+        let out = CopilotPostToolUseInput::from_symposium(&canon);
+        let s = out
+            .tool_args
+            .as_str()
+            .expect("toolArgs must be a JSON string on the Copilot wire");
+        let reparsed: serde_json::Value = serde_json::from_str(s).unwrap();
+        assert_eq!(reparsed, serde_json::json!({"command": "ls"}));
+    }
+}
