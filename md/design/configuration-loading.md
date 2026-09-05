@@ -9,3 +9,5 @@ See the [configuration reference](../reference/configuration.md#directory-resolu
 ## Config loading
 
 The user config (`~/.symposium/config.toml`) is loaded once at startup into the `Symposium` struct. The file is deserialized into `RawConfig`, then validated into the runtime `Config` used by the rest of the code. If the file is missing or empty, defaults are used. If parsing fails, a warning is printed and defaults are used.
+
+That last rule sets the cost of `deny_unknown_fields`, which most sections carry: one misspelled key does not fall back to the default for *that key*, it falls back to the default for the *whole config* — agents, registries and hook scope included. It is the right trade for a typo (a silently ignored setting is worse), but it means removing a key the code once accepted is a breaking change for anyone still naming it. `[experiments]` is where that bites, since experiments are expected to disappear: a graduated flag stays accepted-and-ignored for a release rather than being deleted.

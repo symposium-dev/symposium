@@ -476,9 +476,24 @@ Results are cached by `(predicate_name, raw_arg)` for the duration of a single s
 
 ## `[[mcp_servers]]`
 
-Each `[[mcp_servers]]` entry declares an MCP server that Symposium registers into the agent's configuration during `sync --agent`.
+Each `[[mcp_servers]]` entry declares an MCP server that Symposium makes available to the agent when the entry's predicates hold.
 
-There are multiple MCP transports:
+Only `name` and one way of reaching the server are required. Every other field defaults, and an unknown key is rejected by name rather than being swallowed.
+
+### Fields common to every transport
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Server name, as a script refers to it and as it appears in agent config. |
+| `depends-on` | string or array | Which crates this server applies to. Optional if plugin has top-level `depends-on`. |
+| `predicates` | array of strings | Predicates (`depends-on`, `shell`, `path_exists`, `env`, `workspace-member`, `not`, `any`, `all`) that must all hold for the server to apply. See [Predicates](./predicates.md). |
+| `requirements` | array of strings | Names of `[[installations]]` entries to acquire before the server first starts. An entry carrying only `install_commands` warms a cache so a package-runner download does not land on the agent's first tool call. |
+| `startup-timeout-secs` | integer | Ceiling on spawning this server and completing its handshake. Overrides the user's `[mcp]` default. |
+| `tool-call-timeout-secs` | integer | Ceiling on a single tool call to this server. Overrides the user's `[mcp]` default. |
+| `enabled-tools` | array of strings | Expose only these tools. An empty list exposes nothing, which is distinct from omitting the field. |
+| `disabled-tools` | array of strings | Expose everything except these. Mutually exclusive with `enabled-tools`. |
+
+The timeouts are clamped against the user's `script-timeout-secs` at dispatch, so an entry can lower a ceiling but never raise the user's.
 
 ### Stdio
 
@@ -487,66 +502,52 @@ There are multiple MCP transports:
 name = "my-server"
 command = "/usr/local/bin/my-server"
 args = ["--stdio"]
-env = []
+env = { RUST_LOG = "debug" }
+cwd = "crates/db"
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `name` | string | Server name as it appears in the agent's MCP config. |
-| `depends-on` | string or array | Which crates this server applies to. Optional if plugin has top-level `depends-on`. |
-| `predicates` | array of strings | Predicates (`depends-on`, `shell`, `path_exists`, `env`, `workspace-member`, `not`, `any`, `all`) that must all hold for the server to register. See [Predicates](./predicates.md). |
-| `command` | string | Path to the server binary. |
-| `args` | array of strings | Arguments passed to the binary. |
-| `env` | array of objects | Environment variables to set when launching the server. |
+| `command` | string | Executable to run, resolved through `PATH` unless absolute. |
+| `installation` | string | Name of an `[[installations]]` entry providing the executable, acquired before first use. Use instead of `command`, not alongside it. |
+| `args` | array of strings | Arguments passed to the binary. Defaults to empty. |
+| `env` | table | Environment for the child, as a `name = "value"` table. Defaults to empty. |
+| `cwd` | string | Directory to run in, resolved against the workspace root. |
 
-Stdio entries do not need a `type` field.
+### HTTP and SSE
 
-### HTTP
+A `url` makes the entry remote. `transport` selects between the two remote transports and defaults to `http`; there is no `type` field.
 
 ```toml
 [[mcp_servers]]
-type = "http"
 name = "my-server"
 url = "http://localhost:8080/mcp"
-headers = []
-```
+headers = { Authorization = "Bearer token" }
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `type` | string | Must be `"http"`. |
-| `name` | string | Server name as it appears in the agent's MCP config. |
-| `depends-on` | string or array | Which crates this server applies to. Optional if plugin has top-level `depends-on`. |
-| `url` | string | HTTP endpoint URL. |
-| `headers` | array of objects | HTTP headers to set when making requests. |
-
-### SSE
-
-```toml
 [[mcp_servers]]
-type = "sse"
-name = "my-server"
+name = "my-sse-server"
 url = "http://localhost:8080/sse"
-headers = []
+transport = "sse"
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `type` | string | Must be `"sse"`. |
-| `name` | string | Server name as it appears in the agent's MCP config. |
-| `depends-on` | string or array | Which crates this server applies to. Optional if plugin has top-level `depends-on`. |
-| `url` | string | SSE endpoint URL. |
-| `headers` | array of objects | HTTP headers to set when making requests. |
+| `url` | string | The endpoint. Setting it rejects `args`, `env` and `cwd`, which apply only to a child process. |
+| `transport` | string | `"http"` (the default) or `"sse"`. |
+| `headers` | table | Headers to send, as a `name = "value"` table. Only valid with a `url`. |
 
 ### How registration works
 
-During `cargo agents sync --agent`, each MCP server entry is written into the agent's config file in the format that agent expects. Registration is idempotent — existing entries with correct values are left untouched, stale entries are updated in place.
+By default, `sync` writes each applicable entry into the agent's own MCP config, handling the format differences per agent.
 
-When a user runs `cargo agents sync` (or the hook triggers it automatically), Symposium:
+Enabling the [MCP meta-server experiment](./configuration.md#experiments) instead writes a single `symposium` entry into each agent's config:
 
-1. Collects `[[mcp_servers]]` entries from all enabled plugins.
-2. Writes each server into the agent's MCP configuration file.
+```toml
+[experiments]
+mcp-meta-server = true
+```
 
-All supported agents have MCP server configuration. Symposium handles the format differences — you declare the server once and it works across agents.
+The agent then sees two tools; the servers behind them are started on demand when a script calls one, and a server whose predicates do not hold is never started at all. Declaring a server is all a plugin does either way — there is no per-agent MCP configuration to maintain.
 
 | Agent | Config location | Key |
 |-------|----------------|-----|
@@ -557,6 +558,8 @@ All supported agents have MCP server configuration. Symposium handles the format
 | Kiro | `.kiro/settings/mcp.json` | `mcpServers.<name>` |
 | OpenCode | `opencode.json` | `mcp.<name>` |
 | Goose | `~/.config/goose/config.yaml` | `extensions.<name>` |
+
+Either way registration is idempotent — existing entries with correct values are left untouched, and entries written by the configuration you switched away from are removed.
 
 ## Example: full manifest
 
@@ -583,7 +586,6 @@ command = { source = "local", command = "./scripts/check-widget.sh" }
 name = "widgetlib-mcp"
 command = "/usr/local/bin/widgetlib-mcp"
 args = ["--stdio"]
-env = []
 ```
 
 ## Validation

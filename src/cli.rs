@@ -113,6 +113,10 @@ pub enum Commands {
         event: hook::HookEvent,
     },
 
+    /// MCP server entry point invoked by your agent (internal)
+    #[command(hide = true, name = "mcp-serve")]
+    McpServe,
+
     /// Manage plugins
     Plugin {
         #[command(subcommand)]
@@ -227,6 +231,11 @@ pub async fn run(
     }
 
     match cmd {
+        // Served by the binary, which owns stdio.
+        Commands::McpServe => Err(anyhow::anyhow!(
+            "mcp-serve must be run from the command line, not through the library"
+        )),
+
         Commands::Init {
             agents,
             remove_agents,

@@ -415,9 +415,42 @@ async fn add_agent_is_additive() {
     .unwrap();
 }
 
-/// `sync` filters MCP servers by their `depends-on` predicates.
+/// With the experiment on, one entry is written, not one per plugin: the agent
+/// loads two tool schemas rather than every plugin server's, and the
+/// workspace's own tools stay out of agent configuration.
 #[tokio::test]
-async fn sync_filters_mcp_servers_by_crates() {
+async fn sync_registers_only_the_meta_server_when_the_experiment_is_on() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["mcp-filtering0", "workspace0"],
+        async |mut ctx| {
+            ctx.enable_experiment("mcp-meta-server")?;
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let settings: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(
+                workspace_root.join(".mcp.json"),
+            )?)?;
+            let servers = settings["mcpServers"]
+                .as_object()
+                .expect("mcpServers should be an object");
+
+            let names: Vec<&String> = servers.keys().collect();
+            assert_eq!(names, vec!["symposium"], "got: {names:?}");
+            assert_eq!(servers["symposium"]["args"][0], "mcp-serve");
+
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Without the meta-server experiment — the default — each applicable plugin
+/// server is registered directly, still filtered by `depends-on`.
+#[tokio::test]
+async fn sync_registers_plugin_servers_by_default() {
     with_fixture(
         TestMode::SimulationOnly,
         &["mcp-filtering0", "workspace0"],
@@ -428,29 +461,53 @@ async fn sync_filters_mcp_servers_by_crates() {
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
             // `.mcp.json`, not the `settings.json` that carries hooks: Claude
             // does not read `mcpServers` from the latter.
-            let settings_path = workspace_root.join(".mcp.json");
-            let settings = std::fs::read_to_string(&settings_path)?;
+            let settings = std::fs::read_to_string(workspace_root.join(".mcp.json"))?;
 
-            // always-server (depends-on = ["*"]) → registered
-            assert!(
-                settings.contains("always-server"),
-                "wildcard MCP server should be registered"
-            );
-            // serde-server (depends-on = ["serde"]) → registered (serde is in workspace0)
-            assert!(
-                settings.contains("serde-server"),
-                "serde MCP server should be registered"
-            );
-            // inherited-server (no crates, inherits from plugin) → registered
-            assert!(
-                settings.contains("inherited-server"),
-                "inherited MCP server should be registered"
-            );
-            // missing-crate-server (depends-on = ["reqwest"]) → NOT registered
+            // depends-on = ["*"], and ["serde"] which workspace0 provides.
+            assert!(settings.contains("always-server"), "got: {settings}");
+            assert!(settings.contains("serde-server"), "got: {settings}");
+            // Inherits the plugin's own predicate.
+            assert!(settings.contains("inherited-server"), "got: {settings}");
+            // depends-on = ["reqwest"], which the workspace does not have.
             assert!(
                 !settings.contains("missing-crate-server"),
-                "reqwest MCP server should NOT be registered"
+                "got: {settings}"
             );
+            assert!(!settings.contains("\"symposium\""), "got: {settings}");
+
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// Turning the experiment off after a sync with it on has to *undo* the
+/// registration, or the agent keeps calling a meta-server the user disabled.
+#[tokio::test]
+async fn sync_swaps_registration_when_the_experiment_is_turned_off() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["mcp-filtering0", "workspace0"],
+        async |mut ctx| {
+            ctx.enable_experiment("mcp-meta-server")?;
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let settings_path = ctx.workspace_root.as_ref().unwrap().join(".mcp.json");
+            let settings = std::fs::read_to_string(&settings_path)?;
+            assert!(settings.contains("\"symposium\""), "got: {settings}");
+            assert!(!settings.contains("always-server"), "got: {settings}");
+
+            let config = ctx.sym.config_dir().join("config.toml");
+            let enabled = std::fs::read_to_string(&config)?;
+            std::fs::write(&config, enabled.replace("mcp-meta-server = true", ""))?;
+            ctx.sym = symposium::config::Symposium::from_dir(ctx.sym.config_dir());
+            ctx.symposium(&["sync"]).await?;
+
+            let settings = std::fs::read_to_string(&settings_path)?;
+            assert!(!settings.contains("\"symposium\""), "got: {settings}");
+            assert!(settings.contains("always-server"), "got: {settings}");
 
             Ok(())
         },
@@ -711,9 +768,13 @@ async fn sync_installs_skill_via_crate_manifest() {
     .unwrap();
 }
 
-/// `sync` registers an MCP server declared by a crate reached through a
-/// `[[plugins]]` chained reference — a crate-sourced plugin's MCP servers flow
-/// through the active plugin set, not just its skills.
+/// An MCP server declared by a crate reached through a `[[plugins]]` chained
+/// reference is available to the agent — a crate-sourced plugin's MCP servers
+/// flow through the active plugin set, not just its skills.
+///
+/// Run with the meta-server experiment on, where the agent's config carries
+/// only the `symposium` entry — so what proves the server reached the agent is
+/// that resolution finds it behind that entry.
 ///
 /// Fixture layout:
 /// - `facet-host` depends on `crate-f` (path dep)
@@ -726,14 +787,24 @@ async fn sync_registers_mcp_server_from_chained_crate() {
         TestMode::SimulationOnly,
         &["crate-facets0"],
         async |mut ctx| {
+            ctx.enable_experiment("mcp-meta-server")?;
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             ctx.symposium(&["sync"]).await?;
 
-            let workspace_root = ctx.workspace_root.as_ref().unwrap();
+            let workspace_root = ctx.workspace_root.as_ref().unwrap().clone();
             let settings = std::fs::read_to_string(workspace_root.join(".mcp.json"))?;
             assert!(
-                settings.contains("facet-server"),
-                "chained crate's MCP server should be registered:\n{settings}"
+                settings.contains(symposium::sync::META_SERVER_NAME),
+                "the meta-server entry should be registered:\n{settings}"
+            );
+
+            let resolution = symposium::mcp::resolve::resolve(&ctx.sym, &workspace_root).await;
+            let names: Vec<&str> = resolution.servers.iter().map(|s| s.name.as_str()).collect();
+            assert!(
+                names.contains(&"facet-server"),
+                "chained crate's MCP server should resolve, got {names:?} \
+                 (rejected: {:?})",
+                resolution.rejected
             );
             Ok(())
         },

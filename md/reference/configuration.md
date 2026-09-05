@@ -34,12 +34,12 @@ path = "my-plugins"
 
 ## Top-level keys
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `auto-sync` | bool | `true` | Automatically run `cargo agents sync` during hook invocations. When enabled, skills are kept in sync with workspace dependencies without manual intervention. |
-| `agents-syncing` | bool | `true` | Include each workspace plugin's `.agents/skills/` default skill group, so skills you author there install into every configured agent's skill directory (such as `.claude/skills/` or `.kiro/skills/`). Skills that symposium itself installed — identified by the `.symposium` marker file — are never treated as sources. See [Workspace skills](../workspace-skills.md) for the user-guide overview, or [Agents syncing](#agents-syncing-mirror-user-authored-skills) below for details. |
-| `hook-scope` | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace. |
-| `auto-update` | string | `"on"` | Controls automatic update behavior. `"off"` disables update checks entirely. `"warn"` checks the registry (at most once per 24 hours) and prints a message when a newer version is available. `"on"` automatically installs the update via `cargo install` and re-executes the command with the new binary. |
+| Key              | Type   | Default    | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------- | ------ | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auto-sync`      | bool   | `true`     | Automatically run `cargo agents sync` during hook invocations. When enabled, skills are kept in sync with workspace dependencies without manual intervention.                                                                                                                                                                                                                                                                                                                               |
+| `agents-syncing` | bool   | `true`     | Include each workspace plugin's `.agents/skills/` default skill group, so skills you author there install into every configured agent's skill directory (such as `.claude/skills/` or `.kiro/skills/`). Skills that symposium itself installed — identified by the `.symposium` marker file — are never treated as sources. See [Workspace skills](../workspace-skills.md) for the user-guide overview, or [Agents syncing](#agents-syncing-mirror-user-authored-skills) below for details. |
+| `hook-scope`     | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace.                                                                                                                                                                                                                                                                                                            |
+| `auto-update`    | string | `"on"`     | Controls automatic update behavior. `"off"` disables update checks entirely. `"warn"` checks the registry (at most once per 24 hours) and prints a message when a newer version is available. `"on"` automatically installs the update via `cargo install` and re-executes the command with the new binary.                                                                                                                                                                                 |
 
 ### Agents syncing: mirror user-authored skills
 
@@ -51,12 +51,12 @@ predicates = ["workspace-member()"]
 source.path = ".agents/skills"
 ```
 
-Skills you author in `.agents/skills/` therefore flow through the same pipeline as every other skill and install into each configured agent's own skill directory, so a single authored copy is visible to every agent. The `workspace-member()` gate is what keeps these maintainer skills from installing for *dependents* of a published crate — they apply only while working in the workspace itself.
+Skills you author in `.agents/skills/` therefore flow through the same pipeline as every other skill and install into each configured agent's own skill directory, so a single authored copy is visible to every agent. The `workspace-member()` gate is what keeps these maintainer skills from installing for _dependents_ of a published crate — they apply only while working in the workspace itself.
 
 Two `.symposium`-marker rules keep sources and copies distinct (symposium never writes a marker into a source, only into directories it installs):
 
 - Skill discovery skips marker-bearing directories, so copies symposium installed into `.agents/skills/` (for agents that read it natively) are never re-discovered as sources.
-- For an agent whose skill directory *is* `.agents/skills/`, a skill whose source already sits at its install slot is left in place — nothing is copied.
+- For an agent whose skill directory _is_ `.agents/skills/`, a skill whose source already sits at its install slot is left in place — nothing is copied.
 
 Installed copies receive the same marker and `*` `.gitignore` that plugin-installed skills get, which means: updates to the source are re-copied on each sync; removing the source removes the copies on the next sync (the normal stale-skill reap); disabling `agents-syncing = false` does the same; and a pre-existing user-managed directory in a target is never overwritten (the skill installs under a suffixed name instead).
 
@@ -72,14 +72,14 @@ Registering hooks at the project level requires you to run `cargo agents sync` w
 
 Each `[[agent]]` entry identifies an agent you use. You can configure multiple agents.
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `name` | string | *(required)* | Agent name: `claude`, `codex`, `copilot`, `gemini`, `goose`, `kiro`, or `opencode`. |
+| Key    | Type   | Default      | Description                                                                         |
+| ------ | ------ | ------------ | ----------------------------------------------------------------------------------- |
+| `name` | string | _(required)_ | Agent name: `claude`, `codex`, `copilot`, `gemini`, `goose`, `kiro`, or `opencode`. |
 
 ## `[logging]`
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
+| Key     | Type   | Default  | Description                                                           |
+| ------- | ------ | -------- | --------------------------------------------------------------------- |
 | `level` | string | `"info"` | Minimum log level. One of: `trace`, `debug`, `info`, `warn`, `error`. |
 
 ## `[telemetry]`
@@ -91,8 +91,8 @@ and share the data yourself with `cargo agents telemetry show`. The preference
 is also collected during `cargo agents init`. See the
 [telemetry design chapter](../design/telemetry.md) for the event format.
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
+| Key       | Type | Default | Description                                                                                                                                                                            |
+| --------- | ---- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `enabled` | bool | `false` | Record anonymous usage events (session starts, prompts, tool usage — counts and metadata only, no prompt or command content). Toggle with `cargo agents telemetry enable` / `disable`. |
 
 ```toml
@@ -100,41 +100,83 @@ is also collected during `cargo agents init`. See the
 enabled = true
 ```
 
+## `[experiments]`
+
+Unfinished features you can opt into. Every key defaults to `false` and carries
+no stability promise: an experiment may change shape, or be withdrawn, between
+releases.
+
+| Key               | Type | Default | Description                                                                                                                                                                                                                                                                                                                    |
+| ----------------- | ---- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `mcp-meta-server` | bool | `false` | Register a single `symposium` MCP entry (`cargo agents mcp-serve`) with each agent instead of one entry per plugin server, and let that server start the backing servers on demand. See [How registration works](./plugin-definition.md#how-registration-works). With the flag off, `cargo agents mcp-serve` refuses to start. |
+
+```toml
+[experiments]
+mcp-meta-server = true
+```
+
+A key this binary does not recognize — a typo, or an experiment that has since
+been withdrawn — fails to parse. Symposium warns and then runs with **every** setting at its default for that invocation, so fix or delete the key rather than leaving it in place.
+
+## `[mcp]`
+
+Tuning for the MCP meta-server: sandbox ceilings for one `execute` call and
+timings for the servers behind it. These take effect only when
+`[experiments] mcp-meta-server` is on. The sandbox limits (`script-*`, `max-*`)
+protect your session from a runaway agent-authored script, so a plugin cannot
+raise them; the per-server timings can be lowered by a plugin's own
+`[[mcp_servers]]` entry, never raised.
+
+| Key                           | Type    | Default | Description                                                                                                                                                                                             |
+| ----------------------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `script-timeout-secs`         | integer | `120`   | Wall-clock ceiling for one `execute` call. Bounds every tool call inside it, so it must exceed `tool-call-timeout-secs`.                                                                                |
+| `script-memory-limit-mb`      | integer | `64`    | Memory ceiling for the JavaScript runtime.                                                                                                                                                              |
+| `script-stack-limit-kb`       | integer | `1024`  | Stack ceiling for the JavaScript runtime.                                                                                                                                                               |
+| `max-tool-calls`              | integer | `100`   | Most backing-server tool calls one `execute` may make.                                                                                                                                                  |
+| `max-result-bytes`            | integer | `32768` | Ceiling on a serialized `execute` return value. Oversized results are truncated with a marker, not rejected.                                                                                            |
+| `max-console-bytes`           | integer | `8192`  | Ceiling on captured `console` output for one `execute`.                                                                                                                                                 |
+| `server-startup-timeout-secs` | integer | `30`    | Ceiling on spawning a backing server and completing its handshake.                                                                                                                                      |
+| `tool-call-timeout-secs`      | integer | `60`    | Ceiling on a single backing-server tool call. Must be below `script-timeout-secs`.                                                                                                                      |
+| `max-server-restarts`         | integer | `5`     | Restart attempts before a backing server is marked permanently failed.                                                                                                                                  |
+| `restart-stable-reset-secs`   | integer | `300`   | How long a backing server must stay connected before its restart counter resets.                                                                                                                        |
+| `shutdown-grace-secs`         | integer | `5`     | How long a backing server gets to exit before its process group is killed.                                                                                                                              |
+| `read-only`                   | bool    | `false` | Expose only tools annotated `readOnlyHint` and reject the rest at dispatch. The annotation is self-declared by the backing server, so this guards against agent mistakes, not against a hostile server. |
+
 ## `[defaults]`
 
 Controls the two built-in registries. Both are enabled by default.
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `symposium-recommendations` | bool | `true` | Fetch plugins from the [symposium-dev/recommendations](https://github.com/symposium-dev/recommendations) repository. |
-| `user-plugins` | bool | `true` | Scan `~/.symposium/plugins/` for user-defined plugins. |
+| Key                         | Type | Default | Description                                                                                                          |
+| --------------------------- | ---- | ------- | -------------------------------------------------------------------------------------------------------------------- |
+| `symposium-recommendations` | bool | `true`  | Fetch plugins from the [symposium-dev/recommendations](https://github.com/symposium-dev/recommendations) repository. |
+| `user-plugins`              | bool | `true`  | Scan `~/.symposium/plugins/` for user-defined plugins.                                                               |
 
 ## `[[registry]]`
 
 Defines additional registries — directories or repositories offering plugins. Each entry must have exactly one of `git` or `path`. `[[plugin-source]]` is the retired spelling of this table and is still accepted.
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `name` | string | *(required)* | A name for this registry. Used in logs and cache paths, and to attribute the plugins loaded from it. |
-| `git` | string | — | Repository URL. Fetched and cached under `~/.symposium/cache/plugin-sources/`, then read as a local directory. |
-| `path` | string | — | Local directory containing plugins. Relative paths are resolved from `~/.symposium/`. |
-| `auto-update` | bool | `true` | Check for updates on startup. Only applies to `git` registries. |
+| Key           | Type   | Default      | Description                                                                                                    |
+| ------------- | ------ | ------------ | -------------------------------------------------------------------------------------------------------------- |
+| `name`        | string | _(required)_ | A name for this registry. Used in logs and cache paths, and to attribute the plugins loaded from it.           |
+| `git`         | string | —            | Repository URL. Fetched and cached under `~/.symposium/cache/plugin-sources/`, then read as a local directory. |
+| `path`        | string | —            | Local directory containing plugins. Relative paths are resolved from `~/.symposium/`.                          |
+| `auto-update` | bool   | `true`       | Check for updates on startup. Only applies to `git` registries.                                                |
 
 ## `[plugins]`
 
-Enablement: which plugins are allowed to run at all, as distinct from the [predicates](./predicates.md) that decide *when* an enabled plugin applies.
+Enablement: which plugins are allowed to run at all, as distinct from the [predicates](./predicates.md) that decide _when_ an enabled plugin applies.
 
 Symposium trusts two things without asking: the workspace you are in, and the [registries](#registry) it is configured with. A registry exists to curate plugins, so enabling one is the act of accepting its curation. Both built-in registries count here and are on by default — `user-plugins` is your own directory, while `symposium-recommendations` is a list curated by the Symposium project and trusted until you turn it off in [`[defaults]`](#defaults).
 
-Your dependency list is deliberately not a trust root. Depending on a crate means compiling its code; it should not silently let the crate's author add instructions to your agent. So a plugin embedded in a dependency runs only once you say so, and a registry plugin that names no dependency anywhere is *dormant* — loaded and listed, but inactive — until you enable it by name.
+Your dependency list is deliberately not a trust root. Depending on a crate means compiling its code; it should not silently let the crate's author add instructions to your agent. So a plugin embedded in a dependency runs only once you say so, and a registry plugin that names no dependency anywhere is _dormant_ — loaded and listed, but inactive — until you enable it by name.
 
-Trust follows whoever supplies the *content*, not the package the content is about: a registry entry recommending a plugin for `serde` is the registry's own content and is trusted, while `serde`'s embedded plugin is not. One consequence is worth knowing: a trusted plugin may name a crate with a [`[[plugins]]` chained reference](./plugin-definition.md), and that crate's plugin content then loads without a `[plugins]` entry of its own — the registry is vouching for it.
+Trust follows whoever supplies the _content_, not the package the content is about: a registry entry recommending a plugin for `serde` is the registry's own content and is trusted, while `serde`'s embedded plugin is not. One consequence is worth knowing: a trusted plugin may name a crate with a [`[[plugins]]` chained reference](./plugin-definition.md), and that crate's plugin content then loads without a `[plugins]` entry of its own — the registry is vouching for it.
 
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| `auto-enable` | array of strings | `[]` | Dependency names whose embedded plugins load without being asked about. `"*"` pre-consents to every dependency. |
-| `use` | array | `[]` | Plugins enabled deliberately. Each entry is either a plain name (enabled in every workspace) or `{ name = "...", workspace = "/path" }` (enabled only while working in that workspace root). |
-| `disable` | array of strings | `[]` | Names that must never be enabled. Takes precedence over `auto-enable`, including over `"*"`. |
+| Key           | Type             | Default | Description                                                                                                                                                                                  |
+| ------------- | ---------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auto-enable` | array of strings | `[]`    | Dependency names whose embedded plugins load without being asked about. `"*"` pre-consents to every dependency.                                                                              |
+| `use`         | array            | `[]`    | Plugins enabled deliberately. Each entry is either a plain name (enabled in every workspace) or `{ name = "...", workspace = "/path" }` (enabled only while working in that workspace root). |
+| `disable`     | array of strings | `[]`    | Names that must never be enabled. Takes precedence over `auto-enable`, including over `"*"`.                                                                                                 |
 
 Names are matched hyphen/underscore-insensitively, like crate names: `widget-lib` and `widget_lib` are the same entry.
 
@@ -153,21 +195,21 @@ You rarely edit this section by hand. [`cargo agents use`](./cargo-agents-use.md
 
 User-wide data lives under `~/.symposium/` by default. Override with environment variables:
 
-| | Config | Cache | Logs |
-|---|---|---|---|
-| `SYMPOSIUM_HOME` | `$SYMPOSIUM_HOME/` | `$SYMPOSIUM_HOME/cache/` | `$SYMPOSIUM_HOME/logs/` |
-| XDG | `$XDG_CONFIG_HOME/symposium/` | `$XDG_CACHE_HOME/symposium/` | `$XDG_STATE_HOME/symposium/logs/` |
-| Default | `~/.symposium/` | `~/.symposium/cache/` | `~/.symposium/logs/` |
+|                  | Config                        | Cache                        | Logs                              |
+| ---------------- | ----------------------------- | ---------------------------- | --------------------------------- |
+| `SYMPOSIUM_HOME` | `$SYMPOSIUM_HOME/`            | `$SYMPOSIUM_HOME/cache/`     | `$SYMPOSIUM_HOME/logs/`           |
+| XDG              | `$XDG_CONFIG_HOME/symposium/` | `$XDG_CACHE_HOME/symposium/` | `$XDG_STATE_HOME/symposium/logs/` |
+| Default          | `~/.symposium/`               | `~/.symposium/cache/`        | `~/.symposium/logs/`              |
 
 `SYMPOSIUM_HOME` takes precedence over XDG variables.
 
 ## File locations
 
-| Path | Purpose |
-|------|---------|
-| `~/.symposium/config.toml` | User configuration |
-| `~/.symposium/state.toml` | Persistent state (binary version stamp, last update check) |
-| `~/.symposium/telemetry/` | Telemetry event log, one JSONL file per day (created when `[telemetry] enabled = true` and events are recorded) |
-| `~/.symposium/plugins/` | User-defined plugins |
-| `~/.symposium/cache/` | Cache directory (crate sources, plugin sources) |
-| `~/.symposium/logs/` | Log files (one per invocation, timestamped) |
+| Path                       | Purpose                                                                                                         |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `~/.symposium/config.toml` | User configuration                                                                                              |
+| `~/.symposium/state.toml`  | Persistent state (binary version stamp, last update check)                                                      |
+| `~/.symposium/telemetry/`  | Telemetry event log, one JSONL file per day (created when `[telemetry] enabled = true` and events are recorded) |
+| `~/.symposium/plugins/`    | User-defined plugins                                                                                            |
+| `~/.symposium/cache/`      | Cache directory (crate sources, plugin sources)                                                                 |
+| `~/.symposium/logs/`       | Log files (one per invocation, timestamped)                                                                     |

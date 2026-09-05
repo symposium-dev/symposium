@@ -260,6 +260,7 @@ pub async fn execute_hook(
         // event network cost. Best-effort; gated by `auto-sync`.
         if session_start && sym.config.auto_sync {
             prewarm_hook_sources(sym, &deps).await;
+            prewarm_mcp_servers(sym, &deps).await;
         }
 
         // Builtin dispatch → symposium output → host agent output as Value
@@ -488,6 +489,22 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<WorkspaceDeps>) {
             }
         }
     }
+}
+
+/// Acquire what MCP servers need, once per session.
+///
+/// Unlike hooks, a declared `requirements` entry is acquired eagerly: that is
+/// the author asking for a warm cache, and the alternative is the download
+/// landing on the agent's first tool call.
+async fn prewarm_mcp_servers(sym: &Symposium, deps: &Arc<WorkspaceDeps>) {
+    if !sym.config.experiments.mcp_meta_server {
+        return;
+    }
+    if deps.load().is_none() {
+        return;
+    }
+    let resolution = crate::mcp::resolve::resolve_with_deps(sym, deps).await;
+    crate::mcp::resolve::prewarm(sym, &resolution).await;
 }
 
 /// Built-in hook logic on canonical symposium types.

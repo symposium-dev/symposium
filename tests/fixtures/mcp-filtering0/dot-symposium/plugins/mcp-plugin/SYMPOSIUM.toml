@@ -6,24 +6,20 @@ name = "always-server"
 depends-on = ["*"]
 command = "/usr/bin/true"
 args = ["--stdio"]
-env = []
 
 [[mcp_servers]]
 name = "serde-server"
 depends-on = ["serde"]
 command = "/usr/bin/true"
 args = ["--stdio"]
-env = []
 
 [[mcp_servers]]
 name = "missing-crate-server"
 depends-on = ["reqwest"]
 command = "/usr/bin/true"
 args = ["--stdio"]
-env = []
 
 [[mcp_servers]]
 name = "inherited-server"
 command = "/usr/bin/true"
 args = ["--stdio"]
-env = []

@@ -54,7 +54,19 @@ async fn main() -> ExitCode {
 
     // Always install the report layer. Mode determines output format:
     // --json → accumulate JSON array; -v → stderr trace; default → stdout.
-    let (mode, level) = if cli.json {
+    // `mcp-serve` owns stdout for JSON-RPC. Reporting there would corrupt the
+    // stream, so it goes to stderr whatever the flags say.
+    let is_mcp_serve = matches!(cli.command, Some(Commands::McpServe));
+    let (mode, level) = if is_mcp_serve {
+        (
+            report::ReportMode::Verbose,
+            if cli.verbose {
+                tracing::Level::DEBUG
+            } else {
+                tracing::Level::INFO
+            },
+        )
+    } else if cli.json {
         let level = if cli.verbose {
             tracing::Level::DEBUG
         } else {
@@ -86,6 +98,7 @@ async fn main() -> ExitCode {
         Some(Commands::Hook { agent, event }) => {
             tracing::debug!(?agent, ?event, "cargo agents hook");
         }
+        Some(Commands::McpServe) => tracing::debug!("cargo agents mcp-serve"),
         Some(Commands::SelfUpdate) => tracing::info!("cargo agents self-update"),
         Some(Commands::CrateInfo { name, version }) => {
             tracing::debug!(%name, version = ?version, "cargo agents crate-info");
@@ -105,7 +118,7 @@ async fn main() -> ExitCode {
     // Hook commands are quiet by default (they're invoked by the agent, not the user).
     // JSON mode also suppresses human output (only JSON goes to stdout).
     let is_hook = matches!(cli.command, Some(Commands::Hook { .. }));
-    let out = if cli.quiet || is_hook || cli.json {
+    let out = if cli.quiet || is_hook || cli.json || is_mcp_serve {
         Output::quiet()
     } else {
         Output::normal()
@@ -122,17 +135,23 @@ async fn main() -> ExitCode {
         }
         _ => cli.update,
     };
-    plugins::ensure_registries(&sym, source_update).await;
+    // Skipped for `mcp-serve`: a client may spawn a throwaway copy to probe
+    // the server before the real session, so startup must not fetch or write.
+    if !is_mcp_serve {
+        plugins::ensure_registries(&sym, source_update).await;
+    }
 
     // Auto-update = "on": check for updates and re-exec if a new binary was
     // installed.  Skipped for self-update (which always checks explicitly)
     // and for hooks (session-start injects the warn nudge into hook output;
     // the "on" re-exec for hooks is handled here).
-    if !matches!(cli.command, Some(Commands::SelfUpdate)) && !is_hook {
+    // Re-exec during an MCP session would drop the client's connection.
+    if !matches!(cli.command, Some(Commands::SelfUpdate)) && !is_hook && !is_mcp_serve {
         if self_update::maybe_check_for_update(&sym, &out).await {
             self_update::re_exec();
         }
     } else if is_hook
+        && !is_mcp_serve
         && sym.config.auto_update == config::AutoUpdate::On
         && self_update::maybe_check_for_update(&sym, &Output::quiet()).await
     {
@@ -142,6 +161,57 @@ async fn main() -> ExitCode {
     match cli.command {
         // Commands that need direct I/O (stdin/stdout) stay in the binary
         Some(Commands::Hook { agent, event }) => hook::run(&sym, agent, event).await,
+
+        Some(Commands::McpServe) if !sym.config.experiments.mcp_meta_server => {
+            // stderr, never stdout: an enabled run owns stdout for JSON-RPC.
+            eprintln!(
+                "Error: the MCP meta-server is experimental and off by default. \
+                 Enable it in {}:\n\n[experiments]\nmcp-meta-server = true",
+                sym.config_dir().join("config.toml").display()
+            );
+            ExitCode::FAILURE
+        }
+
+        Some(Commands::McpServe) => {
+            let resolution = symposium::mcp::resolve::resolve(&sym, &cwd).await;
+            for rejection in &resolution.rejected {
+                tracing::warn!(
+                    server = %rejection.server,
+                    "skipping mcp server: {}",
+                    rejection.reason
+                );
+            }
+            let catalog = std::sync::Arc::new(symposium::mcp::catalog::Catalog::new(
+                std::sync::Arc::new(sym.clone()),
+                resolution,
+                symposium::mcp::supervisor::RestartPolicy {
+                    max_restarts: sym.config.mcp.max_server_restarts,
+                    stable_reset: std::time::Duration::from_secs(
+                        sym.config.mcp.restart_stable_reset_secs,
+                    ),
+                    shutdown_grace: std::time::Duration::from_secs(
+                        sym.config.mcp.shutdown_grace_secs,
+                    ),
+                    ..Default::default()
+                },
+                sym.config.mcp.read_only,
+                cwd.clone(),
+            ));
+            let limits = symposium::mcp::sandbox::Limits {
+                timeout: std::time::Duration::from_secs(sym.config.mcp.script_timeout_secs),
+                memory_bytes: (sym.config.mcp.script_memory_limit_mb as usize) << 20,
+                stack_bytes: (sym.config.mcp.script_stack_limit_kb as usize) << 10,
+                max_result_bytes: sym.config.mcp.max_result_bytes,
+                max_console_bytes: sym.config.mcp.max_console_bytes,
+            };
+            match symposium::mcp::server::serve(catalog, limits).await {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(err) => {
+                    eprintln!("Error: {err:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
 
         Some(Commands::Plugin { command }) => {
             let code = handle_plugin_command(&sym, command).await;

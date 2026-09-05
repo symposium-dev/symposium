@@ -221,6 +221,16 @@ impl Drop for TestContext {
 }
 
 impl TestContext {
+    /// Turn on an `[experiments]` flag in the fixture's `config.toml` and
+    /// reload, so the test exercises a feature that is off by default.
+    pub fn enable_experiment(&mut self, key: &str) -> anyhow::Result<()> {
+        let path = self.sym.config_dir().join("config.toml");
+        let existing = std::fs::read_to_string(&path).unwrap_or_default();
+        std::fs::write(&path, format!("{existing}\n[experiments]\n{key} = true\n"))?;
+        self.sym = Symposium::from_dir(self.sym.config_dir());
+        Ok(())
+    }
+
     /// Run a `symposium` CLI command in-process, returning captured output.
     pub async fn symposium(&mut self, args: &[&str]) -> anyhow::Result<String> {
         let mut full_args = vec!["cargo-agents"];

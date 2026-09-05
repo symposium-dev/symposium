@@ -10,7 +10,6 @@ name = "facet-server"
 depends-on = ["*"]
 command = "/usr/bin/true"
 args = ["--stdio"]
-env = []
 
 [[installations]]
 name = "facet-install"
