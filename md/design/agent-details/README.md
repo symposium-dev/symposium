@@ -145,12 +145,42 @@ Symposium uses the vendor-neutral `.agents/skills/` path whenever the agent supp
 
 Relevant if symposium exposes functionality via MCP.
 
-| Agent | MCP config location | Format |
-|---|---|---|
-| Claude Code | `.claude/settings.json` (`mcpServers` key) | JSON |
-| GitHub Copilot | `.vscode/mcp.json` (VS Code), `~/.copilot/mcp-config.json` (CLI) | JSON |
-| Gemini CLI | `.gemini/settings.json` (`mcpServers` key) | JSON |
-| Codex CLI | `.codex/config.toml` / `~/.codex/config.toml` (`mcp_servers` key) | TOML |
-| Kiro | `.kiro/settings/mcp.json`, `~/.kiro/settings/mcp.json` | JSON |
-| OpenCode | `opencode.json` (`mcp` key) | JSON |
-| Goose | `~/.config/goose/config.yaml` (`extensions` key) | YAML |
+An agent's MCP file is usually **not** the file its hooks live in, and the
+per-agent entry shapes differ more than they look. `Agent::mcp_config_path`
+encodes this table; every row marked verified was confirmed by asking the tool
+(`<tool> mcp list` reporting an entry symposium wrote, and `<tool> mcp add`
+showing which file it chooses), because a wrong guess here fails silently -
+symposium reports success for a file the agent never reads.
+
+| Agent | Project scope | User scope | Entry shape | Verified |
+|---|---|---|---|---|
+| Claude Code | `<project>/.mcp.json` | `~/.claude.json` | `mcpServers.<name>` = `{command, args}` | yes |
+| Gemini CLI | `.gemini/settings.json` | `~/.gemini/settings.json` | `mcpServers.<name>` = `{command, args}` | yes |
+| OpenCode | `<project>/opencode.json` | `~/.config/opencode/opencode.json` | `mcp.<name>` = `{type: "local", command: [bin, ...args], enabled, environment}` | yes |
+| Codex CLI | *(none - user scope only)* | `~/.codex/config.toml` | `[mcp_servers.<name>]` = `command`, `args` | yes |
+| GitHub Copilot CLI | *(none - user scope only)* | `~/.copilot/mcp-config.json` | `mcpServers.<name>` = `{command, args}` | yes |
+| Kiro | `.kiro/settings/mcp.json` | `~/.kiro/settings/mcp.json` | `mcpServers.<name>` = `{command, args}` | no (GUI only) |
+| Goose | *(none - user scope only)* | `~/.config/goose/config.yaml` | `extensions.<name>` = `{name, type: stdio, cmd, args, enabled, envs}` | yes |
+
+Notes that cost real debugging time:
+
+- Claude Code ignores `mcpServers` in `settings.json` at both scopes - that file
+  is hooks only. See [Claude Code](./claude-code.md#mcp-server-registration).
+- The Copilot **CLI** requires the `mcpServers` wrapper; entries written bare at
+  the top level make it reject the whole file (`mcpServers: Required`), taking
+  the user's own servers down with it. `.vscode/mcp.json` belongs to the VS Code
+  extension, a different product symposium does not currently target.
+- OpenCode rejects the entire config file for a wrong entry shape, so its
+  serializer is separate: the command is one array, and env vars go under
+  `environment` (an `env` key parses but never reaches the child).
+- Codex, Copilot CLI and Goose have no project-level MCP config, so project
+  scope resolves to their user-level file rather than to a file nobody reads.
+- Goose uses `cmd`, not `command`, and requires a `type`; the nested
+  `provider: mcp` / `config:` form it once got is rejected outright. Remote is
+  `type: streamable_http` with `uri` - Goose has no `sse` variant.
+- `env`/`headers` must be **maps**. ACP models them as `[{name, value}]` pairs,
+  and a list is skipped or rejected - silently, for an entry that differs from a
+  working one only by carrying env. Codex takes env as a TOML table, Goose as
+  `envs`, OpenCode as `environment`, everyone else as `env`.
+- The Copilot CLI also needs an explicit `type` (`local`/`http`/`sse`), or a
+  remote entry never appears.

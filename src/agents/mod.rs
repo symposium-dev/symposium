@@ -15,6 +15,19 @@ use serde_json::json;
 use crate::config::Symposium;
 use crate::output::{Output, display_path};
 
+/// Which of an agent's two MCP configuration levels to write.
+///
+/// Distinct from [`crate::config::HookScope`]: an agent may support one level
+/// and not the other, so this is a preference, not a guarantee (see
+/// [`Agent::supports_project_mcp_scope`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum McpScope {
+    /// Applies to one workspace.
+    Project,
+    /// Applies to every project this user opens.
+    User,
+}
+
 /// Supported AI agents.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Agent {
@@ -191,188 +204,124 @@ impl Agent {
     // MCP server registration
     // -----------------------------------------------------------------------
 
-    /// Register MCP servers in the project-level agent config.
-    pub fn register_project_mcp_servers(
-        &self,
-        project_root: &Path,
-        servers: &[sacp::schema::McpServer],
-        out: &Output,
-    ) -> Result<()> {
-        match self {
-            Agent::Claude => mcp_server_registration::register_claude_mcp_servers(
-                &project_root.join(".claude").join("settings.json"),
-                servers,
-                out,
-            ),
-            Agent::Codex => mcp_server_registration::register_codex_mcp_servers(
-                &project_root.join(".codex").join("config.toml"),
-                servers,
-                out,
-            ),
-            Agent::Copilot => mcp_server_registration::register_copilot_mcp_servers(
-                &project_root.join(".vscode").join("mcp.json"),
-                servers,
-                out,
-            ),
-            Agent::Gemini => mcp_server_registration::register_gemini_mcp_servers(
-                &project_root.join(".gemini").join("settings.json"),
-                servers,
-                out,
-            ),
-            Agent::Kiro => mcp_server_registration::register_kiro_mcp_servers(
-                &project_root.join(".kiro").join("settings").join("mcp.json"),
-                servers,
-                out,
-            ),
-            Agent::Goose => mcp_server_registration::register_goose_mcp_servers(
-                &project_root.join(".goose").join("config.yaml"),
-                servers,
-                out,
-            ),
-            Agent::OpenCode => mcp_server_registration::register_opencode_mcp_servers(
-                &project_root.join("opencode.json"),
-                servers,
-                out,
-            ),
+    /// Where an agent reads MCP servers from.
+    ///
+    /// Deliberately not the file its *hooks* live in: several agents keep the
+    /// two apart, and writing MCP entries into the hooks file means the agent
+    /// never sees them.
+    ///
+    /// Honors each tool's relocation env var (`CLAUDE_CONFIG_DIR`,
+    /// `XDG_CONFIG_HOME`), or a user who moved their config gets a file the
+    /// agent never reads.
+    pub fn mcp_config_path(&self, scope: McpScope, project_root: &Path, home: &Path) -> PathBuf {
+        let env_dir = |name: &str| {
+            std::env::var_os(name)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        };
+        let xdg_config = || {
+            env_dir("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config"))
+        };
+
+        match (self, scope) {
+            // Project MCP is `.mcp.json`; the user-level file is `.claude.json`.
+            // Neither is `settings.json`, which holds hooks.
+            (Agent::Claude, McpScope::Project) => project_root.join(".mcp.json"),
+            (Agent::Claude, McpScope::User) => env_dir("CLAUDE_CONFIG_DIR")
+                .unwrap_or_else(|| home.to_path_buf())
+                .join(".claude.json"),
+
+            (Agent::Gemini, McpScope::Project) => project_root.join(".gemini").join("settings.json"),
+            (Agent::Gemini, McpScope::User) => home.join(".gemini").join("settings.json"),
+
+            (Agent::OpenCode, McpScope::Project) => project_root.join("opencode.json"),
+            (Agent::OpenCode, McpScope::User) => {
+                xdg_config().join("opencode").join("opencode.json")
+            }
+
+            (Agent::Kiro, McpScope::Project) => {
+                project_root.join(".kiro").join("settings").join("mcp.json")
+            }
+            (Agent::Kiro, McpScope::User) => home.join(".kiro").join("settings").join("mcp.json"),
+
+            // No project-level MCP config exists for these: the CLI reads the
+            // user-level file only (Codex and Copilot verified by asking them
+            // from a project holding an entry: both reported none). Project
+            // scope therefore resolves to the same user-level file rather than
+            // to a file nobody reads.
+            (Agent::Codex, _) => home.join(".codex").join("config.toml"),
+            (Agent::Copilot, _) => home.join(".copilot").join("mcp-config.json"),
+            (Agent::Goose, _) => xdg_config().join("goose").join("config.yaml"),
         }
     }
 
-    /// Register MCP servers in the global agent config.
-    pub fn register_global_mcp_servers(
+    /// Whether this agent honors project-scoped MCP registration at all.
+    ///
+    /// `false` means [`Self::mcp_config_path`] ignores the requested scope and
+    /// answers with the user-level file, which callers may want to report.
+    pub fn supports_project_mcp_scope(&self) -> bool {
+        matches!(
+            self,
+            Agent::Claude | Agent::Gemini | Agent::OpenCode | Agent::Kiro
+        )
+    }
+
+    /// Register MCP servers in the agent's config for `scope`.
+    pub fn register_mcp_servers(
         &self,
+        scope: McpScope,
+        project_root: &Path,
         home: &Path,
         servers: &[sacp::schema::McpServer],
         out: &Output,
     ) -> Result<()> {
-        tracing::debug!(agent = %self.config_name(), count = servers.len(), "registering MCP servers");
+        tracing::debug!(agent = %self.config_name(), count = servers.len(), ?scope, "registering MCP servers");
+        let path = self.mcp_config_path(scope, project_root, home);
         match self {
-            Agent::Claude => mcp_server_registration::register_claude_mcp_servers(
-                &home.join(".claude").join("settings.json"),
-                servers,
-                out,
-            ),
-            Agent::Codex => mcp_server_registration::register_codex_mcp_servers(
-                &home.join(".codex").join("config.toml"),
-                servers,
-                out,
-            ),
-            Agent::Copilot => mcp_server_registration::register_copilot_mcp_servers(
-                &home.join(".copilot").join("mcp-config.json"),
-                servers,
-                out,
-            ),
-            Agent::Gemini => mcp_server_registration::register_gemini_mcp_servers(
-                &home.join(".gemini").join("settings.json"),
-                servers,
-                out,
-            ),
-            Agent::Kiro => mcp_server_registration::register_kiro_mcp_servers(
-                &home.join(".kiro").join("settings").join("mcp.json"),
-                servers,
-                out,
-            ),
-            Agent::Goose => mcp_server_registration::register_goose_mcp_servers(
-                &home.join(".config").join("goose").join("config.yaml"),
-                servers,
-                out,
-            ),
-            Agent::OpenCode => mcp_server_registration::register_opencode_mcp_servers(
-                &home.join(".config").join("opencode").join("opencode.json"),
-                servers,
-                out,
-            ),
+            Agent::Claude => {
+                mcp_server_registration::register_claude_mcp_servers(&path, servers, out)
+            }
+            Agent::Codex => mcp_server_registration::register_codex_mcp_servers(&path, servers, out),
+            Agent::Copilot => {
+                mcp_server_registration::register_copilot_mcp_servers(&path, servers, out)
+            }
+            Agent::Gemini => {
+                mcp_server_registration::register_gemini_mcp_servers(&path, servers, out)
+            }
+            Agent::Kiro => mcp_server_registration::register_kiro_mcp_servers(&path, servers, out),
+            Agent::Goose => mcp_server_registration::register_goose_mcp_servers(&path, servers, out),
+            Agent::OpenCode => {
+                mcp_server_registration::register_opencode_mcp_servers(&path, servers, out)
+            }
         }
     }
 
-    /// Remove MCP servers from the project-level agent config.
-    pub fn unregister_project_mcp_servers(
+    /// Remove MCP servers from the agent's config for `scope`.
+    pub fn unregister_mcp_servers(
         &self,
+        scope: McpScope,
         project_root: &Path,
-        names: &[&str],
-        out: &Output,
-    ) -> Result<()> {
-        match self {
-            Agent::Claude => mcp_server_registration::unregister_claude_mcp_servers(
-                &project_root.join(".claude").join("settings.json"),
-                names,
-                out,
-            ),
-            Agent::Codex => mcp_server_registration::unregister_codex_mcp_servers(
-                &project_root.join(".codex").join("config.toml"),
-                names,
-                out,
-            ),
-            Agent::Copilot => mcp_server_registration::unregister_copilot_mcp_servers(
-                &project_root.join(".vscode").join("mcp.json"),
-                names,
-                out,
-            ),
-            Agent::Gemini => mcp_server_registration::unregister_gemini_mcp_servers(
-                &project_root.join(".gemini").join("settings.json"),
-                names,
-                out,
-            ),
-            Agent::Kiro => mcp_server_registration::unregister_kiro_mcp_servers(
-                &project_root.join(".kiro").join("settings").join("mcp.json"),
-                names,
-                out,
-            ),
-            Agent::Goose => mcp_server_registration::unregister_goose_mcp_servers(
-                &project_root.join(".goose").join("config.yaml"),
-                names,
-                out,
-            ),
-            Agent::OpenCode => mcp_server_registration::unregister_opencode_mcp_servers(
-                &project_root.join("opencode.json"),
-                names,
-                out,
-            ),
-        }
-    }
-
-    /// Remove MCP servers from the global agent config.
-    pub fn unregister_global_mcp_servers(
-        &self,
         home: &Path,
         names: &[&str],
         out: &Output,
     ) -> Result<()> {
+        let path = self.mcp_config_path(scope, project_root, home);
         match self {
-            Agent::Claude => mcp_server_registration::unregister_claude_mcp_servers(
-                &home.join(".claude").join("settings.json"),
-                names,
-                out,
-            ),
-            Agent::Codex => mcp_server_registration::unregister_codex_mcp_servers(
-                &home.join(".codex").join("config.toml"),
-                names,
-                out,
-            ),
-            Agent::Copilot => mcp_server_registration::unregister_copilot_mcp_servers(
-                &home.join(".copilot").join("mcp-config.json"),
-                names,
-                out,
-            ),
-            Agent::Gemini => mcp_server_registration::unregister_gemini_mcp_servers(
-                &home.join(".gemini").join("settings.json"),
-                names,
-                out,
-            ),
-            Agent::Kiro => mcp_server_registration::unregister_kiro_mcp_servers(
-                &home.join(".kiro").join("settings").join("mcp.json"),
-                names,
-                out,
-            ),
-            Agent::Goose => mcp_server_registration::unregister_goose_mcp_servers(
-                &home.join(".config").join("goose").join("config.yaml"),
-                names,
-                out,
-            ),
-            Agent::OpenCode => mcp_server_registration::unregister_opencode_mcp_servers(
-                &home.join(".config").join("opencode").join("opencode.json"),
-                names,
-                out,
-            ),
+            Agent::Claude => {
+                mcp_server_registration::unregister_claude_mcp_servers(&path, names, out)
+            }
+            Agent::Codex => mcp_server_registration::unregister_codex_mcp_servers(&path, names, out),
+            Agent::Copilot => {
+                mcp_server_registration::unregister_copilot_mcp_servers(&path, names, out)
+            }
+            Agent::Gemini => {
+                mcp_server_registration::unregister_gemini_mcp_servers(&path, names, out)
+            }
+            Agent::Kiro => mcp_server_registration::unregister_kiro_mcp_servers(&path, names, out),
+            Agent::Goose => mcp_server_registration::unregister_goose_mcp_servers(&path, names, out),
+            Agent::OpenCode => {
+                mcp_server_registration::unregister_opencode_mcp_servers(&path, names, out)
+            }
         }
     }
 
@@ -1055,12 +1004,27 @@ fn load_json_or_empty(path: &Path) -> Result<serde_json::Value> {
     }
 }
 
+/// Write JSON config, replacing the file atomically.
+///
+/// Temp file plus rename, because some of these are live agent state (Claude
+/// Code rewrites `~/.claude.json` throughout a session) and a truncating write
+/// that loses a race leaves a document the agent cannot parse.
+///
+/// Bounds torn reads, not lost updates. What keeps that window from mattering is
+/// that registration writes only when an entry actually differs.
 fn save_json(path: &Path, value: &serde_json::Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
     let contents = serde_json::to_string_pretty(value)?;
-    fs::write(path, contents)?;
+
+    // Pid-suffixed so two concurrent syncs cannot share a temp path.
+    let temp = path.with_extension(format!("symposium-tmp-{}", std::process::id()));
+    fs::write(&temp, contents)?;
+    if let Err(e) = fs::rename(&temp, path) {
+        let _ = fs::remove_file(&temp);
+        return Err(e.into());
+    }
     Ok(())
 }
 
@@ -1075,6 +1039,139 @@ mod tests {
         assert_eq!(Agent::from_config_name("copilot").unwrap(), Agent::Copilot);
         assert_eq!(Agent::from_config_name("gemini").unwrap(), Agent::Gemini);
         assert!(Agent::from_config_name("unknown").is_err());
+    }
+
+    /// Each path was confirmed by asking the tool itself, not read off docs: a
+    /// wrong one fails silently, since symposium reports success for writing a
+    /// file the agent never reads.
+    #[test]
+    fn mcp_config_paths_match_what_each_agent_reads() {
+        let project = Path::new("/project");
+        let home = Path::new("/home/user");
+        let cases = [
+            (Agent::Claude, "/project/.mcp.json", "/home/user/.claude.json"),
+            (
+                Agent::Gemini,
+                "/project/.gemini/settings.json",
+                "/home/user/.gemini/settings.json",
+            ),
+            (
+                Agent::OpenCode,
+                "/project/opencode.json",
+                "/home/user/.config/opencode/opencode.json",
+            ),
+            (
+                Agent::Kiro,
+                "/project/.kiro/settings/mcp.json",
+                "/home/user/.kiro/settings/mcp.json",
+            ),
+        ];
+        for (agent, project_path, user_path) in cases {
+            assert_eq!(
+                agent.mcp_config_path(McpScope::Project, project, home),
+                PathBuf::from(project_path),
+                "{agent:?} project scope"
+            );
+            // Env-relocatable on purpose; mutating env here would race other tests.
+            if !relocated_by_env(agent) {
+                assert_eq!(
+                    agent.mcp_config_path(McpScope::User, project, home),
+                    PathBuf::from(user_path),
+                    "{agent:?} user scope"
+                );
+            }
+            assert!(agent.supports_project_mcp_scope(), "{agent:?}");
+        }
+    }
+
+    /// Is this agent's user-scope path redirected by an env var right now?
+    fn relocated_by_env(agent: Agent) -> bool {
+        let set = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+        match agent {
+            Agent::Claude => set("CLAUDE_CONFIG_DIR"),
+            Agent::OpenCode | Agent::Goose => set("XDG_CONFIG_HOME"),
+            _ => false,
+        }
+    }
+
+    #[test]
+    fn claude_user_path_follows_claude_config_dir() {
+        let path = Agent::Claude.mcp_config_path(
+            McpScope::User,
+            Path::new("/project"),
+            Path::new("/home/user"),
+        );
+        match std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
+            Some(dir) => assert_eq!(path, PathBuf::from(dir).join(".claude.json")),
+            None => assert_eq!(path, PathBuf::from("/home/user/.claude.json")),
+        }
+    }
+
+    /// These CLIs read only their user-level file, so project scope resolves
+    /// there rather than to a project file they would ignore.
+    #[test]
+    fn agents_without_project_mcp_scope_fall_back_to_the_user_file() {
+        let project = Path::new("/project");
+        let home = Path::new("/home/user");
+        for (agent, expected) in [
+            (Agent::Codex, "/home/user/.codex/config.toml"),
+            (Agent::Copilot, "/home/user/.copilot/mcp-config.json"),
+            (Agent::Goose, "/home/user/.config/goose/config.yaml"),
+        ] {
+            assert!(!agent.supports_project_mcp_scope(), "{agent:?}");
+            for scope in [McpScope::Project, McpScope::User] {
+                let path = agent.mcp_config_path(scope, project, home);
+                if !relocated_by_env(agent) {
+                    assert_eq!(path, PathBuf::from(expected), "{agent:?} {scope:?}");
+                } else {
+                    // Still the point of the test: both scopes agree.
+                    assert_eq!(
+                        path,
+                        agent.mcp_config_path(McpScope::User, project, home),
+                        "{agent:?} {scope:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Compared per agent against *its own* hook file: a global "never
+    /// `.claude/settings.json`" check would pass while pointing Codex at
+    /// `.codex/hooks.json`.
+    ///
+    /// Gemini is the legitimate exception - `.gemini/settings.json` carries both,
+    /// confirmed by `gemini mcp list` reading entries written beside the hooks.
+    #[test]
+    fn mcp_config_is_never_the_agents_own_hooks_file() {
+        let project = Path::new("/project");
+        let home = Path::new("/home/user");
+        for &agent in Agent::all() {
+            if agent == Agent::Gemini {
+                continue;
+            }
+            for (scope, root) in [
+                (McpScope::Project, project),
+                (McpScope::User, home),
+            ] {
+                let mcp = agent.mcp_config_path(scope, project, home);
+                for hooks in hook_paths_for(agent, root) {
+                    assert_ne!(mcp, hooks, "{agent:?} {scope:?} writes MCP into its hooks file");
+                }
+            }
+        }
+    }
+
+    /// Mirrors the targets [`Agent::register_hooks`] writes.
+    fn hook_paths_for(agent: Agent, root: &Path) -> Vec<PathBuf> {
+        match agent {
+            Agent::Claude => vec![root.join(".claude").join("settings.json")],
+            Agent::Codex => vec![root.join(".codex").join("hooks.json")],
+            Agent::Copilot => vec![root.join(".github").join("hooks")],
+            Agent::Gemini => vec![root.join(".gemini").join("settings.json")],
+            Agent::Kiro => vec![root.join(".kiro").join("agents")],
+            // Skills-only agents register no hooks at all.
+            Agent::Goose | Agent::OpenCode => vec![],
+        }
     }
 
     #[test]

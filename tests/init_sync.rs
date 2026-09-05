@@ -426,7 +426,9 @@ async fn sync_filters_mcp_servers_by_crates() {
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-            let settings_path = workspace_root.join(".claude/settings.json");
+            // `.mcp.json`, not the `settings.json` that carries hooks: Claude
+            // does not read `mcpServers` from the latter.
+            let settings_path = workspace_root.join(".mcp.json");
             let settings = std::fs::read_to_string(&settings_path)?;
 
             // always-server (depends-on = ["*"]) → registered
@@ -728,7 +730,7 @@ async fn sync_registers_mcp_server_from_chained_crate() {
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-            let settings = std::fs::read_to_string(workspace_root.join(".claude/settings.json"))?;
+            let settings = std::fs::read_to_string(workspace_root.join(".mcp.json"))?;
             assert!(
                 settings.contains("facet-server"),
                 "chained crate's MCP server should be registered:\n{settings}"

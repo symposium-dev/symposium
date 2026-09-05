@@ -61,19 +61,47 @@ the Goose config file.
 
 ### Configuration structure
 
-The MCP server entry is added under `extensions` in the YAML config:
+The MCP server entry is added under `extensions` in the YAML config. Goose's
+schema has its own vocabulary - a `type` discriminant, the binary under `cmd`
+(not `command`), and env as an `envs` map:
 
 ```yaml
 extensions:
   symposium:
-    provider: mcp
-    config:
-      command: /path/to/cargo-agents
-      args: [mcp]
+    name: symposium
+    type: stdio
+    cmd: /path/to/cargo-agents
+    args: [mcp]
+    enabled: true
+    envs:
+      TOKEN: abc
 ```
 
-- **Project-level**: `.goose/config.yaml`
+A remote server is `type: streamable_http` with the endpoint under `uri`. There
+is no `sse` variant - the accepted set is `stdio`, `builtin`, `platform`,
+`streamable_http`, `frontend`, `inline_python`, which `goose recipe validate`
+will list back at you for a wrong one:
+
+```yaml
+extensions:
+  remote:
+    name: remote
+    type: streamable_http
+    uri: https://example.com/mcp
+    enabled: true
+    headers:
+      Authorization: Bearer t
+```
+
 - **User-level**: `~/.config/goose/config.yaml`
+- **Project-level**: none - Goose reads only the user-level file, so
+  project-scoped registration resolves there.
+
+Two ways to check a change without a configured LLM provider: `goose recipe
+validate` on a recipe holding the entry (it deserializes the same
+`ExtensionConfig`), and `goose run --text hi`, whose startup warnings name each
+extension it tried to launch. `goose info -v` only echoes the raw YAML, so it
+cannot tell an accepted entry from a rejected one.
 
 Registration is idempotent — if the entry already exists with the correct
 values, no changes are made. Stale entries are updated in place.

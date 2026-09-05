@@ -181,13 +181,15 @@ Decision precedence across parallel hooks: **deny > defer > ask > allow**. The `
 ## MCP Server Registration
 
 In addition to hooks, symposium registers itself as an MCP server in the
-agent's settings file. This provides an alternative integration path
+agent's MCP configuration. This provides an alternative integration path
 alongside the hook-based approach.
 
 ### Configuration structure
 
-The MCP server entry is added under `mcpServers` in the same settings
-file used for hooks:
+The entry goes under `mcpServers` - but **not** in the `settings.json` that
+carries hooks. Claude Code does not read `mcpServers` from a settings file at
+either scope; entries written there are silently ignored (`claude mcp list`
+shows nothing, and a session sees no tools). MCP has its own two files:
 
 ```json
 {
@@ -200,8 +202,17 @@ file used for hooks:
 }
 ```
 
-- **Project-level**: `.claude/settings.json`
-- **User-level**: `~/.claude/settings.json`
+- **Project-level**: `<project>/.mcp.json`
+- **User-level**: `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`)
+
+Confirmed against the CLI: `claude mcp add -s project` writes the former,
+`-s user` the latter.
+
+A server in a project `.mcp.json` starts out **pending approval** - Claude asks
+before trusting a server a repository supplies. Symposium deliberately does not
+pre-approve its own entries (that would mean overriding a trust prompt on the
+user's behalf); approve once via `/mcp`, or add the name to
+`enabledMcpjsonServers` in your own settings if you want it standing.
 
 Registration is idempotent — if the entry already exists with the
 correct values, no changes are made. If the entry exists but has stale

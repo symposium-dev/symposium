@@ -402,12 +402,32 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
             crate::config::HookScope::Project => project_root.clone(),
         };
 
-        // Register hooks and MCP servers
+        // MCP does not follow `hook_root`: an agent's MCP file differs from its
+        // hooks file, so the target is resolved per agent instead.
         agent
             .register_hooks(&hook_root, sym, out)
             .context("failed to register hooks")?;
+        let mcp_scope = match sym.config.hook_scope {
+            crate::config::HookScope::Global => crate::agents::McpScope::User,
+            crate::config::HookScope::Project => crate::agents::McpScope::Project,
+        };
+        // Reported, not logged: the user asked for project scope and is getting a
+        // machine-wide entry.
+        if mcp_scope == crate::agents::McpScope::Project
+            && !agent.supports_project_mcp_scope()
+            && !mcp_servers.is_empty()
+        {
+            tracing::info!(
+                report = %crate::report::ReportEvent::Info {
+                    message: format!(
+                        "{} has no project-level MCP config; registering its servers at user level",
+                        agent.display_name(),
+                    ),
+                },
+            );
+        }
         agent
-            .register_global_mcp_servers(&hook_root, &mcp_servers, out)
+            .register_mcp_servers(mcp_scope, &project_root, sym.home_dir(), &mcp_servers, out)
             .context("failed to register MCP servers")?;
 
         for (skill_name, origin_hash, skill_source) in &to_install {
@@ -531,11 +551,23 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
         }
     }
 
-    // Unregister hooks/MCP for agents no longer configured
+    // Both scopes: entries may have been written under either, and a leftover
+    // one keeps pointing the agent at a server this workspace no longer offers.
     for &agent in Agent::all() {
         if !agent_names.contains(&agent.config_name().to_string()) {
             agent.unregister_hooks(sym.home_dir(), sym, out);
-            let _ = agent.unregister_global_mcp_servers(sym.home_dir(), &server_names, out);
+            for scope in [
+                crate::agents::McpScope::Project,
+                crate::agents::McpScope::User,
+            ] {
+                let _ = agent.unregister_mcp_servers(
+                    scope,
+                    &project_root,
+                    sym.home_dir(),
+                    &server_names,
+                    out,
+                );
+            }
         }
     }
 
@@ -573,17 +605,26 @@ pub async fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
 
     let agent_names: Vec<String> = sym.config.agents.iter().map(|a| a.name.clone()).collect();
 
+    // `init` has no workspace in hand, so this is the user-level pass only;
+    // the project-level file is written by the first `sync` in a workspace.
+    let home = sym.home_dir();
     for agent_name in &agent_names {
         let agent = Agent::from_config_name(agent_name)?;
-        agent.register_hooks(sym.home_dir(), sym, out)?;
-        agent.register_global_mcp_servers(sym.home_dir(), &mcp_servers, out)?;
+        agent.register_hooks(home, sym, out)?;
+        agent.register_mcp_servers(crate::agents::McpScope::User, home, home, &mcp_servers, out)?;
     }
 
     // Unregister hooks for agents no longer configured
     for &agent in Agent::all() {
         if !agent_names.contains(&agent.config_name().to_string()) {
-            agent.unregister_hooks(sym.home_dir(), sym, out);
-            let _ = agent.unregister_global_mcp_servers(sym.home_dir(), &server_names, out);
+            agent.unregister_hooks(home, sym, out);
+            let _ = agent.unregister_mcp_servers(
+                crate::agents::McpScope::User,
+                home,
+                home,
+                &server_names,
+                out,
+            );
         }
     }
 
