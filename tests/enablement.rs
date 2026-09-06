@@ -339,6 +339,35 @@ async fn search_renders_grouped_by_origin() {
     .unwrap();
 }
 
+/// `disable` is the last word, so `use` on a declined plugin is refused
+/// rather than recorded. Recording it would report success and then install
+/// nothing, since activation refuses the plugin too.
+#[tokio::test]
+async fn use_on_a_disabled_plugin_errors() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            symposium::discovery::apply_consent(&mut ctx.sym, &[], &["crate-a".to_string()])?;
+
+            let err = ctx
+                .symposium(&["use", "crate-a"])
+                .await
+                .expect_err("a disabled plugin cannot be enabled by name");
+            assert!(
+                err.to_string().contains("disabled in `[plugins] disable`"),
+                "{err}"
+            );
+            let config = read_config(&ctx);
+            assert!(!config.contains("use = "), "nothing recorded: {config}");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 // ── status ───────────────────────────────────────────────────────────
 
 /// `status` reports an undecided dependency plugin as a candidate, then as
@@ -582,6 +611,37 @@ async fn session_start_hints_pending_candidates() {
             assert!(context.contains("crate-a"), "{context}");
             assert!(context.contains("cargo agents use"), "{context}");
             assert!(context.contains("Do not enable them yourself"), "{context}");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// A plugin named by both `use` and `disable` is reported declined, matching
+/// what activation does with it. The two must agree, or `status` says a
+/// plugin is active while it never runs.
+#[tokio::test]
+async fn status_reports_a_used_but_disabled_plugin_as_declined() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+
+            ctx.symposium(&["use", "crate-a"]).await?;
+            // Straight into the config: `use` itself now refuses this pairing,
+            // but a hand-edited config can still hold both.
+            symposium::discovery::apply_consent(&mut ctx.sym, &[], &["crate-a".to_string()])?;
+
+            let deps = ctx.sym.workspace_deps(&workspace_root);
+            let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
+            let entry = entries
+                .iter()
+                .find(|e| e.name == "crate-a")
+                .expect("crate-a present");
+            assert_eq!(entry.state, StatusState::Declined);
             Ok(())
         },
     )

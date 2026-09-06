@@ -32,6 +32,14 @@ pub async fn use_plugin(
     global: bool,
     update: UpdateLevel,
 ) -> Result<()> {
+    // `disable` outranks every way of enabling a plugin, `use` included, so
+    // recording an entry here would report success and then install nothing.
+    // Re-enabling is dropping the `disable` entry, which is a deliberate edit
+    // rather than something `use` undoes on the user's behalf.
+    if sym.config.plugins.is_disabled(name) {
+        bail!("`{name}` is disabled in `[plugins] disable`; remove that entry to enable it again");
+    }
+
     // A configured registry is a trust root: what it offers is already
     // enabled by configuration, so there is nothing to record. The exception
     // is a dormant plugin, for which `use` is exactly the wake-up call.
