@@ -1,6 +1,6 @@
 # Writing a hook handler
 
-This guide walks through writing a symposium hook handler in Rust using the `symposium-hook` crate.
+This guide walks through writing a symposium hook handler in Rust using the `symposium-sdk` crate.
 
 ## Step 1. Create a new binary crate
 
@@ -11,27 +11,27 @@ cargo new my-hook-handler
 cd my-hook-handler
 ```
 
-And then add symposium-hook to your dependencies:
+And then add symposium-sdk to your dependencies:
 
 ```bash
-cargo add symposium-hook
+cargo add symposium-sdk
 ```
 
 ## Step 2. Write the handler
 
-A hook handler is a program that reads a JSON event on stdin and writes a JSON response to stdout. The `symposium-hook` crate provides a `HookHandler` trait and a `run()` harness that handles the plumbing.
+A hook handler is a program that reads a JSON event on stdin and writes a JSON response to stdout. The `symposium-sdk` crate provides a `HookHandler` trait and a `run()` harness that handles the plumbing.
 
 Implement `HookHandler` and override the methods for the events you care about:
 
 ```rust
 // src/main.rs
 use std::process::ExitCode;
-use symposium_hook::{HookHandler, PreToolUseInput, PreToolUseOutput, run};
+use symposium_sdk::hook::{HookHandler, PreToolUseInput, PreToolUseOutput, run};
 
 struct MyHook;
 
 impl HookHandler for MyHook {
-    fn pre_tool_use(&self, event: &PreToolUseInput) -> anyhow::Result<PreToolUseOutput> {
+    async fn pre_tool_use(&self, event: &PreToolUseInput) -> anyhow::Result<PreToolUseOutput> {
         if event.tool_name == "Bash" {
             Ok(PreToolUseOutput::context("Remember: prefer non-destructive commands"))
         } else {
@@ -92,11 +92,11 @@ Return `Err(...)` from any method to report an error (exit code 1, message on st
 
 ```rust
 pub trait HookHandler {
-    fn handle_event(&self, input: &Input) -> anyhow::Result<Output> { /* dispatches */ }
-    fn pre_tool_use(&self, event: &PreToolUseInput) -> anyhow::Result<PreToolUseOutput> { /* default */ }
-    fn post_tool_use(&self, event: &PostToolUseInput) -> anyhow::Result<PostToolUseOutput> { /* default */ }
-    fn user_prompt_submit(&self, event: &UserPromptSubmitInput) -> anyhow::Result<UserPromptSubmitOutput> { /* default */ }
-    fn session_start(&self, event: &SessionStartInput) -> anyhow::Result<SessionStartOutput> { /* default */ }
+    async fn handle_event(&self, input: &Input) -> anyhow::Result<Output> { /* dispatches */ }
+    async fn pre_tool_use(&self, event: &PreToolUseInput) -> anyhow::Result<PreToolUseOutput> { /* default */ }
+    async fn post_tool_use(&self, event: &PostToolUseInput) -> anyhow::Result<PostToolUseOutput> { /* default */ }
+    async fn user_prompt_submit(&self, event: &UserPromptSubmitInput) -> anyhow::Result<UserPromptSubmitOutput> { /* default */ }
+    async fn session_start(&self, event: &SessionStartInput) -> anyhow::Result<SessionStartOutput> { /* default */ }
 }
 ```
 
@@ -122,11 +122,11 @@ echo '{"PreToolUse":{"tool_name":"Bash","tool_input":{"command":"rm -rf /"},"ses
 ## Example: blocking destructive commands
 
 ```rust
-{{#include ../../symposium-hook/examples/block_destructive.rs}}
+{{#include ../../symposium-sdk/examples/block_destructive.rs}}
 ```
 
 ## Example: injecting context on session start
 
 ```rust
-{{#include ../../symposium-hook/examples/inject_context.rs}}
+{{#include ../../symposium-sdk/examples/inject_context.rs}}
 ```
