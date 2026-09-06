@@ -179,25 +179,23 @@ impl<'a> PredicateContext<'a> {
         }
 
         let disk_key = cache_key(name, arg);
-        if let Some(cache) = &self.disk_cache {
-            if let Some(entry) = cache.get(&disk_key) {
-                if !entry.is_time_expired(now_ms())
-                    && Fingerprints::capture(&watch_set_from_entry(entry)) == entry.fingerprints
-                {
-                    // Disk hit. Populate the in-memory cache with a result
-                    // that has no events; the events belong to the run that
-                    // originally produced this entry.
-                    let passed = entry.result;
-                    self.custom_cache.insert(
-                        mem_key,
-                        CustomPredicateResult {
-                            passed,
-                            events: Vec::new(),
-                        },
-                    );
-                    return passed;
-                }
-            }
+        if let Some(cache) = &self.disk_cache
+            && let Some(entry) = cache.get(&disk_key)
+            && !entry.is_time_expired(now_ms())
+            && Fingerprints::capture(&watch_set_from_entry(entry)) == entry.fingerprints
+        {
+            // Disk hit. Populate the in-memory cache with a result
+            // that has no events; the events belong to the run that
+            // originally produced this entry.
+            let passed = entry.result;
+            self.custom_cache.insert(
+                mem_key,
+                CustomPredicateResult {
+                    passed,
+                    events: Vec::new(),
+                },
+            );
+            return passed;
         }
 
         let result = run_custom_predicate(&self.custom_entries, name, arg);

@@ -182,8 +182,10 @@ mod tests {
     #[test]
     fn should_check_when_interval_elapsed() {
         let tmp = tempfile::tempdir().unwrap();
-        let mut state = State::default();
-        state.last_update_check = Some(Utc::now() - chrono::Duration::hours(25));
+        let state = State {
+            last_update_check: Some(Utc::now() - chrono::Duration::hours(25)),
+            ..State::default()
+        };
         save(tmp.path(), &state);
         assert!(should_check_for_update(tmp.path()));
     }

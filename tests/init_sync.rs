@@ -40,7 +40,7 @@ fn find_installed_skills(parent: &Path, skill_name: &str) -> Vec<PathBuf> {
 
 /// Locate the unique installed skill directory by name. Panics if 0 or
 /// >1 directories match. Use `find_installed_skills` when the test cares
-/// about how many were installed.
+/// > about how many were installed.
 fn find_installed_skill(parent: &Path, skill_name: &str) -> PathBuf {
     let mut hits = find_installed_skills(parent, skill_name);
     assert_eq!(

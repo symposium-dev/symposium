@@ -138,10 +138,11 @@ mod tests {
         let workspace = tmp.path().join("project");
         fs::create_dir_all(&workspace).unwrap();
 
-        let mut state = WorkspaceState::default();
-        state.last_sync_lock_mtime = Some(1234567890);
-        state.last_sync_battery_pack_mtime = Some(9876543210);
-        state.workspace_root = Some(workspace.clone());
+        let state = WorkspaceState {
+            last_sync_lock_mtime: Some(1234567890),
+            last_sync_battery_pack_mtime: Some(9876543210),
+            workspace_root: Some(workspace.clone()),
+        };
         state.save(&sym, &workspace);
 
         let loaded = WorkspaceState::load(&sym, &workspace);

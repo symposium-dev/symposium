@@ -4414,7 +4414,7 @@ mod tests {
             command = "tool"
             bogus = 42
         "#};
-        let err = from_str(toml).err().expect("expected error");
+        let err = from_str(toml).expect_err("expected error");
         let msg = format!("{err:#}");
         assert!(msg.contains("bogus") || msg.contains("unknown"), "{msg}");
     }
@@ -4434,7 +4434,7 @@ mod tests {
             description = "Try to shadow init"
             command = "tool"
         "#};
-        let err = from_str(toml).err().expect("expected error");
+        let err = from_str(toml).expect_err("expected error");
         let msg = format!("{err:#}");
         assert!(msg.contains("shadows") && msg.contains("init"), "{msg}");
     }
@@ -4454,7 +4454,7 @@ mod tests {
             description = "dotted name"
             command = "tool"
         "#};
-        let err = from_str(toml).err().expect("expected error");
+        let err = from_str(toml).expect_err("expected error");
         let msg = format!("{err:#}");
         assert!(msg.contains("invalid characters"), "{msg}");
     }
@@ -4477,7 +4477,7 @@ mod tests {
             command = "tool"
             "#
         );
-        let err = from_str(&toml).err().expect("expected error");
+        let err = from_str(&toml).expect_err("expected error");
         let msg = format!("{err:#}");
         assert!(msg.contains("1024"), "{msg}");
     }
@@ -4492,7 +4492,7 @@ mod tests {
             description = "..."
             command = "missing"
         "#};
-        let err = from_str(toml).err().expect("expected error");
+        let err = from_str(toml).expect_err("expected error");
         let msg = format!("{err:#}");
         assert!(msg.contains("unknown installation"), "{msg}");
     }

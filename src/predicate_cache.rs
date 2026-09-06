@@ -52,21 +52,16 @@ pub struct WatchSet {
 
 /// How long the predicate result may be cached, independent of file / env
 /// invalidation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CacheTtl {
     /// No `WatchTime` events were emitted; the result never becomes stale by
     /// time alone.
+    #[default]
     Forever,
     /// The shortest `WatchTime(N>0)` reported by the predicate.
     For(Duration),
     /// `WatchTime(0)` was emitted; the result must not be cached.
     Never,
-}
-
-impl Default for CacheTtl {
-    fn default() -> Self {
-        Self::Forever
-    }
 }
 
 impl WatchSet {

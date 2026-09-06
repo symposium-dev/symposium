@@ -1027,8 +1027,8 @@ mod tests {
             env.get("SYMPOSIUM_DIR_setup").map(String::as_str),
             Some("/cache/setup")
         );
-        assert!(env.get("SYMPOSIUM_setup").is_none());
-        assert!(env.get("PATH").is_none());
+        assert!(!env.contains_key("SYMPOSIUM_setup"));
+        assert!(!env.contains_key("PATH"));
     }
 
     #[test]
@@ -1042,9 +1042,9 @@ mod tests {
             }),
         }];
         let env: std::collections::HashMap<_, _> = build_env(&acquired).into_iter().collect();
-        assert!(env.get("SYMPOSIUM_DIR_rg").is_none());
-        assert!(env.get("SYMPOSIUM_rg").is_none());
-        assert!(env.get("PATH").is_none());
+        assert!(!env.contains_key("SYMPOSIUM_DIR_rg"));
+        assert!(!env.contains_key("SYMPOSIUM_rg"));
+        assert!(!env.contains_key("PATH"));
     }
 
     #[tokio::test]
