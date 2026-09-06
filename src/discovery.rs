@@ -341,10 +341,15 @@ fn count_phrase(n: usize, singular: &str, plural: &str) -> Option<String> {
 /// user declined stays declined.
 fn decide(sym: &Symposium, name: &str, workspace_root: &Path) -> Enablement {
     let plugins = &sym.config.plugins;
-    if plugins.is_used_in(name, workspace_root) {
-        Enablement::Used
-    } else if plugins.is_disabled(name) {
+    // `disable` is tested first because it is the last word: every other
+    // entry says a plugin *may* run, and this is the only one that says it
+    // may not. Activation agrees (see `record_active`), so classifying a
+    // disabled plugin as `Used` here would report it active while it stays
+    // off.
+    if plugins.is_disabled(name) {
         Enablement::Declined
+    } else if plugins.is_used_in(name, workspace_root) {
+        Enablement::Used
     } else if plugins.is_auto_enabled(name) {
         Enablement::AutoEnabled
     } else {
