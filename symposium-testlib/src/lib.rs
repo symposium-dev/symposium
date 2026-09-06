@@ -477,31 +477,34 @@ impl TestContext {
     /// through the command interpreter, and production spawns the cargo
     /// override directly, so this needs no production change. It does require
     /// `sh` on PATH (the documented Windows dev/CI requirement).
-    pub fn set_mock_cargo(&mut self, script: &str) {
-        let cargo_override = self.write_mock_cargo(script);
+    /// Returns the generated `sh` script path so tests can locate files the
+    /// script writes relative to `$0` without depending on its directory.
+    pub fn set_mock_cargo(&mut self, script: &str) -> PathBuf {
+        let (cargo_override, script_path) = self.write_mock_cargo(script);
         self.sym.set_cargo_override(cargo_override);
+        script_path
     }
 
-    /// Write the mock cargo as a directly-spawnable program; return its path.
+    /// Write the mock cargo and return its executable and `sh` script paths.
     #[cfg(not(windows))]
-    fn write_mock_cargo(&self, script: &str) -> PathBuf {
+    fn write_mock_cargo(&self, script: &str) -> (PathBuf, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         let path = self.tempdir.join("mock-cargo");
         std::fs::write(&path, script).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        path
+        (path.clone(), path)
     }
 
     /// Windows can't exec a shebang script, so run it through `sh` via a
     /// one-line `.cmd` shim (Rust spawns `.cmd` through the command interpreter).
     #[cfg(windows)]
-    fn write_mock_cargo(&self, script: &str) -> PathBuf {
+    fn write_mock_cargo(&self, script: &str) -> (PathBuf, PathBuf) {
         let sh_script = self.tempdir.join("mock-cargo.sh");
         std::fs::write(&sh_script, script).unwrap();
         let sh_script_fwd = sh_script.to_string_lossy().replace('\\', "/");
         let cmd_shim = self.tempdir.join("mock-cargo.cmd");
         std::fs::write(&cmd_shim, format!("@sh \"{sh_script_fwd}\" %*\r\n")).unwrap();
-        cmd_shim
+        (cmd_shim, sh_script)
     }
 
     /// Replace variable content with stable placeholders for snapshot tests.

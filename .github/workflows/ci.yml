@@ -25,12 +25,12 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index/
@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -71,18 +71,22 @@ jobs:
         include:
           - name: ubuntu
             os: ubuntu-latest
+            native: true
           - name: macos
             os: macos-latest
+            native: true
           - name: musl
             os: ubuntu-latest
             target: x86_64-unknown-linux-musl
+            native: false
           - name: windows
             os: windows-latest
+            native: true
 
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -96,7 +100,7 @@ jobs:
           sudo apt-get install -y musl-tools
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index/
@@ -125,6 +129,10 @@ jobs:
       - name: Test
         run: cargo test ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
 
+      - name: Check benchmarks
+        if: matrix.native
+        run: cargo check -p symposium-benchsuite --all-targets
+
   xtask:
     name: Run xtask checks
     needs: check
@@ -132,13 +140,13 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry/index/

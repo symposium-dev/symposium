@@ -1,0 +1,142 @@
+name: Benchmarks
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - .cargo/**
+      - .github/workflows/benchmarks.yml
+      - benches/**
+      - Cargo.toml
+      - Cargo.lock
+      - src/**
+      - symposium-install/**
+      - symposium-sdk/**
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Measure benchmarks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust 1.98.0
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
+
+      - name: Cache Cargo dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+          key: benchmark-rust-1.98.0-${{ hashFiles('Cargo.lock') }}
+
+      - name: Record benchmark environment
+        shell: bash
+        run: |
+          {
+            printf 'Commit: %s\n\n' "$GITHUB_SHA"
+            printf 'Runner image: %s (%s)\n\n' \
+              "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+            rustc --version --verbose
+            printf '\n'
+            cargo --version --verbose
+            printf '\n'
+            uname -a
+            printf '\n'
+            lscpu
+          } | tee benchmark-environment.txt
+
+      - name: Smoke-test benchmark workloads
+        run: cargo test -p symposium-benchsuite --benches --locked
+
+      - name: Measure workspace dependency resolution
+        run: cargo bench -p symposium-benchsuite --bench workspace_deps --locked
+
+      - name: Measure hook dispatch
+        run: cargo bench -p symposium-benchsuite --bench hook_dispatch --locked
+
+      - name: Write benchmark summary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          median_ns() {
+            jq -er '.median.point_estimate' \
+              "target/criterion/$1/new/estimates.json"
+          }
+
+          format_ms() {
+            awk -v nanoseconds="$1" \
+              'BEGIN { printf "%.2f ms", nanoseconds / 1000000 }'
+          }
+
+          cache_miss=$(median_ns \
+            workspace_deps/symposium_cache_miss)
+          cache_hit=$(median_ns \
+            workspace_deps/new_resolver_disk_cache_hit)
+          minimal_hook=$(median_ns \
+            hook_dispatch/pre_tool_use_minimal_config)
+          registry_hook=$(median_ns \
+            hook_dispatch/pre_tool_use_local_registry)
+          cache_speedup=$(awk \
+            -v miss="$cache_miss" \
+            -v hit="$cache_hit" \
+            'BEGIN { printf "%.2fx", miss / hit }')
+          os_name=$(. /etc/os-release && printf '%s' "$PRETTY_NAME")
+          cpu_name=$(lscpu | awk -F: \
+            '$1 == "Model name" { sub(/^[[:space:]]+/, "", $2); print $2 }')
+
+          {
+            echo '> These experimental measurements are informational.'
+            echo '> They do not gate merges or establish a regression.'
+            echo
+            echo '## Benchmark environment'
+            printf -- '- Commit: `%s`\n' "$GITHUB_SHA"
+            printf -- '- Rust: `%s`\n' "$(rustc --version)"
+            printf -- '- Cargo: `%s`\n' "$(cargo --version)"
+            printf -- '- Runner image: `%s` (`%s`)\n' \
+              "${ImageOS:-unknown}" "${ImageVersion:-unknown}"
+            printf -- '- OS: `%s`\n' "$os_name"
+            printf -- '- CPU: `%s` (%s available cores)\n\n' \
+              "$cpu_name" "$(nproc)"
+            echo '## Median estimates'
+            echo '| Benchmark | Median |'
+            echo '| --- | ---: |'
+            printf '| `workspace_deps/symposium_cache_miss` | %s |\n' \
+              "$(format_ms "$cache_miss")"
+            printf '| `workspace_deps/new_resolver_disk_cache_hit` | %s |\n' \
+              "$(format_ms "$cache_hit")"
+            printf '| `hook_dispatch/pre_tool_use_minimal_config` | %s |\n' \
+              "$(format_ms "$minimal_hook")"
+            printf '| `hook_dispatch/pre_tool_use_local_registry` | %s |\n\n' \
+              "$(format_ms "$registry_hook")"
+            printf '**Workspace cache speedup:** %s\n' "$cache_speedup"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: criterion-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: |
+            benchmark-environment.txt
+            target/criterion/
+          if-no-files-found: warn
+          retention-days: 14
