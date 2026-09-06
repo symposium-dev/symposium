@@ -1183,7 +1183,7 @@ mod tests {
         assert_eq!(ext["name"].as_str().unwrap(), "symposium");
         assert_eq!(ext["cmd"].as_str().unwrap(), "/usr/local/bin/cargo-agents");
         assert_eq!(ext["args"][0].as_str().unwrap(), "mcp");
-        assert_eq!(ext["enabled"].as_bool().unwrap(), true);
+        assert!(ext["enabled"].as_bool().unwrap());
     }
 
     /// Env vars were dropped entirely before, so a server needing them got
