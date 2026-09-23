@@ -328,46 +328,42 @@ async fn matcher_filters_out_non_matching_hooks() {
 /// while a later one gets the agent's neutral output and reaches nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn later_invocations_of_a_turn_reach_no_plugin_hook() {
-    with_fixture(
-        TestMode::SimulationOnly,
-        &["prompt-hook0"],
-        async |mut ctx| {
-            let payload = |invocation_num: u32| {
-                json!({
-                    "invocationNum": invocation_num,
-                    "conversationId": "c",
-                    "workspacePaths": [],
-                })
-            };
+    with_fixture(TestMode::SimulationOnly, &["prompt-hook0"], async |ctx| {
+        let payload = |invocation_num: u32| {
+            json!({
+                "invocationNum": invocation_num,
+                "conversationId": "c",
+                "workspacePaths": [],
+            })
+        };
 
-            let first = ctx
-                .invoke_hook(
-                    HookAgent::Antigravity,
-                    HookEvent::UserPromptSubmit,
-                    &payload(0),
-                )
-                .await?;
-            let first = String::from_utf8(first)?;
-            assert!(
-                first.contains("prompt-hook-ran"),
-                "the first invocation of a turn is the prompt event, got: {first}"
-            );
+        let first = ctx
+            .invoke_hook(
+                HookAgent::Antigravity,
+                HookEvent::UserPromptSubmit,
+                &payload(0),
+            )
+            .await?;
+        let first = String::from_utf8(first)?;
+        assert!(
+            first.contains("prompt-hook-ran"),
+            "the first invocation of a turn is the prompt event, got: {first}"
+        );
 
-            let later = ctx
-                .invoke_hook(
-                    HookAgent::Antigravity,
-                    HookEvent::UserPromptSubmit,
-                    &payload(1),
-                )
-                .await?;
-            assert_eq!(
-                String::from_utf8(later)?,
-                r#"{"injectSteps":[]}"#,
-                "a later invocation is answered neutrally and runs no hook"
-            );
-            Ok(())
-        },
-    )
+        let later = ctx
+            .invoke_hook(
+                HookAgent::Antigravity,
+                HookEvent::UserPromptSubmit,
+                &payload(1),
+            )
+            .await?;
+        assert_eq!(
+            String::from_utf8(later)?,
+            r#"{"injectSteps":[]}"#,
+            "a later invocation is answered neutrally and runs no hook"
+        );
+        Ok(())
+    })
     .await
     .unwrap();
 }

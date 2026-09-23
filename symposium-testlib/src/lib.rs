@@ -526,11 +526,6 @@ struct FixtureScanResult {
     workspace_dirs: Vec<PathBuf>,
 }
 
-/// Create a test context by overlaying fixture fragments into a tempdir.
-///
-/// Text files (`.toml`, `.md`, `.json`, `.txt`, `.ts`, `.js`) have variables expanded:
-/// - `$TEST_DIR` — the tempdir root
-/// - `$BINARY` — path to the `cargo-agents` binary (from `CARGO_BIN_EXE_cargo-agents`)
 /// Install a permissive global default subscriber, once per test process.
 ///
 /// tracing caches callsite interest and the global max level process-wide,
@@ -547,6 +542,11 @@ pub fn install_tracing_baseline() {
     });
 }
 
+/// Create a test context by overlaying fixture fragments into a tempdir.
+///
+/// Text files (`.toml`, `.md`, `.json`, `.txt`, `.ts`, `.js`) have variables expanded:
+/// - `$TEST_DIR` — the tempdir root
+/// - `$BINARY` — path to the `cargo-agents` binary (from `CARGO_BIN_EXE_cargo-agents`)
 async fn setup_fixture(fixtures: &[&str]) -> TestContext {
     install_tracing_baseline();
     let fixtures_base = Path::new(env!("SYMPOSIUM_FIXTURES_DIR"));

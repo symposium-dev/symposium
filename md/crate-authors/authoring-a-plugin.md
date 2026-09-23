@@ -193,7 +193,7 @@ crate = "my-crate-hooks"
 executable = "my-crate-hooks"
 ```
 
-The hook binary receives symposium canonical JSON on stdin and writes symposium canonical JSON to stdout. Symposium handles converting to and from each agent's wire format, so a single implementation works across all supported agents. See [Writing a hook handler](./writing-a-hook-handler.md) for how to implement the binary using the `symposium-hook` crate, and [Symposium hook events](../reference/hook-events.md) for input/output JSON schemas.
+The hook binary receives symposium canonical JSON on stdin and writes symposium canonical JSON to stdout. Symposium handles converting to and from each agent's wire format, so a single implementation works across all supported agents. See [Writing a hook handler](./writing-a-hook-handler.md) for how to implement the binary using the `symposium-sdk` crate, and [Symposium hook events](../reference/hook-events.md) for input/output JSON schemas.
 
 #### Agent-specific hooks
 
