@@ -7,14 +7,14 @@ pub(in crate::telemetry) use admission::SelectedExtensionInvocationAggregate;
 #[cfg(test)]
 pub(in crate::telemetry) use admission::ExtensionInvocationAggregateStore;
 
-use std::{collections::BTreeSet, fmt};
+use std::fmt;
 
-use crate::telemetry::{
-    identity::SessionId,
-    schema::{ExtensionInvocationPhase, MAX_IDENTIFIED_SESSIONS},
-};
+use crate::telemetry::{identity::SessionId, schema::ExtensionInvocationPhase};
 
-use super::set_len;
+use super::session_pair::{SessionPairSnapshot, TrackedSessionPair};
+
+#[cfg(test)]
+use crate::telemetry::schema::MAX_IDENTIFIED_SESSIONS;
 
 /// Snapshot counters used to reconcile one private tracker with its row.
 ///
@@ -33,16 +33,6 @@ impl ExtensionSessionCountBaseline {
             TrackedPhase::Completed => self.completed,
         }
     }
-}
-
-/// Complete or permanently incomplete invocation-session sets.
-#[derive(Clone, PartialEq, Eq)]
-enum TrackedExtensionSessions {
-    Complete {
-        attempted: BTreeSet<SessionId>,
-        completed: BTreeSet<SessionId>,
-    },
-    Incomplete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,30 +62,17 @@ impl From<TrackedPhase> for ExtensionInvocationPhase {
     }
 }
 
-impl TrackedExtensionSessions {
-    fn record(&mut self, phase: TrackedPhase, session_id: Option<SessionId>) {
+impl TrackedPhase {
+    fn record(self, sessions: &mut TrackedSessionPair, session_id: Option<SessionId>) {
         let Some(session_id) = session_id else {
-            *self = Self::Incomplete;
+            sessions.invalidate();
             return;
-        };
-        let Self::Complete {
-            attempted,
-            completed,
-        } = self
-        else {
-            return;
-        };
-        let sessions = match phase {
-            TrackedPhase::Attempted => attempted,
-            TrackedPhase::Completed => completed,
         };
 
-        if !sessions.contains(&session_id) && set_len(sessions) >= MAX_IDENTIFIED_SESSIONS {
-            *self = Self::Incomplete;
-            return;
+        match self {
+            Self::Attempted => sessions.record_first(session_id),
+            Self::Completed => sessions.record_second(session_id),
         }
-
-        sessions.insert(session_id);
     }
 }
 
@@ -110,7 +87,7 @@ pub(in crate::telemetry) struct ExtensionSessionCountTracker<K> {
     key: K,
     attempted_contributions: u64,
     completed_contributions: u64,
-    sessions: TrackedExtensionSessions,
+    sessions: TrackedSessionPair,
 }
 
 impl<K> fmt::Debug for ExtensionSessionCountTracker<K> {
@@ -120,15 +97,12 @@ impl<K> fmt::Debug for ExtensionSessionCountTracker<K> {
             .field("attempted_contributions", &self.attempted_contributions)
             .field("completed_contributions", &self.completed_contributions);
 
-        match &self.sessions {
-            TrackedExtensionSessions::Complete {
-                attempted,
-                completed,
-            } => debug
+        match self.sessions.snapshot() {
+            SessionPairSnapshot::Complete { first, second } => debug
                 .field("session_counts_complete", &true)
-                .field("identified_sessions", &attempted.len())
-                .field("identified_sessions_completed", &completed.len()),
-            TrackedExtensionSessions::Incomplete => debug.field("session_counts_complete", &false),
+                .field("identified_sessions", &first)
+                .field("identified_sessions_completed", &second),
+            SessionPairSnapshot::Incomplete => debug.field("session_counts_complete", &false),
         };
 
         debug.finish()
@@ -143,10 +117,7 @@ impl<K> ExtensionSessionCountTracker<K> {
             key,
             attempted_contributions: 0,
             completed_contributions: 0,
-            sessions: TrackedExtensionSessions::Complete {
-                attempted: BTreeSet::new(),
-                completed: BTreeSet::new(),
-            },
+            sessions: TrackedSessionPair::new(),
         }
     }
 
@@ -167,7 +138,7 @@ impl<K> ExtensionSessionCountTracker<K> {
         if self.attempted_contributions != baseline.attempted
             || self.completed_contributions != baseline.completed
         {
-            self.sessions = TrackedExtensionSessions::Incomplete;
+            self.sessions.invalidate();
         }
 
         self.attempted_contributions = baseline.attempted;
@@ -210,7 +181,7 @@ impl<K> ExtensionSessionCountTracker<K> {
         let Some((tracked_phase, next_contributions)) = tracked_update else {
             return Ok(());
         };
-        self.sessions.record(tracked_phase, session_id);
+        tracked_phase.record(&mut self.sessions, session_id);
         *self.counter_mut(tracked_phase) = next_contributions;
 
         Ok(())
@@ -219,15 +190,14 @@ impl<K> ExtensionSessionCountTracker<K> {
     /// Return the aggregate fields represented by the current private sets.
     #[must_use]
     pub(in crate::telemetry) fn snapshot(&self) -> ExtensionSessionCountSnapshot {
-        match &self.sessions {
-            TrackedExtensionSessions::Complete {
-                attempted,
-                completed,
-            } => ExtensionSessionCountSnapshot::Complete {
-                identified_sessions: set_len(attempted),
-                identified_sessions_completed: set_len(completed),
-            },
-            TrackedExtensionSessions::Incomplete => ExtensionSessionCountSnapshot::Incomplete,
+        match self.sessions.snapshot() {
+            SessionPairSnapshot::Complete { first, second } => {
+                ExtensionSessionCountSnapshot::Complete {
+                    identified_sessions: first,
+                    identified_sessions_completed: second,
+                }
+            }
+            SessionPairSnapshot::Incomplete => ExtensionSessionCountSnapshot::Incomplete,
         }
     }
 }
