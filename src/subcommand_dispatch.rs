@@ -12,7 +12,7 @@ use std::{ffi::OsString, path::Path, process::ExitStatus};
 use crate::{
     config::Symposium,
     installation::{acquire_installation, resolve_runnable},
-    plugins::{self, ParsedPlugin, Plugin, Subcommand},
+    plugins::{self, Plugin, PluginManifest, Subcommand},
     pm::PackageId,
 };
 use anyhow::{Context, Result, bail};
@@ -29,14 +29,14 @@ use tokio::process::Command;
 /// plus crate-sourced ones — so a crate plugin's subcommands are dispatchable
 /// exactly like a registry plugin's.
 pub fn applicable_subcommands<'a>(
-    plugins: &'a [ParsedPlugin],
+    plugins: &'a [Plugin],
     deps: &[PackageId],
     used: &[&str],
-) -> Vec<(&'a Plugin, &'a str, &'a Subcommand)> {
+) -> Vec<(&'a PluginManifest, &'a str, &'a Subcommand)> {
     let mut ctx = crate::predicate::PredicateContext::new(deps).with_used_names(used);
     let mut results = Vec::new();
     for parsed in plugins {
-        let plugin = &parsed.plugin;
+        let plugin = &parsed.manifest;
         if !parsed.applies(&mut ctx) {
             continue;
         }
@@ -56,11 +56,11 @@ pub fn applicable_subcommands<'a>(
 /// - `Ok(Some(..))` - exactly one plugin claims the name and applies.
 /// - `Err(..)` - two or more plugins claim the name and all apply.
 pub fn find_subcommand<'a>(
-    plugins: &'a [ParsedPlugin],
+    plugins: &'a [Plugin],
     name: &str,
     deps: &[PackageId],
     used: &[&str],
-) -> Result<Option<(&'a Plugin, &'a Subcommand)>> {
+) -> Result<Option<(&'a PluginManifest, &'a Subcommand)>> {
     let matches: Vec<_> = applicable_subcommands(plugins, deps, used)
         .into_iter()
         .filter(|(_, n, _)| *n == name)
@@ -200,10 +200,10 @@ mod tests {
         name: &str,
         depends_on: &str,
         subcommands: BTreeMap<String, Subcommand>,
-    ) -> ParsedPlugin {
-        ParsedPlugin {
+    ) -> Plugin {
+        Plugin {
             canonical: PackageId::new("test", name, ANY_VERSION),
-            plugin: Plugin {
+            manifest: PluginManifest {
                 name: name.into(),
                 predicates: crate_set(depends_on),
                 installations: vec![],
@@ -228,7 +228,7 @@ mod tests {
         }
     }
 
-    fn registry(plugins: Vec<ParsedPlugin>) -> PluginRegistry {
+    fn registry(plugins: Vec<Plugin>) -> PluginRegistry {
         PluginRegistry {
             plugins,
             warnings: vec![],

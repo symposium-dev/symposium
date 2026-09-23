@@ -306,7 +306,7 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
             // configuration rather than re-reading a manifest file.
             Some(p) => {
                 println!("# {}", p.canonical);
-                match toml::to_string_pretty(&p.plugin) {
+                match toml::to_string_pretty(&p.manifest) {
                     Ok(rendered) => {
                         println!();
                         print!("{rendered}");

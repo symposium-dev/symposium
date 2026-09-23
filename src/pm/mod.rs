@@ -29,7 +29,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use symposium_install::UpdateLevel;
 
-use crate::plugins::ParsedPlugin;
+use crate::plugins::Plugin;
 
 mod cargo;
 mod git;
@@ -71,7 +71,7 @@ pub struct FetchedPackage {
 /// *unvalidated* manifest, and are best-effort: failures are logged and
 /// dropped, not surfaced, so one bad plugin never aborts a sync or hook.
 ///
-/// Validating an [`UnvalidatedPlugin`] into a [`ParsedPlugin`] is [`PmInstance`]'s
+/// Validating an [`UnvalidatedPlugin`] into a [`Plugin`] is [`PmInstance`]'s
 /// job, not the PM's, because the policy depends on where the plugin came from rather than
 /// on what it says. That is the whole trust boundary: see [`PluginKind`].
 #[async_trait::async_trait]
@@ -138,7 +138,7 @@ pub enum RegistrySource {
 pub enum PluginKind {
     /// A curated registry entry. It must name itself, `[defaults]` is
     /// rejected, and one that references no dependency anywhere loads
-    /// [dormant](crate::plugins::Plugin::requires_use): there is nothing to
+    /// [dormant](crate::plugins::PluginManifest::requires_use): there is nothing to
     /// infer a gate from, and "always on" would fire it in every workspace.
     Registry,
     /// A package in an ecosystem. Its id supplies the name, the reference that
@@ -165,16 +165,16 @@ pub struct PmInstance {
 impl PmInstance {
     /// This instance's active plugins, validated. A plugin that fails
     /// validation is logged and dropped: best-effort, like the PM layer above.
-    pub async fn active_plugins(&self, deps: &[PackageId]) -> Vec<ParsedPlugin> {
+    pub async fn active_plugins(&self, deps: &[PackageId]) -> Vec<Plugin> {
         self.validate_all(self.pm.active_plugins(deps).await)
     }
 
     /// The plugin(s) an id maps to, validated.
-    pub async fn load_plugin(&self, id: &PackageId) -> Vec<ParsedPlugin> {
+    pub async fn load_plugin(&self, id: &PackageId) -> Vec<Plugin> {
         self.validate_all(self.pm.load_plugin(id).await)
     }
 
-    fn validate_all(&self, unvalidated: Vec<UnvalidatedPlugin>) -> Vec<ParsedPlugin> {
+    fn validate_all(&self, unvalidated: Vec<UnvalidatedPlugin>) -> Vec<Plugin> {
         unvalidated
             .into_iter()
             .filter_map(|plugin| {
@@ -239,7 +239,7 @@ impl PmRegistry {
     /// Load the plugin(s) an id maps to, asking every instance. Any instance may
     /// contribute a plugin relevant to the id, so this can return several. Each
     /// instance's plugins are validated under its own [`PluginKind`].
-    pub async fn load_plugin(&self, id: &PackageId) -> Vec<ParsedPlugin> {
+    pub async fn load_plugin(&self, id: &PackageId) -> Vec<Plugin> {
         let mut out = Vec::new();
         for inst in &self.instances {
             out.extend(inst.load_plugin(id).await);

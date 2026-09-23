@@ -222,7 +222,7 @@ async fn resolve_custom_predicate_entries(
 
     for (name, resolved) in registry.custom_predicates.iter() {
         let plugin = &registry.plugins[resolved.plugin_index];
-        let Some(install) = plugin.plugin.get_installation(&resolved.command) else {
+        let Some(install) = plugin.manifest.get_installation(&resolved.command) else {
             tracing::warn!(
                 predicate = name,
                 command = &resolved.command,
@@ -350,7 +350,7 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     let mut mcp_servers: Vec<sacp::schema::McpServer> = Vec::new();
     for p in &active {
         if p.applies(&mut ctx) {
-            mcp_servers.extend(p.plugin.applicable_mcp_servers(&mut ctx));
+            mcp_servers.extend(p.manifest.applicable_mcp_servers(&mut ctx));
         }
     }
     if let Err(e) = ctx.persist_disk_cache(&predicate_cache_path) {
@@ -604,7 +604,7 @@ pub async fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
     let mcp_servers: Vec<sacp::schema::McpServer> = registry
         .plugins
         .iter()
-        .flat_map(|p| p.plugin.mcp_servers.iter().map(|s| s.server.clone()))
+        .flat_map(|p| p.manifest.mcp_servers.iter().map(|s| s.server.clone()))
         .collect();
 
     let server_names: Vec<&str> = mcp_servers

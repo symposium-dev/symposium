@@ -678,7 +678,7 @@ async fn dormant_plugin_activates_only_once_used() {
 
             // It is nonetheless loaded and known — dormant, not invalid.
             let found = symposium::plugins::find_plugin(&ctx.sym, "gateless-plugin").await;
-            assert!(found.is_some_and(|p| p.plugin.requires_use));
+            assert!(found.is_some_and(|p| p.manifest.requires_use));
 
             ctx.sym
                 .config

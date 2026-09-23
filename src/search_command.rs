@@ -42,13 +42,13 @@ pub async fn find_matches(sym: &Symposium, query: &str) -> Vec<SearchMatch> {
 
     let registry = crate::plugins::load_registry(sym).await;
     for parsed in &registry.plugins {
-        if name_matches(&parsed.plugin.name, query) {
+        if name_matches(&parsed.manifest.name, query) {
             matches.push(SearchMatch {
                 origin: parsed.canonical.pm.clone(),
-                name: parsed.plugin.name.clone(),
+                name: parsed.manifest.name.clone(),
                 version: None,
                 description: parsed
-                    .plugin
+                    .manifest
                     .requires_use
                     .then(|| "dormant — enable with `cargo agents use`".to_string()),
             });

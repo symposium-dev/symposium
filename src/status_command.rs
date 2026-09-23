@@ -11,7 +11,7 @@
 //!   root names the trust root: workspace membership, a configured registry,
 //!   `[plugins] auto-enable`, or a `[plugins] use` entry.
 //! - **dormant** — loaded but waiting: a registry plugin that names no
-//!   dependency ([`requires_use`](crate::plugins::Plugin::requires_use)), or
+//!   dependency ([`requires_use`](crate::plugins::PluginManifest::requires_use)), or
 //!   one whose predicates don't currently hold.
 //! - **candidate** — discovered in a dependency and awaiting consent. These
 //!   are exactly what the [consent prompt](crate::discovery::prompt_for_consent)
@@ -89,16 +89,16 @@ pub async fn workspace_status(
     for parsed in &registry.plugins {
         let root = if parsed.workspace_member {
             "workspace member".to_string()
-        } else if parsed.plugin.requires_use && ctx.is_used(&parsed.plugin.name) {
+        } else if parsed.manifest.requires_use && ctx.is_used(&parsed.manifest.name) {
             "`[plugins] use`".to_string()
         } else {
             format!("registry `{}`", parsed.canonical.pm)
         };
         let active = parsed.applies(&mut ctx);
         entries.push(StatusEntry {
-            name: parsed.plugin.name.clone(),
+            name: parsed.manifest.name.clone(),
             version: None,
-            root: if active || !parsed.plugin.requires_use {
+            root: if active || !parsed.manifest.requires_use {
                 root
             } else {
                 format!("{root} (dormant: awaiting `cargo agents use`)")
@@ -137,7 +137,7 @@ pub async fn workspace_status(
     let shown: std::collections::HashSet<String> = registry
         .plugins
         .iter()
-        .map(|p| normalize(&p.plugin.name))
+        .map(|p| normalize(&p.manifest.name))
         .chain(
             discovery
                 .active

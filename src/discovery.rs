@@ -28,7 +28,7 @@
 //! plugins an ecosystem transport surfaces, which run only with consent.
 //!
 //! [`plugins::load_registry`]: crate::plugins::load_registry
-//! [`Plugin::applies`]: crate::plugins::ParsedPlugin::applies
+//! [`Plugin::applies`]: crate::plugins::Plugin::applies
 //!
 //! [`pm::workspace_dep_ids`]: crate::pm::workspace_dep_ids
 //! [`PackageManager::active_plugins`]: crate::pm::PackageManager::active_plugins
@@ -130,7 +130,7 @@ pub async fn discover(sym: &Symposium, deps: &Arc<WorkspaceDeps>) -> Discovery {
     for inst in pms.instances().filter(|i| !i.trusted) {
         for plugin in inst.active_plugins(&dep_ids).await {
             let name = plugin.canonical.name.clone();
-            let description = Some(describe_plugin(&plugin.plugin));
+            let description = Some(describe_plugin(&plugin.manifest));
             let enablement = decide(sym, &name, &workspace_root);
             let discovered = DiscoveredPlugin {
                 registry: inst.name.clone(),
@@ -314,7 +314,7 @@ pub async fn prompt_for_consent(
 /// consent prompt and status output. Emphasizes the facets that matter to a
 /// trust decision — a plugin that only ships skills is lower-stakes than one
 /// that runs a hook or an MCP server.
-fn describe_plugin(plugin: &crate::plugins::Plugin) -> String {
+fn describe_plugin(plugin: &crate::plugins::PluginManifest) -> String {
     let parts: Vec<String> = [
         count_phrase(plugin.skills.len(), "skill group", "skill groups"),
         count_phrase(plugin.hooks.len(), "hook", "hooks"),

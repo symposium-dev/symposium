@@ -9,7 +9,7 @@
 //!
 //! It is also what wakes a *dormant* registry plugin (one whose manifest
 //! names no dependency, so nothing else would ever gate it on —
-//! [`Plugin::requires_use`](crate::plugins::Plugin::requires_use)).
+//! [`PluginManifest::requires_use`](crate::plugins::PluginManifest::requires_use)).
 //!
 //! `use` only adds to what *may* run; activation predicates still decide
 //! when it applies. `--remove` is the inverse, and re-syncs so the plugin's
@@ -48,8 +48,8 @@ pub async fn use_plugin(
     let registry_plugin = registry
         .plugins
         .iter()
-        .find(|p| normalize_crate_name(&p.plugin.name) == normalized);
-    let dormant = registry_plugin.is_some_and(|p| p.plugin.requires_use);
+        .find(|p| normalize_crate_name(&p.manifest.name) == normalized);
+    let dormant = registry_plugin.is_some_and(|p| p.manifest.requires_use);
     let already_trusted = registry_plugin.is_some() && !dormant;
     if already_trusted {
         tracing::info!(

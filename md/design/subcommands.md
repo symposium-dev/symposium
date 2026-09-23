@@ -42,7 +42,7 @@ command = "example-tool"
 
 Reserved names that cannot be used as subcommand keys: `init`, `sync`, `hook`, `plugin`, `crate-info`, `help`. A plugin cannot shadow a built-in.
 
-The TOML key is singular (`[subcommand.<name>]`), matching the natural read of a TOML table. The internal field on `Plugin` is plural (`subcommands`).
+The TOML key is singular (`[subcommand.<name>]`), matching the natural read of a TOML table. The internal field on `PluginManifest` is plural (`subcommands`).
 
 ### Inline form
 

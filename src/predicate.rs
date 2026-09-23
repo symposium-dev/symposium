@@ -77,12 +77,12 @@ pub struct PredicateContext<'a> {
     pub deps: &'a [PackageId],
     /// Whether the plugin currently being evaluated is defined by a member
     /// of the active workspace. This is *provenance*, not a workspace fact:
-    /// the loader stamps it per plugin (via `ParsedPlugin::applies`) before
+    /// the loader stamps it per plugin (via `Plugin::applies`) before
     /// that plugin's predicate sets are evaluated.
     workspace_member: bool,
     /// Plugin names enabled by the applicable `[plugins] use` entries,
     /// normalized. A plugin with no gate of its own
-    /// ([`Plugin::requires_use`](crate::plugins::Plugin::requires_use)) is
+    /// ([`PluginManifest::requires_use`](crate::plugins::PluginManifest::requires_use)) is
     /// dormant unless it is named here.
     used_names: std::collections::HashSet<String>,
     custom_entries: std::collections::HashMap<String, ResolvedPredicateEntry>,

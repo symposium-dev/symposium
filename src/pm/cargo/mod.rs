@@ -132,7 +132,7 @@ impl PackageManager for CargoPm {
 
     /// The plugins embedded in the workspace's dependencies: every dep in
     /// `deps` whose source tree embeds plugin content, built into a full
-    /// `ParsedPlugin`. Whether each is *trusted* (may activate without consent)
+    /// `Plugin`. Whether each is *trusted* (may activate without consent)
     /// is the caller's decision — the cargo transport is marked untrusted.
     ///
     /// Each dependency is fetched cache-only ([`UpdateLevel::None`]) to locate

@@ -16,7 +16,7 @@ use crate::pm::WorkspaceDeps;
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
-    plugins::ParsedPlugin,
+    plugins::Plugin,
 };
 use crate::{
     help_render::{AGENTS_HEADING, HUMANS_HEADING},
@@ -43,8 +43,8 @@ struct ResolvedHook {
 }
 
 impl ResolvedHook {
-    fn build(parsed_plugin: &ParsedPlugin, hook: &crate::plugins::Hook) -> anyhow::Result<Self> {
-        let plugin = &parsed_plugin.plugin;
+    fn build(parsed_plugin: &Plugin, hook: &crate::plugins::Hook) -> anyhow::Result<Self> {
+        let plugin = &parsed_plugin.manifest;
         let lookup = |name: &str| -> anyhow::Result<Installation> {
             plugin
                 .get_installation(name)
@@ -60,7 +60,7 @@ impl ResolvedHook {
             .collect::<anyhow::Result<Vec<_>>>()?;
 
         Ok(Self {
-            plugin_name: parsed_plugin.plugin.name.clone(),
+            plugin_name: parsed_plugin.manifest.name.clone(),
             hook_name: hook.name.clone(),
             format: hook.format.clone(),
             requirements,
@@ -428,10 +428,10 @@ async fn run_auto_sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, session_start
 /// plugin in — since expansion evaluates edge and plugin predicates against the
 /// crate graph too. Registry plugins reached without any of these dispatch on a
 /// crate-free context (the fast path for `PreToolUse`).
-fn hook_dispatch_needs_deps(sym: &Symposium, registry_plugins: &[ParsedPlugin]) -> bool {
+fn hook_dispatch_needs_deps(sym: &Symposium, registry_plugins: &[Plugin]) -> bool {
     registry_plugins
         .iter()
-        .any(|p| p.plugin.hooks_need_dep_resolution() || !p.plugin.chained.is_empty())
+        .any(|p| p.manifest.hooks_need_dep_resolution() || !p.manifest.chained.is_empty())
         || sym.config.plugins.has_enablement_entries()
 }
 
@@ -476,14 +476,14 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<WorkspaceDeps>) {
         if !parsed.applies(&mut ctx) {
             continue;
         }
-        for hook in &parsed.plugin.hooks {
+        for hook in &parsed.manifest.hooks {
             if !hook.predicates.evaluate(&mut ctx) {
                 continue;
             }
             let resolved = match ResolvedHook::build(parsed, hook) {
                 Ok(r) => r,
                 Err(e) => {
-                    tracing::debug!(plugin = %parsed.plugin.name, hook = %hook.name, error = %e, "prewarm: skipping unbuildable hook");
+                    tracing::debug!(plugin = %parsed.manifest.name, hook = %hook.name, error = %e, "prewarm: skipping unbuildable hook");
                     continue;
                 }
             };
@@ -848,7 +848,7 @@ pub fn merge(a: &mut serde_json::Value, b: serde_json::Value) {
 /// The resulting `ResolvedHook`s are ready to dispatch without further plugin
 /// lookups.
 fn dispatched_hooks_for_payload(
-    plugins: &[ParsedPlugin],
+    plugins: &[Plugin],
     input: &symposium::InputEvent,
     host_agent: HookAgent,
     ctx: &mut crate::predicate::PredicateContext,
@@ -862,7 +862,7 @@ fn dispatched_hooks_for_payload(
         // per plugin per dispatch — keep them cheap.
         if !parsed_plugin.applies(ctx) {
             tracing::debug!(
-                plugin = %parsed_plugin.plugin.name,
+                plugin = %parsed_plugin.manifest.name,
                 "plugin predicates failed, skipping hooks"
             );
             continue;
@@ -871,7 +871,7 @@ fn dispatched_hooks_for_payload(
         let mut native_match: Option<&crate::plugins::Hook> = None;
         let mut symposium_match: Option<&crate::plugins::Hook> = None;
 
-        for hook in &parsed_plugin.plugin.hooks {
+        for hook in &parsed_plugin.manifest.hooks {
             if hook.event != input.event() {
                 continue;
             }
@@ -902,7 +902,7 @@ fn dispatched_hooks_for_payload(
             if !hook.predicates.evaluate(ctx) {
                 tracing::debug!(
                     report = %crate::report::ReportEvent::HookConsidered {
-                        plugin: parsed_plugin.plugin.name.clone(),
+                        plugin: parsed_plugin.manifest.name.clone(),
                         hook: hook.name.clone(),
                         event: format!("{:?}", input.event()),
                         selected: false,
@@ -914,7 +914,7 @@ fn dispatched_hooks_for_payload(
             }
             tracing::debug!(
                 report = %crate::report::ReportEvent::HookConsidered {
-                    plugin: parsed_plugin.plugin.name.clone(),
+                    plugin: parsed_plugin.manifest.name.clone(),
                     hook: hook.name.clone(),
                     event: format!("{:?}", input.event()),
                     selected: true,
@@ -926,7 +926,7 @@ fn dispatched_hooks_for_payload(
                 Ok(dispatched) => out.push(dispatched),
                 Err(e) => {
                     tracing::warn!(
-                        plugin = %parsed_plugin.plugin.name,
+                        plugin = %parsed_plugin.manifest.name,
                         hook = %hook.name,
                         error = %e,
                         "failed to resolve hook for dispatch"
@@ -934,14 +934,14 @@ fn dispatched_hooks_for_payload(
                 }
             }
         } else if parsed_plugin
-            .plugin
+            .manifest
             .hooks
             .iter()
             .any(|h| h.event == input.event())
         {
             tracing::debug!(
                 report = %crate::report::ReportEvent::HookConsidered {
-                    plugin: parsed_plugin.plugin.name.clone(),
+                    plugin: parsed_plugin.manifest.name.clone(),
                     hook: "(none)".into(),
                     event: format!("{:?}", input.event()),
                     selected: false,
@@ -1124,11 +1124,8 @@ mod tests {
 
     /// Helper: build a minimal plugin with a single PreToolUse hook backed
     /// by a no-op script installation (no `source`, just an on-disk script).
-    fn plugin_with_hook(
-        plugin_shell: Vec<&str>,
-        hook_shell: Vec<&str>,
-    ) -> crate::plugins::ParsedPlugin {
-        use crate::plugins::{Hook, HookFormat, Installation, Plugin};
+    fn plugin_with_hook(plugin_shell: Vec<&str>, hook_shell: Vec<&str>) -> crate::plugins::Plugin {
+        use crate::plugins::{Hook, HookFormat, Installation, PluginManifest};
 
         let install = Installation {
             name: "no-op".into(),
@@ -1165,7 +1162,7 @@ mod tests {
                     .map(|c| crate::predicate::Predicate::Shell(c.into())),
             )
             .collect();
-        let plugin = Plugin {
+        let plugin = PluginManifest {
             name: "test-plugin".into(),
             predicates: crate::predicate::PredicateSet {
                 predicates: plugin_predicates,
@@ -1179,8 +1176,8 @@ mod tests {
             chained: vec![],
             requires_use: false,
         };
-        crate::plugins::ParsedPlugin {
-            plugin,
+        crate::plugins::Plugin {
+            manifest: plugin,
             workspace_member: false,
             canonical: PackageId::new("test", "test-plugin", ANY_VERSION),
         }
@@ -1238,7 +1235,7 @@ mod tests {
     fn dispatch_respects_plugin_crate_gate() {
         // Replace the wildcard plugin gate with a concrete `depends-on(serde)`.
         let mut plugin = plugin_with_hook(vec![], vec![]);
-        plugin.plugin.predicates = crate::predicate::PredicateSet {
+        plugin.manifest.predicates = crate::predicate::PredicateSet {
             predicates: vec![crate::predicate::Predicate::DependsOn("serde".into(), None)],
         };
 

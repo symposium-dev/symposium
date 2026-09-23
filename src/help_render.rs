@@ -13,7 +13,7 @@ use clap::{Command, CommandFactory};
 use crate::{
     cli::{Cli, Commands, builtin_audience},
     config::Symposium,
-    plugins::{Audience, ParsedPlugin, load_registry_with_workspace},
+    plugins::{Audience, Plugin, load_registry_with_workspace},
     pm::PackageId,
     subcommand_dispatch::applicable_subcommands,
 };
@@ -114,7 +114,7 @@ pub async fn render_help(sym: &Symposium, cwd: &Path) -> String {
     render(&active, &dep_ids, &used)
 }
 
-fn render(plugins: &[ParsedPlugin], deps: &[PackageId], used: &[&str]) -> String {
+fn render(plugins: &[Plugin], deps: &[PackageId], used: &[&str]) -> String {
     let mut cmd = Cli::command();
     let full = cmd.render_help().to_string();
 
@@ -162,7 +162,7 @@ fn render(plugins: &[ParsedPlugin], deps: &[PackageId], used: &[&str]) -> String
 /// Collect entries for one audience section: clap's builtins first (sorted), then plugin-vended subs whose predicates apply (sorted).
 fn collect_section(
     cmd: &Command,
-    plugins: &[ParsedPlugin],
+    plugins: &[Plugin],
     deps: &[PackageId],
     used: &[&str],
     target: Audience,
@@ -200,7 +200,7 @@ mod tests {
     use expect_test::expect;
 
     use crate::{
-        plugins::{Plugin, PluginRegistry, Subcommand},
+        plugins::{PluginManifest, PluginRegistry, Subcommand},
         pm::ANY_VERSION,
         predicate::PredicateSet,
     };
@@ -219,9 +219,9 @@ mod tests {
         name: &str,
         depends_on: &str,
         subcommands: BTreeMap<String, Subcommand>,
-    ) -> ParsedPlugin {
-        ParsedPlugin {
-            plugin: Plugin {
+    ) -> Plugin {
+        Plugin {
+            manifest: PluginManifest {
                 name: name.into(),
                 hooks: vec![],
                 predicates: crate_set(depends_on),
@@ -247,7 +247,7 @@ mod tests {
         }
     }
 
-    fn registry(plugins: Vec<ParsedPlugin>) -> PluginRegistry {
+    fn registry(plugins: Vec<Plugin>) -> PluginRegistry {
         PluginRegistry {
             plugins,
             warnings: vec![],
