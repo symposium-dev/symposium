@@ -33,7 +33,7 @@ A future release may require a higher consent version after changing the recorde
 
 Adding an agent enum value creates a new schema version for each affected event kind so typed readers do not reinterpret old schemas. It does not by itself require renewed consent when the recorded fields, categories, timestamp precision, and correlation boundaries remain unchanged. New fields, hook surfaces, or linkage for that agent do require a higher consent version.
 
-Accepting a newer consent version rotates the telemetry identity key and starts a new D0-D30 return cohort. Existing event and aggregate-metric files are neither rewritten nor deleted, but their scoped identifiers cannot link to later rows.
+Accepting a newer consent version rotates the telemetry identity key, sets the identifier-window anchor to the later of the current UTC day and the latest-opened-day high-water mark, and clears the return-cohort anchor. The next observed session starts a new D0-D30 return cohort. Existing event and aggregate-metric files are neither rewritten nor deleted, but their scoped identifiers cannot link to later rows.
 
 ## Changing telemetry state
 
@@ -43,7 +43,7 @@ Accepting a newer consent version rotates the telemetry identity key and starts 
 
 ## Related private and installation state
 
-Consent configuration is separate from the random identity key and current identifier-window and cohort anchors in private `<config-dir>/telemetry-state.toml` (default `~/.symposium/telemetry-state.toml`). This state sits outside the inspectable `<config-dir>/telemetry/` data directory and uses owner-only permissions where supported.
+Consent configuration is separate from the random identity key, current identifier-window anchor, optional return-cohort anchor, and latest opened UTC day in private `<config-dir>/telemetry-state.toml` (default `~/.symposium/telemetry-state.toml`). This state sits outside the inspectable `<config-dir>/telemetry/` data directory and uses owner-only permissions where supported.
 
 It persists across `disable` and `clear`, keeping identifiers consistent inside the active window. It is not configuration, and Symposium never reads it from project configuration.
 

@@ -16,7 +16,7 @@ Every JSONL row has:
 | `day`       | `2026-08-03`    | UTC calendar day.                       |
 | `symposium` | `0.4.0`         | Symposium version that wrote the event. |
 
-Completed operational events (`session_start` and `command`) also have `at`, an RFC3339 UTC timestamp truncated to one second. Resolution, configuration, and aggregate metric rows have only `day`.
+Completed operational events (`session_start` and `command`) also have `at`, an RFC3339 UTC timestamp truncated to one second. Their `day` is the UTC calendar day containing `at`; a mismatch makes the row invalid. Resolution, configuration, and aggregate metric rows have only `day`.
 
 Counters and durations are non-negative JSON integers that fit an unsigned 64-bit value. Symposium checks arithmetic and drops an overflowing batch or observation instead of wrapping the value.
 
@@ -43,11 +43,49 @@ These are independent row-shape examples, not one coherent operation or batch. T
 
 ### Key and rotation
 
-When an enabled recorder first needs identity state, Symposium stores a random secret key in private `<config-dir>/telemetry-state.toml` (default `~/.symposium/telemetry-state.toml`). The same state holds the current identifier-window and return-cohort anchors. Every recorder reads it under the telemetry lock, so identical domain, window, and dimension inputs produce the same subject across processes and restarts.
+When an enabled recorder first needs identity state, Symposium stores a random secret key in private `<config-dir>/telemetry-state.toml` (default `~/.symposium/telemetry-state.toml`). The same state holds the current identifier-window anchor and, after the first observed session, the return-cohort anchor. Every recorder reads it under the telemetry lock, so identical domain, window, and dimension inputs produce the same subject across processes and restarts.
 
-Normal 30-day rollover changes the window input without replacing the key. Renewed consent or `telemetry reset-identifiers` replaces it. `telemetry disable` and `telemetry clear` preserve the key and anchors.
+An identifier window includes its anchor day as day 0 and remains active through day 29. The first recording-capable observation on day 30 or later starts a new window anchored to that observation. This normal rollover changes the window input without replacing the key. Renewed consent or `telemetry reset-identifiers` replaces the key, sets the identifier-window anchor to the later of the current UTC day and the latest-opened-day high-water mark, and clears the return-cohort anchor. The next observed session starts a new cohort at D0. `telemetry disable` and `telemetry clear` preserve the key and whichever anchors exist.
+
+Identifier-window age uses that same later day. An anchor later than the wall-clock day is valid after clock rollback and is not malformed for that reason alone.
 
 This file is separate from the inspectable `<config-dir>/telemetry/` data directory and has owner-only permissions where the platform supports them. The key is private state, not anonymized telemetry. It is not written into events, printed by telemetry commands, or derived from your machine. Someone who has the key can recompute candidate identifiers.
+
+The implementation prevents accidental formatting or serialization of the key. It does not promise to scrub every in-memory copy: the security boundary is the private state file and keeping the key out of telemetry and diagnostics.
+
+### Derivation format
+
+Version 1 uses the first 128 bits of HMAC-SHA-256. Each variable-length window or dimension value has an eight-byte unsigned big-endian byte length followed by its bytes:
+
+```text
+frame(value) = u64_be(byte_length(value)) || value
+
+HMAC(
+    key,
+    "telemetry:<domain>:v1\0"
+    || frame(window)
+    || frame(dimension field 1)
+    || frame(dimension field 2)
+    || ...
+)
+```
+
+The window is the canonical byte form of the relevant anchor in `telemetry-state.toml`. Dimension fields use the exact UTF-8 bytes of their stable labels and validated strings, without case folding or Unicode normalization. Length framing keeps field boundaries unambiguous even when a value contains a NUL byte. Domains with no dimension fields end after the framed window.
+
+The domain strings, wire prefixes, and ordered dimension fields are frozen for consent version 1:
+
+| Identifier | HMAC domain | Wire prefix | Ordered dimension fields |
+| --- | --- | --- | --- |
+| `session_id` | `session_id` | `sess_` | Agent, vendor session id. |
+| `retention_subject` | `retention_subject` | `ret_` | None; the return-cohort anchor is the window. |
+| `agent_subject` | `agent_subject` | `agt_` | Agent. |
+| `package_subject` | `package_subject` | `pkg_` | Package ecosystem, name, exact version. |
+| `extension_subject` | `extension_subject` | `ext_` | Target type, source, name, then the complete safe resolution path. |
+| `hook_subject` | `hook_subject` | `hok_` | Agent, hook surface. |
+| `plugin_subject` | `plugin_subject` | `plg_` | Public source, plugin name. |
+| `command_subject` | `command_subject` | `cmd_` | Command type, then its typed coordinate fields in event order. |
+
+Structured values such as an extension path use the same framing recursively. A sequence starts with its eight-byte unsigned big-endian item count. Each variant starts with its framed type label, followed by its fields in the order used by the corresponding event schema. Identity code owns this encoding; telemetry producers pass typed coordinates rather than concatenating strings.
 
 ### What identifiers can link
 
@@ -98,7 +136,7 @@ This row records a completed registered Symposium session-start hook.
 
 GitHub Copilot does not currently supply a session id. OpenCode and Goose do not currently call Symposium through a registered session-start hook, so they do not produce this event.
 
-These rows, not `hook_metrics` rows whose `hook` is `session_start`, are authoritative for observed-session and return measurements. For each `retention_subject`, the first row establishes D0. D1, D7, or D30 is present when at least one later session-start row has that `cohort_day`, regardless of agent or vendor session id. Multiple rows on the same cohort day count once.
+These rows, not `hook_metrics` rows whose `hook` is `session_start`, are authoritative for observed-session and return measurements. A stored D0 row admits its `retention_subject` cohort to analysis. D1, D7, or D30 is present when at least one later session-start row has that `cohort_day`, regardless of agent or vendor session id. A later row without a stored D0 for the same subject is ignored. Multiple rows on the same cohort day count once.
 
 The aggregate hook rows measure only session-start hook reliability and latency.
 
@@ -368,6 +406,10 @@ Low-volume events are appended as JSON lines in `events-YYYY-MM-DD.jsonl` under 
 
 The lock in the telemetry directory also guards sibling private state. A recorder makes one non-waiting lock attempt. It may drop a complete buffered event batch or aggregate observation rather than delay your hook or command. Recording failures never change the user operation's result.
 
+Under that lock, session recording rejects a day before the latest-opened-day high-water mark. It calculates the identifier-window and return-cohort transitions before mutating either anchor. It then applies both transitions and any high-water advancement to one in-memory state, atomically replaces private state once, and only then derives the row identifiers and appends the `session_start` row. If that append fails after a new cohort is stored, later rows for the cohort remain ineligible for Q1 unless a D0 row was stored. This failure mode undercounts returns rather than creating unstable identity.
+
+Private state keeps the latest opened UTC day as a high-water mark. Observing a later day permanently closes earlier daily files. An observation dated before the high-water mark is dropped rather than modifying a closed day. Raw inspection still preserves every stored line. Typed reading of a closed day returns only recognized rows that pass their versioned schema and file/day invariants, and reports malformed, invalid, and unknown-version lines separately. It rejects an oversized or incompletely read day as a whole rather than returning a partial validated result.
+
 ### Daily limits and retention
 
 The event file, aggregate-metric snapshot, and reserved maximum-size `storage_limit` line share an 8 MiB daily allowance. This allowance is a safety ceiling, not expected volume or preallocation. It bounds damage from a producer bug or unexpectedly large resolution batch.
@@ -378,13 +420,13 @@ A file is eligible for deletion only when `current_utc_day - file_utc_day > 30`.
 
 ### Private state
 
-The sibling private `<config-dir>/telemetry-state.toml` holds the identity key, current identifier-window and return-cohort anchors, cleanup and marker metadata, bounded keyed session sets, and snapshot contribution counts used to calculate complete distinct-session counts.
+The sibling private `<config-dir>/telemetry-state.toml` holds the identity key, current identifier-window anchor, optional return-cohort anchor, the latest opened UTC day, cleanup and marker metadata, bounded keyed session sets, and snapshot contribution counts used to calculate complete distinct-session counts.
 
 Symposium creates and replaces it atomically with owner-only permissions where supported. Replacement uses a same-directory temporary file beside `config.toml`; abandoned state temporaries are ignored and cleaned lazily under the telemetry lock.
 
 The session sets are not printed or copied into metric rows. Symposium discards them at UTC-day rollover and removes them when `telemetry clear` or `telemetry reset-identifiers` runs. State is replaced before the corresponding metric snapshot. If a later snapshot write fails, a contribution-count mismatch on the next update discards the sets and permanently marks the row's session counts incomplete for that day.
 
-`telemetry clear` deletes event and aggregate-metric files and rewrites private state to remove pending sets while preserving the identity key and current anchors. `telemetry reset-identifiers` rotates future identifiers and starts a new retention cohort. `telemetry disable` stops recording; existing files remain unless the user accepts its interactive clear offer or runs `telemetry clear` later.
+`telemetry clear` deletes event and aggregate-metric files and rewrites private state to remove pending sets while preserving the identity key, current anchors, and latest-opened-day high-water mark. `telemetry reset-identifiers` rotates future identifiers, sets the identifier-window anchor to the later of the current UTC day and that high-water mark, and clears the return-cohort anchor without moving the high-water mark backward. The next observed session starts a new retention cohort at D0. `telemetry disable` stops recording; existing files remain unless the user accepts its interactive clear offer or runs `telemetry clear` later.
 
 ### Installation index
 

@@ -168,9 +168,11 @@ Builtin dispatch currently only acts on `SessionStart`, where `handle_session_st
 
 Manages `state.toml` in the config directory. Deserializes through `RawState` and validates into the runtime `State`. Tracks the semver of the binary that last touched the directory (for future migration hooks) and the timestamp of the last update check (to throttle crates.io queries to once per 24 hours). `ensure_current()` is called on startup to silently stamp the current version. `should_check_for_update()` / `record_update_check()` gate the auto-update flow.
 
-### `telemetry.rs` — opt-in usage telemetry
+### `telemetry/` — opt-in usage telemetry
 
 Implements the local, opt-in [telemetry](./telemetry.md) event log under `<config-dir>/telemetry/`, one JSONL file per UTC day. Off by default; gated by `[telemetry] enabled`. A `TelemetryEvent` is an `at` timestamp plus a kind-tagged `EventKind` (`session_start` / `user_prompt` / `tool_use`), serialized one per line. `record` / `record_kind` append an event; `roll_off` deletes files older than `RETENTION_DAYS` (30); `read_events` / `recent_events` read them back; `usage` + `status_text` back `telemetry status`; `recent_events` backs `telemetry show`. Events are anonymous by construction — no prompt text, command lines, or file paths. Every write path is best-effort — failures are logged and swallowed so a hook is never broken. The recording entry points are not yet called from the hook pipeline, so no events are produced today even when telemetry is enabled.
+
+The replacement recording contract is being built behind private `schema`, `identity`, and `state` submodules before it is connected to production callers. Within `schema`, `mod.rs` owns shared row primitives and version dispatch, while `agent.rs` owns agent vocabulary and agent-originated rows. Timestamped rows validate during deserialization that `day` is the UTC calendar day containing `at`; the later archive reader separately validates that the row belongs to its daily file. Within `state`, `mod.rs` owns the versioned private-state file shape, while `lifecycle.rs` owns identifier-window, return-cohort, and identifier-reset transitions. Their tests remain beside the responsibility they exercise.
 
 ### `report.rs` — structured report layer
 
