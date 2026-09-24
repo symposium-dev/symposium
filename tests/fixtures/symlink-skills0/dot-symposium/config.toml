@@ -1,0 +1,9 @@
+hook-scope = "project"
+
+# Zero debounce so a second `sync` in the same test actually compares source
+# and destination instead of short-circuiting on the marker's mtime.
+sync-debounce-secs = 0
+
+[defaults]
+symposium-recommendations = false
+user-plugins = false

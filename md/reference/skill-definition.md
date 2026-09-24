@@ -14,6 +14,42 @@ skills/
     resources/     # optional
 ```
 
+## Symlinks in skill content
+
+A skill directory may contain symlinks, and installing a skill **follows** them:
+a link to a file arrives as a real file, a link to a directory arrives as a real
+directory holding a copy of its contents. That is what lets a workspace keep one
+copy of a shared script and link it into the several skills that use it.
+
+Links are followed wherever they point, including outside the skill directory
+and outside the crate or registry entry that ships it. Two alternatives were
+considered and rejected:
+
+- **Copying the link itself.** The installed skill lives in the agent's skill
+  directory, a different tree, so a relative link pointing outside the skill
+  directory dangles there — which is exactly the missing-file error this is
+  meant to avoid.
+- **Following only links that stay inside the source.** This breaks layouts that
+  already exist, such as a skill linking a library out of a sibling crate in the
+  same workspace, and it would make installing from a source tree stricter than
+  installing the same crate from crates.io: `cargo package` follows links,
+  including ones whose target escapes the package root, so the published crate
+  carries that content as a real file either way.
+
+The consequence is worth stating plainly: a skill you install can bring any file
+its links reach into the directory your agent reads. The boundary that governs
+that is [enablement](./configuration.md#plugins) — a plugin embedded in a
+dependency does not run without your consent, and a registry is a trust root you
+added yourself. Symposium does not put a second, filesystem-shaped boundary on
+top of it.
+
+Two links are skipped rather than followed, each with a warning, and neither
+fails the sync:
+
+- a **broken** link, whose target does not exist;
+- a link naming a **directory the copy is already inside**, which would
+  otherwise nest forever.
+
 ## SKILL.md format
 
 A `SKILL.md` file has YAML frontmatter followed by a markdown body:

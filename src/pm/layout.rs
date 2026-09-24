@@ -78,19 +78,32 @@ pub fn enumerate(root: &Path) -> Result<Vec<RegistryEntry>> {
 /// Recursively collect entry directories under `dir`, unsorted and without
 /// the root guard. Subpaths are relative to `rel`.
 pub(crate) fn walk(dir: &Path, rel: &Path, entries: &mut Vec<RegistryEntry>) {
+    let mut ancestors = crate::dir_walk::Ancestors::rooted_at(dir);
+    walk_in(dir, rel, &mut ancestors, entries);
+}
+
+fn walk_in(
+    dir: &Path,
+    rel: &Path,
+    ancestors: &mut crate::dir_walk::Ancestors,
+    entries: &mut Vec<RegistryEntry>,
+) {
     let Ok(read) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in read.flatten() {
         let path = entry.path();
+        // `is_dir` follows symlinks, so a linked directory is an entry like any
+        // other — and can name a directory this walk is already inside.
         if !path.is_dir() {
             continue;
         }
         let sub = rel.join(entry.file_name());
         if classify(&path).is_some() {
             entries.push(RegistryEntry { subpath: sub });
-        } else {
-            walk(&path, &sub, entries);
+        } else if ancestors.enter(&path) {
+            walk_in(&path, &sub, ancestors, entries);
+            ancestors.leave();
         }
     }
 }
@@ -129,6 +142,21 @@ mod tests {
 
         // Missing root: no entries, no error.
         assert!(enumerate(&tmp.path().join("nope")).unwrap().is_empty());
+    }
+
+    /// A registry directory that links back into itself still enumerates.
+    #[cfg(unix)]
+    #[test]
+    fn flat_layout_terminates_on_a_symlink_cycle() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        touch(&tmp.path().join("group/deep/skill/SKILL.md"));
+        symlink("..", tmp.path().join("group/back")).unwrap();
+
+        let entries = enumerate(tmp.path()).unwrap();
+        let subpaths: Vec<_> = entries.iter().map(|e| e.subpath.clone()).collect();
+        assert_eq!(subpaths, vec![PathBuf::from("group/deep/skill")]);
     }
 
     #[test]

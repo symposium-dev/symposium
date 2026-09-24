@@ -14,6 +14,7 @@ use symposium_install::UpdateLevel;
 
 use crate::agents::Agent;
 use crate::config::Symposium;
+use crate::dir_walk::{self, EntryKind};
 use crate::output::{Output, display_path};
 use crate::plugins;
 use crate::pm::WorkspaceDeps;
@@ -77,63 +78,129 @@ fn has_symposium_marker(dir: &Path) -> bool {
     dir.join(MARKER_FILE).exists()
 }
 
-/// Recursively copy the contents of `src` into `dst`. Creates `dst` if
-/// missing. Regular files are copied with `fs::copy`; subdirectories are
-/// walked. Symlinks and other special files are ignored.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    fs::create_dir_all(dst).with_context(|| format!("create {}", dst.display()))?;
-    for entry in fs::read_dir(src).with_context(|| format!("read {}", src.display()))? {
-        let entry = entry?;
-        let src_path = entry.path();
-        let dst_path = dst.join(entry.file_name());
-        let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            copy_dir_recursive(&src_path, &dst_path)?;
-        } else if file_type.is_file() {
-            fs::copy(&src_path, &dst_path)
-                .with_context(|| format!("copy {} → {}", src_path.display(), dst_path.display()))?;
-        }
-    }
-    Ok(())
+/// One entry of a source tree as the installer sees it: a path relative to the
+/// tree root, with symlinks already resolved.
+type TreeEntry = (PathBuf, EntryKind);
+
+/// Walk `root` depth-first with symlinks followed, returning every directory
+/// and regular file under it as a path relative to `root`, sorted, together
+/// with one message per entry the walk refused to follow.
+///
+/// Copying and comparing both go through this one walk, because they have to
+/// agree entry for entry. A comparison scan that omitted something the copier
+/// writes would see the destination differ from the source on every run, and
+/// every sync would become a full delete-and-recopy.
+///
+/// Sorting by relative path puts each directory before its children, so a
+/// caller may create or read the entries in order.
+fn walk_tree(root: &Path) -> Result<(Vec<TreeEntry>, Vec<String>)> {
+    let mut entries = Vec::new();
+    let mut skipped = Vec::new();
+    let mut ancestors = dir_walk::Ancestors::rooted_at(root);
+    walk_tree_inner(root, root, &mut ancestors, &mut entries, &mut skipped)?;
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok((entries, skipped))
 }
 
-/// Collect all regular files in `dir` recursively, returning paths relative
-/// to `dir` paired with their contents. Skips the `.symposium` marker and
-/// `.gitignore` since those are managed metadata, not skill content.
-fn collect_dir_contents(dir: &Path) -> Result<Vec<(PathBuf, Vec<u8>)>> {
-    let mut result = Vec::new();
-    collect_dir_contents_inner(dir, dir, &mut result)?;
-    result.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok(result)
-}
-
-fn collect_dir_contents_inner(
-    base: &Path,
+fn walk_tree_inner(
+    root: &Path,
     dir: &Path,
-    out: &mut Vec<(PathBuf, Vec<u8>)>,
+    ancestors: &mut dir_walk::Ancestors,
+    entries: &mut Vec<TreeEntry>,
+    skipped: &mut Vec<String>,
 ) -> Result<()> {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
+    let read = match fs::read_dir(dir) {
+        Ok(read) => read,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e).with_context(|| format!("read {}", dir.display())),
     };
-    for entry in entries {
+    for entry in read {
         let entry = entry?;
         let path = entry.path();
+        let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
         let file_type = entry.file_type()?;
-        if file_type.is_dir() {
-            collect_dir_contents_inner(base, &path, out)?;
-        } else if file_type.is_file() {
-            let rel = path.strip_prefix(base).unwrap_or(&path).to_path_buf();
-            let name = rel.to_string_lossy();
-            if name == MARKER_FILE || name == ".gitignore" {
-                continue;
+        match dir_walk::resolved_kind(&path, file_type) {
+            Ok(Some(EntryKind::Dir)) => {
+                if !ancestors.enter(&path) {
+                    skipped.push(format!(
+                        "skipping {}: symlink re-enters a directory it is inside",
+                        display_path(&path)
+                    ));
+                    continue;
+                }
+                entries.push((rel, EntryKind::Dir));
+                walk_tree_inner(root, &path, ancestors, entries, skipped)?;
+                ancestors.leave();
             }
-            let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-            out.push((rel, bytes));
+            Ok(Some(EntryKind::File)) => entries.push((rel, EntryKind::File)),
+            // A socket or a fifo. Never skill content, so never worth a word.
+            Ok(None) => {}
+            Err(e) => skipped.push(format!(
+                "skipping {}: broken symlink ({e})",
+                display_path(&path)
+            )),
         }
     }
     Ok(())
+}
+
+/// Recursively copy the contents of `src` into `dst`. Creates `dst` if
+/// missing. Symlinks are followed: a link to a file lands as a real file, a
+/// link to a directory as a real directory holding a copy of its contents.
+///
+/// Entries the walk cannot follow are reported and skipped, so a single broken
+/// link leaves the rest of the skill installed instead of failing the sync.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
+    let (entries, skipped) = walk_tree(src)?;
+    for message in skipped {
+        tracing::info!(report = %crate::report::ReportEvent::Warning { message });
+    }
+    fs::create_dir_all(dst).with_context(|| format!("create {}", dst.display()))?;
+    for (rel, kind) in entries {
+        let dst_path = dst.join(&rel);
+        match kind {
+            EntryKind::Dir => {
+                fs::create_dir_all(&dst_path)
+                    .with_context(|| format!("create {}", dst_path.display()))?;
+            }
+            EntryKind::File => {
+                let src_path = src.join(&rel);
+                fs::copy(&src_path, &dst_path).with_context(|| {
+                    format!("copy {} → {}", src_path.display(), dst_path.display())
+                })?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Collect `dir`'s tree for comparison: every directory and regular file under
+/// it, as a path relative to `dir` paired with the file's contents (`None` for
+/// a directory). Symlinks resolve exactly as [`copy_dir_recursive`] resolves
+/// them, so the source of an installed skill and its destination compare equal.
+///
+/// Skips the `.symposium` marker and `.gitignore`, which are managed metadata
+/// rather than skill content. Entries the walk refuses are dropped silently:
+/// the copy this comparison guards reports them, and reporting them here too
+/// would say the same thing twice per sync.
+fn collect_dir_contents(dir: &Path) -> Result<Vec<(PathBuf, Option<Vec<u8>>)>> {
+    let (entries, _skipped) = walk_tree(dir)?;
+    let mut out = Vec::with_capacity(entries.len());
+    for (rel, kind) in entries {
+        let name = rel.to_string_lossy();
+        if name == MARKER_FILE || name == ".gitignore" {
+            continue;
+        }
+        let contents = match kind {
+            EntryKind::Dir => None,
+            EntryKind::File => {
+                let path = dir.join(&rel);
+                Some(fs::read(&path).with_context(|| format!("read {}", path.display()))?)
+            }
+        };
+        out.push((rel, contents));
+    }
+    Ok(out)
 }
 
 /// Returns true if the source directory's content differs from the
@@ -643,4 +710,155 @@ pub async fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A source tree holding, in order: a plain file, a nested directory, an
+    /// empty directory, a link to a file outside the tree, a link to a
+    /// directory outside the tree, a broken link, and a link back to the root.
+    #[cfg(unix)]
+    fn tree_with_symlinks(root: &Path) -> PathBuf {
+        use std::os::unix::fs::symlink;
+
+        let outside = root.join("outside");
+        fs::create_dir_all(outside.join("nested")).unwrap();
+        fs::write(outside.join("lib.txt"), "shared").unwrap();
+        fs::write(outside.join("nested/deep.txt"), "deep").unwrap();
+
+        let src = root.join("src");
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::create_dir(src.join("empty")).unwrap();
+        fs::write(src.join("SKILL.md"), "skill").unwrap();
+        fs::write(src.join("sub/plain.txt"), "plain").unwrap();
+        symlink("../outside/lib.txt", src.join("lib.txt")).unwrap();
+        // A chain: the first link resolves to a second one, itself relative to
+        // a third directory. Whole chains are followed, not just one hop.
+        symlink("../outside/hop.txt", src.join("chain.txt")).unwrap();
+        symlink("nested/../lib.txt", outside.join("hop.txt")).unwrap();
+        symlink("../outside", src.join("vendor")).unwrap();
+        symlink("gone.txt", src.join("broken.txt")).unwrap();
+        symlink(".", src.join("loop")).unwrap();
+        src
+    }
+
+    /// The installed copy is the content behind the links, as real files, and
+    /// the comparison that guards the next sync agrees with what was written.
+    #[cfg(unix)]
+    #[test]
+    fn copy_follows_symlinks_and_compares_equal_afterwards() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tree_with_symlinks(tmp.path());
+        let dst = tmp.path().join("dst");
+
+        copy_dir_recursive(&src, &dst).unwrap();
+
+        assert!(
+            !fs::symlink_metadata(dst.join("lib.txt"))
+                .unwrap()
+                .is_symlink()
+        );
+        assert_eq!(fs::read_to_string(dst.join("lib.txt")).unwrap(), "shared");
+        assert_eq!(
+            fs::read_to_string(dst.join("chain.txt")).unwrap(),
+            "shared",
+            "a link chain resolves to its final target"
+        );
+        assert_eq!(
+            fs::read_to_string(dst.join("vendor/lib.txt")).unwrap(),
+            "shared"
+        );
+        assert_eq!(
+            fs::read_to_string(dst.join("vendor/nested/deep.txt")).unwrap(),
+            "deep"
+        );
+        assert_eq!(
+            fs::read_to_string(dst.join("sub/plain.txt")).unwrap(),
+            "plain"
+        );
+        assert!(
+            dst.join("empty").is_dir(),
+            "an empty directory still copies"
+        );
+        assert!(!dst.join("broken.txt").exists(), "a broken link is skipped");
+        assert!(
+            !dst.join("loop").exists(),
+            "a link back to the root is skipped"
+        );
+
+        assert!(
+            !dir_contents_differ(&src, &dst).unwrap(),
+            "the source scan must see exactly what the copier wrote, or every \
+             sync turns into a full recopy"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unfollowable_entries_are_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tree_with_symlinks(tmp.path());
+
+        let (_, skipped) = walk_tree(&src).unwrap();
+
+        assert!(
+            skipped
+                .iter()
+                .any(|m| m.contains("broken.txt") && m.contains("broken symlink")),
+            "{skipped:?}"
+        );
+        assert!(
+            skipped
+                .iter()
+                .any(|m| m.contains("loop") && m.contains("re-enters")),
+            "{skipped:?}"
+        );
+    }
+
+    /// A change behind a link is a change to the skill.
+    #[cfg(unix)]
+    #[test]
+    fn editing_a_linked_file_is_seen_as_a_difference() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tree_with_symlinks(tmp.path());
+        let dst = tmp.path().join("dst");
+        copy_dir_recursive(&src, &dst).unwrap();
+
+        fs::write(tmp.path().join("outside/lib.txt"), "edited").unwrap();
+
+        assert!(dir_contents_differ(&src, &dst).unwrap());
+    }
+
+    #[test]
+    fn a_plain_tree_copies_and_compares_equal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(src.join("sub")).unwrap();
+        fs::write(src.join("SKILL.md"), "skill").unwrap();
+        fs::write(src.join("sub/a.txt"), "a").unwrap();
+        let dst = tmp.path().join("dst");
+
+        copy_dir_recursive(&src, &dst).unwrap();
+
+        assert_eq!(fs::read_to_string(dst.join("sub/a.txt")).unwrap(), "a");
+        assert!(!dir_contents_differ(&src, &dst).unwrap());
+    }
+
+    /// Managed metadata is excluded from the comparison, so writing the marker
+    /// and gitignore into the destination does not make it look changed.
+    #[test]
+    fn managed_metadata_is_not_skill_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("SKILL.md"), "skill").unwrap();
+        let dst = tmp.path().join("dst");
+
+        copy_dir_recursive(&src, &dst).unwrap();
+        mark_generated_skill_directory(&dst).unwrap();
+
+        assert!(!dir_contents_differ(&src, &dst).unwrap());
+    }
 }

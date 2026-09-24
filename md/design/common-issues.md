@@ -31,6 +31,14 @@ no error — the hook simply never runs. `ANTIGRAVITY_EVENTS` and
 `antigravity_is_tool_event` in `agents/mod.rs` are the single source of truth for
 both, and the unit tests assert the shape per event for exactly this reason.
 
+## Symlinks in source trees
+
+`DirEntry::file_type()` reports the *entry*, so a symlink is neither `is_dir()` nor `is_file()` and falls through the gap between the two branches — silently, with no error and no warning. That is how installing a skill used to drop every symlinked file in it: `sync`'s copier had exactly that shape, and so did the scan it compares against. `fs::metadata` follows the link; `DirEntry::metadata` does not. Reach for `dir_walk::resolved_kind` instead of either.
+
+`Path::is_dir()` *does* follow links, which is the other half of the trap: a walk written that way already descends into linked directories, so it can already loop on a link naming a directory it is inside. Guard any such walk with `dir_walk::Ancestors`.
+
+And when two walks over one tree feed each other — a copy, and the comparison that decides whether to copy — they have to be the same traversal. Fixing one and not the other does not show up as a wrong file; it shows up as a sync that reinstalls the same skill forever.
+
 ## Windows portability (tests)
 
 The test suite runs on `windows-latest`, where CI passes `--no-fail-fast` so that one failing test binary does not hide the failures in every binary cargo would otherwise skip. A few patterns recur when writing tests that touch paths or scripts:

@@ -375,6 +375,15 @@ pub(crate) fn discover_skills(
 /// sources. This matters for `.agents/skills/`, which is both a workspace
 /// skill-group source and the install destination for vendor-neutral agents.
 pub(crate) fn find_skill_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
+    let mut ancestors = crate::dir_walk::Ancestors::rooted_at(dir);
+    find_skill_files_in(dir, &mut ancestors, out);
+}
+
+fn find_skill_files_in(
+    dir: &Path,
+    ancestors: &mut crate::dir_walk::Ancestors,
+    out: &mut Vec<PathBuf>,
+) {
     if dir.join(crate::sync::MARKER_FILE).exists() {
         return;
     }
@@ -384,8 +393,13 @@ pub(crate) fn find_skill_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        // `is_dir` follows symlinks, so a symlinked directory of skills is
+        // discovered — and can name a directory this walk is already inside.
         if path.is_dir() {
-            find_skill_files_recursive(&path, out);
+            if ancestors.enter(&path) {
+                find_skill_files_in(&path, ancestors, out);
+                ancestors.leave();
+            }
         } else if path.file_name().is_some_and(|f| f == "SKILL.md") {
             out.push(path);
         }
@@ -662,6 +676,24 @@ mod tests {
     /// Build a predicate set from dependency atoms (the `depends-on` field form).
     fn pred_set(s: &str) -> PredicateSet {
         PredicateSet::from_depends_on(s).unwrap()
+    }
+
+    /// Discovery follows directory links, so a skills tree that links back
+    /// into itself must not be walked forever — and must not report the same
+    /// `SKILL.md` once per turn around the loop.
+    #[test]
+    #[cfg(unix)]
+    fn discovery_terminates_on_a_symlink_cycle() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skills = tmp.path().join("skills");
+        fs::create_dir_all(skills.join("my-skill")).unwrap();
+        fs::write(skills.join("my-skill/SKILL.md"), "# skill").unwrap();
+        std::os::unix::fs::symlink("..", skills.join("my-skill/back")).unwrap();
+
+        let mut found = Vec::new();
+        find_skill_files_recursive(&skills, &mut found);
+
+        assert_eq!(found, vec![skills.join("my-skill/SKILL.md")]);
     }
 
     /// Reaching one SKILL.md through a symlinked prefix must yield one origin.

@@ -137,13 +137,25 @@ fn embedded_plugin_kind(dir: &std::path::Path) -> Option<&'static str> {
 
 /// Is there a `SKILL.md` anywhere under `dir`?
 fn contains_skill_md(dir: &std::path::Path) -> bool {
+    let mut ancestors = crate::dir_walk::Ancestors::rooted_at(dir);
+    contains_skill_md_in(dir, &mut ancestors)
+}
+
+fn contains_skill_md_in(dir: &std::path::Path, ancestors: &mut crate::dir_walk::Ancestors) -> bool {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return false;
     };
     entries.flatten().any(|entry| {
         let path = entry.path();
+        // `is_dir` follows symlinks, so a linked directory is searched — and
+        // can name a directory this walk is already inside.
         if path.is_dir() {
-            contains_skill_md(&path)
+            if !ancestors.enter(&path) {
+                return false;
+            }
+            let found = contains_skill_md_in(&path, ancestors);
+            ancestors.leave();
+            found
         } else {
             path.file_name().is_some_and(|f| f == "SKILL.md")
         }

@@ -2650,3 +2650,144 @@ async fn report_json_shows_skipped_skills() {
     .await
     .unwrap();
 }
+
+/// A skill whose content includes symlinks installs complete: a symlinked file
+/// arrives with real content, a symlinked directory arrives with its contents,
+/// a dangling link is skipped rather than failing the sync, and a link cycle
+/// terminates. Syncing again with no source change must stay a no-op.
+///
+/// Unix only: creating symlinks on Windows needs Developer Mode or elevation.
+#[cfg(unix)]
+#[tokio::test]
+async fn sync_follows_symlinks_in_skill_content() {
+    use std::os::unix::fs::symlink;
+
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["symlink-skills0", "workspace-plugin0"],
+        async |mut ctx| {
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            let source = workspace_root.join("skills/ws-hello");
+
+            // Shared content living outside the skill directory, the way a
+            // workspace shares one library between several crates' skills.
+            std::fs::create_dir_all(workspace_root.join("shared/nested")).unwrap();
+            std::fs::write(workspace_root.join("shared/lib.txt"), "shared-lib").unwrap();
+            std::fs::write(workspace_root.join("shared/nested/deep.txt"), "deep").unwrap();
+
+            symlink("../../shared/lib.txt", source.join("lib.txt")).unwrap();
+            symlink("../../shared", source.join("vendor")).unwrap();
+            symlink("no-such-file.txt", source.join("dangling.txt")).unwrap();
+            symlink("../ws-hello", source.join("loop")).unwrap();
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let events = ctx.sync_with_report(tracing::Level::INFO).await?;
+            let installed: Vec<&Value> = events
+                .iter()
+                .filter(|e| e["kind"] == "skill_installed")
+                .collect();
+            assert!(
+                !installed.is_empty(),
+                "first sync should install the skill: {events:?}"
+            );
+
+            assert!(
+                events.iter().any(|e| e
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .is_some_and(|m| m.contains("dangling.txt") && m.contains("broken symlink"))),
+                "the dangling link should be reported, not silently dropped: {events:?}"
+            );
+
+            let dest = find_installed_skill(&workspace_root.join(".claude/skills"), "ws-hello");
+
+            let lib = dest.join("lib.txt");
+            assert!(
+                !std::fs::symlink_metadata(&lib).unwrap().is_symlink(),
+                "installed copy should be a real file, not a link"
+            );
+            assert_eq!(std::fs::read_to_string(&lib).unwrap(), "shared-lib");
+
+            assert_eq!(
+                std::fs::read_to_string(dest.join("vendor/lib.txt")).unwrap(),
+                "shared-lib",
+                "a symlinked directory should install its contents"
+            );
+            assert_eq!(
+                std::fs::read_to_string(dest.join("vendor/nested/deep.txt")).unwrap(),
+                "deep",
+            );
+
+            assert!(
+                !dest.join("dangling.txt").exists(),
+                "a dangling link should be skipped"
+            );
+            assert!(
+                !dest.join("loop/loop").exists(),
+                "a link cycle should terminate instead of nesting"
+            );
+
+            // Second sync with an unchanged source must not reinstall: the
+            // source scan has to see the same content the copier wrote.
+            let events = ctx.sync_with_report(tracing::Level::INFO).await?;
+            let reinstalled: Vec<&Value> = events
+                .iter()
+                .filter(|e| e["kind"] == "skill_installed")
+                .collect();
+            assert!(
+                reinstalled.is_empty(),
+                "second sync on an unchanged source should be a no-op: {reinstalled:?}"
+            );
+
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// The whole skills directory can itself be a symlink — the shape a crate uses
+/// to serve one copy of its skills from another crate in the workspace. The
+/// group source is followed, and so is every link inside what it reaches.
+///
+/// Unix only: creating symlinks on Windows needs Developer Mode or elevation.
+#[cfg(unix)]
+#[tokio::test]
+async fn sync_installs_skills_from_a_symlinked_group_directory() {
+    use std::os::unix::fs::symlink;
+
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["symlink-skills0", "workspace-plugin0"],
+        async |mut ctx| {
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+
+            // Turn the bare `skills/` convention directory into a link to a
+            // directory elsewhere in the workspace, carrying a linked file.
+            std::fs::rename(
+                workspace_root.join("skills"),
+                workspace_root.join("real-skills"),
+            )
+            .unwrap();
+            std::fs::write(workspace_root.join("lib.txt"), "shared-lib").unwrap();
+            symlink(
+                "../../lib.txt",
+                workspace_root.join("real-skills/ws-hello/lib.txt"),
+            )
+            .unwrap();
+            symlink("real-skills", workspace_root.join("skills")).unwrap();
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let dest = find_installed_skill(&workspace_root.join(".claude/skills"), "ws-hello");
+            assert_eq!(
+                std::fs::read_to_string(dest.join("lib.txt")).unwrap(),
+                "shared-lib",
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
