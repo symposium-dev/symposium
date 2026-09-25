@@ -152,7 +152,6 @@ strict_versioned_row! {
 
     kind: RowKind::ResolutionSummary,
     raw: RawResolutionSummaryV1,
-    error: ResolutionSummaryError,
     validate: validate_resolution_summary,
 }
 
@@ -406,7 +405,7 @@ mod tests {
     fn resolution_summary_rejects_mismatched_unnamed_count() {
         let raw = raw_summary(20, example_reasons());
 
-        let result = ResolutionSummaryV1::try_from(raw);
+        let result = validate_resolution_summary(&raw);
 
         assert_eq!(
             result,
@@ -426,7 +425,7 @@ mod tests {
         };
         let raw = raw_summary(u64::MAX, reasons);
 
-        let result = ResolutionSummaryV1::try_from(raw);
+        let result = validate_resolution_summary(&raw);
 
         assert_eq!(
             result,

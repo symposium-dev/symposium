@@ -238,7 +238,6 @@ strict_versioned_row! {
 
     kind: RowKind::Command,
     raw: RawCommandV1,
-    error: CommandError,
     validate: validate_command,
 }
 

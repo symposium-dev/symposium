@@ -7,6 +7,8 @@
     )
 )]
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
 use super::{
@@ -14,9 +16,56 @@ use super::{
     schema::UtcDay,
 };
 
+mod extension_invocation;
+mod hook;
 mod lifecycle;
+mod open_day;
+mod plugin_hook;
+mod public_row_budget;
+mod session_counts;
 
+fn set_len<T>(sessions: &BTreeSet<T>) -> u64 {
+    u64::try_from(sessions.len()).expect("BUG: usize must fit in u64 on supported targets")
+}
+
+pub(in crate::telemetry) use extension_invocation::{
+    ExtensionSessionCountBaseline, ExtensionSessionCountSnapshot, ExtensionSessionCountUpdateError,
+    SelectedExtensionInvocationAggregate,
+};
 pub(in crate::telemetry) use lifecycle::{BoundRecordingObservation, BoundSessionObservation};
+pub(in crate::telemetry) use open_day::DayBeforeCurrent;
+pub(in crate::telemetry) use plugin_hook::SelectedPluginHookAggregate;
+pub(in crate::telemetry) use session_counts::{
+    HookSessionCountSnapshot, HookSessionCountTracker, HookSessionCountUpdateError,
+};
+
+#[cfg(test)]
+pub(in crate::telemetry) use {
+    extension_invocation::ExtensionInvocationAggregateStore, hook::HookAggregateStore,
+    plugin_hook::PluginHookAggregateStore, public_row_budget::MAX_PUBLIC_ROWS_PER_DAY,
+};
+
+#[cfg(test)]
+pub(in crate::telemetry) const IDENTIFIER_WINDOW_TEST_STATE: &str = r#"version = 1
+
+[identity]
+key = "4242424242424242424242424242424242424242424242424242424242424242"
+identifier-window-anchor = "2026-08-03"
+"#;
+
+/// Build a recording context inside the shared test state's identifier window.
+#[cfg(test)]
+pub(in crate::telemetry) fn recording_observation(
+    state: &mut TelemetryStateV1,
+) -> BoundRecordingObservation<'_> {
+    use chrono::{TimeZone as _, Utc};
+
+    let completed_at = super::schema::UtcSecond::from_datetime(
+        Utc.with_ymd_and_hms(2026, 8, 3, 10, 2, 11).unwrap(),
+    );
+    let observation = state.observe_recording(completed_at).unwrap();
+    state.bind_recording_observation(observation).unwrap()
+}
 
 /// The initial schema version of `telemetry-state.toml`.
 ///

@@ -181,7 +181,7 @@ If no identity state exists, the command reports that there is nothing to reset 
 
 Each project skills parent may also contain a generated `.symposium/index-v1.json` installation index. It maps agent-facing skill identifiers to Symposium-managed installations so a later hook can attribute a skill activation. The index is gitignored installation state, not telemetry: `show`, `clear`, retention, and identifier reset do not read or delete it, and this RFD does not upload it.
 
-`telemetry-state.toml` is private Symposium state outside the inspectable telemetry data directory. It contains the secret identity key, current identifier-window anchor, optional return-cohort anchor, the latest opened UTC day, cleanup and marker metadata, and bounded keyed session sets plus contribution counts used for complete aggregate session counts. All recorders read this state under the telemetry lock.
+`telemetry-state.toml` is private Symposium state outside the inspectable telemetry data directory. It contains the secret identity key, current identifier-window anchor, optional return-cohort anchor, the latest opened UTC day, cleanup and marker metadata, bounded keyed session sets plus contribution counts used for complete aggregate session counts, the stable row `event_id` in each plugin-hook and extension-invocation aggregate entry, and their separate daily public-row admission counts. A stored row identifier is also present in its metric row and is not secret. All recorders read this state under the telemetry lock.
 
 An identifier window includes its anchor day as day 0 and remains active through day 29. The first recording-capable observation on day 30 or later starts a new window anchored to that observation without replacing the key. Renewed consent or `reset-identifiers` replaces the key, resets the identifier-window anchor, and clears the return-cohort anchor; `disable` and `clear` preserve them. None of these operations moves the latest-opened-day high-water mark backward.
 
@@ -191,7 +191,7 @@ Symposium atomically creates and replaces the file with owner-only permissions w
 
 `show`, `status`, data retention, and `clear` do not expose or delete the state file. `clear` rewrites it only to remove pending sets, preserving the key and current anchors.
 
-Session sets and contribution counts are never copied into metric rows. Symposium discards them at day rollover or when `clear` or `reset-identifiers` runs. `show` and `status` do not lock writers, so a summary spanning several files is not an atomic snapshot.
+Session sets and contribution counts are never copied into metric rows. Symposium discards complete plugin-hook and extension-invocation entries, including their row identifiers, at day rollover or when `clear` or `reset-identifiers` runs. `clear` also deletes the identified rows and resets the daily public-row allowances, while reset removes entries keyed to the previous identifier epoch without restoring those allowances. `show` and `status` do not lock writers, so a summary spanning several files is not an atomic snapshot.
 
 ## Concurrent recording
 
@@ -200,6 +200,8 @@ Recorders make one non-waiting attempt on the lock in the telemetry data directo
 Event batches are appended. Hook, plugin-hook, and extension-invocation observations are merged into a bounded, canonically ordered snapshot using a same-directory temporary write and atomic replace. A crash leaves either the old or new complete snapshot; abandoned temporary files are ignored and cleaned lazily.
 
 Session-count state is atomically replaced first and carries the snapshot contribution count. After a failed snapshot write, a mismatch discards the sets and makes the row's session counts incomplete for that day.
+
+On load, Symposium rebuilds each daily public-row allowance from every surviving public row for that family and day, saturating the count at 128. When selecting a public aggregate with no private entry, it adopts a matching surviving row without spending another slot only when the row's recorded subject equals the subject derived from the observation. Adoption runs before overflow selection. An unnamed or overflow row with no private entry starts a separate row.
 
 Management commands can wait for the lock. A crash can still lose the last batch or metric update, or leave a partial final event line; `status` reports that line as malformed and `show` preserves it.
 

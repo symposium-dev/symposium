@@ -38,7 +38,7 @@ impl TelemetryStateV1 {
     /// # Errors
     ///
     /// Returns an error when the operating system cannot generate a secret key.
-    pub(super) fn reset_identifiers(
+    pub(in crate::telemetry) fn reset_identifiers(
         &mut self,
         identifier_window_anchor: UtcDay,
     ) -> Result<(), getrandom::Error> {

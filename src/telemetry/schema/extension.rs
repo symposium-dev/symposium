@@ -26,7 +26,7 @@ impl ExtensionKind {
 }
 
 /// Public source approved for version 1 extension telemetry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(in crate::telemetry) enum PublicExtensionSource {
     SymposiumRecommendations,

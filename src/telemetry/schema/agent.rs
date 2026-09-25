@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     CohortDay, EventId, RowKind, SchemaVersion, SymposiumVersion, UtcDay, UtcSecond,
-    deserialize_version_one, macros::strict_versioned_row,
+    macros::strict_versioned_row,
 };
 use crate::{
     agents::Agent,
@@ -76,7 +76,7 @@ impl From<Agent> for SupportedAgent {
 ///
 /// Unlike the platform enums, this has no `Other`: Symposium owns the set of
 /// registered agent hooks, so adding an agent changes the row schema.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(in crate::telemetry) enum HookAgent {
     Claude,
@@ -89,7 +89,7 @@ pub(in crate::telemetry) enum HookAgent {
 impl HookAgent {
     /// Return the frozen version 1 wire label.
     #[must_use]
-    const fn as_str(self) -> &'static str {
+    pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
@@ -199,6 +199,19 @@ impl AgentSessionIdentity {
     }
 }
 
+/// Derive the optional scoped session identifier used by aggregate rows.
+///
+/// Keeping this beside [`SessionDimension`] gives session-start and aggregate
+/// rows one encoding without exposing the dimension itself.
+#[must_use]
+pub(super) fn derive_session_id(
+    identity: &IdentifierWindowScope<'_>,
+    agent: HookAgent,
+    vendor_session_id: Option<&VendorSessionId>,
+) -> Option<SessionId> {
+    AgentSessionIdentity::new(identity, agent, vendor_session_id).session_id()
+}
+
 /// Operating-system class for the running Symposium build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -289,7 +302,6 @@ strict_versioned_row! {
 
     kind: RowKind::SessionStart,
     raw: RawSessionStartV1,
-    error: SessionStartError,
     validate: validate_session_start,
 }
 
@@ -372,21 +384,19 @@ pub(in crate::telemetry) struct AgentConfigurationFields {
     pub(in crate::telemetry) configured: bool,
 }
 
-/// Version 1 daily observation of one supported agent's configuration.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(in crate::telemetry) struct AgentConfigurationV1 {
-    #[serde(rename = "v", deserialize_with = "deserialize_version_one")]
-    version: SchemaVersion,
-    kind: RowKind,
-    event_id: EventId,
-    day: UtcDay,
-    symposium: SymposiumVersion,
-    agent: SupportedAgent,
-    configured: bool,
-    os: OperatingSystem,
-    arch: Architecture,
-    agent_subject: AgentSubject,
+strict_versioned_row! {
+    /// Version 1 daily observation of one supported agent's configuration.
+    pub(in crate::telemetry) struct AgentConfigurationV1 {
+        symposium: SymposiumVersion,
+        agent: SupportedAgent,
+        configured: bool,
+        os: OperatingSystem,
+        arch: Architecture,
+        agent_subject: AgentSubject,
+    }
+
+    kind: RowKind::AgentConfiguration,
+    raw: RawAgentConfigurationV1,
 }
 
 impl AgentConfigurationV1 {
@@ -402,7 +412,7 @@ impl AgentConfigurationV1 {
 
         Self {
             version: SchemaVersion::V1,
-            kind: RowKind::AgentConfiguration,
+            kind: Self::KIND,
             event_id: EventId::new(),
             day: observation.day(),
             symposium: SymposiumVersion::current(),
