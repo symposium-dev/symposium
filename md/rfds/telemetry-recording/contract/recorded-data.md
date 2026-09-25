@@ -70,20 +70,20 @@ HMAC(
 )
 ```
 
-The window is the canonical byte form of the relevant anchor in `telemetry-state.toml`. Dimension fields use the exact UTF-8 bytes of their stable labels and validated strings, without case folding or Unicode normalization. Length framing keeps field boundaries unambiguous even when a value contains a NUL byte. Domains with no dimension fields end after the framed window.
+The window is the anchor's ASCII `YYYY-MM-DD` representation from `telemetry-state.toml`. Dimension fields use the exact UTF-8 bytes of their stable labels and validated strings, without case folding or Unicode normalization. Length framing keeps field boundaries unambiguous even when a value contains a NUL byte. Domains with no dimension fields end after the framed window.
 
 The domain strings, wire prefixes, and ordered dimension fields are frozen for consent version 1:
 
-| Identifier | HMAC domain | Wire prefix | Ordered dimension fields |
-| --- | --- | --- | --- |
-| `session_id` | `session_id` | `sess_` | Agent, vendor session id. |
-| `retention_subject` | `retention_subject` | `ret_` | None; the return-cohort anchor is the window. |
-| `agent_subject` | `agent_subject` | `agt_` | Agent. |
-| `package_subject` | `package_subject` | `pkg_` | Package ecosystem, name, exact version. |
-| `extension_subject` | `extension_subject` | `ext_` | Target type, source, name, then the complete safe resolution path. |
-| `hook_subject` | `hook_subject` | `hok_` | Agent, hook surface. |
-| `plugin_subject` | `plugin_subject` | `plg_` | Public source, plugin name. |
-| `command_subject` | `command_subject` | `cmd_` | Command type, then its typed coordinate fields in event order. |
+| Identifier | HMAC domain | Wire prefix | Window anchor | Ordered dimension fields |
+| --- | --- | --- | --- | --- |
+| `session_id` | `session_id` | `sess_` | `identifier-window` | Agent, vendor session id. |
+| `retention_subject` | `retention_subject` | `ret_` | `return-cohort` | None. |
+| `agent_subject` | `agent_subject` | `agt_` | `identifier-window` | Agent. |
+| `package_subject` | `package_subject` | `pkg_` | `identifier-window` | Package ecosystem, name, exact version. |
+| `extension_subject` | `extension_subject` | `ext_` | `identifier-window` | Target type, source, name, then the complete safe resolution path. |
+| `hook_subject` | `hook_subject` | `hok_` | `identifier-window` | Agent, hook surface. |
+| `plugin_subject` | `plugin_subject` | `plg_` | `identifier-window` | Public source, plugin name. |
+| `command_subject` | `command_subject` | `cmd_` | `identifier-window` | Command type, then its typed coordinate fields in event order. |
 
 Structured values such as an extension path use the same framing recursively. A sequence starts with its eight-byte unsigned big-endian item count. Each variant starts with its framed type label, followed by its fields in the order used by the corresponding event schema. Identity code owns this encoding; telemetry producers pass typed coordinates rather than concatenating strings.
 
@@ -117,6 +117,8 @@ Only the following stable labels can make package, plugin, skill, or plugin-comm
 
 `crates-io` applies only when core proves allowlisted crates.io provenance; `symposium-recommendations` identifies the built-in registry. `user-plugins`, configured registries, paths, workspaces, and arbitrary git sources remain unnamed. Raw registry names and URLs are never enum values. Adding an ecosystem or public-source label expands name eligibility and requires a new consent version.
 
+Public plugin and skill names use a fixed version 1 grammar: 1 through 64 ASCII bytes, beginning with an ASCII letter or digit, followed by ASCII letters, digits, `-`, or `_`. Unlike public package names, extension names may begin with a digit because they are authored extension identifiers rather than crates.io package coordinates. Symposium preserves the spelling without case folding or Unicode normalization. An otherwise valid extension whose name does not fit this telemetry grammar remains usable but is treated as unnamed by telemetry.
+
 ## Event kinds
 
 ### `session_start`
@@ -137,6 +139,8 @@ This row records a completed registered Symposium session-start hook.
 GitHub Copilot does not currently supply a session id. OpenCode and Goose do not currently call Symposium through a registered session-start hook, so they do not produce this event.
 
 These rows, not `hook_metrics` rows whose `hook` is `session_start`, are authoritative for observed-session and return measurements. A stored D0 row admits its `retention_subject` cohort to analysis. D1, D7, or D30 is present when at least one later session-start row has that `cohort_day`, regardless of agent or vendor session id. A later row without a stored D0 for the same subject is ignored. Multiple rows on the same cohort day count once.
+
+The producer captures `at` once when session-start handling completes. That timestamp determines `day` and the session observation from which the producer derives `session_id`, `retention_subject`, and `cohort_day`.
 
 The aggregate hook rows measure only session-start hook reliability and latency.
 
@@ -188,12 +192,16 @@ This row records one eligible public package used as resolution input during a f
 | Field               | Values                  | Meaning                                                              |
 | ------------------- | ----------------------- | -------------------------------------------------------------------- |
 | `package.ecosystem` | `cargo`                  | Stable public ecosystem label.                                       |
-| `package.name`      | validated string        | Public package name.                                                 |
+| `package.name`      | validated string        | Public package name using the fixed version 1 grammar.               |
 | `package.version`   | validated exact version | Exact resolved public version, never a range or `*`.                 |
 | `extension_match`   | `public`, `unnamed_only`, `none` | What kind of resolved extension, if any, the package contributed to. |
 | `package_subject`   | scoped id               | Deduplicates this exact coordinate for 30 days.                      |
 
 A package is named only when its package manager reports provenance matching a reviewed public-registry allowlist. Registry URLs themselves are not recorded.
+
+The version 1 package-name grammar is 1 through 64 ASCII bytes. The first byte is an ASCII letter; the remaining bytes are ASCII letters, digits, `-`, or `_`. Symposium preserves the spelling without case folding or treating hyphens and underscores as equivalent. This stable telemetry grammar does not copy a registry's changing reserved-name list.
+
+An exact package version has three numeric semantic-version components and may include prerelease or build metadata. Missing versions, ranges, and wildcards are invalid coordinates.
 
 `extension_match` describes what the package contributed:
 
@@ -211,7 +219,7 @@ This row records one public plugin or skill and one safe path that selected it.
 | ------------------- | --------------------------- | --------------------------------------------------- |
 | `target.type`       | `plugin`, `skill`           | Resolved extension type.                            |
 | `target.source`     | `symposium-recommendations`, `crates-io` | Stable label, never a configured URL or local name. |
-| `target.name`       | validated string            | Name defined by eligible public content.            |
+| `target.name`       | public extension name       | Name defined by eligible public content.            |
 | `path`              | bounded typed nodes         | Actual safe package/predicate/extension chain.      |
 | `extension_subject` | scoped id                   | Deduplicates this safe target/path for 30 days.     |
 
@@ -226,9 +234,26 @@ Path nodes are limited to:
 | `not`       | Marker only; the child is not recorded.                              |
 | `opaque`    | Fixed reason: `private_source`, `non_package_predicate`, or `limit`. |
 
+The exact version 1 node shapes are shown below. These examples use public
+placeholder coordinates; the same package and extension validation rules
+described above apply inside path nodes.
+
+```json
+{"type":"package","ecosystem":"cargo","name":"example-runtime","version":"1.2.3"}
+{"type":"extension","extension_type":"skill","source":"symposium-recommendations","name":"example-debugging"}
+{"type":"all","children":[{"type":"package","ecosystem":"cargo","name":"example-runtime","version":"1.2.3"},{"type":"any","child":{"type":"extension","extension_type":"skill","source":"symposium-recommendations","name":"example-debugging"}},{"type":"not"},{"type":"opaque","reason":"limit"}]}
+{"type":"any","child":{"type":"not"}}
+{"type":"not"}
+{"type":"opaque","reason":"non_package_predicate"}
+```
+
+`all.children` contains one or more nodes. `any.child` contains the one branch
+that made the expression succeed. Each object is strict: missing fields,
+additional fields, unknown node types, and unknown opaque reasons are invalid.
+
 Shell commands, paths, environment variables, custom predicate names or arguments, and private package or extension names never enter a path. An opaque marker can represent their position.
 
-Witness depth counts nested evidence nodes from the root, which is level 1, to a terminal package, extension, `not`, or opaque node. A subtree that would exceed level 8 becomes `opaque: limit`. The complete path is also limited to 16 evidence leaves and 4 KiB. Evidence depth does not count filesystem components; filesystem paths are never recorded.
+The path array is non-empty, and each top-level node begins at depth 1. Depth counts nested evidence nodes through a terminal package, extension, `not`, or opaque node. A subtree that would exceed depth 8 becomes `opaque: limit`. The complete path is limited to 16 evidence leaves. Its 4 KiB bound is the byte length of the compact UTF-8 JSON encoding of the complete path array, excluding the surrounding event row. Evidence depth does not count filesystem components; filesystem paths are never recorded.
 
 This event says an extension resolved. It does not say that an agent read or used the extension; a matching `extension_invocation_metrics` aggregate separately reports observed agent activation. Version 1 can produce that aggregate only for Claude.
 
@@ -264,7 +289,7 @@ This cumulative row combines plugin-hook observations for one UTC day, agent, ho
 | `hook`                        | `pre_tool_use`, `post_tool_use`, `user_prompt_submit`, `session_start`, `stop` | Symposium hook surface.                                                                     |
 | `plugin_scope`                | `public`, `unnamed`, `overflow`                                                | Whether the bucket names an eligible public plugin.                                         |
 | `plugin.source`               | `symposium-recommendations`, `crates-io`, conditional                         | Present only when `plugin_scope=public`.                                                     |
-| `plugin.name`                 | validated string, conditional                                                  | Present only when `plugin_scope=public`.                                                     |
+| `plugin.name`                 | public extension name, conditional                                             | Present only when `plugin_scope=public`.                                                     |
 | `attempts`                    | integer                                                                        | Plugin-hook attempts that reached an observed terminal result.                              |
 | `executions`                  | integer                                                                        | Those completed attempts that reached child execution.                                      |
 | `outcomes`                    | plugin outcome counters                                                        | Exact counters named `ok`, `blocked`, and `error`.                                           |
@@ -315,7 +340,7 @@ This cumulative row combines skill-invocation observations for one UTC day, supp
 | `target_scope`                  | `public`, `unnamed`, `overflow`                                                                    | Whether the bucket names an eligible public skill.                                                      |
 | `target.type`                   | `skill`, conditional                                                                                 | Present only when `target_scope=public`.                                                               |
 | `target.source`                 | `symposium-recommendations`, `crates-io`, conditional                                              | Reviewed public source; present only when `target_scope=public`.                                       |
-| `target.name`                   | validated string, conditional                                                                        | Public skill name; present only when `target_scope=public`.                                            |
+| `target.name`                   | public extension name, conditional                                                                 | Public skill name; present only when `target_scope=public`.                                            |
 | `unnamed_reason`                | `ineligible`, `not_indexed`, `attribution_unavailable`, `ambiguous`, `invalid_signal`, conditional    | Present only when `target_scope=unnamed`.                                                              |
 | `attempted`                     | integer                                                                                              | Valid Claude `PreToolUse:Skill` observations merged into the row.                                      |
 | `completed`                     | integer                                                                                              | Successful Claude `PostToolUse:Skill` observations merged into the row.                                |
@@ -365,7 +390,7 @@ This row records one completed eligible top-level user command.
 
 Arguments are never recorded. Internal `hook`, all `telemetry` commands, and ineligible external/plugin commands do not produce command events.
 
-Built-in names are `init`, `sync`, `search`, `use`, `status`, `plugin_sync`, `plugin_list`, `plugin_show`, `plugin_validate`, `self_update`, and `crate_info`:
+Built-in command operations are `init`, `sync`, `search`, `use`, `remove`, `status`, `plugin_sync`, `plugin_list`, `plugin_show`, `plugin_validate`, `self_update`, and `crate_info`. `remove` is the telemetry name for `cargo agents use --remove`; it is not a separate CLI subcommand.
 
 ```json
 {"type":"builtin","name":"use"}
@@ -376,6 +401,8 @@ An eligible plugin command contains only its reviewed public-source label, publi
 ```json
 {"type":"plugin","source":"symposium-recommendations","plugin":"example-tools","name":"example-check"}
 ```
+
+Public plugin-command names use a fixed version 1 grammar: 1 through 64 ASCII bytes, beginning with an ASCII letter or digit, followed by ASCII letters, digits, `-`, or `_`. Symposium preserves the spelling without case folding or Unicode normalization. A plugin command outside this telemetry grammar remains usable but does not produce a command event.
 
 ### `storage_limit`
 
@@ -406,7 +433,9 @@ Low-volume events are appended as JSON lines in `events-YYYY-MM-DD.jsonl` under 
 
 The lock in the telemetry directory also guards sibling private state. A recorder makes one non-waiting lock attempt. It may drop a complete buffered event batch or aggregate observation rather than delay your hook or command. Recording failures never change the user operation's result.
 
-Under that lock, session recording rejects a day before the latest-opened-day high-water mark. It calculates the identifier-window and return-cohort transitions before mutating either anchor. It then applies both transitions and any high-water advancement to one in-memory state, atomically replaces private state once, and only then derives the row identifiers and appends the `session_start` row. If that append fails after a new cohort is stored, later rows for the cohort remain ineligible for Q1 unless a D0 row was stored. This failure mode undercounts returns rather than creating unstable identity.
+Under that lock, a recording operation captures its completion timestamp once, uses its UTC day, and rejects it when it precedes the latest-opened-day high-water mark. It calculates the identifier-window transition, applies it with any high-water advancement to one in-memory state, atomically replaces private state once, and only then binds the timestamp, day, and identifier window for row construction. The replacement also occurs when the selected window remains current, so every operation has the same persist-before-bind boundary. Every row in one operation reuses that bound recording context. In particular, a full resolution uses one context for its summary, package, and extension rows.
+
+Session recording also calculates the return-cohort transition before mutating either anchor. The identifier-window transition, return-cohort transition, and high-water advancement are persisted together. The `session_start` row is then derived from the same bound session context. If its append fails after a new cohort is stored, later rows for the cohort remain ineligible for Q1 unless a D0 row was stored. This failure mode undercounts returns rather than creating unstable identity.
 
 Private state keeps the latest opened UTC day as a high-water mark. Observing a later day permanently closes earlier daily files. An observation dated before the high-water mark is dropped rather than modifying a closed day. Raw inspection still preserves every stored line. Typed reading of a closed day returns only recognized rows that pass their versioned schema and file/day invariants, and reports malformed, invalid, and unknown-version lines separately. It rejects an oversized or incompletely read day as a whole rather than returning a partial validated result.
 

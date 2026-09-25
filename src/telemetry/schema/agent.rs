@@ -6,11 +6,17 @@ use serde::{Deserialize, Serialize};
 
 use super::{
     CohortDay, EventId, RowKind, SchemaVersion, SymposiumVersion, UtcDay, UtcSecond,
-    deserialize_version_one,
+    deserialize_version_one, macros::strict_versioned_row,
 };
 use crate::{
     agents::Agent,
-    telemetry::identity::{AgentSubject, RetentionSubject, SessionId},
+    telemetry::{
+        identity::{
+            AgentDomain, AgentSubject, DimensionWriter, IdentifierWindowScope, IdentityDimension,
+            RetentionDimension, RetentionSubject, SessionDomain, SessionId,
+        },
+        state::{BoundRecordingObservation, BoundSessionObservation},
+    },
 };
 
 /// Agent included in the daily configuration snapshot.
@@ -25,6 +31,31 @@ pub(in crate::telemetry) enum SupportedAgent {
     #[serde(rename = "opencode")]
     OpenCode,
     Goose,
+}
+
+impl SupportedAgent {
+    /// Return the frozen version 1 wire label.
+    #[must_use]
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Copilot => "copilot",
+            Self::Gemini => "gemini",
+            Self::Kiro => "kiro",
+            Self::OpenCode => "opencode",
+            Self::Goose => "goose",
+        }
+    }
+}
+
+impl IdentityDimension for SupportedAgent {
+    type Domain = AgentDomain;
+
+    /// Write the version 1 `agent_subject` fields in contract order.
+    fn write(&self, writer: &mut DimensionWriter<'_>) {
+        writer.field(self.as_str().as_bytes());
+    }
 }
 
 impl From<Agent> for SupportedAgent {
@@ -55,6 +86,20 @@ pub(in crate::telemetry) enum HookAgent {
     Kiro,
 }
 
+impl HookAgent {
+    /// Return the frozen version 1 wire label.
+    #[must_use]
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Copilot => "copilot",
+            Self::Gemini => "gemini",
+            Self::Kiro => "kiro",
+        }
+    }
+}
+
 impl From<HookAgent> for SupportedAgent {
     fn from(agent: HookAgent) -> Self {
         match agent {
@@ -64,6 +109,93 @@ impl From<HookAgent> for SupportedAgent {
             HookAgent::Gemini => Self::Gemini,
             HookAgent::Kiro => Self::Kiro,
         }
+    }
+}
+
+/// A raw vendor session identifier supplied by an agent.
+///
+/// This value is used only as an identity-derivation input. It deliberately
+/// implements neither formatting nor serialization traits so telemetry cannot
+/// accidentally write it to a row or diagnostic.
+pub(in crate::telemetry) struct VendorSessionId(String);
+
+impl VendorSessionId {
+    /// Wrap a vendor session identifier without changing its UTF-8 bytes.
+    #[must_use]
+    pub(in crate::telemetry) fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    /// Borrow the exact UTF-8 bytes supplied by the agent.
+    #[must_use]
+    fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+/// Canonical version 1 inputs for a scoped session identifier.
+struct SessionDimension<'a> {
+    agent: HookAgent,
+    vendor_session_id: &'a VendorSessionId,
+}
+
+impl<'a> SessionDimension<'a> {
+    #[must_use]
+    const fn new(agent: HookAgent, vendor_session_id: &'a VendorSessionId) -> Self {
+        Self {
+            agent,
+            vendor_session_id,
+        }
+    }
+}
+
+impl IdentityDimension for SessionDimension<'_> {
+    type Domain = SessionDomain;
+
+    /// Write the version 1 `session_id` fields in contract order.
+    fn write(&self, writer: &mut DimensionWriter<'_>) {
+        writer.field(self.agent.as_str().as_bytes());
+        writer.field(self.vendor_session_id.as_bytes());
+    }
+}
+
+/// An agent session paired with its optional scoped identifier.
+///
+/// The identifier is derived from the same agent stored here, so callers
+/// cannot associate one agent with an identifier derived for another. Agents
+/// that do not supply a vendor session identifier remain explicitly
+/// unidentified.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AgentSessionIdentity {
+    agent: HookAgent,
+    session_id: Option<SessionId>,
+}
+
+impl AgentSessionIdentity {
+    /// Derive the identifier for one agent session in an identifier window.
+    #[must_use]
+    fn new(
+        identity: &IdentifierWindowScope<'_>,
+        agent: HookAgent,
+        vendor_session_id: Option<&VendorSessionId>,
+    ) -> Self {
+        let session_id = vendor_session_id.map(|vendor_session_id| {
+            identity.derive(&SessionDimension::new(agent, vendor_session_id))
+        });
+
+        Self { agent, session_id }
+    }
+
+    /// Return the agent whose session this identity describes.
+    #[must_use]
+    const fn agent(self) -> HookAgent {
+        self.agent
+    }
+
+    /// Return the scoped identifier when the agent supplied a vendor id.
+    #[must_use]
+    const fn session_id(self) -> Option<SessionId> {
+        self.session_id
     }
 }
 
@@ -128,60 +260,73 @@ pub(in crate::telemetry) enum SessionStartKind {
     Unknown,
 }
 
-/// Agent-supplied and derived fields for one completed session-start hook.
+/// Non-derived inputs for one completed session-start hook.
 ///
-/// These fields are repeated on [`SessionStartV1`] because flattening this
-/// struct into the row would weaken strict unknown-field rejection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::telemetry) struct SessionStartFields {
+/// The raw vendor identifier is used only during subject derivation and cannot
+/// be formatted or serialized as part of this input bundle.
+pub(in crate::telemetry) struct SessionStartFields<'a> {
     pub(in crate::telemetry) agent: HookAgent,
     pub(in crate::telemetry) os: OperatingSystem,
     pub(in crate::telemetry) arch: Architecture,
     pub(in crate::telemetry) start: SessionStartKind,
-    pub(in crate::telemetry) session_id: Option<SessionId>,
-    pub(in crate::telemetry) retention_subject: RetentionSubject,
-    pub(in crate::telemetry) cohort_day: CohortDay,
+    pub(in crate::telemetry) vendor_session_id: Option<&'a VendorSessionId>,
 }
 
-/// Version 1 record of a completed registered session-start hook.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "RawSessionStartV1")]
-pub(in crate::telemetry) struct SessionStartV1 {
-    #[serde(rename = "v")]
-    version: SchemaVersion,
-    kind: RowKind,
-    event_id: EventId,
-    day: UtcDay,
-    at: UtcSecond,
-    symposium: SymposiumVersion,
-    agent: HookAgent,
-    os: OperatingSystem,
-    arch: Architecture,
-    start: SessionStartKind,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    session_id: Option<SessionId>,
-    retention_subject: RetentionSubject,
-    cohort_day: CohortDay,
+strict_versioned_row! {
+    /// Version 1 record of a completed registered session-start hook.
+    pub(in crate::telemetry) struct SessionStartV1 {
+        at: UtcSecond,
+        symposium: SymposiumVersion,
+        agent: HookAgent,
+        os: OperatingSystem,
+        arch: Architecture,
+        start: SessionStartKind,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_id: Option<SessionId>,
+        retention_subject: RetentionSubject,
+        cohort_day: CohortDay,
+    }
+
+    kind: RowKind::SessionStart,
+    raw: RawSessionStartV1,
+    error: SessionStartError,
+    validate: validate_session_start,
 }
 
 impl SessionStartV1 {
     /// Create a record for a completed registered session-start hook.
+    ///
+    /// Both scoped identifiers and the cohort day come from the same bound
+    /// state transition as its captured completion timestamp.
     #[must_use]
-    pub(in crate::telemetry) fn new(at: UtcSecond, fields: SessionStartFields) -> Self {
+    pub(in crate::telemetry) fn new(
+        fields: SessionStartFields<'_>,
+        observation: &BoundSessionObservation<'_>,
+    ) -> Self {
+        let at = observation.completed_at();
+        let session = AgentSessionIdentity::new(
+            observation.identifier_window_scope(),
+            fields.agent,
+            fields.vendor_session_id,
+        );
+        let retention_subject = observation
+            .return_cohort_scope()
+            .derive(&RetentionDimension);
+
         Self {
             version: SchemaVersion::V1,
-            kind: RowKind::SessionStart,
+            kind: Self::KIND,
             event_id: EventId::new(),
             day: at.day(),
             at,
             symposium: SymposiumVersion::current(),
-            agent: fields.agent,
+            agent: session.agent(),
             os: fields.os,
             arch: fields.arch,
             start: fields.start,
-            session_id: fields.session_id,
-            retention_subject: fields.retention_subject,
-            cohort_day: fields.cohort_day,
+            session_id: session.session_id(),
+            retention_subject,
+            cohort_day: observation.cohort_day(),
         }
     }
 }
@@ -205,57 +350,16 @@ impl fmt::Display for SessionStartError {
 
 impl std::error::Error for SessionStartError {}
 
-/// Strict wire representation validated before becoming a session-start row.
-///
-/// Serde's `try_from` deserializes this type rather than the outer row, so its
-/// version and unknown-field checks are deliberately declared here.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawSessionStartV1 {
-    #[serde(rename = "v", deserialize_with = "deserialize_version_one")]
-    version: SchemaVersion,
-    kind: RowKind,
-    event_id: EventId,
-    day: UtcDay,
-    at: UtcSecond,
-    symposium: SymposiumVersion,
-    agent: HookAgent,
-    os: OperatingSystem,
-    arch: Architecture,
-    start: SessionStartKind,
-    session_id: Option<SessionId>,
-    retention_subject: RetentionSubject,
-    cohort_day: CohortDay,
-}
-
-impl TryFrom<RawSessionStartV1> for SessionStartV1 {
-    type Error = SessionStartError;
-
-    fn try_from(raw: RawSessionStartV1) -> Result<Self, Self::Error> {
-        let timestamp_day = raw.at.day();
-        if raw.day != timestamp_day {
-            return Err(SessionStartError::DayDoesNotMatchTimestamp {
-                stored: raw.day,
-                timestamp: timestamp_day,
-            });
-        }
-
-        Ok(Self {
-            version: raw.version,
-            kind: raw.kind,
-            event_id: raw.event_id,
-            day: raw.day,
-            at: raw.at,
-            symposium: raw.symposium,
-            agent: raw.agent,
-            os: raw.os,
-            arch: raw.arch,
-            start: raw.start,
-            session_id: raw.session_id,
-            retention_subject: raw.retention_subject,
-            cohort_day: raw.cohort_day,
-        })
+fn validate_session_start(raw: &RawSessionStartV1) -> Result<(), SessionStartError> {
+    let timestamp_day = raw.at.day();
+    if raw.day != timestamp_day {
+        return Err(SessionStartError::DayDoesNotMatchTimestamp {
+            stored: raw.day,
+            timestamp: timestamp_day,
+        });
     }
+
+    Ok(())
 }
 
 /// Fields that vary for each entry in a daily agent configuration snapshot.
@@ -266,7 +370,6 @@ impl TryFrom<RawSessionStartV1> for SessionStartV1 {
 pub(in crate::telemetry) struct AgentConfigurationFields {
     pub(in crate::telemetry) agent: SupportedAgent,
     pub(in crate::telemetry) configured: bool,
-    pub(in crate::telemetry) agent_subject: AgentSubject,
 }
 
 /// Version 1 daily observation of one supported agent's configuration.
@@ -290,47 +393,88 @@ impl AgentConfigurationV1 {
     /// Create one agent entry in a daily configuration snapshot.
     #[must_use]
     pub(in crate::telemetry) fn new(
-        day: UtcDay,
+        observation: &BoundRecordingObservation<'_>,
         os: OperatingSystem,
         arch: Architecture,
         fields: AgentConfigurationFields,
     ) -> Self {
+        let agent_subject = observation.identifier_window_scope().derive(&fields.agent);
+
         Self {
             version: SchemaVersion::V1,
             kind: RowKind::AgentConfiguration,
             event_id: EventId::new(),
-            day,
+            day: observation.day(),
             symposium: SymposiumVersion::current(),
             agent: fields.agent,
             configured: fields.configured,
             os,
             arch,
-            agent_subject: fields.agent_subject,
+            agent_subject,
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::{NaiveDate, TimeZone, Utc};
+    use chrono::{TimeZone, Utc};
 
-    use super::super::{RowClassification, TelemetryRow, classify_row};
+    use super::super::{
+        IDENTIFIER_WINDOW_TEST_STATE, RowClassification, TelemetryRow, assert_contract_names,
+        assert_contract_names_with_labels, classify_row, recording_observation,
+    };
     use super::*;
+    use crate::telemetry::{identity::encode_dimension_for_test, state::TelemetryStateV1};
 
-    fn session_start_fields(session_id: Option<SessionId>) -> SessionStartFields {
+    fn session_start_fields(
+        agent: HookAgent,
+        vendor_session_id: Option<&VendorSessionId>,
+    ) -> SessionStartFields<'_> {
         SessionStartFields {
-            agent: HookAgent::Claude,
+            agent,
             os: OperatingSystem::Linux,
             arch: Architecture::X86_64,
             start: SessionStartKind::Fresh,
-            session_id,
-            retention_subject: "ret_74ddf26f80ad8b58de7f03e6c632e654".parse().unwrap(),
-            cohort_day: CohortDay::D0,
+            vendor_session_id,
         }
     }
 
     fn session_start_time() -> UtcSecond {
         UtcSecond::from_datetime(Utc.with_ymd_and_hms(2026, 8, 3, 9, 14, 2).unwrap())
+    }
+
+    fn session_start(
+        completed_at: UtcSecond,
+        vendor_session_id: Option<&VendorSessionId>,
+    ) -> SessionStartV1 {
+        session_start_for_agent(completed_at, HookAgent::Claude, vendor_session_id)
+    }
+
+    fn session_start_for_agent(
+        completed_at: UtcSecond,
+        agent: HookAgent,
+        vendor_session_id: Option<&VendorSessionId>,
+    ) -> SessionStartV1 {
+        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let observation = state.observe_session(completed_at).unwrap();
+        let observation = state.bind_session_observation(observation).unwrap();
+
+        SessionStartV1::new(session_start_fields(agent, vendor_session_id), &observation)
+    }
+
+    fn agent_configuration(agent: SupportedAgent) -> AgentConfigurationV1 {
+        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let observation = recording_observation(&mut state);
+
+        AgentConfigurationV1::new(
+            &observation,
+            OperatingSystem::Linux,
+            Architecture::X86_64,
+            AgentConfigurationFields {
+                agent,
+                configured: true,
+            },
+        )
     }
 
     #[test]
@@ -343,13 +487,73 @@ mod tests {
             (HookAgent::Kiro, "kiro"),
         ];
 
-        for (agent, name) in cases {
-            let json = serde_json::to_string(&agent).unwrap();
-            let decoded = serde_json::from_str::<HookAgent>(&json).unwrap();
+        assert_contract_names_with_labels(&cases, HookAgent::as_str);
+    }
 
-            assert_eq!(json, format!(r#""{name}""#));
-            assert_eq!(decoded, agent);
-        }
+    #[test]
+    fn session_dimension_uses_agent_then_vendor_session_id() {
+        let vendor_session_id = VendorSessionId::new("vendor-session-123".to_owned());
+        let dimension = SessionDimension::new(HookAgent::Claude, &vendor_session_id);
+        let expected = [
+            [0, 0, 0, 0, 0, 0, 0, 6].as_slice(),
+            b"claude".as_slice(),
+            [0, 0, 0, 0, 0, 0, 0, 18].as_slice(),
+            b"vendor-session-123".as_slice(),
+        ]
+        .concat();
+
+        let encoded = encode_dimension_for_test(&dimension);
+
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn session_subject_derivation_matches_independent_vector() {
+        let vendor_session_id = VendorSessionId::new("vendor-session-123".to_owned());
+
+        let row = session_start(session_start_time(), Some(&vendor_session_id));
+
+        // Cross-checked with .NET's HMACSHA256 over the contract header,
+        // identifier window, agent, and vendor session id. The complete
+        // digest is
+        // 2f77ea40740f4be8e85ba05e7924e1ad054037d26629db2ef7dc7097dddf723a.
+        assert_eq!(
+            row.session_id,
+            Some("sess_2f77ea40740f4be8e85ba05e7924e1ad".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn session_subject_changes_with_the_agent_or_vendor_session_id() {
+        let first_vendor_id = VendorSessionId::new("vendor-session-123".to_owned());
+        let second_vendor_id = VendorSessionId::new("vendor-session-456".to_owned());
+
+        let first = session_start_for_agent(
+            session_start_time(),
+            HookAgent::Claude,
+            Some(&first_vendor_id),
+        );
+        let other_agent = session_start_for_agent(
+            session_start_time(),
+            HookAgent::Codex,
+            Some(&first_vendor_id),
+        );
+        let other_vendor_id = session_start_for_agent(
+            session_start_time(),
+            HookAgent::Claude,
+            Some(&second_vendor_id),
+        );
+
+        assert_ne!(first.session_id, other_agent.session_id);
+        assert_ne!(first.session_id, other_vendor_id.session_id);
+    }
+
+    #[test]
+    fn agent_session_without_vendor_id_is_unidentified() {
+        let row = session_start_for_agent(session_start_time(), HookAgent::Copilot, None);
+
+        assert_eq!(row.agent, HookAgent::Copilot);
+        assert_eq!(row.session_id, None);
     }
 
     #[test]
@@ -382,13 +586,7 @@ mod tests {
             (SupportedAgent::Goose, "goose"),
         ];
 
-        for (agent, name) in cases {
-            let json = serde_json::to_string(&agent).unwrap();
-            let decoded = serde_json::from_str::<SupportedAgent>(&json).unwrap();
-
-            assert_eq!(json, format!(r#""{name}""#));
-            assert_eq!(decoded, agent);
-        }
+        assert_contract_names_with_labels(&cases, SupportedAgent::as_str);
     }
 
     #[test]
@@ -410,13 +608,7 @@ mod tests {
             (OperatingSystem::Other, "other"),
         ];
 
-        for (operating_system, name) in cases {
-            let json = serde_json::to_string(&operating_system).unwrap();
-            let decoded = serde_json::from_str::<OperatingSystem>(&json).unwrap();
-
-            assert_eq!(json, format!(r#""{name}""#));
-            assert_eq!(decoded, operating_system);
-        }
+        assert_contract_names(&cases);
     }
 
     #[test]
@@ -455,13 +647,7 @@ mod tests {
             (Architecture::Other, "other"),
         ];
 
-        for (architecture, name) in cases {
-            let json = serde_json::to_string(&architecture).unwrap();
-            let decoded = serde_json::from_str::<Architecture>(&json).unwrap();
-
-            assert_eq!(json, format!(r#""{name}""#));
-            assert_eq!(decoded, architecture);
-        }
+        assert_contract_names(&cases);
     }
 
     #[test]
@@ -497,13 +683,7 @@ mod tests {
             (SessionStartKind::Unknown, "unknown"),
         ];
 
-        for (start_kind, name) in cases {
-            let json = serde_json::to_string(&start_kind).unwrap();
-            let decoded = serde_json::from_str::<SessionStartKind>(&json).unwrap();
-
-            assert_eq!(json, format!(r#""{name}""#));
-            assert_eq!(decoded, start_kind);
-        }
+        assert_contract_names(&cases);
     }
 
     #[test]
@@ -524,12 +704,16 @@ mod tests {
     }
 
     #[test]
-    fn new_session_start_uses_fixed_common_fields_and_timestamp_day() {
+    fn new_session_start_derives_identity_and_cohort_from_bound_observation() {
         let at = session_start_time();
-        let session_id = "sess_31d8b1916028f65a0c0521dc1f4c86fb".parse().unwrap();
-        let fields = session_start_fields(Some(session_id));
+        let vendor_session_id = VendorSessionId::new("vendor-session-123".to_owned());
+        // These are the independently cross-checked session and retention
+        // vectors pinned by the focused identity tests above and in
+        // `identity.rs`.
+        let expected_session = "sess_2f77ea40740f4be8e85ba05e7924e1ad".parse().unwrap();
+        let expected_retention = "ret_270adecd2120c543261f04bd771df491".parse().unwrap();
 
-        let row = SessionStartV1::new(at, fields);
+        let row = session_start(at, Some(&vendor_session_id));
 
         assert_eq!(row.version, SchemaVersion::V1);
         assert_eq!(row.kind, RowKind::SessionStart);
@@ -537,46 +721,68 @@ mod tests {
         assert_eq!(row.day, at.day());
         assert_eq!(row.at, at);
         assert_eq!(row.symposium, SymposiumVersion::current());
-        assert_eq!(row.agent, fields.agent);
-        assert_eq!(row.os, fields.os);
-        assert_eq!(row.arch, fields.arch);
-        assert_eq!(row.start, fields.start);
-        assert_eq!(row.session_id, fields.session_id);
-        assert_eq!(row.retention_subject, fields.retention_subject);
-        assert_eq!(row.cohort_day, fields.cohort_day);
+        assert_eq!(row.agent, HookAgent::Claude);
+        assert_eq!(row.os, OperatingSystem::Linux);
+        assert_eq!(row.arch, Architecture::X86_64);
+        assert_eq!(row.start, SessionStartKind::Fresh);
+        assert_eq!(row.session_id, Some(expected_session));
+        assert_eq!(row.retention_subject, expected_retention);
+        assert_eq!(row.cohort_day, CohortDay::D0);
     }
 
     #[test]
-    fn new_agent_configuration_uses_fixed_common_fields() {
-        let day = UtcDay::from_date(NaiveDate::from_ymd_opt(2026, 8, 3).unwrap());
-        let agent_subject = "agt_9255770e1679cb789796a9f9e86325c5".parse().unwrap();
+    fn session_start_before_utc_midnight_keeps_row_and_cohort_on_the_same_day() {
+        let completed_at =
+            UtcSecond::from_datetime(Utc.with_ymd_and_hms(2026, 8, 3, 23, 59, 59).unwrap());
+        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let observation = state.observe_session(completed_at).unwrap();
+        let observation = state.bind_session_observation(observation).unwrap();
 
-        let row = AgentConfigurationV1::new(
-            day,
-            OperatingSystem::Linux,
-            Architecture::X86_64,
-            AgentConfigurationFields {
-                agent: SupportedAgent::Claude,
-                configured: true,
-                agent_subject,
-            },
-        );
+        let row = SessionStartV1::new(session_start_fields(HookAgent::Claude, None), &observation);
+        let stored_state = toml::to_string(&state).unwrap();
+        let stored_state = toml::from_str::<toml::Value>(&stored_state).unwrap();
+        let cohort_anchor = stored_state["identity"]["return-cohort-anchor"]
+            .as_str()
+            .unwrap();
+
+        assert_eq!(row.at, completed_at);
+        assert_eq!(row.day, completed_at.day());
+        assert_eq!(cohort_anchor, row.day.to_string());
+        assert_eq!(row.cohort_day, CohortDay::D0);
+    }
+
+    #[test]
+    fn new_agent_configuration_derives_subject_from_its_agent() {
+        // Cross-checked with .NET's HMACSHA256 over the contract header,
+        // identifier window, and agent. The complete digest is
+        // e346647f3c83e0f8bea71a0ff04bfb6fa601f0967a92713894dcea7f793214b0.
+        let expected_subject = "agt_e346647f3c83e0f8bea71a0ff04bfb6f".parse().unwrap();
+
+        let row = agent_configuration(SupportedAgent::Claude);
 
         assert_eq!(row.version, SchemaVersion::V1);
         assert_eq!(row.kind, RowKind::AgentConfiguration);
         assert_eq!(row.event_id.0.get_version(), Some(uuid::Version::Random));
-        assert_eq!(row.day, day);
+        assert_eq!(row.day.to_string(), "2026-08-03");
         assert_eq!(row.symposium, SymposiumVersion::current());
         assert_eq!(row.agent, SupportedAgent::Claude);
         assert!(row.configured);
         assert_eq!(row.os, OperatingSystem::Linux);
         assert_eq!(row.arch, Architecture::X86_64);
-        assert_eq!(row.agent_subject, agent_subject);
+        assert_eq!(row.agent_subject, expected_subject);
+    }
+
+    #[test]
+    fn agent_subject_changes_with_the_agent() {
+        let claude = agent_configuration(SupportedAgent::Claude);
+        let codex = agent_configuration(SupportedAgent::Codex);
+
+        assert_ne!(claude.agent_subject, codex.agent_subject);
     }
 
     #[test]
     fn session_start_without_session_id_classifies_and_round_trips() {
-        let row = SessionStartV1::new(session_start_time(), session_start_fields(None));
+        let row = session_start(session_start_time(), None);
 
         let json = serde_json::to_string(&row).unwrap();
         let value = serde_json::from_str::<serde_json::Value>(&json).unwrap();
@@ -592,7 +798,7 @@ mod tests {
 
     #[test]
     fn session_start_rejects_a_day_that_disagrees_with_its_timestamp() {
-        let row = SessionStartV1::new(session_start_time(), session_start_fields(None));
+        let row = session_start(session_start_time(), None);
         let mut value = serde_json::to_value(row).unwrap();
         value["day"] = serde_json::Value::String("2026-08-04".to_owned());
 
