@@ -6,7 +6,8 @@ use semver::Version;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
 use super::super::{
-    EventId, RowKind, SchemaVersion, SymposiumVersion, UtcDay, deserialize_version_one,
+    EventId, RowKind, SchemaVersion, SymposiumVersion,
+    macros::strict_versioned_row,
     name::{InitialByteRule, validated_string_newtype},
 };
 use crate::telemetry::identity::{
@@ -242,19 +243,17 @@ impl std::error::Error for InvalidPublicPackageCoordinate {
     }
 }
 
-/// Version 1 record of one eligible public package used during resolution.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(in crate::telemetry) struct PackageResolutionV1 {
-    #[serde(rename = "v", deserialize_with = "deserialize_version_one")]
-    version: SchemaVersion,
-    kind: RowKind,
-    event_id: EventId,
-    day: UtcDay,
-    symposium: SymposiumVersion,
-    package: PublicPackageCoordinate,
-    extension_match: ExtensionMatch,
-    package_subject: PackageSubject,
+strict_versioned_row! {
+    /// Version 1 record of one eligible public package used during resolution.
+    pub(in crate::telemetry) struct PackageResolutionV1 {
+        symposium: SymposiumVersion,
+        package: PublicPackageCoordinate,
+        extension_match: ExtensionMatch,
+        package_subject: PackageSubject,
+    }
+
+    kind: RowKind::PackageResolution,
+    raw: RawPackageResolutionV1,
 }
 
 impl PackageResolutionV1 {
@@ -269,7 +268,7 @@ impl PackageResolutionV1 {
 
         Self {
             version: SchemaVersion::V1,
-            kind: RowKind::PackageResolution,
+            kind: Self::KIND,
             event_id: EventId::new(),
             day: observation.day(),
             symposium: SymposiumVersion::current(),
@@ -285,8 +284,8 @@ mod tests {
     use chrono::NaiveDate;
 
     use super::super::super::{
-        IDENTIFIER_WINDOW_TEST_STATE, assert_contract_names, assert_contract_names_with_labels,
-        recording_observation,
+        IDENTIFIER_WINDOW_TEST_STATE, UtcDay, assert_contract_names,
+        assert_contract_names_with_labels, recording_observation,
     };
     use super::*;
     use crate::telemetry::{identity::encode_dimension_for_test, state::TelemetryStateV1};

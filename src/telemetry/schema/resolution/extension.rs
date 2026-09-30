@@ -2,14 +2,15 @@
 
 use std::fmt;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 
 use super::{
     super::{
-        EventId, RowKind, SchemaVersion, SymposiumVersion, UtcDay, deserialize_version_one,
+        EventId, RowKind, SchemaVersion, SymposiumVersion,
         extension::{
             ExtensionKind, PublicExtensionCoordinate, PublicExtensionName, PublicExtensionSource,
         },
+        macros::strict_versioned_row,
     },
     package::PublicPackageCoordinate,
 };
@@ -143,19 +144,122 @@ impl ResolutionPath {
     }
 }
 
-/// Version 1 record of one public extension and a safe path that selected it.
+/// Public skill coordinate safe to persist in the installation index.
+///
+/// The full public extension coordinate remains on the wire, including its
+/// `type` field. Construction and deserialization both reject coordinates for
+/// any extension kind other than `skill`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::telemetry) struct PublicSkillCoordinate(PublicExtensionCoordinate);
+
+impl PublicSkillCoordinate {
+    /// Return the validated public extension coordinate for this skill.
+    #[must_use]
+    const fn as_extension(&self) -> &PublicExtensionCoordinate {
+        &self.0
+    }
+}
+
+impl TryFrom<PublicExtensionCoordinate> for PublicSkillCoordinate {
+    type Error = NotPublicSkill;
+
+    fn try_from(coordinate: PublicExtensionCoordinate) -> Result<Self, Self::Error> {
+        if coordinate.kind() != ExtensionKind::Skill {
+            return Err(NotPublicSkill {
+                found: coordinate.kind(),
+            });
+        }
+
+        Ok(Self(coordinate))
+    }
+}
+
+impl Serialize for PublicSkillCoordinate {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for PublicSkillCoordinate {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let coordinate = PublicExtensionCoordinate::deserialize(deserializer)?;
+
+        Self::try_from(coordinate).map_err(D::Error::custom)
+    }
+}
+
+/// A public extension coordinate that identifies something other than a skill.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::telemetry) struct NotPublicSkill {
+    found: ExtensionKind,
+}
+
+impl fmt::Display for NotPublicSkill {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "expected a public skill coordinate, found {}",
+            self.found.as_str()
+        )
+    }
+}
+
+impl std::error::Error for NotPublicSkill {}
+
+/// Safe public attribution persisted for one installed skill.
+///
+/// Deserializing this type revalidates the skill-only target and the complete
+/// resolution-path depth, leaf-count, and encoded-size limits.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(in crate::telemetry) struct ExtensionResolutionV1 {
-    #[serde(rename = "v", deserialize_with = "deserialize_version_one")]
-    version: SchemaVersion,
-    kind: RowKind,
-    event_id: EventId,
-    day: UtcDay,
-    symposium: SymposiumVersion,
-    target: PublicExtensionCoordinate,
+pub(in crate::telemetry) struct SafeSkillAttribution {
+    target: PublicSkillCoordinate,
     path: ResolutionPath,
-    extension_subject: ExtensionSubject,
+}
+
+impl SafeSkillAttribution {
+    /// Combine a validated public skill with the safe path that selected it.
+    #[must_use]
+    pub(in crate::telemetry) const fn new(
+        target: PublicSkillCoordinate,
+        path: ResolutionPath,
+    ) -> Self {
+        Self { target, path }
+    }
+
+    /// Return the validated public skill selected by this attribution.
+    #[must_use]
+    pub(in crate::telemetry) const fn target(&self) -> &PublicSkillCoordinate {
+        &self.target
+    }
+
+    /// Derive the subject shared by resolution and invocation telemetry.
+    #[must_use]
+    pub(in crate::telemetry) fn derive_subject(
+        &self,
+        scope: &IdentifierWindowScope<'_>,
+    ) -> ExtensionSubject {
+        self.path.derive_subject(scope, self.target.as_extension())
+    }
+}
+
+strict_versioned_row! {
+    /// Version 1 record of one public extension and a safe path that selected it.
+    pub(in crate::telemetry) struct ExtensionResolutionV1 {
+        symposium: SymposiumVersion,
+        target: PublicExtensionCoordinate,
+        path: ResolutionPath,
+        extension_subject: ExtensionSubject,
+    }
+
+    kind: RowKind::ExtensionResolution,
+    raw: RawExtensionResolutionV1,
 }
 
 impl ExtensionResolutionV1 {
@@ -170,7 +274,7 @@ impl ExtensionResolutionV1 {
 
         Self {
             version: SchemaVersion::V1,
-            kind: RowKind::ExtensionResolution,
+            kind: Self::KIND,
             event_id: EventId::new(),
             day: observation.day(),
             symposium: SymposiumVersion::current(),
@@ -555,20 +659,105 @@ mod tests {
     }
 
     #[test]
-    fn extension_subject_derivation_matches_independent_vector() {
+    fn safe_skill_attribution_derives_the_independent_subject_vector() {
         let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
         let observation = recording_observation(&mut state);
-        let target = public_target();
-        let path = resolution_path_with_every_node_variant();
+        let target = PublicSkillCoordinate::try_from(public_target()).unwrap();
+        let attribution =
+            SafeSkillAttribution::new(target, resolution_path_with_every_node_variant());
         // Cross-checked with .NET's HMACSHA256 over the contract header,
         // identifier window, public target, and complete recursive path. The
         // complete digest is
         // 63872efd4737ec84179b4e8b0662c1212e9e3295e1940387c4a4e2cca0a9090e.
         let expected_subject = "ext_63872efd4737ec84179b4e8b0662c121".parse().unwrap();
 
-        let subject = path.derive_subject(observation.identifier_window_scope(), &target);
+        let subject = attribution.derive_subject(observation.identifier_window_scope());
 
         assert_eq!(subject, expected_subject);
+    }
+
+    #[test]
+    fn public_skill_coordinate_preserves_the_full_contract_shape() {
+        let target = PublicSkillCoordinate::try_from(public_target()).unwrap();
+
+        let json = serde_json::to_string(&target).unwrap();
+        let decoded = serde_json::from_str::<PublicSkillCoordinate>(&json).unwrap();
+
+        assert_eq!(
+            json,
+            r#"{"type":"skill","source":"symposium-recommendations","name":"example-debugging"}"#
+        );
+        assert_eq!(decoded, target);
+    }
+
+    #[test]
+    fn public_skill_coordinate_rejects_a_plugin_at_both_boundaries() {
+        let plugin = PublicExtensionCoordinate::try_new(
+            ExtensionKind::Plugin,
+            PublicExtensionSource::CratesIo,
+            "example-tools",
+        )
+        .unwrap();
+        let constructed = PublicSkillCoordinate::try_from(plugin);
+        let deserialized = serde_json::from_str::<PublicSkillCoordinate>(
+            r#"{"type":"plugin","source":"crates-io","name":"example-tools"}"#,
+        );
+
+        assert_eq!(
+            constructed,
+            Err(NotPublicSkill {
+                found: ExtensionKind::Plugin,
+            })
+        );
+        assert!(
+            deserialized
+                .unwrap_err()
+                .to_string()
+                .contains("expected a public skill coordinate, found plugin")
+        );
+    }
+
+    #[test]
+    fn safe_skill_attribution_round_trips_in_index_shape() {
+        let attribution = SafeSkillAttribution::new(
+            PublicSkillCoordinate::try_from(public_target()).unwrap(),
+            serde_json::from_str(r#"[{"type":"not"}]"#).unwrap(),
+        );
+
+        let json = serde_json::to_string(&attribution).unwrap();
+        let decoded = serde_json::from_str::<SafeSkillAttribution>(&json).unwrap();
+
+        assert_eq!(
+            json,
+            r#"{"target":{"type":"skill","source":"symposium-recommendations","name":"example-debugging"},"path":[{"type":"not"}]}"#
+        );
+        assert_eq!(decoded, attribution);
+    }
+
+    #[test]
+    fn safe_skill_attribution_rejects_unknown_fields() {
+        let json = r#"{"target":{"type":"skill","source":"symposium-recommendations","name":"example-debugging"},"path":[{"type":"not"}],"private_name":"debugging"}"#;
+
+        let result = serde_json::from_str::<SafeSkillAttribution>(json);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn safe_skill_attribution_revalidates_resolution_path_limits() {
+        let path = resolution_path_with_depth(9);
+        let json = format!(
+            r#"{{"target":{{"type":"skill","source":"symposium-recommendations","name":"example-debugging"}},"path":{path}}}"#
+        );
+
+        let result = serde_json::from_str::<SafeSkillAttribution>(&json);
+
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("resolution path depth 9 exceeds maximum 8")
+        );
     }
 
     #[test]

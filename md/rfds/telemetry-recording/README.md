@@ -317,7 +317,7 @@ Commands are measured once at top-level dispatch. Raw errors never enter telemet
 
 Low-volume rows append to `events-YYYY-MM-DD.jsonl`. Current daily hook, plugin-hook, and extension-invocation aggregates live in a bounded, atomically replaced `metrics-YYYY-MM-DD.jsonl` snapshot under the inspectable telemetry data directory.
 
-The sibling private `telemetry-state.toml` holds the identity key, cohort and cleanup metadata, the latest opened UTC day, marker state, and temporary keyed session-count sets. These sets are never emitted and expire at day rollover. The telemetry lock remains in the data directory and guards data and private state mutations.
+The sibling private `telemetry-state.toml` holds the identity key, cohort and cleanup metadata, the latest opened UTC day, marker state, and temporary keyed aggregate entries. Each plugin-hook entry keeps its stable row `event_id`, session-count sets, and contribution count together. The identifier also appears in the metric row and is not secret; the session sets are never emitted. Complete entries expire at day rollover and are removed by `clear` or `reset-identifiers`. The telemetry lock remains in the data directory and guards data and private state mutations.
 
 #### Closed days
 
