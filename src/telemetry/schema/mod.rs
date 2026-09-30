@@ -5,6 +5,10 @@
 )]
 
 mod agent;
+mod command;
+mod extension;
+mod macros;
+mod name;
 mod resolution;
 
 use std::{fmt, num::NonZeroU64, sync::LazyLock};
@@ -18,7 +22,10 @@ use serde::{
 use uuid::Uuid;
 
 use agent::{AgentConfigurationV1, SessionStartV1};
-use resolution::ResolutionSummaryV1;
+use command::CommandV1;
+use resolution::{
+    ResolutionSummaryV1, extension::ExtensionResolutionV1, package::PackageResolutionV1,
+};
 
 /// Random identifier for one telemetry row.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -73,6 +80,9 @@ pub(super) enum TelemetryRow {
     SessionStart(SessionStartV1),
     AgentConfiguration(AgentConfigurationV1),
     ResolutionSummary(ResolutionSummaryV1),
+    PackageResolution(PackageResolutionV1),
+    ExtensionResolution(ExtensionResolutionV1),
+    Command(CommandV1),
     StorageLimit(StorageLimitV1),
 }
 
@@ -85,6 +95,9 @@ impl Serialize for TelemetryRow {
             Self::SessionStart(row) => row.serialize(serializer),
             Self::AgentConfiguration(row) => row.serialize(serializer),
             Self::ResolutionSummary(row) => row.serialize(serializer),
+            Self::PackageResolution(row) => row.serialize(serializer),
+            Self::ExtensionResolution(row) => row.serialize(serializer),
+            Self::Command(row) => row.serialize(serializer),
             Self::StorageLimit(row) => row.serialize(serializer),
         }
     }
@@ -393,6 +406,13 @@ pub(super) fn classify_row(line: &str) -> RowClassification {
         ("resolution_summary", 1) => {
             deserialize_supported_row(line, TelemetryRow::ResolutionSummary)
         }
+        ("package_resolution", 1) => {
+            deserialize_supported_row(line, TelemetryRow::PackageResolution)
+        }
+        ("extension_resolution", 1) => {
+            deserialize_supported_row(line, TelemetryRow::ExtensionResolution)
+        }
+        ("command", 1) => deserialize_supported_row(line, TelemetryRow::Command),
         ("storage_limit", 1) => deserialize_supported_row(line, TelemetryRow::StorageLimit),
         _ => RowClassification::UnknownSchema,
     }
@@ -409,29 +429,107 @@ where
 }
 
 #[cfg(test)]
+const RECORDED_DATA_CONTRACT: &str =
+    include_str!("../../../md/rfds/telemetry-recording/contract/recorded-data.md");
+
+#[cfg(test)]
+const IDENTIFIER_WINDOW_TEST_STATE: &str = r#"version = 1
+
+[identity]
+key = "4242424242424242424242424242424242424242424242424242424242424242"
+identifier-window-anchor = "2026-08-03"
+"#;
+
+/// Build a recording context that remains inside the fixture's identifier
+/// window, so schema tests do not depend on separate timestamp choices.
+#[cfg(test)]
+fn recording_observation(
+    state: &mut crate::telemetry::state::TelemetryStateV1,
+) -> crate::telemetry::state::BoundRecordingObservation<'_> {
+    use chrono::TimeZone as _;
+
+    let completed_at =
+        UtcSecond::from_datetime(Utc.with_ymd_and_hms(2026, 8, 3, 10, 2, 11).unwrap());
+    let observation = state.observe_recording(completed_at).unwrap();
+    state.bind_recording_observation(observation).unwrap()
+}
+
+#[cfg(test)]
+fn recorded_data_example_block(section_heading: &str, opening_fence: &str) -> &'static str {
+    recorded_data_example_block_at(section_heading, opening_fence, 0)
+}
+
+#[cfg(test)]
+fn recorded_data_example_block_at(
+    section_heading: &str,
+    opening_fence: &str,
+    block_index: usize,
+) -> &'static str {
+    let (_, after_heading) = RECORDED_DATA_CONTRACT
+        .split_once(section_heading)
+        .unwrap_or_else(|| panic!("recorded-data contract must contain {section_heading}"));
+    let after_fence = after_heading
+        .split(opening_fence)
+        .skip(1)
+        .nth(block_index)
+        .unwrap_or_else(|| {
+            panic!("{section_heading} must contain {opening_fence} block {block_index}")
+        });
+    let (example_block, _) = after_fence
+        .split_once("```")
+        .unwrap_or_else(|| panic!("{section_heading} example block must have a closing fence"));
+
+    example_block
+}
+
+#[cfg(test)]
+fn recorded_data_example_row(requested_kind: &str) -> &'static str {
+    let example_block =
+        recorded_data_example_block("## Example JSONL for every row kind", "```jsonl");
+
+    example_block
+        .lines()
+        .filter_map(|line| {
+            serde_json::from_str::<RowEnvelope>(line)
+                .ok()
+                .map(|envelope| (line, envelope))
+        })
+        .find_map(|(line, envelope)| (envelope.kind == requested_kind).then_some(line))
+        .unwrap_or_else(|| panic!("missing {requested_kind} example in recorded-data contract"))
+}
+
+#[cfg(test)]
+fn assert_contract_names<T>(cases: &[(T, &str)])
+where
+    T: Copy + fmt::Debug + PartialEq + Serialize + DeserializeOwned,
+{
+    for &(value, name) in cases {
+        let encoded = serde_json::to_string(&value).unwrap();
+        let decoded: T = serde_json::from_str(&encoded).unwrap();
+
+        assert_eq!(encoded, format!(r#""{name}""#));
+        assert_eq!(decoded, value);
+    }
+}
+
+#[cfg(test)]
+fn assert_contract_names_with_labels<T>(cases: &[(T, &str)], label: impl Fn(T) -> &'static str)
+where
+    T: Copy + fmt::Debug + PartialEq + Serialize + DeserializeOwned,
+{
+    assert_contract_names(cases);
+
+    for &(value, name) in cases {
+        assert_eq!(label(value), name);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    const RECORDED_DATA: &str =
-        include_str!("../../../md/rfds/telemetry-recording/contract/recorded-data.md");
-
     fn example_row(requested_kind: &str) -> &'static str {
-        let (_, after_fence) = RECORDED_DATA
-            .split_once("```jsonl")
-            .expect("recorded-data contract must contain a JSONL example block");
-        let (example_block, _) = after_fence
-            .split_once("```")
-            .expect("recorded-data JSONL example block must have a closing fence");
-
-        example_block
-            .lines()
-            .filter_map(|line| {
-                serde_json::from_str::<RowEnvelope>(line)
-                    .ok()
-                    .map(|envelope| (line, envelope))
-            })
-            .find_map(|(line, envelope)| (envelope.kind == requested_kind).then_some(line))
-            .unwrap_or_else(|| panic!("missing {requested_kind} example in recorded-data contract"))
+        recorded_data_example_row(requested_kind)
     }
 
     #[test]
@@ -510,13 +608,7 @@ mod tests {
             (RowKind::StorageLimit, "storage_limit"),
         ];
 
-        for (kind, name) in cases {
-            let json = serde_json::to_string(&kind).unwrap();
-            let decoded = serde_json::from_str::<RowKind>(&json).unwrap();
-
-            assert_eq!(json, format!(r#""{name}""#));
-            assert_eq!(decoded, kind);
-        }
+        assert_contract_names(&cases);
     }
 
     #[test]
@@ -807,6 +899,116 @@ mod tests {
     }
 
     #[test]
+    fn package_resolution_example_round_trips() {
+        let example = example_row("package_resolution");
+
+        let RowClassification::Supported(row) = classify_row(example) else {
+            panic!("package_resolution contract example was not classified as supported");
+        };
+
+        assert_eq!(serde_json::to_string(&row).unwrap(), example);
+    }
+
+    #[test]
+    fn extension_resolution_example_round_trips() {
+        let example = example_row("extension_resolution");
+
+        let RowClassification::Supported(row) = classify_row(example) else {
+            panic!("extension_resolution contract example was not classified as supported");
+        };
+
+        assert_eq!(serde_json::to_string(&row).unwrap(), example);
+    }
+
+    #[test]
+    fn unsupported_extension_resolution_version_is_unknown_schema() {
+        let example = example_row("extension_resolution");
+        let json = example.replacen(r#""v":1"#, r#""v":2"#, 1);
+
+        let classification = classify_row(&json);
+
+        assert_eq!(classification, RowClassification::UnknownSchema);
+    }
+
+    #[test]
+    fn extension_resolution_with_unknown_field_is_invalid() {
+        let example = example_row("extension_resolution");
+        let json = example.replacen(r#""target""#, r#""future_field":true,"target""#, 1);
+
+        let classification = classify_row(&json);
+
+        assert_eq!(classification, RowClassification::Invalid);
+    }
+
+    #[test]
+    fn extension_resolution_with_missing_field_is_invalid() {
+        let example = example_row("extension_resolution");
+        let mut value = serde_json::from_str::<serde_json::Value>(example).unwrap();
+        value.as_object_mut().unwrap().remove("path");
+        let json = serde_json::to_string(&value).unwrap();
+
+        let classification = classify_row(&json);
+
+        assert_eq!(classification, RowClassification::Invalid);
+    }
+
+    #[test]
+    fn extension_resolution_with_invalid_target_is_invalid() {
+        let example = example_row("extension_resolution");
+        let mut value = serde_json::from_str::<serde_json::Value>(example).unwrap();
+        value["target"]["name"] = serde_json::json!("private/example-debugging");
+        let json = serde_json::to_string(&value).unwrap();
+
+        let classification = classify_row(&json);
+
+        assert_eq!(classification, RowClassification::Invalid);
+    }
+
+    #[test]
+    fn extension_resolution_with_over_limit_path_is_invalid() {
+        let example = example_row("extension_resolution");
+        let mut value = serde_json::from_str::<serde_json::Value>(example).unwrap();
+        value["path"] = serde_json::Value::Array(
+            std::iter::repeat_n(serde_json::json!({ "type": "not" }), 17).collect(),
+        );
+        let json = serde_json::to_string(&value).unwrap();
+
+        let classification = classify_row(&json);
+
+        assert_eq!(classification, RowClassification::Invalid);
+    }
+
+    #[test]
+    fn unsupported_package_resolution_version_is_unknown_schema() {
+        let example = example_row("package_resolution");
+        let json = example.replacen(r#""v":1"#, r#""v":2"#, 1);
+
+        let classification = classify_row(&json);
+
+        assert_eq!(classification, RowClassification::UnknownSchema);
+    }
+
+    #[test]
+    fn package_resolution_with_unknown_field_is_invalid() {
+        let example = example_row("package_resolution");
+        let json = example.replacen(r#""package""#, r#""future_field":true,"package""#, 1);
+
+        let classification = classify_row(&json);
+
+        assert_eq!(classification, RowClassification::Invalid);
+    }
+
+    #[test]
+    fn package_resolution_with_invalid_coordinate_is_invalid() {
+        let example = example_row("package_resolution");
+        let json = example.replacen(r#""version":"1.2.3""#, r#""version":"*""#, 1);
+
+        let classification = classify_row(&json);
+
+        assert_eq!(classification, RowClassification::Invalid);
+    }
+
+    #[test]
     fn unsupported_resolution_summary_version_is_unknown_schema() {
         let example = example_row("resolution_summary");
         let json = example.replacen(r#""v":1"#, r#""v":2"#, 1);
@@ -882,13 +1084,7 @@ mod tests {
             (DroppedOperation::Command, "command"),
         ];
 
-        for (operation, name) in cases {
-            let json = serde_json::to_string(&operation).unwrap();
-            let decoded = serde_json::from_str::<DroppedOperation>(&json).unwrap();
-
-            assert_eq!(json, format!(r#""{name}""#));
-            assert_eq!(decoded, operation);
-        }
+        assert_contract_names(&cases);
     }
 
     #[test]

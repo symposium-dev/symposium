@@ -229,7 +229,7 @@ Safe nodes are public `package` and `extension` coordinates, `all` contributors,
 
 Shell commands, paths, environment values, custom predicate details, workspace members, wildcards, private names, and a negated child never enter the path.
 
-Witness depth counts nested evidence nodes from the root, which is level 1, to a terminal package, extension, `not`, or opaque node. A subtree that would exceed level 8 becomes `opaque: limit`. The complete path is also limited to 16 evidence leaves and 4 KiB. These limits do not count filesystem path components; filesystem paths are never recorded.
+The path array is non-empty, and each top-level node begins at depth 1. Depth counts nested evidence nodes through a terminal package, extension, `not`, or opaque node. A subtree that would exceed depth 8 becomes `opaque: limit`. The complete path is limited to 16 evidence leaves. Its 4 KiB bound is the byte length of the compact UTF-8 JSON encoding of the complete path array, excluding the surrounding event row. These limits do not count filesystem path components; filesystem paths are never recorded.
 
 Full sync builds safe evidence for successful installations because the generated attribution index needs it even when telemetry is disabled. Only an enabled recorder serializes that evidence as telemetry.
 

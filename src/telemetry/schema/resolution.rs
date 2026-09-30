@@ -1,14 +1,17 @@
 //! Schema types for resolution telemetry.
 
+pub(in crate::telemetry) mod extension;
+pub(in crate::telemetry) mod package;
+
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use super::{
-    DroppedOperation, EventId, RowKind, SchemaVersion, SymposiumVersion, UtcDay,
-    deserialize_version_one,
+    DroppedOperation, EventId, RowKind, SchemaVersion, SymposiumVersion, agent::IdentifiedSession,
+    macros::strict_versioned_row,
 };
-use crate::telemetry::identity::SessionId;
+use crate::telemetry::{identity::SessionId, state::BoundRecordingObservation};
 
 /// Operation that caused a full resolution and sync.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -38,22 +41,6 @@ pub(in crate::telemetry) enum ResolutionOutcome {
     Ok,
     Partial,
     Error,
-}
-
-/// Public package ecosystem approved for version 1 telemetry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(in crate::telemetry) enum PackageEcosystem {
-    Cargo,
-}
-
-/// Kind of extension content contributed by one public package.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(in crate::telemetry) enum ExtensionMatch {
-    Public,
-    UnnamedOnly,
-    None,
 }
 
 /// One reason that a package coordinate cannot be named.
@@ -129,8 +116,8 @@ impl UnnamedPackageReasons {
 ///
 /// These fields are repeated on [`ResolutionSummaryV1`] because flattening
 /// this constructor input would weaken strict unknown-field rejection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::telemetry) struct ResolutionSummaryFields {
+#[derive(Clone, Copy)]
+pub(in crate::telemetry) struct ResolutionSummaryFields<'a> {
     pub(in crate::telemetry) trigger: ResolutionTrigger,
     pub(in crate::telemetry) outcome: ResolutionOutcome,
     pub(in crate::telemetry) duration_ms: u64,
@@ -141,32 +128,32 @@ pub(in crate::telemetry) struct ResolutionSummaryFields {
     pub(in crate::telemetry) installed: u64,
     pub(in crate::telemetry) updated: u64,
     pub(in crate::telemetry) reaped: u64,
-    pub(in crate::telemetry) session_id: Option<SessionId>,
+    pub(in crate::telemetry) identified_session: Option<IdentifiedSession<'a>>,
 }
 
-/// Version 1 summary of one completed full resolution and sync.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "RawResolutionSummaryV1")]
-pub(in crate::telemetry) struct ResolutionSummaryV1 {
-    #[serde(rename = "v")]
-    version: SchemaVersion,
-    kind: RowKind,
-    event_id: EventId,
-    day: UtcDay,
-    symposium: SymposiumVersion,
-    trigger: ResolutionTrigger,
-    outcome: ResolutionOutcome,
-    duration_ms: u64,
-    public_packages: u64,
-    unnamed_packages: u64,
-    unnamed_package_reasons: UnnamedPackageReasons,
-    plugins: u64,
-    skills: u64,
-    installed: u64,
-    updated: u64,
-    reaped: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    session_id: Option<SessionId>,
+strict_versioned_row! {
+    /// Version 1 summary of one completed full resolution and sync.
+    pub(in crate::telemetry) struct ResolutionSummaryV1 {
+        symposium: SymposiumVersion,
+        trigger: ResolutionTrigger,
+        outcome: ResolutionOutcome,
+        duration_ms: u64,
+        public_packages: u64,
+        unnamed_packages: u64,
+        unnamed_package_reasons: UnnamedPackageReasons,
+        plugins: u64,
+        skills: u64,
+        installed: u64,
+        updated: u64,
+        reaped: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        session_id: Option<SessionId>,
+    }
+
+    kind: RowKind::ResolutionSummary,
+    raw: RawResolutionSummaryV1,
+    error: ResolutionSummaryError,
+    validate: validate_resolution_summary,
 }
 
 impl ResolutionSummaryV1 {
@@ -177,8 +164,8 @@ impl ResolutionSummaryV1 {
     /// Returns [`ResolutionSummaryError::UnnamedPackageCountOverflow`] when
     /// the unnamed-package reason counters cannot be represented by `u64`.
     pub(in crate::telemetry) fn new(
-        day: UtcDay,
-        fields: ResolutionSummaryFields,
+        observation: &BoundRecordingObservation<'_>,
+        fields: ResolutionSummaryFields<'_>,
     ) -> Result<Self, ResolutionSummaryError> {
         let unnamed_packages = fields
             .unnamed_package_reasons
@@ -187,9 +174,9 @@ impl ResolutionSummaryV1 {
 
         Ok(Self {
             version: SchemaVersion::V1,
-            kind: RowKind::ResolutionSummary,
+            kind: Self::KIND,
             event_id: EventId::new(),
-            day,
+            day: observation.day(),
             symposium: SymposiumVersion::current(),
             trigger: fields.trigger,
             outcome: fields.outcome,
@@ -202,7 +189,9 @@ impl ResolutionSummaryV1 {
             installed: fields.installed,
             updated: fields.updated,
             reaped: fields.reaped,
-            session_id: fields.session_id,
+            session_id: fields
+                .identified_session
+                .map(|session| session.derive_id(observation.identifier_window_scope())),
         })
     }
 }
@@ -230,76 +219,33 @@ impl fmt::Display for ResolutionSummaryError {
 
 impl std::error::Error for ResolutionSummaryError {}
 
-/// Strict wire representation validated before becoming a resolution summary.
-///
-/// Serde's `try_from` deserializes this type rather than the outer row, so its
-/// version and unknown-field checks are deliberately declared here.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RawResolutionSummaryV1 {
-    #[serde(rename = "v", deserialize_with = "deserialize_version_one")]
-    version: SchemaVersion,
-    kind: RowKind,
-    event_id: EventId,
-    day: UtcDay,
-    symposium: SymposiumVersion,
-    trigger: ResolutionTrigger,
-    outcome: ResolutionOutcome,
-    duration_ms: u64,
-    public_packages: u64,
-    unnamed_packages: u64,
-    unnamed_package_reasons: UnnamedPackageReasons,
-    plugins: u64,
-    skills: u64,
-    installed: u64,
-    updated: u64,
-    reaped: u64,
-    session_id: Option<SessionId>,
-}
+fn validate_resolution_summary(raw: &RawResolutionSummaryV1) -> Result<(), ResolutionSummaryError> {
+    let derived = raw
+        .unnamed_package_reasons
+        .checked_total()
+        .ok_or(ResolutionSummaryError::UnnamedPackageCountOverflow)?;
 
-impl TryFrom<RawResolutionSummaryV1> for ResolutionSummaryV1 {
-    type Error = ResolutionSummaryError;
-
-    fn try_from(raw: RawResolutionSummaryV1) -> Result<Self, Self::Error> {
-        let derived = raw
-            .unnamed_package_reasons
-            .checked_total()
-            .ok_or(ResolutionSummaryError::UnnamedPackageCountOverflow)?;
-
-        if raw.unnamed_packages != derived {
-            return Err(ResolutionSummaryError::UnnamedPackageCountMismatch {
-                stored: raw.unnamed_packages,
-                derived,
-            });
-        }
-
-        Ok(Self {
-            version: raw.version,
-            kind: raw.kind,
-            event_id: raw.event_id,
-            day: raw.day,
-            symposium: raw.symposium,
-            trigger: raw.trigger,
-            outcome: raw.outcome,
-            duration_ms: raw.duration_ms,
-            public_packages: raw.public_packages,
-            unnamed_packages: raw.unnamed_packages,
-            unnamed_package_reasons: raw.unnamed_package_reasons,
-            plugins: raw.plugins,
-            skills: raw.skills,
-            installed: raw.installed,
-            updated: raw.updated,
-            reaped: raw.reaped,
-            session_id: raw.session_id,
-        })
+    if raw.unnamed_packages != derived {
+        return Err(ResolutionSummaryError::UnnamedPackageCountMismatch {
+            stored: raw.unnamed_packages,
+            derived,
+        });
     }
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use chrono::NaiveDate;
 
+    use super::super::{
+        IDENTIFIER_WINDOW_TEST_STATE, UtcDay,
+        agent::{HookAgent, VendorSessionId},
+        assert_contract_names, recording_observation,
+    };
     use super::*;
+    use crate::telemetry::state::TelemetryStateV1;
 
     fn example_reasons() -> UnnamedPackageReasons {
         UnnamedPackageReasons {
@@ -316,7 +262,18 @@ mod tests {
         UtcDay::from_date(NaiveDate::from_ymd_opt(2026, 8, 3).unwrap())
     }
 
-    fn summary_fields(session_id: Option<SessionId>) -> ResolutionSummaryFields {
+    fn resolution_summary(
+        fields: ResolutionSummaryFields<'_>,
+    ) -> Result<ResolutionSummaryV1, ResolutionSummaryError> {
+        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let observation = recording_observation(&mut state);
+
+        ResolutionSummaryV1::new(&observation, fields)
+    }
+
+    fn summary_fields(
+        identified_session: Option<IdentifiedSession<'_>>,
+    ) -> ResolutionSummaryFields<'_> {
         ResolutionSummaryFields {
             trigger: ResolutionTrigger::SessionStart,
             outcome: ResolutionOutcome::Ok,
@@ -331,7 +288,7 @@ mod tests {
             installed: 2,
             updated: 0,
             reaped: 0,
-            session_id,
+            identified_session,
         }
     }
 
@@ -362,10 +319,13 @@ mod tests {
 
     #[test]
     fn new_resolution_summary_derives_fixed_fields_and_unnamed_total() {
-        let session_id = "sess_31d8b1916028f65a0c0521dc1f4c86fb".parse().unwrap();
-        let fields = summary_fields(Some(session_id));
+        let vendor_session_id = VendorSessionId::new("vendor-session-123".to_owned());
+        let fields = summary_fields(Some(IdentifiedSession::new(
+            HookAgent::Claude,
+            &vendor_session_id,
+        )));
 
-        let row = ResolutionSummaryV1::new(summary_day(), fields).unwrap();
+        let row = resolution_summary(fields).unwrap();
 
         assert_eq!(row.version, SchemaVersion::V1);
         assert_eq!(row.kind, RowKind::ResolutionSummary);
@@ -383,7 +343,10 @@ mod tests {
         assert_eq!(row.installed, fields.installed);
         assert_eq!(row.updated, fields.updated);
         assert_eq!(row.reaped, fields.reaped);
-        assert_eq!(row.session_id, fields.session_id);
+        assert_eq!(
+            row.session_id,
+            Some("sess_2f77ea40740f4be8e85ba05e7924e1ad".parse().unwrap())
+        );
     }
 
     #[test]
@@ -395,7 +358,7 @@ mod tests {
             ..UnnamedPackageReasons::default()
         };
 
-        let result = ResolutionSummaryV1::new(summary_day(), fields);
+        let result = resolution_summary(fields);
 
         assert_eq!(
             result,
@@ -405,7 +368,7 @@ mod tests {
 
     #[test]
     fn direct_resolution_summary_deserialization_rejects_future_version() {
-        let row = ResolutionSummaryV1::new(summary_day(), summary_fields(None)).unwrap();
+        let row = resolution_summary(summary_fields(None)).unwrap();
         let json = serde_json::to_string(&row).unwrap();
         let future = json.replacen(r#""v":1"#, r#""v":2"#, 1);
 
@@ -416,7 +379,7 @@ mod tests {
 
     #[test]
     fn resolution_summary_rejects_unknown_fields() {
-        let row = ResolutionSummaryV1::new(summary_day(), summary_fields(None)).unwrap();
+        let row = resolution_summary(summary_fields(None)).unwrap();
         let json = serde_json::to_string(&row).unwrap();
         let unknown = json.replacen(r#""trigger""#, r#""future_field":true,"trigger""#, 1);
 
@@ -427,7 +390,7 @@ mod tests {
 
     #[test]
     fn resolution_summary_requires_every_top_level_field() {
-        let row = ResolutionSummaryV1::new(summary_day(), summary_fields(None)).unwrap();
+        let row = resolution_summary(summary_fields(None)).unwrap();
         let json = serde_json::to_string(&row).unwrap();
         let missing = json.replacen(r#","plugins":1"#, "", 1);
 
@@ -438,7 +401,7 @@ mod tests {
 
     #[test]
     fn resolution_summary_json_rejects_mismatched_unnamed_count() {
-        let row = ResolutionSummaryV1::new(summary_day(), summary_fields(None)).unwrap();
+        let row = resolution_summary(summary_fields(None)).unwrap();
         let json = serde_json::to_string(&row).unwrap();
         let mismatched = json.replacen(r#""unnamed_packages":1"#, r#""unnamed_packages":2"#, 1);
 
@@ -485,7 +448,7 @@ mod tests {
 
     #[test]
     fn resolution_summary_without_session_id_round_trips_without_the_field() {
-        let row = ResolutionSummaryV1::new(summary_day(), summary_fields(None)).unwrap();
+        let row = resolution_summary(summary_fields(None)).unwrap();
 
         let json = serde_json::to_string(&row).unwrap();
         let value = serde_json::from_str::<serde_json::Value>(&json).unwrap();
@@ -504,15 +467,13 @@ mod tests {
             (ResolutionTrigger::Remove, "remove"),
         ];
 
+        assert_contract_names(&cases);
+
         for (trigger, name) in cases {
-            let json = serde_json::to_string(&trigger).unwrap();
-            let decoded = serde_json::from_str::<ResolutionTrigger>(&json).unwrap();
             let dropped_operation =
                 serde_json::to_string(&DroppedOperation::from(trigger)).unwrap();
 
-            assert_eq!(json, format!(r#""{name}""#));
-            assert_eq!(decoded, trigger);
-            assert_eq!(dropped_operation, json);
+            assert_eq!(dropped_operation, format!(r#""{name}""#));
         }
     }
 
@@ -524,43 +485,7 @@ mod tests {
             (ResolutionOutcome::Error, "error"),
         ];
 
-        for (outcome, name) in cases {
-            let json = serde_json::to_string(&outcome).unwrap();
-            let decoded = serde_json::from_str::<ResolutionOutcome>(&json).unwrap();
-
-            assert_eq!(json, format!(r#""{name}""#));
-            assert_eq!(decoded, outcome);
-        }
-    }
-
-    #[test]
-    fn package_ecosystems_round_trip_with_contract_names() {
-        let cases = [(PackageEcosystem::Cargo, "cargo")];
-
-        for (ecosystem, name) in cases {
-            let json = serde_json::to_string(&ecosystem).unwrap();
-            let decoded = serde_json::from_str::<PackageEcosystem>(&json).unwrap();
-
-            assert_eq!(json, format!(r#""{name}""#));
-            assert_eq!(decoded, ecosystem);
-        }
-    }
-
-    #[test]
-    fn extension_matches_round_trip_with_contract_names() {
-        let cases = [
-            (ExtensionMatch::Public, "public"),
-            (ExtensionMatch::UnnamedOnly, "unnamed_only"),
-            (ExtensionMatch::None, "none"),
-        ];
-
-        for (extension_match, name) in cases {
-            let json = serde_json::to_string(&extension_match).unwrap();
-            let decoded = serde_json::from_str::<ExtensionMatch>(&json).unwrap();
-
-            assert_eq!(json, format!(r#""{name}""#));
-            assert_eq!(decoded, extension_match);
-        }
+        assert_contract_names(&cases);
     }
 
     #[test]
@@ -569,13 +494,9 @@ mod tests {
 
         let trigger = serde_json::from_str::<ResolutionTrigger>(unknown);
         let outcome = serde_json::from_str::<ResolutionOutcome>(unknown);
-        let ecosystem = serde_json::from_str::<PackageEcosystem>(unknown);
-        let extension_match = serde_json::from_str::<ExtensionMatch>(unknown);
 
         assert!(trigger.is_err());
         assert!(outcome.is_err());
-        assert!(ecosystem.is_err());
-        assert!(extension_match.is_err());
     }
 
     #[test]
