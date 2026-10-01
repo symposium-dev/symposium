@@ -11,6 +11,10 @@
 //! Every entry point here is best-effort: a failure to read or write the log
 //! must never break a hook, so errors are logged and swallowed.
 
+mod identity;
+mod schema;
+mod state;
+
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};

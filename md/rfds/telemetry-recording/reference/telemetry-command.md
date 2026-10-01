@@ -28,16 +28,17 @@ $ cargo agents telemetry status
 Telemetry: enabled (consent version 1)
   data directory:    ~/.symposium/telemetry/
   stored:            3 file(s), 28.4 KiB
-  physical lines:    71
+  physical lines:    72
   supported rows:    68
   unknown schemas:   2
+  invalid rows:      1
   malformed lines:   1
   range:             2026-08-01 through 2026-08-03
 ```
 
 Possible states are `disabled`, `consent required`, and `enabled`. `Consent required` means the config contains an earlier or unversioned opt-in; Symposium records nothing until you accept the current disclosure.
 
-Stored files/bytes and physical lines cover daily event and aggregate-metric files; they exclude `.lock`, temporary files, and sibling private `telemetry-state.toml`. Supported rows are lines the current binary recognizes by kind and schema version. Unknown and malformed lines stay on disk and remain visible through `show`. `status` never prints the secret identity key or pending keyed session sets.
+Stored files/bytes and physical lines cover daily event and aggregate-metric files; they exclude `.lock`, temporary files, and sibling private `telemetry-state.toml`. Supported rows are lines the current binary recognizes by kind and schema version and that satisfy the complete schema. An unknown schema has an unrecognized kind or version. An invalid row names a recognized schema but violates it. A malformed line has no usable `{v, kind}` JSON envelope. Unknown, invalid, and malformed lines stay on disk and remain visible through `show`. `status` never prints the secret identity key or pending keyed session sets.
 
 ## `enable`
 
@@ -109,7 +110,7 @@ Enable telemetry under consent version 1? [y/N]
 
 In a non-interactive environment, `enable` does not change config unless `--acknowledge` is supplied explicitly. This prevents scripts or a manually retained unversioned boolean from upgrading consent silently.
 
-Enabling telemetry does not rewrite or assign new identifiers to old stored lines. Accepting a new consent version rotates the secret identity key and starts a new retention cohort, severing old and new scoped identifiers.
+Enabling telemetry does not rewrite or assign new identifiers to old stored lines. Accepting a new consent version rotates the secret identity key, sets the identifier-window anchor to the later of the current UTC day and the latest-opened-day high-water mark, and clears the return-cohort anchor, severing old and new scoped identifiers. The next observed session starts a new retention cohort at D0.
 
 ## `disable`
 
@@ -152,11 +153,11 @@ $ cargo agents telemetry clear
 Deleted 12 telemetry data file(s) from ~/.symposium/telemetry/.
 ```
 
-`clear` preserves the telemetry directory, lock, identity/cohort state, identity key, and consent setting. New rows in the same identifier window can therefore carry the same scoped subjects as cleared rows. Severing that future linkage also requires `reset-identifiers`.
+`clear` preserves the telemetry directory, lock, identity/cohort state, identity key, latest-opened-day high-water mark, and consent setting. New rows in the same identifier window can therefore carry the same scoped subjects as cleared rows. Severing that future linkage also requires `reset-identifiers`.
 
 ## `reset-identifiers`
 
-`reset-identifiers` severs identifier linkage between future and existing rows. It acquires the telemetry lock, replaces the secret identity key, discards pending aggregate session-count sets, and starts a new retention cohort:
+`reset-identifiers` severs identifier linkage between future and existing rows. It acquires the telemetry lock, replaces the secret identity key, sets the identifier-window anchor to the later of the current UTC day and the latest-opened-day high-water mark, clears the return-cohort anchor, and discards pending aggregate session-count sets. The next observed session starts a new retention cohort at D0:
 
 ```console
 $ cargo agents telemetry reset-identifiers
@@ -180,9 +181,11 @@ If no identity state exists, the command reports that there is nothing to reset 
 
 Each project skills parent may also contain a generated `.symposium/index-v1.json` installation index. It maps agent-facing skill identifiers to Symposium-managed installations so a later hook can attribute a skill activation. The index is gitignored installation state, not telemetry: `show`, `clear`, retention, and identifier reset do not read or delete it, and this RFD does not upload it.
 
-`telemetry-state.toml` is private Symposium state outside the inspectable telemetry data directory. It contains the secret identity key, current identifier-window and return-cohort anchors, cleanup and marker metadata, and bounded keyed session sets plus contribution counts used for complete aggregate session counts. All recorders read this state under the telemetry lock.
+`telemetry-state.toml` is private Symposium state outside the inspectable telemetry data directory. It contains the secret identity key, current identifier-window anchor, optional return-cohort anchor, the latest opened UTC day, cleanup and marker metadata, and bounded keyed session sets plus contribution counts used for complete aggregate session counts. All recorders read this state under the telemetry lock.
 
-Normal 30-day rollover changes the window anchor without replacing the key. Renewed consent or `reset-identifiers` replaces the key; `disable` and `clear` preserve it.
+An identifier window includes its anchor day as day 0 and remains active through day 29. The first recording-capable observation on day 30 or later starts a new window anchored to that observation without replacing the key. Renewed consent or `reset-identifiers` replaces the key, resets the identifier-window anchor, and clears the return-cohort anchor; `disable` and `clear` preserve them. None of these operations moves the latest-opened-day high-water mark backward.
+
+For a session, high-water advancement, identifier-window rollover, and return-cohort transition form one state transition under the telemetry lock. Symposium writes them with one atomic private-state replacement before deriving identifiers or appending the `session_start` row.
 
 Symposium atomically creates and replaces the file with owner-only permissions where supported. Replacement uses a same-directory temporary file beside `config.toml`; abandoned state temporaries are ignored and cleaned lazily under the telemetry lock.
 

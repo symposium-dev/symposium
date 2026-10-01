@@ -54,6 +54,9 @@ dialoguer = "0.12.0"
 toml_edit = "0.25.11"
 url = "2.5.8"
 symposium-install = { version = "0.1.0", path = "symposium-install", features = ["clap"] }
+uuid = { version = "1.26.0", features = ["v4", "serde"] }
+hmac = "0.12.1"
+getrandom = "0.4.2"
 
 
 [dev-dependencies]
