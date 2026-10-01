@@ -44,6 +44,12 @@ Install with [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) (p
 cargo binstall symposium   # or: cargo install symposium
 ```
 
+On Arch Linux, install the [`symposium`](https://archlinux.org/packages/extra/x86_64/symposium/) package from the official repositories:
+
+```bash
+pacman -S symposium
+```
+
 Both provide the `cargo-agents` binary, invoked as `cargo agents`.
 
 ## Quick start
