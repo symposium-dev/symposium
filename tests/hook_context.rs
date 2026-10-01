@@ -22,7 +22,7 @@ async fn respond(ctx: &TestContext, agent: HookAgent, step: HookStep) -> String 
     )
     .unwrap();
     let stdout = ctx.invoke_hook(agent, event, &payload).await.unwrap();
-    String::from_utf8(stdout).unwrap()
+    String::from_utf8(stdout.stdout).unwrap()
 }
 
 /// Assert `stdout` holds every one of `parts`, in this order.

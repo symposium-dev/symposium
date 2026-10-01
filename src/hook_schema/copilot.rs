@@ -86,19 +86,36 @@ macro_rules! copilot_output_impl {
                 Ok(serde_json::from_slice(output)?)
             }
             fn from_symposium(event: &symposium::OutputEvent) -> Self {
+                let symposium::OutputEvent::PreToolUse(o) = event else {
+                    return Self::default();
+                };
                 let mut out = Self::default();
-                out.additional_context = event.additional_context().map(String::from);
+                if matches!(o.decision, symposium_sdk::hook::Decision::Deny) {
+                    out.permission_decision = Some("deny".into());
+                    out.permission_decision_reason = o.additional_context.clone();
+                } else {
+                    out.additional_context = o.additional_context.clone();
+                    out.modified_args = o.updated_input.clone();
+                }
                 out
             }
             fn to_symposium(&self) -> symposium::OutputEvent {
-                let decision = match self.permission_decision.as_deref() {
-                    Some("deny") => symposium_sdk::hook::Decision::Deny,
-                    _ => symposium_sdk::hook::Decision::Allow,
+                let (decision, context) = match self.permission_decision.as_deref() {
+                    Some("deny") => (
+                        symposium_sdk::hook::Decision::Deny,
+                        self.permission_decision_reason
+                            .clone()
+                            .or_else(|| self.additional_context.clone()),
+                    ),
+                    _ => (
+                        symposium_sdk::hook::Decision::Allow,
+                        self.additional_context.clone(),
+                    ),
                 };
                 symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
                     decision,
-                    self.additional_context.clone(),
-                    None,
+                    context,
+                    self.modified_args.as_ref().map(parse_copilot_tool_args),
                 ))
             }
             fn to_hook_output(&self) -> serde_json::Value {

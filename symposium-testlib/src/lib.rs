@@ -295,7 +295,7 @@ impl TestContext {
         agent: HookAgent,
         event: hook::HookEvent,
         payload: &impl Serialize,
-    ) -> anyhow::Result<Vec<u8>> {
+    ) -> anyhow::Result<hook::HookResponse> {
         let input = serde_json::to_string(payload)?;
         hook::execute_hook(&self.sym, agent, event, &input).await
     }
@@ -387,7 +387,9 @@ impl TestContext {
             let agent_input = handler.translate_input(&sym_input);
             let input_str = agent_input.to_string()?;
 
-            let output_bytes = hook::execute_hook(&self.sym, agent, event, &input_str).await?;
+            let output_bytes = hook::execute_hook(&self.sym, agent, event, &input_str)
+                .await?
+                .stdout;
 
             let input_val: serde_json::Value = serde_json::from_str(&input_str)?;
             let output_val: serde_json::Value = if output_bytes.is_empty() {

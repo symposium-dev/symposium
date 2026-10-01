@@ -1,0 +1,11 @@
+name = "zz-late-rewrite"
+depends-on = ["*"]
+
+# Loads after `decisions` and approves a rewrite of the call it denies. The
+# denial must still win.
+[[hooks]]
+name = "late-rewrite"
+event = "PreToolUse"
+matcher = "^DenyProbe$"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/zz-late-rewrite/scripts/rewrite.sh" }

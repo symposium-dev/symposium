@@ -1,0 +1,31 @@
+name = "decisions"
+depends-on = ["*"]
+
+# Each tool name selects one way a plugin can intervene in a tool call.
+
+[[hooks]]
+name = "deny"
+event = "PreToolUse"
+matcher = "^DenyProbe$"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/decisions/scripts/deny.sh" }
+
+[[hooks]]
+name = "rewrite"
+event = "PreToolUse"
+matcher = "^RewriteProbe$"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/decisions/scripts/rewrite.sh" }
+
+[[hooks]]
+name = "block"
+event = "PreToolUse"
+matcher = "^BlockProbe$"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/decisions/scripts/block.sh" }
+
+[[hooks]]
+name = "block-prompt"
+event = "UserPromptSubmit"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/decisions/scripts/block.sh" }

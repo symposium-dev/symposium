@@ -164,9 +164,35 @@ impl AgentHookOutput for ClaudePreToolUseOutput {
         Ok(serde_json::from_slice(output)?)
     }
     fn from_symposium(event: &symposium::OutputEvent) -> Self {
-        match claude_hook_output_from_symposium("PreToolUse", event) {
-            Some(v) => serde_json::from_value(v).unwrap_or_default(),
-            None => Self::default(),
+        let symposium::OutputEvent::PreToolUse(o) = event else {
+            return Self::default();
+        };
+        let denied = matches!(o.decision, symposium_sdk::hook::Decision::Deny);
+        // Claude applies `updatedInput` only alongside a permission decision.
+        // `ask` shows the rewritten call to the user; `allow` would approve it
+        // on the plugin's behalf, skipping the user's permission prompt.
+        let permission_decision = if denied {
+            Some("deny")
+        } else if o.updated_input.is_some() {
+            Some("ask")
+        } else {
+            None
+        };
+        if permission_decision.is_none() && o.additional_context.is_none() {
+            return Self::default();
+        }
+        Self {
+            hook_specific_output: Some(ClaudePreToolUseHookOutput {
+                hook_event_name: "PreToolUse".into(),
+                permission_decision: permission_decision.map(String::from),
+                // Claude shows a denial's reason to the model; for `ask` the
+                // reason would go to the user instead, so context stays context.
+                permission_decision_reason: denied.then(|| o.additional_context.clone()).flatten(),
+                updated_input: (!denied).then(|| o.updated_input.clone()).flatten(),
+                additional_context: (!denied).then(|| o.additional_context.clone()).flatten(),
+                rest: serde_json::Map::new(),
+            }),
+            ..Default::default()
         }
     }
     fn to_symposium(&self) -> symposium::OutputEvent {
@@ -175,9 +201,17 @@ impl AgentHookOutput for ClaudePreToolUseOutput {
             Some("deny") => symposium_sdk::hook::Decision::Deny,
             _ => symposium_sdk::hook::Decision::Allow,
         };
+        let context = match decision {
+            symposium_sdk::hook::Decision::Deny => h.and_then(|h| {
+                h.permission_decision_reason
+                    .clone()
+                    .or_else(|| h.additional_context.clone())
+            }),
+            _ => h.and_then(|h| h.additional_context.clone()),
+        };
         symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
             decision,
-            h.and_then(|h| h.additional_context.clone()),
+            context,
             h.and_then(|h| h.updated_input.clone()),
         ))
     }
