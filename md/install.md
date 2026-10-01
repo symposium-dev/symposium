@@ -14,6 +14,12 @@ If you prefer to build from source, use `cargo install` instead:
 cargo install symposium
 ```
 
+On Arch Linux, install the [`symposium`](https://archlinux.org/packages/extra/x86_64/symposium/) package from the official repositories:
+
+```bash
+pacman -S symposium
+```
+
 ## Initialization
 
 Once you have installed Symposium, you need to run the [`init` command](./references/cargo-agents-init.md):
