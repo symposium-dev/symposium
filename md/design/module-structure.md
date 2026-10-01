@@ -390,3 +390,5 @@ Implements `cargo agents self-update`. Queries the registry for the latest publi
 ### `crate_command.rs` — crate source lookup
 
 Contains `dispatch_crate()`, which resolves a crate's version and fetches its source code. Called by the CLI's `crate-info` command. Path dependencies are resolved to their local source directory via `WorkspaceCrate.path`. Without `--version`, a workspace member is looked up in `member_crates` first and resolves to its own directory.
+
+Agent detection history is stored as `detected-agents` in `state.toml`; init uses it to preserve previous deselections.

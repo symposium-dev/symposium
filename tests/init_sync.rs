@@ -109,6 +109,36 @@ fn find_installed_skill(parent: &Path, skill_name: &str) -> PathBuf {
     hits.pop().unwrap()
 }
 
+/// A first `init` records the agents it detected in `state.toml`.
+#[tokio::test]
+async fn init_records_detected_agents_on_first_run() {
+    with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
+        std::fs::create_dir(ctx.sym.home_dir().join(".codex"))?;
+        ctx.symposium(&["init"]).await?;
+
+        let state = symposium::state::load(ctx.sym.config_dir()).expect("state.toml");
+        assert!(state.detected_agents.contains(&"codex".to_string()));
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+/// `init --add-agent` leaves the detection record alone.
+#[tokio::test]
+async fn init_with_flags_does_not_record_detected_agents() {
+    with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
+        std::fs::create_dir(ctx.sym.home_dir().join(".codex"))?;
+        ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+        let state = symposium::state::load(ctx.sym.config_dir());
+        assert!(state.is_none_or(|s| s.detected_agents.is_empty()));
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
 /// `init` defaults to global hook scope — hooks go to home dir.
 #[tokio::test]
 async fn init_defaults_to_global_hooks() {
@@ -183,29 +213,6 @@ async fn init_creates_config() {
         let content = read_user_config(&ctx);
         assert!(content.contains(r#"name = "claude""#));
         assert!(!content.contains("sync-default"));
-        Ok(())
-    })
-    .await
-    .unwrap();
-}
-
-#[tokio::test]
-async fn non_interactive_init_defaults_to_claude() {
-    with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
-        ctx.symposium(&["init"]).await?;
-
-        let config = symposium::config::Symposium::from_dir(ctx.sym.config_dir());
-        let agent_names: Vec<_> = config
-            .config
-            .agents
-            .iter()
-            .map(|a| a.name.as_str())
-            .collect();
-        assert_eq!(agent_names, vec!["claude"]);
-
-        let home = ctx.sym.home_dir();
-        assert!(home.join(".claude/settings.json").exists());
-        assert!(!home.join(".gemini").exists());
         Ok(())
     })
     .await

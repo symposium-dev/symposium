@@ -27,6 +27,8 @@ pub struct State {
     /// Last time we checked crates.io for a newer version.
     #[serde(default, rename = "last-update-check")]
     pub last_update_check: Option<DateTime<Utc>>,
+    #[serde(default, rename = "detected-agents")]
+    pub detected_agents: Vec<String>,
 
     /// MCP server entries Symposium wrote. Removal is limited to these, since
     /// a server name alone may also belong to an entry the user wrote.
@@ -51,6 +53,8 @@ struct RawState {
     version: String,
     #[serde(default, rename = "last-update-check")]
     last_update_check: Option<DateTime<Utc>>,
+    #[serde(default, rename = "detected-agents")]
+    detected_agents: Vec<String>,
     #[serde(default, rename = "mcp-server")]
     mcp_servers: Vec<McpRegistration>,
     #[serde(default, rename = "trial-use")]
@@ -62,6 +66,7 @@ impl RawState {
         State {
             version: self.version,
             last_update_check: self.last_update_check,
+            detected_agents: self.detected_agents,
             mcp_servers: self.mcp_servers,
             trial_uses: self.trial_uses,
         }
@@ -73,6 +78,7 @@ impl Default for State {
         Self {
             version: CURRENT_VERSION.to_string(),
             last_update_check: None,
+            detected_agents: Vec::new(),
             mcp_servers: Vec::new(),
             trial_uses: Vec::new(),
         }
@@ -190,6 +196,12 @@ pub fn forget_trial_use(config_dir: &Path, name: &str) {
     if state.trial_uses.len() != before {
         save(config_dir, &state);
     }
+}
+
+pub fn record_detected_agents(config_dir: &Path, agents: Vec<String>) {
+    let mut state = load(config_dir).unwrap_or_default();
+    state.detected_agents = agents;
+    save(config_dir, &state);
 }
 
 fn state_path(config_dir: &Path) -> PathBuf {
