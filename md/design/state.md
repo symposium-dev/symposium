@@ -22,3 +22,5 @@ name = "demo"
 The ledger exists because a server name is not proof of ownership. A user, or their team in a committed project file, may have their own server named like a plugin's, in an agent Symposium does not manage. Removing by name deleted those. Nothing can be marked inside the agent files instead: several agents reject unknown keys, and JSON has no comments.
 
 The ledger is per machine. An entry Symposium did not write on this machine, including one written by an earlier version that had no ledger, is never removed automatically.
+
+Agent detection history is stored as `detected-agents` in `state.toml`; init uses it to preserve previous deselections.
