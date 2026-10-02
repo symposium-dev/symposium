@@ -6,6 +6,8 @@ license = "MIT OR Apache-2.0"
 description = "AI the Rust Way"
 repository = "https://github.com/symposium-dev/symposium"
 readme = "README.md"
+autobenches = false
+exclude = ["/benches"]
 
 [lib]
 name = "symposium"
@@ -63,4 +65,4 @@ indoc = "2.0.7"
 symposium-testlib = { path = "symposium-testlib" }
 
 [workspace]
-members = [".", "symposium-testlib", "symposium-install", "symposium-sdk", "xtask"]
+members = [".", "symposium-testlib", "symposium-install", "symposium-sdk", "xtask", "benches/benchsuite"]
