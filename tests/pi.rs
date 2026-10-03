@@ -1,7 +1,7 @@
 //! Pi initialization, extension registration, and automatic skill sync.
 
 use symposium::agents::{Agent, McpScope};
-use symposium::hook_schema::HookAgent;
+use symposium::hook_schema::{HookAgent, HookEvent};
 use symposium_testlib::{HookStep, TestMode, with_fixture};
 
 #[test]
@@ -24,6 +24,61 @@ fn pi_is_available_in_init_and_uses_shared_skills() {
     let format: symposium_sdk::manifest::HookFormat = serde_json::from_str("\"pi\"").unwrap();
     assert_eq!(format.as_agent(), Some(HookAgent::Pi));
     assert_eq!(serde_json::to_string(&format).unwrap(), "\"pi\"");
+}
+
+#[tokio::test]
+async fn pi_stop_returns_empty_output_in_pipeline_and_cli() {
+    use std::io::Write;
+
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["workspace-empty0"],
+        async |mut ctx| {
+            ctx.sym.config.auto_sync = false;
+            ctx.sym.config.auto_update = symposium::config::AutoUpdate::Off;
+            ctx.sym.save_config()?;
+            let root = ctx.workspace_root.as_ref().unwrap();
+            let payload = serde_json::json!({
+                "cwd": root,
+                "session_id": "test-session",
+            });
+
+            let output = ctx
+                .invoke_hook(HookAgent::Pi, HookEvent::Stop, &payload)
+                .await?;
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&output)?,
+                serde_json::json!({})
+            );
+
+            let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-agents"))
+                .args(["hook", "pi", "stop"])
+                .env("SYMPOSIUM_HOME", ctx.sym.config_dir())
+                .current_dir(root)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()?;
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(&serde_json::to_vec(&payload)?)?;
+            let output = child.wait_with_output()?;
+            assert!(
+                output.status.success(),
+                "Pi stop failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&output.stdout)?,
+                serde_json::json!({})
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
