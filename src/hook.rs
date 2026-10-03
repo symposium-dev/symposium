@@ -708,7 +708,7 @@ pub async fn dispatch_builtin(
         symposium::InputEvent::SessionStart(session) => {
             handle_session_start(sym, session, deps, plugin_reload_notice).await
         }
-        _ => symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
+        _ => symposium::OutputEvent::empty_for(input.event()),
     }
 }
 
@@ -1403,6 +1403,20 @@ mod tests {
         ));
         let output = dispatch_builtin(&sym, &input, &deps, false, None).await;
         assert!(output.additional_context().is_none());
+    }
+
+    #[tokio::test]
+    async fn builtin_stop_returns_matching_empty_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(tmp.path());
+        let deps = sym.workspace_deps(tmp.path());
+        let input = symposium::InputEvent::Stop(symposium::StopInput::new(None, None));
+
+        for notify in [false, true] {
+            let output = dispatch_builtin(&sym, &input, &deps, notify).await;
+            assert!(matches!(&output, symposium::OutputEvent::Stop(_)));
+            assert!(output.additional_context().is_none());
+        }
     }
 
     #[tokio::test]
