@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2](https://github.com/symposium-dev/symposium/compare/symposium-v0.5.1...symposium-v0.5.2) - 2026-10-03
+
+### Other
+
+- Fix link to reference in install and about chapter
+
 ## [0.5.1](https://github.com/symposium-dev/symposium/compare/symposium-v0.5.0...symposium-v0.5.1) - 2026-10-01
 
 ### Other
