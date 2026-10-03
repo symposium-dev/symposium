@@ -42,6 +42,7 @@ Which agents do you use? (space to select, enter to confirm):
   [ ] Goose
   [x] Kiro
   [ ] OpenCode
+  [ ] Pi
 ```
 
 After installing or uninstalling an agent, rerun `cargo agents init`: the list reflects the change, so you just confirm. You can also run `cargo agents init --add-agent <name>` or `--remove-agent <name>`.

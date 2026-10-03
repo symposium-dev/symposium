@@ -25,6 +25,7 @@ The tables below summarize the answers for each agent. Individual agent pages co
 | [Kiro](./kiro.md) | `.kiro/agents/*.json` | `~/.kiro/agents/*.json` | JSON, `hooks` key in agent config |
 | [OpenCode](./opencode.md) | `.opencode/plugins/` | `~/.config/opencode/plugins/` | JS/TS plugins (not shell hooks) |
 | [Goose](./goose.md) | *(no hooks)* | *(no hooks)* | N/A |
+| [Pi](./pi.md) | `.pi/extensions/symposium.ts` | `~/.pi/agent/extensions/symposium.ts` | TypeScript extension |
 
 ### Command field
 
@@ -37,6 +38,7 @@ The tables below summarize the answers for each agent. Individual agent pages co
 | Kiro | `command` | No |
 | OpenCode | N/A (JS function) | N/A |
 | Goose | N/A | N/A |
+| Pi extension | `execFile("cargo-agents", ["hook", "pi", event])` | No |
 
 ### Timeout defaults
 
@@ -49,6 +51,7 @@ The tables below summarize the answers for each agent. Individual agent pages co
 | Kiro | 30,000 | milliseconds (`timeout_ms`) |
 | OpenCode | 60,000 | milliseconds (community hooks plugin) |
 | Goose | N/A | N/A |
+| Pi extension | 30 | seconds |
 
 Symposium registers 10 seconds for Codex and Copilot and 30 for Antigravity, and leaves the others at their defaults. Plugin hooks run inside that budget, limited to 5 seconds each and 8 together (see [the hook flow](../hook-flow.md)).
 
@@ -64,6 +67,9 @@ Symposium registers hooks for four events on every agent with shell hooks, plus 
 | session-start | `SessionStart` | `SessionStart` | `sessionStart` | `SessionStart` | `agentSpawn` | `session.created` | N/A |
 | stop | `Stop` | `Stop` | *not registered* (`agentStop`) | `Stop` | *not registered* (`stop`) | N/A | N/A |
 
+Pi uses extension events rather than shell hooks. Its mapping is documented in
+[Pi integration](./pi.md#event-mapping-and-wire-format).
+
 ### Blocking support
 
 Not all events can block the action in all agents.
@@ -77,6 +83,7 @@ Not all events can block the action in all agents.
 | Kiro | Yes (exit 2) | No | No | No |
 | OpenCode | Yes (throw Error) | No | No (observe only) | No (observe only) |
 | Goose | N/A | N/A | N/A | N/A |
+| Pi | Yes | No | No | No |
 
 ## Hook I/O protocol
 
@@ -91,6 +98,7 @@ Not all events can block the action in all agents.
 | Kiro | `tool_name` | `tool_input` (object) | `hook_event_name`, `cwd` |
 | OpenCode | `tool` | `args` (mutable output object) | `sessionID`, `callID` |
 | Goose | N/A | N/A | N/A |
+| Pi bridge | `tool_name` | `tool_input` (object) | `session_id`, `cwd` |
 
 ### Output structure (pre-tool-use)
 
@@ -103,6 +111,7 @@ Not all events can block the action in all agents.
 | Kiro | *(exit code only)* | exit 0 = allow, exit 2 = block | *(not supported)* | N/A |
 | OpenCode | *(throw to block)* | allow (return) / deny (throw) | mutate `output.args` | JS mutation |
 | Goose | N/A | N/A | N/A | N/A |
+| Pi bridge | `decision` | allow, deny | `updatedInput` | flat |
 
 ### Exit codes
 
@@ -129,6 +138,7 @@ All shell-based agents use the same convention (where applicable):
 | Kiro | `.kiro/skills/<name>/SKILL.md` | `~/.kiro/skills/<name>/SKILL.md` |
 | OpenCode | `.opencode/skills/<name>/SKILL.md` | `~/.agents/skills/<name>/SKILL.md` |
 | Goose | *(N/A — uses MCP extensions)* | *(N/A)* |
+| Pi | `.agents/skills/<name>/SKILL.md` | `~/.agents/skills/<name>/SKILL.md` |
 
 Symposium uses the vendor-neutral `.agents/skills/` path whenever the agent supports it, falling back to agent-specific paths (e.g., `.claude/skills/`, `.kiro/skills/`) when required. Codex CLI and OpenCode also support `.agents/skills/` natively; OpenCode still gets `.opencode/skills/`, so that an agent taking a plugin does not also find OpenCode's per-skill copies of its skills (see [OpenCode](./opencode.md#skills)).
 
@@ -143,6 +153,7 @@ Symposium uses the vendor-neutral `.agents/skills/` path whenever the agent supp
 | Kiro | `.kiro/steering/*.md`, `AGENTS.md` | `~/.kiro/steering/*.md` |
 | OpenCode | `AGENTS.md`, `CLAUDE.md` | `~/.config/opencode/AGENTS.md` |
 | Goose | `.goosehints`, `AGENTS.md` | `~/.config/goose/.goosehints` |
+| Pi | `AGENTS.md`, `CLAUDE.md` | `~/.pi/agent/AGENTS.md` |
 
 ## MCP server configuration
 
@@ -164,6 +175,7 @@ symposium reports success for a file the agent never reads.
 | GitHub Copilot CLI | *(none - user scope only)* | `~/.copilot/mcp-config.json` | `mcpServers.<name>` = `{command, args}` | yes |
 | Kiro | `.kiro/settings/mcp.json` | `~/.kiro/settings/mcp.json` | `mcpServers.<name>` = `{command, args}` | no (GUI only) |
 | Goose | *(none - user scope only)* | `~/.config/goose/config.yaml` | `extensions.<name>` = `{name, type: stdio, cmd, args, enabled, envs}` | yes |
+| Pi | `.pi/mcp.json` | `~/.pi/agent/mcp.json` | `mcpServers.<name>` = `{command, args}` or `{url, headers}` | yes (`pi mcp list`) |
 
 Notes that cost real debugging time:
 
