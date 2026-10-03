@@ -44,6 +44,35 @@ async fn native_hook_takes_priority_over_symposium() {
     .unwrap();
 }
 
+/// Pi native hooks receive flat fields and retain decisions and input changes.
+#[tokio::test(flavor = "multi_thread")]
+async fn pi_native_hook_takes_priority_over_symposium() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hooks-format"],
+        async |ctx| {
+            let output = ctx
+                .invoke_hook(
+                    HookAgent::Pi,
+                    HookEvent::PreToolUse,
+                    &json!({
+                        "cwd": ctx.tempdir.display().to_string(),
+                        "tool_name": "bash",
+                        "tool_input": {"command": "ls"},
+                    }),
+                )
+                .await?;
+            let output: serde_json::Value = serde_json::from_slice(&output)?;
+            assert_eq!(output["decision"], "deny");
+            assert_eq!(output["updatedInput"]["command"], "pwd");
+            assert_eq!(output["additionalContext"], "pi-hook-fired");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// When running on Copilot and the plugin has both `format = "claude"` and
 /// `format = "symposium"` hooks, the symposium hook fires (no native match).
 /// Copilot names its shell tool `bash`, not Claude's `Bash`.

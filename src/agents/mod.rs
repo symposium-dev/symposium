@@ -5,6 +5,7 @@
 //! that knowledge.
 
 mod mcp_server_registration;
+mod pi;
 mod plugin_registration;
 
 pub(crate) use plugin_registration::sync_marketplace_index;
@@ -18,7 +19,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde_json::json;
 
-use crate::config::Symposium;
+use crate::config::{HookScope, Symposium};
 use crate::output::{Output, display_path};
 
 const HOOK_COMMAND: &str = "symposium hook";
@@ -104,6 +105,7 @@ pub enum Agent {
     Goose,
     Kiro,
     OpenCode,
+    Pi,
 }
 
 impl Agent {
@@ -117,8 +119,9 @@ impl Agent {
             "goose" => Ok(Agent::Goose),
             "kiro" => Ok(Agent::Kiro),
             "opencode" => Ok(Agent::OpenCode),
+            "pi" => Ok(Agent::Pi),
             other => bail!(
-                "unknown agent: {other} (expected antigravity, claude, codex, copilot, goose, kiro, or opencode)"
+                "unknown agent: {other} (expected antigravity, claude, codex, copilot, goose, kiro, opencode, or pi)"
             ),
         }
     }
@@ -133,6 +136,7 @@ impl Agent {
             Agent::Goose => "goose",
             Agent::Kiro => "kiro",
             Agent::OpenCode => "opencode",
+            Agent::Pi => "pi",
         }
     }
 
@@ -153,6 +157,7 @@ impl Agent {
             Agent::Goose => "Goose",
             Agent::Kiro => "Kiro",
             Agent::OpenCode => "OpenCode",
+            Agent::Pi => "Pi",
         }
     }
 
@@ -166,6 +171,7 @@ impl Agent {
             Agent::Goose,
             Agent::Kiro,
             Agent::OpenCode,
+            Agent::Pi,
         ]
     }
 
@@ -197,9 +203,8 @@ impl Agent {
 
     /// Project-level skill directory for a given skill name.
     ///
-    /// Claude Code requires `.claude/skills/`, while Antigravity, Copilot and
-    /// Antigravity, Codex and Copilot support the vendor-neutral
-    /// `.agents/skills/` path.
+    /// Claude Code and Kiro use agent-specific paths. Other agents, including
+    /// Pi, support the vendor-neutral `.agents/skills/` path.
     pub fn project_skill_dir(&self, project_root: &Path, skill_name: &str) -> PathBuf {
         assert!(
             crate::skills::is_safe_dir_name(skill_name),
@@ -216,6 +221,7 @@ impl Agent {
                 .join(".opencode")
                 .join("skills")
                 .join(skill_name),
+            Agent::Pi => project_root.join(".agents").join("skills").join(skill_name),
         }
     }
 
@@ -239,7 +245,9 @@ impl Agent {
             Agent::Copilot => None, // no global skills path
             Agent::Goose => Some(home.join(".agents").join("skills").join(skill_name)),
             Agent::Kiro => Some(home.join(".kiro").join("skills").join(skill_name)),
-            Agent::OpenCode => Some(home.join(".agents").join("skills").join(skill_name)),
+            Agent::OpenCode | Agent::Pi => {
+                Some(home.join(".agents").join("skills").join(skill_name))
+            }
         }
     }
 
@@ -255,6 +263,28 @@ impl Agent {
     // -----------------------------------------------------------------------
     // Hook registration
     // -----------------------------------------------------------------------
+
+    /// Register hooks at the configured scope.
+    ///
+    /// Pi loads both extension locations. Remove the other generated copy
+    /// before registration so a scope change does not duplicate its handlers.
+    pub fn register_scoped_hooks(
+        &self,
+        project_root: &Path,
+        sym: &Symposium,
+        out: &Output,
+    ) -> Result<()> {
+        if *self == Agent::Pi {
+            match sym.config.hook_scope {
+                HookScope::Global => self.unregister_project_hooks(project_root, sym, out),
+                HookScope::Project => self.unregister_hooks(sym.home_dir(), sym, out),
+            }
+        }
+        match sym.config.hook_scope {
+            HookScope::Global => self.register_hooks(sym.home_dir(), sym, out),
+            HookScope::Project => self.register_project_hooks(project_root, sym, out),
+        }
+    }
 
     /// Register hooks in the project-level agent config.
     pub fn register_project_hooks(
@@ -277,6 +307,7 @@ impl Agent {
                 register_copilot_hooks(&project_root.join(".github").join("hooks"), out)
             }
             Agent::Kiro => register_kiro_hooks(&project_root.join(".kiro").join("agents"), out),
+            Agent::Pi => pi::register_extension(&project_root.join(".pi"), out),
             Agent::Goose => {
                 out.info(
                     "Goose uses MCP extensions for hooks; skipping hook registration (skills only)",
@@ -309,6 +340,7 @@ impl Agent {
                 register_copilot_hooks_global(&copilot_config_dir(sym).join("settings.json"), out)
             }
             Agent::Kiro => register_kiro_hooks(&home.join(".kiro").join("agents"), out),
+            Agent::Pi => pi::register_extension(&pi::agent_dir(home), out),
             Agent::Goose => {
                 out.info(
                     "Goose uses MCP extensions for hooks; skipping hook registration (skills only)",
@@ -377,6 +409,8 @@ impl Agent {
             (Agent::Codex, _) => codex_dir(sym).join("config.toml"),
             (Agent::Copilot, _) => copilot_config_dir(sym).join("mcp-config.json"),
             (Agent::Goose, _) => goose_config_dir(sym).join("config.yaml"),
+            (Agent::Pi, McpScope::Project) => project_root.join(".pi").join("mcp.json"),
+            (Agent::Pi, McpScope::User) => pi::agent_dir(home).join("mcp.json"),
         }
     }
 
@@ -387,7 +421,7 @@ impl Agent {
     pub fn supports_project_mcp_scope(&self) -> bool {
         matches!(
             self,
-            Agent::Antigravity | Agent::Claude | Agent::OpenCode | Agent::Kiro
+            Agent::Antigravity | Agent::Claude | Agent::OpenCode | Agent::Kiro | Agent::Pi
         )
     }
 
@@ -423,6 +457,7 @@ impl Agent {
             Agent::OpenCode => {
                 mcp_server_registration::register_opencode_mcp_servers(&path, servers, out)
             }
+            Agent::Pi => mcp_server_registration::register_pi_mcp_servers(&path, servers, out),
         }
     }
 
@@ -444,6 +479,7 @@ impl Agent {
             Agent::OpenCode => {
                 mcp_server_registration::unregister_opencode_mcp_servers(path, names, out)
             }
+            Agent::Pi => mcp_server_registration::unregister_pi_mcp_servers(&path, names, out),
         }
     }
 
@@ -514,6 +550,7 @@ impl Agent {
                 unregister_copilot_hooks(&project_root.join(".github").join("hooks"), out)
             }
             Agent::Kiro => unregister_kiro_hooks(&project_root.join(".kiro").join("agents"), out),
+            Agent::Pi => pi::unregister_extension(&project_root.join(".pi"), out),
             Agent::Goose => {}    // no hooks to unregister
             Agent::OpenCode => {} // no hooks to unregister
         }
@@ -534,6 +571,7 @@ impl Agent {
                 unregister_copilot_hooks_global(&copilot_config_dir(sym).join("settings.json"), out)
             }
             Agent::Kiro => unregister_kiro_hooks(&home.join(".kiro").join("agents"), out),
+            Agent::Pi => pi::unregister_extension(&pi::agent_dir(home), out),
             Agent::Goose => {}    // no hooks to unregister
             Agent::OpenCode => {} // no hooks to unregister
         }
@@ -1367,6 +1405,11 @@ mod tests {
                 "/project/.kiro/settings/mcp.json",
                 ".kiro/settings/mcp.json",
             ),
+            (
+                Agent::Pi,
+                "/project/.pi/mcp.json",
+                ".pi/agent/mcp.json",
+            ),
         ];
         for (agent, project_path, user_path) in cases {
             assert_eq!(
@@ -1594,6 +1637,7 @@ mod tests {
                 root.join(".gemini").join("config").join("hooks.json"),
             ],
             Agent::Kiro => vec![root.join(".kiro").join("agents")],
+            Agent::Pi => vec![root.join(".pi").join("extensions").join("symposium.ts")],
             // Skills-only agents register no hooks at all.
             Agent::Goose | Agent::OpenCode => vec![],
         }
