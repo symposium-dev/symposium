@@ -36,7 +36,7 @@ MCP registration is its own axis, and the one place where guessing is expensive:
 
 ### `init.rs` — initialization command
 
-Implements `cargo agents init`. Prompts for agents (or accepts `--add-agent`/`--remove-agent` flags), hook scope, auto-update behavior, and opt-in [telemetry](./telemetry.md); writes user config; and registers global hooks.
+Implements `cargo agents init`. Prompts for agents (or accepts `--add-agent`/`--remove-agent` flags), hook scope, auto-update behavior, and opt-in [telemetry](./telemetry.md); writes user config; and registers global hooks. The agent prompt preselects the agents `Agent::detect_installed` finds by their user config directory, and on later runs reports which ones appeared or disappeared since the last setup.
 
 ### `sync.rs` — synchronization command
 
