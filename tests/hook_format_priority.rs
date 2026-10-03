@@ -44,6 +44,62 @@ async fn native_hook_takes_priority_over_symposium() {
     .unwrap();
 }
 
+/// A canonical output for the wrong event is skipped before agent conversion.
+#[tokio::test(flavor = "multi_thread")]
+async fn mismatched_output_is_skipped_in_pipeline_and_cli() {
+    use std::io::Write;
+
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["workspace-empty0", "plugin-hooks-output-event"],
+        async |ctx| {
+            let root = ctx.workspace_root.as_ref().unwrap();
+            let payload = json!({"cwd": root, "session_id": "test-session"});
+            let expected = json!({"additionalContext": "valid-stop-output"});
+
+            let output = ctx
+                .invoke_hook(HookAgent::Pi, HookEvent::Stop, &payload)
+                .await?;
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&output)?,
+                expected
+            );
+
+            let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-agents"))
+                .args(["hook", "pi", "stop"])
+                .env("SYMPOSIUM_HOME", ctx.sym.config_dir())
+                .current_dir(root)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()?;
+            child
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(&serde_json::to_vec(&payload)?)?;
+            let output = child.wait_with_output()?;
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(output.status.success(), "Pi Stop failed: {stderr}");
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&output.stdout)?,
+                expected
+            );
+            let logs = std::fs::read_dir(ctx.sym.config_dir().join("logs"))?
+                .map(|entry| std::fs::read_to_string(entry?.path()))
+                .collect::<Result<Vec<_>, _>>()?
+                .join("\n");
+            assert!(
+                logs.contains("plugin output event does not match input event"),
+                "missing event mismatch warning: {logs}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// Pi native hooks receive flat fields and retain decisions and input changes.
 #[tokio::test(flavor = "multi_thread")]
 async fn pi_native_hook_takes_priority_over_symposium() {

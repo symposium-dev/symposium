@@ -323,6 +323,17 @@ pub enum Output {
 }
 
 impl Output {
+    /// Returns the event type for this output.
+    pub fn event(&self) -> HookEvent {
+        match self {
+            Output::PreToolUse(_) => HookEvent::PreToolUse,
+            Output::PostToolUse(_) => HookEvent::PostToolUse,
+            Output::UserPromptSubmit(_) => HookEvent::UserPromptSubmit,
+            Output::SessionStart(_) => HookEvent::SessionStart,
+            Output::Stop(_) => HookEvent::Stop,
+        }
+    }
+
     /// Create an empty output for the given event type.
     pub fn empty_for(event: HookEvent) -> Self {
         match event {
@@ -680,5 +691,18 @@ mod tests {
             serde_json::json!({"PreToolUse": {"decision": "deny"}})
         );
         assert!(is_empty_output(&Output::empty_for(HookEvent::PreToolUse)));
+    }
+    #[test]
+    fn output_preserves_event_type() {
+        for event in [
+            HookEvent::PreToolUse,
+            HookEvent::PostToolUse,
+            HookEvent::UserPromptSubmit,
+            HookEvent::SessionStart,
+            HookEvent::Stop,
+        ] {
+            assert_eq!(Output::empty_for(event).event(), event);
+            assert_eq!(Output::with_context(event, "context".into()).event(), event);
+        }
     }
 }
