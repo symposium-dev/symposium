@@ -132,7 +132,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let source = tmp.path().join("registry");
         std::fs::create_dir_all(source.join("tools")).unwrap();
-        std::fs::write(source.join("tools/SYMPOSIUM.toml"), "name = \"tools\"").unwrap();
+        std::fs::write(source.join("tools/Symposium.toml"), "name = \"tools\"").unwrap();
         std::fs::create_dir_all(source.join("nested/style")).unwrap();
         std::fs::write(
             source.join("nested/style/SKILL.md"),

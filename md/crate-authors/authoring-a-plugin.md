@@ -2,12 +2,12 @@
 
 Symposium lets you ship skills, hooks, and MCP servers that are automatically loaded when a user's project depends on your crate. This page walks through how to create a plugin and configure each extension type.
 
-## Step 1. Create a `SYMPOSIUM.toml` manifest
+## Step 1. Create a `Symposium.toml` manifest
 
-Every plugin starts with a `SYMPOSIUM.toml` manifest uploaded to the [central recommendations repository][rr]. The manifest declares your plugin's name, which crates it applies to, and what extensions it provides.
+Every plugin starts with a `Symposium.toml` manifest uploaded to the [central recommendations repository][rr]. The manifest declares your plugin's name, which crates it applies to, and what extensions it provides.
 
 ```toml
-# `my-crate/SYMPOSIUM.toml` on the symposium-dev/recommendations repository
+# `my-crate/Symposium.toml` on the symposium-dev/recommendations repository
 name = "my-crate"
 depends-on = ["my-crate"]
 ```
@@ -61,7 +61,7 @@ my-crate/
 ##### 2. Reference your crate with a chained plugin
 
 ```toml
-# `my-crate/SYMPOSIUM.toml` on the symposium-dev/recommendations repository
+# `my-crate/Symposium.toml` on the symposium-dev/recommendations repository
 name = "my-crate"
 depends-on = ["my-crate"]
 
@@ -73,7 +73,7 @@ When `my-crate` is a dependency, this loads its plugin: Symposium fetches the cr
 
 ##### Prefer a directory other than `skills/`?
 
-Add `[package.metadata.symposium]` to your crate's `Cargo.toml` to specify a custom path. This block uses the same schema as a `SYMPOSIUM.toml` plugin manifest:
+Add `[package.metadata.symposium]` to your crate's `Cargo.toml` to specify a custom path. This block uses the same schema as a `Symposium.toml` plugin manifest:
 
 ```toml
 # In your crate's Cargo.toml
@@ -83,12 +83,12 @@ source.path = "docs/agent-skills"
 
 When no metadata section is present, Symposium defaults to the `skills/` directory. See [Supporting your crate](./supporting-your-crate.md) for the full schema including chained references to other crates.
 
-##### Ship a full `SYMPOSIUM.toml` in your crate
+##### Ship a full `Symposium.toml` in your crate
 
-For more than a single custom directory — named skill groups, per-group predicates, or a git skill source — put a `SYMPOSIUM.toml` at your crate root. When the crate is reached through a `[[plugins]] source.cargo` reference, that manifest is loaded as a first-class plugin:
+For more than a single custom directory — named skill groups, per-group predicates, or a git skill source — put a `Symposium.toml` at your crate root. When the crate is reached through a `[[plugins]] source.cargo` reference, that manifest is loaded as a first-class plugin:
 
 ```toml
-# `my-crate/SYMPOSIUM.toml` (in your crate's source tree)
+# `my-crate/Symposium.toml` (in your crate's source tree)
 [[skills]]
 source.path = "docs/agent-skills"
 
@@ -97,19 +97,19 @@ depends-on = ["tokio"]
 source.path = "docs/async-skills"
 ```
 
-Because the chained reference is already the gate, a crate manifest doesn't need `name` (it defaults to the crate) or a top-level `depends-on`. The default `skills/` group is still appended unless you opt out with `[defaults] skills = false`. The `[package.metadata.symposium]` block and a `SYMPOSIUM.toml` file are the same manifest schema and are combined when both are present (defaults → Cargo.toml → SYMPOSIUM.toml) — use whichever is convenient.
+Because the chained reference is already the gate, a crate manifest doesn't need `name` (it defaults to the crate) or a top-level `depends-on`. The default `skills/` group is still appended unless you opt out with `[defaults] skills = false`. The `[package.metadata.symposium]` block and a `Symposium.toml` file are the same manifest schema and are combined when both are present (defaults → Cargo.toml → Symposium.toml) — use whichever is convenient.
 
-> Hooks, MCP servers, and subcommands declared in a crate `SYMPOSIUM.toml` are parsed but not yet dispatched — only its skills load today. Declare those in a recommendations-repo manifest for now.
+> Hooks, MCP servers, and subcommands declared in a crate `Symposium.toml` are parsed but not yet dispatched — only its skills load today. Declare those in a recommendations-repo manifest for now.
 
 #### Standalone skills (on the recommendations repo)
 
 You can also upload skills directly to the [recommendations repo][rr] — without embedding them in the crate source. This is the right approach when you're writing skills for a crate you don't maintain.
 
-Place skill directories alongside your `SYMPOSIUM.toml`:
+Place skill directories alongside your `Symposium.toml`:
 
 ```
 my-crate/
-    SYMPOSIUM.toml
+    Symposium.toml
     basics/
         SKILL.md
     advanced-patterns/
@@ -237,13 +237,13 @@ Before submitting a PR, validate your plugin or skill directory to catch errors 
 
 ```bash
 # Validate a plugin manifest
-cargo agents plugin validate path/to/SYMPOSIUM.toml
+cargo agents plugin validate path/to/Symposium.toml
 
 # Validate a directory of standalone skills
 cargo agents plugin validate path/to/skill-directory/
 
 # Skip the crates.io name check (e.g., for private crates)
-cargo agents plugin validate path/to/SYMPOSIUM.toml --no-check-crates
+cargo agents plugin validate path/to/Symposium.toml --no-check-crates
 ```
 
 [rr]: https://github.com/symposium-dev/recommendations

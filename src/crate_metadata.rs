@@ -1,11 +1,11 @@
 //! Extract the `[package.metadata.symposium]` table from a crate `Cargo.toml`.
 //!
-//! The table uses the *same schema* as a `SYMPOSIUM.toml` plugin manifest — a
+//! The table uses the *same schema* as a `Symposium.toml` plugin manifest — a
 //! crate can define its plugin inline in `Cargo.toml` instead of (or in
 //! addition to) shipping a separate file.
 //! [`CargoPm::load_plugin`](crate::pm::CargoPm::load_plugin) deserializes
 //! whatever this returns into a plugin manifest and merges it with any
-//! `SYMPOSIUM.toml` the crate ships (see
+//! `Symposium.toml` the crate ships (see
 //! [`merge_crate_manifest`](crate::plugins::merge_crate_manifest)).
 
 use std::path::Path;

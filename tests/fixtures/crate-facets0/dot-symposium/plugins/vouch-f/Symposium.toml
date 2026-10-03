@@ -2,6 +2,6 @@ name = "vouch-f"
 depends-on = ["crate-f"]
 
 # No extensions of its own — it vouches for crate-f's plugin, which ships its
-# own SYMPOSIUM.toml and is loaded through this chained reference.
+# own Symposium.toml and is loaded through this chained reference.
 [[plugins]]
 source.cargo = "crate-f"

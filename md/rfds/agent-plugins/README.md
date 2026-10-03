@@ -3,7 +3,7 @@
 ## TL;DR
 
 - Compile each applicable Symposium plugin into an agent plugin directory and install that directory, rather than writing skill files into a different path for each agent that has a plugin unit.
-- Read externally authored agent plugins as ordinary Symposium plugins, so a crate can publish a `plugin.json` at its root instead of a `SYMPOSIUM.toml`.
+- Read externally authored agent plugins as ordinary Symposium plugins, so a crate can publish a `plugin.json` at its root instead of a `Symposium.toml`.
 - Prefer the Agent Plugins format where an agent reads it, but do not treat it as the only way to register extensions: one compiled directory carries the Agent Plugins, Claude Code and Gemini CLI manifests at once, and the per-skill install path stays for the agents with no plugin unit, and for any project-scoped plugin on an agent that cannot express one.
 - Write each directory once and register its path with an agent where the agent accepts one, copying where it does not. Only Claude Code accepts one today, so most agents get a copy.
 - Install through `cargo agents sync`, at the same scope as the enablement that selected the plugin. No new command.
@@ -17,7 +17,7 @@ The agents that grew a plugin system converged on the same unit, not on one form
 
 A directory is also a better unit to own. Symposium writes a `.gitignore` containing `*` into each installed skill directory and marks each with a `.symposium` file so that it can later remove what it no longer owns. Applied per plugin rather than per skill, this becomes one hidden directory to write and one directory to remove when a plugin stops applying.
 
-The reading direction is currently worse than absent. Registry enumeration claims a directory that holds a `SYMPOSIUM.toml` or a `SKILL.md` and otherwise descends into it. A registry of agent plugins therefore yields one claimed entry per `skills/<name>/SKILL.md`. The package name, its version, and its identity are discarded, and its skills arrive as unrelated dormant plugins.
+The reading direction is currently worse than absent. Registry enumeration claims a directory that holds a `Symposium.toml` or a `SKILL.md` and otherwise descends into it. A registry of agent plugins therefore yields one claimed entry per `skills/<name>/SKILL.md`. The package name, its version, and its identity are discarded, and its skills arrive as unrelated dormant plugins.
 
 The same content is treated three different ways depending on where it sits. A crate that ships a `plugin.json` beside a `skills/` directory already has its skills collected, because crate defaults scan `skills/` regardless of the manifest beside it; such a crate is missing only its metadata and validation. Registries and workspace members receive nothing at all.
 
@@ -147,7 +147,7 @@ OpenCode extends through TypeScript modules and Goose through MCP servers. Neith
 
 ### External packages
 
-Symposium recognizes two kinds of plugin directory today, one holding a `SYMPOSIUM.toml` and one holding a bare `SKILL.md`. A directory holding a `plugin.json` becomes a third. Precedence runs `SYMPOSIUM.toml`, then `plugin.json`, then `SKILL.md`. A directory carrying both a TOML and a JSON manifest loads as a Symposium plugin and takes its name and version from `plugin.json` where the TOML omits them.
+Symposium recognizes two kinds of plugin directory today, one holding a `Symposium.toml` and one holding a bare `SKILL.md`. A directory holding a `plugin.json` becomes a third. Precedence runs `Symposium.toml`, then `plugin.json`, then `SKILL.md`. A directory carrying both a TOML and a JSON manifest loads as a Symposium plugin and takes its name and version from `plugin.json` where the TOML omits them.
 
 Such a package is recognized in the three positions a plugin already occupies, and each position retains its existing meaning. A registry entry is curated and trusted. A workspace member is gated by membership. A dependency is an untrusted offer subject to consent.
 

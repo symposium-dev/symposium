@@ -79,7 +79,7 @@ impl PluginInfo {
 /// resolved identity, where its content is on disk, and a manifest describing
 /// it.
 ///
-/// The manifest is the point. A PM may have parsed it from a `SYMPOSIUM.toml`,
+/// The manifest is the point. A PM may have parsed it from a `Symposium.toml`,
 /// translated it from its ecosystem's own manifest, or synthesized it for a
 /// package that describes itself not at all. Symposium cannot tell, and does
 /// not need to. A package manager says which plugins exist and what they
