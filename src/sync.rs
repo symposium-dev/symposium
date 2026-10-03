@@ -479,6 +479,8 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
                 message: "no agents configured, run `cargo agents init` to add one".into(),
             },
         );
+        // Still run cleanup so removing the final agent also removes its
+        // project hooks and managed skills.
     }
 
     // Track every skill directory this sync wants, even one whose refresh
@@ -501,18 +503,8 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
             continue;
         };
 
-        // Hooks: the project and global locations are genuinely different files
-        // for some agents - Antigravity writes `.agents/hooks.json` but
-        // `~/.gemini/config/hooks.json`, and Copilot `.github/hooks/` but
-        // `~/.copilot/settings.json` - so project scope cannot be produced by
-        // rooting the global path at the workspace.
-        let hooks = match sym.config.hook_scope {
-            crate::config::HookScope::Global => agent.register_hooks(sym.home_dir(), sym, out),
-            crate::config::HookScope::Project => {
-                agent.register_project_hooks(&project_root, sym, out)
-            }
-        };
-        if let Err(e) = hooks {
+        // Agent-specific paths and scope cleanup live in the agent module.
+        if let Err(e) = agent.register_scoped_hooks(&project_root, sym, out) {
             tracing::info!(
                 report = %crate::report::ReportEvent::Warning {
                     message: format!("failed to register hooks for {agent_name}: {e:#}"),
@@ -734,7 +726,7 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
         out,
     );
 
-    if to_install.is_empty() {
+    if !agent_names.is_empty() && to_install.is_empty() {
         tracing::info!(
             report = %crate::report::ReportEvent::Info {
                 message: "no applicable skills found for workspace dependencies".into(),

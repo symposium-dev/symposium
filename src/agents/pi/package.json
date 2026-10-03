@@ -1,0 +1,17 @@
+{
+  "name": "symposium-pi-extension",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test extension.test.mjs"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.0",
+    "@types/node": "^22.19.0",
+    "typescript": "^6.0.3"
+  }
+}

@@ -363,6 +363,21 @@ pub struct RawSubcommand {
 ///
 /// Distinct from [`HookAgent`] because `Symposium` is a wire format but not an
 /// agent, and not every agent has a shell-hook JSON format.
+/// Match with a fallback so future formats do not break your code.
+///
+/// An exhaustive match in another crate is not supported:
+///
+/// ```compile_fail
+/// use symposium_sdk::manifest::HookFormat;
+/// fn known_format(format: HookFormat) {
+///     match format {
+///         HookFormat::Symposium | HookFormat::Antigravity | HookFormat::Claude
+///         | HookFormat::Codex | HookFormat::Copilot | HookFormat::Kiro
+///         | HookFormat::Pi => (),
+///     }
+/// }
+/// ```
+#[non_exhaustive]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum HookFormat {
@@ -375,6 +390,7 @@ pub enum HookFormat {
     Codex,
     Copilot,
     Kiro,
+    Pi,
 }
 
 impl HookFormat {
@@ -387,6 +403,7 @@ impl HookFormat {
             HookFormat::Codex => Some(HookAgent::Codex),
             HookFormat::Copilot => Some(HookAgent::Copilot),
             HookFormat::Kiro => Some(HookAgent::Kiro),
+            HookFormat::Pi => Some(HookAgent::Pi),
         }
     }
 }
