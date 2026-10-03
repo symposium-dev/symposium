@@ -35,6 +35,7 @@ Which agents do you use? (space to select, enter to confirm):
   [ ] Goose
   [x] Kiro
   [x] OpenCode
+  [ ] Pi
 ```
 
 ### Global vs project hook registration

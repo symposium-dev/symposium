@@ -531,7 +531,7 @@ pub async fn dispatch_builtin(
         symposium::InputEvent::SessionStart(session) => {
             handle_session_start(sym, session, deps).await
         }
-        _ => symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
+        _ => symposium::OutputEvent::empty_for(input.event()),
     }
 }
 
@@ -808,6 +808,17 @@ pub async fn dispatch_plugin_hooks(
                                     if let Ok(sym_out) =
                                         serde_json::from_value::<symposium::OutputEvent>(v.clone())
                                     {
+                                        let output_event = sym_out.event();
+                                        if output_event != event {
+                                            tracing::warn!(
+                                                plugin = %hook.plugin_name,
+                                                hook = %hook.hook_name,
+                                                expected_event = ?event,
+                                                output_event = ?output_event,
+                                                "plugin output event does not match input event"
+                                            );
+                                            continue;
+                                        }
                                         let host_out = host_h.translate_output(&sym_out);
                                         (host_out.to_hook_output(), Some(sym_out))
                                     } else {
@@ -1151,6 +1162,20 @@ mod tests {
         ));
         let output = dispatch_builtin(&sym, &input, &deps, false).await;
         assert!(output.additional_context().is_none());
+    }
+
+    #[tokio::test]
+    async fn builtin_stop_returns_matching_empty_output() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(tmp.path());
+        let deps = sym.workspace_deps(tmp.path());
+        let input = symposium::InputEvent::Stop(symposium::StopInput::new(None, None));
+
+        for notify in [false, true] {
+            let output = dispatch_builtin(&sym, &input, &deps, notify).await;
+            assert!(matches!(&output, symposium::OutputEvent::Stop(_)));
+            assert!(output.additional_context().is_none());
+        }
     }
 
     #[tokio::test]
