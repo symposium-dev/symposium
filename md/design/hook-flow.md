@@ -30,6 +30,7 @@ The payload is parsed first, and the agent's parser can declare it not an occurr
        - Spawn `path args…` directly for `Exec`, or `sh path args…` for `Script`.
      - Pass the event JSON (in the selected format) on stdin to the plugin's hook.
      - Collect output from each handler.
+     - Check that a tagged canonical output has the same event type as the input. If it does not, log a warning and skip that output. Keep the agent adapter's type checks strict and continue to later plugins.
      - Convert output back to the agent's wire format.
      - Merge results (e.g., allow/block decisions, output text) across all handlers. `merge` lets a later value replace an earlier one, so on `SessionStart`, `UserPromptSubmit` and `PostToolUse` a `JoinedContext` keeps every source's context (the builtin fragments first, then each hook) and writes the joined text back after each merge. `PreToolUse` and `Stop` are left out: there some agents keep context in the field that holds the decision.
      - Return the merged result to the agent.

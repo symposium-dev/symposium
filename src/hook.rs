@@ -808,6 +808,17 @@ pub async fn dispatch_plugin_hooks(
                                     if let Ok(sym_out) =
                                         serde_json::from_value::<symposium::OutputEvent>(v.clone())
                                     {
+                                        let output_event = sym_out.event();
+                                        if output_event != event {
+                                            tracing::warn!(
+                                                plugin = %hook.plugin_name,
+                                                hook = %hook.hook_name,
+                                                expected_event = ?event,
+                                                output_event = ?output_event,
+                                                "plugin output event does not match input event"
+                                            );
+                                            continue;
+                                        }
                                         let host_out = host_h.translate_output(&sym_out);
                                         (host_out.to_hook_output(), Some(sym_out))
                                     } else {

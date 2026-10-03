@@ -1,0 +1,7 @@
+hook-scope = "project"
+auto-sync = false
+auto-update = "off"
+
+[defaults]
+symposium-recommendations = false
+user-plugins = true
