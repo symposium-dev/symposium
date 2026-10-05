@@ -15,7 +15,7 @@ additional-css = ["theme/custom.css"]
 fold.enable = true
 fold.level = 0
 git-repository-url = "https://github.com/symposium-dev/symposium"
-edit-url-template = "https://github.com/symposium-dev/symposium/edit/main/md/{path}"
+edit-url-template = "https://github.com/symposium-dev/symposium/edit/main/{path}"
 
 # Redirects for pages that have been renamed. The key is the old path
 # (relative to the book root, including leading slash), and the value is
