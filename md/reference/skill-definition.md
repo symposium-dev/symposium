@@ -1,6 +1,6 @@
 # Skill definitions
 
-A skill is a `SKILL.md` file inside a skill directory. Skills follow the [agentskills.io](https://agentskills.io/specification.md) format.
+A skill is a `SKILL.md` file inside a skill directory. Skills follow the [agentskills.io](https://agentskills.io/specification.md) format, with one restriction: every frontmatter value must be a string, so the spec's `metadata` map (or any other list or map) is rejected. See [Frontmatter fields](#frontmatter-fields).
 
 Skills can be supplied by a [plugin](./plugin-definition.md) or [by adding skills into the `.agents/skills` directory within the workspace](../workspace-skills.md).
 
@@ -57,7 +57,7 @@ A `SKILL.md` file has YAML frontmatter followed by a markdown body:
 ```markdown
 ---
 name: serde-basics
-description: Basic guidance for serde usage
+description: Basics of the serde crate. Use when adding Serialize or Deserialize support to Rust types.
 depends-on: serde
 ---
 
@@ -68,10 +68,17 @@ Prefer deriving `Serialize` and `Deserialize` on data types.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | yes | Skill identifier. |
-| `description` | string | yes | Short description shown in skill listings. |
-| `depends-on` | string | no | Comma-separated dependency atoms this skill is about (e.g., `depends-on: serde, tokio>=1.0`). Narrows the enclosing `[[skills]]` group scope — cannot widen it. |
+| `name` | string | yes | Skill identifier. Follow the agentskills.io naming rules (lowercase letters, digits, and hyphens). It becomes the name of the installed skill directory, so prefix it with your crate's name (for example `widgetlib-basics`). |
+| `description` | string | yes | What the skill covers and when to use it. Must not be empty; at most 1024 bytes. Agents decide whether to load a skill from its description alone, so name the crate and the tasks the skill helps with (for example "Use when building or theming widgets with the widgetlib crate"). |
+| `depends-on` | string | no | Comma-separated dependency atoms this skill is about (e.g., `depends-on: serde, tokio>=1.0`). Narrows the enclosing `[[skills]]` group scope; it cannot widen it. |
 | `predicates` | string | no | Comma-separated predicates (`depends-on`, `shell`, `path_exists`, `env`, `workspace-member`, `not`, `any`, `all`); all must hold for the skill to activate. ANDed with plugin- and group-level predicates. See [Predicates](./predicates.md). |
+
+Other string fields from the agentskills.io spec, such as `license`, are accepted and kept. These rules apply to every field:
+
+- Every value must be a YAML string. Lists, maps (including the agentskills.io `metadata` map), numbers, booleans, and empty values are rejected, so quote anything YAML would read otherwise (`version: "1.0"`).
+- Quote a value that contains `: ` or ` #`. Unquoted, YAML rejects the first and treats everything after ` #` as a comment, silently shortening the value.
+- The `crates` field is rejected; use `depends-on`.
+- In [workspace skills](../workspace-skills.md) the frontmatter is optional: `name` defaults to the name of the skill's directory, and `description` may be omitted. Skills from a registry or a crate need both.
 
 ## Crate atoms
 
@@ -87,7 +94,9 @@ Crate atoms specify a crate name with an optional version constraint:
 - `serde=1.0` — compatible-with-1.0 (equivalent to `^1.0`)
 - `serde==1.0.219` — exact version
 
-See [Crate predicates](./depends-on.md) for the full syntax.
+Write the atom without spaces: `serde >=1.0`, `serde>= 1.0`, and `serde>=1.0, <2.0` are all rejected. In frontmatter, `depends-on` is split on commas, so a range with a comma (`serde>=1.0,<2.0`) cannot be written there; use `predicates: depends-on(serde>=1.0,<2.0)` instead, since commas inside parentheses do not separate predicates.
+
+See [Dependency predicates](./depends-on.md) for the full syntax.
 
 ## Scope composition
 

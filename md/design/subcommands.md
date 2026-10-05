@@ -10,7 +10,7 @@ The motivating use cases:
 
 ## Relationship to `[[installations]]`
 
-Subcommands reuse the [installation framework](./hooks.md#installations) introduced for hooks. An installation declares *how to acquire a binary or script* (cargo install with binstall fast-path, github clone, or a path on disk), where it caches, and which `executable` or `script` to run. Subcommands reference installations by name, or declare them inline — the same shape hooks use.
+Subcommands reuse the [installation framework](../reference/plugin-definition.md#installations) introduced for hooks. An installation declares *how to acquire a binary or script* (cargo install with binstall fast-path, github clone, or a path on disk), where it caches, and which `executable` or `script` to run. Subcommands reference installations by name, or declare them inline — the same shape hooks use.
 
 This means a plugin author writes installation logic once and shares it across hooks and subcommands. Symposium owns acquisition, caching, idempotency, and post-install setup; subcommands only own dispatch.
 
