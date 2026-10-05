@@ -65,6 +65,7 @@ Which agents do you use? (space to select, enter to confirm):
   [ ] Goose
   [x] Kiro
   [x] OpenCode
+  [ ] Pi
 ```
 
 - **Global** hook scope (default) registers Symposium for the selected agents in your home directory, so it activates in every Rust project.
@@ -133,6 +134,7 @@ Every agent receives skill installation. Hook registration is available for a su
 | Kiro | `.kiro/skills/` | Yes |
 | OpenCode | `.agents/skills/` | No |
 | Goose | `.agents/skills/` | No |
+| Pi | `.agents/skills/` | Yes (TypeScript extension) |
 
 ## For crate authors
 

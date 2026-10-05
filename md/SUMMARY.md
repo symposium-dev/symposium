@@ -51,6 +51,7 @@
     - [Kiro](./reference/agents/kiro.md)
     - [OpenCode](./reference/agents/opencode.md)
     - [Goose](./reference/agents/goose.md)
+    - [Pi](./reference/agents/pi.md)
   - [Configuration](./reference/configuration.md)
   - [Plugin sources](./reference/plugin-source.md)
   - [Plugin definition](./reference/plugin-definition.md)
@@ -85,6 +86,7 @@
     - [Goose](./design/agent-details/goose.md)
     - [Kiro](./design/agent-details/kiro.md)
     - [OpenCode](./design/agent-details/opencode.md)
+    - [Pi](./design/agent-details/pi.md)
 - [RFDs](./rfds/README.md)
   - [Template](./rfds/TEMPLATE/README.md)
   - [Accepted](./rfds/accepted.md) <!-- put accepted rfds in this section; the file goes in the rfds directory -->
