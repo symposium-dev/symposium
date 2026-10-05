@@ -22,11 +22,12 @@ Once you have installed Symposium, you need to run the [`init` command](./refere
 cargo agents init
 ```
 
-### Select your agents
+### Your agents
 
-This will prompt you to select the agents you use (Antigravity, Claude Code, Copilot, etc.) — you can pick more than one:
+This will prompt you to select the agents you use (Antigravity, Claude Code, Copilot, etc.). The ones Symposium finds installed, recognized by their config directory such as `~/.claude` or `~/.codex`, are already checked, so usually you just press Enter:
 
-```bash
+```text
+ℹ️  Detected: Codex CLI, Kiro
 Which agents do you use? (space to select, enter to confirm):
 > [ ] Antigravity CLI
   [ ] Claude Code
@@ -34,8 +35,10 @@ Which agents do you use? (space to select, enter to confirm):
   [ ] GitHub Copilot
   [ ] Goose
   [x] Kiro
-  [x] OpenCode
+  [ ] OpenCode
 ```
+
+After installing or uninstalling an agent, rerun `cargo agents init`: the list reflects the change, so you just confirm. You can also run `cargo agents init --add-agent <name>` or `--remove-agent <name>`.
 
 ### Global vs project hook registration
 

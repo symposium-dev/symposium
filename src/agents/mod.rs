@@ -6,6 +6,7 @@
 
 mod mcp_server_registration;
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -94,6 +95,29 @@ impl Agent {
             Agent::Kiro,
             Agent::OpenCode,
         ]
+    }
+
+    pub fn detect_installed(home: &Path, env: impl Fn(&str) -> Option<OsString>) -> Vec<Agent> {
+        Agent::all()
+            .iter()
+            .copied()
+            .filter(|agent| agent.user_config_dir(home, &env).is_dir())
+            .collect()
+    }
+
+    fn user_config_dir(&self, home: &Path, env: impl Fn(&str) -> Option<OsString>) -> PathBuf {
+        let env_dir = |name: &str| env(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+        let xdg_config = || env_dir("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config"));
+        match self {
+            // Not `~/.gemini/` alone: Gemini CLI creates that one too.
+            Agent::Antigravity => home.join(".gemini").join("antigravity-cli"),
+            Agent::Claude => env_dir("CLAUDE_CONFIG_DIR").unwrap_or_else(|| home.join(".claude")),
+            Agent::Codex => home.join(".codex"),
+            Agent::Copilot => home.join(".copilot"),
+            Agent::Goose => xdg_config().join("goose"),
+            Agent::Kiro => home.join(".kiro"),
+            Agent::OpenCode => xdg_config().join("opencode"),
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -1055,6 +1079,72 @@ mod tests {
         assert_eq!(Agent::from_config_name("codex").unwrap(), Agent::Codex);
         assert_eq!(Agent::from_config_name("copilot").unwrap(), Agent::Copilot);
         assert!(Agent::from_config_name("unknown").is_err());
+    }
+
+    fn detect(home: &Path, vars: &[(&str, &Path)]) -> Vec<Agent> {
+        Agent::detect_installed(home, |name| {
+            vars.iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| value.as_os_str().to_owned())
+        })
+    }
+
+    #[test]
+    fn detects_nothing_on_a_bare_machine() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(detect(home.path(), &[]).is_empty());
+    }
+
+    #[test]
+    fn detects_agent_by_config_dir() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir(home.path().join(".codex")).unwrap();
+        assert_eq!(detect(home.path(), &[]), vec![Agent::Codex]);
+    }
+
+    #[test]
+    fn a_file_is_not_a_config_dir() {
+        let home = tempfile::tempdir().unwrap();
+        fs::write(home.path().join(".codex"), "").unwrap();
+        assert!(detect(home.path(), &[]).is_empty());
+    }
+
+    #[test]
+    fn empty_relocation_falls_back_to_home() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir(home.path().join(".claude")).unwrap();
+        assert_eq!(
+            detect(home.path(), &[("CLAUDE_CONFIG_DIR", Path::new(""))]),
+            vec![Agent::Claude]
+        );
+    }
+
+    #[test]
+    fn gemini_dir_alone_is_not_antigravity() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir(home.path().join(".gemini")).unwrap();
+        assert!(detect(home.path(), &[]).is_empty());
+
+        fs::create_dir(home.path().join(".gemini").join("antigravity-cli")).unwrap();
+        assert_eq!(detect(home.path(), &[]), vec![Agent::Antigravity]);
+    }
+
+    #[test]
+    fn detection_honors_relocated_config_dirs() {
+        let home = tempfile::tempdir().unwrap();
+        let claude = tempfile::tempdir().unwrap();
+        let xdg = tempfile::tempdir().unwrap();
+        fs::create_dir(xdg.path().join("goose")).unwrap();
+        assert_eq!(
+            detect(
+                home.path(),
+                &[
+                    ("CLAUDE_CONFIG_DIR", claude.path()),
+                    ("XDG_CONFIG_HOME", xdg.path())
+                ]
+            ),
+            vec![Agent::Claude, Agent::Goose]
+        );
     }
 
     /// Each path was confirmed by asking the tool itself, not read off docs: a
