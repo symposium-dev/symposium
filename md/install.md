@@ -54,7 +54,7 @@ You may wish to browse the [configuration](./reference/configuration.md) page to
 
 Symposium will now install skills, MCP servers, and other extensions based on your dependencies automatically.
 
-Currently all the plugins installed by Symposium can be found in the [central recommendations repository][rr]. We expect eventually to allow crates to define their own plugins without any central repository, but not yet. If you have a crate and would like to add a plugin for it to symposium, see the [Supporting your crate](./crate-authors/supporting-your-crate.md) page.
+Most plugins come from two places: the [central recommendations repository][rr], which is enabled by default, and crates your project depends on directly that ship their own. A dependency's plugin stays off until you enable it: an interactive [`cargo agents sync`](./reference/cargo-agents-sync.md#consent-prompt) asks about each one, and [`cargo agents status`](./reference/cargo-agents-status.md) lists the ones waiting for an answer. If you have a crate and would like to add a plugin for it to symposium, see the [Supporting your crate](./crate-authors/supporting-your-crate.md) page.
 
 [rr]: https://github.com/symposium-dev/recommendations
 

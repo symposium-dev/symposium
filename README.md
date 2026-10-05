@@ -90,10 +90,10 @@ cargo agents sync
 
 Symposium reads the workspace dependency graph and evaluates each plugin's and skill's predicates against it. An extension is installed only when its predicates match.
 
-- The `depends-on` field matches by crate name and version requirement (`serde`, `serde >= 1.0`, `*`).
+- The `depends-on` field matches by crate name and version requirement (`serde`, `serde>=1.0`, `*`).
 - The `predicates` field uses function-call syntax (`depends-on(...)`, `shell(...)`, `path_exists(...)`, `env(...)`), combined with `not`, `any`, and `all`.
 
-When a skill group declares `source = "crate"`, Symposium fetches the matched crate's source (from the local path, the cargo registry cache, or crates.io), reads `[package.metadata.symposium]` from its `Cargo.toml` to locate the skills, and follows crate-to-crate redirects. See the [predicates reference](https://symposium.dev/reference/predicates.html).
+A crate can ship its own plugin, and a manifest can load it with a `[[plugins]] source.cargo` reference: Symposium fetches the crate's source (from the local path, the cargo registry cache, or crates.io), reads its `SYMPOSIUM.toml` and `[package.metadata.symposium]` to locate the skills, and follows the crate's own references. See the [predicates reference](https://symposium.dev/reference/predicates.html).
 
 ## Commands
 
@@ -136,7 +136,7 @@ Every agent receives skill installation. Hook registration is available for a su
 
 ## For crate authors
 
-If you maintain a Rust crate, you can ship skills, hooks, and MCP servers so AI-assisted users of your library get guidance matched to the exact version they depend on. Add a `skills/` directory to your crate, control its layout with `[package.metadata.symposium]` in `Cargo.toml`, and register a plugin manifest in the [recommendations repository][rr].
+If you maintain a Rust crate, you can ship skills, hooks, and MCP servers so AI-assisted users of your library get guidance matched to the exact version they depend on. Add a `skills/` directory to your crate (and a `SYMPOSIUM.toml` for hooks and MCP servers): users who depend on it enable it with one confirmation, and an optional entry in the [recommendations repository][rr] makes it load without asking.
 
 See [Supporting your crate](https://symposium.dev/crate-authors/supporting-your-crate.html) and [Authoring a plugin](https://symposium.dev/crate-authors/authoring-a-plugin.html).
 

@@ -12,4 +12,4 @@ The Claude Code plugin that connects Symposium to Claude Code. Contains a static
 
 ### [recommendations](https://github.com/symposium-dev/recommendations)
 
-The central plugin repository. Crate authors submit skills and plugin manifests here. Symposium fetches this as a registry by default.
+The central plugin repository. It holds plugins for crates that don't ship their own, and entries that make a crate's own plugin load without the consent step. Symposium fetches this as a registry by default.

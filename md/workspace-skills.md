@@ -15,7 +15,7 @@ The default skill location therefore varies depending on the intended audience:
 
 The workspace root and every member crate directory can define a *workspace plugin*: add a `SYMPOSIUM.toml` manifest (see the [plugin definition](./reference/plugin-definition.md)), or just a bare `skills/` directory — a directory with skills and no manifest counts as a plugin whose only content is those skills.
 
-Workspace plugins are always active while you work in that workspace — no plugin source configuration or `depends-on` gate is needed. A `skills/` directory in a member crate serves double duty: it installs for everyone working in the workspace *and*, once published, for projects that depend on the crate.
+Workspace plugins are always active while you work in that workspace: no plugin source configuration or `depends-on` gate is needed. A `skills/` directory in a member crate serves double duty: it installs for everyone working in the workspace *and*, once published, for projects that depend on the crate and enable its plugin.
 
 Every workspace plugin gets two default skill groups (unless disabled with `[defaults] skills = false`):
 
