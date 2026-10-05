@@ -83,7 +83,7 @@ Each output type has convenience constructors:
 
 - `::default()` — empty output, no-op.
 - `::context("...")` — inject text into the agent's context.
-- `PreToolUseOutput::with_updated_input(value)` — replace the tool input.
+- `PreToolUseOutput::with_updated_input(value)` — replace the tool input. Not every agent can apply a rewrite; see [how each agent receives the decision](../reference/hook-events.md#pretooluse-output).
 - `PreToolUseOutput::deny("reason")` — block the tool call with a reason.
 
 Return `Err(...)` from any method to report an error (exit code 1, message on stderr).

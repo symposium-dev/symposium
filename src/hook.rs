@@ -225,17 +225,17 @@ fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
 }
 
 // Re-export hook schema types for convenience.
-pub use crate::hook_schema::{HookAgent, HookEvent};
+pub use crate::hook_schema::{HookAgent, HookEvent, HookResponse};
 /// Core hook pipeline: sync → parse → builtin → plugins → serialize.
 ///
-/// Takes the raw agent wire-format input, returns agent wire-format output bytes.
-/// Called by both `run()` (CLI) and the test harness.
+/// Takes the raw agent wire-format input, returns the agent wire-format
+/// response. Called by both `run()` (CLI) and the test harness.
 pub async fn execute_hook(
     sym: &Symposium,
     agent: HookAgent,
     event: HookEvent,
     input: &str,
-) -> anyhow::Result<Vec<u8>> {
+) -> anyhow::Result<HookResponse> {
     let event_handler = crate::hook_schema::agent_event(agent, event);
 
     if let Some(handler) = event_handler {
@@ -251,7 +251,7 @@ pub async fn execute_hook(
                 "payload is not an occurrence of the event, skipping"
             );
             let neutral = handler.translate_output(&symposium::OutputEvent::empty_for(event));
-            return Ok(handler.serialize_output(&neutral.to_hook_output()));
+            return Ok(handler.respond(&neutral.to_hook_output()));
         }
 
         let sym_input = payload.to_symposium();
@@ -284,7 +284,7 @@ pub async fn execute_hook(
         let prior_output = builtin_agent_output.to_hook_output();
 
         // Plugin dispatch with format routing
-        let final_output = dispatch_plugin_hooks(
+        let response = match dispatch_plugin_hooks(
             sym,
             agent,
             event,
@@ -295,16 +295,46 @@ pub async fn execute_hook(
             &deps,
         )
         .await
-        .map_err(|stderr| {
-            anyhow::anyhow!("plugin blocked: {}", String::from_utf8_lossy(&stderr))
-        })?;
-
-        let serialized = handler.serialize_output(&final_output);
-        tracing::trace!(output_len = serialized.len(), "hook output serialized");
-        Ok(serialized)
+        {
+            Ok(final_output) => handler.respond(&final_output),
+            Err(stderr) => blocked_response(handler.as_ref(), event, &stderr),
+        };
+        tracing::trace!(
+            stdout_len = response.stdout.len(),
+            exit_code = response.exit_code,
+            "hook response ready"
+        );
+        Ok(response)
     } else {
         // Agent doesn't support this event
         anyhow::bail!("agent {agent:?} does not support hook event {event:?}")
+    }
+}
+
+/// The response for a plugin hook that exited 2, which the plugin contract
+/// defines as "block, with stderr as the reason". A tool call is denied
+/// through the canonical decision, so each agent receives the denial in the
+/// form it honors (Antigravity ignores exit codes, Copilot drops the reason
+/// on a non-zero exit). Every other event passes exit 2 and the reason
+/// through, for the agent to apply its own blocking semantics.
+fn blocked_response(
+    handler: &dyn crate::hook_schema::ErasedAgentHookEvent,
+    event: HookEvent,
+    stderr: &[u8],
+) -> HookResponse {
+    let reason = String::from_utf8_lossy(stderr).trim().to_string();
+    let reason = if reason.is_empty() {
+        "blocked by a plugin hook".to_string()
+    } else {
+        reason
+    };
+    tracing::info!(?event, %reason, "plugin hook blocked");
+
+    if event == HookEvent::PreToolUse {
+        let deny = OutputEvent::PreToolUse(symposium::PreToolUseOutput::deny(reason));
+        handler.respond(&handler.translate_output(&deny).to_hook_output())
+    } else {
+        HookResponse::blocked(&reason)
     }
 }
 
@@ -320,12 +350,15 @@ pub async fn run(sym: &Symposium, agent: HookAgent, event: HookEvent) -> ExitCod
     tracing::trace!(?input, "hook stdin");
 
     match execute_hook(sym, agent, event, &input).await {
-        Ok(bytes) => {
-            write_hook_trace(agent, event, &input, &bytes);
-            if !bytes.is_empty() {
-                std::io::stdout().write_all(&bytes).unwrap();
+        Ok(response) => {
+            write_hook_trace(agent, event, &input, &response);
+            if !response.stdout.is_empty() {
+                std::io::stdout().write_all(&response.stdout).unwrap();
             }
-            ExitCode::SUCCESS
+            if !response.stderr.is_empty() {
+                std::io::stderr().write_all(&response.stderr).unwrap();
+            }
+            ExitCode::from(response.exit_code)
         }
         Err(e) => {
             tracing::warn!(?event, error = %e, "hook failed");
@@ -336,7 +369,7 @@ pub async fn run(sym: &Symposium, agent: HookAgent, event: HookEvent) -> ExitCod
 
 /// If `SYMPOSIUM_HOOK_TRACE` is set to a file path, append a JSONL entry.
 /// Used for integration testing to check what hooks occur when we invoke the agent.
-fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, output: &[u8]) {
+fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, response: &HookResponse) {
     let Some(path) = std::env::var_os("SYMPOSIUM_HOOK_TRACE") else {
         return;
     };
@@ -344,13 +377,15 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, output: &[u
     let input_val: serde_json::Value =
         serde_json::from_str(input).unwrap_or(serde_json::Value::Null);
     let output_val: serde_json::Value =
-        serde_json::from_slice(output).unwrap_or(serde_json::Value::Null);
+        serde_json::from_slice(&response.stdout).unwrap_or(serde_json::Value::Null);
 
     let entry = serde_json::json!({
         "event": event,
         "agent": agent,
         "input": input_val,
         "output": output_val,
+        "exit_code": response.exit_code,
+        "stderr": String::from_utf8_lossy(&response.stderr),
     });
 
     use std::fs::OpenOptions;
@@ -822,6 +857,14 @@ pub async fn dispatch_plugin_hooks(
                         };
 
                         merge(&mut output, host_json);
+                        if hook_output.as_ref().is_some_and(denies) {
+                            tracing::info!(
+                                plugin = %hook.plugin_name,
+                                hook = %hook.hook_name,
+                                "plugin hook denied the tool call; later hooks do not run"
+                            );
+                            return Ok(output);
+                        }
                         context.add(hook_output.as_ref(), &mut output, host_h.as_ref());
                     }
                     Some(code) => {
@@ -893,6 +936,15 @@ impl JoinedContext {
             merge(output, handler.translate_output(&joined).to_hook_output());
         }
     }
+}
+
+/// Whether a hook's output denies the tool call. A denial is final, like exit
+/// 2: otherwise a later hook's decision would overwrite it in [`merge`].
+fn denies(output: &symposium::OutputEvent) -> bool {
+    matches!(
+        output,
+        symposium::OutputEvent::PreToolUse(o) if matches!(o.decision, symposium_sdk::hook::Decision::Deny)
+    )
 }
 
 /// Recursively merge two JSON objects, with `b` taking precedence over `a`.

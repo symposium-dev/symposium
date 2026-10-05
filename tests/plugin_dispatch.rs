@@ -344,7 +344,7 @@ async fn later_invocations_of_a_turn_reach_no_plugin_hook() {
                 &payload(0),
             )
             .await?;
-        let first = String::from_utf8(first)?;
+        let first = String::from_utf8(first.stdout)?;
         assert!(
             first.contains("prompt-hook-ran"),
             "the first invocation of a turn is the prompt event, got: {first}"
@@ -358,7 +358,7 @@ async fn later_invocations_of_a_turn_reach_no_plugin_hook() {
             )
             .await?;
         assert_eq!(
-            String::from_utf8(later)?,
+            String::from_utf8(later.stdout)?,
             r#"{"injectSteps":[]}"#,
             "a later invocation is answered neutrally and runs no hook"
         );

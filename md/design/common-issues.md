@@ -4,9 +4,12 @@
 
 The following issues were identified by auditing our hook implementations against the agent reference docs (`md/design/agent-details/`). They don't cause crashes (the fallback path handles events without agent-specific handlers) but mean some features are incomplete.
 
-### `permissionDecision` dropped (Copilot)
+### A tool decision has to reach the agent in the form it honors
 
-`CopilotPreToolUseOutput::from_hook_output()` never maps `permissionDecision` or `permissionDecisionReason` from the builtin hook output. If a builtin handler wants to deny a tool call, the decision is silently lost in Copilot output.
+A deny or rewrite that the translation drops fails open: the tool runs, and since the reason still reaches the model as context, the agent can even report the call as blocked. That was the state of Claude, Codex and Copilot until each `from_symposium` mapped `decision` and `updatedInput`, so check the wire output per agent (`tests/hook_decisions.rs`) whenever a PreToolUse field is added. Two agents need more than a field:
+
+- **Claude and Codex apply `updatedInput` only alongside a `permissionDecision`**, and `"allow"` skips the user's permission prompt. Claude gets `"ask"`; Codex has no `"ask"`, so a rewrite is not applied there.
+- **Kiro reads no decision from stdout.** A denial becomes exit 2 in the Kiro handler's `respond`, which is why the pipeline returns a `HookResponse` rather than bytes.
 
 ### Copilot also runs Claude Code's hooks
 

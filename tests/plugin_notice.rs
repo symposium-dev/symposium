@@ -19,7 +19,7 @@ async fn respond(ctx: &TestContext, agent: HookAgent, step: HookStep) -> String 
     )
     .unwrap();
     let stdout = ctx.invoke_hook(agent, event, &payload).await.unwrap();
-    String::from_utf8(stdout).unwrap()
+    String::from_utf8(stdout.stdout).unwrap()
 }
 
 fn tool_call_finished() -> HookStep {

@@ -126,8 +126,20 @@ Your hook writes a JSON object to stdout. The object is wrapped in an enum tag m
 | Field | Type | Description |
 |-------|------|-------------|
 | `decision` | `"allow"` or `"deny"` | Whether to allow or block the tool call. Defaults to `"allow"` and may be omitted. |
-| `additionalContext` | string or null | Text injected into the agent's context for this tool call. |
+| `additionalContext` | string or null | Text injected into the agent's context for this tool call. With `"deny"`, the reason the agent is given. |
 | `updatedInput` | object or null | Replacement tool input. If set, overrides the original `tool_input`. |
+
+Each agent receives the decision in the form it honors:
+
+| Agent | `"deny"` | `updatedInput` |
+|-------|----------|----------------|
+| Claude Code | `permissionDecision: "deny"`, reason shown to Claude | Sent with `permissionDecision: "ask"`: the user confirms the rewritten call. Claude applies a rewrite only alongside a decision, and `"allow"` would skip the user's permission prompt. In a headless run (`claude -p`) there is nobody to ask, so the rewritten call is blocked. |
+| Codex CLI | `permissionDecision: "deny"` | Not applied. Codex rewrites only with `"allow"` and has no `"ask"`; the original call runs and a warning is logged. |
+| GitHub Copilot | `permissionDecision: "deny"` | Sent as `modifiedArgs`. |
+| Kiro | Exit 2, reason on stderr (Kiro reads no decision from stdout) | Not applied; the original call runs and a warning is logged. |
+| Antigravity | `decision: "deny"` | Sent as `overwrite`. |
+
+Tool input is the agent's own: write `updatedInput` in the shape that agent's tool takes.
 
 ### `PostToolUse` output
 
@@ -190,7 +202,7 @@ Your hook writes a JSON object to stdout. The object is wrapped in an enum tag m
 | Code | Meaning |
 |------|---------|
 | `0` | Success. Stdout is parsed as JSON and merged into the hook result. |
-| `2` | Block. The action is blocked and stderr is returned to the agent as the reason. |
+| `2` | Block. The action is blocked and stderr is returned to the agent as the reason. On `PreToolUse` this is a `"deny"` decision, delivered to each agent as in the table above. On other events `cargo agents hook` exits 2 with the reason on stderr, and the agent applies its own semantics (Claude Code, for instance, erases a blocked prompt). |
 | Other non-zero | Warning. The hook is considered to have succeeded for dispatch purposes; stdout is still parsed if possible. |
 
 ## Matcher

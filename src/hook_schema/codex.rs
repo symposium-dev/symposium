@@ -70,6 +70,18 @@ pub struct CodexHookSpecificOutput {
         skip_serializing_if = "Option::is_none"
     )]
     pub additional_context: Option<String>,
+    #[serde(
+        rename = "permissionDecision",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub permission_decision: Option<String>,
+    #[serde(
+        rename = "permissionDecisionReason",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub permission_decision_reason: Option<String>,
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
@@ -158,21 +170,51 @@ impl AgentHookOutput for CodexPreToolUseOutput {
         Ok(serde_json::from_slice(output)?)
     }
     fn from_symposium(event: &symposium::OutputEvent) -> Self {
-        codex_hook_output_from_symposium("PreToolUse", event)
-            .map(|v| serde_json::from_value(v).unwrap())
-            .unwrap_or_default()
+        let symposium::OutputEvent::PreToolUse(o) = event else {
+            return Self::default();
+        };
+        if o.updated_input.is_some() {
+            // Codex applies `updatedInput` only with `permissionDecision:
+            // "allow"`, which would approve the rewritten call on the plugin's
+            // behalf, and it has no `ask` to leave the decision to the user.
+            tracing::warn!(
+                "Codex cannot rewrite a tool call without auto-approving it; ignoring the hook's updated input"
+            );
+        }
+        if !matches!(o.decision, symposium_sdk::hook::Decision::Deny) {
+            return codex_hook_output_from_symposium("PreToolUse", event)
+                .map(|v| serde_json::from_value(v).unwrap())
+                .unwrap_or_default();
+        }
+        Self {
+            hook_specific_output: Some(CodexHookSpecificOutput {
+                hook_event_name: "PreToolUse".into(),
+                permission_decision: Some("deny".into()),
+                permission_decision_reason: o.additional_context.clone(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
     }
     fn to_symposium(&self) -> symposium::OutputEvent {
-        let decision = match self.decision.as_deref() {
-            Some("block") | Some("deny") => symposium_sdk::hook::Decision::Deny,
-            _ => symposium_sdk::hook::Decision::Allow,
+        let h = self.hook_specific_output.as_ref();
+        let denied = matches!(self.decision.as_deref(), Some("block") | Some("deny"))
+            || h.and_then(|h| h.permission_decision.as_deref()) == Some("deny");
+        let (decision, context) = if denied {
+            let reason = self
+                .reason
+                .clone()
+                .or_else(|| h.and_then(|h| h.permission_decision_reason.clone()))
+                .or_else(|| h.and_then(|h| h.additional_context.clone()));
+            (symposium_sdk::hook::Decision::Deny, reason)
+        } else {
+            (
+                symposium_sdk::hook::Decision::Allow,
+                h.and_then(|h| h.additional_context.clone()),
+            )
         };
         symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
-            decision,
-            self.hook_specific_output
-                .as_ref()
-                .and_then(|h| h.additional_context.clone()),
-            None,
+            decision, context, None,
         ))
     }
     fn to_hook_output(&self) -> serde_json::Value {

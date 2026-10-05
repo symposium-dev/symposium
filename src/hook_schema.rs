@@ -104,6 +104,44 @@ pub trait AgentHookEvent {
     fn serialize_output(&self, output: &serde_json::Value) -> Vec<u8> {
         serde_json::to_vec(output).unwrap()
     }
+
+    /// The response the agent receives for the final output Value.
+    /// Default: its serialization on stdout, exit 0. Override for agents that
+    /// read part of the output from the exit code instead (e.g., Kiro, which
+    /// denies a tool call only through exit 2).
+    fn respond(&self, output: &serde_json::Value) -> HookResponse {
+        HookResponse::success(self.serialize_output(output))
+    }
+}
+
+/// What `cargo agents hook` hands back to the agent. Most agents read the
+/// result from stdout, but blocking can hinge on the exit code, so the
+/// response carries all three.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HookResponse {
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+    pub exit_code: u8,
+}
+
+impl HookResponse {
+    /// Exit 0 with `stdout` for the agent to parse.
+    pub fn success(stdout: Vec<u8>) -> Self {
+        Self {
+            stdout,
+            ..Self::default()
+        }
+    }
+
+    /// Exit 2 with `reason` on stderr, which every agent that honors exit
+    /// codes reads as "blocked, and here is why".
+    pub fn blocked(reason: &str) -> Self {
+        Self {
+            stdout: Vec::new(),
+            stderr: reason.as_bytes().to_vec(),
+            exit_code: 2,
+        }
+    }
 }
 
 /// Represents an agent that can handle hook events.
@@ -128,9 +166,9 @@ pub trait ErasedAgentHookEvent {
     /// Convert a canonical symposium input event into a boxed agent payload.
     fn translate_input(&self, input: &symposium::InputEvent) -> Box<dyn AgentHookInput>;
 
-    /// Serialize the final accumulated output (as JSON Value) to bytes for stdout.
-    /// Most agents emit JSON; Kiro emits plain text.
-    fn serialize_output(&self, output: &serde_json::Value) -> Vec<u8>;
+    /// The response for the final accumulated output (as JSON Value).
+    /// Most agents take JSON on stdout; Kiro takes plain text, and exit 2 to deny.
+    fn respond(&self, output: &serde_json::Value) -> HookResponse;
 }
 
 struct ErasedAgentHookEventImpl<E: AgentHookEvent + 'static>(E);
@@ -158,8 +196,8 @@ where
         Box::new(E::Input::from_symposium(input))
     }
 
-    fn serialize_output(&self, output: &serde_json::Value) -> Vec<u8> {
-        self.0.serialize_output(output)
+    fn respond(&self, output: &serde_json::Value) -> HookResponse {
+        self.0.respond(output)
     }
 }
 

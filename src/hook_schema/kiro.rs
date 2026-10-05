@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::hook_schema::{
-    Agent, AgentHookEvent, AgentHookInput, AgentHookOutput, erase_agent_hook_event, symposium,
+    Agent, AgentHookEvent, AgentHookInput, AgentHookOutput, HookResponse, erase_agent_hook_event,
+    symposium,
 };
 
 pub struct Kiro;
@@ -32,6 +33,18 @@ macro_rules! kiro_event {
                     .and_then(|v| v.as_str())
                     .map(|s| s.as_bytes().to_vec())
                     .unwrap_or_default()
+            }
+            fn respond(&self, output: &serde_json::Value) -> HookResponse {
+                // Plain text carries no decision; Kiro blocks a tool only on
+                // exit 2, reading the reason from stderr.
+                if output.get("decision").and_then(|v| v.as_str()) == Some("deny") {
+                    let reason = output
+                        .get("additionalContext")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("blocked by a plugin hook");
+                    return HookResponse::blocked(reason);
+                }
+                HookResponse::success(self.serialize_output(output))
             }
         }
     };
@@ -69,18 +82,33 @@ macro_rules! kiro_output_impl {
                 let text = String::from_utf8_lossy(output);
                 Ok(Self {
                     additional_context: Some(text.into_owned()),
+                    decision: None,
                     rest: serde_json::Map::new(),
                 })
             }
             fn from_symposium(event: &symposium::OutputEvent) -> Self {
+                let symposium::OutputEvent::PreToolUse(o) = event else {
+                    return Self::default();
+                };
+                if o.updated_input.is_some() {
+                    tracing::warn!(
+                        "Kiro cannot rewrite a tool call; ignoring the hook's updated input"
+                    );
+                }
+                let denied = matches!(o.decision, symposium_sdk::hook::Decision::Deny);
                 Self {
-                    additional_context: event.additional_context().map(String::from),
+                    additional_context: o.additional_context.clone(),
+                    decision: denied.then(|| "deny".to_string()),
                     rest: serde_json::Map::new(),
                 }
             }
             fn to_symposium(&self) -> symposium::OutputEvent {
+                let decision = match self.decision.as_deref() {
+                    Some("deny") => symposium_sdk::hook::Decision::Deny,
+                    _ => symposium_sdk::hook::Decision::Allow,
+                };
                 symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
-                    Default::default(),
+                    decision,
                     self.additional_context.clone(),
                     None,
                 ))
@@ -146,6 +174,10 @@ pub struct KiroPreToolUseInput {
 pub struct KiroPreToolUseOutput {
     #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
     pub additional_context: Option<String>,
+    /// `"deny"` when a plugin denied the tool call. Never written to Kiro:
+    /// `respond` turns it into exit 2.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
