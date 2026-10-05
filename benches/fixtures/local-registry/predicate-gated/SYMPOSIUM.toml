@@ -1,0 +1,8 @@
+name = "predicate-gated"
+depends-on = ["*"]
+
+[[hooks]]
+name = "never-runs"
+event = "PreToolUse"
+command = { script = "unexpected-hook.sh" }
+predicates = ["path_exists(./.symposium-benchmark-never-present)"]

@@ -1,0 +1,7 @@
+[defaults]
+symposium-recommendations = false
+user-plugins = false
+
+[[registry]]
+name = "benchmark-local"
+path = "../local-registry"

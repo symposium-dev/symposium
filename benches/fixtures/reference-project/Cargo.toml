@@ -1,0 +1,4 @@
+[workspace]
+members = ["cli", "server"]
+exclude = ["domain", "terminal", "storage"]
+resolver = "3"
