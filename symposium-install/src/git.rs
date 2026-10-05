@@ -417,8 +417,6 @@ impl GitCacheManager {
             std::fs::remove_dir_all(plugin_dir)
                 .with_context(|| format!("failed to remove old cache: {}", plugin_dir.display()))?;
         }
-        std::fs::create_dir_all(plugin_dir.parent().unwrap_or(plugin_dir))?;
-
         // Copy (not rename — source may be a subdirectory of temp_dir)
         copy_dir_recursive(&source_dir, plugin_dir)?;
 
@@ -507,16 +505,45 @@ fn flatten_single_dir(dir: &std::path::Path) -> Result<()> {
 }
 
 fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> Result<()> {
-    for entry in std::fs::read_dir(src)? {
+    std::fs::create_dir_all(dst)
+        .with_context(|| format!("failed to create `{}`", dst.display()))?;
+    for entry in
+        std::fs::read_dir(src).with_context(|| format!("failed to read `{}`", src.display()))?
+    {
         let entry = entry?;
         let path = entry.path();
         let dst_path = dst.join(entry.file_name());
         if path.is_dir() {
-            std::fs::create_dir_all(&dst_path)?;
             copy_dir_recursive(&path, &dst_path)?;
         } else {
-            std::fs::copy(&path, &dst_path)?;
+            std::fs::copy(&path, &dst_path).with_context(|| {
+                format!(
+                    "failed to copy `{}` to `{}`",
+                    path.display(),
+                    dst_path.display()
+                )
+            })?;
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copy_dir_recursive_creates_a_missing_destination() {
+        let src = tempfile::tempdir().unwrap();
+        std::fs::write(src.path().join("SKILL.md"), "skill").unwrap();
+
+        let parent = tempfile::tempdir().unwrap();
+        let dst = parent.path().join("owner--repo@main--subpath");
+        copy_dir_recursive(src.path(), &dst).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(dst.join("SKILL.md")).unwrap(),
+            "skill"
+        );
+    }
 }
