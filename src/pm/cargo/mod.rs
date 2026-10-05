@@ -51,7 +51,7 @@ impl CargoPm {
 
     /// Build the [`UnvalidatedPlugin`] for an already-fetched crate, layering its
     /// manifest sources: `[package.metadata.symposium]` in `Cargo.toml` and a
-    /// `SYMPOSIUM.toml` at the root: via
+    /// `Symposium.toml` at the root: via
     /// [`merge_crate_manifest`](crate::plugins::merge_crate_manifest).
     ///
     /// A crate with no manifest sources still yields a plugin: an empty
@@ -69,7 +69,7 @@ impl CargoPm {
                 None
             });
 
-        let manifest_path = fetched.root.join("SYMPOSIUM.toml");
+        let manifest_path = fetched.root.join(crate::pm::layout::MANIFEST_FILE);
         let file = if manifest_path.is_file() {
             match std::fs::read_to_string(&manifest_path) {
                 Ok(c) => Some(c),
@@ -77,7 +77,7 @@ impl CargoPm {
                     tracing::warn!(
                         path = %manifest_path.display(),
                         error = %e,
-                        "failed to read crate SYMPOSIUM.toml"
+                        "failed to read crate Symposium.toml"
                     );
                     None
                 }
@@ -93,11 +93,11 @@ impl CargoPm {
 
 /// What plugin content a crate source tree at `dir` embeds, as a short
 /// human-readable phrase — or `None` when it embeds none. Mirrors what
-/// [`CargoPm::load_plugin`] would build a plugin from: a `SYMPOSIUM.toml`,
+/// [`CargoPm::load_plugin`] would build a plugin from: a `Symposium.toml`,
 /// `[package.metadata.symposium]`, or the default `skills/` directory.
 fn embedded_plugin_kind(dir: &std::path::Path) -> Option<&'static str> {
-    if dir.join("SYMPOSIUM.toml").is_file() {
-        return Some("plugin manifest (SYMPOSIUM.toml)");
+    if dir.join(crate::pm::layout::MANIFEST_FILE).is_file() {
+        return Some("plugin manifest (Symposium.toml)");
     }
     if matches!(
         crate::crate_metadata::symposium_metadata(&dir.join("Cargo.toml")),
@@ -273,7 +273,7 @@ mod tests {
         // embeds a manifest — surfaced now that `active_plugins` fetches.
         let registry_embedded = tmp.path().join("registry-embedded");
         std::fs::create_dir_all(&registry_embedded).unwrap();
-        std::fs::write(registry_embedded.join("SYMPOSIUM.toml"), "").unwrap();
+        std::fs::write(registry_embedded.join("Symposium.toml"), "").unwrap();
 
         let plain = tmp.path().join("plain");
         std::fs::create_dir_all(plain.join("src")).unwrap();

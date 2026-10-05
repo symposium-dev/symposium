@@ -6,7 +6,7 @@ Symposium can load packages in the [Agent Plugins 1.0.0](https://agent-plugins.o
 
 Loading one gives you its skills in every agent you have set up, including the agents that cannot read the format themselves.
 
-Symposium reads the skills half of the format. The format's other component type, MCP servers, is reported as unsupported. Declare those in a [`SYMPOSIUM.toml`](../../reference/plugin-definition.md) plugin.
+Symposium reads the skills half of the format. The format's other component type, MCP servers, is reported as unsupported. Declare those in a [`Symposium.toml`](../../reference/plugin-definition.md) plugin.
 
 ## Layout
 
@@ -30,7 +30,7 @@ These packages are picked up in the same three places as a symposium plugin:
 | A workspace member's folder | On whenever that project is in your workspace |
 | A dependency's source | Offered for consent, like any plugin found in a dependency |
 
-A folder holding both a `SYMPOSIUM.toml` and a `plugin.json` is read as a symposium plugin. `SYMPOSIUM.toml` is the richer manifest and wins.
+A folder holding both a `Symposium.toml` and a `plugin.json` is read as a symposium plugin. `Symposium.toml` is the richer manifest and wins.
 
 ## Manifest
 
@@ -63,7 +63,7 @@ The manifest has no way to say when a package applies, so one that comes from a 
 }
 ```
 
-Other clients must ignore keys they do not know, so this costs you nothing in portability. The fields take the same syntax as a `SYMPOSIUM.toml` plugin gate. See [Predicates](../../reference/predicates.md).
+Other clients must ignore keys they do not know, so this costs you nothing in portability. The fields take the same syntax as a `Symposium.toml` plugin gate. See [Predicates](../../reference/predicates.md).
 
 ## Skills
 
@@ -73,7 +73,7 @@ Where those skills end up per agent is covered in [How extensions are installed]
 
 ## What the format cannot carry
 
-Hooks, subcommands, installations, and custom predicates are not in the format, so one of these packages cannot declare them. Use a [`SYMPOSIUM.toml`](../../reference/plugin-definition.md) plugin when you need those.
+Hooks, subcommands, installations, and custom predicates are not in the format, so one of these packages cannot declare them. Use a [`Symposium.toml`](../../reference/plugin-definition.md) plugin when you need those.
 
 ## What happens when something is wrong
 

@@ -732,14 +732,14 @@ async fn sync_installs_skill_via_chained_plugin() {
     .unwrap();
 }
 
-/// `sync` loads a crate that ships its own `SYMPOSIUM.toml` as a first-class
+/// `sync` loads a crate that ships its own `Symposium.toml` as a first-class
 /// plugin through a `[[plugins]]` chained reference.
 ///
 /// Fixture layout:
 /// - `manifest-host` depends on `crate-m` (path dep)
 /// - `vouch-m` gates on `crate-m` and carries `[[plugins]] source.cargo =
 ///   "crate-m"` but *no* skill group of its own
-/// - `crate-m` ships a `SYMPOSIUM.toml` whose skills live in `agent-docs/`
+/// - `crate-m` ships a `Symposium.toml` whose skills live in `agent-docs/`
 ///   (NOT the default `skills/`), plus `agent-docs/m-guidance/SKILL.md`
 ///
 /// `m-guidance` sits at a non-default path, so it is reachable *only* if the
@@ -776,7 +776,7 @@ async fn sync_installs_skill_via_crate_manifest() {
 /// - `facet-host` depends on `crate-f` (path dep)
 /// - `vouch-f` gates on `crate-f` and carries `[[plugins]] source.cargo =
 ///   "crate-f"` but declares nothing of its own
-/// - `crate-f` ships a `SYMPOSIUM.toml` declaring the `facet-server` MCP server
+/// - `crate-f` ships a `Symposium.toml` declaring the `facet-server` MCP server
 #[tokio::test]
 async fn sync_registers_mcp_server_from_chained_crate() {
     with_fixture(

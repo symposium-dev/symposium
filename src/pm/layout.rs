@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 /// Plugin manifest filename that marks a directory as a plugin entry.
-pub const MANIFEST_FILE: &str = "SYMPOSIUM.toml";
+pub const MANIFEST_FILE: &str = "Symposium.toml";
 
 /// Skill file that marks a directory as a standalone-skill entry.
 pub const SKILL_FILE: &str = "SKILL.md";
@@ -27,7 +27,7 @@ pub const SKILL_FILE: &str = "SKILL.md";
 /// What kind of entry a directory is.
 #[derive(Debug)]
 pub enum EntryKind {
-    /// A plugin entry; carries the path to its `SYMPOSIUM.toml`.
+    /// A plugin entry; carries the path to its `Symposium.toml`.
     Plugin(PathBuf),
     /// A standalone-skill entry; carries the path to its `SKILL.md`.
     Skill(PathBuf),
@@ -60,7 +60,7 @@ pub struct RegistryEntry {
 pub fn enumerate(root: &Path) -> Result<Vec<RegistryEntry>> {
     match classify(root) {
         Some(EntryKind::Plugin(_)) => anyhow::bail!(
-            "plugin source root contains SYMPOSIUM.toml — it should contain subdirectories with plugins, not be a plugin itself: {}",
+            "plugin source root contains Symposium.toml — it should contain subdirectories with plugins, not be a plugin itself: {}",
             root.display()
         ),
         Some(EntryKind::Skill(_)) => anyhow::bail!(
@@ -128,7 +128,7 @@ mod tests {
     #[test]
     fn flat_layout_finds_nested_entries_with_pruning() {
         let tmp = tempfile::tempdir().unwrap();
-        touch(&tmp.path().join("plug/SYMPOSIUM.toml"));
+        touch(&tmp.path().join("plug/Symposium.toml"));
         // Claimed as a plugin — the nested skill is not a separate entry.
         touch(&tmp.path().join("plug/inner/SKILL.md"));
         touch(&tmp.path().join("group/deep/skill/SKILL.md"));

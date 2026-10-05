@@ -1,8 +1,8 @@
-//! The `SYMPOSIUM.toml` manifest schema, unvalidated.
+//! The `Symposium.toml` manifest schema, unvalidated.
 //!
 //! This is the shape a plugin manifest deserializes into, and the shape that
 //! crosses the package-manager boundary. A PM's job is to *produce* one of
-//! these: by parsing a `SYMPOSIUM.toml` it found, by translating another
+//! these: by parsing a `Symposium.toml` it found, by translating another
 //! ecosystem's manifest, or by synthesizing one for a package that describes
 //! itself not at all. Symposium then validates it, applies defaults, and
 //! decides trust.
@@ -30,7 +30,7 @@ pub const DEFAULT_SKILLS_PATH: &str = "skills";
 /// (as opposed to using its published packages).
 pub const AGENTS_SKILLS_PATH: &str = ".agents/skills";
 
-/// A whole `SYMPOSIUM.toml`, unvalidated.
+/// A whole `Symposium.toml`, unvalidated.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RawPluginManifest {
@@ -85,7 +85,7 @@ impl RawPluginManifest {
     /// together.
     ///
     /// Used to combine a package's ecosystem-native metadata (base) with a
-    /// `SYMPOSIUM.toml` (over).
+    /// `Symposium.toml` (over).
     pub fn merge(mut self, over: RawPluginManifest) -> RawPluginManifest {
         self.installations.extend(over.installations);
         self.hooks.extend(over.hooks);

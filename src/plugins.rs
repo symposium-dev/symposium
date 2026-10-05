@@ -802,7 +802,7 @@ enum ManifestOrigin<'a> {
         /// group (the `agents-syncing` config knob).
         agents_skills: bool,
     },
-    /// A `SYMPOSIUM.toml` shipped inside a crate, reached through a
+    /// A `Symposium.toml` shipped inside a crate, reached through a
     /// `[[plugins]] source.cargo` chained reference. The name defaults to the
     /// crate name; the every-plugin-must-mention-a-dependency rule is waived
     /// (the reference is the gate); the default `skills/` group is appended
@@ -917,7 +917,7 @@ pub async fn find_plugin(sym: &Symposium, name: &str) -> Option<Plugin> {
     None
 }
 
-/// The unvalidated plugin for a registry entry at `root/subpath`: a `SYMPOSIUM.toml`
+/// The unvalidated plugin for a registry entry at `root/subpath`: a `Symposium.toml`
 /// manifest read as-is, or a bare `SKILL.md` synthesized into one
 /// ([`standalone_skill_manifest`]). `None` when the directory is neither.
 /// Called by [`PathPm`](crate::pm::PathPm).
@@ -1060,7 +1060,7 @@ pub(crate) fn standalone_skill_manifest(skill_md: &Path) -> Result<RawPluginMani
 ///
 /// Each registry instance lists the plugin-bearing entries it offers
 /// (`list_plugins`, no network), and each entry is loaded as a plugin: a
-/// `SYMPOSIUM.toml` manifest, or a bare `SKILL.md` synthesized into a default
+/// `Symposium.toml` manifest, or a bare `SKILL.md` synthesized into a default
 /// plugin. Refreshing git registries is a separate concern
 /// ([`ensure_registries`]).
 ///
@@ -1247,7 +1247,7 @@ fn warn_undispatched_crate_features(parsed: &Plugin) {
 /// Load the plugins defined by the active workspace: the workspace root
 /// plus every member package directory.
 ///
-/// A directory defines a workspace plugin when it has a `SYMPOSIUM.toml`
+/// A directory defines a workspace plugin when it has a `Symposium.toml`
 /// manifest (whose `name` defaults to the directory name) or a `skills/`
 /// directory (a manifest-less plugin whose only content is the default
 /// skills group). Default content — the `[[skills]] source.path = "skills"`
@@ -1277,7 +1277,7 @@ pub fn workspace_plugins(
             Err(e) => {
                 tracing::warn!(dir = %dir.display(), error = %e, "failed to load workspace plugin");
                 warnings.push(LoadWarning {
-                    path: dir.join("SYMPOSIUM.toml"),
+                    path: dir.join(crate::pm::layout::MANIFEST_FILE),
                     message: format!("failed to load workspace plugin: {e}"),
                 });
             }
@@ -1293,7 +1293,7 @@ fn workspace_plugin_for_dir(
     dir: &Path,
     agents_skills: bool,
 ) -> Result<Option<Plugin>> {
-    let manifest_path = dir.join("SYMPOSIUM.toml");
+    let manifest_path = dir.join(crate::pm::layout::MANIFEST_FILE);
     let bare_convention = dir.join(CRATE_DEFAULT_SKILLS_PATH).is_dir()
         || (agents_skills && dir.join(AGENTS_SKILLS_PATH).is_dir());
     let raw: RawPluginManifest = if manifest_path.is_file() {
@@ -1331,7 +1331,7 @@ fn workspace_plugin_for_dir(
 /// manifests and collecting its standalone skills.
 ///
 /// Entry discovery is the [flat layout](crate::pm::layout): a directory with
-/// a `SYMPOSIUM.toml` is a plugin, one with a `SKILL.md` is a standalone
+/// a `Symposium.toml` is a plugin, one with a `SKILL.md` is a standalone
 /// skill (manifest wins when both are present), and a claimed directory is
 /// not recursed into.
 ///
@@ -1556,7 +1556,7 @@ fn raw_crate_manifest(content: &str) -> Result<RawPluginManifest> {
 /// A crate can describe its plugin two ways, and this combines them (later
 /// layers win / append):
 /// 1. `[package.metadata.symposium]` from `Cargo.toml` (`metadata`);
-/// 2. a `SYMPOSIUM.toml` file at the crate root (`file`).
+/// 2. a `Symposium.toml` file at the crate root (`file`).
 ///
 /// Both use the same schema as any plugin manifest. Each is parsed
 /// independently and **leniently**: a malformed layer is logged and dropped so
@@ -1591,7 +1591,7 @@ pub(crate) fn merge_crate_manifest(
             tracing::warn!(
                 crate_name = %crate_name,
                 error = %e,
-                "ignoring malformed crate SYMPOSIUM.toml"
+                "ignoring malformed crate Symposium.toml"
             );
             None
         }
@@ -1643,7 +1643,7 @@ fn validate_manifest(
         }
         ManifestOrigin::Crate { .. } => {
             // A crate is a dependency, not a workspace member: it gets the
-            // default `skills/` group (so a bare `SYMPOSIUM.toml` doesn't
+            // default `skills/` group (so a bare `Symposium.toml` doesn't
             // silently drop skills the metadata path would have found), but
             // not the workspace-only `.agents/skills` maintainer group.
             let defaults = manifest.defaults.take().unwrap_or_default();
@@ -2102,7 +2102,7 @@ mod tests {
     #[test]
     fn crate_manifest_bare_gets_default_skills_group() {
         // An empty manifest still yields the default `skills/` group, so
-        // shipping a `SYMPOSIUM.toml` never silently drops the skills the
+        // shipping a `Symposium.toml` never silently drops the skills the
         // metadata path would have found.
         let plugin = load_crate_manifest(None, Some(""), "crate-m").unwrap();
         assert_eq!(plugin.name, "crate-m");
@@ -2140,7 +2140,7 @@ mod tests {
 
     #[test]
     fn crate_manifest_merges_metadata_and_file() {
-        // `[package.metadata.symposium]` and `SYMPOSIUM.toml` layer additively:
+        // `[package.metadata.symposium]` and `Symposium.toml` layer additively:
         // one skill group from each, plus the appended default `skills/`.
         let meta: toml::Table = toml::from_str(indoc! {r#"
             [[skills]]
@@ -2422,7 +2422,7 @@ mod tests {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
             File(
-                "my-plugin/SYMPOSIUM.toml",
+                "my-plugin/Symposium.toml",
                 indoc! {r#"
                 name = "my-plugin"
                 depends-on = ["*"]
@@ -2547,7 +2547,7 @@ mod tests {
     fn scan_source_dir_rejects_root_level_plugin() {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[File(
-            "SYMPOSIUM.toml",
+            "Symposium.toml",
             indoc! {r#"
                 name = "root-plugin"
                 depends-on = ["*"]
@@ -2557,8 +2557,8 @@ mod tests {
         let err = scan_source_dir(tmp.path(), "").unwrap_err();
         assert!(
             err.to_string()
-                .contains("plugin source root contains SYMPOSIUM.toml"),
-            "expected root SYMPOSIUM.toml error, got: {err}"
+                .contains("plugin source root contains Symposium.toml"),
+            "expected root Symposium.toml error, got: {err}"
         );
     }
 
@@ -2567,7 +2567,7 @@ mod tests {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
             File(
-                "mixed/SYMPOSIUM.toml",
+                "mixed/Symposium.toml",
                 indoc! {r#"
                 name = "mixed-plugin"
                 depends-on = ["*"]
@@ -2599,7 +2599,7 @@ mod tests {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
             File(
-                "precedence-test/SYMPOSIUM.toml",
+                "precedence-test/Symposium.toml",
                 indoc! {r#"
                 name = "preferred-plugin"
                 depends-on = ["*"]
@@ -2624,7 +2624,7 @@ mod tests {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
             File(
-                "foo/SYMPOSIUM.toml",
+                "foo/Symposium.toml",
                 indoc! {r#"
                 name = "foo-plugin"
                 depends-on = ["*"]
@@ -2653,7 +2653,7 @@ mod tests {
             "},
             ),
             File(
-                "baz/qux/SYMPOSIUM.toml",
+                "baz/qux/Symposium.toml",
                 indoc! {r#"
                 name = "qux-plugin"
                 depends-on = ["*"]
@@ -2690,13 +2690,13 @@ mod tests {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
             File(
-                "good-plugin/SYMPOSIUM.toml",
+                "good-plugin/Symposium.toml",
                 indoc! {r#"
                 name = "good-plugin"
                 depends-on = ["serde"]
             "#},
             ),
-            File("bad-plugin/SYMPOSIUM.toml", "not valid toml {{{"),
+            File("bad-plugin/Symposium.toml", "not valid toml {{{"),
             File(
                 "my-skill/SKILL.md",
                 indoc! {"
@@ -2767,7 +2767,7 @@ mod tests {
     fn validate_source_dir_names_the_entry_that_failed_validation() {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[File(
-            "unnamed/SYMPOSIUM.toml",
+            "unnamed/Symposium.toml",
             indoc! {r#"
                 depends-on = ["*"]
             "#},
@@ -2784,7 +2784,7 @@ mod tests {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
             File(
-                "my-plugin/SYMPOSIUM.toml",
+                "my-plugin/Symposium.toml",
                 indoc! {r#"
                 name = "my-plugin"
                 depends-on = ["*"]
@@ -2817,7 +2817,7 @@ mod tests {
     fn collect_crate_names_skips_invalid_items() {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
-            File("bad-plugin/SYMPOSIUM.toml", "not valid {{{"),
+            File("bad-plugin/Symposium.toml", "not valid {{{"),
             File(
                 "good-skill/SKILL.md",
                 indoc! {"
@@ -2965,7 +2965,7 @@ mod tests {
 
         // Root: manifest without a name — name falls back to the dir name,
         // default skills group is appended.
-        std::fs::write(root.join("SYMPOSIUM.toml"), "").unwrap();
+        std::fs::write(root.join("Symposium.toml"), "").unwrap();
 
         // member-bare: no manifest, but a skills/ dir — bare convention.
         let bare = root.join("member-bare");
@@ -2975,7 +2975,7 @@ mod tests {
         let optout = root.join("member-optout");
         std::fs::create_dir_all(&optout).unwrap();
         std::fs::write(
-            optout.join("SYMPOSIUM.toml"),
+            optout.join("Symposium.toml"),
             indoc! {r#"
                 name = "explicit-name"
 
@@ -3174,7 +3174,7 @@ mod tests {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[
             File(
-                "no-crates-plugin/SYMPOSIUM.toml",
+                "no-crates-plugin/Symposium.toml",
                 indoc! {r#"
                 name = "no-crates-plugin"
 
@@ -3185,7 +3185,7 @@ mod tests {
             "#},
             ),
             File(
-                "good-plugin/SYMPOSIUM.toml",
+                "good-plugin/Symposium.toml",
                 indoc! {r#"
                 name = "good-plugin"
                 depends-on = ["serde"]
@@ -4522,7 +4522,7 @@ mod tests {
     fn scan_source_dir_loads_plugin_with_subcommand() {
         use crate::test_utils::{File, instantiate_fixture};
         let tmp = instantiate_fixture(&[File(
-            "demo-plugin/SYMPOSIUM.toml",
+            "demo-plugin/Symposium.toml",
             indoc! {r#"
                 name = "demo-plugin"
                 depends-on = ["example-crate"]

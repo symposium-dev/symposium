@@ -1,6 +1,6 @@
 # Plugin definitions
 
-A **symposium plugin** collects together all the extensions offered for a particular crate. Plugins are directories containing a `SYMPOSIUM.toml` manifest file that references skills, hooks, MCP servers, and other resources relevant to your crate. These extensions can be packaged within the plugin directory or the plugin can contain pointers to external repositories.
+A **symposium plugin** collects together all the extensions offered for a particular crate. Plugins are directories containing a `Symposium.toml` manifest file that references skills, hooks, MCP servers, and other resources relevant to your crate. These extensions can be packaged within the plugin directory or the plugin can contain pointers to external repositories.
 
 Plugins enable capabilities beyond standalone skills — they're needed when you want to add hooks or MCP servers. For simple skill publishing, see [Authoring a plugin](../crate-authors/authoring-a-plugin.md) instead.
 
@@ -10,7 +10,7 @@ You could define a plugin definition with inline skills by having a directory st
 
 ```
 myplugin/
-  SYMPOSIUM.toml
+  Symposium.toml
   skills/
     skill-a/
       SKILL.md
@@ -18,7 +18,7 @@ myplugin/
       SKILL.md
 ```
 
-where `myplugin/SYMPOSIUM.toml` is as follows:
+where `myplugin/Symposium.toml` is as follows:
 
 ```toml
 name = "example"
@@ -95,7 +95,7 @@ The edge's `depends-on` decides *whether* to load the referenced crate; the crat
 
 ### Crate-embedded manifest
 
-A referenced crate describes its plugin with the ordinary plugin-manifest schema, from **two interchangeable sources**: a `SYMPOSIUM.toml` at its source root, and/or a `[package.metadata.symposium]` table in its `Cargo.toml`. Both are honored the same as a registry manifest — named `[[skills]]` groups, per-group predicates, `source.path` / `source.git` sources, and further `[[plugins]]` chained references. The crate's effective manifest is the two sources merged over the crate defaults (merge order **defaults → `[package.metadata.symposium]` → `SYMPOSIUM.toml`**): list entries from both are kept; where the two set the same scalar, the file wins. Each source is parsed leniently — a malformed layer is logged and dropped, and the crate still resolves through the remaining layers (at minimum the default `skills/` group).
+A referenced crate describes its plugin with the ordinary plugin-manifest schema, from **two interchangeable sources**: a `Symposium.toml` at its source root, and/or a `[package.metadata.symposium]` table in its `Cargo.toml`. Both are honored the same as a registry manifest — named `[[skills]]` groups, per-group predicates, `source.path` / `source.git` sources, and further `[[plugins]]` chained references. The crate's effective manifest is the two sources merged over the crate defaults (merge order **defaults → `[package.metadata.symposium]` → `Symposium.toml`**): list entries from both are kept; where the two set the same scalar, the file wins. Each source is parsed leniently — a malformed layer is logged and dropped, and the crate still resolves through the remaining layers (at minimum the default `skills/` group).
 
 Because the chained reference is already the gate, a crate manifest may omit `name` (defaults to the crate) and a top-level `depends-on`; the default `skills/` group is appended unless `[defaults] skills = false`. A crate with no manifest sources at all still resolves as a plugin whose only content is that default `skills/` group.
 
@@ -114,7 +114,7 @@ Hooks, MCP servers, and subcommands declared in a crate manifest are parsed and 
 A crate can delegate to another crate with a `[[plugins]]` chained reference of its own — the replacement for the retired `crate = {..}` metadata redirect:
 
 ```toml
-# In the referenced crate's Cargo.toml (or its SYMPOSIUM.toml)
+# In the referenced crate's Cargo.toml (or its Symposium.toml)
 [[package.metadata.symposium.plugins]]
 source.cargo = "companion-crate"
 ```

@@ -56,7 +56,7 @@ You only need to override the methods you care about — unimplemented methods r
 
 ## Step 3. Register it in your plugin manifest
 
-In your `SYMPOSIUM.toml`, reference the built binary as a hook command:
+In your `Symposium.toml`, reference the built binary as a hook command:
 
 ```toml
 name = "my-crate"
