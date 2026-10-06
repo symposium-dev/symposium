@@ -47,6 +47,10 @@ both, and the unit tests assert the shape per event for exactly this reason.
 
 And when two walks over one tree feed each other — a copy, and the comparison that decides whether to copy — they have to be the same traversal. Fixing one and not the other does not show up as a wrong file; it shows up as a sync that reinstalls the same skill forever.
 
+## Plugin-supplied names are untrusted input
+
+Plugin content must not decide where Symposium writes. A name it supplies, such as a skill's `name`, can resolve outside the directory it is joined onto (`Path::join` does not confine it), so it never becomes part of a path unchecked. Validate it with `skills::is_safe_dir_name`, which also covers Windows-specific path forms, rather than with a check of your own.
+
 ## Windows portability (tests)
 
 The test suite runs on `windows-latest`, where CI passes `--no-fail-fast` so that one failing test binary does not hide the failures in every binary cargo would otherwise skip. A few patterns recur when writing tests that touch paths or scripts:

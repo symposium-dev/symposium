@@ -68,10 +68,12 @@ Prefer deriving `Serialize` and `Deserialize` on data types.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `name` | string | yes | Skill identifier. |
+| `name` | string | yes | Skill identifier, also the name of the directory the skill is installed into. |
 | `description` | string | yes | Short description shown in skill listings. |
 | `depends-on` | string | no | Comma-separated dependency atoms this skill is about (e.g., `depends-on: serde, tokio>=1.0`). Narrows the enclosing `[[skills]]` group scope — cannot widen it. |
 | `predicates` | string | no | Comma-separated predicates (`depends-on`, `shell`, `path_exists`, `env`, `workspace-member`, `not`, `any`, `all`); all must hold for the skill to activate. ANDed with plugin- and group-level predicates. See [Predicates](./predicates.md). |
+
+> **Security:** a skill's `name` comes from plugin content and becomes a directory on disk, so Symposium treats it as untrusted input. A name that would resolve outside the agent's skills directory is rejected: the skill fails to load instead of being installed, and `cargo agents plugin validate` reports it.
 
 ## Crate atoms
 

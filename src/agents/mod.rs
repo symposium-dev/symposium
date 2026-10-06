@@ -106,6 +106,10 @@ impl Agent {
     /// Antigravity, Codex and Copilot support the vendor-neutral
     /// `.agents/skills/` path.
     pub fn project_skill_dir(&self, project_root: &Path, skill_name: &str) -> PathBuf {
+        assert!(
+            crate::skills::is_safe_dir_name(skill_name),
+            "unsafe skill directory name {skill_name:?}"
+        );
         match self {
             Agent::Claude => project_root.join(".claude").join("skills").join(skill_name),
             Agent::Antigravity | Agent::Codex | Agent::Copilot => {
@@ -119,6 +123,10 @@ impl Agent {
 
     /// Global skill directory for a given skill name, if supported.
     pub fn global_skill_dir(&self, home: &Path, skill_name: &str) -> Option<PathBuf> {
+        assert!(
+            crate::skills::is_safe_dir_name(skill_name),
+            "unsafe skill directory name {skill_name:?}"
+        );
         match self {
             // Antigravity's shared config root, the one location all three of its
             // surfaces (CLI, IDE, web) read.

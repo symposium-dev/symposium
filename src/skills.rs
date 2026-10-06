@@ -516,6 +516,9 @@ fn load_skill(
     let name = frontmatter
         .get("name")
         .context("SKILL.md frontmatter missing required `name` field")?;
+    if !is_safe_dir_name(name) {
+        bail!("SKILL.md `name` must be a plain directory name, got {name:?}");
+    }
 
     // Validate description per agentskills.io spec
     // (https://agentskills.io/specification.md): required, non-empty, max 1024 chars.
@@ -558,6 +561,12 @@ fn load_skill(
     };
     tracing::debug!(name = %skill.name(), path = %skill_md_path.display(), "skill loaded");
     Ok(skill)
+}
+
+pub(crate) fn is_safe_dir_name(name: &str) -> bool {
+    // Windows trims trailing dots and spaces, so a name made only of them resolves to the parent.
+    let only_dots_and_spaces = name.chars().all(|c| c == '.' || c == ' ');
+    !only_dots_and_spaces && !name.contains(['/', '\\', ':'])
 }
 
 /// Evaluate the skill-level predicate set and collect the skill if it holds.
@@ -979,6 +988,35 @@ mod tests {
         let skill = load_skill(&skill_md, false, &pred_set("serde")).unwrap();
         assert!(skill.predicates.is_empty()); // skill-level is empty
         assert_eq!(skill.frontmatter.get("name").unwrap(), "no-own-crates");
+    }
+
+    #[test]
+    fn load_skill_rejects_names_that_are_not_plain_directory_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_md = tmp.path().join("SKILL.md");
+        for name in [
+            "",
+            ".",
+            "..",
+            "...",
+            ".. ",
+            "../escaped",
+            "nested/skill",
+            "/tmp/escaped",
+            "..\\escaped",
+            "C:escaped",
+        ] {
+            fs::write(
+                &skill_md,
+                format!("---\nname: {name:?}\ndescription: d\ndepends-on: serde\n---\n"),
+            )
+            .unwrap();
+            let err = load_skill(&skill_md, false, &PredicateSet::default()).unwrap_err();
+            assert!(
+                err.to_string().contains("plain directory name"),
+                "{name:?}: {err}"
+            );
+        }
     }
 
     // --- Bare SKILL.md loading (see plugins::standalone_skill_manifest
