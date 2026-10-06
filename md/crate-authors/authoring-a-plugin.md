@@ -1,4 +1,5 @@
 # Authoring a plugin
+> **Working with an agent?** Give it [`llms.txt`](./llms.txt): a single file, written for agents, with what it needs to write a Symposium plugin and links to the full reference.
 
 Symposium lets you ship skills, hooks, and MCP servers that are automatically loaded when a user's project depends on your crate. This page walks through how to create a plugin and configure each extension type.
 

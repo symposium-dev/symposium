@@ -1,4 +1,5 @@
 # Supporting your crate
+> **Working with an agent?** Give it [`llms.txt`](./llms.txt): a single file, written for agents, with what it needs to write a Symposium plugin and links to the full reference.
 
 If you maintain a Rust crate, you can extend Symposium with skills, MCP servers, or other extensions that will teach agents the best way to use your crate.
 
