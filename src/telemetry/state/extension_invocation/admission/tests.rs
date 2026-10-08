@@ -84,6 +84,27 @@ fn public_admission_keeps_safe_attribution_and_subject_together() {
 }
 
 #[test]
+fn extension_key_rebuilds_from_safe_attribution() {
+    let mut state = state();
+    let recording = recording_observation(&mut state);
+    let ExtensionInvocationAttribution::Public(attribution) = public("example-skill") else {
+        panic!("public helper returned unnamed attribution");
+    };
+    let bucket = AdmittedExtensionBucket::public(recording.identifier_window_scope(), attribution);
+    let key =
+        ExtensionInvocationAggregateKey::new(&recording, ExtensionInvocationAgent::Claude, &bucket);
+
+    let rebuilt = ExtensionInvocationAggregateKey::from_scope(
+        recording.day(),
+        recording.identifier_window_scope(),
+        ExtensionInvocationAgent::Claude,
+        &bucket,
+    );
+
+    assert_eq!(rebuilt, key);
+}
+
+#[test]
 fn unnamed_admission_exposes_only_its_fixed_reason() {
     let mut state = state();
     let recording = recording_observation(&mut state);

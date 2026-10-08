@@ -10,7 +10,7 @@ use std::{
 
 use super::ExtensionSessionCountTracker;
 use crate::telemetry::{
-    identity::{AgentSubject, ExtensionSubject},
+    identity::{AgentSubject, ExtensionSubject, IdentifierWindowScope},
     schema::{
         EventId, ExtensionInvocationAgent, ExtensionInvocationAttribution, ExtensionTargetScope,
         PublicSkillCoordinate, SafeSkillAttribution, SupportedAgent, UnnamedExtensionReason,
@@ -47,19 +47,28 @@ impl AdmittedExtensionBucket {
     ) -> Self {
         match attribution {
             ExtensionInvocationAttribution::Public(attribution) => {
-                let subject = attribution.derive_subject(recording.identifier_window_scope());
-                Self(AdmittedExtensionBucketKind::Public {
-                    attribution,
-                    subject,
-                })
+                Self::public(recording.identifier_window_scope(), attribution)
             }
-            ExtensionInvocationAttribution::Unnamed(reason) => {
-                Self(AdmittedExtensionBucketKind::Unnamed(reason))
-            }
+            ExtensionInvocationAttribution::Unnamed(reason) => Self::unnamed(reason),
         }
     }
 
-    const fn overflow() -> Self {
+    pub(in crate::telemetry::state) fn public(
+        scope: &IdentifierWindowScope<'_>,
+        attribution: SafeSkillAttribution,
+    ) -> Self {
+        let subject = attribution.derive_subject(scope);
+        Self(AdmittedExtensionBucketKind::Public {
+            attribution,
+            subject,
+        })
+    }
+
+    pub(in crate::telemetry::state) const fn unnamed(reason: UnnamedExtensionReason) -> Self {
+        Self(AdmittedExtensionBucketKind::Unnamed(reason))
+    }
+
+    pub(in crate::telemetry::state) const fn overflow() -> Self {
         Self(AdmittedExtensionBucketKind::Overflow)
     }
 
@@ -111,7 +120,7 @@ impl AdmittedExtensionBucket {
         matches!(self.0, AdmittedExtensionBucketKind::Public { .. })
     }
 
-    const fn key(&self) -> ExtensionInvocationBucketKey {
+    pub(in crate::telemetry::state) const fn key(&self) -> ExtensionInvocationBucketKey {
         match self.0 {
             AdmittedExtensionBucketKind::Public { subject, .. } => {
                 ExtensionInvocationBucketKey::Public(subject)
@@ -127,11 +136,11 @@ impl AdmittedExtensionBucket {
 /// Private lookup key for one daily invocation aggregate.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(in crate::telemetry) struct ExtensionInvocationAggregateKey {
-    day: UtcDay,
+    pub(in crate::telemetry::state) day: UtcDay,
     // The row needs the plaintext agent; its subject separates private epochs.
-    agent: ExtensionInvocationAgent,
-    agent_subject: AgentSubject,
-    bucket: ExtensionInvocationBucketKey,
+    pub(in crate::telemetry::state) agent: ExtensionInvocationAgent,
+    pub(in crate::telemetry::state) agent_subject: AgentSubject,
+    pub(in crate::telemetry::state) bucket: ExtensionInvocationBucketKey,
 }
 
 impl ExtensionInvocationAggregateKey {
@@ -140,12 +149,24 @@ impl ExtensionInvocationAggregateKey {
         agent: ExtensionInvocationAgent,
         bucket: &AdmittedExtensionBucket,
     ) -> Self {
-        let agent_subject = recording
-            .identifier_window_scope()
-            .derive(&SupportedAgent::from(agent));
+        Self::from_scope(
+            recording.day(),
+            recording.identifier_window_scope(),
+            agent,
+            bucket,
+        )
+    }
+
+    pub(in crate::telemetry::state) fn from_scope(
+        day: UtcDay,
+        scope: &IdentifierWindowScope<'_>,
+        agent: ExtensionInvocationAgent,
+        bucket: &AdmittedExtensionBucket,
+    ) -> Self {
+        let agent_subject = scope.derive(&SupportedAgent::from(agent));
 
         Self {
-            day: recording.day(),
+            day,
             agent,
             agent_subject,
             bucket: bucket.key(),
@@ -154,7 +175,7 @@ impl ExtensionInvocationAggregateKey {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum ExtensionInvocationBucketKey {
+pub(in crate::telemetry::state) enum ExtensionInvocationBucketKey {
     Public(ExtensionSubject),
     Unnamed(UnnamedExtensionReason),
     Overflow,
