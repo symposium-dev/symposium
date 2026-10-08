@@ -13,7 +13,8 @@ use crate::telemetry::{
     identity::{AgentSubject, ExtensionSubject},
     schema::{
         EventId, ExtensionInvocationAgent, ExtensionInvocationAttribution, ExtensionTargetScope,
-        PublicSkillCoordinate, SupportedAgent, UnnamedExtensionReason, UtcDay,
+        PublicSkillCoordinate, SafeSkillAttribution, SupportedAgent, UnnamedExtensionReason,
+        UtcDay,
     },
     state::{
         BoundRecordingObservation, DayBeforeCurrent,
@@ -32,7 +33,7 @@ pub(in crate::telemetry) struct AdmittedExtensionBucket(AdmittedExtensionBucketK
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum AdmittedExtensionBucketKind {
     Public {
-        target: PublicSkillCoordinate,
+        attribution: SafeSkillAttribution,
         subject: ExtensionSubject,
     },
     Unnamed(UnnamedExtensionReason),
@@ -47,8 +48,10 @@ impl AdmittedExtensionBucket {
         match attribution {
             ExtensionInvocationAttribution::Public(attribution) => {
                 let subject = attribution.derive_subject(recording.identifier_window_scope());
-                let target = attribution.target().clone();
-                Self(AdmittedExtensionBucketKind::Public { target, subject })
+                Self(AdmittedExtensionBucketKind::Public {
+                    attribution,
+                    subject,
+                })
             }
             ExtensionInvocationAttribution::Unnamed(reason) => {
                 Self(AdmittedExtensionBucketKind::Unnamed(reason))
@@ -72,7 +75,16 @@ impl AdmittedExtensionBucket {
     #[must_use]
     pub(in crate::telemetry) const fn target(&self) -> Option<&PublicSkillCoordinate> {
         match &self.0 {
-            AdmittedExtensionBucketKind::Public { target, .. } => Some(target),
+            AdmittedExtensionBucketKind::Public { attribution, .. } => Some(attribution.target()),
+            AdmittedExtensionBucketKind::Unnamed(_) | AdmittedExtensionBucketKind::Overflow => None,
+        }
+    }
+
+    /// Return the validated target and path retained by a public bucket.
+    #[must_use]
+    pub(in crate::telemetry) const fn safe_attribution(&self) -> Option<&SafeSkillAttribution> {
+        match &self.0 {
+            AdmittedExtensionBucketKind::Public { attribution, .. } => Some(attribution),
             AdmittedExtensionBucketKind::Unnamed(_) | AdmittedExtensionBucketKind::Overflow => None,
         }
     }

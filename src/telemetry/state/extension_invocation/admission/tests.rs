@@ -45,14 +45,15 @@ fn public(name: &str) -> ExtensionInvocationAttribution {
 }
 
 #[test]
-fn public_admission_keeps_target_and_subject_together() {
+fn public_admission_keeps_safe_attribution_and_subject_together() {
     let mut state = state();
     let recording = recording_observation(&mut state);
     let attribution = public("example-skill");
     let ExtensionInvocationAttribution::Public(safe_attribution) = &attribution else {
         panic!("public helper returned unnamed attribution");
     };
-    let expected_target = safe_attribution.target().clone();
+    let expected_attribution = safe_attribution.clone();
+    let expected_target = expected_attribution.target().clone();
     let expected_subject = safe_attribution.derive_subject(recording.identifier_window_scope());
     let mut store = ExtensionInvocationAggregateStore::new(recording.day());
 
@@ -63,6 +64,10 @@ fn public_admission_keeps_target_and_subject_together() {
     assert_eq!(selected.day(), recording.day());
     assert_eq!(selected.agent(), ExtensionInvocationAgent::Claude);
     assert_eq!(selected.bucket().scope(), ExtensionTargetScope::Public);
+    assert_eq!(
+        selected.bucket().safe_attribution(),
+        Some(&expected_attribution)
+    );
     assert_eq!(selected.bucket().target(), Some(&expected_target));
     assert_eq!(selected.bucket().unnamed_reason(), None);
     assert_eq!(

@@ -26,6 +26,7 @@ pub(in crate::telemetry) use metrics::MAX_IDENTIFIED_SESSIONS;
 pub(in crate::telemetry) use plugin_hook::{
     PluginHookAttribution, PluginHookOutcome, PluginScope, PublicPluginCoordinate,
 };
+pub(in crate::telemetry) use resolution::extension::SafeSkillAttribution;
 
 use std::{fmt, num::NonZeroU64, str::FromStr, sync::LazyLock};
 
