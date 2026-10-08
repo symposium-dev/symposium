@@ -208,6 +208,10 @@ identifier-window scope without trusting persisted subject bytes.
 reconciliation separately from subject-matched rows that private state may
 adopt. Duplicate matches choose the lowest `event_id` deterministically.
 
+`state/staged_entries.rs` provides a per-entry copy-on-write overlay for
+aggregate maps. The hook store applies day rollover and tracker edits through
+that overlay, so dropping or poisoning a stage leaves its real store unchanged.
+
 `state/codec.rs` owns canonical private-state serialization, version dispatch,
 schema decoding, and secret-safe diagnostics. The private `storage` module
 owns the bounded file I/O that calls that codec.

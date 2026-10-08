@@ -380,8 +380,9 @@ mod tests {
         {
             let recording = recording_observation(&mut state);
             store = HookAggregateStore::new(recording.day());
-            let tracker = store
-                .select(&recording, HookAgent::Claude, HookSurface::PreToolUse)
+            let mut staged = store.stage_for_test(&recording).unwrap();
+            let tracker = staged
+                .select(HookAgent::Claude, HookSurface::PreToolUse)
                 .unwrap();
             row = HookMetricsV1::new(
                 &recording,
@@ -389,8 +390,8 @@ mod tests {
                 tracker,
             )
             .unwrap();
-            let tracker = store
-                .select(&recording, HookAgent::Claude, HookSurface::PreToolUse)
+            let tracker = staged
+                .select(HookAgent::Claude, HookSurface::PreToolUse)
                 .unwrap();
 
             row.checked_record(
@@ -399,32 +400,41 @@ mod tests {
                 tracker,
             )
             .unwrap();
+            assert_eq!(
+                staged.commit(),
+                crate::telemetry::state::StageCommit::Applied
+            );
         }
         let completed_at =
             UtcSecond::from_datetime(Utc.with_ymd_and_hms(2026, 8, 4, 10, 2, 11).unwrap());
         let observation = state.observe_recording(completed_at).unwrap();
         let later = state.bind_recording_observation(observation).unwrap();
         let row_day = row.day;
-        let tracker = store
-            .select(&later, HookAgent::Claude, HookSurface::PreToolUse)
-            .unwrap();
-        let tracker_before = tracker.clone();
+        let store_before = store.clone();
+        {
+            let mut staged = store.stage_for_test(&later).unwrap();
+            let tracker = staged
+                .select(HookAgent::Claude, HookSurface::PreToolUse)
+                .unwrap();
+            let tracker_before = tracker.clone();
 
-        let result = row.checked_record(
-            &later,
-            metric_observation(HookOutcome::Ok, Some(&vendor_session_id)),
-            tracker,
-        );
+            let result = row.checked_record(
+                &later,
+                metric_observation(HookOutcome::Ok, Some(&vendor_session_id)),
+                tracker,
+            );
 
-        assert_eq!(row.invocations, 2);
-        assert_eq!(
-            result,
-            Err(HookMetricsUpdateError::DayChanged {
-                row_day,
-                observation_day: later.day(),
-            })
-        );
-        assert_eq!(&*tracker, &tracker_before);
+            assert_eq!(row.invocations, 2);
+            assert_eq!(
+                result,
+                Err(HookMetricsUpdateError::DayChanged {
+                    row_day,
+                    observation_day: later.day(),
+                })
+            );
+            assert_eq!(&*tracker, &tracker_before);
+        }
+        assert_eq!(store, store_before);
     }
 
     #[test]

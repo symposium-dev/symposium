@@ -17,6 +17,7 @@ use super::{
 /// The only private-state schema version understood by this binary.
 pub(super) const STATE_VERSION: u64 = 1;
 
+mod aggregate;
 mod codec;
 mod extension_invocation;
 mod hook;
@@ -26,7 +27,9 @@ mod plugin_hook;
 mod public_row_budget;
 mod session_counts;
 mod session_pair;
+mod staged_entries;
 
+pub(in crate::telemetry) use aggregate::StageCommit;
 pub(in crate::telemetry) use codec::{StateContentError, StateDecodeError, decode, encode};
 pub(in crate::telemetry) use extension_invocation::{
     ExtensionSessionCountBaseline, ExtensionSessionCountSnapshot, ExtensionSessionCountUpdateError,
