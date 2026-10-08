@@ -2,10 +2,16 @@
 
 mod admission;
 
-pub(in crate::telemetry) use admission::SelectedExtensionInvocationAggregate;
-
-#[cfg(test)]
-pub(in crate::telemetry) use admission::ExtensionInvocationAggregateStore;
+#[expect(
+    unused_imports,
+    reason = "the final staging seam lands before its recording coordinator"
+)]
+pub(in crate::telemetry) use admission::{
+    ExtensionInvocationAdmissionError, ExtensionInvocationAggregateStage,
+};
+pub(in crate::telemetry) use admission::{
+    ExtensionInvocationAggregateStore, SelectedExtensionInvocationAggregate,
+};
 
 use std::fmt;
 
