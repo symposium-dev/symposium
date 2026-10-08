@@ -155,7 +155,7 @@ fn separate_recordings_reuse_the_public_event_id_without_spending_again() {
 
     assert_eq!(second_event_id, first_event_id);
     assert_eq!(store.len(), 1);
-    assert_eq!(store.admitted_public_rows(), 1);
+    assert_eq!(store.public_rows_spent(), 1);
 }
 
 #[test]
@@ -210,7 +210,7 @@ fn the_129th_public_target_joins_one_overflow_row() {
     assert_eq!(repeated_overflow.bucket().unnamed_reason(), None);
     assert_eq!(repeated_overflow.bucket().extension_subject(), None);
     assert_eq!(store.len(), 129);
-    assert_eq!(store.admitted_public_rows(), MAX_PUBLIC_ROWS_PER_DAY);
+    assert_eq!(store.public_rows_spent(), MAX_PUBLIC_ROWS_PER_DAY);
 }
 
 #[test]
@@ -244,7 +244,7 @@ fn identifier_reset_does_not_restore_the_daily_allowance() {
 
     assert_eq!(selected.bucket().scope(), ExtensionTargetScope::Overflow);
     assert_eq!(store.len(), 1);
-    assert_eq!(store.admitted_public_rows(), MAX_PUBLIC_ROWS_PER_DAY);
+    assert_eq!(store.public_rows_spent(), MAX_PUBLIC_ROWS_PER_DAY);
 }
 
 #[test]
@@ -273,7 +273,7 @@ fn clear_restores_the_daily_allowance() {
 
     assert_eq!(selected.bucket().scope(), ExtensionTargetScope::Public);
     assert_eq!(store.len(), 1);
-    assert_eq!(store.admitted_public_rows(), 1);
+    assert_eq!(store.public_rows_spent(), 1);
 }
 
 #[test]
@@ -304,7 +304,7 @@ fn day_rollover_clears_entries_and_restores_the_allowance() {
     assert_eq!(selected.day(), day(4));
     assert_eq!(selected.bucket().scope(), ExtensionTargetScope::Public);
     assert_eq!(store.len(), 1);
-    assert_eq!(store.admitted_public_rows(), 1);
+    assert_eq!(store.public_rows_spent(), 1);
 }
 
 #[test]

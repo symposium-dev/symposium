@@ -416,8 +416,8 @@ impl ExtensionInvocationAggregateStore {
     }
 
     #[cfg(test)]
-    const fn admitted_public_rows(&self) -> u64 {
-        self.public_rows.admitted()
+    const fn public_rows_spent(&self) -> u64 {
+        self.public_rows.spent()
     }
 
     #[cfg(test)]

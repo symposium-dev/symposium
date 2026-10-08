@@ -210,7 +210,10 @@ adopt. Duplicate matches choose the lowest `event_id` deterministically.
 
 `state/staged_entries.rs` provides a per-entry copy-on-write overlay for
 aggregate maps. The hook store applies day rollover and tracker edits through
-that overlay, so dropping or poisoning a stage leaves its real store unchanged.
+that overlay. Plugin-hook admission also stages its open day, public-row spend,
+and every recovered or newly admitted entry. Dropping either stage leaves its
+real store unchanged, while a selection error poisons the stage so commit
+discards all of its edits.
 
 `state/codec.rs` owns canonical private-state serialization, version dispatch,
 schema decoding, and secret-safe diagnostics. The private `storage` module

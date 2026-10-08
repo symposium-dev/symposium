@@ -46,6 +46,27 @@ where
         }
     }
 
+    /// Return whether an entry exists through the staged view.
+    pub(super) fn contains_key(&self, key: &K) -> bool {
+        self.staged.contains_key(key)
+            || (!self.discard_destination && self.destination.contains_key(key))
+    }
+
+    /// Borrow one entry through the staged view, cloning it on first access.
+    pub(super) fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+        match self.staged.entry(key.clone()) {
+            Entry::Occupied(entry) => Some(entry.into_mut()),
+            Entry::Vacant(entry) => {
+                if self.discard_destination {
+                    return None;
+                }
+
+                let value = self.destination.get(key)?.clone();
+                Some(entry.insert(value))
+            }
+        }
+    }
+
     /// Apply every prepared entry edit without a recoverable failure.
     ///
     /// Multi-store recording updates commit their stages sequentially. This
@@ -85,6 +106,18 @@ mod tests {
         }
 
         assert_eq!(destination, before);
+    }
+
+    #[test]
+    fn mutable_lookup_clones_an_existing_entry_into_the_staged_view() {
+        let mut destination = BTreeMap::from([(1, vec![1]), (2, vec![2])]);
+        let mut staged = StagedEntries::new(&mut destination, false);
+
+        staged.get_mut(&1).unwrap().push(3);
+        assert!(staged.get_mut(&3).is_none());
+        staged.commit();
+
+        assert_eq!(destination, BTreeMap::from([(1, vec![1, 3]), (2, vec![2])]));
     }
 
     #[test]
