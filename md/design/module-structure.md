@@ -204,6 +204,10 @@ Hook, plugin-hook, and extension-invocation aggregate keys retain their
 validated source dimensions. Each key can therefore be rebuilt from a stored
 identifier-window scope without trusting persisted subject bytes.
 
+`storage/metrics/recovery.rs` indexes every surviving public row for allowance
+reconciliation separately from subject-matched rows that private state may
+adopt. Duplicate matches choose the lowest `event_id` deterministically.
+
 `state/codec.rs` owns canonical private-state serialization, version dispatch,
 schema decoding, and secret-safe diagnostics. The private `storage` module
 owns the bounded file I/O that calls that codec.
