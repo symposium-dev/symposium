@@ -11,10 +11,16 @@ use crate::telemetry::schema::{
     ExtensionInvocationAgent, ExtensionInvocationAttribution, ExtensionInvocationPhase, HookAgent,
     HookOutcome, HookSurface, PluginHookAttempt, PluginHookAttribution, VendorSessionId,
 };
+use crate::telemetry::{state::BoundRecordingObservation, storage::metrics::MetricSnapshot};
+
+use super::AggregateState;
 
 mod error;
+mod rows;
+mod stages;
 
 pub(in crate::telemetry) use error::AggregateRecordingError;
+use stages::InvocationStages;
 
 /// Every aggregate input observed for one completed top-level hook invocation.
 ///
@@ -22,13 +28,6 @@ pub(in crate::telemetry) use error::AggregateRecordingError;
 /// `plugin_attempts`, making a claimed count that disagrees with the supplied
 /// observations unrepresentable at this boundary.
 // Intentionally omit `Debug`: this value borrows a raw vendor session id.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the recording coordinator consumes this in the next commit"
-    )
-)]
 pub(in crate::telemetry) struct HookInvocationMetricObservation<'a> {
     pub(in crate::telemetry) agent: HookAgent,
     pub(in crate::telemetry) hook: HookSurface,
@@ -44,13 +43,6 @@ pub(in crate::telemetry) struct HookInvocationMetricObservation<'a> {
 /// A missing terminal result contributes only to the hook row's attempted
 /// count. A terminal result additionally contributes to the completed count
 /// and will update one plugin-hook row.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the recording coordinator consumes this in the next commit"
-    )
-)]
 #[derive(Clone, PartialEq, Eq)]
 pub(in crate::telemetry) struct PluginHookInvocationObservation {
     pub(in crate::telemetry) attribution: PluginHookAttribution,
@@ -62,13 +54,6 @@ pub(in crate::telemetry) struct PluginHookInvocationObservation {
 /// This coordinator accepts `attempted` from `pre_tool_use` and `completed`
 /// from `post_tool_use`. The targeted failure signal has no top-level hook row
 /// and will use its own recording entry point.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the recording coordinator consumes this in the next commit"
-    )
-)]
 #[derive(Clone, PartialEq, Eq)]
 pub(in crate::telemetry) struct ExtensionInvocationObservation {
     pub(in crate::telemetry) attribution: ExtensionInvocationAttribution,
@@ -88,13 +73,6 @@ struct HookInvocationTarget<'a> {
 /// Construction is the only place that interprets the complete observation,
 /// so row staging cannot receive independently supplied plugin counts or an
 /// extension phase from the wrong hook surface.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the recording coordinator consumes this in the next commit"
-    )
-)]
 struct NormalizedHookInvocation<'a> {
     target: HookInvocationTarget<'a>,
     outcome: HookOutcome,
@@ -144,6 +122,47 @@ impl<'a> NormalizedHookInvocation<'a> {
             plugin_attempts,
             extension,
         })
+    }
+}
+
+/// Aggregate snapshot staged in memory but not anchored by persisted state.
+///
+/// This type deliberately exposes no preparation or publication method. The
+/// persistence transaction will consume it only after replacing the owned
+/// per-operation private state that selected its identifiers.
+#[must_use = "an aggregate recording must be persisted or explicitly dropped"]
+#[derive(Debug)]
+pub(in crate::telemetry) struct StagedAggregateRecording {
+    snapshot: MetricSnapshot,
+}
+
+impl AggregateState {
+    /// Stage one complete hook invocation across every aggregate family.
+    ///
+    /// All three private stores are staged even when the observation has no
+    /// plugin or extension contribution. This keeps their monotonic open days
+    /// aligned. The supplied snapshot is owned by the operation and is dropped
+    /// with every private overlay when any selection or row update fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first typed selection, row-update, or snapshot-edit error.
+    /// No private aggregate state is committed and no staged snapshot is
+    /// returned on failure.
+    pub(in crate::telemetry) fn stage_hook_invocation(
+        &mut self,
+        recording: &BoundRecordingObservation<'_>,
+        mut snapshot: MetricSnapshot,
+        observation: HookInvocationMetricObservation<'_>,
+    ) -> Result<StagedAggregateRecording, AggregateRecordingError> {
+        let invocation = NormalizedHookInvocation::new(observation)?;
+        let recovery = snapshot.recovery_index();
+        let mut stages =
+            InvocationStages::open(self.hook_invocation_stores(), &recovery, recording)?;
+        stages.apply(&mut snapshot, invocation)?;
+        stages.commit()?;
+
+        Ok(StagedAggregateRecording { snapshot })
     }
 }
 

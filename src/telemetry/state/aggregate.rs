@@ -11,13 +11,6 @@ use super::{
 use crate::telemetry::schema::UtcDay;
 
 /// Aggregate row family named by coordinator and persistence diagnostics.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the recording coordinator consumes this in the next commit"
-    )
-)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::telemetry) enum AggregateFamily {
     Hook,
@@ -53,7 +46,10 @@ pub(in crate::telemetry) enum StageCommit {
 ///
 /// One hook observation may update all three families. Keeping the stores as
 /// separate fields lets the recording layer hold their stages at the same time
-/// without repeatedly borrowing a parent object.
+/// without repeatedly borrowing a parent object. The coordinator opens every
+/// stage for each invocation, even when a family has no row contribution, so
+/// their monotonic days advance together. A successful staged unit commits all
+/// three stores; any staging or row-update failure drops all three.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::telemetry) struct AggregateState {
     hook: HookAggregateStore,
@@ -73,7 +69,7 @@ impl AggregateState {
 
     /// Borrow the three stores one hook observation may update.
     #[must_use]
-    pub(in crate::telemetry::state) const fn hook_invocation_stores(
+    const fn hook_invocation_stores(
         &mut self,
     ) -> (
         &mut HookAggregateStore,
