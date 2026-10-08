@@ -1,14 +1,18 @@
 //! Bounded private session sets for hook aggregate rows.
 
-use std::{collections::BTreeSet, fmt};
+use std::fmt;
 
-use super::plugin_hook::PluginHookMetricsKey;
+use super::{
+    plugin_hook::PluginHookMetricsKey,
+    session_pair::{SessionPairSnapshot, TrackedSessionPair},
+};
 use crate::telemetry::{
     identity::SessionId,
-    schema::{HookMetricsKey, HookOutcome, MAX_IDENTIFIED_SESSIONS, PluginHookOutcome},
+    schema::{HookMetricsKey, HookOutcome, PluginHookOutcome},
 };
 
-use super::set_len;
+#[cfg(test)]
+use crate::telemetry::schema::MAX_IDENTIFIED_SESSIONS;
 
 /// One hook observation's contribution to the private session sets.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -38,44 +42,12 @@ impl HookSessionContribution {
             (Some(session_id), false) => Self::IdentifiedNonOk(session_id),
         }
     }
-}
 
-/// Complete or permanently incomplete session sets for one hook aggregate.
-#[derive(Clone, PartialEq, Eq)]
-enum TrackedHookSessions {
-    Complete {
-        identified: BTreeSet<SessionId>,
-        non_ok: BTreeSet<SessionId>,
-    },
-    Incomplete,
-}
-
-impl TrackedHookSessions {
-    fn record(&mut self, contribution: HookSessionContribution) {
-        match contribution {
-            HookSessionContribution::Unidentified => *self = Self::Incomplete,
-            HookSessionContribution::IdentifiedOk(session_id) => {
-                self.record_identified(session_id, false);
-            }
-            HookSessionContribution::IdentifiedNonOk(session_id) => {
-                self.record_identified(session_id, true);
-            }
-        }
-    }
-
-    fn record_identified(&mut self, session_id: SessionId, is_non_ok: bool) {
-        let Self::Complete { identified, non_ok } = self else {
-            return;
-        };
-
-        if !identified.contains(&session_id) && set_len(identified) >= MAX_IDENTIFIED_SESSIONS {
-            *self = Self::Incomplete;
-            return;
-        }
-
-        identified.insert(session_id);
-        if is_non_ok {
-            non_ok.insert(session_id);
+    fn record(self, sessions: &mut TrackedSessionPair) {
+        match self {
+            Self::Unidentified => sessions.invalidate(),
+            Self::IdentifiedOk(session_id) => sessions.record_first(session_id),
+            Self::IdentifiedNonOk(session_id) => sessions.record_both(session_id),
         }
     }
 }
@@ -90,7 +62,7 @@ impl TrackedHookSessions {
 pub(in crate::telemetry) struct HookSessionCountTracker<K> {
     key: K,
     contribution_count: u64,
-    sessions: TrackedHookSessions,
+    sessions: TrackedSessionPair,
 }
 
 impl<K> fmt::Debug for HookSessionCountTracker<K> {
@@ -98,12 +70,12 @@ impl<K> fmt::Debug for HookSessionCountTracker<K> {
         let mut debug = formatter.debug_struct("HookSessionCountTracker");
         debug.field("contribution_count", &self.contribution_count);
 
-        match &self.sessions {
-            TrackedHookSessions::Complete { identified, non_ok } => debug
+        match self.sessions.snapshot() {
+            SessionPairSnapshot::Complete { first, second } => debug
                 .field("session_counts_complete", &true)
-                .field("identified_sessions", &identified.len())
-                .field("identified_sessions_non_ok", &non_ok.len()),
-            TrackedHookSessions::Incomplete => debug.field("session_counts_complete", &false),
+                .field("identified_sessions", &first)
+                .field("identified_sessions_non_ok", &second),
+            SessionPairSnapshot::Incomplete => debug.field("session_counts_complete", &false),
         };
 
         debug.finish()
@@ -117,10 +89,7 @@ impl<K> HookSessionCountTracker<K> {
         Self {
             key,
             contribution_count: 0,
-            sessions: TrackedHookSessions::Complete {
-                identified: BTreeSet::new(),
-                non_ok: BTreeSet::new(),
-            },
+            sessions: TrackedSessionPair::new(),
         }
     }
 
@@ -140,10 +109,10 @@ impl<K> HookSessionCountTracker<K> {
             .ok_or(HookSessionCountUpdateError::ContributionCountOverflow)?;
 
         if self.contribution_count != snapshot_contributions {
-            self.sessions = TrackedHookSessions::Incomplete;
+            self.sessions.invalidate();
         }
 
-        self.sessions.record(contribution);
+        contribution.record(&mut self.sessions);
         self.contribution_count = next_contribution_count;
         Ok(())
     }
@@ -151,14 +120,12 @@ impl<K> HookSessionCountTracker<K> {
     /// Return the aggregate fields represented by the current private sets.
     #[must_use]
     pub(in crate::telemetry) fn snapshot(&self) -> HookSessionCountSnapshot {
-        match &self.sessions {
-            TrackedHookSessions::Complete { identified, non_ok } => {
-                HookSessionCountSnapshot::Complete {
-                    identified_sessions: set_len(identified),
-                    identified_sessions_non_ok: set_len(non_ok),
-                }
-            }
-            TrackedHookSessions::Incomplete => HookSessionCountSnapshot::Incomplete,
+        match self.sessions.snapshot() {
+            SessionPairSnapshot::Complete { first, second } => HookSessionCountSnapshot::Complete {
+                identified_sessions: first,
+                identified_sessions_non_ok: second,
+            },
+            SessionPairSnapshot::Incomplete => HookSessionCountSnapshot::Incomplete,
         }
     }
 }
