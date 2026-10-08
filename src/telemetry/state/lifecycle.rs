@@ -745,6 +745,22 @@ mod tests {
     }
 
     #[test]
+    fn identifier_reset_preserves_the_storage_limit_day() {
+        let stopped_day = day(2026, 9, 10);
+        let mut state: TelemetryStateV1 = toml::from_str(&state_with_return_cohort(KEY)).unwrap();
+        state.stop_event_recording(stopped_day);
+
+        state
+            .reset_identifiers_with::<Infallible>(stopped_day, |bytes| {
+                bytes.fill(GENERATED_KEY_BYTE);
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(state.event_recording_is_stopped(stopped_day));
+    }
+
+    #[test]
     fn recording_on_day_thirty_advances_only_the_identifier_window() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-08-11");
         let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();

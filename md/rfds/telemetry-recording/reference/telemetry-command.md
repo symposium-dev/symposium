@@ -181,7 +181,7 @@ If no identity state exists, the command reports that there is nothing to reset 
 
 Each project skills parent may also contain a generated `.symposium/index-v1.json` installation index. It maps agent-facing skill identifiers to Symposium-managed installations so a later hook can attribute a skill activation. The index is gitignored installation state, not telemetry: `show`, `clear`, retention, and identifier reset do not read or delete it, and this RFD does not upload it.
 
-`telemetry-state.toml` is private Symposium state outside the inspectable telemetry data directory. It contains the secret identity key, current identifier-window anchor, optional return-cohort anchor, the latest opened UTC day, cleanup and marker metadata, bounded keyed session sets plus contribution counts used for complete aggregate session counts, the stable row `event_id` in each plugin-hook and extension-invocation aggregate entry, and their separate daily public-row admission counts. A stored row identifier is also present in its metric row and is not secret. All recorders read this state under the telemetry lock.
+`telemetry-state.toml` is private Symposium state outside the inspectable telemetry data directory. It contains the secret identity key, current identifier-window anchor, optional return-cohort anchor, the latest opened UTC day, cleanup metadata, an optional stopped day for the storage-limit marker, bounded keyed session sets plus contribution counts used for complete aggregate session counts, the stable row `event_id` in each plugin-hook and extension-invocation aggregate entry, and their separate daily public-row admission counts. A matching stopped day suppresses only low-volume event appends. An older value does not affect a later day; `clear` removes it and `reset-identifiers` preserves it. A stored row identifier is also present in its metric row and is not secret. All recorders read this state under the telemetry lock.
 
 An identifier window includes its anchor day as day 0 and remains active through day 29. The first recording-capable observation on day 30 or later starts a new window anchored to that observation without replacing the key. Renewed consent or `reset-identifiers` replaces the key, resets the identifier-window anchor, and clears the return-cohort anchor; `disable` and `clear` preserve them. None of these operations moves the latest-opened-day high-water mark backward.
 
@@ -205,11 +205,13 @@ On load, Symposium rebuilds each daily public-row allowance from every surviving
 
 Management commands can wait for the lock. A crash can still lose the last batch or metric update, or leave a partial final event line; `status` reports that line as malformed and `show` preserves it.
 
+Before appending another batch, Symposium closes a nonempty partial final line with one newline. The new batch therefore remains independently readable, and that repair byte counts toward the daily allowance.
+
 Hook and extension-invocation counts are lower bounds. There is no durable all-cause dropped-update counter because contention, termination, and I/O failure can also prevent writing that counter.
 
 ## Size and expiry
 
-Each UTC day's event file, aggregate-metric snapshot, and reserved maximum-size `storage_limit` line share an 8 MiB allowance. This is a safety ceiling, not expected volume or preallocation. It bounds damage from a producer bug or unexpectedly large resolution batch.
+Each UTC day's event file, aggregate-metric snapshot, and reserved maximum-size `storage_limit` line share an 8 MiB allowance. A version 1 marker line is at most 2 KiB including its terminating line feed. This is a safety ceiling, not expected volume or preallocation. It bounds damage from a producer bug or unexpectedly large resolution batch.
 
 Aggregate metrics may use at most 512 KiB. An update that would exceed that maximum or the remaining shared allowance is dropped without stopping low-volume event recording.
 

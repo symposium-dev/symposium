@@ -456,7 +456,7 @@ impl OpaqueResolutionReason {
 #[cfg(test)]
 mod tests {
     use super::super::super::{
-        IDENTIFIER_WINDOW_TEST_STATE, RowClassification, TelemetryRow,
+        IDENTIFIER_WINDOW_TEST_STATE, LowVolumeRow, RowClassification, TelemetryRow,
         assert_contract_names_with_labels, classify_row, recorded_data_example_block,
         recording_observation,
     };
@@ -792,8 +792,9 @@ mod tests {
         );
         let json = serde_json::to_string(&row).unwrap();
 
-        let RowClassification::Supported(TelemetryRow::ExtensionResolution(decoded)) =
-            classify_row(&json)
+        let RowClassification::Supported(TelemetryRow::LowVolume(
+            LowVolumeRow::ExtensionResolution(decoded),
+        )) = classify_row(&json)
         else {
             panic!("nested extension_resolution row was not classified as supported");
         };

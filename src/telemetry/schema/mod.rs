@@ -89,6 +89,11 @@ pub(super) enum RowKind {
     StorageLimit,
 }
 
+/// Common daily-file ownership exposed by every strict versioned row.
+pub(super) trait VersionedRow {
+    fn day(&self) -> UtcDay;
+}
+
 /// Result of interpreting one physical telemetry line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum RowClassification {
@@ -101,20 +106,51 @@ pub(super) enum RowClassification {
 /// Telemetry row understood by this version of Symposium.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TelemetryRow {
+    LowVolume(LowVolumeRow),
+    // Box large aggregate rows so every enum value does not inherit their size.
+    HookMetrics(Box<HookMetricsV1>),
+    PluginHookMetrics(Box<PluginHookMetricsV1>),
+    ExtensionInvocationMetrics(Box<ExtensionInvocationMetricsV1>),
+}
+
+/// Append-only telemetry row understood by this version of Symposium.
+///
+/// Aggregate rows are deliberately absent, so they cannot enter the event-file
+/// append path by construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum LowVolumeRow {
     SessionStart(SessionStartV1),
     AgentConfiguration(AgentConfigurationV1),
     ResolutionSummary(ResolutionSummaryV1),
     PackageResolution(PackageResolutionV1),
     ExtensionResolution(ExtensionResolutionV1),
-    // Box large aggregate rows so every enum value does not inherit their size.
-    HookMetrics(Box<HookMetricsV1>),
-    PluginHookMetrics(Box<PluginHookMetricsV1>),
-    ExtensionInvocationMetrics(Box<ExtensionInvocationMetricsV1>),
     Command(CommandV1),
     StorageLimit(StorageLimitV1),
 }
 
-impl Serialize for TelemetryRow {
+/// Maximum physical size of a version 1 `storage_limit` JSONL line.
+///
+/// The bound includes the terminating line feed. Readers use this wire-format
+/// limit to inspect the final event-file line without an unbounded read.
+pub(in crate::telemetry) const MAX_STORAGE_LIMIT_LINE_BYTES: usize = 2 * 1024;
+
+impl LowVolumeRow {
+    /// Return the UTC day whose event file owns this row.
+    #[must_use]
+    pub(super) fn day(&self) -> UtcDay {
+        match self {
+            Self::SessionStart(row) => row.day(),
+            Self::AgentConfiguration(row) => row.day(),
+            Self::ResolutionSummary(row) => row.day(),
+            Self::PackageResolution(row) => row.day(),
+            Self::ExtensionResolution(row) => row.day(),
+            Self::Command(row) => row.day(),
+            Self::StorageLimit(row) => row.day(),
+        }
+    }
+}
+
+impl Serialize for LowVolumeRow {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -125,11 +161,22 @@ impl Serialize for TelemetryRow {
             Self::ResolutionSummary(row) => row.serialize(serializer),
             Self::PackageResolution(row) => row.serialize(serializer),
             Self::ExtensionResolution(row) => row.serialize(serializer),
+            Self::Command(row) => row.serialize(serializer),
+            Self::StorageLimit(row) => row.serialize(serializer),
+        }
+    }
+}
+
+impl Serialize for TelemetryRow {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::LowVolume(row) => row.serialize(serializer),
             Self::HookMetrics(row) => row.serialize(serializer),
             Self::PluginHookMetrics(row) => row.serialize(serializer),
             Self::ExtensionInvocationMetrics(row) => row.serialize(serializer),
-            Self::Command(row) => row.serialize(serializer),
-            Self::StorageLimit(row) => row.serialize(serializer),
         }
     }
 }
@@ -411,12 +458,22 @@ impl StorageLimitV1 {
     /// Create a marker for an operation rejected by the daily storage limit.
     #[must_use]
     pub(super) fn new(day: UtcDay, dropped_operation: DroppedOperation) -> Self {
+        Self::with_version(day, dropped_operation, SymposiumVersion::current())
+    }
+
+    /// Create a marker with an explicit producer version for size validation.
+    #[must_use]
+    fn with_version(
+        day: UtcDay,
+        dropped_operation: DroppedOperation,
+        symposium: SymposiumVersion,
+    ) -> Self {
         Self {
             version: SchemaVersion::V1,
             kind: Self::KIND,
             event_id: EventId::new(),
             day,
-            symposium: SymposiumVersion::current(),
+            symposium,
             dropped_operation,
         }
     }
@@ -435,6 +492,19 @@ pub(super) enum DroppedOperation {
     Command,
 }
 
+impl DroppedOperation {
+    /// Complete consent-version 1 vocabulary in contract order.
+    pub(in crate::telemetry) const ALL: [Self; 7] = [
+        Self::SessionStart,
+        Self::ManualSync,
+        Self::Use,
+        Self::Remove,
+        Self::Init,
+        Self::Configuration,
+        Self::Command,
+    ];
+}
+
 /// Classify a physical JSONL line and return typed data only for a known schema.
 ///
 /// This is the only supported entry point for reading typed rows. Individual
@@ -446,19 +516,21 @@ pub(super) fn classify_row(line: &str) -> RowClassification {
     };
 
     match (envelope.kind.as_str(), envelope.version) {
-        ("session_start", 1) => deserialize_supported_row(line, TelemetryRow::SessionStart),
-        ("agent_configuration", 1) => {
-            deserialize_supported_row(line, TelemetryRow::AgentConfiguration)
-        }
-        ("resolution_summary", 1) => {
-            deserialize_supported_row(line, TelemetryRow::ResolutionSummary)
-        }
-        ("package_resolution", 1) => {
-            deserialize_supported_row(line, TelemetryRow::PackageResolution)
-        }
-        ("extension_resolution", 1) => {
-            deserialize_supported_row(line, TelemetryRow::ExtensionResolution)
-        }
+        ("session_start", 1) => deserialize_supported_row(line, |row| {
+            TelemetryRow::LowVolume(LowVolumeRow::SessionStart(row))
+        }),
+        ("agent_configuration", 1) => deserialize_supported_row(line, |row| {
+            TelemetryRow::LowVolume(LowVolumeRow::AgentConfiguration(row))
+        }),
+        ("resolution_summary", 1) => deserialize_supported_row(line, |row| {
+            TelemetryRow::LowVolume(LowVolumeRow::ResolutionSummary(row))
+        }),
+        ("package_resolution", 1) => deserialize_supported_row(line, |row| {
+            TelemetryRow::LowVolume(LowVolumeRow::PackageResolution(row))
+        }),
+        ("extension_resolution", 1) => deserialize_supported_row(line, |row| {
+            TelemetryRow::LowVolume(LowVolumeRow::ExtensionResolution(row))
+        }),
         ("hook_metrics", 1) => {
             deserialize_supported_row(line, |row| TelemetryRow::HookMetrics(Box::new(row)))
         }
@@ -468,8 +540,12 @@ pub(super) fn classify_row(line: &str) -> RowClassification {
         ("extension_invocation_metrics", 1) => deserialize_supported_row(line, |row| {
             TelemetryRow::ExtensionInvocationMetrics(Box::new(row))
         }),
-        ("command", 1) => deserialize_supported_row(line, TelemetryRow::Command),
-        ("storage_limit", 1) => deserialize_supported_row(line, TelemetryRow::StorageLimit),
+        ("command", 1) => deserialize_supported_row(line, |row| {
+            TelemetryRow::LowVolume(LowVolumeRow::Command(row))
+        }),
+        ("storage_limit", 1) => deserialize_supported_row(line, |row| {
+            TelemetryRow::LowVolume(LowVolumeRow::StorageLimit(row))
+        }),
         _ => RowClassification::UnknownSchema,
     }
 }
@@ -1107,6 +1183,17 @@ mod tests {
     }
 
     #[test]
+    fn prerelease_storage_limit_marker_has_v1_line_headroom() {
+        let day = UtcDay(NaiveDate::from_ymd_opt(2026, 8, 3).unwrap());
+        let version = format!("0.4.0-alpha.1+{}", "a".repeat(128));
+        let version = SymposiumVersion(Version::parse(&version).unwrap());
+        let row = StorageLimitV1::with_version(day, DroppedOperation::Configuration, version);
+        let physical_line_bytes = serde_json::to_vec(&row).unwrap().len() + 1;
+
+        assert!(physical_line_bytes <= MAX_STORAGE_LIMIT_LINE_BYTES / 2);
+    }
+
+    #[test]
     fn structurally_strict_row_rejects_future_version_when_deserialized_directly() {
         let example = example_row("storage_limit");
         let json = example.replacen(r#""v":1"#, r#""v":2"#, 1);
@@ -1138,6 +1225,8 @@ mod tests {
             (DroppedOperation::Command, "command"),
         ];
 
+        assert_eq!(DroppedOperation::ALL.len(), 7);
+        assert_eq!(cases.map(|(operation, _)| operation), DroppedOperation::ALL);
         assert_contract_names(&cases);
     }
 

@@ -54,6 +54,12 @@ macro_rules! strict_versioned_row {
             }
         }
 
+        impl $crate::telemetry::schema::VersionedRow for $row {
+            fn day(&self) -> $crate::telemetry::schema::UtcDay {
+                self.day
+            }
+        }
+
         // A manual implementation lets the macro name `$raw`; Serde's
         // `try_from` attribute accepts only a string literal.
         impl<'de> ::serde::Deserialize<'de> for $row {

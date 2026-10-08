@@ -222,8 +222,17 @@ child performs a bounded byte read, distinguishes TOML syntax errors, invalid
 state content, and unsupported versions without retaining parser source text,
 serializes the complete state before replacement, and requires mutable access
 to replace it. Its `daily_files.rs` sibling recognizes only canonical event
-and metric filenames. When private state is absent, storage initializes the
-high-water mark and identifier-window anchor from the later of the current UTC
+and metric filenames. Its `events.rs` sibling validates one-day low-volume
+batches, serializes every row before filesystem access, and appends them in one
+write after closing any partial final line left by an earlier failure.
+`storage/limits.rs` measures the two daily files, performs a bounded final-line
+inspection, reserves the largest version 1 storage-limit marker, and makes the
+all-or-marker decision with saturating arithmetic. Inspection or marker-
+preparation failure suppresses only the current event append, while a stored
+or surviving final marker closes low-volume recording for that UTC day without
+stopping aggregates. When
+private state is absent, storage initializes the high-water mark and
+identifier-window anchor from the later of the current UTC
 day and the newest surviving daily filename; malformed and unsupported state
 remain errors rather than entering this path.
 
