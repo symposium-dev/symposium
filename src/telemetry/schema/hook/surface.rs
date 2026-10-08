@@ -20,7 +20,7 @@ pub(in crate::telemetry) enum HookSurface {
 impl HookSurface {
     /// Return the frozen version 1 wire label.
     #[must_use]
-    pub(super) const fn as_str(self) -> &'static str {
+    pub(in crate::telemetry::schema) const fn as_str(self) -> &'static str {
         match self {
             Self::PreToolUse => "pre_tool_use",
             Self::PostToolUse => "post_tool_use",

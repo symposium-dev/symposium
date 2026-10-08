@@ -1,7 +1,7 @@
 use super::*;
 use crate::telemetry::schema::{
-    ExtensionInvocationPhase, MAX_IDENTIFIED_SESSIONS, RowClassification, TelemetryRow,
-    classify_row,
+    AggregateRow, ExtensionInvocationPhase, MAX_IDENTIFIED_SESSIONS, RowClassification,
+    TelemetryRow, classify_row,
     metrics::{ExtensionSessionCountError, SessionSet, SessionSetError},
     recorded_data_example_row,
 };
@@ -59,8 +59,9 @@ fn assert_scope_error(
 fn extension_invocation_example_round_trips_through_the_classifier() {
     let source = recorded_data_example_row("extension_invocation_metrics");
 
-    let RowClassification::Supported(TelemetryRow::ExtensionInvocationMetrics(row)) =
-        classify_row(source)
+    let RowClassification::Supported(TelemetryRow::Aggregate(AggregateRow::ExtensionInvocation(
+        row,
+    ))) = classify_row(source)
     else {
         panic!("documented extension-invocation row was not classified as supported");
     };

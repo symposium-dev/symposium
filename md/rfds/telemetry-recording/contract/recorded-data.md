@@ -108,7 +108,7 @@ Symposium derives each identifier for one narrow purpose:
 
 These values are pseudonymous, not anonymous: they deliberately permit limited linking inside the stated scope. `retention_subject` can link observed sessions across agents for D0-D30; this is the single exception needed for return measurement. No identifier links that cohort, a package subject, and a command subject, and there is no workspace id.
 
-All lines in your local telemetry directory still come from your Symposium home. File order and same-day events can therefore suggest which observations happened together.
+All lines in your local telemetry directory still come from your Symposium home. Low-volume event order and same-day membership can therefore suggest which observations happened together. Aggregate snapshots use canonical row order rather than arrival order, removing that ordering signal but not the same-day membership signal.
 
 ## Version 1 public identity allowlists
 
@@ -441,6 +441,10 @@ The row appears at most once per UTC day, and the marker itself counts toward 8 
 ### Data files and recording
 
 Low-volume events are appended as JSON lines in `events-YYYY-MM-DD.jsonl` under the inspectable `<config-dir>/telemetry/` data directory (default `~/.symposium/telemetry/`). Current cumulative hook, plugin-hook, and extension-invocation aggregates are JSON lines in `metrics-YYYY-MM-DD.jsonl`. Symposium rewrites this bounded snapshot atomically after a merge.
+
+Metric rows are ordered canonically by their wire labels: kind, agent, hook when present, scope when present, public source and name or unnamed reason when present, and finally `event_id`. Missing components sort before present components, and labels compare by their UTF-8 bytes. This ordering is independent of observation arrival order.
+
+Symposium loads a metric snapshot as one bounded unit. Every physical line must terminate with a line feed and must contain a recognized, valid aggregate row for the filename's day. Duplicate aggregate dimensions are allowed because identifier reset or private-state recovery can produce otherwise identical rows with different `event_id` values; only a repeated `event_id` is invalid. When one line is malformed, unknown, invalid, low-volume, for another day, or repeats an `event_id`, Symposium leaves the complete file unchanged and stops aggregate updates for that day. Low-volume event appends remain independent. `telemetry status` reports the category and physical line without retaining its contents, and `telemetry clear` is the recovery. A successful rewrite preserves the exact physical bytes of every untouched row while canonically serializing only inserted or replaced rows.
 
 One operation serializes its complete low-volume batch before opening the event file and appends it with one batch write. If an earlier failed append left a nonempty final line without a newline, the next append first writes one newline so the new batch cannot be swallowed into that malformed line. The repair byte counts toward the daily allowance.
 

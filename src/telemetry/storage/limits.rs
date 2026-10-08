@@ -182,7 +182,7 @@ struct PreparedStorageLimit {
 impl PreparedStorageLimit {
     fn new(day: UtcDay, operation: DroppedOperation) -> Result<Self, MarkerPreparationError> {
         let batch = storage_limit_batch(day, operation)?;
-        let reserved_line_bytes = marker_reservation(day, operation, batch.byte_len())?;
+        let reserved_line_bytes = marker_reservation(day)?;
 
         Ok(Self {
             batch,
@@ -191,11 +191,7 @@ impl PreparedStorageLimit {
     }
 }
 
-fn marker_reservation(
-    day: UtcDay,
-    operation: DroppedOperation,
-    actual_line_bytes: usize,
-) -> Result<u64, MarkerPreparationError> {
+fn marker_reservation(day: UtcDay) -> Result<u64, MarkerPreparationError> {
     // Every canonical UTC day and event id has a fixed wire length. The only
     // runtime-width field is the process-wide Symposium package version, so a
     // successful reservation is independent of later arguments in this run.
@@ -205,11 +201,8 @@ fn marker_reservation(
         return Ok(*reservation);
     }
 
-    let mut reservation = saturating_u64(actual_line_bytes);
+    let mut reservation = 0;
     for candidate in DroppedOperation::ALL {
-        if candidate == operation {
-            continue;
-        }
         let candidate = storage_limit_batch(day, candidate)?;
         reservation = reservation.max(saturating_u64(candidate.byte_len()));
     }
@@ -223,6 +216,15 @@ fn marker_reservation(
     }
 
     Ok(*RESERVATION.get_or_init(|| reservation))
+}
+
+/// Reserve the same future marker line used by event admission.
+///
+/// A build that cannot encode a version 1 marker falls back to the schema's
+/// maximum line size. This is conservative and keeps the metric policy total.
+#[must_use]
+pub(super) fn reserved_storage_limit_line_bytes(day: UtcDay) -> u64 {
+    marker_reservation(day).unwrap_or_else(|_| saturating_u64(MAX_STORAGE_LIMIT_LINE_BYTES))
 }
 
 #[derive(Debug)]
@@ -305,13 +307,33 @@ fn select_event_write(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct EventFileUsage {
+pub(super) struct EventFileUsage {
     byte_len: u64,
     tail_needs_repair: bool,
     ends_with_marker: bool,
 }
 
-fn inspect_event_file(path: &std::path::Path, day: UtcDay) -> io::Result<EventFileUsage> {
+impl EventFileUsage {
+    #[must_use]
+    pub(super) const fn byte_len(self) -> u64 {
+        self.byte_len
+    }
+
+    #[must_use]
+    pub(super) const fn tail_needs_repair(self) -> bool {
+        self.tail_needs_repair
+    }
+
+    #[must_use]
+    pub(super) const fn ends_with_marker(self) -> bool {
+        self.ends_with_marker
+    }
+}
+
+pub(super) fn inspect_event_file(
+    path: &std::path::Path,
+    day: UtcDay,
+) -> io::Result<EventFileUsage> {
     let mut file = match File::open(path) {
         Ok(file) => file,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {

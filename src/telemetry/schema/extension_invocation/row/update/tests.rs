@@ -4,7 +4,7 @@ use serde_json::json;
 use super::*;
 use crate::telemetry::{
     schema::{
-        RowClassification, RowKind, TelemetryRow, UtcSecond, classify_row,
+        AggregateRow, RowClassification, RowKind, TelemetryRow, UtcSecond, classify_row,
         extension_invocation::{
             ExtensionInvocationAgent, ExtensionInvocationAttribution, ExtensionTargetScope,
             UnnamedExtensionReason,
@@ -113,7 +113,9 @@ fn first_public_attempt_builds_identity_and_complete_session_counts_from_selecti
     assert_eq!(row.identified_sessions_completed, Some(0));
     assert!(matches!(
         classify_row(&json),
-        RowClassification::Supported(TelemetryRow::ExtensionInvocationMetrics(_))
+        RowClassification::Supported(TelemetryRow::Aggregate(AggregateRow::ExtensionInvocation(
+            _
+        )))
     ));
 }
 
@@ -201,7 +203,9 @@ fn failed_observation_reconciles_private_state_after_a_lost_snapshot_row() {
     assert_eq!(recovered.identified_sessions_completed, None);
     assert!(matches!(
         classify_row(&json),
-        RowClassification::Supported(TelemetryRow::ExtensionInvocationMetrics(_))
+        RowClassification::Supported(TelemetryRow::Aggregate(AggregateRow::ExtensionInvocation(
+            _
+        )))
     ));
 }
 
@@ -321,8 +325,9 @@ fn later_phases_accumulate_and_round_trip_as_one_supported_row() {
     }
     let json = serde_json::to_string(&row).unwrap();
 
-    let RowClassification::Supported(TelemetryRow::ExtensionInvocationMetrics(decoded)) =
-        classify_row(&json)
+    let RowClassification::Supported(TelemetryRow::Aggregate(AggregateRow::ExtensionInvocation(
+        decoded,
+    ))) = classify_row(&json)
     else {
         panic!("updated extension-invocation row was not supported");
     };

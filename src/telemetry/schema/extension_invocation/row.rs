@@ -8,7 +8,7 @@ use super::{ExtensionInvocationAgent, ExtensionTargetScope, UnnamedExtensionReas
 use crate::telemetry::identity::ExtensionSubject;
 
 use super::super::{
-    RowKind, SymposiumVersion,
+    AggregateSortKey, RowKind, SymposiumVersion,
     macros::strict_versioned_row,
     metrics::{
         ExtensionSessionCountError, ExtensionSessionCountInput, validate_extension_session_counts,
@@ -43,6 +43,23 @@ strict_versioned_row! {
     kind: RowKind::ExtensionInvocationMetrics,
     raw: RawExtensionInvocationMetricsV1,
     validate: validate_extension_invocation_metrics,
+}
+
+impl ExtensionInvocationMetricsV1 {
+    pub(in crate::telemetry::schema) fn snapshot_sort_key(&self) -> AggregateSortKey<'_> {
+        let (source, name) = self.target.as_ref().map_or((None, None), |target| {
+            (Some(target.source().as_str()), Some(target.name().as_str()))
+        });
+
+        AggregateSortKey::extension_invocation(
+            self.agent.as_str(),
+            self.target_scope.as_str(),
+            source,
+            name,
+            self.unnamed_reason.map(UnnamedExtensionReason::as_str),
+            self.event_id,
+        )
+    }
 }
 
 fn validate_extension_invocation_metrics(

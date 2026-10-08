@@ -436,6 +436,8 @@ Upload may use only accepted local fields and must preserve scoped-correlation b
 
 The local archive is the durable handoff for that future work. A future uploader consumes only recognized, validated rows from closed UTC days; it does not receive live observations or opaque JSONL files. Malformed, invalid, and unknown-version lines remain locally inspectable but are not uploadable by a reader that does not understand them.
 
+Aggregate snapshots use a canonical wire-label order rather than observation arrival order. This removes arrival ordering from the metric file, while same-day membership and low-volume event order remain visible local association signals.
+
 The uploader remains downstream of storage. It reads a bounded day under the telemetry lock, releases the lock before network work, and retries from unchanged local files. Upload failure does not extend local retention: data becomes ineligible on D31 whether it was acknowledged, failed, or never attempted. The uploader owns separate acknowledgement and retry state so transport concerns do not enter identity state or recording paths. Acknowledging all currently recognized rows is not a whole-day acknowledgement while unknown-version rows remain.
 
 This RFD supplies the closed-day and validated-reader boundary, not an uploader, upload state, network dependency, endpoint, authentication scheme, schedule, or upload setting. Using the archive avoids both a live second sink, which would couple recording to network behavior, and a duplicate upload outbox containing another copy of the data.

@@ -290,8 +290,8 @@ mod tests {
     use super::*;
     use crate::telemetry::{
         schema::{
-            IDENTIFIER_WINDOW_TEST_STATE, RowClassification, RowKind, TelemetryRow, UtcSecond,
-            classify_row, recording_observation,
+            AggregateRow, IDENTIFIER_WINDOW_TEST_STATE, RowClassification, RowKind, TelemetryRow,
+            UtcSecond, classify_row, recording_observation,
         },
         state::{HookAggregateStore, TelemetryStateV1},
     };
@@ -365,7 +365,7 @@ mod tests {
         );
         assert!(matches!(
             classify_row(&json),
-            RowClassification::Supported(TelemetryRow::HookMetrics(_))
+            RowClassification::Supported(TelemetryRow::Aggregate(AggregateRow::Hook(_)))
         ));
     }
 
@@ -474,7 +474,7 @@ mod tests {
         assert!(row.session_counts_complete);
         assert!(matches!(
             classify_row(&json),
-            RowClassification::Supported(TelemetryRow::HookMetrics(_))
+            RowClassification::Supported(TelemetryRow::Aggregate(AggregateRow::Hook(_)))
         ));
     }
 

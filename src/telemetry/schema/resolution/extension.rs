@@ -158,6 +158,18 @@ impl PublicSkillCoordinate {
     const fn as_extension(&self) -> &PublicExtensionCoordinate {
         &self.0
     }
+
+    /// Return the reviewed public source used by snapshot ordering.
+    #[must_use]
+    pub(in crate::telemetry::schema) const fn source(&self) -> PublicExtensionSource {
+        self.0.source()
+    }
+
+    /// Return the validated public name used by snapshot ordering.
+    #[must_use]
+    pub(in crate::telemetry::schema) const fn name(&self) -> &PublicExtensionName {
+        self.0.name()
+    }
 }
 
 impl TryFrom<PublicExtensionCoordinate> for PublicSkillCoordinate {
