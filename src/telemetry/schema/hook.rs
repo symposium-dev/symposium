@@ -5,7 +5,7 @@ use std::fmt;
 use outcome::HookOutcomeCounters;
 
 use super::{
-    RowKind, SymposiumVersion,
+    AggregateSortKey, RowKind, SymposiumVersion,
     agent::HookAgent,
     macros::strict_versioned_row,
     metrics::{LatencyHistogram, SessionCountError, SessionCountInput, validate_session_counts},
@@ -43,6 +43,12 @@ strict_versioned_row! {
     kind: RowKind::HookMetrics,
     raw: RawHookMetricsV1,
     validate: validate_hook_metrics,
+}
+
+impl HookMetricsV1 {
+    pub(in crate::telemetry::schema) fn snapshot_sort_key(&self) -> AggregateSortKey<'_> {
+        AggregateSortKey::hook(self.agent.as_str(), self.hook.as_str(), self.event_id)
+    }
 }
 
 fn validate_hook_metrics(raw: &RawHookMetricsV1) -> Result<(), HookMetricsError> {
@@ -145,7 +151,7 @@ impl std::error::Error for HookMetricsError {}
 #[cfg(test)]
 mod tests {
     use super::super::{
-        RowClassification, TelemetryRow, classify_row,
+        AggregateRow, RowClassification, TelemetryRow, classify_row,
         metrics::{MAX_IDENTIFIED_SESSIONS, SessionSet, SessionSetError},
         recorded_data_example_row,
     };
@@ -171,7 +177,8 @@ mod tests {
     fn hook_metrics_example_round_trips_through_the_classifier() {
         let source = recorded_data_example_row("hook_metrics");
 
-        let RowClassification::Supported(TelemetryRow::HookMetrics(row)) = classify_row(source)
+        let RowClassification::Supported(TelemetryRow::Aggregate(AggregateRow::Hook(row))) =
+            classify_row(source)
         else {
             panic!("documented hook metrics row was not classified as supported");
         };
@@ -477,7 +484,7 @@ mod tests {
 
         assert!(matches!(
             classification,
-            RowClassification::Supported(TelemetryRow::HookMetrics(_))
+            RowClassification::Supported(TelemetryRow::Aggregate(AggregateRow::Hook(_)))
         ));
     }
 }

@@ -52,7 +52,7 @@ use resolution::{
 };
 
 /// Random identifier for one telemetry row.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub(super) struct EventId(Uuid);
 
@@ -60,6 +60,12 @@ impl EventId {
     /// Generate a new random version 4 UUID.
     pub(super) fn new() -> Self {
         Self(Uuid::new_v4())
+    }
+}
+
+impl fmt::Display for EventId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
     }
 }
 
@@ -89,8 +95,10 @@ pub(super) enum RowKind {
     StorageLimit,
 }
 
-/// Common daily-file ownership exposed by every strict versioned row.
+/// Common stored identity exposed by every strict versioned row.
 pub(super) trait VersionedRow {
+    fn event_id(&self) -> EventId;
+
     fn day(&self) -> UtcDay;
 }
 
@@ -107,10 +115,96 @@ pub(super) enum RowClassification {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum TelemetryRow {
     LowVolume(LowVolumeRow),
-    // Box large aggregate rows so every enum value does not inherit their size.
-    HookMetrics(Box<HookMetricsV1>),
-    PluginHookMetrics(Box<PluginHookMetricsV1>),
-    ExtensionInvocationMetrics(Box<ExtensionInvocationMetricsV1>),
+    Aggregate(AggregateRow),
+}
+
+/// Atomically replaced aggregate row understood by this Symposium version.
+///
+/// Low-volume rows are deliberately absent, so they cannot enter the metric
+/// snapshot replacement path by construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum AggregateRow {
+    // Box large rows so every enum value does not inherit their size.
+    Hook(Box<HookMetricsV1>),
+    PluginHook(Box<PluginHookMetricsV1>),
+    ExtensionInvocation(Box<ExtensionInvocationMetricsV1>),
+}
+
+/// Stable wire-label key used to order rows inside a metric snapshot.
+///
+/// String comparison is bytewise, matching the canonical JSON vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(in crate::telemetry) struct AggregateSortKey<'a> {
+    kind: &'static str,
+    agent: &'static str,
+    hook: Option<&'static str>,
+    scope: Option<&'static str>,
+    source: Option<&'static str>,
+    name: Option<&'a str>,
+    unnamed_reason: Option<&'static str>,
+    event_id: EventId,
+}
+
+impl<'a> AggregateSortKey<'a> {
+    #[must_use]
+    pub(in crate::telemetry::schema) const fn hook(
+        agent: &'static str,
+        hook: &'static str,
+        event_id: EventId,
+    ) -> Self {
+        Self {
+            kind: "hook_metrics",
+            agent,
+            hook: Some(hook),
+            scope: None,
+            source: None,
+            name: None,
+            unnamed_reason: None,
+            event_id,
+        }
+    }
+
+    #[must_use]
+    pub(in crate::telemetry::schema) const fn plugin_hook(
+        agent: &'static str,
+        hook: &'static str,
+        scope: &'static str,
+        source: Option<&'static str>,
+        name: Option<&'a str>,
+        event_id: EventId,
+    ) -> Self {
+        Self {
+            kind: "plugin_hook_metrics",
+            agent,
+            hook: Some(hook),
+            scope: Some(scope),
+            source,
+            name,
+            unnamed_reason: None,
+            event_id,
+        }
+    }
+
+    #[must_use]
+    pub(in crate::telemetry::schema) const fn extension_invocation(
+        agent: &'static str,
+        scope: &'static str,
+        source: Option<&'static str>,
+        name: Option<&'a str>,
+        unnamed_reason: Option<&'static str>,
+        event_id: EventId,
+    ) -> Self {
+        Self {
+            kind: "extension_invocation_metrics",
+            agent,
+            hook: None,
+            scope: Some(scope),
+            source,
+            name,
+            unnamed_reason,
+            event_id,
+        }
+    }
 }
 
 /// Append-only telemetry row understood by this version of Symposium.
@@ -150,6 +244,38 @@ impl LowVolumeRow {
     }
 }
 
+impl AggregateRow {
+    /// Return the random identifier selecting this exact stored row.
+    #[must_use]
+    pub(super) fn event_id(&self) -> EventId {
+        match self {
+            Self::Hook(row) => row.event_id(),
+            Self::PluginHook(row) => row.event_id(),
+            Self::ExtensionInvocation(row) => row.event_id(),
+        }
+    }
+
+    /// Return the UTC day whose metric snapshot owns this row.
+    #[must_use]
+    pub(super) fn day(&self) -> UtcDay {
+        match self {
+            Self::Hook(row) => row.day(),
+            Self::PluginHook(row) => row.day(),
+            Self::ExtensionInvocation(row) => row.day(),
+        }
+    }
+
+    /// Return the canonical, arrival-order-independent snapshot key.
+    #[must_use]
+    pub(super) fn sort_key(&self) -> AggregateSortKey<'_> {
+        match self {
+            Self::Hook(row) => row.snapshot_sort_key(),
+            Self::PluginHook(row) => row.snapshot_sort_key(),
+            Self::ExtensionInvocation(row) => row.snapshot_sort_key(),
+        }
+    }
+}
+
 impl Serialize for LowVolumeRow {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -167,6 +293,19 @@ impl Serialize for LowVolumeRow {
     }
 }
 
+impl Serialize for AggregateRow {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Self::Hook(row) => row.serialize(serializer),
+            Self::PluginHook(row) => row.serialize(serializer),
+            Self::ExtensionInvocation(row) => row.serialize(serializer),
+        }
+    }
+}
+
 impl Serialize for TelemetryRow {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -174,9 +313,7 @@ impl Serialize for TelemetryRow {
     {
         match self {
             Self::LowVolume(row) => row.serialize(serializer),
-            Self::HookMetrics(row) => row.serialize(serializer),
-            Self::PluginHookMetrics(row) => row.serialize(serializer),
-            Self::ExtensionInvocationMetrics(row) => row.serialize(serializer),
+            Self::Aggregate(row) => row.serialize(serializer),
         }
     }
 }
@@ -531,14 +668,14 @@ pub(super) fn classify_row(line: &str) -> RowClassification {
         ("extension_resolution", 1) => deserialize_supported_row(line, |row| {
             TelemetryRow::LowVolume(LowVolumeRow::ExtensionResolution(row))
         }),
-        ("hook_metrics", 1) => {
-            deserialize_supported_row(line, |row| TelemetryRow::HookMetrics(Box::new(row)))
-        }
-        ("plugin_hook_metrics", 1) => {
-            deserialize_supported_row(line, |row| TelemetryRow::PluginHookMetrics(Box::new(row)))
-        }
+        ("hook_metrics", 1) => deserialize_supported_row(line, |row| {
+            TelemetryRow::Aggregate(AggregateRow::Hook(Box::new(row)))
+        }),
+        ("plugin_hook_metrics", 1) => deserialize_supported_row(line, |row| {
+            TelemetryRow::Aggregate(AggregateRow::PluginHook(Box::new(row)))
+        }),
         ("extension_invocation_metrics", 1) => deserialize_supported_row(line, |row| {
-            TelemetryRow::ExtensionInvocationMetrics(Box::new(row))
+            TelemetryRow::Aggregate(AggregateRow::ExtensionInvocation(Box::new(row)))
         }),
         ("command", 1) => deserialize_supported_row(line, |row| {
             TelemetryRow::LowVolume(LowVolumeRow::Command(row))
@@ -593,7 +730,7 @@ fn recorded_data_example_block_at(
 }
 
 #[cfg(test)]
-fn recorded_data_example_row(requested_kind: &str) -> &'static str {
+pub(in crate::telemetry) fn recorded_data_example_row(requested_kind: &str) -> &'static str {
     let example_block =
         recorded_data_example_block("## Example JSONL for every row kind", "```jsonl");
 
@@ -657,6 +794,7 @@ mod tests {
         let json = serde_json::to_string(&event_id).unwrap();
 
         assert_eq!(json, r#""9f2c41b6-495e-4c88-a22b-c597f8102aed""#);
+        assert_eq!(event_id.to_string(), "9f2c41b6-495e-4c88-a22b-c597f8102aed");
     }
 
     #[test]
@@ -667,6 +805,24 @@ mod tests {
         let decoded = serde_json::from_str::<EventId>(&json).unwrap();
 
         assert_eq!(decoded, event_id);
+    }
+
+    #[test]
+    fn aggregate_sort_kind_matches_each_rows_wire_kind() {
+        for kind in [
+            "hook_metrics",
+            "plugin_hook_metrics",
+            "extension_invocation_metrics",
+        ] {
+            let source = example_row(kind);
+            let RowClassification::Supported(TelemetryRow::Aggregate(row)) = classify_row(source)
+            else {
+                panic!("documented {kind} row was not classified as an aggregate");
+            };
+            let serialized = serde_json::to_value(&row).unwrap();
+
+            assert_eq!(serialized["kind"].as_str(), Some(row.sort_key().kind));
+        }
     }
 
     #[test]

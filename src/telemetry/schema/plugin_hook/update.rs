@@ -270,8 +270,8 @@ mod tests {
     use super::*;
     use crate::telemetry::{
         schema::{
-            IDENTIFIER_WINDOW_TEST_STATE, RowClassification, TelemetryRow, UtcSecond, classify_row,
-            extension::PublicExtensionSource, recording_observation,
+            AggregateRow, IDENTIFIER_WINDOW_TEST_STATE, RowClassification, TelemetryRow, UtcSecond,
+            classify_row, extension::PublicExtensionSource, recording_observation,
         },
         state::{PluginHookAggregateStore, TelemetryStateV1},
     };
@@ -339,7 +339,9 @@ mod tests {
         expected: PluginHookMetricsUpdateError,
     ) {
         let row_before = row.clone();
-        drop(select_private(store, recording, attribution.clone(), hook));
+        {
+            let _selection = select_private(store, recording, attribution.clone(), hook);
+        }
         let store_before = store.clone();
         let selected = select_private(store, recording, attribution, hook);
 
@@ -407,7 +409,7 @@ mod tests {
         assert!(row.session_counts_complete);
         assert!(matches!(
             classify_row(&json),
-            RowClassification::Supported(TelemetryRow::PluginHookMetrics(_))
+            RowClassification::Supported(TelemetryRow::Aggregate(AggregateRow::PluginHook(_)))
         ));
     }
 
@@ -482,7 +484,7 @@ mod tests {
         assert!(row.session_counts_complete);
         assert!(matches!(
             classify_row(&json),
-            RowClassification::Supported(TelemetryRow::PluginHookMetrics(_))
+            RowClassification::Supported(TelemetryRow::Aggregate(AggregateRow::PluginHook(_)))
         ));
     }
 
@@ -631,12 +633,14 @@ mod tests {
             None,
         );
         let row_before = row.clone();
-        drop(select_private(
-            &mut store,
-            &recording,
-            PluginHookAttribution::Unnamed,
-            HookSurface::PreToolUse,
-        ));
+        {
+            let _selection = select_private(
+                &mut store,
+                &recording,
+                PluginHookAttribution::Unnamed,
+                HookSurface::PreToolUse,
+            );
+        }
         let store_before = store.clone();
         let selected = select_private(
             &mut store,
