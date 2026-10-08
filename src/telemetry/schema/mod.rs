@@ -15,7 +15,7 @@ mod name;
 mod plugin_hook;
 mod resolution;
 
-pub(in crate::telemetry) use agent::{HookAgent, SupportedAgent};
+pub(in crate::telemetry) use agent::{HookAgent, SupportedAgent, VendorSessionId};
 pub(in crate::telemetry) use extension_invocation::{
     ExtensionInvocationAgent, ExtensionInvocationAttribution, ExtensionInvocationPhase,
     ExtensionTargetScope, UnnamedExtensionReason,
@@ -24,7 +24,8 @@ pub(in crate::telemetry) use extension_invocation::{
 pub(in crate::telemetry) use hook::{HookMetricsKey, HookOutcome, HookSurface};
 pub(in crate::telemetry) use metrics::MAX_IDENTIFIED_SESSIONS;
 pub(in crate::telemetry) use plugin_hook::{
-    PluginHookAttribution, PluginHookOutcome, PluginScope, PublicPluginCoordinate,
+    PluginHookAttempt, PluginHookAttribution, PluginHookOutcome, PluginScope,
+    PublicPluginCoordinate,
 };
 pub(in crate::telemetry) use resolution::extension::SafeSkillAttribution;
 

@@ -1,10 +1,39 @@
 //! Disjoint private stores for cumulative telemetry rows.
 
+pub(in crate::telemetry) mod recording;
+
+use std::fmt;
+
 use super::{
     extension_invocation::ExtensionInvocationAggregateStore, hook::HookAggregateStore,
     plugin_hook::PluginHookAggregateStore,
 };
 use crate::telemetry::schema::UtcDay;
+
+/// Aggregate row family named by coordinator and persistence diagnostics.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the recording coordinator consumes this in the next commit"
+    )
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::telemetry) enum AggregateFamily {
+    Hook,
+    PluginHook,
+    ExtensionInvocation,
+}
+
+impl fmt::Display for AggregateFamily {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Hook => "hook_metrics",
+            Self::PluginHook => "plugin_hook_metrics",
+            Self::ExtensionInvocation => "extension_invocation_metrics",
+        })
+    }
+}
 
 /// Result of consuming one aggregate private-state stage.
 ///
@@ -66,6 +95,22 @@ mod tests {
         state::{IDENTIFIER_WINDOW_TEST_STATE, TelemetryStateV1, recording_observation},
         storage::metrics::MetricSnapshot,
     };
+
+    #[test]
+    fn aggregate_families_use_their_wire_labels() {
+        let cases = [
+            (AggregateFamily::Hook, "hook_metrics"),
+            (AggregateFamily::PluginHook, "plugin_hook_metrics"),
+            (
+                AggregateFamily::ExtensionInvocation,
+                "extension_invocation_metrics",
+            ),
+        ];
+
+        for (family, label) in cases {
+            assert_eq!(family.to_string(), label);
+        }
+    }
 
     #[test]
     fn all_three_aggregate_stages_can_remain_live_together() {
