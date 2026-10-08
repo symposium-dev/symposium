@@ -170,6 +170,8 @@ impl HookMetricsV1 {
     pub(in crate::telemetry) const fn key(&self) -> HookMetricsKey {
         HookMetricsKey {
             day: self.day,
+            agent: self.agent,
+            hook: self.hook,
             hook_subject: self.hook_subject,
         }
     }

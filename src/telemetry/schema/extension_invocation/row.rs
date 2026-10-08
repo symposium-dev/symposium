@@ -60,6 +60,29 @@ impl ExtensionInvocationMetricsV1 {
             self.event_id,
         )
     }
+
+    /// Return the public identity used to recover this row's private entry.
+    ///
+    /// Validated unnamed and overflow rows return `None`; neither carries a
+    /// subject that could prove its identifier epoch.
+    #[must_use]
+    pub(in crate::telemetry) fn public_recovery_identity(
+        &self,
+    ) -> Option<(
+        ExtensionInvocationAgent,
+        &PublicSkillCoordinate,
+        ExtensionSubject,
+    )> {
+        match (&self.target, self.extension_subject) {
+            (Some(target), Some(subject)) => Some((self.agent, target, subject)),
+            (None, None) => None,
+            _ => {
+                unreachable!(
+                    "BUG: validated extension-invocation row has inconsistent public identity"
+                )
+            }
+        }
+    }
 }
 
 fn validate_extension_invocation_metrics(

@@ -62,6 +62,26 @@ impl PluginHookMetricsV1 {
             self.event_id,
         )
     }
+
+    /// Return the public identity used to recover this row's private entry.
+    ///
+    /// Validated unnamed and overflow rows return `None`; neither carries a
+    /// subject that could prove its identifier epoch.
+    #[must_use]
+    pub(in crate::telemetry) fn public_recovery_identity(
+        &self,
+    ) -> Option<(
+        HookAgent,
+        HookSurface,
+        &PublicPluginCoordinate,
+        PluginSubject,
+    )> {
+        match (&self.plugin, self.plugin_subject) {
+            (Some(plugin), Some(subject)) => Some((self.agent, self.hook, plugin, subject)),
+            (None, None) => None,
+            _ => unreachable!("BUG: validated plugin-hook row has inconsistent public identity"),
+        }
+    }
 }
 
 fn validate_plugin_hook_metrics(

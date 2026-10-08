@@ -36,6 +36,10 @@ use super::{
     },
 };
 
+mod recovery;
+
+pub(in crate::telemetry) use recovery::AggregateRecoveryIndex;
+
 /// Maximum physical size of one aggregate snapshot.
 pub(super) const MAX_METRIC_SNAPSHOT_BYTES: usize = 512 * 1024;
 
@@ -71,6 +75,12 @@ impl MetricSnapshot {
             day,
             rows: Vec::new(),
         }
+    }
+
+    /// Index rows that constrain admission or can recover a private entry.
+    #[must_use]
+    pub(in crate::telemetry) fn recovery_index(&self) -> AggregateRecoveryIndex {
+        AggregateRecoveryIndex::from_snapshot(self)
     }
 
     /// Borrow the row with this exact persisted identifier.

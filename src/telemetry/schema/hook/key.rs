@@ -2,7 +2,9 @@
 
 use super::surface::HookSurface;
 use crate::telemetry::{
-    identity::{DimensionWriter, HookDomain, HookSubject, IdentityDimension},
+    identity::{
+        DimensionWriter, HookDomain, HookSubject, IdentifierWindowScope, IdentityDimension,
+    },
     schema::{UtcDay, agent::HookAgent},
     state::BoundRecordingObservation,
 };
@@ -37,6 +39,8 @@ impl IdentityDimension for HookDimension {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(in crate::telemetry) struct HookMetricsKey {
     pub(super) day: UtcDay,
+    pub(super) agent: HookAgent,
+    pub(super) hook: HookSurface,
     pub(super) hook_subject: HookSubject,
 }
 
@@ -48,14 +52,45 @@ impl HookMetricsKey {
         agent: HookAgent,
         hook: HookSurface,
     ) -> Self {
-        let hook_subject = recording
-            .identifier_window_scope()
-            .derive(&HookDimension::new(agent, hook));
+        Self::from_scope(
+            recording.day(),
+            recording.identifier_window_scope(),
+            agent,
+            hook,
+        )
+    }
+
+    /// Rebuild a key from its source dimensions and stored identity scope.
+    #[must_use]
+    pub(in crate::telemetry) fn from_scope(
+        day: UtcDay,
+        scope: &IdentifierWindowScope<'_>,
+        agent: HookAgent,
+        hook: HookSurface,
+    ) -> Self {
+        let hook_subject = scope.derive(&HookDimension::new(agent, hook));
 
         Self {
-            day: recording.day(),
+            day,
+            agent,
+            hook,
             hook_subject,
         }
+    }
+
+    #[must_use]
+    pub(in crate::telemetry) const fn day(self) -> UtcDay {
+        self.day
+    }
+
+    #[must_use]
+    pub(in crate::telemetry) const fn agent(self) -> HookAgent {
+        self.agent
+    }
+
+    #[must_use]
+    pub(in crate::telemetry) const fn hook(self) -> HookSurface {
+        self.hook
     }
 }
 
@@ -112,5 +147,21 @@ mod tests {
 
         assert_ne!(baseline, other_agent);
         assert_ne!(baseline, other_surface);
+    }
+
+    #[test]
+    fn hook_key_rebuilds_from_source_dimensions() {
+        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let recording = recording_observation(&mut state);
+        let key = HookMetricsKey::new(&recording, HookAgent::Claude, HookSurface::PreToolUse);
+
+        let rebuilt = HookMetricsKey::from_scope(
+            key.day(),
+            recording.identifier_window_scope(),
+            key.agent(),
+            key.hook(),
+        );
+
+        assert_eq!(rebuilt, key);
     }
 }
