@@ -20,6 +20,7 @@ mod update;
 pub(in crate::telemetry) use key::HookMetricsKey;
 pub(in crate::telemetry) use outcome::HookOutcome;
 pub(in crate::telemetry) use surface::HookSurface;
+pub(in crate::telemetry) use update::{HookMetricObservation, HookMetricsUpdateError};
 
 strict_versioned_row! {
     /// Version 1 daily aggregate for one agent and hook surface.

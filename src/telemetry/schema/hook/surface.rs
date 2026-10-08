@@ -31,6 +31,12 @@ impl HookSurface {
     }
 }
 
+impl fmt::Display for HookSurface {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 /// A hook event that version 1 telemetry does not aggregate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::telemetry) struct UnsupportedHookEvent;
@@ -76,6 +82,10 @@ mod tests {
         ];
 
         assert_contract_names_with_labels(&cases, HookSurface::as_str);
+
+        for (surface, label) in cases {
+            assert_eq!(surface.to_string(), label);
+        }
     }
 
     #[test]

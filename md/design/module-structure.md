@@ -209,7 +209,13 @@ open day, public-row spend, and every recovered or newly admitted entry.
 Dropping a stage leaves its real store unchanged, while a selection error
 poisons the stage so commit discards all of its edits. `state/aggregate.rs`
 owns the three stores as disjoint fields and exposes the borrow seam that lets
-a future recording coordinator keep all three stages live together.
+the recording coordinator keep all three stages live together.
+`state/aggregate/recording.rs` owns the complete invocation input, derives its
+plugin totals, and returns an unpublished staged snapshot. Its `stages.rs`
+child opens all three private stages, checks the snapshot day, applies one
+staged unit, and performs the shared poison preflight; `rows.rs` selects and
+mutates each family's row against the owned snapshot; and `error.rs` keeps the
+content-free failure vocabulary.
 
 `state/codec.rs` owns canonical private-state serialization, version dispatch,
 schema decoding, and secret-safe diagnostics. The private `storage` module

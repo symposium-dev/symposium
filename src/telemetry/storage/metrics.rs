@@ -83,6 +83,12 @@ impl MetricSnapshot {
         AggregateRecoveryIndex::from_snapshot(self)
     }
 
+    /// Iterate over validated rows without exposing physical storage order.
+    #[cfg(test)]
+    pub(in crate::telemetry) fn rows(&self) -> impl Iterator<Item = &AggregateRow> {
+        self.rows.iter().map(|stored| &stored.row)
+    }
+
     /// Borrow the row with this exact persisted identifier.
     #[must_use]
     pub(in crate::telemetry) fn row(&self, event_id: EventId) -> Option<&AggregateRow> {

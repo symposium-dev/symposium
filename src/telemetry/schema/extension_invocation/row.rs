@@ -2,6 +2,10 @@
 
 mod update;
 
+pub(in crate::telemetry) use update::{
+    ExtensionInvocationMetricObservation, ExtensionInvocationMetricsUpdateError,
+};
+
 use std::fmt;
 
 use super::{ExtensionInvocationAgent, ExtensionTargetScope, UnnamedExtensionReason};
