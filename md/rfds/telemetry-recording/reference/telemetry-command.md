@@ -38,7 +38,7 @@ Telemetry: enabled (consent version 1)
 
 Possible states are `disabled`, `consent required`, and `enabled`. `Consent required` means the config contains an earlier or unversioned opt-in; Symposium records nothing until you accept the current disclosure.
 
-Stored files/bytes and physical lines cover daily event and aggregate-metric files; they exclude `.lock`, temporary files, and sibling private `telemetry-state.toml`. Supported rows are lines the current binary recognizes by kind and schema version and that satisfy the complete schema. An unknown schema has an unrecognized kind or version. An invalid row names a recognized schema but violates it. A malformed line has no usable `{v, kind}` JSON envelope. Unknown, invalid, and malformed lines stay on disk and remain visible through `show`. `status` never prints the secret identity key or pending keyed session sets.
+Stored files/bytes and physical lines cover daily event and aggregate-metric files; they exclude `.lock`, temporary files, and sibling private `telemetry-state.toml`. Supported rows are lines the current binary recognizes by kind and schema version and that satisfy the complete schema. An unknown schema has an unrecognized kind or version. An invalid row names a recognized schema but violates it. A malformed line has no usable `{v, kind}` JSON envelope. Unknown, invalid, and malformed lines stay on disk and remain visible through `show`. `status` never prints the secret identity key or pending keyed session sets. When the latest-opened-day high-water mark is later than the current UTC day, `status` reports that recording is paused until the clock catches up.
 
 ## `enable`
 
@@ -166,7 +166,7 @@ Telemetry identifiers reset. Existing telemetry data files were not changed.
 
 The command neither deletes nor rewrites old event or aggregate-metric rows. Identifiers before and after the reset cannot be derived into each other from the data files.
 
-If no identity state exists, the command reports that there is nothing to reset instead of creating a key. If existing state is unreadable or malformed, recording remains stopped until this command explicitly replaces it.
+If no identity state exists, the command reports that there is nothing to reset instead of creating a key. If existing state is unreadable or malformed, recording remains stopped until this command explicitly replaces it. If the file has a syntactically valid unsupported version, the command refuses to replace it and reports that a binary supporting that version must manage it.
 
 ## Files and private state
 

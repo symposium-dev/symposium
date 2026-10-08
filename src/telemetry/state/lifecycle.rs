@@ -17,8 +17,8 @@ const IDENTIFIER_WINDOW_DAYS: i64 = 30;
 impl TelemetryStateV1 {
     /// Rotate future identifiers and begin a new identifier window.
     ///
-    /// `identifier_window_anchor` must be the later of the current UTC day and
-    /// the durable latest-opened-day high-water mark. Unlike a stale session
+    /// The new identifier-window anchor is the later of `current_day` and the
+    /// durable latest-opened-day high-water mark. Unlike a stale session
     /// observation, an explicit reset is clamped to that high-water mark rather
     /// than dropped. The next observed session starts a new return cohort at
     /// D0.
@@ -40,9 +40,9 @@ impl TelemetryStateV1 {
     /// Returns an error when the operating system cannot generate a secret key.
     pub(in crate::telemetry) fn reset_identifiers(
         &mut self,
-        identifier_window_anchor: UtcDay,
+        current_day: UtcDay,
     ) -> Result<(), getrandom::Error> {
-        self.reset_identifiers_with(identifier_window_anchor, getrandom::fill)
+        self.reset_identifiers_with(current_day, getrandom::fill)
     }
 
     /// Reset identifiers using a caller-provided source of key bytes.
@@ -52,14 +52,17 @@ impl TelemetryStateV1 {
     /// Returns the source error without changing state if key generation fails.
     fn reset_identifiers_with<E>(
         &mut self,
-        identifier_window_anchor: UtcDay,
+        current_day: UtcDay,
         fill_key: impl FnOnce(&mut [u8]) -> Result<(), E>,
     ) -> Result<(), E> {
         let key = IdentityKey::generate_with(fill_key)?;
+        let latest_opened_day = self.identity.latest_opened_day;
+        let identifier_window_anchor = current_day.max(latest_opened_day);
         self.identity = IdentityState {
             key,
             identifier_window_anchor,
             return_cohort_anchor: None,
+            latest_opened_day,
         };
         Ok(())
     }
@@ -71,41 +74,43 @@ impl TelemetryStateV1 {
     /// observation for every row it emits, so a batch cannot cross identity
     /// windows partway through.
     ///
-    /// Storage must call this while holding the telemetry lock, after rejecting
-    /// a day before the latest-opened-day high-water mark. Any high-water
+    /// Storage must call this while holding the telemetry lock. The transition
+    /// rejects a day before the latest-opened-day high-water mark itself; an
+    /// earlier storage-boundary check is defense in depth. Any high-water
     /// advancement and this transition belong to one private-state replacement.
     /// That replacement must complete before the observation is bound or its
     /// selected anchor is used to derive an identifier.
     ///
     /// # Errors
     ///
-    /// Returns an error if the timestamp's UTC day precedes the stored
-    /// identifier-window anchor. A conforming storage caller filters this case
-    /// through its durable day policy; the check protects against an incorrect
-    /// caller or inconsistent state. State does not change on failure.
+    /// Returns an error if the timestamp's UTC day precedes the latest-opened
+    /// day or the stored identifier-window anchor. State does not change on
+    /// failure.
     pub(in crate::telemetry) fn observe_recording(
         &mut self,
         completed_at: UtcSecond,
     ) -> Result<RecordingObservation, RecordingObservationError> {
         let observation = self.select_recording(completed_at)?;
         self.identity.identifier_window_anchor = observation.identifier_window.anchor();
+        self.identity.latest_opened_day = completed_at.day();
         Ok(observation)
     }
 
     /// Bind a completed recording transition to the unchanged private state.
     ///
     /// Storage calls this only after atomically persisting the state changed by
-    /// [`Self::observe_recording`]. The selected anchor is checked before its
-    /// identity scope is exposed. Storage must still bind immediately after
-    /// persistence while holding the same telemetry lock; the anchor does not
-    /// identify a private-state instance by itself. When private-state
-    /// persistence is implemented, its successful write token will become an
-    /// additional required binding input so this ordering is structural.
+    /// [`Self::observe_recording`]. The selected anchor and high-water day are
+    /// checked before its identity scope is exposed. Storage must still bind
+    /// immediately after persistence while holding the same telemetry lock;
+    /// those values do not identify a private-state instance by themselves.
+    /// When private-state persistence is implemented, its successful write
+    /// token will become an additional required binding input so this ordering
+    /// is structural.
     ///
     /// # Errors
     ///
-    /// Returns an error when the stored identifier-window anchor differs from
-    /// the anchor selected by `observation`.
+    /// Returns an error when either the stored identifier-window anchor or
+    /// latest-opened day differs from the transition selected by `observation`.
     pub(in crate::telemetry) fn bind_recording_observation(
         &self,
         observation: RecordingObservation,
@@ -113,9 +118,18 @@ impl TelemetryStateV1 {
         let selected_anchor = observation.identifier_window.anchor();
         let current_anchor = self.identity.identifier_window_anchor;
         if selected_anchor != current_anchor {
-            return Err(RecordingObservationBindingError {
+            return Err(RecordingObservationBindingError::IdentifierWindowChanged {
                 selected_anchor,
                 current_anchor,
+            });
+        }
+
+        let selected_day = observation.completed_at.day();
+        let current_day = self.identity.latest_opened_day;
+        if selected_day != current_day {
+            return Err(RecordingObservationBindingError::LatestOpenedDayChanged {
+                selected_day,
+                current_day,
             });
         }
 
@@ -133,8 +147,9 @@ impl TelemetryStateV1 {
     /// existing cohort keeps its anchor through D30; the first later
     /// observation starts another D0.
     ///
-    /// Storage must call this while holding the telemetry lock, after rejecting
-    /// a day before the latest-opened-day high-water mark. Any high-water
+    /// Storage must call this while holding the telemetry lock. The transition
+    /// rejects a day before the latest-opened-day high-water mark itself; an
+    /// earlier storage-boundary check is defense in depth. Any high-water
     /// advancement and this complete session transition belong to one
     /// private-state replacement. That replacement must complete before the
     /// `session_start` row is appended or either returned anchor is used to
@@ -142,10 +157,9 @@ impl TelemetryStateV1 {
     ///
     /// # Errors
     ///
-    /// Returns an error if the timestamp's UTC day precedes either stored
-    /// anchor. A conforming storage caller filters this case through its durable
-    /// day policy; these checks protect against an incorrect caller or
-    /// inconsistent state. Neither anchor changes when validation fails.
+    /// Returns an error if the timestamp's UTC day precedes the latest-opened
+    /// day or either stored anchor. Neither anchor changes when validation
+    /// fails.
     pub(in crate::telemetry) fn observe_session(
         &mut self,
         completed_at: UtcSecond,
@@ -156,6 +170,7 @@ impl TelemetryStateV1 {
 
         self.identity.identifier_window_anchor = recording.identifier_window.anchor();
         self.identity.return_cohort_anchor = Some(return_cohort.anchor());
+        self.identity.latest_opened_day = effective_day;
 
         Ok(SessionObservation {
             recording,
@@ -209,7 +224,16 @@ impl TelemetryStateV1 {
         &self,
         completed_at: UtcSecond,
     ) -> Result<RecordingObservation, RecordingObservationError> {
-        let identifier_window = self.select_identifier_window(completed_at.day())?;
+        let observed_day = completed_at.day();
+        let latest_opened_day = self.identity.latest_opened_day;
+        if observed_day < latest_opened_day {
+            return Err(RecordingObservationError::BeforeHighWater {
+                observed_day,
+                latest_opened_day,
+            });
+        }
+
+        let identifier_window = self.select_identifier_window(observed_day)?;
         Ok(RecordingObservation {
             completed_at,
             identifier_window,
@@ -225,7 +249,7 @@ impl TelemetryStateV1 {
         let elapsed_days = effective_day.days_since(anchor);
 
         if elapsed_days < 0 {
-            return Err(RecordingObservationError {
+            return Err(RecordingObservationError::BeforeIdentifierWindow {
                 observed_day: effective_day,
                 window_anchor: anchor,
             });
@@ -307,39 +331,73 @@ impl BoundRecordingObservation<'_> {
     }
 }
 
-/// A recording observation whose selected window no longer matches state.
+/// A recording observation whose selected identity state no longer matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::telemetry) struct RecordingObservationBindingError {
-    selected_anchor: UtcDay,
-    current_anchor: UtcDay,
+pub(in crate::telemetry) enum RecordingObservationBindingError {
+    IdentifierWindowChanged {
+        selected_anchor: UtcDay,
+        current_anchor: UtcDay,
+    },
+    LatestOpenedDayChanged {
+        selected_day: UtcDay,
+        current_day: UtcDay,
+    },
 }
 
 impl fmt::Display for RecordingObservationBindingError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "recording selected identifier-window anchor {}, but current state uses {}",
-            self.selected_anchor, self.current_anchor
-        )
+        match self {
+            Self::IdentifierWindowChanged {
+                selected_anchor,
+                current_anchor,
+            } => write!(
+                formatter,
+                "recording selected identifier-window anchor {selected_anchor}, but current state uses {current_anchor}"
+            ),
+            Self::LatestOpenedDayChanged {
+                selected_day,
+                current_day,
+            } => write!(
+                formatter,
+                "recording selected latest-opened day {selected_day}, but current state uses {current_day}"
+            ),
+        }
     }
 }
 
 impl std::error::Error for RecordingObservationBindingError {}
 
-/// A recording operation earlier than its stored identifier-window anchor.
+/// A recording operation earlier than a stored monotonic identity day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(in crate::telemetry) struct RecordingObservationError {
-    observed_day: UtcDay,
-    window_anchor: UtcDay,
+pub(in crate::telemetry) enum RecordingObservationError {
+    BeforeHighWater {
+        observed_day: UtcDay,
+        latest_opened_day: UtcDay,
+    },
+    BeforeIdentifierWindow {
+        observed_day: UtcDay,
+        window_anchor: UtcDay,
+    },
 }
 
 impl fmt::Display for RecordingObservationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            formatter,
-            "observed day {} precedes the identifier-window anchor {}",
-            self.observed_day, self.window_anchor
-        )
+        match self {
+            Self::BeforeHighWater {
+                observed_day,
+                latest_opened_day,
+            } => write!(
+                formatter,
+                "observed day {observed_day} precedes the latest opened day {latest_opened_day}"
+            ),
+            Self::BeforeIdentifierWindow {
+                observed_day,
+                window_anchor,
+            } => write!(
+                formatter,
+                "observed day {observed_day} precedes the identifier-window anchor {window_anchor}"
+            ),
+        }
     }
 }
 
@@ -492,7 +550,7 @@ impl ReturnCohortUpdate {
 /// An observed session earlier than one of its stored identity anchors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::telemetry) enum SessionObservationError {
-    BeforeIdentifierWindow(RecordingObservationError),
+    Recording(RecordingObservationError),
     BeforeReturnCohort {
         observed_day: UtcDay,
         cohort_anchor: UtcDay,
@@ -501,14 +559,14 @@ pub(in crate::telemetry) enum SessionObservationError {
 
 impl From<RecordingObservationError> for SessionObservationError {
     fn from(error: RecordingObservationError) -> Self {
-        Self::BeforeIdentifierWindow(error)
+        Self::Recording(error)
     }
 }
 
 impl fmt::Display for SessionObservationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BeforeIdentifierWindow(error) => fmt::Display::fmt(error, formatter),
+            Self::Recording(error) => fmt::Display::fmt(error, formatter),
             Self::BeforeReturnCohort {
                 observed_day,
                 cohort_anchor,
@@ -523,7 +581,7 @@ impl fmt::Display for SessionObservationError {
 impl std::error::Error for SessionObservationError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::BeforeIdentifierWindow(error) => Some(error),
+            Self::Recording(error) => Some(error),
             Self::BeforeReturnCohort { .. } => None,
         }
     }
@@ -576,8 +634,23 @@ mod tests {
         identifier_window_anchor: &str,
         return_cohort_anchor: &str,
     ) -> String {
+        let latest_opened_day = identifier_window_anchor.max(return_cohort_anchor);
+        state_with_anchors_at_high_water(
+            key,
+            identifier_window_anchor,
+            return_cohort_anchor,
+            latest_opened_day,
+        )
+    }
+
+    fn state_with_anchors_at_high_water(
+        key: &str,
+        identifier_window_anchor: &str,
+        return_cohort_anchor: &str,
+        latest_opened_day: &str,
+    ) -> String {
         format!(
-            "version = 1\n\n[identity]\nkey = \"{key}\"\nidentifier-window-anchor = \"{identifier_window_anchor}\"\nreturn-cohort-anchor = \"{return_cohort_anchor}\"\n"
+            "version = 1\n\n[identity]\nkey = \"{key}\"\nidentifier-window-anchor = \"{identifier_window_anchor}\"\nreturn-cohort-anchor = \"{return_cohort_anchor}\"\nlatest-opened-day = \"{latest_opened_day}\"\n"
         )
     }
 
@@ -586,8 +659,20 @@ mod tests {
     }
 
     fn state_without_return_cohort_at(key: &str, identifier_window_anchor: &str) -> String {
+        state_without_return_cohort_at_high_water(
+            key,
+            identifier_window_anchor,
+            identifier_window_anchor,
+        )
+    }
+
+    fn state_without_return_cohort_at_high_water(
+        key: &str,
+        identifier_window_anchor: &str,
+        latest_opened_day: &str,
+    ) -> String {
         format!(
-            "version = 1\n\n[identity]\nkey = \"{key}\"\nidentifier-window-anchor = \"{identifier_window_anchor}\"\n"
+            "version = 1\n\n[identity]\nkey = \"{key}\"\nidentifier-window-anchor = \"{identifier_window_anchor}\"\nlatest-opened-day = \"{latest_opened_day}\"\n"
         )
     }
 
@@ -605,8 +690,29 @@ mod tests {
             .unwrap();
         let serialized = toml::to_string_pretty(&state).unwrap();
 
-        let expected = state_without_return_cohort_at(GENERATED_KEY, "2026-10-15");
+        let expected =
+            state_without_return_cohort_at_high_water(GENERATED_KEY, "2026-10-15", "2026-09-10");
         assert_eq!(serialized, expected);
+    }
+
+    #[test]
+    fn identifier_reset_clamps_a_rolled_back_clock_to_the_high_water_mark() {
+        let source =
+            state_with_anchors_at_high_water(KEY, "2026-12-01", "2026-08-11", "2026-09-10");
+        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+
+        state
+            .reset_identifiers_with::<Infallible>(day(2026, 9, 1), |bytes| {
+                bytes.fill(GENERATED_KEY_BYTE);
+                Ok(())
+            })
+            .unwrap();
+        let serialized = toml::to_string_pretty(&state).unwrap();
+
+        assert_eq!(
+            serialized,
+            state_without_return_cohort_at_high_water(GENERATED_KEY, "2026-09-10", "2026-09-10",)
+        );
     }
 
     #[test]
@@ -703,7 +809,7 @@ mod tests {
     }
 
     #[test]
-    fn recording_before_the_window_anchor_is_rejected_without_mutation() {
+    fn recording_before_the_high_water_mark_is_rejected_without_mutation() {
         let source = state_with_return_cohort(KEY);
         let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
 
@@ -712,7 +818,26 @@ mod tests {
 
         assert_eq!(
             result,
-            Err(RecordingObservationError {
+            Err(RecordingObservationError::BeforeHighWater {
+                observed_day: day(2026, 9, 9),
+                latest_opened_day: day(2026, 9, 10),
+            })
+        );
+        assert_eq!(serialized, source);
+    }
+
+    #[test]
+    fn recording_before_the_window_anchor_is_rejected_without_mutation() {
+        let source =
+            state_with_anchors_at_high_water(KEY, "2026-09-10", "2026-08-11", "2026-09-01");
+        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+
+        let result = state.observe_recording(completion_time(2026, 9, 9));
+        let serialized = toml::to_string_pretty(&state).unwrap();
+
+        assert_eq!(
+            result,
+            Err(RecordingObservationError::BeforeIdentifierWindow {
                 observed_day: day(2026, 9, 9),
                 window_anchor: day(2026, 9, 10),
             })
@@ -735,9 +860,31 @@ mod tests {
 
         assert_eq!(
             result.err(),
-            Some(RecordingObservationBindingError {
+            Some(RecordingObservationBindingError::IdentifierWindowChanged {
                 selected_anchor: day(2026, 9, 10),
                 current_anchor: day(2026, 10, 25),
+            })
+        );
+    }
+
+    #[test]
+    fn recording_binding_rejects_an_older_day_in_the_same_window() {
+        let source = state_with_anchors(KEY, "2026-09-10", "2026-08-11");
+        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let older_observation = state
+            .observe_recording(completion_time(2026, 9, 11))
+            .unwrap();
+        let _current_observation = state
+            .observe_recording(completion_time(2026, 9, 12))
+            .unwrap();
+
+        let result = state.bind_recording_observation(older_observation);
+
+        assert_eq!(
+            result.err(),
+            Some(RecordingObservationBindingError::LatestOpenedDayChanged {
+                selected_day: day(2026, 9, 11),
+                current_day: day(2026, 9, 12),
             })
         );
     }
@@ -876,7 +1023,7 @@ mod tests {
         assert!(matches!(
             result,
             Err(SessionObservationBindingError::IdentifierWindowChanged(
-                RecordingObservationBindingError {
+                RecordingObservationBindingError::IdentifierWindowChanged {
                     selected_anchor,
                     current_anchor,
                 }
@@ -885,14 +1032,14 @@ mod tests {
     }
 
     #[test]
-    fn binding_rejects_an_observation_from_an_older_return_cohort() {
+    fn binding_rejects_a_changed_return_cohort_anchor() {
         let source = state_with_anchors(KEY, "2026-09-01", "2026-08-11");
         let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
-        let older_observation = state.observe_session(completion_time(2026, 9, 10)).unwrap();
+        let observation = state.observe_session(completion_time(2026, 9, 10)).unwrap();
         let current_cohort = day(2026, 9, 11);
-        let _current_observation = state.observe_session(completion_time(2026, 9, 11)).unwrap();
+        state.identity.return_cohort_anchor = Some(current_cohort);
 
-        let result = state.bind_session_observation(older_observation);
+        let result = state.bind_session_observation(observation);
 
         assert!(matches!(
             result,
@@ -907,9 +1054,9 @@ mod tests {
     fn binding_rejects_an_observation_after_identifier_reset() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-09-10");
         let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
-        let observation = state.observe_session(completion_time(2026, 9, 11)).unwrap();
+        let observation = state.observe_session(completion_time(2026, 9, 10)).unwrap();
         state
-            .reset_identifiers_with::<Infallible>(day(2026, 9, 10), |bytes| {
+            .reset_identifiers_with::<Infallible>(day(2026, 9, 9), |bytes| {
                 bytes.fill(GENERATED_KEY_BYTE);
                 Ok(())
             })
@@ -956,7 +1103,7 @@ mod tests {
 
         assert_eq!(
             error.to_string(),
-            "observed day 2026-09-09 precedes the identifier-window anchor 2026-09-10"
+            "observed day 2026-09-09 precedes the latest opened day 2026-09-10"
         );
         assert_eq!(serialized, source);
     }
@@ -1074,7 +1221,8 @@ mod tests {
 
     #[test]
     fn invalid_cohort_day_does_not_partially_advance_the_window() {
-        let source = state_with_anchors(KEY, "2026-08-01", "2026-09-10");
+        let source =
+            state_with_anchors_at_high_water(KEY, "2026-08-01", "2026-09-10", "2026-08-01");
         let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
 
         let error = state

@@ -27,7 +27,7 @@ pub(in crate::telemetry) use plugin_hook::{
     PluginHookAttribution, PluginHookOutcome, PluginScope, PublicPluginCoordinate,
 };
 
-use std::{fmt, num::NonZeroU64, sync::LazyLock};
+use std::{fmt, num::NonZeroU64, str::FromStr, sync::LazyLock};
 
 use chrono::{DateTime, NaiveDate, SecondsFormat, Timelike, Utc};
 use semver::Version;
@@ -182,6 +182,32 @@ impl fmt::Display for UtcDay {
     }
 }
 
+/// A string that is not a canonical UTC calendar day.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct InvalidUtcDay;
+
+impl fmt::Display for InvalidUtcDay {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("expected a UTC day in YYYY-MM-DD form")
+    }
+}
+
+impl std::error::Error for InvalidUtcDay {}
+
+impl FromStr for UtcDay {
+    type Err = InvalidUtcDay;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if !has_utc_day_shape(value) {
+            return Err(InvalidUtcDay);
+        }
+
+        NaiveDate::parse_from_str(value, "%Y-%m-%d")
+            .map(Self)
+            .map_err(|_| InvalidUtcDay)
+    }
+}
+
 impl Serialize for UtcDay {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -198,12 +224,7 @@ impl<'de> Deserialize<'de> for UtcDay {
     {
         let value = String::deserialize(deserializer)?;
 
-        if !has_utc_day_shape(&value) {
-            return Err(D::Error::custom("expected a UTC day in YYYY-MM-DD form"));
-        }
-
-        let date = NaiveDate::parse_from_str(&value, "%Y-%m-%d").map_err(D::Error::custom)?;
-        Ok(Self(date))
+        value.parse().map_err(D::Error::custom)
     }
 }
 

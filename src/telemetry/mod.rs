@@ -14,6 +14,13 @@
 mod identity;
 mod schema;
 mod state;
+mod storage;
+
+/// Namespace reserved for temporary files owned by telemetry storage.
+///
+/// Lazy cleanup may delete every file carrying this prefix, and status excludes
+/// the same files from its stored-file and byte counts.
+const TEMPORARY_FILE_PREFIX: &str = ".telemetry-tmp-";
 
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;

@@ -165,10 +165,7 @@ fn source_position(source: &str, offset: usize) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    const CANONICAL_STATE: &str = "version = 1\n\n[identity]\n\
-                                   key = \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n\
-                                   identifier-window-anchor = \"2026-08-03\"\n";
+    use crate::telemetry::state::IDENTIFIER_WINDOW_TEST_STATE;
 
     fn assert_diagnostic_redacts(error: &StateDecodeError, sensitive: &str) {
         assert!(!error.to_string().contains(sensitive));
@@ -178,11 +175,11 @@ mod tests {
 
     #[test]
     fn canonical_state_decodes_and_reencodes_without_drift() {
-        let state = decode(CANONICAL_STATE.as_bytes()).unwrap();
+        let state = decode(IDENTIFIER_WINDOW_TEST_STATE.as_bytes()).unwrap();
 
         let encoded = encode(&state).unwrap();
 
-        assert_eq!(encoded, CANONICAL_STATE);
+        assert_eq!(encoded, IDENTIFIER_WINDOW_TEST_STATE);
     }
 
     #[test]
@@ -212,7 +209,8 @@ mod tests {
         const INVALID_STATE_SECRET: &str = "recognizable-invalid-private-key";
         let invalid_state = format!(
             "version = 1\n\n[identity]\nkey = \"{INVALID_STATE_SECRET}\"\n\
-             identifier-window-anchor = \"2026-08-03\"\n"
+             identifier-window-anchor = \"2026-08-03\"\n\
+             latest-opened-day = \"2026-08-03\"\n"
         );
         let Err(invalid_state_error) = decode(invalid_state.as_bytes()) else {
             panic!("accepted private state containing an invalid identity key");
