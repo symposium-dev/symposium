@@ -40,6 +40,8 @@ Possible states are `disabled`, `consent required`, and `enabled`. `Consent requ
 
 Stored files/bytes and physical lines cover daily event and aggregate-metric files; they exclude `.lock`, temporary files, and sibling private `telemetry-state.toml`. Supported rows are lines the current binary recognizes by kind and schema version and that satisfy the complete schema. An unknown schema has an unrecognized kind or version. An invalid row names a recognized schema but violates it. A malformed line has no usable `{v, kind}` JSON envelope. Unknown, invalid, and malformed lines stay on disk and remain visible through `show`. `status` never prints the secret identity key or pending keyed session sets. When the latest-opened-day high-water mark is later than the current UTC day, `status` reports that recording is paused until the clock catches up.
 
+If an aggregate snapshot cannot be updated safely, `status` also reports its content-free category and physical line number. A malformed, unknown, invalid, wrong-day, low-volume, duplicate-`event_id`, oversized, or unterminated metric snapshot remains byte-for-byte on disk and stops aggregate updates for that day. Event appends continue, and `telemetry clear` is the recovery.
+
 ## `enable`
 
 `enable` presents the current disclosure and asks whether to begin local recording. It does not enable telemetry unless the user explicitly accepts.
@@ -198,6 +200,8 @@ Session sets and contribution counts are never copied into metric rows. Symposiu
 Recorders make one non-waiting attempt on the lock in the telemetry data directory. The lock guards data and private state mutations. On contention, the recorder drops the entire event batch or aggregate observation rather than delaying the agent or command.
 
 Event batches are appended. Hook, plugin-hook, and extension-invocation observations are merged into a bounded, canonically ordered snapshot using a same-directory temporary write and atomic replace. A crash leaves either the old or new complete snapshot; abandoned temporary files are ignored and cleaned lazily.
+
+Snapshot order compares the kind, agent, optional hook, optional scope, optional public coordinate or unnamed reason, and `event_id` wire labels rather than preserving observation arrival. Loading fails closed on any unsafe physical line and never rewrites the remaining lines from a partial parse. Duplicate dimensions with distinct row identifiers remain legal; only duplicate `event_id` values are rejected. Untouched rows retain their exact physical bytes across a successful replacement.
 
 Session-count state is atomically replaced first and carries the snapshot contribution count. After a failed snapshot write, a mismatch discards the sets and makes the row's session counts incomplete for that day.
 
