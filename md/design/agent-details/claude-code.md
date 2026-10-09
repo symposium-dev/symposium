@@ -217,3 +217,48 @@ user's behalf); approve once via `/mcp`, or add the name to
 Registration is idempotent — if the entry already exists with the
 correct values, no changes are made. If the entry exists but has stale
 values (e.g. the binary moved), it is updated in place.
+
+## Plugin Delivery
+
+A plugin enabled with `use --global` reaches Claude Code as a
+**skills-directory plugin**: symposium copies the compiled plugin directory
+into the user skills directory, `~/.claude/skills/<plugin>/`
+(`$CLAUDE_CONFIG_DIR/skills/<plugin>/` when that variable is set, in which case
+Claude Code ignores `~/.claude/skills/`). Claude Code loads every folder there
+that holds `.claude-plugin/plugin.json` as the plugin `<plugin>@skills-dir`, in
+place, in every project. Its skills are invoked as `/<plugin>:<skill>`.
+
+Nothing is written to `settings.json`, `known_marketplaces.json` or
+`installed_plugins.json`. A user who runs `claude plugin disable
+<plugin>@skills-dir` gets an `enabledPlugins` entry that symposium never
+touches.
+
+Verified against Claude Code 2.1.284 by asking the agent (`claude plugin list
+--json`, `claude plugin details`, and the `system/init` event of `claude -p`):
+
+- The plugin is listed in the first session after `cargo agents sync`, and
+  `claude plugin list` shows it without a prior session.
+- An edit at the same version is picked up by the next session: the copy is
+  read in place, and nothing is cached under `~/.claude/plugins/cache/`.
+- Removing the directory removes the plugin, with no residue and no error.
+- The plugin takes its identity from its manifest, not its directory name, so
+  a copy moved to a hashed directory name keeps its name.
+- A plugin written during the `SessionStart` hook (symposium's auto-sync) loads
+  in the next session, or after `/reload-plugins` in the current one.
+- A plain `SKILL.md` folder of the user's own next to it is unaffected.
+
+The alternative, registering the staging root as a directory marketplace
+(`extraKnownMarketplaces` plus `enabledPlugins`), also loads in place, but
+Claude Code then writes `~/.claude/plugins/known_marketplaces.json` and
+`installed_plugins.json` entries of its own that outlive the registration, and
+at project scope two repositories using the same marketplace name loaded each
+other's content.
+
+### Project scope
+
+A `<project>/.claude/skills/<plugin>/` folder with the same layout loads as a
+project-scoped `<plugin>@skills-dir`, only in a folder the user has trusted (an
+untrusted folder lists it as `(suppressed)@skills-dir`; plain project skills
+still load). A user-level plugin of the same name shadows the project one, and
+`claude plugin list` reports it. Symposium does not write project-scoped
+plugins yet.
