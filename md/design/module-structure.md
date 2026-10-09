@@ -223,10 +223,13 @@ staged unit, and performs the shared poison preflight; `rows.rs` selects and
 mutates each family's row against the owned snapshot; and `error.rs` keeps the
 content-free failure vocabulary.
 
-`state/aggregate/persistence/sessions.rs` is the private wire bridge for the
-shared session pair. It preserves permanent incompleteness, rejects malformed
-or oversized raw sets, and checks the family-specific subset and contribution
-relationships without giving runtime trackers general-purpose serialization.
+`state/aggregate/persistence.rs` wraps the three family wire shapes and owns
+cross-family row-identifier uniqueness plus agreement between every store day
+and the identity high-water day. Its `sessions.rs` child is the private wire
+bridge for the shared session pair. It preserves permanent incompleteness,
+rejects malformed or oversized raw sets, and checks the family-specific subset
+and contribution relationships without giving runtime trackers general-purpose
+serialization.
 Its `hook.rs` sibling defines the strict borrowed and owned hook-store wire
 shapes, re-derives hook subjects from the document's identity scope, and runs
 the same store validator before encoding and after reconstruction.
