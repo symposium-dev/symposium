@@ -221,6 +221,18 @@ content-free failure vocabulary.
 shared session pair. It preserves permanent incompleteness, rejects malformed
 or oversized raw sets, and checks the family-specific subset and contribution
 relationships without giving runtime trackers general-purpose serialization.
+Its `hook.rs` sibling defines the strict borrowed and owned hook-store wire
+shapes, re-derives hook subjects from the document's identity scope, and runs
+the same store validator before encoding and after reconstruction.
+`plugin_hook.rs` adds the plugin-hook row identifier, strict public, unnamed,
+and overflow bucket shapes, and persisted public-row spend. It re-derives
+public plugin subjects from the document scope and rejects duplicate keys,
+row identifiers, inconsistent spend, and mismatched entry identity.
+`extension_invocation.rs` persists the analogous extension store while keeping
+each public bucket's validated skill target and complete safe resolution path
+together. It revalidates recursive paths during decoding and re-derives both
+agent and extension subjects from the document scope instead of trusting
+stored subjects.
 
 `state/codec.rs` owns canonical private-state serialization, version dispatch,
 schema decoding, and secret-safe diagnostics. The private `storage` module

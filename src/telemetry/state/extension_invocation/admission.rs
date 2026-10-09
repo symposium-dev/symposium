@@ -14,6 +14,7 @@ use crate::telemetry::{
         BoundRecordingObservation, DayBeforeCurrent, StageCommit,
         open_day::OpenDayUpdate,
         public_row_budget::{DailyPublicRowBudget, PublicRowAdmission},
+        session_pair::TrackedSessionPair,
         staged_entries::StagedEntries,
     },
     storage::metrics::AggregateRecoveryIndex,
@@ -187,7 +188,7 @@ pub(in crate::telemetry::state) enum ExtensionInvocationBucketKey {
 
 /// Private state paired with one extension-invocation aggregate row.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ExtensionInvocationAggregateState {
+pub(in crate::telemetry::state) struct ExtensionInvocationAggregateState {
     event_id: EventId,
     bucket: AdmittedExtensionBucket,
     session_counts: ExtensionSessionCountTracker<ExtensionInvocationAggregateKey>,
@@ -220,6 +221,43 @@ impl ExtensionInvocationAggregateState {
             event_id,
             bucket,
             session_counts: ExtensionSessionCountTracker::new(key.clone()),
+        }
+    }
+
+    /// Borrow the private row identity and session tracker for persistence.
+    #[must_use]
+    pub(in crate::telemetry::state) const fn persistence_parts(
+        &self,
+    ) -> (
+        EventId,
+        &AdmittedExtensionBucket,
+        &ExtensionSessionCountTracker<ExtensionInvocationAggregateKey>,
+    ) {
+        (self.event_id, &self.bucket, &self.session_counts)
+    }
+
+    /// Rebuild an entry from decoded private-state fields.
+    ///
+    /// The persistence caller must validate the containing store before
+    /// returning it; construction alone does not prove identity consistency.
+    #[must_use]
+    pub(in crate::telemetry::state) fn from_persisted(
+        key: &ExtensionInvocationAggregateKey,
+        event_id: EventId,
+        bucket: AdmittedExtensionBucket,
+        attempted_contributions: u64,
+        completed_contributions: u64,
+        sessions: TrackedSessionPair,
+    ) -> Self {
+        Self {
+            event_id,
+            bucket,
+            session_counts: ExtensionSessionCountTracker::from_persisted(
+                key.clone(),
+                attempted_contributions,
+                completed_contributions,
+                sessions,
+            ),
         }
     }
 
@@ -316,6 +354,47 @@ impl ExtensionInvocationAggregateStore {
         }
     }
 
+    /// Return the UTC day owned by this private aggregate store.
+    #[must_use]
+    pub(in crate::telemetry::state) const fn day(&self) -> UtcDay {
+        self.public_rows.persistence_parts().0
+    }
+
+    /// Return how many public-row slots this store has spent today.
+    #[must_use]
+    pub(in crate::telemetry::state) const fn public_rows_spent(&self) -> u64 {
+        self.public_rows.persistence_parts().1
+    }
+
+    /// Borrow entries in their deterministic persistence order.
+    pub(in crate::telemetry::state) fn persistence_entries(
+        &self,
+    ) -> impl ExactSizeIterator<
+        Item = (
+            &ExtensionInvocationAggregateKey,
+            &ExtensionInvocationAggregateState,
+        ),
+    > {
+        self.entries.iter()
+    }
+
+    /// Rebuild a store from decoded private-state fields.
+    ///
+    /// The persistence caller must run its store-level validator before
+    /// returning this value; construction alone does not establish allowance
+    /// or entry-identity consistency.
+    #[must_use]
+    pub(in crate::telemetry::state) const fn from_persisted(
+        day: UtcDay,
+        public_rows_spent: u64,
+        entries: BTreeMap<ExtensionInvocationAggregateKey, ExtensionInvocationAggregateState>,
+    ) -> Self {
+        Self {
+            public_rows: DailyPublicRowBudget::from_persisted(day, public_rows_spent),
+            entries,
+        }
+    }
+
     /// Stage private-state edits for one recording operation.
     ///
     /// The required recovery index proves that the day's snapshot loaded
@@ -379,11 +458,6 @@ impl ExtensionInvocationAggregateStore {
     pub(in crate::telemetry) fn clear(&mut self) {
         self.entries.clear();
         self.public_rows.clear();
-    }
-
-    #[cfg(test)]
-    const fn public_rows_spent(&self) -> u64 {
-        self.public_rows.spent()
     }
 
     #[cfg(test)]

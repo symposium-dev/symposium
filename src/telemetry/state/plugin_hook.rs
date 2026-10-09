@@ -161,7 +161,7 @@ impl PluginHookMetricsKey {
 
 /// Private state paired with one plugin-hook aggregate row.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct PluginHookAggregateState {
+pub(in crate::telemetry::state) struct PluginHookAggregateState {
     event_id: EventId,
     bucket: AdmittedPluginBucket,
     session_counts: HookSessionCountTracker<PluginHookMetricsKey>,
@@ -193,6 +193,41 @@ impl PluginHookAggregateState {
             event_id,
             bucket,
             session_counts: HookSessionCountTracker::new(key.clone()),
+        }
+    }
+
+    /// Borrow the private row identity and session tracker for persistence.
+    #[must_use]
+    pub(in crate::telemetry::state) const fn persistence_parts(
+        &self,
+    ) -> (
+        EventId,
+        &AdmittedPluginBucket,
+        &HookSessionCountTracker<PluginHookMetricsKey>,
+    ) {
+        (self.event_id, &self.bucket, &self.session_counts)
+    }
+
+    /// Rebuild an entry from decoded private-state fields.
+    ///
+    /// The persistence caller must validate the containing store before
+    /// returning it; construction alone does not prove identity consistency.
+    #[must_use]
+    pub(in crate::telemetry::state) fn from_persisted(
+        key: &PluginHookMetricsKey,
+        event_id: EventId,
+        bucket: AdmittedPluginBucket,
+        contribution_count: u64,
+        sessions: super::session_pair::TrackedSessionPair,
+    ) -> Self {
+        Self {
+            event_id,
+            bucket,
+            session_counts: HookSessionCountTracker::from_persisted(
+                key.clone(),
+                contribution_count,
+                sessions,
+            ),
         }
     }
 

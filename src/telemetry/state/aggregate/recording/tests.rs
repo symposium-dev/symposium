@@ -9,9 +9,7 @@ use crate::telemetry::{
         AggregateRow, ExtensionInvocationMetricsUpdateError, PluginHookMetricsUpdateError,
         RowClassification, TelemetryRow, UnnamedExtensionReason, UtcSecond, classify_row,
     },
-    state::{
-        IDENTIFIER_WINDOW_TEST_STATE, TelemetryStateV1, open_day::OpenDay, recording_observation,
-    },
+    state::{IDENTIFIER_WINDOW_TEST_STATE, TelemetryStateV1, recording_observation},
 };
 
 fn plugin(terminal: bool) -> PluginHookInvocationObservation {
@@ -501,7 +499,7 @@ fn hook_only_rollover_advances_all_three_store_days() {
         .unwrap();
     drop(staged);
 
-    assert_eq!(aggregates.hook.day, OpenDay::new(recording.day()));
+    assert_eq!(aggregates.hook.day(), recording.day());
     assert_ne!(aggregates.plugin_hook, before.plugin_hook);
     assert_ne!(aggregates.extension_invocation, before.extension_invocation);
 }

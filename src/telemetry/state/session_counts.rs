@@ -99,6 +99,28 @@ impl<K> HookSessionCountTracker<K> {
         &self.key
     }
 
+    /// Borrow the private counters and sets for the persistence boundary.
+    #[must_use]
+    pub(in crate::telemetry::state) const fn persistence_parts(
+        &self,
+    ) -> (u64, &TrackedSessionPair) {
+        (self.contribution_count, &self.sessions)
+    }
+
+    /// Rebuild a tracker from fields validated by private-state persistence.
+    #[must_use]
+    pub(in crate::telemetry::state) const fn from_persisted(
+        key: K,
+        contribution_count: u64,
+        sessions: TrackedSessionPair,
+    ) -> Self {
+        Self {
+            key,
+            contribution_count,
+            sessions,
+        }
+    }
+
     fn checked_record_contribution(
         &mut self,
         snapshot_contributions: u64,
