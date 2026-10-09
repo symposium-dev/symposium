@@ -5,6 +5,7 @@
 //! that knowledge.
 
 mod mcp_server_registration;
+mod plugin_registration;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,13 @@ use serde_json::json;
 
 use crate::config::Symposium;
 use crate::output::{Output, display_path};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CompiledPlugin {
+    pub name: String,
+    pub version: String,
+    pub dir: PathBuf,
+}
 
 /// Which of an agent's two MCP configuration levels to write.
 ///
@@ -178,7 +186,7 @@ impl Agent {
     }
 
     /// Register hooks in the global agent config.
-    pub fn register_hooks(&self, home: &Path, _sym: &Symposium, out: &Output) -> Result<()> {
+    pub fn register_hooks(&self, home: &Path, sym: &Symposium, out: &Output) -> Result<()> {
         tracing::debug!(agent = %self.config_name(), "registering hooks");
         // Register hooks
         match self {
@@ -187,7 +195,7 @@ impl Agent {
                 out,
             ),
             Agent::Claude => {
-                register_claude_hooks(&home.join(".claude").join("settings.json"), out)
+                register_claude_hooks(&claude_config_dir(sym).join("settings.json"), out)
             }
             Agent::Codex => register_codex_hooks(&home.join(".codex").join("hooks.json"), out),
             Agent::Copilot => {
@@ -222,19 +230,24 @@ impl Agent {
     /// Honors each tool's relocation env var (`CLAUDE_CONFIG_DIR`,
     /// `XDG_CONFIG_HOME`), or a user who moved their config gets a file the
     /// agent never reads.
-    pub fn mcp_config_path(&self, scope: McpScope, project_root: &Path, home: &Path) -> PathBuf {
-        let env_dir = |name: &str| {
-            std::env::var_os(name)
-                .filter(|v| !v.is_empty())
-                .map(PathBuf::from)
+    pub fn mcp_config_path(
+        &self,
+        scope: McpScope,
+        project_root: &Path,
+        sym: &Symposium,
+    ) -> PathBuf {
+        let home = sym.home_dir();
+        let xdg_config = || {
+            sym.env_dir("XDG_CONFIG_HOME")
+                .unwrap_or_else(|| home.join(".config"))
         };
-        let xdg_config = || env_dir("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config"));
 
         match (self, scope) {
             // Project MCP is `.mcp.json`; the user-level file is `.claude.json`.
             // Neither is `settings.json`, which holds hooks.
             (Agent::Claude, McpScope::Project) => project_root.join(".mcp.json"),
-            (Agent::Claude, McpScope::User) => env_dir("CLAUDE_CONFIG_DIR")
+            (Agent::Claude, McpScope::User) => sym
+                .env_dir("CLAUDE_CONFIG_DIR")
                 .unwrap_or_else(|| home.to_path_buf())
                 .join(".claude.json"),
 
@@ -284,12 +297,12 @@ impl Agent {
         &self,
         scope: McpScope,
         project_root: &Path,
-        home: &Path,
+        sym: &Symposium,
         servers: &[sacp::schema::McpServer],
         out: &Output,
     ) -> Result<()> {
         tracing::debug!(agent = %self.config_name(), count = servers.len(), ?scope, "registering MCP servers");
-        let path = self.mcp_config_path(scope, project_root, home);
+        let path = self.mcp_config_path(scope, project_root, sym);
         match self {
             Agent::Claude => {
                 mcp_server_registration::register_claude_mcp_servers(&path, servers, out)
@@ -318,11 +331,11 @@ impl Agent {
         &self,
         scope: McpScope,
         project_root: &Path,
-        home: &Path,
+        sym: &Symposium,
         names: &[&str],
         out: &Output,
     ) -> Result<()> {
-        let path = self.mcp_config_path(scope, project_root, home);
+        let path = self.mcp_config_path(scope, project_root, sym);
         match self {
             Agent::Claude => {
                 mcp_server_registration::unregister_claude_mcp_servers(&path, names, out)
@@ -343,6 +356,32 @@ impl Agent {
             Agent::OpenCode => {
                 mcp_server_registration::unregister_opencode_mcp_servers(&path, names, out)
             }
+        }
+    }
+
+    /// Returns whether the agent installs `plugins` itself, in which case its
+    /// per-skill copies of their skills are not written.
+    pub(crate) fn sync_user_plugins(
+        &self,
+        sym: &Symposium,
+        root: &Path,
+        plugins: &[CompiledPlugin],
+        out: &Output,
+    ) -> Result<bool> {
+        match self {
+            Agent::Antigravity => {
+                plugin_registration::antigravity::sync_user_plugins(sym, root, plugins, out)
+            }
+            Agent::Claude => {
+                plugin_registration::claude::sync_user_plugins(sym, root, plugins, out)
+            }
+            Agent::Codex => plugin_registration::codex::sync_user_plugins(sym, root, plugins, out),
+            Agent::Copilot => {
+                plugin_registration::copilot::sync_user_plugins(sym, root, plugins, out)
+            }
+            Agent::Goose => plugin_registration::goose::sync_user_plugins(sym, root, plugins, out),
+            Agent::Kiro => Ok(false),
+            Agent::OpenCode => Ok(false),
         }
     }
 
@@ -368,14 +407,14 @@ impl Agent {
     }
 
     /// Remove hooks from the global agent config.
-    pub fn unregister_hooks(&self, home: &Path, _sym: &Symposium, out: &Output) {
+    pub fn unregister_hooks(&self, home: &Path, sym: &Symposium, out: &Output) {
         match self {
             Agent::Antigravity => unregister_antigravity_hooks(
                 &home.join(".gemini").join("config").join("hooks.json"),
                 out,
             ),
             Agent::Claude => {
-                unregister_claude_hooks(&home.join(".claude").join("settings.json"), out)
+                unregister_claude_hooks(&claude_config_dir(sym).join("settings.json"), out)
             }
             Agent::Codex => unregister_codex_hooks(&home.join(".codex").join("hooks.json"), out),
             Agent::Copilot => {
@@ -391,6 +430,11 @@ impl Agent {
 // ---------------------------------------------------------------------------
 // Claude Code hook registration
 // ---------------------------------------------------------------------------
+
+fn claude_config_dir(sym: &Symposium) -> PathBuf {
+    sym.env_dir("CLAUDE_CONFIG_DIR")
+        .unwrap_or_else(|| sym.home_dir().join(".claude"))
+}
 
 fn register_claude_hooks(settings_path: &Path, out: &Output) -> Result<()> {
     let mut settings = load_json_or_empty(settings_path)?;
@@ -1009,7 +1053,7 @@ fn event_to_cli_arg(event: &str) -> &str {
     }
 }
 
-fn load_json_or_empty(path: &Path) -> Result<serde_json::Value> {
+pub(crate) fn load_json_or_empty(path: &Path) -> Result<serde_json::Value> {
     if path.exists() {
         let contents = fs::read_to_string(path)?;
         if contents.trim().is_empty() {
@@ -1029,7 +1073,7 @@ fn load_json_or_empty(path: &Path) -> Result<serde_json::Value> {
 ///
 /// Bounds torn reads, not lost updates. What keeps that window from mattering is
 /// that registration writes only when an entry actually differs.
-fn save_json(path: &Path, value: &serde_json::Value) -> Result<()> {
+pub(crate) fn save_json(path: &Path, value: &serde_json::Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -1043,6 +1087,15 @@ fn save_json(path: &Path, value: &serde_json::Value) -> Result<()> {
         return Err(e.into());
     }
     Ok(())
+}
+
+pub(crate) fn save_json_if_changed(path: &Path, value: &serde_json::Value) -> Result<bool> {
+    let contents = serde_json::to_string_pretty(value)?;
+    if fs::read_to_string(path).is_ok_and(|existing| existing == contents) {
+        return Ok(false);
+    }
+    save_json(path, value)?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -1062,95 +1115,93 @@ mod tests {
     /// file the agent never reads.
     #[test]
     fn mcp_config_paths_match_what_each_agent_reads() {
+        let home = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(home.path());
         let project = Path::new("/project");
-        let home = Path::new("/home/user");
         let cases = [
-            (
-                Agent::Claude,
-                "/project/.mcp.json",
-                "/home/user/.claude.json",
-            ),
+            (Agent::Claude, "/project/.mcp.json", ".claude.json"),
             (
                 Agent::Antigravity,
                 "/project/.agents/mcp_config.json",
-                "/home/user/.gemini/config/mcp_config.json",
+                ".gemini/config/mcp_config.json",
             ),
             (
                 Agent::OpenCode,
                 "/project/opencode.json",
-                "/home/user/.config/opencode/opencode.json",
+                ".config/opencode/opencode.json",
             ),
             (
                 Agent::Kiro,
                 "/project/.kiro/settings/mcp.json",
-                "/home/user/.kiro/settings/mcp.json",
+                ".kiro/settings/mcp.json",
             ),
         ];
         for (agent, project_path, user_path) in cases {
             assert_eq!(
-                agent.mcp_config_path(McpScope::Project, project, home),
+                agent.mcp_config_path(McpScope::Project, project, &sym),
                 PathBuf::from(project_path),
                 "{agent:?} project scope"
             );
-            // Env-relocatable on purpose; mutating env here would race other tests.
-            if !relocated_by_env(agent) {
-                assert_eq!(
-                    agent.mcp_config_path(McpScope::User, project, home),
-                    PathBuf::from(user_path),
-                    "{agent:?} user scope"
-                );
-            }
+            assert_eq!(
+                agent.mcp_config_path(McpScope::User, project, &sym),
+                home.path().join(user_path),
+                "{agent:?} user scope"
+            );
             assert!(agent.supports_project_mcp_scope(), "{agent:?}");
         }
     }
 
-    /// Is this agent's user-scope path redirected by an env var right now?
-    fn relocated_by_env(agent: Agent) -> bool {
-        let set = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
-        match agent {
-            Agent::Claude => set("CLAUDE_CONFIG_DIR"),
-            Agent::OpenCode | Agent::Goose => set("XDG_CONFIG_HOME"),
-            _ => false,
-        }
-    }
-
     #[test]
-    fn claude_user_path_follows_claude_config_dir() {
-        let path = Agent::Claude.mcp_config_path(
-            McpScope::User,
-            Path::new("/project"),
-            Path::new("/home/user"),
+    fn claude_user_files_follow_claude_config_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let mut sym = Symposium::from_dir(home.path());
+        let relocated = home.path().join("relocated");
+        let value = relocated.clone().into_os_string();
+        sym.set_env(move |name| (name == "CLAUDE_CONFIG_DIR").then(|| value.clone()));
+
+        assert_eq!(
+            Agent::Claude.mcp_config_path(McpScope::User, Path::new("/project"), &sym),
+            relocated.join(".claude.json")
         );
-        match std::env::var_os("CLAUDE_CONFIG_DIR").filter(|v| !v.is_empty()) {
-            Some(dir) => assert_eq!(path, PathBuf::from(dir).join(".claude.json")),
-            None => assert_eq!(path, PathBuf::from("/home/user/.claude.json")),
-        }
+
+        let settings = relocated.join("settings.json");
+        Agent::Claude
+            .register_hooks(sym.home_dir(), &sym, &Output::quiet())
+            .unwrap();
+        assert!(
+            fs::read_to_string(&settings)
+                .unwrap()
+                .contains("cargo-agents hook claude session-start")
+        );
+        assert!(!home.path().join(".claude").exists());
+
+        Agent::Claude.unregister_hooks(sym.home_dir(), &sym, &Output::quiet());
+        assert!(
+            !fs::read_to_string(&settings)
+                .unwrap()
+                .contains("cargo-agents hook")
+        );
     }
 
     /// These CLIs read only their user-level file, so project scope resolves
     /// there rather than to a project file they would ignore.
     #[test]
     fn agents_without_project_mcp_scope_fall_back_to_the_user_file() {
+        let home = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(home.path());
         let project = Path::new("/project");
-        let home = Path::new("/home/user");
         for (agent, expected) in [
-            (Agent::Codex, "/home/user/.codex/config.toml"),
-            (Agent::Copilot, "/home/user/.copilot/mcp-config.json"),
-            (Agent::Goose, "/home/user/.config/goose/config.yaml"),
+            (Agent::Codex, ".codex/config.toml"),
+            (Agent::Copilot, ".copilot/mcp-config.json"),
+            (Agent::Goose, ".config/goose/config.yaml"),
         ] {
             assert!(!agent.supports_project_mcp_scope(), "{agent:?}");
             for scope in [McpScope::Project, McpScope::User] {
-                let path = agent.mcp_config_path(scope, project, home);
-                if !relocated_by_env(agent) {
-                    assert_eq!(path, PathBuf::from(expected), "{agent:?} {scope:?}");
-                } else {
-                    // Still the point of the test: both scopes agree.
-                    assert_eq!(
-                        path,
-                        agent.mcp_config_path(McpScope::User, project, home),
-                        "{agent:?} {scope:?}"
-                    );
-                }
+                assert_eq!(
+                    agent.mcp_config_path(scope, project, &sym),
+                    home.path().join(expected),
+                    "{agent:?} {scope:?}"
+                );
             }
         }
     }
@@ -1161,11 +1212,13 @@ mod tests {
     ///
     #[test]
     fn mcp_config_is_never_the_agents_own_hooks_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(tmp.path());
         let project = Path::new("/project");
-        let home = Path::new("/home/user");
+        let home = tmp.path();
         for &agent in Agent::all() {
             for (scope, root) in [(McpScope::Project, project), (McpScope::User, home)] {
-                let mcp = agent.mcp_config_path(scope, project, home);
+                let mcp = agent.mcp_config_path(scope, project, &sym);
                 for hooks in hook_paths_for(agent, root) {
                     assert_ne!(
                         mcp, hooks,
@@ -1508,9 +1561,10 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
+        let sym = Symposium::from_dir(root);
 
         Agent::Antigravity
-            .register_mcp_servers(McpScope::Project, root, root, &servers, &Output::quiet())
+            .register_mcp_servers(McpScope::Project, root, &sym, &servers, &Output::quiet())
             .unwrap();
         let project = root.join(".agents/mcp_config.json");
         assert!(
@@ -1522,7 +1576,7 @@ mod tests {
         assert!(cfg["mcpServers"]["symposium"].is_object());
 
         Agent::Antigravity
-            .register_mcp_servers(McpScope::User, root, root, &servers, &Output::quiet())
+            .register_mcp_servers(McpScope::User, root, &sym, &servers, &Output::quiet())
             .unwrap();
         assert!(
             root.join(".gemini/config/mcp_config.json").is_file(),

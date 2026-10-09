@@ -256,6 +256,8 @@ Both follow from evaluating a workspace-dependent gate once and keeping the resu
 
 The test is conservative. `depends-on(<name>)` and `workspace-member()` are workspace-dependent by definition, `shell(...)` and a relative `path_exists(...)` resolve against the workspace as their working directory, and a custom predicate is opaque. Only the empty set and `depends-on(*)` qualify; widening the test per predicate kind later is additive.
 
+The implementation does not apply this test yet; see [Which plugins install for the user](#which-plugins-install-for-the-user).
+
 ### One directory, several manifests
 
 This is the evidence for the single directory [Change in a nutshell](#change-in-a-nutshell) shows. An earlier draft treated Claude Code and Gemini CLI as separate emitters; probing the installed agents shows they do not need to be. Claude Code ignores a `plugin.json` at a package root and falls back to the directory name for identity, Agent Plugins clients ignore `.claude-plugin/`, and Gemini CLI reads only its own file. So one compiled directory carrying all three manifests, with the same content in each, satisfies every one of them:
@@ -296,8 +298,33 @@ Codex CLI's install step copies a package into a version-keyed cache under `$COD
 
 Gemini CLI needs no configuration write at all: a package present at `~/.gemini/extensions/<name>/` is listed and enabled. Its own `extensions link` command blocks waiting on input, which is another reason the file is written directly rather than shelling out.
 
+### Which plugins install for the user
+
+A plugin installs for the user when a `[plugins] use` entry without a workspace names it, by manifest name or by package name, and it is not a workspace member, whatever `hook-scope` says: `hook-scope` decides only where Symposium registers its own hook and MCP servers. No predicate analysis is done. Everything else (registry plugins active by their own gate, workspace members, dependencies, workspace-scoped `use` entries) keeps the per-skill path.
+
+Predicates are still evaluated in the workspace being synced, so what a global plugin carries reflects the workspace that synced last, and a plugin that does not apply in that workspace leaves user scope until a workspace where it applies syncs. The plugin is compiled from the skills that survive the usual deduplication, the first plugin to reach a skill keeping it.
+
+The compiled manifests carry `"version": "0.0.0"` until packages declare a version of their own. Claude Code reads its copy in place, so the version does not decide when an edit reaches it.
+
+### How Claude Code receives a global plugin
+
+Claude Code gets a copy of the compiled directory in its user skills directory, `~/.claude/skills/<name>/` (`$CLAUDE_CONFIG_DIR/skills/<name>/` when set), where it loads in every project as the skills-directory plugin `<name>@skills-dir`. This replaces the directory marketplace [Installation](#installation) describes for it. Both were tried against Claude Code 2.1.284, asking the agent what it loaded (`claude plugin list --json`, `claude plugin details`, and the `system/init` event of `claude -p`):
+
+| | Directory marketplace | Skills-directory plugin |
+|---|---|---|
+| First session after a sync | loaded in place; `claude plugin list` shows it from the second session | loaded in place; listed at once |
+| Same-version edit | picked up by the next session | picked up by the next session |
+| Writes to agent configuration | `settings.json`, plus `known_marketplaces.json` and `installed_plugins.json` entries Claude Code adds itself | none |
+| After removal | `plugin list` keeps a disabled entry and `plugin marketplace list` the marketplace, unless Symposium edits files Claude Code manages | nothing listed, no error |
+| Project scope, two repositories with the same plugin name | each loaded the other's content, through the one marketplace name they share | each loads its own, once the folder is trusted |
+
+Neither copies into `~/.claude/plugins/cache/`, and with either a plugin written during the `SessionStart` hook loads in the next session or after `/reload-plugins`. At user scope neither form is picked up by the Copilot CLI (1.0.89), and Goose (1.53.0) does not load the skills inside the copied directory.
+
 ## Implementation status
 
-This RFD describes proposed work. Implementation has not begun.
+In progress.
+
+- Step 2: plugins enabled with `use --global` are compiled into `~/.symposium/installed/<name>/`, carrying `plugin.json`, `.claude-plugin/plugin.json`, the ownership marker and name disambiguation; no `gemini-extension.json` is emitted, since Gemini CLI support was replaced by Antigravity CLI. Project-scoped compilation is not implemented.
+- Step 3: done for Claude Code ([How Claude Code receives a global plugin](#how-claude-code-receives-a-global-plugin)) under the eligibility rule in [Which plugins install for the user](#which-plugins-install-for-the-user). The other agents keep per-skill delivery until their delivery lands.
 
 See [Proposed: Agent Plugins packages](./proposed-reference.md) for the intended authoring reference and [Proposed: How extensions are installed](./proposed-install.md) for the resulting install locations.

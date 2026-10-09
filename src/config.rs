@@ -179,6 +179,12 @@ impl PluginsConfig {
             .any(|entry| name_matches(entry, name))
     }
 
+    pub(crate) fn is_used_globally(&self, name: &str) -> bool {
+        self.used
+            .iter()
+            .any(|entry| matches!(entry, UseEntry::Global(entry) if name_matches(entry, name)))
+    }
+
     /// Whether any enablement entry could pull in a crate plugin. With neither
     /// `auto-enable` nor `use` naming anything,
     /// [`enabled_dependencies`](crate::discovery::enabled_dependencies) is empty
@@ -407,6 +413,8 @@ pub struct RegistryConfig {
 /// Cache subdirectory holding git registries' unpacked content.
 pub const REGISTRY_CACHE_SUBDIR: &str = "plugin-sources";
 
+pub const INSTALLED_PLUGINS_SUBDIR: &str = "installed";
+
 const BUILTIN_RECOMMENDATIONS_URL: &str = "https://github.com/symposium-dev/recommendations";
 
 /// Full application context: parsed config + resolved directory paths.
@@ -417,7 +425,10 @@ pub struct Symposium {
     pub config: Config,
     dirs: crate::dirs::SymposiumDirs,
     home_dir: PathBuf,
+    env: EnvLookup,
 }
+
+type EnvLookup = Arc<dyn Fn(&str) -> Option<std::ffi::OsString> + Send + Sync>;
 
 impl Symposium {
     /// Production constructor: resolves paths from environment.
@@ -441,6 +452,7 @@ impl Symposium {
             config,
             dirs,
             home_dir,
+            env: Arc::new(|name| env::var_os(name)),
         }
     }
 
@@ -466,6 +478,7 @@ impl Symposium {
             config,
             dirs,
             home_dir,
+            env: Arc::new(|_| None),
         }
     }
 
@@ -537,6 +550,20 @@ impl Symposium {
     #[doc(hidden)]
     pub fn set_cargo_override(&mut self, path: PathBuf) {
         self.dirs.cargo_override = Some(path);
+    }
+
+    #[doc(hidden)]
+    pub fn set_env(
+        &mut self,
+        env: impl Fn(&str) -> Option<std::ffi::OsString> + Send + Sync + 'static,
+    ) {
+        self.env = Arc::new(env);
+    }
+
+    pub(crate) fn env_dir(&self, var: &str) -> Option<PathBuf> {
+        (self.env)(var)
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from)
     }
 
     /// Initialize logging with an optional report layer. Call once at startup.
@@ -985,6 +1012,8 @@ mod tests {
         );
         assert!(config.plugins.is_used_in("scoped", Path::new("/ws/a")));
         assert!(!config.plugins.is_used_in("scoped", Path::new("/ws/other")));
+        assert!(config.plugins.is_used_globally("everywhere"));
+        assert!(!config.plugins.is_used_globally("scoped"));
 
         // Entries survive a round trip through the config file.
         let reparsed = parse_config(&toml::to_string_pretty(&config).unwrap());
