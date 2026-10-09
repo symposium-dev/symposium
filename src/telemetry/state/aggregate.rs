@@ -111,7 +111,8 @@ mod tests {
 
     #[test]
     fn all_three_aggregate_stages_can_remain_live_together() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let recovery = MetricSnapshot::empty(recording.day()).recovery_index();
         let mut aggregates = AggregateState::new(recording.day());

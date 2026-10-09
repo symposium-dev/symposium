@@ -231,7 +231,7 @@ mod tests {
     }
 
     fn state() -> TelemetryStateV1 {
-        toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap()
+        TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE)
     }
 
     fn recording_at(state: &mut TelemetryStateV1, day: u32) -> BoundRecordingObservation<'_> {

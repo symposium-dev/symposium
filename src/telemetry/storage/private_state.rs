@@ -504,7 +504,8 @@ mod tests {
     fn replacement_load_and_reserialization_preserve_canonical_bytes() {
         let temporary = tempfile::tempdir().unwrap();
         let mut storage = storage(&temporary);
-        let state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
 
         storage.replace_state(&state).unwrap();
         let on_disk = fs::read(storage.paths.state_file()).unwrap();
@@ -512,7 +513,7 @@ mod tests {
             .load_state()
             .unwrap()
             .expect("the replaced state file must exist");
-        let reserialized = toml::to_string_pretty(&loaded).unwrap().into_bytes();
+        let reserialized = encode(&loaded).unwrap().into_bytes();
 
         assert_eq!(on_disk, IDENTIFIER_WINDOW_TEST_STATE.as_bytes());
         assert_eq!(reserialized, on_disk);

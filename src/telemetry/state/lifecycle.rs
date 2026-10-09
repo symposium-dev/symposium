@@ -598,6 +598,7 @@ mod tests {
         DimensionWriter, IdentityDimension, RetentionDimension, SessionDomain,
     };
     use crate::telemetry::schema::UtcSecond;
+    use crate::telemetry::state::encode;
 
     const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const GENERATED_KEY_BYTE: u8 = 0x42;
@@ -679,7 +680,7 @@ mod tests {
     #[test]
     fn identifier_reset_rotates_the_key_resets_the_window_and_clears_the_cohort() {
         let source = state_with_return_cohort(KEY);
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let reset_day = day(2026, 10, 15);
 
         state
@@ -688,7 +689,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
 
         let expected =
             state_without_return_cohort_at_high_water(GENERATED_KEY, "2026-10-15", "2026-09-10");
@@ -699,7 +700,7 @@ mod tests {
     fn identifier_reset_clamps_a_rolled_back_clock_to_the_high_water_mark() {
         let source =
             state_with_anchors_at_high_water(KEY, "2026-12-01", "2026-08-11", "2026-09-10");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
 
         state
             .reset_identifiers_with::<Infallible>(day(2026, 9, 1), |bytes| {
@@ -707,7 +708,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
 
         assert_eq!(
             serialized,
@@ -718,13 +719,13 @@ mod tests {
     #[test]
     fn failed_identifier_reset_preserves_the_complete_state() {
         let source = state_with_return_cohort(KEY);
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
 
         let result = state.reset_identifiers_with(day(2026, 10, 15), |bytes| {
             bytes.fill(GENERATED_KEY_BYTE);
             Err(TestKeySourceError)
         });
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
 
         assert_eq!(result, Err(TestKeySourceError));
         assert_eq!(serialized, source);
@@ -733,11 +734,11 @@ mod tests {
     #[test]
     fn identifier_reset_can_use_operating_system_randomness() {
         let source = state_with_return_cohort(KEY);
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let reset_day = day(2026, 10, 15);
 
         state.reset_identifiers(reset_day).unwrap();
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
 
         assert!(!serialized.contains(KEY));
         assert_eq!(state.identity.identifier_window_anchor, reset_day);
@@ -747,7 +748,8 @@ mod tests {
     #[test]
     fn identifier_reset_preserves_the_storage_limit_day() {
         let stopped_day = day(2026, 9, 10);
-        let mut state: TelemetryStateV1 = toml::from_str(&state_with_return_cohort(KEY)).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(&state_with_return_cohort(KEY));
         state.stop_event_recording(stopped_day);
 
         state
@@ -763,12 +765,12 @@ mod tests {
     #[test]
     fn recording_on_day_thirty_advances_only_the_identifier_window() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-08-11");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let completed_at = completion_time(2026, 10, 10);
         let observed_day = completed_at.day();
 
         let observation = state.observe_recording(completed_at).unwrap();
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
 
         assert_eq!(
             observation.identifier_window,
@@ -785,11 +787,11 @@ mod tests {
     #[test]
     fn recording_without_a_return_cohort_does_not_start_one() {
         let source = state_without_return_cohort(KEY);
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let completed_at = completion_time(2026, 10, 10);
 
         let observation = state.observe_recording(completed_at).unwrap();
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
 
         assert!(matches!(
             observation.identifier_window,
@@ -805,7 +807,7 @@ mod tests {
     #[test]
     fn recording_observation_binds_its_timestamp_day_and_window_scope() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-08-11");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let old_subject = state.identifier_window_scope().derive(&TestWindowDimension);
         let completed_at = completion_time(2026, 10, 10);
 
@@ -827,10 +829,10 @@ mod tests {
     #[test]
     fn recording_before_the_high_water_mark_is_rejected_without_mutation() {
         let source = state_with_return_cohort(KEY);
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
 
         let result = state.observe_recording(completion_time(2026, 9, 9));
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
 
         assert_eq!(
             result,
@@ -846,10 +848,10 @@ mod tests {
     fn recording_before_the_window_anchor_is_rejected_without_mutation() {
         let source =
             state_with_anchors_at_high_water(KEY, "2026-09-10", "2026-08-11", "2026-09-01");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
 
         let result = state.observe_recording(completion_time(2026, 9, 9));
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
 
         assert_eq!(
             result,
@@ -864,7 +866,7 @@ mod tests {
     #[test]
     fn recording_binding_rejects_an_observation_from_an_older_window() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-08-11");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let older_observation = state
             .observe_recording(completion_time(2026, 9, 11))
             .unwrap();
@@ -886,7 +888,7 @@ mod tests {
     #[test]
     fn recording_binding_rejects_an_older_day_in_the_same_window() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-08-11");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let older_observation = state
             .observe_recording(completion_time(2026, 9, 11))
             .unwrap();
@@ -908,7 +910,7 @@ mod tests {
     #[test]
     fn observations_on_days_zero_through_twenty_nine_keep_the_window() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-09-10");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let anchor = day(2026, 9, 10);
 
         for completed_at in [completion_time(2026, 9, 10), completion_time(2026, 10, 9)] {
@@ -926,7 +928,7 @@ mod tests {
     #[test]
     fn observation_on_day_thirty_advances_the_window() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-09-10");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let completed_at = completion_time(2026, 10, 10);
         let observed_day = completed_at.day();
 
@@ -945,7 +947,7 @@ mod tests {
     #[test]
     fn observation_after_inactivity_anchors_both_lifecycles_to_the_observation() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-09-10");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let completed_at = completion_time(2026, 10, 25);
         let observed_day = completed_at.day();
 
@@ -970,7 +972,7 @@ mod tests {
     #[test]
     fn observed_session_binds_both_scopes_to_the_selected_anchors() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-09-10");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let old_session = state.identifier_window_scope().derive(&TestWindowDimension);
         let old_retention = state
             .return_cohort_scope()
@@ -1005,7 +1007,7 @@ mod tests {
     #[test]
     fn bound_session_exposes_its_recording_context() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-09-10");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let completed_at = completion_time(2026, 9, 11);
         let observation = state.observe_session(completed_at).unwrap();
         let observation = state.bind_session_observation(observation).unwrap();
@@ -1027,7 +1029,7 @@ mod tests {
     #[test]
     fn binding_rejects_an_observation_from_an_older_identifier_window() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-09-10");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let older_observation = state.observe_session(completion_time(2026, 9, 11)).unwrap();
         let current_day = day(2026, 10, 25);
         let _current_observation = state
@@ -1050,7 +1052,7 @@ mod tests {
     #[test]
     fn binding_rejects_a_changed_return_cohort_anchor() {
         let source = state_with_anchors(KEY, "2026-09-01", "2026-08-11");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let observation = state.observe_session(completion_time(2026, 9, 10)).unwrap();
         let current_cohort = day(2026, 9, 11);
         state.identity.return_cohort_anchor = Some(current_cohort);
@@ -1069,7 +1071,7 @@ mod tests {
     #[test]
     fn binding_rejects_an_observation_after_identifier_reset() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-09-10");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let observation = state.observe_session(completion_time(2026, 9, 10)).unwrap();
         state
             .reset_identifiers_with::<Infallible>(day(2026, 9, 9), |bytes| {
@@ -1092,12 +1094,12 @@ mod tests {
     #[test]
     fn window_rollover_preserves_the_key_and_return_cohort() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-09-10");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
 
         let observation = state
             .observe_session(completion_time(2026, 10, 10))
             .unwrap();
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
 
         let expected = state_with_anchors(KEY, "2026-10-10", "2026-09-10");
         assert!(matches!(
@@ -1110,12 +1112,12 @@ mod tests {
     #[test]
     fn observation_before_the_window_anchor_is_rejected_without_mutation() {
         let source = state_with_return_cohort(KEY);
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
 
         let error = state
             .observe_session(completion_time(2026, 9, 9))
             .unwrap_err();
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
 
         assert_eq!(
             error.to_string(),
@@ -1127,7 +1129,7 @@ mod tests {
     #[test]
     fn first_observed_session_starts_d0() {
         let source = state_without_return_cohort(KEY);
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let completed_at = completion_time(2026, 9, 10);
         let observed_day = completed_at.day();
 
@@ -1140,12 +1142,12 @@ mod tests {
     #[test]
     fn first_session_after_window_expiry_starts_d0_and_advances_the_window() {
         let source = state_without_return_cohort(KEY);
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let completed_at = completion_time(2026, 10, 25);
         let observed_day = completed_at.day();
 
         let observation = state.observe_session(completed_at).unwrap();
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
 
         let expected = state_with_anchors(KEY, "2026-10-25", "2026-10-25");
         assert_eq!(
@@ -1173,7 +1175,7 @@ mod tests {
             ("2026-09-01", completion_time(2026, 9, 10), 30),
         ] {
             let source = state_with_anchors(KEY, window_anchor, "2026-08-11");
-            let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+            let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
 
             let observation = state.observe_session(completed_at).unwrap();
 
@@ -1192,11 +1194,11 @@ mod tests {
     #[test]
     fn cohort_rollover_preserves_the_identifier_window_and_key() {
         let source = state_with_anchors(KEY, "2026-09-01", "2026-08-11");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let completed_at = completion_time(2026, 9, 11);
 
         let observation = state.observe_session(completed_at).unwrap();
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
 
         let expected = state_with_anchors(KEY, "2026-09-01", "2026-09-11");
         assert_eq!(
@@ -1212,12 +1214,12 @@ mod tests {
     #[test]
     fn both_session_lifecycles_roll_over_in_one_transition() {
         let source = state_with_anchors(KEY, "2026-08-12", "2026-08-11");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
         let completed_at = completion_time(2026, 9, 11);
         let observed_day = completed_at.day();
 
         let observation = state.observe_session(completed_at).unwrap();
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
 
         let expected = state_with_anchors(KEY, "2026-09-11", "2026-09-11");
         assert_eq!(
@@ -1239,12 +1241,12 @@ mod tests {
     fn invalid_cohort_day_does_not_partially_advance_the_window() {
         let source =
             state_with_anchors_at_high_water(KEY, "2026-08-01", "2026-09-10", "2026-08-01");
-        let mut state: TelemetryStateV1 = toml::from_str(&source).unwrap();
+        let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
 
         let error = state
             .observe_session(completion_time(2026, 9, 9))
             .unwrap_err();
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
 
         assert_eq!(
             error.to_string(),

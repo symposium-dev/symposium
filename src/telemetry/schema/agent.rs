@@ -504,7 +504,8 @@ mod tests {
         agent: HookAgent,
         vendor_session_id: Option<&VendorSessionId>,
     ) -> SessionStartV1 {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let observation = state.observe_session(completed_at).unwrap();
         let observation = state.bind_session_observation(observation).unwrap();
 
@@ -512,7 +513,8 @@ mod tests {
     }
 
     fn agent_configuration(agent: SupportedAgent) -> AgentConfigurationV1 {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let observation = recording_observation(&mut state);
 
         AgentConfigurationV1::new(
@@ -787,7 +789,8 @@ mod tests {
     fn session_start_before_utc_midnight_keeps_row_and_cohort_on_the_same_day() {
         let completed_at =
             UtcSecond::from_datetime(Utc.with_ymd_and_hms(2026, 8, 3, 23, 59, 59).unwrap());
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let observation = state.observe_session(completed_at).unwrap();
         let observation = state.bind_session_observation(observation).unwrap();
 
