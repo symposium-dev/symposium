@@ -91,10 +91,6 @@ pub(super) fn decode_plugin_hook(
 }
 
 /// Decode and validate one extension-invocation tracker.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the next persistence commit")
-)]
 pub(super) fn decode_extension_invocation(
     complete: bool,
     attempted_sessions: Option<Vec<SessionId>>,
@@ -130,10 +126,6 @@ pub(super) fn validate_plugin_hook(
 }
 
 /// Validate one extension-invocation tracker before encoding it.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the next persistence commit")
-)]
 pub(super) fn validate_extension_invocation(
     pair: &TrackedSessionPair,
     attempted_contributions: u64,

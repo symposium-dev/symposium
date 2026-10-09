@@ -12,6 +12,7 @@
 //! Family validators reject duplicate row identifiers within one store. The
 //! root aggregate-state validator owns cross-family identifier uniqueness and
 //! agreement between every store day and the identity high-water day.
+mod extension_invocation;
 mod hook;
 mod plugin_hook;
 mod sessions;
