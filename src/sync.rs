@@ -575,6 +575,7 @@ pub async fn sync(
     let mut warned = BTreeSet::new();
     let plugins_root = sym.config_dir().join(INSTALLED_PLUGINS_SUBDIR);
     let compiled = compile::compile(&plugins_root, &global, debounce, &mut warned, skip_cleanup);
+    crate::agents::sync_marketplace_index(sym, &compiled.plugins);
 
     let mut delivered = BTreeSet::new();
     let mut plugin_changes = Vec::new();

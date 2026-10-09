@@ -1,3 +1,4 @@
+mod codex;
 mod copilot;
 
 use std::fs;
@@ -23,6 +24,13 @@ const AGENTS: &[DeliveringAgent] = &[
         relocation_var: "CLAUDE_CONFIG_DIR",
         config_root: |home| home.join(".claude"),
         plugin_dir: |root, plugin| root.join("skills").join(plugin),
+    },
+    DeliveringAgent {
+        name: "codex",
+        project_skills: ".agents/skills",
+        relocation_var: "CODEX_HOME",
+        config_root: |home| home.join(".codex"),
+        plugin_dir: |root, plugin| root.join(format!("plugins/cache/symposium/{plugin}/0.0.0")),
     },
     DeliveringAgent {
         name: "copilot",

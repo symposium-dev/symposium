@@ -8,6 +8,18 @@ Config name: `codex`
 |-------|------|
 | Project | `.agents/skills/<name>/SKILL.md` |
 
+## Plugins
+
+A plugin enabled with `cargo agents use --global` is installed for you as a Codex plugin:
+
+| What | Where |
+|------|-------|
+| Marketplace | `[marketplaces.symposium]` in `~/.codex/config.toml`, pointing at `~/.symposium/installed/` |
+| Enablement | `[plugins."<plugin>@symposium"]` in the same file |
+| Plugin files | `~/.codex/plugins/cache/symposium/<plugin>/0.0.0/` |
+
+All three follow `$CODEX_HOME` when it is set. Codex lists the plugin in `/plugins` and loads it in every project. Turning it off there writes `enabled = false`, which symposium leaves alone; `codex plugin remove` is undone by the next sync, so remove it with `cargo agents use --remove --global <plugin>`. A plugin installed while a session runs appears in the next session.
+
 ## Hooks
 
 Symposium merges hook entries into Codex's `hooks.json`.

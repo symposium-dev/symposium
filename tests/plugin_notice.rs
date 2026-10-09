@@ -136,6 +136,7 @@ async fn agents_that_read_context_after_a_tool_call_get_the_notice() {
 async fn session_start_tells_the_agent_how_to_load_the_plugins_its_sync_installed() {
     for (agent, load_now) in [
         (HookAgent::Claude, "/reload-plugins"),
+        (HookAgent::Codex, "new session"),
         (HookAgent::Copilot, "/restart"),
     ] {
         with_fixture(
