@@ -73,6 +73,12 @@ pub enum ReportEvent {
         dest: String,
     },
 
+    PluginInstalled {
+        plugin: String,
+        agent: String,
+        dest: String,
+    },
+
     /// A stale skill directory was removed.
     SkillRemoved { path: String },
 
@@ -231,6 +237,11 @@ impl ReportEvent {
             Self::SkillInstalled { skill, agent, dest } => {
                 format!("✅ installed skill {skill} for {agent} → {dest}")
             }
+            Self::PluginInstalled {
+                plugin,
+                agent,
+                dest,
+            } => format!("installed plugin {plugin} for {agent} -> {dest}"),
             Self::SkillRemoved { path } => {
                 format!("➖ removed {path}")
             }

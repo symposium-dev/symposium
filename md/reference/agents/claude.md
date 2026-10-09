@@ -10,6 +10,16 @@ Config name: `claude`
 
 Claude Code does not support the vendor-neutral `.agents/skills/` path.
 
+## Plugins
+
+A plugin enabled with `cargo agents use --global` is installed for you as a plugin directory:
+
+| Scope | Path |
+|-------|------|
+| Global | `~/.claude/skills/<plugin>/` (`$CLAUDE_CONFIG_DIR/skills/<plugin>/` when set) |
+
+Claude Code loads it in every project as `<plugin>@skills-dir`. Symposium writes no settings for it, so a `claude plugin disable <plugin>@skills-dir` stays in effect. A plugin installed while a session runs appears in the next session, or after `/reload-plugins`.
+
 ## Hooks
 
 Symposium merges hook entries into Claude Code's `settings.json`.

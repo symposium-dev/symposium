@@ -5,6 +5,7 @@
 //! that knowledge.
 
 mod mcp_server_registration;
+mod plugin_registration;
 
 use std::fs;
 use std::io::Write as _;
@@ -15,6 +16,13 @@ use serde_json::json;
 
 use crate::config::Symposium;
 use crate::output::{Output, display_path};
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct CompiledPlugin {
+    pub name: String,
+    pub dir: PathBuf,
+    pub updated: bool,
+}
 
 /// Which of an agent's two MCP configuration levels to write.
 ///
@@ -69,6 +77,13 @@ impl Agent {
             Agent::Kiro => "kiro",
             Agent::OpenCode => "opencode",
         }
+    }
+
+    pub(crate) fn is_configured(&self, sym: &Symposium) -> bool {
+        sym.config
+            .agents
+            .iter()
+            .any(|entry| entry.name == self.config_name())
     }
 
     /// Human-readable display name.
@@ -345,6 +360,21 @@ impl Agent {
             Agent::OpenCode => {
                 mcp_server_registration::unregister_opencode_mcp_servers(path, names, out)
             }
+        }
+    }
+
+    pub(crate) fn deliver_user_plugins(&self, sym: &Symposium, plugins: &[CompiledPlugin]) -> bool {
+        match self {
+            Agent::Claude => {
+                plugin_registration::claude::deliver_user_plugins(sym, plugins);
+                true
+            }
+            Agent::Antigravity
+            | Agent::Codex
+            | Agent::Copilot
+            | Agent::Goose
+            | Agent::Kiro
+            | Agent::OpenCode => false,
         }
     }
 

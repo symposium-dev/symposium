@@ -135,7 +135,7 @@ Trust follows whoever supplies the *content*, not the package the content is abo
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `auto-enable` | array of strings | `[]` | Dependency names whose embedded plugins load without being asked about. `"*"` pre-consents to every dependency. |
-| `use` | array | `[]` | Plugins enabled deliberately. Each entry is either a plain name (enabled in every workspace) or `{ name = "...", workspace = "/path" }` (enabled only while working in that workspace root). |
+| `use` | array | `[]` | Plugins enabled deliberately. Each entry is either a plain name (enabled in every workspace, and installed for you as a plugin directory on the agents that support it) or `{ name = "...", workspace = "/path" }` (enabled only while working in that workspace root). |
 | `disable` | array of strings | `[]` | Names that must never be enabled. Takes precedence over `auto-enable`, including over `"*"`. |
 
 Each name is matched by the package manager its package comes from: a crate name the way cargo matches it, hyphen/underscore-insensitively (`widget-lib` and `widget_lib` are the same entry), and a registry plugin's name exactly. A `use` name that names both a registry plugin and a crate (a dependency or one on crates.io) means the registry plugin only, so it does not also consent to that crate's embedded plugin, and a `use` name no package manager has enables nothing.
@@ -171,5 +171,6 @@ User-wide data lives under `~/.symposium/` by default. Override with environment
 | `~/.symposium/state.toml` | Persistent state (binary version stamp, last update check) |
 | `~/.symposium/telemetry/` | Telemetry event log, one JSONL file per day (created when `[telemetry] enabled = true` and events are recorded) |
 | `~/.symposium/plugins/` | User-defined plugins |
+| `~/.symposium/installed/` | Plugins enabled with `use --global`, compiled for the agents to install |
 | `~/.symposium/cache/` | Cache directory (crate sources, plugin sources) |
 | `~/.symposium/logs/` | Log files (one per invocation, timestamped) |

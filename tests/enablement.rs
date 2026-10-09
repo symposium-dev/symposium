@@ -225,7 +225,11 @@ async fn plugins_entries_match_crate_names_like_cargo() {
             ctx.sym.config.plugins.auto_enable.clear();
             ctx.sym.config.plugins.used = vec![UseEntry::Global("crate_a".into())];
             ctx.symposium(&["sync"]).await?;
-            assert!(installed(), "use");
+            let user_plugin = ctx.sym.home_dir().join(".claude/skills/crate-a");
+            assert!(
+                user_plugin.join("skills/a-guidance/SKILL.md").is_file(),
+                "use"
+            );
 
             ctx.sym.config.plugins.used.clear();
             ctx.sym.config.plugins.auto_enable = vec!["*".into()];
@@ -273,6 +277,29 @@ async fn plugins_entries_match_registry_plugin_names_exactly() {
                 .expect_err("the exact `disable` spelling blocks it");
             assert!(err.to_string().contains("[plugins] disable"), "{err}");
             assert!(!woken());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn use_global_installs_registry_content_for_the_user() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["use", "--global", "serde-guidance"])
+                .await?;
+            assert!(
+                read_config(&ctx).contains("serde-guidance"),
+                "{}",
+                read_config(&ctx)
+            );
+            let plugin = ctx.sym.home_dir().join(".claude/skills/serde-guidance");
+            assert!(plugin.join("skills/serde-guidance/SKILL.md").is_file());
             Ok(())
         },
     )
