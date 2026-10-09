@@ -76,10 +76,6 @@ pub(super) fn decode_hook(
 }
 
 /// Decode and validate one plugin-hook tracker.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the next persistence commit")
-)]
 pub(super) fn decode_plugin_hook(
     complete: bool,
     identified: Option<Vec<SessionId>>,
@@ -126,10 +122,6 @@ pub(super) fn validate_hook(
 }
 
 /// Validate one plugin-hook tracker before encoding it.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the next persistence commit")
-)]
 pub(super) fn validate_plugin_hook(
     pair: &TrackedSessionPair,
     contributions: u64,

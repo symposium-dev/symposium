@@ -230,6 +230,10 @@ relationships without giving runtime trackers general-purpose serialization.
 Its `hook.rs` sibling defines the strict borrowed and owned hook-store wire
 shapes, re-derives hook subjects from the document's identity scope, and runs
 the same store validator before encoding and after reconstruction.
+`plugin_hook.rs` adds the plugin-hook row identifier, strict public, unnamed,
+and overflow bucket shapes, and persisted public-row spend. It re-derives
+public plugin subjects from the document scope and rejects duplicate keys,
+row identifiers, inconsistent spend, and mismatched entry identity.
 
 `state/codec.rs` owns canonical private-state serialization, version dispatch,
 schema decoding, and secret-safe diagnostics. The private `storage` module
