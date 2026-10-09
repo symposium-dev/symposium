@@ -1,5 +1,6 @@
 use super::*;
 
+use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
@@ -119,7 +120,6 @@ fn files_are_written_only_when_something_changes() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("installed");
     let settings = tmp.path().join("copilot/settings.json");
-    let index = root.join(".claude-plugin/marketplace.json");
 
     deliver(&root, &settings, &[]).unwrap();
     assert!(!settings.exists(), "nothing to remove creates no file");
@@ -135,7 +135,7 @@ fn files_are_written_only_when_something_changes() {
 
     deliver(&root, &settings, &compiled(&["fresh"])).unwrap();
     let an_hour_ago = SystemTime::now() - Duration::from_secs(3600);
-    let written: [&PathBuf; 2] = [&settings, &index];
+    let written: [&PathBuf; 1] = [&settings];
     for path in written {
         fs::File::options()
             .write(true)

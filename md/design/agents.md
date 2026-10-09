@@ -51,7 +51,7 @@ At the global level, each agent has its own path:
 | OpenCode | `~/.agents/skills/<skill-name>/SKILL.md` |
 | Goose | `~/.agents/skills/<skill-name>/SKILL.md` |
 
-A plugin enabled with `use --global` reaches an agent as one compiled plugin directory instead, through `Agent::deliver_user_plugins`: Claude Code receives it in `~/.claude/skills/<plugin>/`, the Copilot CLI loads it in place through two entries in `~/.copilot/settings.json`, and the other agents keep per-skill copies in the project. See [`sync`](./sync-agent-flow.md#plugins-enabled-for-every-workspace).
+A plugin enabled with `use --global` reaches an agent as one compiled plugin directory instead, through `Agent::deliver_user_plugins`: Claude Code receives it in `~/.claude/skills/<plugin>/`, Codex CLI installs it into its plugin cache through two entries in `~/.codex/config.toml`, the Copilot CLI loads it in place through two entries in `~/.copilot/settings.json`, and the other agents keep per-skill copies in the project. See [`sync`](./sync-agent-flow.md#plugins-enabled-for-every-workspace).
 
 ---
 

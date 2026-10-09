@@ -7,6 +7,8 @@
 mod mcp_server_registration;
 mod plugin_registration;
 
+pub(crate) use plugin_registration::sync_marketplace_index;
+
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -372,10 +374,9 @@ impl Agent {
             Agent::Claude => Some(plugin_registration::claude::deliver_user_plugins(
                 sym, plugins,
             )),
+            Agent::Codex => plugin_registration::codex::deliver_user_plugins(sym, plugins),
             Agent::Copilot => plugin_registration::copilot::deliver_user_plugins(sym, plugins),
-            Agent::Antigravity | Agent::Codex | Agent::Goose | Agent::Kiro | Agent::OpenCode => {
-                None
-            }
+            Agent::Antigravity | Agent::Goose | Agent::Kiro | Agent::OpenCode => None,
         }
     }
 

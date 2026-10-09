@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -9,8 +8,7 @@ use crate::config::{INSTALLED_PLUGINS_SUBDIR, Symposium};
 use crate::output::display_path;
 use crate::report::ReportEvent;
 
-const MARKETPLACE: &str = "symposium";
-const ENABLED_SUFFIX: &str = "@symposium";
+use super::{ENABLED_SUFFIX, MARKETPLACE};
 const MARKETPLACES_KEY: &str = "extraKnownMarketplaces";
 const ENABLED_KEY: &str = "enabledPlugins";
 
@@ -39,14 +37,6 @@ pub(crate) fn deliver_user_plugins(
 }
 
 fn deliver(root: &Path, settings_path: &Path, plugins: &[CompiledPlugin]) -> Result<Vec<String>> {
-    let index = root.join(".claude-plugin").join("marketplace.json");
-    if !plugins.is_empty() {
-        let value = marketplace(plugins);
-        if !load_json_or_empty(&index).is_ok_and(|current| current == value) {
-            save_json(&index, &value)?;
-        }
-    }
-
     let shown = display_path(settings_path);
     let mut settings =
         load_json_or_empty(settings_path).with_context(|| format!("failed to read {shown}"))?;
@@ -72,25 +62,7 @@ fn deliver(root: &Path, settings_path: &Path, plugins: &[CompiledPlugin]) -> Res
             },
         );
     }
-
-    if plugins.is_empty() && index.exists() {
-        fs::remove_file(&index)?;
-        let _ = fs::remove_dir(root.join(".claude-plugin"));
-    }
     Ok(installed)
-}
-
-fn marketplace(plugins: &[CompiledPlugin]) -> Value {
-    let mut names: Vec<&str> = plugins.iter().map(|p| p.name.as_str()).collect();
-    names.sort();
-    json!({
-        "name": MARKETPLACE,
-        "owner": { "name": MARKETPLACE },
-        "plugins": names
-            .into_iter()
-            .map(|name| json!({ "name": name, "source": format!("./{name}") }))
-            .collect::<Vec<_>>(),
-    })
 }
 
 fn register(

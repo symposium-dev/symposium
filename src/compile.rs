@@ -16,7 +16,7 @@ use crate::report::ReportEvent;
 use crate::skills::SkillWithGroupContext;
 use crate::sync::{self, TreeContents};
 
-const PLUGIN_VERSION: &str = "0.0.0";
+pub(crate) const PLUGIN_VERSION: &str = "0.0.0";
 const AGENT_PLUGINS_SCHEMA: &str = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
 const MANIFEST_FILE: &str = "plugin.json";
 const CLAUDE_MANIFEST_DIR: &str = ".claude-plugin";

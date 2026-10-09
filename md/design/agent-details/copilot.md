@@ -213,7 +213,7 @@ Network-layer control with deny-by-default domain allowlist, configured at org/r
 
 ## Plugin Delivery
 
-A plugin enabled with `use --global` reaches the Copilot CLI through its user settings, `~/.copilot/settings.json` (`$COPILOT_HOME/settings.json` when that variable is set). While Copilot has plugins, symposium writes `.claude-plugin/marketplace.json` into the staging root `~/.symposium/installed/`, registers that root as a directory marketplace and enables each plugin from it:
+A plugin enabled with `use --global` reaches the Copilot CLI through its user settings, `~/.copilot/settings.json` (`$COPILOT_HOME/settings.json` when that variable is set). While Codex or Copilot has plugins, symposium writes `.claude-plugin/marketplace.json` into the staging root `~/.symposium/installed/`, registers that root as a directory marketplace and enables each plugin from it:
 
 ```json
 {
