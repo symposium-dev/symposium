@@ -1,0 +1,9 @@
+hook-scope = "project"
+sync-debounce-secs = 0
+
+[defaults]
+symposium-recommendations = false
+user-plugins = true
+
+[plugins]
+use = ["global-guide", { name = "workspace-guide", workspace = "$TEST_DIR" }]

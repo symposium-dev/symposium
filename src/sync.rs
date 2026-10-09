@@ -13,7 +13,8 @@ use anyhow::{Context, Result};
 use symposium_install::UpdateLevel;
 
 use crate::agents::Agent;
-use crate::config::Symposium;
+use crate::compile;
+use crate::config::{INSTALLED_PLUGINS_SUBDIR, Symposium};
 use crate::dir_walk::{self, EntryKind};
 use crate::output::{Output, display_path};
 use crate::plugins;
@@ -74,7 +75,7 @@ fn mark_generated_skill_directory(dir: &Path) -> Result<()> {
 /// Does `dir` contain the `.symposium` marker, i.e. is it a symposium-managed
 /// skill directory? Returns `false` for user-authored skills and for any
 /// directory symposium did not create.
-fn has_symposium_marker(dir: &Path) -> bool {
+pub(crate) fn has_symposium_marker(dir: &Path) -> bool {
     dir.join(MARKER_FILE).exists()
 }
 
@@ -174,6 +175,24 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+pub(crate) type TreeContents = Vec<(PathBuf, Option<Vec<u8>>)>;
+
+fn read_tree(dir: &Path, entries: Vec<TreeEntry>) -> Result<TreeContents> {
+    entries
+        .into_iter()
+        .map(|(rel, kind)| {
+            let contents = match kind {
+                EntryKind::Dir => None,
+                EntryKind::File => {
+                    let path = dir.join(&rel);
+                    Some(fs::read(&path).with_context(|| format!("read {}", path.display()))?)
+                }
+            };
+            Ok((rel, contents))
+        })
+        .collect()
+}
+
 /// Collect `dir`'s tree for comparison: every directory and regular file under
 /// it, as a path relative to `dir` paired with the file's contents (`None` for
 /// a directory). Symlinks resolve exactly as [`copy_dir_recursive`] resolves
@@ -183,24 +202,121 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
 /// rather than skill content. Entries the walk refuses are dropped silently:
 /// the copy this comparison guards reports them, and reporting them here too
 /// would say the same thing twice per sync.
-fn collect_dir_contents(dir: &Path) -> Result<Vec<(PathBuf, Option<Vec<u8>>)>> {
+fn collect_dir_contents(dir: &Path) -> Result<TreeContents> {
     let (entries, _skipped) = walk_tree(dir)?;
-    let mut out = Vec::with_capacity(entries.len());
-    for (rel, kind) in entries {
-        let name = rel.to_string_lossy();
-        if name == MARKER_FILE || name == ".gitignore" {
+    let mut contents = read_tree(dir, entries)?;
+    contents.retain(|(rel, _)| rel != Path::new(MARKER_FILE) && rel != Path::new(".gitignore"));
+    Ok(contents)
+}
+
+pub(crate) fn collect_skill_tree(dir: &Path) -> Result<TreeContents> {
+    let (entries, skipped) = walk_tree(dir)?;
+    for message in skipped {
+        tracing::info!(report = %crate::report::ReportEvent::Warning { message });
+    }
+    read_tree(dir, entries)
+}
+
+pub(crate) fn recently_synced(dir: &Path, debounce: Duration) -> bool {
+    !debounce.is_zero()
+        && fs::metadata(dir.join(MARKER_FILE))
+            .and_then(|meta| meta.modified())
+            .ok()
+            .and_then(|mtime| SystemTime::now().duration_since(mtime).ok())
+            .is_some_and(|elapsed| elapsed < debounce)
+}
+
+pub(crate) fn sync_tree(dest: &Path, sorted: &TreeContents) -> Result<bool> {
+    if dest.exists() && !has_symposium_marker(dest) {
+        anyhow::bail!("{} is not managed by symposium", display_path(dest));
+    }
+    if dest.is_dir() && collect_dir_contents(dest)? == *sorted {
+        touch_marker(&dest.join(MARKER_FILE))?;
+        return Ok(false);
+    }
+    replace_dir(dest, |fresh| {
+        for (rel, data) in sorted {
+            let path = fresh.join(rel);
+            match data {
+                None => fs::create_dir(&path),
+                Some(bytes) => fs::write(&path, bytes),
+            }
+            .with_context(|| format!("write {}", path.display()))?;
+        }
+        touch_marker(&fresh.join(MARKER_FILE))
+    })?;
+    Ok(true)
+}
+
+pub(crate) fn sync_plugin_dir(source: &Path, dest: &Path, debounce: Duration) -> Result<bool> {
+    if recently_synced(dest, debounce) {
+        return Ok(false);
+    }
+    sync_tree(dest, &collect_dir_contents(source)?)
+}
+
+/// The old tree is moved aside first: Windows cannot rename onto a non-empty
+/// directory.
+fn replace_dir(dest: &Path, write: impl FnOnce(&Path) -> Result<()>) -> Result<()> {
+    let (Some(parent), Some(name)) = (dest.parent(), dest.file_name()) else {
+        anyhow::bail!("{} has no parent directory", dest.display());
+    };
+    let name = name.to_string_lossy();
+    let pid = std::process::id();
+    let fresh = parent.join(format!(".{name}.symposium-new-{pid}"));
+    let stale = parent.join(format!(".{name}.symposium-old-{pid}"));
+
+    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    let _ = fs::remove_dir_all(&fresh);
+    fs::create_dir(&fresh).with_context(|| format!("create {}", fresh.display()))?;
+    if let Err(e) = write(&fresh) {
+        let _ = fs::remove_dir_all(&fresh);
+        return Err(e);
+    }
+
+    if !dest.exists() {
+        return fs::rename(&fresh, dest).with_context(|| format!("create {}", dest.display()));
+    }
+    let _ = fs::remove_dir_all(&stale);
+    if let Err(e) = fs::rename(dest, &stale) {
+        let _ = fs::remove_dir_all(&fresh);
+        return Err(e).with_context(|| format!("replace {}", dest.display()));
+    }
+    if let Err(e) = fs::rename(&fresh, dest) {
+        let _ = fs::rename(&stale, dest);
+        let _ = fs::remove_dir_all(&fresh);
+        return Err(e).with_context(|| format!("replace {}", dest.display()));
+    }
+    let _ = fs::remove_dir_all(&stale);
+    Ok(())
+}
+
+pub(crate) fn reap_unlisted(parent: &Path, keep: impl Fn(&Path) -> bool) {
+    let Ok(entries) = fs::read_dir(parent) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() || !has_symposium_marker(&path) || keep(&path) {
             continue;
         }
-        let contents = match kind {
-            EntryKind::Dir => None,
-            EntryKind::File => {
-                let path = dir.join(&rel);
-                Some(fs::read(&path).with_context(|| format!("read {}", path.display()))?)
+        match fs::remove_dir_all(&path) {
+            Ok(()) => {
+                tracing::info!(
+                    report = %crate::report::ReportEvent::SkillRemoved {
+                        path: display_path(&path),
+                    },
+                );
             }
-        };
-        out.push((rel, contents));
+            Err(e) => {
+                tracing::info!(
+                    report = %crate::report::ReportEvent::Warning {
+                        message: format!("failed to remove stale {}: {e}", display_path(&path)),
+                    },
+                );
+            }
+        }
     }
-    Ok(out)
 }
 
 /// Returns true if the source directory's content differs from the
@@ -243,18 +359,13 @@ fn sync_skill_dir(
     }
 
     // Debounce: if we synced recently, skip the content comparison.
-    let marker_path = dest_dir.join(MARKER_FILE);
-    if !debounce.is_zero()
-        && let Ok(meta) = fs::metadata(&marker_path)
-        && let Ok(mtime) = meta.modified()
-        && let Ok(elapsed) = SystemTime::now().duration_since(mtime)
-        && elapsed < debounce
-    {
+    if recently_synced(dest_dir, debounce) {
         tracing::debug!(dest = %dest_dir.display(), "skill sync debounced");
         return Ok(false);
     }
 
     // Compare content (excluding managed metadata).
+    let marker_path = dest_dir.join(MARKER_FILE);
     if !dir_contents_differ(source_dir, dest_dir)? {
         // Content is identical — just touch the marker to reset debounce.
         touch_marker(&marker_path)?;
@@ -401,15 +512,15 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     // plain name and their origin hash so we can decide later whether each one
     // needs an `<name>-<hash>` suffix to avoid collisions.
     let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
-    let mut to_install: Vec<(String, String, &std::path::Path)> = Vec::new();
+    let mut to_install: Vec<&skills::SkillWithGroupContext> = Vec::new();
     let mut name_counts: std::collections::BTreeMap<String, usize> =
         std::collections::BTreeMap::new();
 
     for entry in &applicable {
         let name = entry.skill.name().to_string();
         if seen.insert((name.clone(), entry.origin_hash.clone())) {
-            *name_counts.entry(name.clone()).or_default() += 1;
-            to_install.push((name, entry.origin_hash.clone(), &entry.skill.path));
+            *name_counts.entry(name).or_default() += 1;
+            to_install.push(entry);
         }
     }
 
@@ -461,6 +572,10 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     // we find later that has the marker file but isn't in this set is stale.
     let mut installed_dirs: BTreeSet<PathBuf> = BTreeSet::new();
 
+    let plugins_root = sym.config_dir().join(INSTALLED_PLUGINS_SUBDIR);
+    let global = compile::global_plugins(&sym.config.plugins, &active, &to_install);
+    let compiled = compile::compile(&plugins_root, &global, debounce);
+
     for agent_name in &agent_names {
         let agent = Agent::from_config_name(agent_name)?;
 
@@ -503,10 +618,24 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
             .register_mcp_servers(mcp_scope, &project_root, sym.home_dir(), &mcp_servers, out)
             .context("failed to register MCP servers")?;
 
-        for (skill_name, origin_hash, skill_source) in &to_install {
-            // `skill_source` is the path to the SKILL.md file; the skill
-            // directory is its parent.
-            let source_dir = match skill_source.parent() {
+        let delivered = agent
+            .sync_user_plugins(sym, &plugins_root, &compiled.plugins, out)
+            .unwrap_or_else(|e| {
+                tracing::info!(
+                    report = %crate::report::ReportEvent::Warning {
+                        message: format!("failed to install plugins for {agent_name}: {e:#}"),
+                    },
+                );
+                false
+            });
+
+        for entry in &to_install {
+            if delivered && compiled.skill_origins.contains(&entry.origin_hash) {
+                continue;
+            }
+            let skill_name = entry.skill.name();
+            let origin_hash = &entry.origin_hash;
+            let source_dir = match entry.skill.path.parent() {
                 Some(p) => p,
                 None => {
                     out.warn(format!(
@@ -539,7 +668,7 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
             let unique_name = name_counts.get(skill_name).copied().unwrap_or(0) == 1;
             let plain_available = !plain_dir.exists() || has_symposium_marker(&plain_dir);
             let dir_name = if unique_name && plain_available {
-                skill_name.clone()
+                skill_name.to_string()
             } else {
                 format!("{skill_name}-{}", origin_hash)
             };
@@ -594,34 +723,9 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
         if !scanned.insert(parent.clone()) {
             continue;
         }
-        let Ok(entries) = fs::read_dir(&parent) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() || installed_dirs.contains(&path) {
-                continue;
-            }
-            if !has_symposium_marker(&path) {
-                continue;
-            }
-            match fs::remove_dir_all(&path) {
-                Ok(()) => {
-                    tracing::info!(
-                        report = %crate::report::ReportEvent::SkillRemoved {
-                            path: display_path(&path),
-                        },
-                    );
-                }
-                Err(e) => {
-                    tracing::info!(
-                        report = %crate::report::ReportEvent::Warning {
-                            message: format!("failed to remove stale {}: {e}", display_path(&path)),
-                        },
-                    );
-                }
-            }
-        }
+        reap_unlisted(&parent, |dir| {
+            installed_dirs.contains(dir) || compile::is_plugin_dir(dir)
+        });
     }
 
     // Hooks come off at whichever scope they would have been written to; MCP
@@ -651,6 +755,7 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
             }
         }
     }
+    unregister_user_plugins(sym, out);
 
     if to_install.is_empty() {
         tracing::info!(
@@ -661,6 +766,20 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     }
 
     Ok(())
+}
+
+pub(crate) fn unregister_user_plugins(sym: &Symposium, out: &Output) {
+    let root = sym.config_dir().join(INSTALLED_PLUGINS_SUBDIR);
+    for &agent in Agent::all() {
+        if !sym
+            .config
+            .agents
+            .iter()
+            .any(|entry| entry.name == agent.config_name())
+        {
+            let _ = agent.sync_user_plugins(sym, &root, &[], out);
+        }
+    }
 }
 
 /// Register global hooks for all configured agents.

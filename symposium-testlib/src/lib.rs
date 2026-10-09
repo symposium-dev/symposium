@@ -517,6 +517,97 @@ impl TestContext {
             .replace(symposium::state::CURRENT_VERSION, "$VERSION")
             .replace('\\', "/")
     }
+
+    pub fn normalize_json(&self, json: &str) -> String {
+        fn normalize(ctx: &TestContext, value: serde_json::Value) -> serde_json::Value {
+            match value {
+                serde_json::Value::String(s) => serde_json::Value::String(ctx.normalize_paths(&s)),
+                serde_json::Value::Array(items) => {
+                    items.into_iter().map(|v| normalize(ctx, v)).collect()
+                }
+                serde_json::Value::Object(map) => map
+                    .into_iter()
+                    .map(|(k, v)| (k, normalize(ctx, v)))
+                    .collect(),
+                other => other,
+            }
+        }
+        let value = serde_json::from_str(json).expect("valid JSON");
+        serde_json::to_string_pretty(&normalize(self, value)).unwrap()
+    }
+}
+
+pub fn tree(dir: &Path) -> String {
+    let mut lines = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(current) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(&current) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let rel = path
+                .strip_prefix(dir)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            if path.is_dir() {
+                lines.push(format!("{rel}/"));
+                pending.push(path);
+            } else {
+                lines.push(rel);
+            }
+        }
+    }
+    lines.sort();
+    lines.join("\n")
+}
+
+pub fn find_installed_skills(dirs: &[PathBuf], skill_name: &str) -> Vec<PathBuf> {
+    let is_copy = |path: &Path| {
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            return false;
+        };
+        let hashed = name
+            .strip_prefix(skill_name)
+            .and_then(|rest| rest.strip_prefix('-'))
+            .is_some_and(|hash| hash.len() == 8 && hash.chars().all(|c| c.is_ascii_hexdigit()));
+        (name == skill_name || hashed) && path.join("SKILL.md").is_file()
+    };
+    let children = |dir: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .map(|entries| entries.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default()
+    };
+    let mut found = Vec::new();
+    for dir in dirs {
+        for child in children(dir) {
+            if is_copy(&child) {
+                found.push(child.clone());
+            }
+            let is_plugin = child.join("plugin.json").is_file()
+                || child.join(".claude-plugin").join("plugin.json").is_file();
+            if is_plugin {
+                found.extend(
+                    children(&child.join("skills"))
+                        .into_iter()
+                        .filter(|s| is_copy(s)),
+                );
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+pub fn find_installed_skill(dirs: &[PathBuf], skill_name: &str) -> PathBuf {
+    let mut found = find_installed_skills(dirs, skill_name);
+    assert_eq!(
+        found.len(),
+        1,
+        "expected exactly one installed `{skill_name}` across {dirs:?}, found {found:?}"
+    );
+    found.pop().unwrap()
 }
 
 /// Directories discovered while copying fixture files.

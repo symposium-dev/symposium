@@ -5,6 +5,7 @@
 //! that knowledge.
 
 mod mcp_server_registration;
+mod plugin_registration;
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,13 @@ use serde_json::json;
 
 use crate::config::Symposium;
 use crate::output::{Output, display_path};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CompiledPlugin {
+    pub name: String,
+    pub version: String,
+    pub dir: PathBuf,
+}
 
 /// Which of an agent's two MCP configuration levels to write.
 ///
@@ -343,6 +351,32 @@ impl Agent {
             Agent::OpenCode => {
                 mcp_server_registration::unregister_opencode_mcp_servers(&path, names, out)
             }
+        }
+    }
+
+    /// Returns whether the agent installs `plugins` itself, in which case its
+    /// per-skill copies of their skills are not written.
+    pub(crate) fn sync_user_plugins(
+        &self,
+        sym: &Symposium,
+        root: &Path,
+        plugins: &[CompiledPlugin],
+        out: &Output,
+    ) -> Result<bool> {
+        match self {
+            Agent::Antigravity => {
+                plugin_registration::antigravity::sync_user_plugins(sym, root, plugins, out)
+            }
+            Agent::Claude => {
+                plugin_registration::claude::sync_user_plugins(sym, root, plugins, out)
+            }
+            Agent::Codex => plugin_registration::codex::sync_user_plugins(sym, root, plugins, out),
+            Agent::Copilot => {
+                plugin_registration::copilot::sync_user_plugins(sym, root, plugins, out)
+            }
+            Agent::Goose => plugin_registration::goose::sync_user_plugins(sym, root, plugins, out),
+            Agent::Kiro => Ok(false),
+            Agent::OpenCode => Ok(false),
         }
     }
 
@@ -1009,7 +1043,7 @@ fn event_to_cli_arg(event: &str) -> &str {
     }
 }
 
-fn load_json_or_empty(path: &Path) -> Result<serde_json::Value> {
+pub(crate) fn load_json_or_empty(path: &Path) -> Result<serde_json::Value> {
     if path.exists() {
         let contents = fs::read_to_string(path)?;
         if contents.trim().is_empty() {
@@ -1029,7 +1063,7 @@ fn load_json_or_empty(path: &Path) -> Result<serde_json::Value> {
 ///
 /// Bounds torn reads, not lost updates. What keeps that window from mattering is
 /// that registration writes only when an entry actually differs.
-fn save_json(path: &Path, value: &serde_json::Value) -> Result<()> {
+pub(crate) fn save_json(path: &Path, value: &serde_json::Value) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -1043,6 +1077,15 @@ fn save_json(path: &Path, value: &serde_json::Value) -> Result<()> {
         return Err(e.into());
     }
     Ok(())
+}
+
+pub(crate) fn save_json_if_changed(path: &Path, value: &serde_json::Value) -> Result<bool> {
+    let contents = serde_json::to_string_pretty(value)?;
+    if fs::read_to_string(path).is_ok_and(|existing| existing == contents) {
+        return Ok(false);
+    }
+    save_json(path, value)?;
+    Ok(true)
 }
 
 #[cfg(test)]
