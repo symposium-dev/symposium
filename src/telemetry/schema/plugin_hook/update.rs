@@ -376,7 +376,8 @@ mod tests {
 
     #[test]
     fn first_unexecuted_plugin_attempt_populates_an_error_aggregate() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let vendor_session_id = VendorSessionId::new("vendor-session-123".to_owned());
         let plugin = public_plugin(
@@ -435,7 +436,8 @@ mod tests {
 
     #[test]
     fn executed_plugin_attempts_accumulate_every_metric() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let first_session = VendorSessionId::new("vendor-session-123".to_owned());
         let second_session = VendorSessionId::new("vendor-session-456".to_owned());
@@ -515,7 +517,8 @@ mod tests {
 
     #[test]
     fn recovered_row_continues_totals_with_incomplete_session_counts() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let plugin = public_plugin(
             PublicExtensionSource::SymposiumRecommendations,
@@ -558,7 +561,8 @@ mod tests {
 
     #[test]
     fn missing_session_id_makes_plugin_hook_counts_incomplete() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let observation = metric_observation(
             PluginHookAttempt::Executed {
@@ -588,7 +592,8 @@ mod tests {
 
     #[test]
     fn another_plugin_identity_is_rejected_without_mutation() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let first_plugin = PluginHookAttribution::Public(public_plugin(
             PublicExtensionSource::SymposiumRecommendations,
@@ -615,7 +620,8 @@ mod tests {
 
     #[test]
     fn another_day_is_rejected_without_mutation() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let (mut row, _) = {
             let recording = recording_observation(&mut state);
             initialized_aggregate(&recording, PluginHookAttribution::Unnamed)
@@ -644,7 +650,8 @@ mod tests {
 
     #[test]
     fn another_hook_target_is_rejected_without_mutation() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let (mut row, _) = initialized_aggregate(&recording, PluginHookAttribution::Unnamed);
         let observation = metric_observation(successful_attempt(), None);
@@ -663,7 +670,8 @@ mod tests {
 
     #[test]
     fn reset_epoch_uses_event_id_to_reject_an_old_unnamed_row() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let (mut row, mut store) = {
             let recording = recording_observation(&mut state);
             let observation = metric_observation(
@@ -729,13 +737,14 @@ mod tests {
 
     #[test]
     fn update_rejects_a_selection_from_another_identifier_epoch() {
-        let mut old_state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut old_state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let old_recording = recording_observation(&mut old_state);
         let (mut row, mut store) =
             initialized_aggregate(&old_recording, PluginHookAttribution::Unnamed);
 
         let mut reset_state: TelemetryStateV1 =
-            toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         reset_state.reset_identifiers(row.day).unwrap();
         let reset_recording = recording_observation(&mut reset_state);
         let observation = metric_observation(successful_attempt(), None);
@@ -759,7 +768,8 @@ mod tests {
 
     #[test]
     fn failed_prepare_histogram_update_preserves_row_and_private_state() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let vendor_session_id = VendorSessionId::new("vendor-session-123".to_owned());
         let first = metric_observation(

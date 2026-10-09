@@ -25,13 +25,6 @@ use crate::telemetry::{
 };
 
 /// Borrowed extension-invocation store in canonical private-state order.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the root state codec consumes this in the next stack branch"
-    )
-)]
 #[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) struct ExtensionInvocationStoreRef<'a> {
@@ -114,13 +107,6 @@ impl<'a> ExtensionInvocationEntryRef<'a> {
 }
 
 /// Extension-invocation store decoded before runtime keys are reconstructed.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the root state codec consumes this in the next stack branch"
-    )
-)]
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub(super) struct RawExtensionInvocationStore {
@@ -131,13 +117,6 @@ pub(super) struct RawExtensionInvocationStore {
 
 impl RawExtensionInvocationStore {
     /// Rebuild extension keys and validate the resulting runtime store.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the root state codec consumes this in the next stack branch"
-        )
-    )]
     pub(super) fn into_runtime(
         self,
         scope: &IdentifierWindowScope<'_>,

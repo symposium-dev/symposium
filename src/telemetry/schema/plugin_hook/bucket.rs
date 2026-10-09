@@ -153,7 +153,8 @@ mod tests {
     }
 
     fn plugin_subject(coordinate: &PublicPluginCoordinate) -> PluginSubject {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
 
         recording.identifier_window_scope().derive(coordinate)

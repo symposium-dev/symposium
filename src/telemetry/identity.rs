@@ -30,6 +30,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// This type deliberately implements no formatting traits, which prevents the
 /// key from being printed accidentally in diagnostics. It does not promise to
 /// scrub every in-memory copy when dropped.
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(super) struct IdentityKey([u8; IDENTITY_KEY_BYTES]);
 
 impl IdentityKey {

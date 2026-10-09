@@ -15,7 +15,7 @@ use crate::telemetry::{
 };
 
 fn state() -> TelemetryStateV1 {
-    toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap()
+    TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE)
 }
 
 fn state_with_other_key() -> TelemetryStateV1 {
@@ -23,7 +23,7 @@ fn state_with_other_key() -> TelemetryStateV1 {
         "4242424242424242424242424242424242424242424242424242424242424242",
         "4343434343434343434343434343434343434343434343434343434343434343",
     );
-    toml::from_str(&source).unwrap()
+    TelemetryStateV1::decode_for_test(&source)
 }
 
 fn session_id(value: u128) -> SessionId {

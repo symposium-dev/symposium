@@ -672,7 +672,8 @@ mod tests {
 
     #[test]
     fn safe_skill_attribution_derives_the_independent_subject_vector() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let observation = recording_observation(&mut state);
         let target = PublicSkillCoordinate::try_from(public_target()).unwrap();
         let attribution =
@@ -774,7 +775,8 @@ mod tests {
 
     #[test]
     fn new_extension_resolution_derives_subject_from_its_target_and_path() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let observation = recording_observation(&mut state);
         let day = observation.day();
         let target = public_target();
@@ -795,7 +797,8 @@ mod tests {
 
     #[test]
     fn nested_extension_resolution_round_trips_through_the_classifier() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let observation = recording_observation(&mut state);
         let row = ExtensionResolutionV1::new(
             &observation,

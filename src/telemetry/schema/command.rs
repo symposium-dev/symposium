@@ -333,7 +333,8 @@ mod tests {
     }
 
     fn command_row(command: CommandCoordinate) -> CommandV1 {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let observation = recording_observation(&mut state);
 
         CommandV1::new(&observation, command, 820, CommandOutcome::Ok)

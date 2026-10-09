@@ -30,7 +30,9 @@ mod session_pair;
 mod staged_entries;
 
 pub(in crate::telemetry) use aggregate::StageCommit;
-pub(in crate::telemetry) use codec::{StateContentError, StateDecodeError, decode, encode};
+pub(in crate::telemetry) use codec::{
+    StateContentError, StateDecodeError, StateEncodeError, decode, encode,
+};
 pub(in crate::telemetry) use extension_invocation::{
     ExtensionSessionCountBaseline, ExtensionSessionCountSnapshot, ExtensionSessionCountUpdateError,
     SelectedExtensionInvocationAggregate,
@@ -56,7 +58,30 @@ pub(in crate::telemetry) const IDENTIFIER_WINDOW_TEST_STATE: &str = r#"version =
 key = "4242424242424242424242424242424242424242424242424242424242424242"
 identifier-window-anchor = "2026-08-03"
 latest-opened-day = "2026-08-03"
+
+[aggregates.hook]
+day = "2026-08-03"
+entries = []
+
+[aggregates.plugin-hook]
+day = "2026-08-03"
+public-rows-spent = 0
+entries = []
+
+[aggregates.extension-invocation]
+day = "2026-08-03"
+public-rows-spent = 0
+entries = []
 "#;
+
+#[cfg(test)]
+fn empty_aggregate_state_toml(day: &str) -> String {
+    format!(
+        "\n[aggregates.hook]\nday = \"{day}\"\nentries = []\n\n\
+         [aggregates.plugin-hook]\nday = \"{day}\"\npublic-rows-spent = 0\nentries = []\n\n\
+         [aggregates.extension-invocation]\nday = \"{day}\"\npublic-rows-spent = 0\nentries = []\n"
+    )
+}
 
 /// Build a recording context inside the shared test state's identifier window.
 #[cfg(test)]
@@ -77,7 +102,7 @@ pub(in crate::telemetry) fn recording_observation(
 /// Exact rather than permissive, unlike a row's `SchemaVersion`: a row written by
 /// a newer binary is classified as an unknown schema and skipped, but private
 /// single-writer state must never be half-understood.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct StateVersion;
 
 impl Serialize for StateVersion {
@@ -111,16 +136,21 @@ impl<'de> Deserialize<'de> for StateVersion {
 /// in which case its type records that explicitly. Once this version ships,
 /// adding a required field needs a migration or a new state version; a default
 /// must not silently turn malformed state into valid state.
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(super) struct TelemetryStateV1 {
     version: StateVersion,
-    #[serde(skip_serializing_if = "Option::is_none")]
     storage_limit_day: Option<UtcDay>,
     identity: IdentityState,
+    aggregates: aggregate::AggregateState,
 }
 
 impl TelemetryStateV1 {
+    /// Decode complete private state through the production codec for tests.
+    #[cfg(test)]
+    pub(in crate::telemetry) fn decode_for_test(source: &str) -> Self {
+        decode(source.as_bytes()).expect("test private state must decode")
+    }
+
     /// Create private state anchored to the day recording first needs identity.
     ///
     /// The return cohort remains absent until a session is observed.
@@ -147,6 +177,7 @@ impl TelemetryStateV1 {
                 return_cohort_anchor: None,
                 latest_opened_day: identifier_window_anchor,
             },
+            aggregates: aggregate::AggregateState::new(identifier_window_anchor),
         }
     }
 
@@ -176,9 +207,10 @@ impl TelemetryStateV1 {
         self.storage_limit_day = Some(day);
     }
 
-    /// Forget the stopped day after telemetry data is cleared.
-    pub(in crate::telemetry) fn clear_storage_limit(&mut self) {
+    /// Forget every private-state value paired with cleared public data.
+    pub(in crate::telemetry) fn clear_recorded_data(&mut self) {
         self.storage_limit_day = None;
+        self.aggregates.clear();
     }
 
     /// Bind the stored key to the active identifier-window anchor.
@@ -188,10 +220,7 @@ impl TelemetryStateV1 {
     /// persisted before its row is appended.
     #[must_use]
     fn identifier_window_scope(&self) -> IdentifierWindowScope<'_> {
-        IdentifierWindowScope::new(
-            &self.identity.key,
-            self.identity.identifier_window_anchor.to_string(),
-        )
+        self.identity.identifier_window_scope()
     }
 
     /// Bind the stored key to the active return-cohort anchor, when present.
@@ -211,6 +240,7 @@ impl TelemetryStateV1 {
 
 /// Stable identity material and the dates that define its rotation windows.
 #[derive(Serialize, Deserialize)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct IdentityState {
     #[serde(with = "state_key_hex")]
@@ -221,13 +251,22 @@ struct IdentityState {
     latest_opened_day: UtcDay,
 }
 
+impl IdentityState {
+    #[must_use]
+    fn identifier_window_scope(&self) -> IdentifierWindowScope<'_> {
+        IdentifierWindowScope::new(&self.key, self.identifier_window_anchor.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;
 
     use chrono::NaiveDate;
 
-    use super::{IdentityKey, TelemetryStateV1};
+    use super::{
+        IdentityKey, StateContentError, StateDecodeError, TelemetryStateV1, decode, encode,
+    };
     use crate::telemetry::{identity::RetentionDimension, schema::UtcDay};
 
     const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -248,35 +287,47 @@ mod tests {
         identifier_window_anchor: &str,
         return_cohort_anchor: &str,
     ) -> String {
-        format!(
+        let identity = format!(
             "version = 1\n\n[identity]\nkey = \"{key}\"\nidentifier-window-anchor = \"{identifier_window_anchor}\"\nreturn-cohort-anchor = \"{return_cohort_anchor}\"\nlatest-opened-day = \"{identifier_window_anchor}\"\n"
-        )
+        );
+        identity + &super::empty_aggregate_state_toml(identifier_window_anchor)
     }
 
     fn state_without_return_cohort(key: &str) -> String {
-        format!(
+        let identity = format!(
             "version = 1\n\n[identity]\nkey = \"{key}\"\nidentifier-window-anchor = \"2026-09-10\"\nlatest-opened-day = \"2026-09-10\"\n"
-        )
+        );
+        identity + &super::empty_aggregate_state_toml("2026-09-10")
     }
 
-    /// Rejection text for `source`, so each test can pin the reason it failed.
+    /// Decode `source` while keeping invalid state out of assertion diagnostics.
     ///
     /// Destructures rather than calling `unwrap_err`, which would need `Debug` on
     /// the state: the identity key deliberately has no formatting traits.
-    fn rejection_message(source: &str) -> String {
-        let Err(error) = toml::from_str::<TelemetryStateV1>(source) else {
+    fn rejection(source: &str) -> StateDecodeError {
+        let Err(error) = decode(source.as_bytes()) else {
             panic!("accepted invalid telemetry state:\n{source}");
         };
 
-        error.to_string()
+        error
+    }
+
+    fn assert_invalid_state_with_location(error: StateDecodeError) {
+        assert!(matches!(
+            error,
+            StateDecodeError::Malformed(StateContentError::InvalidState {
+                line: Some(_),
+                column: Some(_),
+            })
+        ));
     }
 
     #[test]
     fn version_one_state_round_trips_in_canonical_form() {
         let source = state_with_return_cohort(KEY);
 
-        let state: TelemetryStateV1 = toml::from_str(&source).unwrap();
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let state = TelemetryStateV1::decode_for_test(&source);
+        let serialized = encode(&state).unwrap();
 
         assert_eq!(serialized, source);
     }
@@ -299,8 +350,8 @@ mod tests {
         let mut state = TelemetryStateV1::new(stopped_day).unwrap();
         state.stop_event_recording(stopped_day);
 
-        let encoded = toml::to_string_pretty(&state).unwrap();
-        let decoded: TelemetryStateV1 = toml::from_str(&encoded).unwrap();
+        let encoded = encode(&state).unwrap();
+        let decoded = TelemetryStateV1::decode_for_test(&encoded);
 
         assert_eq!(decoded.storage_limit_day(), Some(stopped_day));
         assert!(decoded.event_recording_is_stopped(stopped_day));
@@ -313,7 +364,7 @@ mod tests {
         let mut state = TelemetryStateV1::new(stopped_day).unwrap();
         state.stop_event_recording(stopped_day);
 
-        state.clear_storage_limit();
+        state.clear_recorded_data();
 
         assert!(!state.event_recording_is_stopped(stopped_day));
     }
@@ -327,7 +378,16 @@ mod tests {
         .unwrap();
 
         let state = TelemetryStateV1::with_key(day(2026, 9, 10), key);
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let serialized = encode(&state).unwrap();
+
+        let (_, aggregate_body) = serialized
+            .split_once("\n[aggregates.hook]")
+            .expect("fresh state contains its aggregate section");
+        let aggregate_section = format!("\n[aggregates.hook]{aggregate_body}");
+        assert_eq!(
+            aggregate_section,
+            super::empty_aggregate_state_toml("2026-09-10")
+        );
 
         let expected = state_without_return_cohort(GENERATED_KEY);
         assert_eq!(serialized, expected);
@@ -337,8 +397,8 @@ mod tests {
     fn state_without_an_observed_session_has_no_return_cohort() {
         let source = state_without_return_cohort(KEY);
 
-        let state: TelemetryStateV1 = toml::from_str(&source).unwrap();
-        let serialized = toml::to_string_pretty(&state).unwrap();
+        let state = TelemetryStateV1::decode_for_test(&source);
+        let serialized = encode(&state).unwrap();
 
         assert!(state.identity.return_cohort_anchor.is_none());
         assert!(state.return_cohort_scope().is_none());
@@ -347,10 +407,10 @@ mod tests {
 
     #[test]
     fn return_cohort_scope_uses_the_return_cohort_anchor() {
-        let first: TelemetryStateV1 =
-            toml::from_str(&state_with_anchors(KEY, "2026-09-10", "2026-08-11")).unwrap();
-        let second: TelemetryStateV1 =
-            toml::from_str(&state_with_anchors(KEY, "2026-09-10", "2026-08-12")).unwrap();
+        let first =
+            TelemetryStateV1::decode_for_test(&state_with_anchors(KEY, "2026-09-10", "2026-08-11"));
+        let second =
+            TelemetryStateV1::decode_for_test(&state_with_anchors(KEY, "2026-09-10", "2026-08-12"));
 
         let first_subject = first
             .return_cohort_scope()
@@ -368,12 +428,12 @@ mod tests {
     fn future_state_version_is_rejected() {
         let source = state_with_return_cohort(KEY).replacen("version = 1", "version = 2", 1);
 
-        let message = rejection_message(&source);
+        let result = decode(source.as_bytes());
 
-        assert!(
-            message.contains("expected telemetry state version 1, found 2"),
-            "unexpected rejection reason: {message}"
-        );
+        assert!(matches!(
+            result,
+            Err(StateDecodeError::UnsupportedVersion(2))
+        ));
     }
 
     #[test]
@@ -384,12 +444,7 @@ mod tests {
             1,
         );
 
-        let message = rejection_message(&source);
-
-        assert!(
-            message.contains("unknown field `unexpected`"),
-            "unexpected rejection reason: {message}"
-        );
+        assert_invalid_state_with_location(rejection(&source));
     }
 
     #[test]
@@ -397,12 +452,7 @@ mod tests {
         let mut source = state_with_return_cohort(KEY);
         source.push_str("unexpected = true\n");
 
-        let message = rejection_message(&source);
-
-        assert!(
-            message.contains("unknown field `unexpected`"),
-            "unexpected rejection reason: {message}"
-        );
+        assert_invalid_state_with_location(rejection(&source));
     }
 
     #[test]
@@ -410,12 +460,7 @@ mod tests {
         let source =
             state_without_return_cohort(KEY).replace("latest-opened-day = \"2026-09-10\"\n", "");
 
-        let message = rejection_message(&source);
-
-        assert!(
-            message.contains("missing field `latest-opened-day`"),
-            "unexpected rejection reason: {message}"
-        );
+        assert_invalid_state_with_location(rejection(&source));
     }
 
     #[test]
@@ -424,25 +469,14 @@ mod tests {
         let one_long = format!("{KEY}0");
 
         for key in ["", one_short, &one_long] {
-            let message = rejection_message(&state_with_return_cohort(key));
-
-            assert!(
-                message.contains("exactly 64 hexadecimal digits"),
-                "accepted or misreported a {}-digit key: {message}",
-                key.len()
-            );
+            assert_invalid_state_with_location(rejection(&state_with_return_cohort(key)));
         }
     }
 
     #[test]
     fn identity_key_must_use_lowercase_hexadecimal() {
         for key in [KEY.to_uppercase(), KEY.replacen('f', "g", 1)] {
-            let message = rejection_message(&state_with_return_cohort(&key));
-
-            assert!(
-                message.contains("lowercase hexadecimal digits"),
-                "accepted or misreported {key}: {message}"
-            );
+            assert_invalid_state_with_location(rejection(&state_with_return_cohort(&key)));
         }
     }
 
@@ -450,11 +484,6 @@ mod tests {
     fn identity_anchor_must_be_a_canonical_utc_day() {
         let source = state_with_return_cohort(KEY).replacen("2026-09-10", "2026-9-10", 1);
 
-        let message = rejection_message(&source);
-
-        assert!(
-            message.contains("UTC day"),
-            "unexpected rejection reason: {message}"
-        );
+        assert_invalid_state_with_location(rejection(&source));
     }
 }

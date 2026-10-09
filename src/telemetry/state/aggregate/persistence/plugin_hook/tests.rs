@@ -9,7 +9,7 @@ use crate::telemetry::{
 const OTHER_KEY: &str = "4343434343434343434343434343434343434343434343434343434343434343";
 
 fn state() -> TelemetryStateV1 {
-    toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap()
+    TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE)
 }
 
 fn state_with_other_key() -> TelemetryStateV1 {
@@ -17,7 +17,7 @@ fn state_with_other_key() -> TelemetryStateV1 {
         "4242424242424242424242424242424242424242424242424242424242424242",
         OTHER_KEY,
     );
-    toml::from_str(&source).unwrap()
+    TelemetryStateV1::decode_for_test(&source)
 }
 
 fn public_plugin(name: &str) -> PublicPluginCoordinate {

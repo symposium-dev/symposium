@@ -217,10 +217,13 @@ staged unit, and performs the shared poison preflight; `rows.rs` selects and
 mutates each family's row against the owned snapshot; and `error.rs` keeps the
 content-free failure vocabulary.
 
-`state/aggregate/persistence/sessions.rs` is the private wire bridge for the
-shared session pair. It preserves permanent incompleteness, rejects malformed
-or oversized raw sets, and checks the family-specific subset and contribution
-relationships without giving runtime trackers general-purpose serialization.
+`state/aggregate/persistence.rs` wraps the three family wire shapes and owns
+cross-family row-identifier uniqueness plus agreement between every store day
+and the identity high-water day. Its `sessions.rs` child is the private wire
+bridge for the shared session pair. It preserves permanent incompleteness,
+rejects malformed or oversized raw sets, and checks the family-specific subset
+and contribution relationships without giving runtime trackers general-purpose
+serialization.
 Its `hook.rs` sibling defines the strict borrowed and owned hook-store wire
 shapes, re-derives hook subjects from the document's identity scope, and runs
 the same store validator before encoding and after reconstruction.
@@ -235,8 +238,15 @@ agent and extension subjects from the document scope instead of trusting
 stored subjects.
 
 `state/codec.rs` owns canonical private-state serialization, version dispatch,
-schema decoding, and secret-safe diagnostics. The private `storage` module
-owns the bounded file I/O that calls that codec.
+schema decoding, and secret-safe diagnostics. It is the only bridge between
+the runtime state and the strict aggregate wire adapters, so aggregate
+invariant failures remain typed without giving identity-bearing runtime types
+general-purpose serialization. `state/lifecycle.rs` advances all three
+aggregate-store days before mutating identity state on every accepted
+operation. Day rollover clears entries and resets public-row spend, while an
+identifier-window rollover or identifier reset clears entries and preserves
+same-day spend. The private `storage` module owns the bounded file I/O that
+calls the codec.
 
 Resolution summaries derive an optional `session_id` from a paired agent and
 raw vendor session identifier rather than accepting a loose scoped identifier.
