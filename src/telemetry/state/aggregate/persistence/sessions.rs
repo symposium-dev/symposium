@@ -16,10 +16,6 @@ use crate::telemetry::{
 ///
 /// Keeping this value free of Serde lets each family retain its meaningful
 /// field names while sharing the complete/incomplete representation.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the next persistence commit")
-)]
 pub(super) struct SessionPairRef<'a> {
     pub(super) complete: bool,
     pub(super) first: Option<&'a BTreeSet<SessionId>>,
@@ -65,10 +61,6 @@ impl SessionContributionCounts {
 }
 
 /// Decode and validate one top-level hook tracker.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the next persistence commit")
-)]
 pub(super) fn decode_hook(
     complete: bool,
     identified: Option<Vec<SessionId>>,
@@ -126,10 +118,6 @@ pub(super) fn decode_extension_invocation(
 }
 
 /// Validate one top-level hook tracker before encoding it.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by the next persistence commit")
-)]
 pub(super) fn validate_hook(
     pair: &TrackedSessionPair,
     contributions: u64,

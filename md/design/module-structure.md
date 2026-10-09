@@ -227,6 +227,9 @@ content-free failure vocabulary.
 shared session pair. It preserves permanent incompleteness, rejects malformed
 or oversized raw sets, and checks the family-specific subset and contribution
 relationships without giving runtime trackers general-purpose serialization.
+Its `hook.rs` sibling defines the strict borrowed and owned hook-store wire
+shapes, re-derives hook subjects from the document's identity scope, and runs
+the same store validator before encoding and after reconstruction.
 
 `state/codec.rs` owns canonical private-state serialization, version dispatch,
 schema decoding, and secret-safe diagnostics. The private `storage` module
