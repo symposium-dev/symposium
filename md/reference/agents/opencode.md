@@ -8,6 +8,8 @@ Config name: `opencode`
 |-------|------|
 | Project | `.agents/skills/<name>/SKILL.md` |
 
+OpenCode also loads the skills of a plugin installed for Claude Code with `cargo agents use --global`, in every folder and whether or not OpenCode is among your agents; set `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` to keep it out of Claude Code's skills.
+
 ## Hooks
 
 **OpenCode does not support shell-command hooks.** Its extensibility is based on TypeScript/JavaScript plugins. Symposium cannot register hooks for OpenCode.

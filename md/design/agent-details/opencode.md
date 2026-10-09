@@ -152,6 +152,8 @@ Priority: local `AGENTS.md` > local `CLAUDE.md` > global `~/.config/opencode/AGE
 
 OpenCode walks up from CWD to the git worktree root, loading matching skill definitions. Skills use `SKILL.md` with YAML frontmatter (`name`, `description`) and are loaded on-demand via the native `skill` tool.
 
+Its search of `~/.claude/skills/` also finds the skills inside a plugin symposium installs for Claude Code (`~/.claude/skills/<plugin>/skills/<skill>/`), in every folder, even when OpenCode is not configured in symposium; `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` stops OpenCode reading Claude Code's skill directories.
+
 ## Additional Events (Plugin System)
 
 The full event list includes: `session.created`, `session.idle`, `session.compacted`, `message.updated`, `file.edited`, `file.watcher.updated`, `permission.asked`, `permission.replied`, `tool.execute.before`, `tool.execute.after`, `shell.env`, `tui.prompt.append`, `tui.command.execute`, and others (~30 total). The `message.updated` event (filtered by `role === "user"`) is the closest equivalent to a user-prompt-submit hook. The `session.created` event is the session-start equivalent.

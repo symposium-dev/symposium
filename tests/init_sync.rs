@@ -1308,8 +1308,8 @@ async fn dormant_plugin_activates_only_once_used() {
             ctx.sym.save_config()?;
             ctx.symposium(&["sync"]).await?;
 
-            let dir = find_installed_skill(&skills_dir, "gateless-guidance");
-            assert!(dir.join(".symposium").exists());
+            let plugin = ctx.sym.home_dir().join(".claude/skills/gateless-plugin");
+            assert!(plugin.join("skills/gateless-guidance/SKILL.md").is_file());
             Ok(())
         },
     )
