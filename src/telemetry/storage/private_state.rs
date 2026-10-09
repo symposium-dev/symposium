@@ -15,7 +15,7 @@ use super::{
 };
 use crate::telemetry::schema::UtcDay;
 use crate::telemetry::state::{
-    StateContentError, StateDecodeError, TelemetryStateV1, decode, encode,
+    StateContentError, StateDecodeError, StateEncodeError, TelemetryStateV1, decode, encode,
 };
 
 /// Safety ceiling for private state read into one recorder process.
@@ -115,16 +115,14 @@ impl From<LoadStateError> for OpenStateError {
 /// Failure to serialize or atomically replace private telemetry state.
 #[derive(Debug)]
 pub(in crate::telemetry) enum ReplaceStateError {
-    Serialize(toml::ser::Error),
+    Encode(StateEncodeError),
     Replace(AtomicReplaceError),
 }
 
 impl fmt::Display for ReplaceStateError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Serialize(_) => {
-                formatter.write_str("failed to serialize telemetry private state")
-            }
+            Self::Encode(error) => error.fmt(formatter),
             Self::Replace(_) => formatter.write_str("failed to replace telemetry private state"),
         }
     }
@@ -133,7 +131,7 @@ impl fmt::Display for ReplaceStateError {
 impl Error for ReplaceStateError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Serialize(error) => Some(error),
+            Self::Encode(error) => Some(error),
             Self::Replace(error) => Some(error),
         }
     }
@@ -195,7 +193,7 @@ impl LockedStorage {
         &mut self,
         state: &TelemetryStateV1,
     ) -> Result<(), ReplaceStateError> {
-        let serialized = encode(state).map_err(ReplaceStateError::Serialize)?;
+        let serialized = encode(state).map_err(ReplaceStateError::Encode)?;
         atomic::replace(self.paths.state_file(), serialized.as_bytes())
             .map_err(ReplaceStateError::Replace)
     }

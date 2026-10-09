@@ -59,6 +59,15 @@ impl HookAggregateStore {
         }
     }
 
+    /// Apply a day already checked by the aggregate-state preflight.
+    pub(in crate::telemetry::state) fn advance_day_after_preflight(&mut self, day: UtcDay) {
+        debug_assert!(day >= self.day());
+        if day > self.day() {
+            self.day = OpenDay::new(day);
+            self.entries.clear();
+        }
+    }
+
     /// Stage private-state edits for one hook recording operation.
     ///
     /// Day selection is applied to a copy. Dropping the returned stage leaves

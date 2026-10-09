@@ -473,7 +473,10 @@ mod tests {
         recording_observation,
     };
     use super::*;
-    use crate::telemetry::{identity::encode_dimension_for_test, state::TelemetryStateV1};
+    use crate::telemetry::{
+        identity::encode_dimension_for_test,
+        state::{TelemetryStateV1, encode},
+    };
 
     fn session_start_fields(
         agent: HookAgent,
@@ -795,7 +798,7 @@ mod tests {
         let observation = state.bind_session_observation(observation).unwrap();
 
         let row = SessionStartV1::new(session_start_fields(HookAgent::Claude, None), &observation);
-        let stored_state = toml::to_string(&state).unwrap();
+        let stored_state = encode(&state).unwrap();
         let stored_state = toml::from_str::<toml::Value>(&stored_state).unwrap();
         let cohort_anchor = stored_state["identity"]["return-cohort-anchor"]
             .as_str()

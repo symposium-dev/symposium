@@ -30,7 +30,9 @@ mod session_pair;
 mod staged_entries;
 
 pub(in crate::telemetry) use aggregate::StageCommit;
-pub(in crate::telemetry) use codec::{StateContentError, StateDecodeError, decode, encode};
+pub(in crate::telemetry) use codec::{
+    StateContentError, StateDecodeError, StateEncodeError, decode, encode,
+};
 pub(in crate::telemetry) use extension_invocation::{
     ExtensionSessionCountBaseline, ExtensionSessionCountSnapshot, ExtensionSessionCountUpdateError,
     SelectedExtensionInvocationAggregate,
@@ -56,7 +58,30 @@ pub(in crate::telemetry) const IDENTIFIER_WINDOW_TEST_STATE: &str = r#"version =
 key = "4242424242424242424242424242424242424242424242424242424242424242"
 identifier-window-anchor = "2026-08-03"
 latest-opened-day = "2026-08-03"
+
+[aggregates.hook]
+day = "2026-08-03"
+entries = []
+
+[aggregates.plugin-hook]
+day = "2026-08-03"
+public-rows-spent = 0
+entries = []
+
+[aggregates.extension-invocation]
+day = "2026-08-03"
+public-rows-spent = 0
+entries = []
 "#;
+
+#[cfg(test)]
+fn empty_aggregate_state_toml(day: &str) -> String {
+    format!(
+        "\n[aggregates.hook]\nday = \"{day}\"\nentries = []\n\n\
+         [aggregates.plugin-hook]\nday = \"{day}\"\npublic-rows-spent = 0\nentries = []\n\n\
+         [aggregates.extension-invocation]\nday = \"{day}\"\npublic-rows-spent = 0\nentries = []\n"
+    )
+}
 
 /// Build a recording context inside the shared test state's identifier window.
 #[cfg(test)]
@@ -77,7 +102,7 @@ pub(in crate::telemetry) fn recording_observation(
 /// Exact rather than permissive, unlike a row's `SchemaVersion`: a row written by
 /// a newer binary is classified as an unknown schema and skipped, but private
 /// single-writer state must never be half-understood.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct StateVersion;
 
 impl Serialize for StateVersion {
@@ -111,13 +136,12 @@ impl<'de> Deserialize<'de> for StateVersion {
 /// in which case its type records that explicitly. Once this version ships,
 /// adding a required field needs a migration or a new state version; a default
 /// must not silently turn malformed state into valid state.
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub(super) struct TelemetryStateV1 {
     version: StateVersion,
-    #[serde(skip_serializing_if = "Option::is_none")]
     storage_limit_day: Option<UtcDay>,
     identity: IdentityState,
+    aggregates: aggregate::AggregateState,
 }
 
 impl TelemetryStateV1 {
@@ -153,6 +177,7 @@ impl TelemetryStateV1 {
                 return_cohort_anchor: None,
                 latest_opened_day: identifier_window_anchor,
             },
+            aggregates: aggregate::AggregateState::new(identifier_window_anchor),
         }
     }
 
@@ -182,9 +207,10 @@ impl TelemetryStateV1 {
         self.storage_limit_day = Some(day);
     }
 
-    /// Forget the stopped day after telemetry data is cleared.
-    pub(in crate::telemetry) fn clear_storage_limit(&mut self) {
+    /// Forget every private-state value paired with cleared public data.
+    pub(in crate::telemetry) fn clear_recorded_data(&mut self) {
         self.storage_limit_day = None;
+        self.aggregates.clear();
     }
 
     /// Bind the stored key to the active identifier-window anchor.
@@ -194,10 +220,7 @@ impl TelemetryStateV1 {
     /// persisted before its row is appended.
     #[must_use]
     fn identifier_window_scope(&self) -> IdentifierWindowScope<'_> {
-        IdentifierWindowScope::new(
-            &self.identity.key,
-            self.identity.identifier_window_anchor.to_string(),
-        )
+        self.identity.identifier_window_scope()
     }
 
     /// Bind the stored key to the active return-cohort anchor, when present.
@@ -217,6 +240,7 @@ impl TelemetryStateV1 {
 
 /// Stable identity material and the dates that define its rotation windows.
 #[derive(Serialize, Deserialize)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct IdentityState {
     #[serde(with = "state_key_hex")]
@@ -225,6 +249,13 @@ struct IdentityState {
     #[serde(skip_serializing_if = "Option::is_none")]
     return_cohort_anchor: Option<UtcDay>,
     latest_opened_day: UtcDay,
+}
+
+impl IdentityState {
+    #[must_use]
+    fn identifier_window_scope(&self) -> IdentifierWindowScope<'_> {
+        IdentifierWindowScope::new(&self.key, self.identifier_window_anchor.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -256,15 +287,17 @@ mod tests {
         identifier_window_anchor: &str,
         return_cohort_anchor: &str,
     ) -> String {
-        format!(
+        let identity = format!(
             "version = 1\n\n[identity]\nkey = \"{key}\"\nidentifier-window-anchor = \"{identifier_window_anchor}\"\nreturn-cohort-anchor = \"{return_cohort_anchor}\"\nlatest-opened-day = \"{identifier_window_anchor}\"\n"
-        )
+        );
+        identity + &super::empty_aggregate_state_toml(identifier_window_anchor)
     }
 
     fn state_without_return_cohort(key: &str) -> String {
-        format!(
+        let identity = format!(
             "version = 1\n\n[identity]\nkey = \"{key}\"\nidentifier-window-anchor = \"2026-09-10\"\nlatest-opened-day = \"2026-09-10\"\n"
-        )
+        );
+        identity + &super::empty_aggregate_state_toml("2026-09-10")
     }
 
     /// Decode `source` while keeping invalid state out of assertion diagnostics.
@@ -331,7 +364,7 @@ mod tests {
         let mut state = TelemetryStateV1::new(stopped_day).unwrap();
         state.stop_event_recording(stopped_day);
 
-        state.clear_storage_limit();
+        state.clear_recorded_data();
 
         assert!(!state.event_recording_is_stopped(stopped_day));
     }
@@ -346,6 +379,15 @@ mod tests {
 
         let state = TelemetryStateV1::with_key(day(2026, 9, 10), key);
         let serialized = encode(&state).unwrap();
+
+        let (_, aggregate_body) = serialized
+            .split_once("\n[aggregates.hook]")
+            .expect("fresh state contains its aggregate section");
+        let aggregate_section = format!("\n[aggregates.hook]{aggregate_body}");
+        assert_eq!(
+            aggregate_section,
+            super::empty_aggregate_state_toml("2026-09-10")
+        );
 
         let expected = state_without_return_cohort(GENERATED_KEY);
         assert_eq!(serialized, expected);

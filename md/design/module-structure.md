@@ -244,8 +244,15 @@ agent and extension subjects from the document scope instead of trusting
 stored subjects.
 
 `state/codec.rs` owns canonical private-state serialization, version dispatch,
-schema decoding, and secret-safe diagnostics. The private `storage` module
-owns the bounded file I/O that calls that codec.
+schema decoding, and secret-safe diagnostics. It is the only bridge between
+the runtime state and the strict aggregate wire adapters, so aggregate
+invariant failures remain typed without giving identity-bearing runtime types
+general-purpose serialization. `state/lifecycle.rs` advances all three
+aggregate-store days before mutating identity state on every accepted
+operation. Day rollover clears entries and resets public-row spend, while an
+identifier-window rollover or identifier reset clears entries and preserves
+same-day spend. The private `storage` module owns the bounded file I/O that
+calls the codec.
 
 Resolution summaries derive an optional `session_id` from a paired agent and
 raw vendor session identifier rather than accepting a loose scoped identifier.

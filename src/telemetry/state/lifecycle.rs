@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-use super::{IdentityState, TelemetryStateV1};
+use super::{DayBeforeCurrent, IdentityState, TelemetryStateV1};
 use crate::telemetry::{
     identity::{IdentifierWindowScope, IdentityKey, ReturnCohortScope},
     schema::{CohortDay, UtcDay, UtcSecond},
@@ -28,9 +28,8 @@ impl TelemetryStateV1 {
     /// identity scope, so reset does not compare the new anchor with the old
     /// one.
     ///
-    /// The storage-level reset must preserve the durable high-water mark and
-    /// clear pending keyed session-count sets once those sibling state sections
-    /// are added.
+    /// The storage-level reset preserves the durable high-water mark and
+    /// clears aggregate entries without resetting same-day public-row spend.
     ///
     /// Key generation completes before any state changes, so a failure leaves
     /// the existing key and anchors intact.
@@ -64,6 +63,7 @@ impl TelemetryStateV1 {
             return_cohort_anchor: None,
             latest_opened_day,
         };
+        self.aggregates.reset_identifier_epoch();
         Ok(())
     }
 
@@ -91,6 +91,10 @@ impl TelemetryStateV1 {
         completed_at: UtcSecond,
     ) -> Result<RecordingObservation, RecordingObservationError> {
         let observation = self.select_recording(completed_at)?;
+        self.advance_aggregate_day(completed_at.day())?;
+        if observation.identifier_window.is_advanced() {
+            self.aggregates.reset_identifier_epoch();
+        }
         self.identity.identifier_window_anchor = observation.identifier_window.anchor();
         self.identity.latest_opened_day = completed_at.day();
         Ok(observation)
@@ -168,6 +172,10 @@ impl TelemetryStateV1 {
         let effective_day = recording.completed_at.day();
         let return_cohort = self.select_return_cohort(effective_day)?;
 
+        self.advance_aggregate_day(effective_day)?;
+        if recording.identifier_window.is_advanced() {
+            self.aggregates.reset_identifier_epoch();
+        }
         self.identity.identifier_window_anchor = recording.identifier_window.anchor();
         self.identity.return_cohort_anchor = Some(return_cohort.anchor());
         self.identity.latest_opened_day = effective_day;
@@ -176,6 +184,19 @@ impl TelemetryStateV1 {
             recording,
             return_cohort,
         })
+    }
+
+    /// Advance all aggregate stores before mutating identity state.
+    fn advance_aggregate_day(
+        &mut self,
+        observed_day: UtcDay,
+    ) -> Result<(), RecordingObservationError> {
+        let result = self.aggregates.advance_day(observed_day);
+        debug_assert!(
+            result.is_ok(),
+            "BUG: validated aggregate-store days cannot lead the identity high-water day"
+        );
+        result.map_err(RecordingObservationError::AggregateDay)
     }
 
     /// Bind a completed session transition to the unchanged private state.
@@ -370,6 +391,7 @@ impl std::error::Error for RecordingObservationBindingError {}
 /// A recording operation earlier than a stored monotonic identity day.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::telemetry) enum RecordingObservationError {
+    AggregateDay(DayBeforeCurrent),
     BeforeHighWater {
         observed_day: UtcDay,
         latest_opened_day: UtcDay,
@@ -383,6 +405,7 @@ pub(in crate::telemetry) enum RecordingObservationError {
 impl fmt::Display for RecordingObservationError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::AggregateDay(error) => write!(formatter, "aggregate private state {error}"),
             Self::BeforeHighWater {
                 observed_day,
                 latest_opened_day,
@@ -401,7 +424,14 @@ impl fmt::Display for RecordingObservationError {
     }
 }
 
-impl std::error::Error for RecordingObservationError {}
+impl std::error::Error for RecordingObservationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::AggregateDay(error) => Some(error),
+            Self::BeforeHighWater { .. } | Self::BeforeIdentifierWindow { .. } => None,
+        }
+    }
+}
 
 /// Identity and return-cohort selections for one observed session.
 #[must_use = "session identity state must be persisted before identifiers are emitted"]
@@ -516,6 +546,12 @@ impl IdentifierWindowUpdate {
             Self::Current { anchor } | Self::Advanced { anchor } => anchor,
         }
     }
+
+    /// Whether this observation begins a new identifier epoch.
+    #[must_use]
+    const fn is_advanced(self) -> bool {
+        matches!(self, Self::Advanced { .. })
+    }
 }
 
 /// Whether selecting a return cohort changed private state.
@@ -598,7 +634,7 @@ mod tests {
         DimensionWriter, IdentityDimension, RetentionDimension, SessionDomain,
     };
     use crate::telemetry::schema::UtcSecond;
-    use crate::telemetry::state::encode;
+    use crate::telemetry::state::{empty_aggregate_state_toml, encode};
 
     const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const GENERATED_KEY_BYTE: u8 = 0x42;
@@ -650,9 +686,10 @@ mod tests {
         return_cohort_anchor: &str,
         latest_opened_day: &str,
     ) -> String {
-        format!(
+        let identity = format!(
             "version = 1\n\n[identity]\nkey = \"{key}\"\nidentifier-window-anchor = \"{identifier_window_anchor}\"\nreturn-cohort-anchor = \"{return_cohort_anchor}\"\nlatest-opened-day = \"{latest_opened_day}\"\n"
-        )
+        );
+        identity + &empty_aggregate_state_toml(latest_opened_day)
     }
 
     fn state_without_return_cohort(key: &str) -> String {
@@ -672,9 +709,10 @@ mod tests {
         identifier_window_anchor: &str,
         latest_opened_day: &str,
     ) -> String {
-        format!(
+        let identity = format!(
             "version = 1\n\n[identity]\nkey = \"{key}\"\nidentifier-window-anchor = \"{identifier_window_anchor}\"\nlatest-opened-day = \"{latest_opened_day}\"\n"
-        )
+        );
+        identity + &empty_aggregate_state_toml(latest_opened_day)
     }
 
     #[test]

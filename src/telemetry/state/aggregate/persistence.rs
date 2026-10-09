@@ -29,20 +29,13 @@ use crate::telemetry::{identity::IdentifierWindowScope, schema::UtcDay};
 
 /// Identity fields needed to validate the aggregate section in either direction.
 #[derive(Clone, Copy)]
-pub(super) struct AggregatePersistenceContext<'scope, 'identity> {
+pub(in crate::telemetry::state) struct AggregatePersistenceContext<'scope, 'identity> {
     scope: &'scope IdentifierWindowScope<'identity>,
     latest_opened_day: UtcDay,
 }
 
 impl<'scope, 'identity> AggregatePersistenceContext<'scope, 'identity> {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the root state codec consumes this in the next stack branch"
-        )
-    )]
-    pub(super) const fn new(
+    pub(in crate::telemetry::state) const fn new(
         scope: &'scope IdentifierWindowScope<'identity>,
         latest_opened_day: UtcDay,
     ) -> Self {
@@ -54,16 +47,9 @@ impl<'scope, 'identity> AggregatePersistenceContext<'scope, 'identity> {
 }
 
 /// Borrowed aggregate private state in canonical wire order.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the root state codec consumes this in the next stack branch"
-    )
-)]
 #[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
-pub(super) struct AggregateStateRef<'a> {
+pub(in crate::telemetry::state) struct AggregateStateRef<'a> {
     hook: hook::HookStoreRef<'a>,
     plugin_hook: plugin_hook::PluginHookStoreRef<'a>,
     extension_invocation: extension_invocation::ExtensionInvocationStoreRef<'a>,
@@ -93,16 +79,9 @@ impl<'store> TryFrom<(&'store AggregateState, AggregatePersistenceContext<'_, '_
 }
 
 /// Aggregate private state decoded before runtime keys are reconstructed.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the root state codec consumes this in the next stack branch"
-    )
-)]
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
-pub(super) struct RawAggregateState {
+pub(in crate::telemetry::state) struct RawAggregateState {
     hook: hook::RawHookStore,
     plugin_hook: plugin_hook::RawPluginHookStore,
     extension_invocation: extension_invocation::RawExtensionInvocationStore,
@@ -110,14 +89,7 @@ pub(super) struct RawAggregateState {
 
 impl RawAggregateState {
     /// Rebuild all family stores, then validate their shared invariants.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the root state codec consumes this in the next stack branch"
-        )
-    )]
-    pub(super) fn into_runtime(
+    pub(in crate::telemetry::state) fn into_runtime(
         self,
         context: AggregatePersistenceContext<'_, '_>,
     ) -> Result<AggregateState, AggregateStateInvariantError> {
