@@ -2,9 +2,9 @@
 //!
 //! Batch validation and serialization finish before the event file is opened.
 //! The generic handle helper in this module is a private fault-injection seam
-//! for distinguishing append stages. The recorder's later RecordingWrites seam
-//! operates on whole state, batch, and snapshot writes; it must not expose file
-//! handles.
+//! for distinguishing append stages. [`RecordingWrites`](super::RecordingWrites)
+//! is the storage-private adapter over complete state, batch, and snapshot
+//! writes; it never exposes file handles or owns their transaction ordering.
 
 use std::{
     error::Error,
@@ -16,7 +16,7 @@ use std::{
 
 use crate::telemetry::schema::{LowVolumeRow, UtcDay};
 
-use super::LockedStorage;
+use super::{LockedStorage, RecordingWriteAccess, RecordingWrites};
 
 /// A complete append-only event batch serialized for exactly one UTC day.
 #[derive(Clone, PartialEq, Eq)]
@@ -162,7 +162,7 @@ impl Error for AppendEventBatchError {
     }
 }
 
-impl LockedStorage {
+impl<Writer: RecordingWrites> LockedStorage<Writer> {
     /// Append one completely serialized batch to its canonical daily event file.
     ///
     /// Callers must already have rejected a day before the latest-opened-day
@@ -179,14 +179,21 @@ impl LockedStorage {
     /// tail repair, or the batch write. A failed batch write may leave a partial
     /// final line; a later append preserves and closes it rather than overwriting
     /// inspectable data.
-    pub(in crate::telemetry) fn append_event_batch(
+    pub(super) fn append_event_batch(
         &mut self,
         batch: &EventBatch,
     ) -> Result<(), AppendEventBatchError> {
-        let path = self.paths.event_file(batch.day());
-        let mut file = prepare_event_file(&path).map_err(AppendEventBatchError::Prepare)?;
-        append_to_handle(&mut file, &batch.bytes)
+        let access = RecordingWriteAccess::new(&self.paths);
+        self.writer.append_event_batch(access, batch)
     }
+}
+
+pub(super) fn append_event_batch(
+    path: &Path,
+    batch: &EventBatch,
+) -> Result<(), AppendEventBatchError> {
+    let mut file = prepare_event_file(path).map_err(AppendEventBatchError::Prepare)?;
+    append_to_handle(&mut file, &batch.bytes)
 }
 
 fn prepare_event_file(path: &Path) -> io::Result<File> {
@@ -248,7 +255,10 @@ mod tests {
     use chrono::NaiveDate;
 
     use super::*;
-    use crate::telemetry::schema::{DroppedOperation, StorageLimitV1};
+    use crate::telemetry::{
+        schema::{DroppedOperation, StorageLimitV1},
+        storage::Storage,
+    };
 
     fn day(day: u32) -> UtcDay {
         UtcDay::from_date(NaiveDate::from_ymd_opt(2026, 8, day).unwrap())
@@ -310,7 +320,7 @@ mod tests {
     #[test]
     fn invalid_batch_never_creates_an_event_file() {
         let temporary = tempfile::tempdir().unwrap();
-        let storage = LockedStorage::try_acquire(temporary.path()).unwrap();
+        let storage = Storage::try_acquire(temporary.path()).unwrap();
         let path = storage.paths.event_file(day(3));
 
         let result = EventBatch::build(day(3), vec![row(day(4), DroppedOperation::Use)]);
@@ -322,7 +332,7 @@ mod tests {
     #[test]
     fn append_creates_the_canonical_event_file() {
         let temporary = tempfile::tempdir().unwrap();
-        let mut storage = LockedStorage::try_acquire(temporary.path()).unwrap();
+        let mut storage = Storage::try_acquire(temporary.path()).unwrap();
         let batch = batch(day(3), DroppedOperation::Use);
         let path = storage.paths.event_file(day(3));
 
@@ -334,7 +344,7 @@ mod tests {
     #[test]
     fn later_batch_appends_without_changing_existing_bytes() {
         let temporary = tempfile::tempdir().unwrap();
-        let mut storage = LockedStorage::try_acquire(temporary.path()).unwrap();
+        let mut storage = Storage::try_acquire(temporary.path()).unwrap();
         let first = batch(day(3), DroppedOperation::Use);
         let second = batch(day(3), DroppedOperation::Command);
         let path = storage.paths.event_file(day(3));
@@ -351,7 +361,7 @@ mod tests {
     #[test]
     fn append_closes_a_partial_final_line_before_the_batch() {
         let temporary = tempfile::tempdir().unwrap();
-        let mut storage = LockedStorage::try_acquire(temporary.path()).unwrap();
+        let mut storage = Storage::try_acquire(temporary.path()).unwrap();
         let batch = batch(day(3), DroppedOperation::Use);
         let path = storage.paths.event_file(day(3));
         fs::write(&path, b"partial").unwrap();
@@ -367,7 +377,7 @@ mod tests {
     #[test]
     fn append_to_an_empty_file_adds_no_blank_line() {
         let temporary = tempfile::tempdir().unwrap();
-        let mut storage = LockedStorage::try_acquire(temporary.path()).unwrap();
+        let mut storage = Storage::try_acquire(temporary.path()).unwrap();
         let batch = batch(day(3), DroppedOperation::Use);
         let path = storage.paths.event_file(day(3));
         fs::write(&path, []).unwrap();
@@ -380,7 +390,7 @@ mod tests {
     #[test]
     fn preparation_failure_is_typed() {
         let temporary = tempfile::tempdir().unwrap();
-        let mut storage = LockedStorage::try_acquire(temporary.path()).unwrap();
+        let mut storage = Storage::try_acquire(temporary.path()).unwrap();
         let batch = batch(day(3), DroppedOperation::Use);
         fs::create_dir(storage.paths.event_file(day(3))).unwrap();
 
@@ -416,7 +426,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
 
         let temporary = tempfile::tempdir().unwrap();
-        let mut storage = LockedStorage::try_acquire(temporary.path()).unwrap();
+        let mut storage = Storage::try_acquire(temporary.path()).unwrap();
         let first = batch(day(3), DroppedOperation::Use);
         let first_path = storage.paths.event_file(day(3));
         storage.append_event_batch(&first).unwrap();
