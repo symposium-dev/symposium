@@ -3,7 +3,7 @@ use std::fs;
 use chrono::NaiveDate;
 
 use super::*;
-use crate::telemetry::schema::recorded_data_example_row;
+use crate::telemetry::{schema::recorded_data_example_row, storage::Storage};
 
 fn day(day: u32) -> UtcDay {
     UtcDay::from_date(NaiveDate::from_ymd_opt(2026, 8, day).unwrap())
@@ -34,11 +34,11 @@ fn canonical_line(row: &AggregateRow) -> Vec<u8> {
     line
 }
 
-fn storage(temporary: &tempfile::TempDir) -> LockedStorage {
-    LockedStorage::try_acquire(temporary.path()).unwrap()
+fn storage(temporary: &tempfile::TempDir) -> Storage {
+    Storage::try_acquire(temporary.path()).unwrap()
 }
 
-fn write_metric_file(storage: &LockedStorage, day: UtcDay, bytes: &[u8]) {
+fn write_metric_file(storage: &Storage, day: UtcDay, bytes: &[u8]) {
     fs::write(storage.paths.metrics_file(day), bytes).unwrap();
 }
 
@@ -325,7 +325,7 @@ fn snapshot_growing_past_the_cap_is_suppressed_without_changing_the_file() {
     snapshot.insert(aggregate("plugin_hook_metrics")).unwrap();
     let prepared = snapshot.prepare().unwrap();
 
-    let decision = storage.plan_metric_write(prepared, Some(day));
+    let decision = storage.plan_metric_write(&prepared, Some(day));
 
     assert_eq!(
         decision,
@@ -338,10 +338,10 @@ fn snapshot_growing_past_the_cap_is_suppressed_without_changing_the_file() {
 fn daily_allowance_accounts_for_event_bytes_repair_marker_and_snapshot() {
     let day = day(3);
     let usage = usage(10, true, false);
-    let exact = select_metric_write(36, usage, 5, None, prepared(day, 20));
-    let over = select_metric_write(35, usage, 5, None, prepared(day, 20));
+    let exact = select_metric_write(36, usage, 5, None, &prepared(day, 20));
+    let over = select_metric_write(35, usage, 5, None, &prepared(day, 20));
 
-    assert!(matches!(exact, MetricWrite::Replace(_)));
+    assert_eq!(exact, MetricWrite::Replace);
     assert_eq!(
         over,
         MetricWrite::Suppressed(MetricSuppression::DailyAllowanceExceeded)
@@ -354,11 +354,11 @@ fn state_or_final_marker_closes_the_event_reservation() {
     let open_usage = usage(10, true, false);
     let marker_usage = usage(10, true, true);
 
-    let state_closed = select_metric_write(30, open_usage, 100, Some(day), prepared(day, 20));
-    let marker_closed = select_metric_write(30, marker_usage, 100, None, prepared(day, 20));
+    let state_closed = select_metric_write(30, open_usage, 100, Some(day), &prepared(day, 20));
+    let marker_closed = select_metric_write(30, marker_usage, 100, None, &prepared(day, 20));
 
-    assert!(matches!(state_closed, MetricWrite::Replace(_)));
-    assert!(matches!(marker_closed, MetricWrite::Replace(_)));
+    assert_eq!(state_closed, MetricWrite::Replace);
+    assert_eq!(marker_closed, MetricWrite::Replace);
 }
 
 #[test]
@@ -368,7 +368,7 @@ fn usage_inspection_failure_suppresses_only_the_metric_replacement() {
     let day = day(3);
     fs::create_dir(storage.paths.event_file(day)).unwrap();
 
-    let decision = storage.plan_metric_write(prepared(day, 1), None);
+    let decision = storage.plan_metric_write(&prepared(day, 1), None);
 
     assert_eq!(
         decision,
@@ -383,7 +383,7 @@ fn oversized_snapshot_is_rejected_before_filesystem_inspection() {
     let day = day(3);
     fs::create_dir(storage.paths.event_file(day)).unwrap();
 
-    let decision = storage.plan_metric_write(prepared(day, MAX_METRIC_SNAPSHOT_BYTES + 1), None);
+    let decision = storage.plan_metric_write(&prepared(day, MAX_METRIC_SNAPSHOT_BYTES + 1), None);
 
     assert_eq!(
         decision,
