@@ -110,28 +110,35 @@ impl From<LoadStateError> for OpenStateError {
     }
 }
 
-/// Failure to serialize or atomically replace private telemetry state.
-#[derive(Debug)]
-pub(in crate::telemetry) enum ReplaceStateError {
-    Encode(StateEncodeError),
-    Replace(AtomicReplaceError),
+/// Fully encoded private state ready for one atomic replacement.
+pub(super) struct PreparedPrivateState {
+    encoded: Box<str>,
 }
 
-impl fmt::Display for ReplaceStateError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Encode(error) => error.fmt(formatter),
-            Self::Replace(_) => formatter.write_str("failed to replace telemetry private state"),
-        }
+impl PreparedPrivateState {
+    /// Validate and encode the complete private-state document.
+    ///
+    /// # Errors
+    ///
+    /// Returns the content-free runtime invariant or TOML encoding failure.
+    pub(super) fn new(state: &TelemetryStateV1) -> Result<Self, StateEncodeError> {
+        encode(state).map(|encoded| Self {
+            encoded: encoded.into_boxed_str(),
+        })
+    }
+
+    #[must_use]
+    pub(super) fn as_bytes(&self) -> &[u8] {
+        self.encoded.as_bytes()
     }
 }
 
-impl Error for ReplaceStateError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Encode(error) => Some(error),
-            Self::Replace(error) => Some(error),
-        }
+impl fmt::Debug for PreparedPrivateState {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PreparedPrivateState")
+            .field("byte_len", &self.encoded.len())
+            .finish()
     }
 }
 
@@ -181,24 +188,21 @@ impl<Writer> LockedStorage<Writer> {
 }
 
 impl<Writer: RecordingWrites> LockedStorage<Writer> {
-    /// Serialize completely, then replace private state through the locked
-    /// whole-operation writer.
+    /// Replace fully prepared private state through the locked writer.
     ///
     /// Mutable access keeps two replacements from overlapping under one held
     /// lock. The replacement is atomic but intentionally not crash-durable.
     ///
     /// # Errors
     ///
-    /// Returns the serialization or atomic replacement stage that failed.
-    pub(super) fn replace_state(
+    /// Returns the atomic replacement stage that failed.
+    pub(super) fn replace_private_state(
         &mut self,
-        state: &TelemetryStateV1,
-    ) -> Result<(), ReplaceStateError> {
-        let serialized = encode(state).map_err(ReplaceStateError::Encode)?;
+        prepared: &PreparedPrivateState,
+    ) -> Result<(), AtomicReplaceError> {
         let access = RecordingWriteAccess::new(&self.paths);
         self.writer
-            .replace_private_state(access, serialized.as_bytes())
-            .map_err(ReplaceStateError::Replace)
+            .replace_private_state(access, prepared.as_bytes())
     }
 }
 
@@ -227,7 +231,7 @@ mod tests {
 
     use chrono::{NaiveDate, TimeZone as _, Utc};
 
-    use super::{LoadStateError, MAX_PRIVATE_STATE_BYTES, OpenStateError};
+    use super::{LoadStateError, MAX_PRIVATE_STATE_BYTES, OpenStateError, PreparedPrivateState};
     use crate::telemetry::{
         schema::{UtcDay, UtcSecond},
         state::{
@@ -507,8 +511,9 @@ mod tests {
         let mut storage = storage(&temporary);
         let state: TelemetryStateV1 =
             TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
+        let prepared = PreparedPrivateState::new(&state).unwrap();
 
-        storage.replace_state(&state).unwrap();
+        storage.replace_private_state(&prepared).unwrap();
         let on_disk = fs::read(storage.paths.state_file()).unwrap();
         let loaded = storage
             .load_state()
