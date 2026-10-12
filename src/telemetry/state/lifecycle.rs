@@ -78,8 +78,8 @@ impl TelemetryStateV1 {
     /// rejects a day before the latest-opened-day high-water mark itself; an
     /// earlier storage-boundary check is defense in depth. Any high-water
     /// advancement and this transition belong to one private-state replacement.
-    /// That replacement must complete before the observation is bound or its
-    /// selected anchor is used to derive an identifier.
+    /// A bound observation may derive rows only inside an owned staging value;
+    /// storage persists this state before that value can publish any row.
     ///
     /// # Errors
     ///
@@ -100,16 +100,12 @@ impl TelemetryStateV1 {
         Ok(observation)
     }
 
-    /// Bind a completed recording transition to the unchanged private state.
+    /// Bind a completed recording transition for unpublished row staging.
     ///
-    /// Storage calls this only after atomically persisting the state changed by
-    /// [`Self::observe_recording`]. The selected anchor and high-water day are
-    /// checked before its identity scope is exposed. Storage must still bind
-    /// immediately after persistence while holding the same telemetry lock;
-    /// those values do not identify a private-state instance by themselves.
-    /// When private-state persistence is implemented, its successful write
-    /// token will become an additional required binding input so this ordering
-    /// is structural.
+    /// The selected anchor and high-water day are checked before the identity
+    /// scope is exposed. The root recording coordinator keeps every derived
+    /// row paired with this exact private state, and storage exposes those rows
+    /// only through a receipt minted by successful state replacement.
     ///
     /// # Errors
     ///
@@ -119,29 +115,7 @@ impl TelemetryStateV1 {
         &self,
         observation: RecordingObservation,
     ) -> Result<BoundRecordingObservation<'_>, RecordingObservationBindingError> {
-        let selected_anchor = observation.identifier_window.anchor();
-        let current_anchor = self.identity.identifier_window_anchor;
-        if selected_anchor != current_anchor {
-            return Err(RecordingObservationBindingError::IdentifierWindowChanged {
-                selected_anchor,
-                current_anchor,
-            });
-        }
-
-        let selected_day = observation.completed_at.day();
-        let current_day = self.identity.latest_opened_day;
-        if selected_day != current_day {
-            return Err(RecordingObservationBindingError::LatestOpenedDayChanged {
-                selected_day,
-                current_day,
-            });
-        }
-
-        Ok(BoundRecordingObservation {
-            completed_at: observation.completed_at,
-            identifier_window: observation.identifier_window,
-            identifier_window_scope: self.identifier_window_scope(),
-        })
+        self.identity.bind_recording_observation(observation)
     }
 
     /// Observe a session at its captured completion timestamp.
@@ -316,6 +290,38 @@ impl TelemetryStateV1 {
     }
 }
 
+impl IdentityState {
+    /// Bind recording identity while borrowing no sibling private-state field.
+    pub(super) fn bind_recording_observation(
+        &self,
+        observation: RecordingObservation,
+    ) -> Result<BoundRecordingObservation<'_>, RecordingObservationBindingError> {
+        let selected_anchor = observation.identifier_window.anchor();
+        let current_anchor = self.identifier_window_anchor;
+        if selected_anchor != current_anchor {
+            return Err(RecordingObservationBindingError::IdentifierWindowChanged {
+                selected_anchor,
+                current_anchor,
+            });
+        }
+
+        let selected_day = observation.completed_at.day();
+        let current_day = self.latest_opened_day;
+        if selected_day != current_day {
+            return Err(RecordingObservationBindingError::LatestOpenedDayChanged {
+                selected_day,
+                current_day,
+            });
+        }
+
+        Ok(BoundRecordingObservation {
+            completed_at: observation.completed_at,
+            identifier_window: observation.identifier_window,
+            identifier_window_scope: self.identifier_window_scope(),
+        })
+    }
+}
+
 /// Identity-window selection for one recording operation.
 #[must_use = "recording identity state must be persisted before identifiers are emitted"]
 #[derive(Debug, PartialEq, Eq)]
@@ -324,7 +330,7 @@ pub(in crate::telemetry) struct RecordingObservation {
     pub(super) identifier_window: IdentifierWindowUpdate,
 }
 
-/// A persisted recording transition bound to its identifier-window scope.
+/// A recording transition bound to its identifier-window scope for staging.
 #[must_use = "a bound recording observation supplies timestamp and identity context"]
 pub(in crate::telemetry) struct BoundRecordingObservation<'a> {
     completed_at: UtcSecond,

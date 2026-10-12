@@ -25,11 +25,20 @@ mod lifecycle;
 mod open_day;
 mod plugin_hook;
 mod public_row_budget;
+mod recording;
 mod session_counts;
 mod session_pair;
 mod staged_entries;
 
 pub(in crate::telemetry) use aggregate::StageCommit;
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "the production recorder consumes these observation types in the next branch"
+    )
+)]
+pub(in crate::telemetry) use aggregate::recording::HookInvocationMetricObservation;
 pub(in crate::telemetry) use codec::{
     StateContentError, StateDecodeError, StateEncodeError, decode, encode,
 };
@@ -40,6 +49,7 @@ pub(in crate::telemetry) use extension_invocation::{
 pub(in crate::telemetry) use lifecycle::{BoundRecordingObservation, BoundSessionObservation};
 pub(in crate::telemetry) use open_day::DayBeforeCurrent;
 pub(in crate::telemetry) use plugin_hook::SelectedPluginHookAggregate;
+pub(in crate::telemetry) use recording::StagedRecording;
 pub(in crate::telemetry) use session_counts::{
     HookSessionCountSnapshot, HookSessionCountTracker, HookSessionCountUpdateError,
 };
