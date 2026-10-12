@@ -9,7 +9,15 @@ matcher = "Bash"
 format = "claude"
 command = { script = "$TEST_DIR/dot-symposium/plugins/format-plugin/scripts/claude-hook.sh" }
 
-# Symposium fallback — should fire on non-Claude agents. Tool names are each
+# Pi-specific hook — should take priority over the portable fallback on Pi.
+[[hooks]]
+name = "pi-specific"
+event = "PreToolUse"
+matcher = "bash"
+format = "pi"
+command = { script = "$TEST_DIR/dot-symposium/plugins/format-plugin/scripts/pi-hook.sh" }
+
+# Symposium fallback — should fire when no native format matches. Tool names are each
 # agent's own, so it names the shell tool as both Claude (`Bash`) and Copilot
 # (`bash`) do.
 [[hooks]]

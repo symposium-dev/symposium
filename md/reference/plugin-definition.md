@@ -229,7 +229,7 @@ Each `[[hooks]]` entry declares a hook that responds to agent events. For the JS
 | `args` | array (optional) | Invocation arguments. Forbidden when the installation also declares `args`. |
 | `requirements` | array (optional) | Installations to acquire before running. Same shape as `command` (string name or inline declaration). |
 | `agent` | string (optional) | Restrict the hook to a specific agent (`antigravity`, `claude`, `copilot`, `kiro`, …). |
-| `format` | string | Wire format the handler expects on stdin. `symposium` (default): symposium converts the agent's event to its canonical format before delivering. Any agent name (`antigravity`, `claude`, `codex`, `copilot`, `kiro`): the handler receives that agent's native wire format. Symposium always intermediates — it never registers plugin hooks directly into agent configs. See [Hooks](../crate-authors/authoring-a-plugin.md#hooks). |
+| `format` | string | Wire format the handler expects on stdin. `symposium` (default): symposium converts the agent's event to its canonical format before delivering. Any agent name (`antigravity`, `claude`, `codex`, `copilot`, `kiro`, `pi`): the handler receives that agent's native wire format. Symposium always intermediates — it never registers plugin hooks directly into agent configs. See [Hooks](../crate-authors/authoring-a-plugin.md#hooks). |
 | `predicates` | array (optional) | Predicates (`depends-on`, `shell`, `path_exists`, `env`, `workspace-member`, `not`, `any`, `all`) that must all hold for the hook to dispatch. Evaluated per-dispatch. See [Predicates](./predicates.md). |
 
 ### Examples
@@ -417,7 +417,7 @@ Use the CLI to test a hook with sample input:
 echo '{"tool": "Bash", "input": "cargo test"}' | cargo agents hook claude pre-tool-use
 ```
 
-You can also use `antigravity`, `copilot`, `codex`, or `kiro` as the agent name.
+You can also use `antigravity`, `copilot`, `codex`, `kiro`, or `pi` as the agent name.
 
 ## `[[predicate]]`
 
@@ -557,6 +557,7 @@ All supported agents have MCP server configuration. Symposium handles the format
 | Kiro | `.kiro/settings/mcp.json` | `mcpServers.<name>` |
 | OpenCode | `opencode.json` | `mcp.<name>` |
 | Goose | `~/.config/goose/config.yaml` (no project file) | `extensions.<name>` |
+| Pi | `.pi/mcp.json` | `mcpServers.<name>` |
 
 See each agent's page under [Supported agents](./supported-agents.md) for the global locations.
 

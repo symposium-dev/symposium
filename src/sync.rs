@@ -454,7 +454,8 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
                 message: "no agents configured, run `cargo agents init` to add one".into(),
             },
         );
-        return Ok(());
+        // Still run cleanup so removing the final agent also removes its
+        // project hooks and managed skills.
     }
 
     // Track every skill directory we (re)install during this sync. Anything
@@ -464,19 +465,10 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     for agent_name in &agent_names {
         let agent = Agent::from_config_name(agent_name)?;
 
-        // Hooks: the project and global locations are genuinely different files
-        // for some agents - Antigravity writes `.agents/hooks.json` but
-        // `~/.gemini/config/hooks.json`, and Copilot `.github/hooks/` but
-        // `~/.copilot/settings.json` - so project scope cannot be produced by
-        // rooting the global path at the workspace.
-        match sym.config.hook_scope {
-            crate::config::HookScope::Global => agent
-                .register_hooks(sym.home_dir(), sym, out)
-                .context("failed to register hooks")?,
-            crate::config::HookScope::Project => agent
-                .register_project_hooks(&project_root, sym, out)
-                .context("failed to register hooks")?,
-        }
+        // Agent-specific paths and scope cleanup live in the agent module.
+        agent
+            .register_scoped_hooks(&project_root, sym, out)
+            .context("failed to register hooks")?;
 
         // MCP does not follow the hook scope: an agent's MCP file differs from
         // its hooks file, so the target is resolved per agent instead.
@@ -652,7 +644,7 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
         }
     }
 
-    if to_install.is_empty() {
+    if !agent_names.is_empty() && to_install.is_empty() {
         tracing::info!(
             report = %crate::report::ReportEvent::Info {
                 message: "no applicable skills found for workspace dependencies".into(),

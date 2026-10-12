@@ -314,6 +314,61 @@ pub(super) fn unregister_antigravity_mcp_servers(
     unregister_json_mcp_servers(path, names, Some("mcpServers"), out)
 }
 
+/// Pi: `mcpServers.<name>` in `mcp.json`. Preserve user-set exposure,
+/// timeouts, authentication, and enabled state when refreshing an entry.
+pub(super) fn register_pi_mcp_servers(
+    path: &Path,
+    servers: &[McpServer],
+    out: &Output,
+) -> Result<()> {
+    let mut config = load_json_or_empty(path)?;
+    anyhow::ensure!(config.is_object(), "Pi MCP config must be an object");
+    if !config.get("mcpServers").is_some_and(|v| v.is_object()) {
+        config["mcpServers"] = json!({});
+    }
+    let mut changed = false;
+    for server in servers {
+        if matches!(server, McpServer::Sse(_)) {
+            out.warn(format!(
+                "Pi does not support SSE MCP servers; skipping {}",
+                server_name(server)
+            ));
+            continue;
+        }
+        let name = server_name(server);
+        let mut expected = config["mcpServers"][name].clone();
+        if !expected.is_object() {
+            expected = json!({});
+        }
+        let entry = expected.as_object_mut().unwrap();
+        for key in ["command", "args", "env", "url", "headers", "type"] {
+            entry.remove(key);
+        }
+        entry.extend(server_to_json(server).as_object().unwrap().clone());
+        if config["mcpServers"][name] != expected {
+            config["mcpServers"][name] = expected;
+            changed = true;
+            out.done(format!(
+                "{}: configured {name} MCP server",
+                display_path(path)
+            ));
+        } else {
+            out.already_ok(format!(
+                "{}: {name} MCP server already configured",
+                display_path(path)
+            ));
+        }
+    }
+    if changed {
+        save_json(path, &config)?;
+    }
+    Ok(())
+}
+
+pub(super) fn unregister_pi_mcp_servers(path: &Path, names: &[&str], out: &Output) -> Result<()> {
+    unregister_json_mcp_servers(path, names, Some("mcpServers"), out)
+}
+
 /// Codex CLI: `[mcp_servers.<name>]` in config.toml
 pub(super) fn register_codex_mcp_servers(
     config_path: &Path,
@@ -792,6 +847,57 @@ mod tests {
         assert_eq!(
             config["mcpServers"]["remote"]["headers"]["Authorization"],
             "Bearer t"
+        );
+    }
+
+    #[test]
+    fn pi_mcp_preserves_user_options_and_other_servers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mcp.json");
+        fs::write(&path, json!({
+            "autoEnableCodemode": false,
+            "mcpServers": {
+                "withenv": {"command": "old", "enabled": false, "exposure": "direct", "timeout": 10},
+                "personal": {"command": "personal-server"}
+            }
+        }).to_string()).unwrap();
+        register_pi_mcp_servers(&path, &env_and_remote_servers(), &Output::quiet()).unwrap();
+        let content = fs::read_to_string(&path).unwrap();
+        let config: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(config["mcpServers"]["withenv"]["env"]["TOKEN"], "abc");
+        assert_eq!(config["mcpServers"]["withenv"]["enabled"], false);
+        assert_eq!(config["mcpServers"]["withenv"]["exposure"], "direct");
+        assert_eq!(config["mcpServers"]["withenv"]["timeout"], 10);
+        assert_eq!(
+            config["mcpServers"]["remote"]["headers"]["Authorization"],
+            "Bearer t"
+        );
+        assert_eq!(config["autoEnableCodemode"], false);
+        register_pi_mcp_servers(&path, &env_and_remote_servers(), &Output::quiet()).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), content);
+        unregister_pi_mcp_servers(&path, &["withenv", "remote"], &Output::quiet()).unwrap();
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(
+            config["mcpServers"]["personal"]["command"],
+            "personal-server"
+        );
+        assert!(config["mcpServers"].get("withenv").is_none());
+        assert!(config["mcpServers"].get("remote").is_none());
+    }
+
+    #[test]
+    fn pi_mcp_skips_unsupported_sse() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mcp.json");
+        let server = McpServer::Sse(sacp::schema::McpServerSse::new(
+            "legacy",
+            "https://example.com/sse",
+        ));
+        register_pi_mcp_servers(&path, &[server], &Output::quiet()).unwrap();
+        assert!(
+            !path.exists(),
+            "Pi must not receive an unsupported transport"
         );
     }
 

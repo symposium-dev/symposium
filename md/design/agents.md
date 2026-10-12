@@ -13,6 +13,7 @@
 | `kiro` | Kiro |
 | `opencode` | OpenCode |
 | `goose` | Goose |
+| `pi` | Pi |
 
 The agent name is stored in `[agent] name` in either the user or project config.
 
@@ -31,11 +32,11 @@ When installing skills, `cargo agents` prefers vendor-neutral paths where possib
 
 | Scope | Path | Supported by |
 |-------|------|-------------|
-| Project skills | `.agents/skills/<skill-name>/SKILL.md` | Antigravity, Copilot, Codex, OpenCode, Goose |
+| Project skills | `.agents/skills/<skill-name>/SKILL.md` | Antigravity, Copilot, Codex, OpenCode, Goose, Pi |
 | Project skills | `.claude/skills/<skill-name>/SKILL.md` | Claude Code (does not support `.agents/skills/`) |
 | Project skills | `.kiro/skills/<skill-name>/SKILL.md` | Kiro (uses its own path) |
 
-At the project level, Claude Code requires `.claude/skills/`, Kiro requires `.kiro/skills/`, while Antigravity, Copilot, Codex, OpenCode, and Goose all support `.agents/skills/`. `cargo agents` uses the vendor-neutral `.agents/skills/` path whenever the agent supports it.
+At the project level, Claude Code requires `.claude/skills/`, Kiro requires `.kiro/skills/`, while Antigravity, Copilot, Codex, OpenCode, Goose, and Pi all support `.agents/skills/`. `cargo agents` uses the vendor-neutral `.agents/skills/` path whenever the agent supports it.
 
 At the global level, each agent has its own path:
 
@@ -48,6 +49,7 @@ At the global level, each agent has its own path:
 | Kiro | `~/.kiro/skills/<skill-name>/SKILL.md` |
 | OpenCode | `~/.agents/skills/<skill-name>/SKILL.md` |
 | Goose | `~/.agents/skills/<skill-name>/SKILL.md` |
+| Pi | `~/.agents/skills/<skill-name>/SKILL.md` |
 
 ---
 
@@ -395,17 +397,33 @@ Goose is supported as a **skills-only** agent — `cargo agents sync` will insta
 
 ---
 
+## Pi
+
+[Integration reference](./agent-details/pi.md)
+
+Pi uses TypeScript extensions. Symposium installs `symposium.ts` in
+`.pi/extensions/` or `~/.pi/agent/extensions/`, according to hook scope. It maps
+session, input, tool, and turn-end events to `cargo-agents hook pi` calls. The
+bridge supports automatic sync, context, tool denial, and tool-input changes.
+
+Pi's skill scanner respects `.gitignore`, which hides generated skills. The
+extension supplies explicit paths to managed `SKILL.md` files through
+`resources_discover`. This event runs after session-start sync. The shared
+`.agents/skills/` path and its ignore rules remain unchanged.
+
+---
+
 ## Cross-agent event mapping
 
 The following table maps symposium's internal event names to each agent's wire-format event name. `—` means the agent does not support shell-command hooks; *not registered* means symposium does not hook that event there.
 
-| Symposium event | Antigravity | Claude | Copilot | Codex | Kiro | OpenCode | Goose |
-|---|---|---|---|---|---|---|---|
-| `pre-tool-use` | `PreToolUse` | `PreToolUse` | `preToolUse` | `PreToolUse` | `preToolUse` | — | — |
-| `post-tool-use` | `PostToolUse` | `PostToolUse` | `postToolUse` | `PostToolUse` | `postToolUse` | — | — |
-| `user-prompt-submit` | `PreInvocation` | `UserPromptSubmit` | `userPromptSubmitted` | `UserPromptSubmit` | `userPromptSubmit` | — | — |
-| `session-start` | `SessionStart` | `SessionStart` | `sessionStart` | `SessionStart` | `agentSpawn` | — | — |
-| `stop` | `Stop` | `Stop` | *not registered* | *not registered* | *not registered* | — | — |
+| Symposium event | Antigravity | Claude | Copilot | Codex | Kiro | OpenCode | Goose | Pi extension |
+|---|---|---|---|---|---|---|---|---|
+| `pre-tool-use` | `PreToolUse` | `PreToolUse` | `preToolUse` | `PreToolUse` | `preToolUse` | — | — | `tool_call` |
+| `post-tool-use` | `PostToolUse` | `PostToolUse` | `postToolUse` | `PostToolUse` | `postToolUse` | — | — | `tool_result` |
+| `user-prompt-submit` | `PreInvocation` | `UserPromptSubmit` | `userPromptSubmitted` | `UserPromptSubmit` | `userPromptSubmit` | — | — | `input` |
+| `session-start` | `SessionStart` | `SessionStart` | `sessionStart` | `SessionStart` | `agentSpawn` | — | — | `session_start` |
+| `stop` | `Stop` | `Stop` | *not registered* | *not registered* | *not registered* | — | — | `agent_end` |
 
 Tool names are each agent's own, and symposium passes them to plugin hooks unchanged: the same shell tool is `Bash` in Claude Code and Codex, `bash` in Copilot and `run_command` in Antigravity. A `matcher` that should fire on several agents has to name each of them.
 
@@ -415,7 +433,8 @@ Tool names are each agent's own, and symposium passes them to plugin hooks uncha
 
 To add support for a new agent:
 
-1. Add a variant to the `HookAgent` enum in `hook_schema.rs`.
-2. Create an agent module (e.g., `hook_schema/newagent.rs`) implementing the `Agent` trait and the event-specific payload/output types.
-3. Implement the `AgentHookPayload` and `AgentHookOutput` traits to convert between the agent's wire format and the internal `HookPayload`/`HookOutput` types.
-4. Document the agent's hook registration locations and extension file layout in this page.
+1. Add variants to `agents::Agent` and `symposium_sdk::hook::HookAgent`.
+2. Add skill paths, hook registration, and MCP configuration to `agents`.
+3. Create a `hook_schema` module that implements the `Agent` trait and the event-specific input/output types. Add its handler to `hook_schema::agent_event`.
+4. Implement `AgentHookInput` and `AgentHookOutput` to convert the wire format to and from the SDK types.
+5. Test init, sync, cleanup, and hook dispatch. Document the agent's file layout and protocol.

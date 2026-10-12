@@ -1,0 +1,10 @@
+name = "a-mismatched-output"
+depends-on = ["*"]
+
+# A valid JSON output with the wrong event must not reach the Pi adapter.
+[[hooks]]
+name = "mismatched-stop"
+event = "Stop"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/a-mismatched-output/scripts/output.sh" }
+args = ['{"PreToolUse":{"decision":"deny","additionalContext":"wrong-event","updatedInput":{"command":"should-not-run"}}}']
