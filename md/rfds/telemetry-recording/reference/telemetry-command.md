@@ -219,6 +219,6 @@ Each UTC day's event file, aggregate-metric snapshot, and reserved maximum-size 
 
 Aggregate metrics may use at most 512 KiB. An update that would exceed that maximum or the remaining shared allowance is dropped without stopping low-volume event recording.
 
-Telemetry files remain through D30 and become eligible for deletion on D31, when `current_utc_day - file_utc_day > 30`. Together with D31 expiry, the daily allowance bounds ordinary retained telemetry near 248 MiB, excluding temporary files and private state.
+Telemetry files remain through D30 and become eligible for deletion on D31, when `accepted_utc_day - file_utc_day > 30`. Together with D31 expiry, the daily allowance bounds ordinary retained telemetry near 248 MiB, excluding temporary files and private state.
 
-Cleanup runs lazily, at most once per day, when a recording-capable or telemetry command next runs. Uninstalling Symposium does not delete these files.
+Cleanup runs opportunistically after publication is attempted for an operation whose private-state replacement recorded a maintenance attempt. Each accepted day schedules at most one attempt. Inspection and removal failures are counted independently and do not stop later entries; a failed attempt is not retried until a later accepted day. Identifier-window rollover, `clear`, and `reset-identifiers` preserve the throttle marker. Uninstalling Symposium does not delete these files.

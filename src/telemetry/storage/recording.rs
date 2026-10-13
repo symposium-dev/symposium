@@ -26,7 +26,7 @@ use super::{
 };
 use crate::telemetry::{
     schema::{DroppedOperation, UtcDay},
-    state::{StagedRecording, StateEncodeError},
+    state::{MaintenanceDue, StagedRecording, StateEncodeError},
 };
 
 /// Optional low-volume publication belonging to one staged recording.
@@ -51,6 +51,7 @@ pub(super) struct PreparedRecording {
     event: Option<EventWrite>,
     metric: PreparedMetricSnapshot,
     stopped_day: Option<UtcDay>,
+    maintenance_due: Option<MaintenanceDue>,
 }
 
 impl<Writer> LockedStorage<Writer> {
@@ -68,6 +69,7 @@ impl<Writer> LockedStorage<Writer> {
         &self,
         staged: StagedRecording,
         event: Option<EventPublicationRequest>,
+        maintenance_due: Option<MaintenanceDue>,
     ) -> Result<PreparedRecording, PrepareRecordingError> {
         let access = RecordingPersistenceAccess::new();
         let (mut state, snapshot) = staged.into_persistence_parts(access);
@@ -112,6 +114,7 @@ impl<Writer> LockedStorage<Writer> {
             event,
             metric,
             stopped_day,
+            maintenance_due,
         })
     }
 }
@@ -185,6 +188,7 @@ impl<Writer: RecordingWrites> LockedStorage<Writer> {
             event: prepared.event,
             metric: prepared.metric,
             stopped_day: prepared.stopped_day,
+            maintenance_due: prepared.maintenance_due,
             publication_attempted: false,
         })
     }
@@ -231,13 +235,14 @@ pub(super) struct PersistedRecording<'storage, Writer> {
     event: Option<EventWrite>,
     metric: PreparedMetricSnapshot,
     stopped_day: Option<UtcDay>,
+    maintenance_due: Option<MaintenanceDue>,
     publication_attempted: bool,
 }
 
 impl<Writer: RecordingWrites> PersistedRecording<'_, Writer> {
     /// Attempt every prepared public write and report their independent result.
     #[must_use]
-    pub(super) fn publish(mut self) -> PublishOutcome {
+    pub(super) fn publish(mut self) -> (PublishOutcome, Option<MaintenanceDue>) {
         // Set this before any writer call: a panic during publication is itself
         // the signal and must not be misreported by Drop as a skipped attempt.
         self.publication_attempted = true;
@@ -264,7 +269,8 @@ impl<Writer: RecordingWrites> PersistedRecording<'_, Writer> {
             },
         };
 
-        PublishOutcome { event, metric }
+        let maintenance_due = self.maintenance_due.take();
+        (PublishOutcome { event, metric }, maintenance_due)
     }
 }
 
