@@ -474,7 +474,7 @@ The sibling private `<config-dir>/telemetry-state.toml` holds the identity key, 
 
 Marker metadata is an optional stopped UTC day. A value matching the current day suppresses further low-volume event appends; an older value does not suppress a later day. `telemetry clear` removes it, while `telemetry reset-identifiers` preserves it. The final event-file marker is a second source for the same decision, allowing a surviving file to restore lost or reinitialized private metadata. Stopping event appends does not stop aggregate updates.
 
-Symposium creates and replaces it atomically with owner-only permissions where supported. Replacement uses a same-directory temporary file beside `config.toml`; abandoned state temporaries are ignored and cleaned lazily under the telemetry lock.
+Symposium creates and replaces it atomically with owner-only permissions where supported. Replacement writes its temporary file in the locked telemetry directory before renaming it to the sibling state path, so both directories must share a filesystem. Snapshot replacement uses the same temporary namespace. The next scheduled maintenance attempt removes abandoned regular files in that namespace immediately, without enumerating the config directory, following symlinks, or recursing into directories.
 
 A recorder reads at most 16 MiB of private state. Invalid UTF-8, invalid TOML, TOML that violates the state schema, and an oversized file are malformed state; diagnostics retain at most the error location and never the source line or parser error that could contain the identity key. A syntactically valid unsupported state version stops recording but is reported separately from malformed state, so an older binary does not treat newer state as safe to replace.
 
