@@ -327,11 +327,11 @@ Raw inspection remains byte-preserving. A separate typed reader returns only rec
 
 #### Concurrent writes and failure
 
-Recorders make one non-waiting exclusive-lock attempt. Contention drops the entire buffered batch or aggregate observation. Event batches serialize before one append so concurrent lines cannot interleave. Snapshot updates use same-directory temporary replacement.
+Recorders make one non-waiting exclusive-lock attempt. Contention drops the entire buffered batch or aggregate observation. Event batches serialize before one append so concurrent lines cannot interleave. Private-state and snapshot replacements write their temporary files inside the locked telemetry directory.
 
 While holding that lock, session recording rejects a day before the latest-opened-day high-water mark. It calculates the identifier-window and return-cohort transitions before mutating either anchor. It then applies both transitions and any high-water advancement to one in-memory state and derives the row into an unpublished staging value. After every output is serialized, it atomically replaces private state once; only the resulting lock-bound receipt can append the `session_start` row. If the append fails after a new cohort is stored, later rows for that cohort are ignored by Q1 unless a D0 row was stored. The partial failure therefore causes undercounting rather than unstable identity.
 
-Private-state replacement uses a temporary file beside `telemetry-state.toml` in the config directory. Abandoned state and snapshot temporaries are ignored and cleaned lazily under the telemetry lock. No `fsync` is promised, so a crash can still lose the latest update. Contribution counts detect state and snapshot divergence and permanently mark affected daily session counts incomplete.
+Private-state replacement renames a temporary from the telemetry directory to the sibling state path, so the two directories must share a filesystem. Abandoned regular temporary files are removed on the next scheduled maintenance attempt; cleanup never enumerates the config directory. Advisory locking excludes compliant writers. If that premise fails on a network filesystem, removing an in-flight temporary can make its later rename fail while leaving the destination unchanged. No `fsync` is promised, so a crash can still lose the latest update. Contribution counts detect state and snapshot divergence and permanently mark affected daily session counts incomplete.
 
 Aggregate counters are lower bounds. No durable counter can quantify observations lost to lock contention, process termination, or I/O failure because those conditions can also prevent writing the counter. A cap-only counter would not measure total loss.
 

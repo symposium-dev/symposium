@@ -189,7 +189,7 @@ An identifier window includes its anchor day as day 0 and remains active through
 
 For a session, high-water advancement, identifier-window rollover, and return-cohort transition form one state transition under the telemetry lock. Symposium writes them with one atomic private-state replacement before deriving identifiers or appending the `session_start` row.
 
-Symposium atomically creates and replaces the file with owner-only permissions where supported. Replacement uses a same-directory temporary file beside `config.toml`; abandoned state temporaries are ignored and cleaned lazily under the telemetry lock.
+Symposium atomically creates and replaces the file with owner-only permissions where supported. Replacement writes a temporary file inside the locked telemetry directory before renaming it to the sibling state path, so the two directories must share a filesystem. Cleanup never enumerates the config directory.
 
 `show`, `status`, data retention, and `clear` do not expose or delete the state file. `clear` rewrites it only to remove pending sets, preserving the key and current anchors.
 
@@ -199,7 +199,7 @@ Session sets and contribution counts are never copied into metric rows. Symposiu
 
 Recorders make one non-waiting attempt on the lock in the telemetry data directory. The lock guards data and private state mutations. On contention, the recorder drops the entire event batch or aggregate observation rather than delaying the agent or command.
 
-Event batches are appended. Hook, plugin-hook, and extension-invocation observations are merged into a bounded, canonically ordered snapshot using a same-directory temporary write and atomic replace. A crash leaves either the old or new complete snapshot; abandoned temporary files are ignored and cleaned lazily.
+Event batches are appended. Hook, plugin-hook, and extension-invocation observations are merged into a bounded, canonically ordered snapshot using a temporary write inside the telemetry directory and atomic replace. A crash leaves either the old or new complete snapshot; the next scheduled maintenance attempt removes abandoned regular temporary files immediately while ignoring directories, symlinks, and unknown names.
 
 Snapshot order compares the kind, agent, optional hook, optional scope, optional public coordinate or unnamed reason, and `event_id` wire labels rather than preserving observation arrival. Loading fails closed on any unsafe physical line and never rewrites the remaining lines from a partial parse. Duplicate dimensions with distinct row identifiers remain legal; only duplicate `event_id` values are rejected. Untouched rows retain their exact physical bytes across a successful replacement.
 
