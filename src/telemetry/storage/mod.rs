@@ -12,6 +12,7 @@ mod daily_files;
 pub(in crate::telemetry) mod events;
 pub(in crate::telemetry) mod limits;
 mod lock;
+mod maintenance;
 pub(in crate::telemetry) mod metrics;
 mod paths;
 mod private_state;
