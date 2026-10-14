@@ -221,9 +221,11 @@ plugin totals, and returns an unpublished staged snapshot. Its `stages.rs`
 child opens all three private stages, checks the snapshot day, applies one
 staged unit, and performs the shared poison preflight; `rows.rs` selects and
 mutates each family's row against the owned snapshot; and `error.rs` keeps the
-content-free failure vocabulary. `state/recording.rs` applies the root
-recording transition and keeps its resulting private state paired with that
-unpublished snapshot until locked storage consumes both together.
+content-free failure vocabulary. `state/recording.rs` owns the opaque change
+for one accepted operation. It schedules maintenance, binds the operation once
+when rows need identity, and keeps private state, an optional event request,
+the staged or deliberately absent metric half, and the maintenance token together
+until locked storage consumes them through its persistence access value.
 
 `state/aggregate/persistence.rs` wraps the three family wire shapes and owns
 cross-family row-identifier uniqueness plus agreement between every store day
@@ -290,10 +292,12 @@ Its `writes.rs` child keeps the storage-private `RecordingWrites` seam over
 complete private-state replacements, event-batch appends, and metric-snapshot
 replacements. Only locked storage can construct the access value that supplies
 their canonical destinations. Its `recording.rs` child prepares one complete
-state-and-snapshot unit, persists private state first, and mints a receipt tied
-to that held lock. The receipt attempts event publication before remeasuring
-and publishing metrics, reports both outcomes independently, and makes an
-unattempted publication loud on drop.
+state-produced change, persists private state first, and mints a receipt tied
+to that held lock. A change with no aggregate rows carries a typed
+`NotRequested` reason instead of inventing an empty snapshot. The receipt
+attempts event publication before remeasuring and publishing staged metrics,
+reports both outcomes independently, and makes an unattempted publication loud
+on drop.
 Its `private_state.rs` child performs a bounded byte read, distinguishes TOML
 syntax errors, invalid state content, and unsupported versions without
 retaining parser source text, serializes the complete state before replacement,
