@@ -50,7 +50,17 @@ pub(in crate::telemetry) use lifecycle::MaintenanceDue;
 pub(in crate::telemetry) use lifecycle::{BoundRecordingObservation, BoundSessionObservation};
 pub(in crate::telemetry) use open_day::DayBeforeCurrent;
 pub(in crate::telemetry) use plugin_hook::SelectedPluginHookAggregate;
-pub(in crate::telemetry) use recording::StagedRecording;
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "state-owned low-volume recording consumes this request in the next branch"
+    )
+)]
+pub(in crate::telemetry) use recording::EventPublicationRequest;
+pub(in crate::telemetry) use recording::{
+    ChangePublication, MetricNotRequestedReason, MetricRecording, RecordingChange,
+};
 pub(in crate::telemetry) use session_counts::{
     HookSessionCountSnapshot, HookSessionCountTracker, HookSessionCountUpdateError,
 };
