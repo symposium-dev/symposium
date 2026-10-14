@@ -72,7 +72,11 @@ fn invocation() -> HookInvocationMetricObservation<'static> {
 
 fn stage(state: TelemetryStateV1) -> StagedRecording {
     state
-        .stage_hook_invocation(completed_at(), MetricSnapshot::empty(day(3)), invocation())
+        .stage_hook_invocation(
+            completed_at(),
+            MetricSnapshot::empty_for_test(day(3)),
+            invocation(),
+        )
         .unwrap()
 }
 
@@ -436,7 +440,8 @@ fn a_successful_marker_releases_its_reservation_for_metric_publication() {
     let event_path = storage.paths.event_file(day(3));
     fs::write(&event_path, existing).unwrap();
     let state = TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
-    let staged = StagedRecording::from_parts_for_test(state, MetricSnapshot::empty(day(3)));
+    let staged =
+        StagedRecording::from_parts_for_test(state, MetricSnapshot::empty_for_test(day(3)));
     let request = EventPublicationRequest::new(command_batch(), operation);
     let prepared = storage
         .prepare_recording(staged, Some(request), None)
@@ -501,7 +506,8 @@ fn mismatched_metric_day_is_rejected_before_persistence() {
     let observed = writes.clone();
     let storage = storage_with_writer(&temporary, writes);
     let state = TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
-    let staged = StagedRecording::from_parts_for_test(state, MetricSnapshot::empty(day(4)));
+    let staged =
+        StagedRecording::from_parts_for_test(state, MetricSnapshot::empty_for_test(day(4)));
 
     let error = storage.prepare_recording(staged, None, None).unwrap_err();
 

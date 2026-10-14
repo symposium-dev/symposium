@@ -315,7 +315,7 @@ mod tests {
         hook: HookSurface,
         use_selection: impl FnOnce(SelectedPluginHookAggregate<'_>) -> R,
     ) -> R {
-        let recovery = MetricSnapshot::empty(recording.day()).recovery_index();
+        let recovery = MetricSnapshot::empty_for_test(recording.day()).recovery_index();
         let mut stage = store.stage_for_test(&recovery, recording).unwrap();
         let selected = stage.select(HookAgent::Claude, hook, attribution).unwrap();
         let result = use_selection(selected);
@@ -330,7 +330,7 @@ mod tests {
         hook: HookSurface,
         use_selection: impl FnOnce(SelectedPluginHookAggregate<'_>) -> R,
     ) -> R {
-        let recovery = MetricSnapshot::empty(recording.day()).recovery_index();
+        let recovery = MetricSnapshot::empty_for_test(recording.day()).recovery_index();
         let mut stage = store.stage_for_test(&recovery, recording).unwrap();
         let selected = stage.select(HookAgent::Claude, hook, attribution).unwrap();
         use_selection(selected)
@@ -531,7 +531,7 @@ mod tests {
         value["plugin_subject"] = serde_json::to_value(subject).unwrap();
         let mut row: PluginHookMetricsV1 = serde_json::from_value(value).unwrap();
         let event_id = row.event_id;
-        let mut snapshot = MetricSnapshot::empty(recording.day());
+        let mut snapshot = MetricSnapshot::empty_for_test(recording.day());
         snapshot
             .insert(AggregateRow::PluginHook(Box::new(row.clone())))
             .unwrap();
