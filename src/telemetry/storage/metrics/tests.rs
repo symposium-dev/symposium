@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, io};
 
 use chrono::NaiveDate;
 
@@ -389,6 +389,60 @@ fn oversized_snapshot_is_rejected_before_filesystem_inspection() {
         decision,
         MetricWrite::Suppressed(MetricSuppression::SnapshotTooLarge)
     );
+}
+
+#[test]
+fn load_failures_project_to_bounded_unavailability_reasons() {
+    let cases = [
+        (
+            LoadMetricSnapshotError::Io(io::Error::from(io::ErrorKind::PermissionDenied)),
+            MetricSnapshotUnavailable::Io(io::ErrorKind::PermissionDenied),
+        ),
+        (
+            LoadMetricSnapshotError::TooLarge { maximum: 17 },
+            MetricSnapshotUnavailable::TooLarge { maximum: 17 },
+        ),
+        (
+            LoadMetricSnapshotError::UnterminatedFinalLine { line: 2 },
+            MetricSnapshotUnavailable::UnterminatedFinalLine { line: 2 },
+        ),
+        (
+            LoadMetricSnapshotError::MalformedLine { line: 3 },
+            MetricSnapshotUnavailable::MalformedLine { line: 3 },
+        ),
+        (
+            LoadMetricSnapshotError::UnknownSchema { line: 4 },
+            MetricSnapshotUnavailable::UnknownSchema { line: 4 },
+        ),
+        (
+            LoadMetricSnapshotError::InvalidRow { line: 5 },
+            MetricSnapshotUnavailable::InvalidRow { line: 5 },
+        ),
+        (
+            LoadMetricSnapshotError::UnexpectedRow {
+                line: 6,
+                reason: UnexpectedMetricRow::LowVolume,
+            },
+            MetricSnapshotUnavailable::UnexpectedRow {
+                line: 6,
+                reason: UnexpectedMetricRow::LowVolume,
+            },
+        ),
+        (
+            LoadMetricSnapshotError::DuplicateEventId {
+                first_line: 7,
+                duplicate_line: 8,
+            },
+            MetricSnapshotUnavailable::DuplicateEventId {
+                first_line: 7,
+                duplicate_line: 8,
+            },
+        ),
+    ];
+
+    for (error, expected) in cases {
+        assert_eq!(MetricSnapshotUnavailable::from(error), expected);
+    }
 }
 
 #[test]

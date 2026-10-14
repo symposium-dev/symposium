@@ -35,7 +35,7 @@ fn session_id(value: u128) -> SessionId {
 fn complete_store(
     recording: &crate::telemetry::state::BoundRecordingObservation<'_>,
 ) -> PluginHookAggregateStore {
-    let recovery = MetricSnapshot::empty(recording.day()).recovery_index();
+    let recovery = MetricSnapshot::empty_for_test(recording.day()).recovery_index();
     let mut store = PluginHookAggregateStore::new(recording.day());
     let mut stage = store.stage_for_test(&recovery, recording).unwrap();
     stage
@@ -63,7 +63,7 @@ fn complete_store(
 fn incomplete_store(
     recording: &crate::telemetry::state::BoundRecordingObservation<'_>,
 ) -> PluginHookAggregateStore {
-    let recovery = MetricSnapshot::empty(recording.day()).recovery_index();
+    let recovery = MetricSnapshot::empty_for_test(recording.day()).recovery_index();
     let mut store = PluginHookAggregateStore::new(recording.day());
     let mut stage = store.stage_for_test(&recovery, recording).unwrap();
     stage

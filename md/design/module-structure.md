@@ -311,8 +311,11 @@ stopping aggregates. Its `metrics.rs` sibling loads the 512 KiB aggregate
 snapshot as one fail-closed unit, retains each validated row's original
 physical bytes, exposes event-id-only insert and replace operations, sorts
 prepared rows by canonical wire labels, and atomically replaces only a fully
-prepared snapshot that fits both storage ceilings. Unsafe snapshot content
-stops aggregate updates for that day without stopping event appends. When
+prepared snapshot that fits both storage ceilings. Its empty-snapshot
+constructor is loader-private, so unsafe content cannot be rebuilt as an empty
+snapshot, and load failures project into a bounded, content-free
+`MetricSnapshotUnavailable` reason. Unsafe snapshot content therefore stops
+aggregate updates for that day without stopping event appends. When
 private state is absent, storage initializes the high-water mark and
 identifier-window anchor from the later of the current UTC
 day and the newest surviving daily filename; malformed and unsupported state
