@@ -446,6 +446,61 @@ fn load_failures_project_to_bounded_unavailability_reasons() {
 }
 
 #[test]
+fn snapshot_unavailability_displays_bounded_categories_and_locations() {
+    let cases = [
+        (
+            MetricSnapshotUnavailable::Io(io::ErrorKind::PermissionDenied),
+            "failed to read aggregate metric snapshot: PermissionDenied",
+        ),
+        (
+            MetricSnapshotUnavailable::TooLarge { maximum: 17 },
+            "aggregate metric snapshot exceeds the 17-byte safety limit",
+        ),
+        (
+            MetricSnapshotUnavailable::UnterminatedFinalLine { line: 2 },
+            "aggregate metric snapshot line 2 is unterminated",
+        ),
+        (
+            MetricSnapshotUnavailable::MalformedLine { line: 3 },
+            "aggregate metric snapshot line 3 is malformed",
+        ),
+        (
+            MetricSnapshotUnavailable::UnknownSchema { line: 4 },
+            "aggregate metric snapshot line 4 has an unknown schema",
+        ),
+        (
+            MetricSnapshotUnavailable::InvalidRow { line: 5 },
+            "aggregate metric snapshot line 5 violates its known schema",
+        ),
+        (
+            MetricSnapshotUnavailable::UnexpectedRow {
+                line: 6,
+                reason: UnexpectedMetricRow::LowVolume,
+            },
+            "aggregate metric snapshot line 6 is a low-volume row",
+        ),
+        (
+            MetricSnapshotUnavailable::UnexpectedRow {
+                line: 7,
+                reason: UnexpectedMetricRow::DayMismatch,
+            },
+            "aggregate metric snapshot line 7 belongs to another day",
+        ),
+        (
+            MetricSnapshotUnavailable::DuplicateEventId {
+                first_line: 8,
+                duplicate_line: 9,
+            },
+            "aggregate metric snapshot lines 8 and 9 repeat one event id",
+        ),
+    ];
+
+    for (reason, expected) in cases {
+        assert_eq!(reason.to_string(), expected);
+    }
+}
+
+#[test]
 fn atomic_replacement_writes_only_the_prepared_snapshot() {
     let temporary = tempfile::tempdir().unwrap();
     let mut storage = storage(&temporary);

@@ -291,13 +291,21 @@ complete-write adapter, while the production `Storage` alias uses `FsWrites`.
 Its `writes.rs` child keeps the storage-private `RecordingWrites` seam over
 complete private-state replacements, event-batch appends, and metric-snapshot
 replacements. Only locked storage can construct the access value that supplies
-their canonical destinations. Its `recording.rs` child prepares one complete
-state-produced change, persists private state first, and mints a receipt tied
-to that held lock. A change with no aggregate rows carries a typed
-`NotRequested` reason instead of inventing an empty snapshot. The receipt
-attempts event publication before remeasuring and publishing staged metrics,
-reports both outcomes independently, and makes an unattempted publication loud
-on drop.
+their canonical destinations. Its `recorder.rs` child is the operation facade:
+it makes the non-waiting lock attempt, loads and observes private state, loads
+the accepted day's snapshot without turning unsafe content into an empty one,
+and sends the opaque state-produced change through the locked transaction. A
+change with no public half is dropped before persistence, including its
+unpersisted maintenance token. The returned outcome says whether nothing was
+recorded or private state persisted, then carries publication and maintenance
+results without retaining serializer errors that could contain private data.
+There is not yet a production caller for this facade. Its `recording.rs` child
+prepares one complete state-produced change, persists private state first, and
+mints a receipt tied to that held lock. A change with no aggregate rows carries
+a typed `NotRequested` reason instead of inventing an empty snapshot. The
+receipt attempts event publication before remeasuring and publishing staged
+metrics, reports both outcomes independently, and makes an unattempted
+publication loud on drop.
 Its `private_state.rs` child performs a bounded byte read, distinguishes TOML
 syntax errors, invalid state content, and unsupported versions without
 retaining parser source text, serializes the complete state before replacement,

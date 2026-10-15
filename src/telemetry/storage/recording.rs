@@ -200,7 +200,7 @@ impl<Writer: RecordingWrites> LockedStorage<Writer> {
 
 /// Private state was not persisted, so no publication receipt was minted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PersistRecordingError {
+pub(in crate::telemetry) enum PersistRecordingError {
     Create(io::ErrorKind),
     Write(io::ErrorKind),
     Persist(io::ErrorKind),
@@ -298,14 +298,14 @@ impl<Writer> Drop for PersistedRecording<'_, Writer> {
 
 /// Independent results of the two best-effort public writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct PublishOutcome {
-    pub(super) event: EventPublication,
-    pub(super) metric: MetricPublication,
+pub(in crate::telemetry) struct PublishOutcome {
+    pub(in crate::telemetry) event: EventPublication,
+    pub(in crate::telemetry) metric: MetricPublication,
 }
 
 /// Result of the optional low-volume event publication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EventPublication {
+pub(in crate::telemetry) enum EventPublication {
     NotRequested,
     Published,
     Suppressed(EventSuppression),
@@ -314,7 +314,7 @@ pub(super) enum EventPublication {
 
 /// Bounded event-append failure retained for reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum EventPublicationFailure {
+pub(in crate::telemetry) enum EventPublicationFailure {
     Prepare(io::ErrorKind),
     InspectTail(io::ErrorKind),
     RepairTail(io::ErrorKind),
@@ -334,7 +334,7 @@ impl From<AppendEventBatchError> for EventPublicationFailure {
 
 /// Result of the aggregate metric publication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum MetricPublication {
+pub(in crate::telemetry) enum MetricPublication {
     NotRequested(MetricNotRequestedReason),
     Published,
     Suppressed(MetricSuppression),
@@ -343,7 +343,7 @@ pub(super) enum MetricPublication {
 
 /// Bounded metric-replacement failure retained for reporting.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum MetricPublicationFailure {
+pub(in crate::telemetry) enum MetricPublicationFailure {
     Create(io::ErrorKind),
     Write(io::ErrorKind),
     Persist(io::ErrorKind),

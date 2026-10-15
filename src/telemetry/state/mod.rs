@@ -31,23 +31,17 @@ mod session_pair;
 mod staged_entries;
 
 pub(in crate::telemetry) use aggregate::StageCommit;
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "the production recorder consumes these observation types in the next branch"
-    )
-)]
 pub(in crate::telemetry) use aggregate::recording::HookInvocationMetricObservation;
 pub(in crate::telemetry) use codec::{
-    StateContentError, StateDecodeError, StateEncodeError, decode, encode,
+    StateContentError, StateDecodeError, StateEncodeError, StateInvariantError, decode, encode,
 };
 pub(in crate::telemetry) use extension_invocation::{
     ExtensionSessionCountBaseline, ExtensionSessionCountSnapshot, ExtensionSessionCountUpdateError,
     SelectedExtensionInvocationAggregate,
 };
-pub(in crate::telemetry) use lifecycle::MaintenanceDue;
-pub(in crate::telemetry) use lifecycle::{BoundRecordingObservation, BoundSessionObservation};
+pub(in crate::telemetry) use lifecycle::{
+    BoundRecordingObservation, BoundSessionObservation, MaintenanceDue, RecordingObservationError,
+};
 pub(in crate::telemetry) use open_day::DayBeforeCurrent;
 pub(in crate::telemetry) use plugin_hook::SelectedPluginHookAggregate;
 #[cfg_attr(
@@ -60,6 +54,7 @@ pub(in crate::telemetry) use plugin_hook::SelectedPluginHookAggregate;
 pub(in crate::telemetry) use recording::EventPublicationRequest;
 pub(in crate::telemetry) use recording::{
     ChangePublication, MetricNotRequestedReason, MetricRecording, RecordingChange,
+    StageRecordingError,
 };
 pub(in crate::telemetry) use session_counts::{
     HookSessionCountSnapshot, HookSessionCountTracker, HookSessionCountUpdateError,
@@ -68,8 +63,7 @@ pub(in crate::telemetry) use session_counts::{
 #[cfg(test)]
 pub(in crate::telemetry) use {
     extension_invocation::ExtensionInvocationAggregateStore, hook::HookAggregateStore,
-    lifecycle::RecordingObservationError, plugin_hook::PluginHookAggregateStore,
-    public_row_budget::MAX_PUBLIC_ROWS_PER_DAY,
+    plugin_hook::PluginHookAggregateStore, public_row_budget::MAX_PUBLIC_ROWS_PER_DAY,
 };
 
 #[cfg(test)]
