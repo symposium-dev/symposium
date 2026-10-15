@@ -14,7 +14,7 @@ use crate::telemetry::{
 
 /// Bounded result of one lock-bound maintenance attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum MaintenanceOutcome {
+pub(in crate::telemetry) enum MaintenanceOutcome {
     DirectoryUnavailable {
         kind: io::ErrorKind,
     },

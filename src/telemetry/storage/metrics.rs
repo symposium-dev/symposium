@@ -416,6 +416,60 @@ pub(in crate::telemetry) enum MetricSnapshotUnavailable {
     },
 }
 
+impl fmt::Display for MetricSnapshotUnavailable {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(kind) => {
+                write!(
+                    formatter,
+                    "failed to read aggregate metric snapshot: {kind:?}"
+                )
+            }
+            Self::TooLarge { maximum } => write!(
+                formatter,
+                "aggregate metric snapshot exceeds the {maximum}-byte safety limit"
+            ),
+            Self::UnterminatedFinalLine { line } => {
+                write!(
+                    formatter,
+                    "aggregate metric snapshot line {line} is unterminated"
+                )
+            }
+            Self::MalformedLine { line } => {
+                write!(
+                    formatter,
+                    "aggregate metric snapshot line {line} is malformed"
+                )
+            }
+            Self::UnknownSchema { line } => write!(
+                formatter,
+                "aggregate metric snapshot line {line} has an unknown schema"
+            ),
+            Self::InvalidRow { line } => write!(
+                formatter,
+                "aggregate metric snapshot line {line} violates its known schema"
+            ),
+            Self::UnexpectedRow { line, reason } => match reason {
+                UnexpectedMetricRow::LowVolume => write!(
+                    formatter,
+                    "aggregate metric snapshot line {line} is a low-volume row"
+                ),
+                UnexpectedMetricRow::DayMismatch => write!(
+                    formatter,
+                    "aggregate metric snapshot line {line} belongs to another day"
+                ),
+            },
+            Self::DuplicateEventId {
+                first_line,
+                duplicate_line,
+            } => write!(
+                formatter,
+                "aggregate metric snapshot lines {first_line} and {duplicate_line} repeat one event id"
+            ),
+        }
+    }
+}
+
 impl From<LoadMetricSnapshotError> for MetricSnapshotUnavailable {
     fn from(error: LoadMetricSnapshotError) -> Self {
         match error {

@@ -49,6 +49,17 @@ pub(in crate::telemetry) enum MetricNotRequestedReason {
     SnapshotUnavailable(MetricSnapshotUnavailable),
 }
 
+impl fmt::Display for MetricNotRequestedReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoAggregateRows => {
+                formatter.write_str("the operation has no aggregate metric rows")
+            }
+            Self::SnapshotUnavailable(reason) => reason.fmt(formatter),
+        }
+    }
+}
+
 /// Whether a state-produced change has any public data to publish.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::telemetry) enum ChangePublication {
