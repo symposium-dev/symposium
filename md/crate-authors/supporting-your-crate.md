@@ -1,4 +1,5 @@
 # Supporting your crate
+> **Working with an agent?** Point it at [`llms.txt`](./llms.txt), a single file written for agents with what it needs to write a Symposium plugin. Ask it to download the file with `curl -fsSL https://symposium.dev/crate-authors/llms.txt` and read all of it: web-fetch tools can hand the agent a summary instead of the text.
 
 If you maintain a Rust crate, you can extend Symposium with skills, MCP servers, or other extensions that will teach agents the best way to use your crate.
 

@@ -1,4 +1,5 @@
 # Authoring a plugin
+> **Working with an agent?** Point it at [`llms.txt`](./llms.txt), a single file written for agents with what it needs to write a Symposium plugin. Ask it to download the file with `curl -fsSL https://symposium.dev/crate-authors/llms.txt` and read all of it: web-fetch tools can hand the agent a summary instead of the text.
 
 Symposium lets you ship skills, hooks, and MCP servers that are automatically loaded when a user's project depends on your crate. This page walks through how to create a plugin and configure each extension type.
 
