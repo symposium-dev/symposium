@@ -8,6 +8,12 @@ The recommended approach is to ship skills directly in your crate's source tree.
 
 See [Authoring a plugin](./authoring-a-plugin.md) for the full walkthrough.
 
+## Ship an Agent Plugins package
+
+If your crate already ships skills for agents that read the [Agent Plugins](../reference/agent-plugins.md) format, a `plugin.json` at the crate root with a `skills/` folder beside it is all Symposium needs: it reads the package as your crate's plugin, with the package's name and version. Only the direct children of `skills/` are skills, and the manifest has to be valid, because a crate whose `plugin.json` is rejected (for instance, one missing `$schema`) offers nothing. Users still consent to it the way they consent to any plugin a dependency carries.
+
+A crate that also has a `[package.metadata.symposium]` block or a `Symposium.toml` is read through those instead, and takes only the `name`, `version` and `description` they leave out from `plugin.json`.
+
 ## Skill layout metadata
 
 By default Symposium looks in your crate's `skills/` directory. To customize the layout — a different subdirectory, named groups, a git source, or delegating to another crate — you describe your crate's plugin inline under `[package.metadata.symposium]` in `Cargo.toml`. **This block uses the exact same schema as a [`Symposium.toml` plugin manifest](../reference/plugin-definition.md)** — it is just that manifest embedded in `Cargo.toml`:
@@ -28,6 +34,8 @@ If you ship *both* a `[package.metadata.symposium]` block and a `Symposium.toml`
 2. **Opt out of the default group** — `[package.metadata.symposium.defaults] skills = false` and declare no skill groups → no skills from this crate.
 3. **`source.path` groups** — look in that subdirectory of your crate's source.
 4. **`[[package.metadata.symposium.plugins]]` chained references** — load another crate's plugin (see [Delegating to another crate](#delegating-to-another-crate)).
+
+Rule 1 does not apply to a crate with a `plugin.json` at its root: that crate is an [Agent Plugins package](#ship-an-agent-plugins-package).
 
 ### Delegating to another crate
 

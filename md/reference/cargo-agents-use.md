@@ -41,7 +41,9 @@ Two things a `use` entry can enable:
   the by-name way to say so (`[plugins] auto-enable` is the ahead-of-time way).
 - **A dormant registry plugin.** A plugin whose manifest names no dependency
   has nothing to gate it on, so it loads dormant. A `use` entry naming it is
-  what wakes it.
+  what wakes it. That includes an [Agent Plugins package](./agent-plugins.md)
+  with no `dev.symposium` gate, named by its manifest `name`; a package
+  embedded in a dependency is named by its crate instead.
 
 Anything a configured registry already offers under a `depends-on` gate is
 enabled by configuration — pointing config at a registry is the act of

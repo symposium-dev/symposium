@@ -1,0 +1,5 @@
+name = "linked-manifest"
+depends-on = ["*"]
+
+[[skills]]
+source.path = "skills"

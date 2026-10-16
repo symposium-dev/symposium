@@ -13,15 +13,9 @@
 //! package` follows links, including ones whose target escapes the package
 //! root.
 //!
-//! Links are followed wherever they point; there is no containment check
-//! against the source root. See [the skill reference][ref] for that decision
-//! and its rationale.
-//!
 //! Following links costs two guarantees that a plain tree gives for free, and
 //! this module holds both: a broken link has no metadata to resolve, and a
 //! directory link naming an ancestor turns a walk into an endless descent.
-//!
-//! [ref]: ../../md/reference/skill-definition.md
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -59,6 +53,11 @@ pub(crate) fn resolved_kind(
     } else {
         None
     })
+}
+
+/// `root` must already be canonical: only `path` is resolved.
+pub(crate) fn resolves_inside(root: &Path, path: &Path) -> bool {
+    fs::canonicalize(path).is_ok_and(|resolved| resolved.starts_with(root))
 }
 
 /// The directories a walk is currently inside, identified by canonical path so

@@ -100,6 +100,7 @@ pub struct SkillWithGroupContext {
     /// The hash of where the skill was discovered. Drives install-path disambiguation
     /// and dedup at sync time.
     pub origin_hash: String,
+    pub agent_plugin_root: Option<PathBuf>,
 }
 
 /// Resolve all applicable skills from the registry.
@@ -163,6 +164,7 @@ pub(crate) async fn collect_skills(
                 collect_skill_applicable_to(
                     skill,
                     origin_hash,
+                    parsed.agent_plugin_root.as_deref(),
                     &parsed.manifest.name,
                     ctx,
                     &mut results,
@@ -576,6 +578,7 @@ pub(crate) fn is_safe_dir_name(name: &str) -> bool {
 fn collect_skill_applicable_to(
     skill: Skill,
     origin_hash: String,
+    agent_plugin_root: Option<&Path>,
     plugin_name: &str,
     ctx: &mut PredicateContext,
     results: &mut Vec<SkillWithGroupContext>,
@@ -600,7 +603,11 @@ fn collect_skill_applicable_to(
             reason: None,
         },
     );
-    results.push(SkillWithGroupContext { skill, origin_hash });
+    results.push(SkillWithGroupContext {
+        skill,
+        origin_hash,
+        agent_plugin_root: agent_plugin_root.map(Path::to_path_buf),
+    });
 }
 
 /// Raw frontmatter fields extracted from a SKILL.md file.
@@ -1146,6 +1153,8 @@ mod tests {
         // Create a plugin that only applies to "other-crate"
         let plugin = PluginManifest {
             name: "other-crate-plugin".to_string(),
+            version: None,
+            description: None,
             predicates: pred_set("other-crate"),
             hooks: vec![],
             skills: vec![SkillGroup {
@@ -1167,6 +1176,7 @@ mod tests {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
                 manifest: plugin,
                 workspace_member: false,
+                agent_plugin_root: None,
             }],
             warnings: vec![],
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
@@ -1205,6 +1215,8 @@ mod tests {
         // Create a plugin with wildcard that has a group targeting different crate
         let plugin = PluginManifest {
             name: "wildcard-plugin".to_string(),
+            version: None,
+            description: None,
             predicates: pred_set("*"), // Plugin applies to all
             hooks: vec![],
             skills: vec![SkillGroup {
@@ -1226,6 +1238,7 @@ mod tests {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
                 manifest: plugin,
                 workspace_member: false,
+                agent_plugin_root: None,
             }],
             warnings: vec![],
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
@@ -1282,6 +1295,8 @@ mod tests {
         // Create a plugin where all levels match serde
         let plugin = PluginManifest {
             name: "serde-plugin".to_string(),
+            version: None,
+            description: None,
             predicates: pred_set("serde"), // Plugin targets serde
             hooks: vec![],
             skills: vec![SkillGroup {
@@ -1303,6 +1318,7 @@ mod tests {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
                 manifest: plugin,
                 workspace_member: false,
+                agent_plugin_root: None,
             }],
             warnings: vec![],
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
@@ -1359,6 +1375,8 @@ mod tests {
         // Plugin matches by crates, but its shell predicate fails.
         let plugin = PluginManifest {
             name: "p".into(),
+            version: None,
+            description: None,
             predicates: PredicateSet {
                 predicates: vec![
                     Predicate::DependsOn("serde".into(), None),
@@ -1385,6 +1403,7 @@ mod tests {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
                 manifest: plugin,
                 workspace_member: false,
+                agent_plugin_root: None,
             }],
             warnings: vec![],
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
@@ -1437,6 +1456,8 @@ mod tests {
 
         let plugin = PluginManifest {
             name: "p".into(),
+            version: None,
+            description: None,
             predicates: PredicateSet {
                 predicates: vec![
                     Predicate::DependsOn("serde".into(), None),
@@ -1468,6 +1489,7 @@ mod tests {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
                 manifest: plugin,
                 workspace_member: false,
+                agent_plugin_root: None,
             }],
             warnings: vec![],
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
@@ -1574,6 +1596,8 @@ mod tests {
 
         let plugin = PluginManifest {
             name: "my-skill".to_string(),
+            version: None,
+            description: None,
             predicates: pred_set("serde"),
             installations: vec![],
             hooks: vec![],
@@ -1596,6 +1620,7 @@ mod tests {
                 canonical: crate::pm::PackageId::any_version("recs", "my-skill"),
                 manifest: plugin,
                 workspace_member: false,
+                agent_plugin_root: None,
             }],
             warnings: vec![],
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),

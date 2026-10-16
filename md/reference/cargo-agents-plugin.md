@@ -40,9 +40,11 @@ Show details for a specific plugin, including its TOML configuration and source 
 cargo agents plugin validate <PATH> [--no-check-crates]
 ```
 
-Validate a plugin source directory or a single TOML manifest file. Useful when authoring plugins.
+Validate a plugin source directory, a single plugin, [Agent Plugins package](./agent-plugins.md) or skill directory, or a single TOML manifest file. Useful when authoring plugins.
 
 | Flag | Description |
 |------|-------------|
-| `<PATH>` | Path to a directory or a single `.toml` file |
+| `<PATH>` | Path to a directory, a `plugin.json` (validated as its package directory), or a single `.toml` file |
 | `--no-check-crates` | Skip checking that crate names in predicates exist on crates.io |
+
+Each item is reported with its kind (`plugin`, `agent plugin` or `skill`). Warnings, such as a dormant plugin or an unknown `plugin.json` field, do not affect the exit code; an entry that fails to load, or a skill that does not meet the [skill format](./skill-definition.md), makes the command fail.

@@ -48,11 +48,19 @@ both, and the unit tests assert the shape per event for exactly this reason.
 
 `Path::is_dir()` *does* follow links, which is the other half of the trap: a walk written that way already descends into linked directories, so it can already loop on a link naming a directory it is inside. Guard any such walk with `dir_walk::Ancestors`.
 
-And when two walks over one tree feed each other — a copy, and the comparison that decides whether to copy — they have to be the same traversal. Fixing one and not the other does not show up as a wrong file; it shows up as a sync that reinstalls the same skill forever.
+And when two walks over one tree feed each other, a copy and the comparison that decides whether to copy, they have to be the same traversal with the same arguments, including the package root that keeps an Agent Plugins package's links inside it. Fixing one and not the other does not show up as a wrong file; it shows up as a sync that reinstalls the same skill forever.
 
 ## Plugin-supplied names are untrusted input
 
 Plugin content must not decide where Symposium writes. A name it supplies, such as a skill's `name`, can resolve outside the directory it is joined onto (`Path::join` does not confine it), so it never becomes part of a path unchecked. Validate it with `skills::is_safe_dir_name`, which also covers Windows-specific path forms, rather than with a check of your own.
+
+## Agent Plugins manifests are closed but forgiving
+
+`plugin.json` has a closed schema, yet the format requires an unknown top-level field, or an `extensions` that is not an object, to be reported and ignored while the package still loads. `#[serde(deny_unknown_fields)]` would reject the package instead, and a plain `Option<String>` would quietly accept `null`, which the schema does not. That is why `plugins/agent_plugin.rs` checks the manifest by hand over a `serde_json::Value`. The one namespace Symposium owns, `extensions.dev.symposium`, is the opposite case: it is strict, because ignoring a typo there would make a package apply more widely than its author meant.
+
+## Installed copies are never sources
+
+A directory Symposium installed carries a `.symposium` marker file, and the trees it installs into can also be read as sources: `.agents/skills/` is a workspace skill group, and a compiled plugin directory holds a `plugin.json` just like a package. Any walk that discovers sources has to skip marked directories, as `find_skill_files_recursive` and the registry layout walk do, or a sync reads its own output back and installs it again. The layout walk checks that the marker is a file, because a project root can hold a `.symposium/` directory that is not a marker.
 
 ## Windows portability (tests)
 

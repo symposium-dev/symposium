@@ -21,9 +21,11 @@ pub use workspace::{
     LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
 };
 
+use super::layout::AGENT_PLUGIN_FILE;
 use super::{
     ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, UnvalidatedPlugin,
 };
+use symposium_sdk::manifest::RawDefaults;
 
 /// How many crates.io hits a search returns — enough to surface the crate a
 /// user is looking for without flooding the report.
@@ -49,15 +51,7 @@ impl CargoPm {
         PackageId::new(CARGO_PM, name, version.unwrap_or(ANY_VERSION))
     }
 
-    /// Build the [`UnvalidatedPlugin`] for an already-fetched crate, layering its
-    /// manifest sources: `[package.metadata.symposium]` in `Cargo.toml` and a
-    /// `Symposium.toml` at the root: via
-    /// [`merge_crate_manifest`](crate::plugins::merge_crate_manifest).
-    ///
-    /// A crate with no manifest sources still yields a plugin: an empty
-    /// manifest, which validation turns into a plugin whose only content is the
-    /// default `skills/` group.
-    fn plugin_from_fetched(&self, fetched: FetchedPackage) -> UnvalidatedPlugin {
+    fn plugin_from_fetched(&self, fetched: FetchedPackage) -> Option<UnvalidatedPlugin> {
         let name = &fetched.id.name;
         let metadata = crate::crate_metadata::symposium_metadata(&fetched.root.join("Cargo.toml"))
             .unwrap_or_else(|e| {
@@ -86,15 +80,37 @@ impl CargoPm {
             None
         };
 
-        let manifest = crate::plugins::merge_crate_manifest(metadata, file.as_deref(), name);
-        UnvalidatedPlugin::new(fetched.id, fetched.root, manifest)
+        if metadata.is_none() && file.is_none() && fetched.root.join(AGENT_PLUGIN_FILE).is_file() {
+            return match crate::plugins::agent_plugin_manifest(&fetched.root) {
+                Ok((mut manifest, notices)) => {
+                    for notice in notices {
+                        tracing::warn!(crate_name = %name, %notice, "agent plugin notice");
+                    }
+                    manifest.defaults = Some(RawDefaults { skills: false });
+                    Some(UnvalidatedPlugin {
+                        agent_plugin: true,
+                        ..UnvalidatedPlugin::new(fetched.id, fetched.root, manifest)
+                    })
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        crate_name = %name,
+                        error = %format!("{e:#}"),
+                        "ignoring crate with an invalid plugin.json"
+                    );
+                    None
+                }
+            };
+        }
+
+        let mut manifest = crate::plugins::merge_crate_manifest(metadata, file.as_deref(), name);
+        if let Some(notice) = crate::plugins::fill_from_agent_plugin(&mut manifest, &fetched.root) {
+            tracing::warn!(crate_name = %name, %notice, "agent plugin notice");
+        }
+        Some(UnvalidatedPlugin::new(fetched.id, fetched.root, manifest))
     }
 }
 
-/// What plugin content a crate source tree at `dir` embeds, as a short
-/// human-readable phrase — or `None` when it embeds none. Mirrors what
-/// [`CargoPm::load_plugin`] would build a plugin from: a `Symposium.toml`,
-/// `[package.metadata.symposium]`, or the default `skills/` directory.
 fn embedded_plugin_kind(dir: &std::path::Path) -> Option<&'static str> {
     if dir.join(crate::pm::layout::MANIFEST_FILE).is_file() {
         return Some("plugin manifest (Symposium.toml)");
@@ -142,11 +158,6 @@ impl PackageManager for CargoPm {
         CARGO_PM
     }
 
-    /// The plugins embedded in the workspace's dependencies: every dep in
-    /// `deps` whose source tree embeds plugin content, built into a full
-    /// `Plugin`. Whether each is *trusted* (may activate without consent)
-    /// is the caller's decision — the cargo transport is marked untrusted.
-    ///
     /// Each dependency is fetched cache-only ([`UpdateLevel::None`]) to locate
     /// its source, then inspected. A workspace dependency resolves into the
     /// source `cargo metadata` already extracted — no probe, no network — so
@@ -170,16 +181,12 @@ impl PackageManager for CargoPm {
             };
             // Only surface dependencies that actually embed plugin content.
             if embedded_plugin_kind(&fetched.root).is_some() {
-                out.push(self.plugin_from_fetched(fetched));
+                out.extend(self.plugin_from_fetched(fetched));
             }
         }
         out
     }
 
-    /// Resolve a specific crate id to its plugin (a chained reference or an
-    /// enabled crate). Unlike `active_plugins`, this loads the named crate
-    /// whatever it embeds — any fetchable crate yields at least the default
-    /// `skills/` plugin. Fetched cache-only.
     async fn load_plugin(&self, id: &PackageId) -> Vec<UnvalidatedPlugin> {
         let fetched = match self.fetch(id, UpdateLevel::None).await {
             Ok(f) => f,
@@ -188,16 +195,10 @@ impl PackageManager for CargoPm {
                 return Vec::new();
             }
         };
-        vec![self.plugin_from_fetched(fetched)]
+        self.plugin_from_fetched(fetched).into_iter().collect()
     }
 
     /// Search crates.io for crates matching `query`.
-    ///
-    /// Name-based, like `cargo search`: the results are *candidate* crates —
-    /// whether one actually carries plugin content is only known once it is
-    /// fetched (any fetchable crate yields at least a default `skills/` plugin).
-    /// So this lets `cargo agents use <crate>` name a crate the workspace
-    /// doesn't depend on; the fetch/load step decides what it contributes.
     async fn search(&self, query: &str) -> Result<Vec<PluginInfo>> {
         let client = crates_io_api::AsyncClient::new(
             "symposium (https://github.com/symposium-dev/symposium)",
@@ -300,5 +301,115 @@ mod tests {
         // The plugin points at the crate source; the default `skills/` group is
         // added by validation, not by the PM.
         assert!(active[0].root.join("skills").is_dir());
+    }
+
+    fn agent_plugin_crate(dir: &std::path::Path, plugin_json: &str, skills: &[&str]) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join(AGENT_PLUGIN_FILE), plugin_json).unwrap();
+        for skill in skills {
+            let skill_dir = dir.join("skills").join(skill);
+            std::fs::create_dir_all(&skill_dir).unwrap();
+            std::fs::write(skill_dir.join("SKILL.md"), "").unwrap();
+        }
+    }
+
+    fn agent_plugin_json(fields: &str) -> String {
+        format!(
+            r#"{{"$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", {fields}}}"#
+        )
+    }
+
+    fn cargo_pm(root: &std::path::Path, crates: Vec<WorkspaceCrate>) -> (CargoPm, Vec<PackageId>) {
+        let deps = crates
+            .iter()
+            .map(|c| PackageId::new(CARGO_PM, &c.name, c.version.to_string()))
+            .collect();
+        let pm = CargoPm::new(crate::pm::WorkspaceDeps::fixture(
+            root.to_path_buf(),
+            crates,
+        ));
+        (pm, deps)
+    }
+
+    fn skill_dirs(plugin: &crate::plugins::Plugin) -> Vec<PathBuf> {
+        plugin
+            .manifest
+            .skills
+            .iter()
+            .map(|group| match &group.source {
+                crate::plugins::PluginSource::Path(dir) => dir.clone(),
+                other => panic!("unexpected source {other:?}"),
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_crate_with_only_plugin_json_is_that_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        let portable = tmp.path().join("portable");
+        agent_plugin_crate(
+            &portable,
+            &agent_plugin_json(r#""name": "pdf-tools", "version": "1.2.0""#),
+            &["tables", "nested/too-deep"],
+        );
+        let invalid = tmp.path().join("invalid");
+        agent_plugin_crate(&invalid, r#"{"name": "invalid"}"#, &["guide"]);
+        let (pm, deps) = cargo_pm(
+            tmp.path(),
+            vec![
+                path_dep("portable", portable.clone()),
+                path_dep("invalid", invalid),
+            ],
+        );
+
+        let offered = pm.active_plugins(&deps).await;
+        let names: Vec<&str> = offered.iter().map(|o| o.id.name.as_str()).collect();
+        assert_eq!(names, ["portable"]);
+        assert!(
+            pm.load_plugin(&CargoPm::id_for("invalid", None))
+                .await
+                .is_empty()
+        );
+
+        let plugin = crate::plugins::validate_plugin(
+            offered.into_iter().next().unwrap(),
+            crate::pm::PluginKind::Package,
+        )
+        .unwrap();
+        assert_eq!(plugin.canonical.name, "portable");
+        assert_eq!(plugin.manifest.name, "pdf-tools");
+        assert_eq!(plugin.manifest.version.as_deref(), Some("1.2.0"));
+        assert_eq!(plugin.format(), Some(crate::plugins::AGENT_PLUGIN_FORMAT));
+        assert_eq!(
+            skill_dirs(&plugin),
+            [portable.join("skills/tables").canonicalize().unwrap()]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_crate_manifest_beside_plugin_json_takes_its_missing_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let both = tmp.path().join("both");
+        agent_plugin_crate(
+            &both,
+            &agent_plugin_json(r#""name": "json-name", "version": "2.0.0""#),
+            &["guide"],
+        );
+        std::fs::write(both.join("Symposium.toml"), "").unwrap();
+        let (pm, _) = cargo_pm(tmp.path(), vec![path_dep("both", both.clone())]);
+
+        let loaded = pm.load_plugin(&CargoPm::id_for("both", None)).await;
+        let plugin = crate::plugins::validate_plugin(
+            loaded.into_iter().next().unwrap(),
+            crate::pm::PluginKind::Package,
+        )
+        .unwrap();
+        assert_eq!(plugin.manifest.name, "json-name");
+        assert_eq!(plugin.manifest.version.as_deref(), Some("2.0.0"));
+        assert_eq!(plugin.format(), None);
+        assert_eq!(
+            skill_dirs(&plugin),
+            [both.join("skills").canonicalize().unwrap()]
+        );
     }
 }

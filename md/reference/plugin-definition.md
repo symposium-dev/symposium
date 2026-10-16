@@ -4,6 +4,8 @@ A **symposium plugin** collects together all the extensions offered for a partic
 
 Plugins enable capabilities beyond standalone skills — they're needed when you want to add hooks or MCP servers. For simple skill publishing, see [Authoring a plugin](../crate-authors/authoring-a-plugin.md) instead.
 
+A plugin directory can hold an [Agent Plugins](./agent-plugins.md) `plugin.json` instead, a portable package format that carries skills only. A directory holding both is read as the `Symposium.toml` plugin, which takes its `name`, `version` and `description` from `plugin.json` where it leaves them out (see [Agent Plugins packages](./agent-plugins.md#where-symposium-looks)).
+
 ## Example: a plugin definition with inline skills
 
 You could define a plugin definition with inline skills by having a directory struct like this:
@@ -33,6 +35,8 @@ source.path = "skills"
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Plugin name. Used in logs and CLI output. |
+| `version` | string | no | Plugin version, shown by [`search`](./cargo-agents-search.md) and [`status`](./cargo-agents-status.md). Free-form; semantic versioning is recommended. |
+| `description` | string | no | Short description, shown by [`search`](./cargo-agents-search.md). |
 | `depends-on` | string or array | no | Which crates this plugin applies to. Use `["*"]` for all crates. See [Plugin-level filtering](#plugin-level-filtering). |
 | `predicates` | array of strings | no | Predicates (`depends-on`, `shell`, `path_exists`, `env`, `workspace-member`, `not`, `any`, `all`) that must all hold for the plugin to apply. See [Predicates](./predicates.md). |
 | `installations` | array of tables | no | Named installation declarations (`[[installations]]`). Hooks reference these by name. See [Installations](#installations). |
@@ -97,7 +101,7 @@ The edge's `depends-on` decides *whether* to load the referenced crate; the crat
 
 A referenced crate describes its plugin with the ordinary plugin-manifest schema, from **two interchangeable sources**: a `Symposium.toml` at its source root, and/or a `[package.metadata.symposium]` table in its `Cargo.toml`. Both are honored the same as a registry manifest — named `[[skills]]` groups, per-group predicates, `source.path` / `source.git` sources, and further `[[plugins]]` chained references. The crate's effective manifest is the two sources merged over the crate defaults (merge order **defaults → `[package.metadata.symposium]` → `Symposium.toml`**): list entries from both are kept; where the two set the same scalar, the file wins. Each source is parsed leniently — a malformed layer is logged and dropped, and the crate still resolves through the remaining layers (at minimum the default `skills/` group).
 
-Because the chained reference is already the gate, a crate manifest may omit `name` (defaults to the crate) and a top-level `depends-on`; the default `skills/` group is appended unless `[defaults] skills = false`. A crate with no manifest sources at all still resolves as a plugin whose only content is that default `skills/` group.
+Because the chained reference is already the gate, a crate manifest may omit `name` (defaults to the crate) and a top-level `depends-on`; the default `skills/` group is appended unless `[defaults] skills = false`. A crate with no manifest at all (no `[package.metadata.symposium]`, `Symposium.toml` or `plugin.json`) still resolves as a plugin whose only content is that default `skills/` group.
 
 **The opt-out belongs to the referenced crate, not the referrer.** The edge decides only *whether* to load the crate (via its `depends-on` / `predicates`); it cannot toggle the crate's defaults. So for an active edge to crate `foo`:
 
@@ -591,7 +595,8 @@ env = []
 ## Validation
 
 ```bash
-cargo agents plugin validate path/to/symposium.toml
+cargo agents plugin validate path/to/myplugin
+cargo agents plugin validate path/to/myplugin/Symposium.toml
 ```
 
-This parses the manifest and reports any errors. Crate name checking against crates.io is on by default; use `--no-check-crates` to skip it.
+This parses the manifest and reports any errors. Pointing it at the plugin directory also checks the skills its groups find. Crate name checking against crates.io is on by default; use `--no-check-crates` to skip it.
