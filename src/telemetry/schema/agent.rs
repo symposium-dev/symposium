@@ -100,6 +100,12 @@ impl HookAgent {
     }
 }
 
+impl fmt::Display for HookAgent {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 impl From<HookAgent> for SupportedAgent {
     fn from(agent: HookAgent) -> Self {
         match agent {
@@ -531,6 +537,10 @@ mod tests {
         ];
 
         assert_contract_names_with_labels(&cases, HookAgent::as_str);
+
+        for (agent, label) in cases {
+            assert_eq!(agent.to_string(), label);
+        }
     }
 
     #[test]
