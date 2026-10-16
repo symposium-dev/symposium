@@ -161,13 +161,13 @@ impl PublicSkillCoordinate {
 
     /// Return the reviewed public source used by snapshot ordering.
     #[must_use]
-    pub(in crate::telemetry::schema) const fn source(&self) -> PublicExtensionSource {
+    pub(in crate::telemetry) const fn source(&self) -> PublicExtensionSource {
         self.0.source()
     }
 
     /// Return the validated public name used by snapshot ordering.
     #[must_use]
-    pub(in crate::telemetry::schema) const fn name(&self) -> &PublicExtensionName {
+    pub(in crate::telemetry) const fn name(&self) -> &PublicExtensionName {
         self.0.name()
     }
 }
