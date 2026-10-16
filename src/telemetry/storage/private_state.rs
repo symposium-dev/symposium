@@ -15,7 +15,7 @@ use super::{
 };
 use crate::telemetry::schema::UtcDay;
 use crate::telemetry::state::{
-    StateContentError, StateDecodeError, TelemetryStateV1, decode, encode,
+    StateContentError, StateDecodeError, StateEncodeError, TelemetryStateV1, decode, encode,
 };
 
 /// Safety ceiling for private state read into one recorder process.
@@ -115,16 +115,14 @@ impl From<LoadStateError> for OpenStateError {
 /// Failure to serialize or atomically replace private telemetry state.
 #[derive(Debug)]
 pub(in crate::telemetry) enum ReplaceStateError {
-    Serialize(toml::ser::Error),
+    Encode(StateEncodeError),
     Replace(AtomicReplaceError),
 }
 
 impl fmt::Display for ReplaceStateError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Serialize(_) => {
-                formatter.write_str("failed to serialize telemetry private state")
-            }
+            Self::Encode(error) => error.fmt(formatter),
             Self::Replace(_) => formatter.write_str("failed to replace telemetry private state"),
         }
     }
@@ -133,7 +131,7 @@ impl fmt::Display for ReplaceStateError {
 impl Error for ReplaceStateError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Serialize(error) => Some(error),
+            Self::Encode(error) => Some(error),
             Self::Replace(error) => Some(error),
         }
     }
@@ -195,7 +193,7 @@ impl LockedStorage {
         &mut self,
         state: &TelemetryStateV1,
     ) -> Result<(), ReplaceStateError> {
-        let serialized = encode(state).map_err(ReplaceStateError::Serialize)?;
+        let serialized = encode(state).map_err(ReplaceStateError::Encode)?;
         atomic::replace(self.paths.state_file(), serialized.as_bytes())
             .map_err(ReplaceStateError::Replace)
     }
@@ -504,7 +502,8 @@ mod tests {
     fn replacement_load_and_reserialization_preserve_canonical_bytes() {
         let temporary = tempfile::tempdir().unwrap();
         let mut storage = storage(&temporary);
-        let state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
 
         storage.replace_state(&state).unwrap();
         let on_disk = fs::read(storage.paths.state_file()).unwrap();
@@ -512,7 +511,7 @@ mod tests {
             .load_state()
             .unwrap()
             .expect("the replaced state file must exist");
-        let reserialized = toml::to_string_pretty(&loaded).unwrap().into_bytes();
+        let reserialized = encode(&loaded).unwrap().into_bytes();
 
         assert_eq!(on_disk, IDENTIFIER_WINDOW_TEST_STATE.as_bytes());
         assert_eq!(reserialized, on_disk);

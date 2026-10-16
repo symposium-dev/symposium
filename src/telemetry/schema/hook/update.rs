@@ -324,7 +324,8 @@ mod tests {
 
     #[test]
     fn first_hook_observation_populates_the_complete_aggregate() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let vendor_session_id = VendorSessionId::new("vendor-session-123".to_owned());
         let mut session_counts =
@@ -373,7 +374,8 @@ mod tests {
 
     #[test]
     fn hook_store_supplies_trackers_for_creation_updates_and_day_rollover() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let vendor_session_id = VendorSessionId::new("vendor-session-123".to_owned());
         let mut store;
         let mut row;
@@ -439,7 +441,8 @@ mod tests {
 
     #[test]
     fn later_hook_observations_accumulate_every_metric() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let first_session = VendorSessionId::new("vendor-session-123".to_owned());
         let second_session = VendorSessionId::new("vendor-session-456".to_owned());
@@ -492,7 +495,8 @@ mod tests {
 
     #[test]
     fn missing_session_id_makes_the_first_aggregate_incomplete() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let mut session_counts =
             session_counts(&recording, HookAgent::Claude, HookSurface::PreToolUse);
@@ -512,7 +516,8 @@ mod tests {
 
     #[test]
     fn snapshot_mismatch_makes_session_counts_incomplete_during_row_update() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let vendor_session_id = VendorSessionId::new("vendor-session-123".to_owned());
         let mut session_counts =
@@ -547,7 +552,8 @@ mod tests {
 
     #[test]
     fn failed_histogram_update_preserves_the_row_and_session_tracker() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let vendor_session_id = VendorSessionId::new("vendor-session-123".to_owned());
         let mut session_counts =
@@ -584,7 +590,8 @@ mod tests {
 
     #[test]
     fn aggregate_rejects_an_observation_for_another_target_without_mutation() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let vendor_session_id = VendorSessionId::new("vendor-session-123".to_owned());
         let mut session_counts =
@@ -611,7 +618,8 @@ mod tests {
 
     #[test]
     fn aggregate_rejects_an_observation_from_another_day_without_mutation() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let vendor_session_id = VendorSessionId::new("vendor-session-123".to_owned());
         let (mut row, mut session_counts) = {
             let recording = recording_observation(&mut state);
@@ -651,7 +659,8 @@ mod tests {
 
     #[test]
     fn aggregate_rejects_another_identifier_epoch_without_mutation() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let vendor_session_id = VendorSessionId::new("vendor-session-123".to_owned());
         let (mut row, mut session_counts, completed_at) = {
             let recording = recording_observation(&mut state);
@@ -684,7 +693,8 @@ mod tests {
 
     #[test]
     fn aggregate_rejects_a_tracker_for_another_hook_surface() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let vendor_session_id = VendorSessionId::new("vendor-session-123".to_owned());
         let mut pre_tool_tracker =
@@ -719,7 +729,8 @@ mod tests {
 
     #[test]
     fn invalid_plugin_counts_reject_the_first_observation_without_state_change() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let mut session_counts =
             session_counts(&recording, HookAgent::Claude, HookSurface::PreToolUse);
@@ -744,7 +755,8 @@ mod tests {
 
     #[test]
     fn invalid_plugin_counts_are_rejected_even_when_the_row_has_slack() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let mut session_counts =
             session_counts(&recording, HookAgent::Claude, HookSurface::PreToolUse);

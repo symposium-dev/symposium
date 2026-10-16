@@ -22,13 +22,6 @@ use crate::telemetry::{
 };
 
 /// Borrowed plugin-hook store in canonical private-state order.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the root state codec consumes this in the next stack branch"
-    )
-)]
 #[derive(Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) struct PluginHookStoreRef<'a> {
@@ -105,13 +98,6 @@ impl<'a> PluginHookEntryRef<'a> {
 }
 
 /// Plugin-hook store decoded before its runtime keys are reconstructed.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the root state codec consumes this in the next stack branch"
-    )
-)]
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub(super) struct RawPluginHookStore {
@@ -122,13 +108,6 @@ pub(super) struct RawPluginHookStore {
 
 impl RawPluginHookStore {
     /// Rebuild plugin-hook keys and validate the resulting runtime store.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the root state codec consumes this in the next stack branch"
-        )
-    )]
     pub(super) fn into_runtime(
         self,
         scope: &IdentifierWindowScope<'_>,

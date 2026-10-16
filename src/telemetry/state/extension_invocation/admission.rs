@@ -395,6 +395,15 @@ impl ExtensionInvocationAggregateStore {
         }
     }
 
+    /// Apply a day already checked by the aggregate-state preflight.
+    pub(in crate::telemetry::state) fn advance_day_after_preflight(&mut self, day: UtcDay) {
+        debug_assert!(day >= self.day());
+        if day > self.day() {
+            self.public_rows = DailyPublicRowBudget::new(day);
+            self.entries.clear();
+        }
+    }
+
     /// Stage private-state edits for one recording operation.
     ///
     /// The required recovery index proves that the day's snapshot loaded
