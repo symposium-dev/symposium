@@ -30,6 +30,18 @@ The consent prompt and the `use` / `search` / `status` commands that record deci
 
 The key code paths are in `discovery.rs`, `config.rs` (`PluginsConfig`, `UseEntry`), `pm/cargo/mod.rs` (`active_plugins`, `load_plugin`), `plugins.rs` (`PluginManifest::requires_use`), `predicate.rs` (`PredicateContext::is_used`), and `skills.rs` (`active_plugins`, `record_active`).
 
+## Global plugin delivery
+
+A plugin named by a `use --global` entry is installed for the user rather than copied into each project, on every agent that can take a plugin directory. It runs inside `sync`, so `cargo agents sync`, `use`, and the hook-triggered auto-sync all do it.
+
+1. `skills::collect_skills` stamps each applicable skill with the index of its plugin in the active set, and `sync` deduplicates the skills as before, the first plugin to reach a skill keeping it.
+2. `compile::global_plugins` groups the deduplicated skills by plugin and keeps the plugins `compile::installs_globally` accepts: named by a `[plugins] use` entry without a workspace (`PluginsConfig::is_used_globally`), and not workspace members. `hook-scope` is not consulted.
+3. `compile::compile` writes one Agent Plugins directory per plugin under `<config dir>/installed/`, writing only what changed and swapping it in by rename (`sync::sync_tree`), maintains the root's `.claude-plugin/marketplace.json`, and reaps the marked directories it did not compile (`sync::reap_unlisted`). It returns the `CompiledPlugin`s and the origins of the skills they carry.
+4. For each configured agent, `Agent::sync_user_plugins` hands it the compiled set; `true` means the agent installed it, and the per-skill loop skips those skills for that agent. Claude Code copies each directory into its user skills directory (`agents/plugin_registration/claude.rs`); the other agents' modules return `false` until their delivery lands.
+5. `sync::unregister_user_plugins` calls every unconfigured agent with an empty set, from `sync` and from `init`.
+
+The key code paths are in `compile.rs`, `agents/mod.rs` (`CompiledPlugin`, `Agent::sync_user_plugins`), `agents/plugin_registration/`, `sync.rs` (`sync`, `sync_tree`, `sync_plugin_dir`, `reap_unlisted`, `unregister_user_plugins`), `skills.rs` (`SkillWithGroupContext::plugin_index`), and `config.rs` (`PluginsConfig::is_used_globally`, `INSTALLED_PLUGINS_SUBDIR`, `Symposium::env_dir`).
+
 ## Help rendering
 
 `cargo agents --help` (and `-h`, the bare `help` keyword, or no subcommand) is rendered by `help_render`, not by clap's default help.
