@@ -305,9 +305,9 @@ mod tests {
     use clap::Parser as _;
 
     use super::super::{
-        IDENTIFIER_WINDOW_TEST_STATE, RowClassification, TelemetryRow, assert_contract_names,
-        assert_contract_names_with_labels, classify_row, recorded_data_example_block_at,
-        recorded_data_example_row, recording_observation,
+        IDENTIFIER_WINDOW_TEST_STATE, LowVolumeRow, RowClassification, TelemetryRow,
+        assert_contract_names, assert_contract_names_with_labels, classify_row,
+        recorded_data_example_block_at, recorded_data_example_row, recording_observation,
     };
     use super::*;
     use crate::{
@@ -595,7 +595,9 @@ mod tests {
     fn command_example_round_trips_in_contract_shape() {
         let source = recorded_data_example_row("command");
 
-        let RowClassification::Supported(TelemetryRow::Command(row)) = classify_row(source) else {
+        let RowClassification::Supported(TelemetryRow::LowVolume(LowVolumeRow::Command(row))) =
+            classify_row(source)
+        else {
             panic!("documented command row was not classified as supported");
         };
         let serialized = serde_json::to_string(&row).unwrap();

@@ -2,10 +2,10 @@
 
 use std::{ffi::OsStr, fs, io, path::Path};
 
+use super::paths::{DAILY_FILE_SUFFIX, EVENT_FILE_PREFIX, METRIC_FILE_PREFIX};
 use crate::telemetry::schema::UtcDay;
 
-const DAILY_FILE_SUFFIX: &str = ".jsonl";
-const DAILY_FILE_PREFIXES: [&str; 2] = ["events-", "metrics-"];
+const DAILY_FILE_PREFIXES: [&str; 2] = [EVENT_FILE_PREFIX, METRIC_FILE_PREFIX];
 
 /// Return the newest UTC day named by a canonical event or metric file.
 ///
@@ -44,6 +44,7 @@ mod tests {
     use chrono::NaiveDate;
 
     use super::*;
+    use crate::telemetry::storage::paths::StoragePaths;
 
     fn day(year: i32, month: u32, day: u32) -> UtcDay {
         UtcDay::from_date(NaiveDate::from_ymd_opt(year, month, day).unwrap())
@@ -92,5 +93,16 @@ mod tests {
         let error = newest_day(&missing).unwrap_err();
 
         assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn canonical_paths_round_trip_through_the_daily_scanner() {
+        let temporary = tempfile::tempdir().unwrap();
+        let paths = StoragePaths::new(temporary.path());
+        let expected = day(2026, 8, 3);
+
+        for path in [paths.event_file(expected), paths.metrics_file(expected)] {
+            assert_eq!(file_day(path.file_name().unwrap()), Some(expected));
+        }
     }
 }
