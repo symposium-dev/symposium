@@ -407,7 +407,7 @@ The following table maps symposium's internal event names to each agent's wire-f
 | `session-start` | `SessionStart` | `SessionStart` | `sessionStart` | `SessionStart` | `agentSpawn` | — | — |
 | `stop` | `Stop` | `Stop` | *not registered* | *not registered* | *not registered* | — | — |
 
-Tool names are each agent's own, and symposium passes them to plugin hooks unchanged: the same shell tool is `Bash` in Claude Code and Codex, `bash` in Copilot and `run_command` in Antigravity. A `matcher` that should fire on several agents has to name each of them.
+Tool names are each agent's own, and symposium passes them to plugin hooks unchanged: the same shell tool is `Bash` in Claude Code and Codex, `bash` in Copilot, `execute_bash` in Kiro and `run_command` in Antigravity. A `matcher` that should fire on several agents has to name each of them.
 
 ---
 

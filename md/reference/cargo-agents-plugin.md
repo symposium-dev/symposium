@@ -32,7 +32,7 @@ List all configured plugin sources and the plugins they provide.
 cargo agents plugin show <PLUGIN>
 ```
 
-Show details for a specific plugin, including its TOML configuration and source file path.
+Show a plugin: its id and its effective configuration as TOML, after validation has filled in defaults and promoted inline installations.
 
 ### `cargo agents plugin validate`
 

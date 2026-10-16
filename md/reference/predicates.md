@@ -1,11 +1,17 @@
 # Predicates
 
-A **predicate** decides whether a plugin, skill group, skill, hook, MCP server, or subcommand is active, evaluated against the workspace's dependency graph and the live environment. There is one predicate model, written two ways:
+A **predicate** decides whether a plugin, skill group, skill, hook, MCP server, `[[plugins]]` edge, or subcommand is active, evaluated against the workspace's dependency graph and the live environment. There is one predicate model, written two ways:
 
 - The **`depends-on`** field uses dependency-atom syntax (see [dependency predicates](./depends-on.md)) and is **sugar**: `depends-on = ["serde", "tokio"]` lowers to a single `any(depends-on(serde), depends-on(tokio))` predicate.
 - The **`predicates`** field uses the function-call syntax below.
 
-Both fields are merged into one list that is ANDed together, so `depends-on` and `predicates` compose with **AND**. A `depends-on(...)` predicate is available in `predicates` too — the field just makes the common case terse.
+Where each field is accepted:
+
+- `predicates`: the plugin itself, `[[skills]]` groups, `[[hooks]]` entries, `[[mcp_servers]]` entries, `[[plugins]]` edges, `[subcommand.<name>]` tables, and SKILL.md frontmatter.
+- `depends-on`: all of the above **except `[[hooks]]`**, which has no `depends-on` field. Gate a hook on a dependency with `predicates = ["depends-on(serde)"]`.
+- Neither: `[[predicate]]` entries, which define a predicate rather than being gated by one.
+
+Where both fields are set, they are merged into one list that is ANDed together, so `depends-on` and `predicates` compose with **AND**. A `depends-on(...)` predicate is available in `predicates` too; the field just makes the common case terse.
 
 The available predicate functions are:
 
@@ -26,7 +32,9 @@ Predicates compose with **AND** semantics within a list: every entry must hold. 
 
 The argument of a leaf predicate (`depends-on`, `shell`, `path_exists`, `env`) is taken **verbatim** between the parentheses — it is *not* quoted. `shell(command -v rg)` runs `command -v rg`; do not wrap the argument in quotes (they would become part of the command). An inner `)` is fine as long as parentheses balance, so `shell(echo $(date))` works. The combinators `not`, `any`, and `all` take nested predicates as their arguments and may be nested arbitrarily, e.g. `not(any(env(CI), path_exists(.skip)))`.
 
-> `crate(...)` is the retired spelling of `depends-on(...)` and is rejected at parse time with a migration hint.
+A plugin can also define its own predicate functions with [`[[predicate]]`](./plugin-definition.md#predicate) and use them in any `predicates` list.
+
+`crate(...)` is rejected; use `depends-on(...)`.
 
 ## Loading a crate's skills
 
@@ -44,15 +52,17 @@ Predicates are evaluated at the same point the workspace's dependency predicates
 
 | Level | Evaluated |
 |-------|-----------|
-| Plugin `predicates` | At sync (gates skills & MCP) and at every hook dispatch |
-| Skill group `predicates` | At sync, before any git/crates source is fetched |
+| Plugin `predicates` | At sync (gates skills & MCP), at every hook dispatch, and at subcommand lookup and `cargo agents --help` |
+| `[[plugins]]` edge `predicates` | Whenever the active plugin set is built: at sync, at every hook dispatch, at subcommand lookup, and at `cargo agents --help` |
+| Skill group `predicates` | At sync, before the group's skills are loaded (so before a `source.git` is fetched) |
 | Skill frontmatter `predicates` | At sync, after the skill loads |
 | Hook `predicates` | At hook dispatch, after the matcher passes |
 | MCP server `predicates` | At sync, when collecting servers to register |
+| Subcommand `predicates` | At subcommand lookup (`cargo agents <name>`) and at `cargo agents --help` |
 
 Hook-level predicates run at dispatch (not sync) so they observe live state — e.g. a hook gated on `path_exists(jq)` will silently disable itself if `jq` was uninstalled since the last sync, without forcing a re-sync.
 
-> **Tip:** keep predicates **fast** and **side-effect free** (`path_exists(rg)`, `path_exists(.git)`, `shell(test -f Cargo.toml)`). Plugin- and hook-level predicates fire on every hook dispatch.
+> **Tip:** keep predicates **fast** and **side-effect free** (`path_exists(rg)`, `path_exists(.git)`, `shell(test -f Cargo.toml)`). Plugin-level, `[[plugins]]` edge, and hook-level predicates fire on every hook dispatch.
 
 ## Usage
 
@@ -108,28 +118,17 @@ event = "PreToolUse"
 command = { script = "scripts/format.sh" }
 ```
 
-The hook here only registers if `jq` is on the user's `$PATH`. No error, no warning — symposium just skips this plugin's contributions while `jq` is missing.
+This plugin's hooks dispatch only while `jq` is on the user's `$PATH`. Symposium never registers plugin hooks into agent configs; it checks the plugin's predicates each time an event arrives. No error, no warning: symposium just skips this plugin's contributions while `jq` is missing.
 
 ## Combining predicates
 
-`depends-on`, `env`, `not`, `any`, and `all` cover the cases plain `depends-on` lists can't:
+`depends-on`, `env`, `not`, `any`, and `all` cover the cases plain `depends-on` lists can't. Each of these is a `predicates` value for any item that accepts one:
 
-```toml
-# Opt-in: only when a flag is set.
-predicates = ["env(SYMPOSIUM_EXPERIMENTAL)"]
-
-# Opt-out / escape hatch: skip when a marker file is present, or in CI.
-predicates = ["not(path_exists(.skip-hooks))", "not(env(CI))"]
-
-# Tool packaged under different names across distros.
-predicates = ["any(path_exists(fd), path_exists(fdfind))"]
-
-# A dependency gate that also requires an env flag (vs. the bare `depends-on = ["serde"]`).
-predicates = ["all(depends-on(serde), env(USE_SERDE))"]
-
-# Apply only when a dependency is absent (impossible with `depends-on`).
-predicates = ["not(depends-on(legacy-thing))"]
-```
+- Opt-in, only when a flag is set: `predicates = ["env(SYMPOSIUM_EXPERIMENTAL)"]`
+- Opt-out or escape hatch, skipped when a marker file is present or in CI: `predicates = ["not(path_exists(.skip-hooks))", "not(env(CI))"]`
+- A tool packaged under different names across distros: `predicates = ["any(path_exists(fd), path_exists(fdfind))"]`
+- A dependency gate that also requires an env flag (vs. the bare `depends-on = ["serde"]`): `predicates = ["all(depends-on(serde), env(USE_SERDE))"]`
+- Only when a dependency is absent (impossible with `depends-on`): `predicates = ["not(depends-on(legacy-thing))"]`
 
 These are equivalent — `depends-on` is just the terse form for the common case:
 

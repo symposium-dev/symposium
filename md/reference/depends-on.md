@@ -1,6 +1,8 @@
 # Dependency predicates (`depends-on`)
 
-Dependency predicates control when plugins, skill groups, and individual skills are active. A predicate matches against a **workspace's direct dependency set** — not against individual packages in isolation. Today the dependency set is the workspace's cargo dependency graph; a `depends-on` atom matches a direct dependency by name.
+Dependency predicates control when plugins and their components are active. A predicate matches against a **workspace's direct dependency set**, not against individual packages in isolation. Today the dependency set is the workspace's cargo dependency graph; a `depends-on` atom matches a direct dependency by name.
+
+The `depends-on` field is accepted on the plugin itself, on `[[skills]]` groups, `[[mcp_servers]]` entries, `[[plugins]]` edges, and `[subcommand.<name>]` tables (see [Plugin definitions](./plugin-definition.md)), and in [SKILL.md frontmatter](./skill-definition.md). `[[hooks]]` and `[[predicate]]` entries have no `depends-on` field; gate a hook on a dependency with `predicates = ["depends-on(serde)"]`.
 
 The `depends-on` field is shorthand: `depends-on = ["serde", "tokio"]` lowers to a single `any(depends-on(serde), depends-on(tokio))` predicate and is merged into the same list as the [`predicates`](./predicates.md) field (ANDed together). Everything below describes the dependency-atom syntax `depends-on` accepts; the equivalent `depends-on(<atom>)` predicate is also usable directly in `predicates`.
 
@@ -26,13 +28,21 @@ Semantics:
 - `==1.0.219`: exact-version matching
 - `*`: wildcard — always matches, even a workspace with zero dependencies
 
+> **`=` is not Cargo's `=`.** In a dependency atom, `=1.0` means `^1.0` (1.0 or any later 1.x release), which is what a bare `1.0` means in Cargo. To pin an exact version, use `==`: `serde==1.0.219` matches only 1.0.219.
+
+Further rules:
+
+- Write the atom without spaces. `serde >=1.0` is rejected; write `serde>=1.0`.
+- Names match exactly, as the crate is published: a `serde-json` atom does not match the `serde_json` crate.
+- In TOML, an atom may carry a comma-separated range, every part of which must hold: `"serde>=1.0,<2.0"`. SKILL.md frontmatter splits `depends-on` on commas, so a range cannot be written there; use `predicates: depends-on(serde>=1.0,<2.0)` instead.
+
 Predicates match against **direct** workspace dependencies only, not transitive ones.
 
 ## Usage in different contexts
 
 ### Plugin manifests (TOML)
 
-The `depends-on` field accepts an array of atom strings:
+The `depends-on` field accepts a single atom string or an array of them:
 
 - `depends-on = ["serde"]`
 - `depends-on = ["serde", "tokio>=1.40"]`
@@ -57,6 +67,4 @@ If there are multiple `depends-on` declarations in scope, all of them must match
 
 `depends-on` is purely a gate — it decides *whether* an item activates, not which crate to fetch. To load a crate's own skills, name that crate explicitly in a [`[[plugins]]` chained reference](./plugin-definition.md#chained-plugins) (`source.cargo = "..."`), gating the edge with `depends-on` as usual.
 
-## Migration from `crates`
-
-`depends-on` replaces the former `crates` field and `crate(...)` predicate (renamed as part of the [registry-centric plugin distribution RFD](../rfds/registry-centric-plugins/README.md), which generalizes dependency matching beyond cargo). The old spellings are rejected at parse time with a migration hint — the atom syntax itself is unchanged, so migrating is a mechanical rename.
+The `crates` field (in manifests and in SKILL.md frontmatter) and the `crate(...)` predicate are rejected; use `depends-on`.
