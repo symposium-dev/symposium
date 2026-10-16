@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/symposium-dev/symposium/compare/symposium-v0.5.1...symposium-v0.6.0) - 2026-10-16
+
+### Added
+
+- preserve telemetry day high-water state
+- load and replace private telemetry state
+- atomically replace telemetry files
+- add exclusive telemetry storage access
+- [**breaking**] rename SYMPOSIUM.toml to Symposium.toml
+- cap daily public plugin hook aggregates
+- add private state for hook aggregates
+- record extension invocation aggregates
+- *(telemetry)* define extension invocation metric rows
+- *(telemetry)* admit extension invocation aggregates
+- *(telemetry)* define invocation attribution inputs
+- track extension invocation sessions independently
+- *(telemetry)* define safe skill attribution
+- *(telemetry)* update plugin hook metrics atomically
+- *(telemetry)* define plugin hook metric rows
+- *(telemetry)* update hook metrics atomically
+- *(telemetry)* define hook metric rows
+- *(telemetry)* bind low-volume rows to recording transitions
+- *(telemetry)* define eligible command identities
+- *(telemetry)* bind session rows to one state transition
+- *(telemetry)* define extension resolution rows
+- *(telemetry)* bind subjects to typed recording scopes
+- *(telemetry)* define package resolution rows
+- *(telemetry)* define resolution summary rows
+- *(telemetry)* define agent recording rows
+- *(telemetry)* model the private identity lifecycle
+- *(telemetry)* implement scoped telemetry identities
+- *(telemetry)* define the common recording schema
+
+### Fixed
+
+- *(test)* use canonical plugin manifest names
+- *(skills)* reject skill names that are not plain directory names
+- *(book)* drop duplicated md/ from edit link
+- *(crate-sources)* find binary-only crates missing from cargo metadata
+- *(hook)* deliver plugin tool decisions to every agent
+- *(telemetry)* reconcile failed invocation observations
+- *(telemetry)* reconcile aggregate schemas after rebase
+- *(telemetry)* derive resolution session identifiers
+- *(telemetry)* carry Antigravity into identity labels
+- *(telemetry)* redact private state parse errors
+- *(telemetry)* record Antigravity instead of Gemini
+
+### Other
+
+- Merge pull request #306 from Fluzko/fix/hook-tool-decisions
+- Merge pull request #324 from Fluzko/fix/skill-name-path-traversal
+- Merge pull request #316 from Fluzko/symposium-toml-rename
+- Merge branch 'main' into telemetry/recording-core
+- Fix link to reference in install and about chapter
+- bind plugin hook rows to private aggregate state
+- separate plugin hook attribution from admission
+- share telemetry day rollover logic
+- *(telemetry)* split aggregate metric modules
+- *(telemetry)* share strict row decoding
+- *(telemetry)* separate schema and state modules
+- *(telemetry)* prepare the recording contract for implementation
+
 ## [0.5.1](https://github.com/symposium-dev/symposium/compare/symposium-v0.5.0...symposium-v0.5.1) - 2026-10-01
 
 ### Other

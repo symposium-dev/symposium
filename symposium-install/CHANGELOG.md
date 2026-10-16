@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/symposium-dev/symposium/compare/symposium-install-v0.1.1...symposium-install-v0.1.2) - 2026-10-16
+
+### Fixed
+
+- *(install)* create git cache dir before copying fetched source
+
 ## [0.1.1](https://github.com/symposium-dev/symposium/compare/symposium-install-v0.1.0...symposium-install-v0.1.1) - 2026-10-01
 
 ### Other
