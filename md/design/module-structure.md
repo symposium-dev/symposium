@@ -262,13 +262,22 @@ errors, so malformed state can never expose the identity key in diagnostics.
 Storage acquisition also tightens a pre-existing telemetry directory and lock
 file to owner-only modes on Unix instead of relying only on their creation
 modes. `storage/atomic.rs` writes a complete byte buffer through a
-same-directory temporary file before atomically replacing its destination; it
-does not fsync, and callers must finish serialization before replacement. Every
-telemetry-owned temporary uses the shared `.telemetry-tmp-` prefix so lazy
-cleanup and status recognize the same namespace. Activating the replacement
-recorder must remove the legacy `record` and `roll_off` paths in the same
-change, so two schemas and retention policies never share the telemetry
-directory.
+temporary file in the telemetry directory before atomically replacing its
+destination. This keeps both private-state and snapshot temporaries under the
+locked cleanup root and requires the config and telemetry directories to share
+a filesystem. Replacement does not fsync, and callers must finish serialization
+before it starts. Every telemetry-owned temporary uses the shared
+`.telemetry-tmp-` prefix.
+
+`storage/maintenance.rs` consumes a due token released only after private state
+has persisted and publication has been attempted. One non-recursive scan removes
+D31 event and metric files plus abandoned replacement temporaries, ignores
+directories, symlinks, and unknown names, and continues after individual
+inspection or removal failures. Private state records the last accepted day on
+which maintenance was attempted, limiting the scan to once per accepted day;
+the marker records an attempt rather than success. Activating the replacement
+recorder must remove the legacy `record` and `roll_off` paths in the same change,
+so two schemas and retention policies never share the telemetry directory.
 
 `LockedStorage` owns both the canonical paths and `TelemetryLock`, so private
 state cannot be loaded or replaced outside the lock. It is generic over a

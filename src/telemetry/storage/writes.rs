@@ -62,7 +62,11 @@ impl RecordingWrites for FsWrites {
         access: RecordingWriteAccess<'_>,
         bytes: &[u8],
     ) -> Result<(), AtomicReplaceError> {
-        atomic::replace(access.paths.state_file(), bytes)
+        atomic::replace(
+            access.paths.telemetry_dir(),
+            access.paths.state_file(),
+            bytes,
+        )
     }
 
     fn append_event_batch(
@@ -78,7 +82,11 @@ impl RecordingWrites for FsWrites {
         access: RecordingWriteAccess<'_>,
         snapshot: &PreparedMetricSnapshot,
     ) -> Result<(), AtomicReplaceError> {
-        metrics::replace_metric_snapshot(&access.paths.metrics_file(snapshot.day()), snapshot)
+        metrics::replace_metric_snapshot(
+            access.paths.telemetry_dir(),
+            &access.paths.metrics_file(snapshot.day()),
+            snapshot,
+        )
     }
 }
 
@@ -228,6 +236,7 @@ mod tests {
         let writes = TestWrites::default();
         let observed = writes.clone();
         let mut storage = LockedStorage::try_acquire_with_writer(temporary.path(), writes).unwrap();
+        assert!(storage.paths.telemetry_dir().is_dir());
         let state = state();
         let events = event_batch();
         let metrics = metric_snapshot();

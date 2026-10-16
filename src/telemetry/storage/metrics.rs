@@ -545,10 +545,11 @@ impl<Writer: RecordingWrites> LockedStorage<Writer> {
 }
 
 pub(super) fn replace_metric_snapshot(
+    temporary_directory: &Path,
     path: &Path,
     prepared: &PreparedMetricSnapshot,
 ) -> Result<(), AtomicReplaceError> {
-    atomic::replace(path, &prepared.bytes)
+    atomic::replace(temporary_directory, path, &prepared.bytes)
 }
 
 /// Event-file facts consumed by the pure metric-size policy.

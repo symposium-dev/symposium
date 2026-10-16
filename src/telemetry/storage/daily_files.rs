@@ -28,7 +28,7 @@ pub(super) fn newest_day(directory: &Path) -> io::Result<Option<UtcDay>> {
     Ok(newest)
 }
 
-fn file_day(file_name: &OsStr) -> Option<UtcDay> {
+pub(super) fn file_day(file_name: &OsStr) -> Option<UtcDay> {
     let file_name = file_name.to_str()?;
     let day = DAILY_FILE_PREFIXES
         .iter()
