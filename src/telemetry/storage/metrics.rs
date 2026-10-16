@@ -10,10 +10,10 @@
 //! even when canonical sorting moves their position. A total wire-label key,
 //! ending in `event_id`, removes arrival order from the metric file.
 //!
-//! These crate-internal publication primitives temporarily rely on callers to
-//! select policy before writing. The transaction layer will carry selected
-//! event and metric bytes inside `PersistedRecording`, making publication
-//! require proof that their private state was replaced successfully.
+//! These storage-private publication primitives temporarily rely on their
+//! caller to select policy before writing. The recording transaction will
+//! become their sole caller and will replace private state before attempting
+//! either public write.
 
 use std::{
     collections::BTreeMap,
@@ -21,6 +21,7 @@ use std::{
     fmt,
     fs::File,
     io::{self, Read as _},
+    path::Path,
 };
 
 use crate::telemetry::schema::{
@@ -28,7 +29,7 @@ use crate::telemetry::schema::{
 };
 
 use super::{
-    LockedStorage,
+    LockedStorage, RecordingWriteAccess, RecordingWrites,
     atomic::{self, AtomicReplaceError},
     limits::{
         DAILY_STORAGE_ALLOWANCE_BYTES, EventFileUsage, inspect_event_file,
@@ -380,10 +381,10 @@ impl From<io::Error> for LoadMetricSnapshotError {
 }
 
 /// Selected action for the aggregate metric file.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use]
 pub(in crate::telemetry) enum MetricWrite {
-    Replace(PreparedMetricSnapshot),
+    Replace,
     Suppressed(MetricSuppression),
 }
 
@@ -411,7 +412,7 @@ impl Error for ReplaceMetricSnapshotError {
     }
 }
 
-impl LockedStorage {
+impl<Writer> LockedStorage<Writer> {
     /// Load one complete aggregate snapshot without discarding unknown bytes.
     ///
     /// Missing and empty files produce an empty snapshot. Every non-empty
@@ -488,9 +489,9 @@ impl LockedStorage {
     ///
     /// Event bytes are measured after the event side has published. A closed
     /// event day needs neither a repair byte nor a future marker reservation.
-    pub(in crate::telemetry) fn plan_metric_write(
+    pub(super) fn plan_metric_write(
         &self,
-        prepared: PreparedMetricSnapshot,
+        prepared: &PreparedMetricSnapshot,
         stopped_day: Option<UtcDay>,
     ) -> MetricWrite {
         if prepared.byte_len() > MAX_METRIC_SNAPSHOT_BYTES {
@@ -517,20 +518,31 @@ impl LockedStorage {
             prepared,
         )
     }
+}
 
+impl<Writer: RecordingWrites> LockedStorage<Writer> {
     /// Atomically replace one fully prepared aggregate snapshot.
     ///
     /// # Errors
     ///
     /// Returns the atomic replacement failure. Serialization and size policy
     /// have already completed before this method creates a temporary file.
-    pub(in crate::telemetry) fn replace_metric_snapshot(
+    pub(super) fn replace_metric_snapshot(
         &mut self,
         prepared: &PreparedMetricSnapshot,
     ) -> Result<(), ReplaceMetricSnapshotError> {
-        atomic::replace(&self.paths.metrics_file(prepared.day), &prepared.bytes)
+        let access = RecordingWriteAccess::new(&self.paths);
+        self.writer
+            .replace_metric_snapshot(access, prepared)
             .map_err(ReplaceMetricSnapshotError)
     }
+}
+
+pub(super) fn replace_metric_snapshot(
+    path: &Path,
+    prepared: &PreparedMetricSnapshot,
+) -> Result<(), AtomicReplaceError> {
+    atomic::replace(path, &prepared.bytes)
 }
 
 /// Event-file facts consumed by the pure metric-size policy.
@@ -557,7 +569,7 @@ fn select_metric_write(
     usage: MetricStorageUsage,
     marker_reservation: u64,
     stopped_day: Option<UtcDay>,
-    prepared: PreparedMetricSnapshot,
+    prepared: &PreparedMetricSnapshot,
 ) -> MetricWrite {
     if prepared.byte_len() > MAX_METRIC_SNAPSHOT_BYTES {
         return MetricWrite::Suppressed(MetricSuppression::SnapshotTooLarge);
@@ -583,7 +595,7 @@ fn select_metric_write(
         .saturating_add(snapshot_bytes);
 
     if total <= allowance {
-        MetricWrite::Replace(prepared)
+        MetricWrite::Replace
     } else {
         MetricWrite::Suppressed(MetricSuppression::DailyAllowanceExceeded)
     }

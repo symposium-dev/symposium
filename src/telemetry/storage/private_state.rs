@@ -9,9 +9,7 @@ use std::{
 };
 
 use super::{
-    LockedStorage,
-    atomic::{self, AtomicReplaceError},
-    daily_files,
+    LockedStorage, RecordingWriteAccess, RecordingWrites, atomic::AtomicReplaceError, daily_files,
 };
 use crate::telemetry::schema::UtcDay;
 use crate::telemetry::state::{
@@ -137,7 +135,7 @@ impl Error for ReplaceStateError {
     }
 }
 
-impl LockedStorage {
+impl<Writer> LockedStorage<Writer> {
     /// Load and validate private state without retaining sensitive diagnostics.
     ///
     /// # Errors
@@ -180,8 +178,11 @@ impl LockedStorage {
             .map_or(current_day, |newest| current_day.max(newest));
         TelemetryStateV1::new(initial_day).map_err(OpenStateError::GenerateIdentityKey)
     }
+}
 
-    /// Serialize completely, then atomically replace private state.
+impl<Writer: RecordingWrites> LockedStorage<Writer> {
+    /// Serialize completely, then replace private state through the locked
+    /// whole-operation writer.
     ///
     /// Mutable access keeps two replacements from overlapping under one held
     /// lock. The replacement is atomic but intentionally not crash-durable.
@@ -189,12 +190,14 @@ impl LockedStorage {
     /// # Errors
     ///
     /// Returns the serialization or atomic replacement stage that failed.
-    pub(in crate::telemetry) fn replace_state(
+    pub(super) fn replace_state(
         &mut self,
         state: &TelemetryStateV1,
     ) -> Result<(), ReplaceStateError> {
         let serialized = encode(state).map_err(ReplaceStateError::Encode)?;
-        atomic::replace(self.paths.state_file(), serialized.as_bytes())
+        let access = RecordingWriteAccess::new(&self.paths);
+        self.writer
+            .replace_private_state(access, serialized.as_bytes())
             .map_err(ReplaceStateError::Replace)
     }
 }
@@ -231,11 +234,11 @@ mod tests {
             IDENTIFIER_WINDOW_TEST_STATE, RecordingObservationError, StateContentError,
             TelemetryStateV1, encode,
         },
-        storage::LockedStorage,
+        storage::Storage,
     };
 
-    fn storage(temporary: &tempfile::TempDir) -> LockedStorage {
-        LockedStorage::try_acquire(temporary.path()).unwrap()
+    fn storage(temporary: &tempfile::TempDir) -> Storage {
+        Storage::try_acquire(temporary.path()).unwrap()
     }
 
     fn day(year: i32, month: u32, day: u32) -> UtcDay {

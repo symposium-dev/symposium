@@ -269,10 +269,16 @@ change, so two schemas and retention policies never share the telemetry
 directory.
 
 `LockedStorage` owns both the canonical paths and `TelemetryLock`, so private
-state cannot be loaded or replaced outside the lock. Its `private_state.rs`
-child performs a bounded byte read, distinguishes TOML syntax errors, invalid
-state content, and unsupported versions without retaining parser source text,
-serializes the complete state before replacement, and requires mutable access
+state cannot be loaded or replaced outside the lock. It is generic over a
+complete-write adapter, while the production `Storage` alias uses `FsWrites`.
+Its `writes.rs` child keeps the storage-private `RecordingWrites` seam over
+complete private-state replacements, event-batch appends, and metric-snapshot
+replacements. Only locked storage can construct the access value that supplies
+their canonical destinations; the recording transaction owns their ordering.
+Its `private_state.rs` child performs a bounded byte read, distinguishes TOML
+syntax errors, invalid state content, and unsupported versions without
+retaining parser source text, serializes the complete state before replacement,
+and requires mutable access
 to replace it. Its `daily_files.rs` sibling recognizes only canonical event
 and metric filenames. Its `events.rs` sibling validates one-day low-volume
 batches, serializes every row before filesystem access, and appends them in one
