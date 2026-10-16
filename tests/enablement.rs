@@ -7,27 +7,8 @@ use symposium::output::Output;
 use symposium::status_command::StatusState;
 use symposium_testlib::{HookStep, TestContext, TestMode, with_fixture};
 
-/// Every installed skill directory under `parent` named `<skill_name>` or
-/// `<skill_name>-<hash>`.
 fn find_installed_skills(parent: &Path, skill_name: &str) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(parent) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        let matches = name == skill_name
-            || (name.starts_with(skill_name)
-                && name.as_bytes().get(skill_name.len()) == Some(&b'-'));
-        if matches && path.join("SKILL.md").is_file() {
-            out.push(path);
-        }
-    }
-    out.sort();
-    out
+    symposium_testlib::find_installed_skills(&[parent.to_path_buf()], skill_name)
 }
 
 /// The unique installed skill directory with this name. Panics on 0 or >1.

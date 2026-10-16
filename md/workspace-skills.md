@@ -2,7 +2,7 @@
 
 In addition to adding skills based on your dependencies, Symposium will also install skills your workspace defines for itself: skills found in `skills/` or `.agents/skills` in the workspace root or any member crate install into the directory appropriate for your configured agent(s).
 
-This allows your project to add skills in one central location that will work for all developers, regardless of which agent they use (for example, Claude Code users will have the skills synced to `.claude/skills`).
+This allows your project to add skills in one central location that will work for all developers, regardless of which agent they use (for example, Claude Code users get each workspace plugin below as a plugin in `.claude/skills/<plugin>/`, and invoke its skills as `/<plugin>:<skill>`).
 
 The default skill location therefore varies depending on the intended audience:
 
@@ -43,7 +43,7 @@ Workspace skills are your own notes, so the [skill frontmatter](./reference/skil
 
 ## Recommended git setup
 
-We recommend you commit your `.agents/skills` or `skills/` into the repository. Symposium installs a `.gitignore` file into every skill that it creates, so automatically copied and installed skills should not dirty your git status.
+We recommend you commit your `.agents/skills` or `skills/` into the repository. Symposium installs a `.gitignore` file into every skill and plugin directory that it creates, and into the `.symposium/` directory where it compiles the project's plugins, so automatically copied and installed skills should not dirty your git status.
 
 ## Pre-existing files
 

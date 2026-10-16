@@ -11,31 +11,8 @@ fn read_user_config(ctx: &symposium_testlib::TestContext) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|_| "(not found)".to_string())
 }
 
-/// Locate every installed skill directory under `parent` whose name is
-/// `<skill_name>` or `<skill_name>-<hash>`. Sync embeds an origin-derived
-/// hash in the directory name to keep distinct origins from colliding.
 fn find_installed_skills(parent: &Path, skill_name: &str) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(parent) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-            continue;
-        };
-        let matches = name == skill_name
-            || (name.starts_with(skill_name)
-                && name.as_bytes().get(skill_name.len()) == Some(&b'-'));
-        if matches && path.join("SKILL.md").is_file() {
-            out.push(path);
-        }
-    }
-    out.sort();
-    out
+    symposium_testlib::find_installed_skills(&[parent.to_path_buf()], skill_name)
 }
 
 /// Locate the unique installed skill directory by name. Panics if 0 or
@@ -143,11 +120,11 @@ async fn sync_installs_workspace_plugin_skills() {
         TestMode::SimulationOnly,
         &["workspace-plugin0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-            let skills_dir = workspace_root.join(".claude/skills");
+            let skills_dir = workspace_root.join(".agents/skills");
             let skill_dir = find_installed_skill(&skills_dir, "ws-hello");
             assert!(
                 skill_dir.join(".symposium").exists(),
@@ -222,11 +199,11 @@ async fn sync_installs_skills() {
         TestMode::SimulationOnly,
         &["plugins0", "workspace0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-            let skills_dir = workspace_root.join(".claude/skills");
+            let skills_dir = workspace_root.join(".agents/skills");
 
             let skill_dir = find_installed_skill(&skills_dir, "serde-guidance");
 
@@ -257,7 +234,7 @@ async fn sync_installs_skills() {
                 "unexpected .gitignore content at {}",
                 gi.display()
             );
-            // Parent directories (e.g. `.claude/skills/`) should NOT get a
+            // Parent directories (e.g. `.agents/skills/`) should NOT get a
             // gitignore — they are shared namespace directories.
             assert!(
                 !skills_dir.join(".gitignore").exists(),
@@ -597,11 +574,11 @@ async fn sync_installs_skill_from_crate_path() {
         TestMode::SimulationOnly,
         &["crate-path0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-            let skills_dir = workspace_root.join(".claude/skills");
+            let skills_dir = workspace_root.join(".agents/skills");
 
             // crate-x: default path via source = "crate"
             let x_dir = find_installed_skill(&skills_dir, "x-guidance");
@@ -633,11 +610,11 @@ async fn auto_enable_admits_a_dependencys_embedded_skills() {
         TestMode::SimulationOnly,
         &["auto-enable0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.clone().unwrap();
-            let skills_dir = workspace_root.join(".claude/skills");
+            let skills_dir = workspace_root.join(".agents/skills");
             assert!(
                 find_installed_skills(&skills_dir, "a-guidance").is_empty(),
                 "an unconsented dependency plugin must not install anything"
@@ -690,8 +667,13 @@ async fn dormant_plugin_activates_only_once_used() {
             ctx.sym.save_config()?;
             ctx.symposium(&["sync"]).await?;
 
-            let dir = find_installed_skill(&skills_dir, "gateless-guidance");
-            assert!(dir.join(".symposium").exists());
+            let user_plugin = ctx.sym.home_dir().join(".claude/skills/gateless-plugin");
+            let dir = symposium_testlib::find_installed_skill(
+                &[skills_dir, ctx.sym.home_dir().join(".claude/skills")],
+                "gateless-guidance",
+            );
+            assert_eq!(dir, user_plugin.join("skills/gateless-guidance"));
+            assert!(user_plugin.join(".symposium").exists());
             Ok(())
         },
     )
@@ -715,11 +697,11 @@ async fn sync_installs_skill_via_chained_plugin() {
         TestMode::SimulationOnly,
         &["chained-crate0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-            let skills_dir = workspace_root.join(".claude/skills");
+            let skills_dir = workspace_root.join(".agents/skills");
 
             let w_dir = find_installed_skill(&skills_dir, "w-guidance");
             let content = std::fs::read_to_string(w_dir.join("SKILL.md"))?;
@@ -751,11 +733,11 @@ async fn sync_installs_skill_via_crate_manifest() {
         TestMode::SimulationOnly,
         &["crate-manifest0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-            let skills_dir = workspace_root.join(".claude/skills");
+            let skills_dir = workspace_root.join(".agents/skills");
 
             let m_dir = find_installed_skill(&skills_dir, "m-guidance");
             let content = std::fs::read_to_string(m_dir.join("SKILL.md"))?;
@@ -949,17 +931,25 @@ async fn sync_installations_are_gitignored() {
                 skill_dir.join("SKILL.md").exists(),
                 "skill should be installed on disk"
             );
+            let plugin_dir = workspace_root.join(".claude/skills/serde-guidance");
             assert!(
-                skill_dir.join(".symposium").exists(),
+                plugin_dir.join(".symposium").exists(),
                 "marker should be on disk"
+            );
+            assert!(
+                workspace_root
+                    .join(".symposium/plugins/serde-guidance")
+                    .is_dir(),
+                "the compiled plugin should be on disk"
             );
 
             // Use `-uall` so untracked dirs expand to their leaf paths —
             // gives deterministic output regardless of git's collapsing rules.
             let status = git(&["status", "--porcelain", "-uall"])?;
 
-            // Skill dirs are fully gitignored by the wildcard `.gitignore`
-            // symposium drops into them, so they don't appear here.
+            // Skill, plugin and `.symposium/` dirs are fully gitignored by the
+            // wildcard `.gitignore` symposium drops into them, so they don't
+            // appear here.
             //
             // `.claude/settings.json` does appear: the `plugins0` fixture
             // sets `hook-scope = "project"`, so init+sync register hooks
@@ -992,12 +982,12 @@ async fn sync_dedups_same_crate_origin_across_plugins() {
         TestMode::SimulationOnly,
         &["dedup-crate-origin0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
             let installed = find_installed_skills(
-                &workspace_root.join(".claude/skills"),
+                &workspace_root.join(".agents/skills"),
                 "code-review",
             );
             assert_eq!(
@@ -1034,12 +1024,12 @@ async fn sync_dedups_same_source_path_across_plugins() {
         TestMode::SimulationOnly,
         &["dedup-source-origin0", "workspace0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
             let installed = find_installed_skills(
-                &workspace_root.join(".claude/skills"),
+                &workspace_root.join(".agents/skills"),
                 "shared-skill",
             );
             assert_eq!(
@@ -1069,12 +1059,12 @@ async fn sync_keeps_distinct_plugin_origins_with_same_skill_name() {
         TestMode::SimulationOnly,
         &["distinct-plugin-origins0", "workspace0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
             let installed = find_installed_skills(
-                &workspace_root.join(".claude/skills"),
+                &workspace_root.join(".agents/skills"),
                 "code-review",
             );
             assert_eq!(
@@ -1119,7 +1109,7 @@ async fn sync_demotes_to_suffixed_when_conflict_appears() {
         TestMode::SimulationOnly,
         &["distinct-plugin-origins0", "workspace0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
 
             // Park plugin-b *outside* any plugin source dir so it isn't
             // discovered. (`tempdir/` sits next to the user config root,
@@ -1132,7 +1122,7 @@ async fn sync_demotes_to_suffixed_when_conflict_appears() {
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.clone().unwrap();
-            let skills_dir = workspace_root.join(".claude/skills");
+            let skills_dir = workspace_root.join(".agents/skills");
 
             // Baseline: only plugin-a's `code-review` is visible, so it
             // takes the plain slot.
@@ -1193,11 +1183,11 @@ async fn sync_promotes_to_unsuffixed_when_conflict_disappears() {
         TestMode::SimulationOnly,
         &["distinct-plugin-origins0", "workspace0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.clone().unwrap();
-            let skills_dir = workspace_root.join(".claude/skills");
+            let skills_dir = workspace_root.join(".agents/skills");
 
             // Baseline: two origins, both suffixed, neither at the
             // plain slot.
@@ -1247,12 +1237,12 @@ async fn sync_falls_back_to_hashed_name_when_user_dir_in_the_way() {
         TestMode::SimulationOnly,
         &["plugins0", "workspace0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "kiro"]).await?;
 
             let workspace_root = ctx.workspace_root.clone().unwrap();
             // Plant a user-managed dir at the slot symposium would
             // normally pick. No `.symposium` marker → user-owned.
-            let user_dir = workspace_root.join(".claude/skills/serde-guidance");
+            let user_dir = workspace_root.join(".kiro/skills/serde-guidance");
             std::fs::create_dir_all(&user_dir)?;
             std::fs::write(user_dir.join("SKILL.md"), "user content")?;
 
@@ -1273,7 +1263,7 @@ async fn sync_falls_back_to_hashed_name_when_user_dir_in_the_way() {
             // matching directory shape; the suffix variant is the only
             // one that should carry the marker.
             let installed =
-                find_installed_skills(&workspace_root.join(".claude/skills"), "serde-guidance");
+                find_installed_skills(&workspace_root.join(".kiro/skills"), "serde-guidance");
             let hashed: Vec<_> = installed
                 .iter()
                 .filter(|p| p.join(".symposium").exists())
@@ -1371,16 +1361,16 @@ async fn sync_keeps_distinct_standalone_origins_at_different_paths() {
 // ---------------------------------------------------------------------------
 
 /// User-authored skills in `.agents/skills/` are propagated to agents that
-/// read skills from a different directory (e.g. Claude → `.claude/skills/`).
+/// read skills from a different directory (e.g. Kiro -> `.kiro/skills/`).
 /// Companion files next to `SKILL.md` are copied too, and the destination
 /// receives a `.symposium` marker so future syncs recognize it as managed.
 #[tokio::test]
-async fn agents_syncing_propagates_user_authored_skill_to_claude() {
+async fn agents_syncing_propagates_user_authored_skill() {
     with_fixture(
         TestMode::SimulationOnly,
         &["plugins0", "workspace0", "user-skills0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "kiro"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
@@ -1396,7 +1386,7 @@ async fn agents_syncing_propagates_user_authored_skill_to_claude() {
 
             // Propagated copy exists with SKILL.md, companion files, marker,
             // and wildcard gitignore.
-            let dest = workspace_root.join(".claude/skills/user-authored-skill");
+            let dest = workspace_root.join(".kiro/skills/user-authored-skill");
             assert!(dest.join("SKILL.md").exists(), "SKILL.md propagated");
             assert!(
                 dest.join("REFERENCE.md").exists(),
@@ -1460,14 +1450,14 @@ async fn agents_syncing_disabled_skips_propagation() {
         TestMode::SimulationOnly,
         &["plugins0", "workspace0", "user-skills0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "kiro"]).await?;
             ctx.sym.config.agents_syncing = false;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
             assert!(
                 !workspace_root
-                    .join(".claude/skills/user-authored-skill")
+                    .join(".kiro/skills/user-authored-skill")
                     .exists(),
                 "propagation should not occur when agents-syncing is disabled"
             );
@@ -1487,11 +1477,11 @@ async fn agents_syncing_cleans_up_removed_user_skill() {
         TestMode::SimulationOnly,
         &["plugins0", "workspace0", "user-skills0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "kiro"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.clone().unwrap();
-            let propagated = workspace_root.join(".claude/skills/user-authored-skill");
+            let propagated = workspace_root.join(".kiro/skills/user-authored-skill");
             assert!(propagated.exists(), "first sync should propagate");
             assert!(propagated.join(".symposium").exists());
 
@@ -1519,11 +1509,11 @@ async fn agents_syncing_disabling_removes_previously_propagated_skills() {
         TestMode::SimulationOnly,
         &["plugins0", "workspace0", "user-skills0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "kiro"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.clone().unwrap();
-            let propagated = workspace_root.join(".claude/skills/user-authored-skill");
+            let propagated = workspace_root.join(".kiro/skills/user-authored-skill");
             assert!(propagated.exists(), "first sync should propagate");
 
             ctx.sym.config.agents_syncing = false;
@@ -1579,12 +1569,12 @@ async fn agents_syncing_does_not_overwrite_user_managed_target() {
         TestMode::SimulationOnly,
         &["plugins0", "workspace0", "user-skills0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "kiro"]).await?;
 
             let workspace_root = ctx.workspace_root.clone().unwrap();
 
             // Pre-existing, user-managed file in the target with the same name.
-            let target_dir = workspace_root.join(".claude/skills/user-authored-skill");
+            let target_dir = workspace_root.join(".kiro/skills/user-authored-skill");
             std::fs::create_dir_all(&target_dir)?;
             let preexisting = target_dir.join("SKILL.md");
             std::fs::write(&preexisting, "pre-existing user content")?;
@@ -1606,7 +1596,7 @@ async fn agents_syncing_does_not_overwrite_user_managed_target() {
 }
 
 /// Modifying a user-authored skill in `.agents/skills/` is detected on the
-/// next sync and propagated to the destination (e.g. `.claude/skills/`).
+/// next sync and propagated to the destination (e.g. `.kiro/skills/`).
 #[tokio::test]
 async fn agents_syncing_detects_modified_source_skill() {
     with_fixture(
@@ -1614,12 +1604,12 @@ async fn agents_syncing_detects_modified_source_skill() {
         &["plugins0", "workspace0", "user-skills0"],
         async |mut ctx| {
             ctx.sym.config.sync_debounce_secs = 0;
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "kiro"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
             let source = workspace_root.join(".agents/skills/user-authored-skill/SKILL.md");
-            let dest = workspace_root.join(".claude/skills/user-authored-skill/SKILL.md");
+            let dest = workspace_root.join(".kiro/skills/user-authored-skill/SKILL.md");
 
             // Sanity: initial propagation worked.
             assert!(dest.exists(), "skill should be propagated on first sync");
@@ -2183,11 +2173,11 @@ async fn auto_sync_always_runs_on_session_start() {
             }];
             ctx.prompt_or_hook("test", &pre_tool, symposium::hook_schema::HookAgent::Claude)
                 .await?;
-            let skill_dir = find_installed_skill(&skills_dir, "serde-guidance");
+            find_installed_skill(&skills_dir, "serde-guidance");
 
             // The gate is now fresh (Cargo.lock unchanged): a PreToolUse hook
             // would skip sync. Remove the skill so we can observe a re-sync.
-            std::fs::remove_dir_all(&skill_dir).unwrap();
+            std::fs::remove_dir_all(&skills_dir).unwrap();
             assert!(
                 find_installed_skills(&skills_dir, "serde-guidance").is_empty(),
                 "skill should be gone after removal"
@@ -2222,11 +2212,11 @@ async fn sync_installs_skill_from_named_crate_source() {
         TestMode::SimulationOnly,
         &["crate-path-named0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-            let skills_dir = workspace_root.join(".claude/skills");
+            let skills_dir = workspace_root.join(".agents/skills");
 
             let b_dir = find_installed_skill(&skills_dir, "b-guidance");
             let content = std::fs::read_to_string(b_dir.join("SKILL.md"))?;
@@ -2277,11 +2267,11 @@ async fn sync_crate_metadata_multihop_redirect() {
         TestMode::SimulationOnly,
         &["crate-path-multihop0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-            let skills_dir = workspace_root.join(".claude/skills");
+            let skills_dir = workspace_root.join(".agents/skills");
 
             let c_dir = find_installed_skill(&skills_dir, "c-guidance");
             let content = std::fs::read_to_string(c_dir.join("SKILL.md"))?;
@@ -2370,11 +2360,11 @@ async fn sync_crate_metadata_hyphen_underscore_cycle() {
         TestMode::SimulationOnly,
         &["crate-path-hyphen-cycle0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-            let skills_dir = workspace_root.join(".claude/skills");
+            let skills_dir = workspace_root.join(".agents/skills");
 
             // The path entry's skill should be installed.
             let foo_dir = find_installed_skill(&skills_dir, "foo-guidance");
@@ -2497,11 +2487,11 @@ async fn sync_crate_metadata_missing_path_dir() {
         TestMode::SimulationOnly,
         &["crate-path-missing-dir0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let workspace_root = ctx.workspace_root.as_ref().unwrap();
-            let skills_dir = workspace_root.join(".claude/skills");
+            let skills_dir = workspace_root.join(".agents/skills");
 
             let entries: Vec<_> = std::fs::read_dir(&skills_dir)
                 .into_iter()
@@ -2529,7 +2519,7 @@ async fn report_json_info_emits_installed_events() {
         TestMode::SimulationOnly,
         &["plugins0", "workspace0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             let events = ctx.sync_with_report(tracing::Level::INFO).await?;
 
             assert!(!events.is_empty(), "expected at least one report event");
@@ -2544,7 +2534,7 @@ async fn report_json_info_emits_installed_events() {
                 "expected at least one skill_installed event, got: {events:?}"
             );
             assert_eq!(installed[0]["skill"], "serde-guidance");
-            assert_eq!(installed[0]["agent"], "claude");
+            assert_eq!(installed[0]["agent"], "codex");
             assert!(
                 installed[0]["dest"]
                     .as_str()
@@ -2576,7 +2566,7 @@ async fn report_json_debug_emits_decision_events() {
         TestMode::SimulationOnly,
         &["plugins0", "workspace0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             let events = ctx.sync_with_report(tracing::Level::DEBUG).await?;
 
             // Should have skill_considered for serde-guidance (matched)
@@ -2618,7 +2608,7 @@ async fn report_json_shows_skipped_skills() {
         TestMode::SimulationOnly,
         &["plugins0", "workspace-empty0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             let events = ctx.sync_with_report(tracing::Level::DEBUG).await?;
 
             // The plugins0 fixture's serde-guidance is a bare skill, now a
@@ -2680,7 +2670,7 @@ async fn sync_follows_symlinks_in_skill_content() {
             symlink("no-such-file.txt", source.join("dangling.txt")).unwrap();
             symlink("../ws-hello", source.join("loop")).unwrap();
 
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             let events = ctx.sync_with_report(tracing::Level::INFO).await?;
             let installed: Vec<&Value> = events
                 .iter()
@@ -2699,7 +2689,7 @@ async fn sync_follows_symlinks_in_skill_content() {
                 "the dangling link should be reported, not silently dropped: {events:?}"
             );
 
-            let dest = find_installed_skill(&workspace_root.join(".claude/skills"), "ws-hello");
+            let dest = find_installed_skill(&workspace_root.join(".agents/skills"), "ws-hello");
 
             let lib = dest.join("lib.txt");
             assert!(

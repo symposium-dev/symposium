@@ -30,6 +30,28 @@ The consent prompt and the `use` / `search` / `status` commands that record deci
 
 The key code paths are in `discovery.rs`, `config.rs` (`PluginsConfig`, `UseEntry`), `pm/cargo/mod.rs` (`active_plugins`, `load_plugin`), `plugins.rs` (`PluginManifest::requires_use`), `predicate.rs` (`PredicateContext::is_used`), and `skills.rs` (`active_plugins`, `record_active`).
 
+## Global plugin delivery
+
+A plugin named by a `use --global` entry is installed for the user rather than copied into each project, on every agent that can take a plugin directory. It runs inside `sync`, so `cargo agents sync`, `use`, and the hook-triggered auto-sync all do it.
+
+1. `skills::collect_skills` stamps each applicable skill with the index of its plugin in the active set, and `sync` deduplicates the skills as before, the first plugin to reach a skill keeping it.
+2. `compile::plugins_by_scope` groups the deduplicated skills by plugin and keeps for the user the plugins `compile::installs_globally` accepts: named by a `[plugins] use` entry without a workspace (`PluginsConfig::is_used_globally`), and not workspace members. `hook-scope` is not consulted. The rest form the [project set](#project-plugin-delivery).
+3. `compile::compile` writes one Agent Plugins directory per plugin under `<config dir>/installed/`, writing only what changed and swapping it in by rename (`sync::sync_tree`), maintains the root's `.claude-plugin/marketplace.json`, and reaps the marked directories it did not compile (`sync::reap_unlisted`). It returns the `CompiledPlugin`s and the origins of the skills they carry.
+4. For each configured agent, `Agent::sync_user_plugins` hands it the compiled set; `true` means the agent installed it, and the per-skill loop skips those skills for that agent. Claude Code copies each directory into its user skills directory (`agents/plugin_registration/claude.rs`); the other agents' modules return `false` until their delivery lands.
+5. `sync::unregister_user_plugins` calls every unconfigured agent with an empty set, from `sync` and from `init`.
+
+The key code paths are in `compile.rs`, `agents/mod.rs` (`CompiledPlugin`, `Agent::sync_user_plugins`), `agents/plugin_registration/`, `sync.rs` (`sync`, `sync_tree`, `sync_plugin_dir`, `reap_unlisted`, `unregister_user_plugins`), `skills.rs` (`SkillWithGroupContext::plugin_index`), and `config.rs` (`PluginsConfig::is_used_globally`, `INSTALLED_PLUGINS_SUBDIR`, `Symposium::env_dir`).
+
+## Project plugin delivery
+
+Every other applicable plugin (registry plugins active by their own gate, workspace members, dependencies, workspace-scoped `use` entries) is compiled for the project in the same `sync`, and delivered as a plugin to the agents that can scope one to a project. Claude Code is the only one; every other agent keeps per-skill copies of these plugins' skills.
+
+1. The project set from `compile::plugins_by_scope` goes to `compile::compile_project`, which makes sure `<project>/.symposium/.gitignore` exists (containing `*`) and then runs the same `compile::compile` into the staging root `<project>/.symposium/plugins/` (`compile::project_plugins_root`). When the `.gitignore` cannot be written, it compiles nothing and every agent falls back to per-skill copies.
+2. For each configured agent, `Agent::sync_project_plugins` hands it that set, after `sync_user_plugins`. Claude Code copies each directory into `<project>/.claude/skills/<plugin>/` with `sync::sync_plugin_dir`, writes a `.gitignore` containing `*` inside it (`sync::ignore_in_git`), and reaps the marked plugin directories there that it did not deliver; the other agents return `false`. A `true` makes the per-skill loop skip those skills for that agent, and the stale-skill cleanup then removes the per-skill copies earlier syncs left.
+3. `sync` calls every unconfigured agent with an empty set, so their project plugins go on the project's next sync.
+
+The key code paths are in `compile.rs` (`plugins_by_scope`, `compile_project`, `project_plugins_root`), `agents/mod.rs` (`Agent::sync_project_plugins`), `agents/plugin_registration/claude.rs`, and `sync.rs` (`sync`, `ignore_in_git`, `has_symposium_marker`).
+
 ## Help rendering
 
 `cargo agents --help` (and `-h`, the bare `help` keyword, or no subcommand) is rendered by `help_render`, not by clap's default help.
