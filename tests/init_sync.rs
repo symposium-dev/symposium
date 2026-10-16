@@ -690,8 +690,13 @@ async fn dormant_plugin_activates_only_once_used() {
             ctx.sym.save_config()?;
             ctx.symposium(&["sync"]).await?;
 
-            let dir = find_installed_skill(&skills_dir, "gateless-guidance");
-            assert!(dir.join(".symposium").exists());
+            let user_plugin = ctx.sym.home_dir().join(".claude/skills/gateless-plugin");
+            let dir = symposium_testlib::find_installed_skill(
+                &[skills_dir, ctx.sym.home_dir().join(".claude/skills")],
+                "gateless-guidance",
+            );
+            assert_eq!(dir, user_plugin.join("skills/gateless-guidance"));
+            assert!(user_plugin.join(".symposium").exists());
             Ok(())
         },
     )

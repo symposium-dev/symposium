@@ -226,6 +226,87 @@ Registration is idempotent — if the entry already exists with the
 correct values, no changes are made. If the entry exists but has stale
 values (e.g. the binary moved), it is updated in place.
 
+## Plugin Delivery
+
+A plugin enabled with `use --global` reaches Codex CLI as Codex's own
+`codex plugin marketplace add` and `codex plugin add` would install it, with
+symposium writing the same files itself:
+
+```toml
+# ~/.codex/config.toml
+[marketplaces.symposium]
+source_type = "local"
+source = "/home/user/.symposium/installed"
+
+[plugins."<plugin>@symposium"]
+enabled = true
+```
+
+plus a copy of the compiled directory in Codex's plugin cache,
+`~/.codex/plugins/cache/symposium/<plugin>/<version>/`. All of it lives under
+`$CODEX_HOME` when that variable is set.
+
+- **Marketplace**: the staging root, whose `.claude-plugin/marketplace.json`
+  Codex reads. The entry exists only while that manifest does: a registered
+  local marketplace without one makes `codex plugin list` fail. A
+  `[marketplaces.symposium]` pointing anywhere else is someone else's, so
+  symposium installs nothing for Codex and keeps its per-skill copies.
+- **Enablement**: one `[plugins."<plugin>@symposium"]` per plugin. An existing
+  entry is kept as it is, so `enabled = false` written by `/plugins` stays,
+  and `<x>@symposium` entries for plugins no longer delivered are removed.
+- **Cache**: sessions load a plugin only from here, never from the marketplace
+  source, and Codex's own startup refresh recopies it only when the version
+  directory differs from the manifest version, which a same-version edit never
+  does. Codex loads the highest-sorting directory under `<plugin>/`, so
+  symposium swaps the whole `<plugin>/` directory, staged beside it, and leaves
+  exactly one version directory, named after the manifest version (`0.0.0`).
+  A copy Codex installed itself, with `codex plugin add` or its startup
+  refresh, has no `.symposium` marker in `<plugin>/`; the next sync takes it
+  back.
+
+The cache is written before its plugin is enabled, and enablement is removed
+before its cache, so a session starting mid-sync never sees an enabled plugin
+without its files. `config.toml` is edited in place with everything else
+preserved, written only when it changed, atomically, and through a symlink to
+its target, as Codex does. A file that does not parse is an error and stays
+untouched.
+
+Verified against Codex CLI 0.159.3 by asking the agent (`codex debug
+prompt-input`, the model request a session sends, `codex plugin list`, and the
+TUI's `/skills` and `/plugins`) after `cargo agents sync`:
+
+- The plugin is listed as installed and enabled, `/plugins` shows it under a
+  `symposium` tab, and the model sees its skills as `<plugin>:<skill>` in TUI
+  and `codex exec` sessions alike, with no warning.
+- An edit at the same version reaches the next session.
+- A TUI session leaves symposium's entries, the cache and the staging root
+  byte-identical, so the next sync writes nothing.
+- Codex runs the `SessionStart` hook when the first prompt is submitted, after
+  the session's skills are listed, so a plugin installed by the auto-sync
+  appears in the next session.
+- Dropping the `use --global` entry, or removing the agent, leaves nothing
+  listed and `codex plugin list` working.
+- Codex does not read Claude Code's copy in `~/.claude/skills/`.
+
+Known limitations:
+
+- `CODEX_HOME` relocates plugins only: symposium's hooks and MCP server are
+  still registered under `~/.codex/`.
+- `.agents/skills/` is shared with Antigravity, Copilot, OpenCode and Goose. A
+  per-skill copy one of them still needs stays in the project, and Codex then
+  lists that skill twice, as `<skill>` and as `<plugin>:<skill>`.
+- `codex plugin remove` is undone by the next sync; `cargo agents use --remove`
+  removes the plugin, and `/plugins` turns it off.
+
+### Project scope
+
+Codex reads `[marketplaces.*]` and `[plugins.*]` from a project's
+`.codex/config.toml` only once the user trusts the project, ignoring an
+untrusted one without a word, and even then installs into the user-level cache
+keyed by marketplace name, so two repositories using the same name share one
+copy. Symposium does not write project-scoped plugins for Codex; they keep
+their per-skill copies in `.agents/skills/`.
+
 ## Other Extensibility
 
 - `notify` in config.toml (fire-and-forget on agent-turn-complete)

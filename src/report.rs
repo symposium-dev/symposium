@@ -76,6 +76,12 @@ pub enum ReportEvent {
     /// A stale skill directory was removed.
     SkillRemoved { path: String },
 
+    PluginInstalled {
+        plugin: String,
+        agent: String,
+        dest: String,
+    },
+
     /// A hook was registered for an agent.
     HookRegistered { agent: String, hook: String },
 
@@ -233,6 +239,13 @@ impl ReportEvent {
             }
             Self::SkillRemoved { path } => {
                 format!("➖ removed {path}")
+            }
+            Self::PluginInstalled {
+                plugin,
+                agent,
+                dest,
+            } => {
+                format!("installed plugin {plugin} for {agent} -> {dest}")
             }
             Self::HookRegistered { agent, hook } => {
                 format!("🟢 {hook}: hooks registered for {agent}")
