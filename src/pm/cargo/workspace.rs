@@ -10,19 +10,26 @@ use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
 use std::{fmt::Write as _, fs};
 
-use cargo_metadata::{CargoOpt, MetadataCommand};
+use cargo_metadata::{CargoOpt, MetadataCommand, Source};
 use serde::{Deserialize, Serialize};
 
-/// A crate in the workspace's direct dependency graph.
+use crate::pm::PackageProvenance;
+
+/// Canonical registry URL carried for packages Cargo identifies as crates.io.
+pub(crate) const CRATES_IO_REGISTRY_URL: &str = "https://github.com/rust-lang/crates.io-index";
+
+/// A resolved crate known to the workspace.
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceCrate {
     /// The crate name as published (e.g. `"serde"`, `"tokio"`).
     pub name: String,
     /// The resolved version.
     pub version: semver::Version,
-    /// Local source path for path dependencies (unpublished, so `fetch` must
-    /// resolve them locally). `None` for registry crates.
+    /// Where Cargo obtained this package's source content.
+    pub provenance: PackageProvenance,
+    /// Local source path for workspace members and path dependencies.
+    /// `None` when no local override is needed to fetch the package.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<PathBuf>,
     /// The crate's extracted source directory, from `cargo metadata`'s
@@ -34,14 +41,21 @@ pub struct WorkspaceCrate {
 }
 
 impl WorkspaceCrate {
-    /// A crate whose source lives at `path` (a path dependency), or a registry
-    /// crate when `path` is `None`. `source_dir` defaults to `path`; use
-    /// [`with_source_dir`](Self::with_source_dir) for a registry crate whose
-    /// extracted source is known.
-    pub fn new(name: String, version: semver::Version, path: Option<PathBuf>) -> Self {
+    /// A resolved crate with explicit source provenance.
+    ///
+    /// `source_dir` defaults to `path`; use
+    /// [`with_source_dir`](Self::with_source_dir) when Cargo located an
+    /// extracted source somewhere else.
+    pub fn new(
+        name: String,
+        version: semver::Version,
+        provenance: PackageProvenance,
+        path: Option<PathBuf>,
+    ) -> Self {
         Self {
             name,
             version,
+            provenance,
             source_dir: path.clone(),
             path,
         }
@@ -54,7 +68,7 @@ impl WorkspaceCrate {
     }
 }
 
-/// The resolved workspace: root path + dependency list + member directories.
+/// The resolved workspace: root path, dependencies, and member packages.
 #[non_exhaustive]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoadedWorkspace {
@@ -62,9 +76,26 @@ pub struct LoadedWorkspace {
     pub root: PathBuf,
     /// Direct dependencies of all workspace members.
     pub crates: Vec<WorkspaceCrate>,
-    /// Manifest directories of the workspace's member packages. Backs
-    /// workspace-plugin discovery (a member directory may define a plugin).
-    pub members: Vec<PathBuf>,
+    /// Workspace members retained with package identity and provenance.
+    ///
+    /// These do not enter the dependency list. Their provenance is retained
+    /// for Cargo's fetch and plugin-load paths to consume when a member is
+    /// reached explicitly.
+    pub member_crates: Vec<WorkspaceCrate>,
+}
+
+impl LoadedWorkspace {
+    /// Member directories used for workspace-plugin discovery.
+    pub fn member_dirs(&self) -> Vec<PathBuf> {
+        let mut dirs: Vec<_> = self
+            .member_crates
+            .iter()
+            .filter_map(|package| package.source_dir.clone())
+            .collect();
+        dirs.sort();
+        dirs.dedup();
+        dirs
+    }
 }
 
 /// On-disk cache format. Adding a field is a compatible cache bump: an old
@@ -74,7 +105,7 @@ struct DiskCache {
     lock_mtime: u64,
     root: PathBuf,
     crates: Vec<WorkspaceCrate>,
-    members: Vec<PathBuf>,
+    member_crates: Vec<WorkspaceCrate>,
 }
 
 /// Lazy, cached workspace dependency resolver.
@@ -110,7 +141,7 @@ impl WorkspaceDeps {
         let _ = cached.set(Some(Arc::new(LoadedWorkspace {
             root: root.clone(),
             crates,
-            members: Vec::new(),
+            member_crates: Vec::new(),
         })));
         Arc::new(Self {
             cwd: root,
@@ -205,7 +236,7 @@ fn try_disk_cache(ws_cache_dir: &Path) -> Option<LoadedWorkspace> {
     Some(LoadedWorkspace {
         root: cached.root,
         crates: cached.crates,
-        members: cached.members,
+        member_crates: cached.member_crates,
     })
 }
 
@@ -219,7 +250,7 @@ fn write_disk_cache(ws_cache_dir: &Path, loaded: &LoadedWorkspace) {
         lock_mtime: mtime,
         root: loaded.root.clone(),
         crates: loaded.crates.clone(),
-        members: loaded.members.clone(),
+        member_crates: loaded.member_crates.clone(),
     };
 
     let _ = fs::create_dir_all(ws_cache_dir);
@@ -330,6 +361,7 @@ fn load_workspace(cwd: &Path, cargo_path: Option<&Path>) -> Option<LoadedWorkspa
                     source_dir: p.manifest_path.parent().map(|dir| dir.into()),
                     name: p.name.to_string(),
                     version: v,
+                    provenance: classify_package_source(p.source.as_ref(), false),
                 })
         })
         .collect();
@@ -337,18 +369,201 @@ fn load_workspace(cwd: &Path, cargo_path: Option<&Path>) -> Option<LoadedWorkspa
     crates.sort_by(|a, b| a.name.cmp(&b.name));
     crates.dedup_by(|a, b| a.name == b.name);
 
-    let mut members: Vec<PathBuf> = metadata
+    let mut member_crates: Vec<_> = metadata
         .packages
         .iter()
         .filter(|p| ws_members.contains(&p.id))
-        .filter_map(|p| p.manifest_path.parent().map(|dir| dir.into()))
+        .filter_map(|p| {
+            let dir: PathBuf = p.manifest_path.parent()?.into();
+            Some(WorkspaceCrate {
+                name: p.name.to_string(),
+                version: p.version.clone(),
+                provenance: classify_package_source(p.source.as_ref(), true),
+                path: Some(dir.clone()),
+                source_dir: Some(dir),
+            })
+        })
         .collect();
-    members.sort();
-    members.dedup();
+    member_crates.sort_by(|a, b| a.name.cmp(&b.name));
+    member_crates.dedup_by(|a, b| a.name == b.name);
 
     Some(LoadedWorkspace {
         root,
         crates,
-        members,
+        member_crates,
     })
+}
+
+fn classify_package_source(
+    source: Option<&Source>,
+    is_workspace_member: bool,
+) -> PackageProvenance {
+    if is_workspace_member {
+        return PackageProvenance::Workspace;
+    }
+
+    let Some(source) = source else {
+        return PackageProvenance::Path;
+    };
+    if source.is_crates_io() || source.repr == "sparse+https://index.crates.io/" {
+        return PackageProvenance::Registry {
+            url: CRATES_IO_REGISTRY_URL.to_owned(),
+        };
+    }
+
+    // cargo_metadata exposes no structured form for other sources. Retain
+    // recognized source facts and classify unfamiliar representations as
+    // unknown rather than guessing.
+    for prefix in ["registry+", "sparse+"] {
+        if let Some(url) = source.repr.strip_prefix(prefix)
+            && !url.is_empty()
+        {
+            return PackageProvenance::Registry {
+                url: url.to_owned(),
+            };
+        }
+    }
+    if let Some(url) = source.repr.strip_prefix("git+")
+        && !url.is_empty()
+    {
+        return PackageProvenance::Git {
+            url: url.to_owned(),
+        };
+    }
+
+    PackageProvenance::Unknown
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(repr: &str) -> Source {
+        Source {
+            repr: repr.to_owned(),
+        }
+    }
+
+    #[test]
+    fn classifies_cargo_package_sources_without_live_metadata() {
+        let cases = [
+            (
+                Some(source(
+                    "registry+https://github.com/rust-lang/crates.io-index",
+                )),
+                false,
+                PackageProvenance::Registry {
+                    url: CRATES_IO_REGISTRY_URL.to_owned(),
+                },
+            ),
+            (
+                Some(source("registry+https://registry.example/index")),
+                false,
+                PackageProvenance::Registry {
+                    url: "https://registry.example/index".to_owned(),
+                },
+            ),
+            (
+                Some(source("sparse+https://index.crates.io/")),
+                false,
+                PackageProvenance::Registry {
+                    url: CRATES_IO_REGISTRY_URL.to_owned(),
+                },
+            ),
+            (
+                Some(source("sparse+https://packages.example/index/")),
+                false,
+                PackageProvenance::Registry {
+                    url: "https://packages.example/index/".to_owned(),
+                },
+            ),
+            (
+                Some(source("git+https://git.example/package?rev=main#01234567")),
+                false,
+                PackageProvenance::Git {
+                    url: "https://git.example/package?rev=main#01234567".to_owned(),
+                },
+            ),
+            (
+                Some(source("other+opaque-source")),
+                false,
+                PackageProvenance::Unknown,
+            ),
+            (None, false, PackageProvenance::Path),
+            (None, true, PackageProvenance::Workspace),
+        ];
+
+        for (source, is_workspace_member, expected) in cases {
+            assert_eq!(
+                classify_package_source(source.as_ref(), is_workspace_member),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_cache_round_trips_package_provenance() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        let cache = temp.path().join("cache");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("Cargo.lock"), "").unwrap();
+
+        let dependency_dir = root.join("dependency");
+        let member_dir = root.join("member");
+        let loaded = LoadedWorkspace {
+            root: root.clone(),
+            crates: vec![WorkspaceCrate::new(
+                "dependency".to_owned(),
+                semver::Version::new(1, 2, 3),
+                PackageProvenance::Git {
+                    url: "https://git.example/dependency".to_owned(),
+                },
+                Some(dependency_dir),
+            )],
+            member_crates: vec![WorkspaceCrate::new(
+                "member".to_owned(),
+                semver::Version::new(0, 1, 0),
+                PackageProvenance::Workspace,
+                Some(member_dir.clone()),
+            )],
+        };
+
+        write_disk_cache(&cache, &loaded);
+        let decoded = try_disk_cache(&cache).expect("the cache should decode");
+
+        assert_eq!(decoded.root, loaded.root);
+        assert_eq!(decoded.crates, loaded.crates);
+        assert_eq!(decoded.member_crates, loaded.member_crates);
+        assert_eq!(decoded.member_dirs(), vec![member_dir]);
+    }
+
+    #[test]
+    fn workspace_cache_rejects_entries_without_provenance() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("workspace");
+        let cache = temp.path().join("cache");
+        fs::create_dir_all(&root).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        fs::write(root.join("Cargo.lock"), "").unwrap();
+
+        let legacy = serde_json::json!({
+            "lock_mtime": file_mtime(&root.join("Cargo.lock")).unwrap(),
+            "root": root,
+            "crates": [{
+                "name": "dependency",
+                "version": "1.2.3",
+                "path": null,
+                "source_dir": null,
+            }],
+            "member_crates": [],
+        });
+        fs::write(
+            cache.join("workspace-deps.json"),
+            serde_json::to_vec_pretty(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        assert!(try_disk_cache(&cache).is_none());
+    }
 }

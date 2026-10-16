@@ -35,6 +35,8 @@ mod cargo;
 mod git;
 pub mod layout;
 mod path;
+#[cfg(test)]
+pub(crate) use cargo::CRATES_IO_REGISTRY_URL;
 pub use cargo::{
     CargoPm, LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
 };

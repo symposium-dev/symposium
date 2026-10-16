@@ -379,10 +379,18 @@ mod tests {
                 WorkspaceCrate::new(
                     "widget-lib".to_string(),
                     semver::Version::new(1, 0, 0),
+                    crate::pm::PackageProvenance::Path,
                     Some(widget),
                 ),
-                WorkspaceCrate::new("serde".to_string(), semver::Version::new(1, 0, 210), None)
-                    .with_source_dir(Some(serde)),
+                WorkspaceCrate::new(
+                    "serde".to_string(),
+                    semver::Version::new(1, 0, 210),
+                    crate::pm::PackageProvenance::Registry {
+                        url: crate::pm::CRATES_IO_REGISTRY_URL.to_owned(),
+                    },
+                    None,
+                )
+                .with_source_dir(Some(serde)),
             ],
         )
     }

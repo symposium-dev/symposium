@@ -17,6 +17,8 @@ use symposium_install::UpdateLevel;
 use crate::crate_sources::RustCrateFetch;
 
 pub mod workspace;
+#[cfg(test)]
+pub(crate) use workspace::CRATES_IO_REGISTRY_URL;
 pub use workspace::{
     LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
 };
@@ -246,19 +248,31 @@ impl PackageManager for CargoPm {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pm::WorkspaceCrate;
+    use crate::pm::{PackageProvenance, WorkspaceCrate};
     use std::path::PathBuf;
 
     /// A path dependency: `source_dir` defaults to its local path.
     fn path_dep(name: &str, dir: PathBuf) -> WorkspaceCrate {
-        WorkspaceCrate::new(name.to_string(), semver::Version::new(1, 0, 0), Some(dir))
+        WorkspaceCrate::new(
+            name.to_string(),
+            semver::Version::new(1, 0, 0),
+            PackageProvenance::Path,
+            Some(dir),
+        )
     }
 
     /// A registry dependency whose extracted source `cargo metadata` located —
     /// no local `path`, but a known `source_dir` (as populated in production).
     fn registry_dep(name: &str, source_dir: PathBuf) -> WorkspaceCrate {
-        WorkspaceCrate::new(name.to_string(), semver::Version::new(1, 0, 0), None)
-            .with_source_dir(Some(source_dir))
+        WorkspaceCrate::new(
+            name.to_string(),
+            semver::Version::new(1, 0, 0),
+            PackageProvenance::Registry {
+                url: workspace::CRATES_IO_REGISTRY_URL.to_owned(),
+            },
+            None,
+        )
+        .with_source_dir(Some(source_dir))
     }
 
     #[tokio::test]

@@ -116,13 +116,21 @@ impl<'a> RustCrateFetch<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pm::PackageProvenance;
 
     fn v(s: &str) -> semver::Version {
         semver::Version::parse(s).unwrap()
     }
 
     fn wc(name: &str, version: &str, path: Option<PathBuf>) -> WorkspaceCrate {
-        WorkspaceCrate::new(name.to_string(), v(version), path)
+        let provenance = if path.is_some() {
+            PackageProvenance::Path
+        } else {
+            PackageProvenance::Registry {
+                url: crate::pm::CRATES_IO_REGISTRY_URL.to_owned(),
+            }
+        };
+        WorkspaceCrate::new(name.to_string(), v(version), provenance, path)
     }
 
     // -- Path override behaviour ---------------------------------------

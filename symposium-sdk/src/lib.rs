@@ -42,8 +42,8 @@
 //! identity and provenance vocabulary. A [`pm::PackageId`] names a package;
 //! [`pm::SourcedPackage`] couples that identity to the source that supplied
 //! it.
-//! Validating that manifest (defaults, dormancy, trust) is Symposium's job,
-//! not the PM's.
+//! Interpreting and validating plugin manifests (defaults, dormancy, trust)
+//! is Symposium's job, not the PM's.
 
 pub mod env;
 pub mod fs;

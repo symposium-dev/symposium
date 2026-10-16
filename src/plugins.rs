@@ -1103,8 +1103,9 @@ async fn load_registry_impl(
     }
 
     if let Some(ws) = workspace {
+        let member_dirs = ws.member_dirs();
         let (ws_plugins, ws_warnings) =
-            workspace_plugins(&ws.root, &ws.members, sym.config.agents_syncing);
+            workspace_plugins(&ws.root, &member_dirs, sym.config.agents_syncing);
         plugins.extend(ws_plugins);
         warnings.extend(ws_warnings);
     }
