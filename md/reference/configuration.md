@@ -38,7 +38,7 @@ path = "my-plugins"
 |-----|------|---------|-------------|
 | `auto-sync` | bool | `true` | Automatically run `cargo agents sync` during hook invocations. When enabled, skills are kept in sync with workspace dependencies without manual intervention. |
 | `agents-syncing` | bool | `true` | Include each workspace plugin's `.agents/skills/` default skill group, so skills you author there install into every configured agent's skill directory (such as `.claude/skills/` or `.kiro/skills/`). Skills that symposium itself installed — identified by the `.symposium` marker file — are never treated as sources. See [Workspace skills](../workspace-skills.md) for the user-guide overview, or [Agents syncing](#agents-syncing-mirror-user-authored-skills) below for details. |
-| `hook-scope` | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace. |
+| `hook-scope` | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace. It does not decide where plugins install: a `use` entry without a workspace installs its plugin for you under either value. |
 | `auto-update` | string | `"on"` | Controls automatic update behavior. `"off"` disables update checks entirely. `"warn"` checks the registry (at most once per 24 hours) and prints a message when a newer version is available. `"on"` automatically installs the update via `cargo install` and re-executes the command with the new binary. |
 
 ### Agents syncing: mirror user-authored skills
@@ -133,7 +133,7 @@ Trust follows whoever supplies the *content*, not the package the content is abo
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `auto-enable` | array of strings | `[]` | Dependency names whose embedded plugins load without being asked about. `"*"` pre-consents to every dependency. |
-| `use` | array | `[]` | Plugins enabled deliberately. Each entry is either a plain name (enabled in every workspace) or `{ name = "...", workspace = "/path" }` (enabled only while working in that workspace root). |
+| `use` | array | `[]` | Plugins enabled deliberately. Each entry is either a plain name (enabled in every workspace, and installed for you as a plugin directory on the agents that support it; see [`cargo agents sync`](./cargo-agents-sync.md#plugins-enabled-for-every-workspace)) or `{ name = "...", workspace = "/path" }` (enabled only while working in that workspace root). |
 | `disable` | array of strings | `[]` | Names that must never be enabled. Takes precedence over `auto-enable`, including over `"*"`. |
 
 Names are matched hyphen/underscore-insensitively, like crate names: `widget-lib` and `widget_lib` are the same entry.
@@ -169,5 +169,6 @@ User-wide data lives under `~/.symposium/` by default. Override with environment
 | `~/.symposium/state.toml` | Persistent state (binary version stamp, last update check) |
 | `~/.symposium/telemetry/` | Telemetry event log, one JSONL file per day (created when `[telemetry] enabled = true` and events are recorded) |
 | `~/.symposium/plugins/` | User-defined plugins |
+| `~/.symposium/installed/` | Plugins enabled with `use --global`, compiled for the agents to install |
 | `~/.symposium/cache/` | Cache directory (crate sources, plugin sources) |
 | `~/.symposium/logs/` | Log files (one per invocation, timestamped) |

@@ -42,6 +42,8 @@ Hooks defined in **`.github/hooks/*.json`**. For the Cloud Agent, files must be 
 
 The CLI combines hooks from several places: repository `.github/hooks/*.json`, user-level `~/.copilot/hooks/*.json` or a `hooks` key in `~/.copilot/settings.json` (where symposium registers globally; `config.json` is managed by the CLI), and also `.claude/settings.json`. It loads a repository's hooks only once the folder is trusted: it asks interactively, or `COPILOT_ALLOW_ALL=true` trusts the working directory. Because it reads Claude's settings too, a project with both agents configured runs symposium's hook twice per Copilot event.
 
+`COPILOT_HOME` moves the user level as a whole: when it is set, the CLI reads `settings.json`, `mcp-config.json` and `skills/` from `$COPILOT_HOME` instead of `~/.copilot/`. Symposium writes its global hooks, MCP servers and plugins there too, and its hook inherits the variable, so a sync the hook runs writes there as well. Verified against the Copilot CLI 1.0.89 with the variable set: symposium's hooks and MCP server left in `~/.copilot/` were ignored (`copilot mcp list` reported no server and no hook ran), while with them under `$COPILOT_HOME` each event ran `cargo-agents hook copilot`, and `copilot mcp list` and the `/mcp` dashboard showed the server, which a session started and offered as a tool. The CLI still keeps its cache of each MCP server's tools in `~/Library/Caches/copilot/mcp-tools/` on macOS, which the variable does not move.
+
 ```json
 {
   "version": 1,
@@ -191,7 +193,7 @@ Symposium registers MCP servers in the Copilot config as top-level keys
 ```
 
 - **Project-level**: `.vscode/mcp.json`
-- **User-level**: `~/.copilot/mcp-config.json`
+- **User-level**: `~/.copilot/mcp-config.json` (`$COPILOT_HOME/mcp-config.json` when set)
 
 Registration is idempotent — if the entry already exists with the
 correct values, no changes are made. If the entry exists but has stale
@@ -208,3 +210,40 @@ The `@github/copilot-sdk` (Node.js, Python, Go, .NET, Java) provides callback-st
 ### Agent firewall (Cloud Agent)
 
 Network-layer control with deny-by-default domain allowlist, configured at org/repo level. Not a hook — controls outbound network access.
+
+## Plugin Delivery
+
+A plugin enabled with `use --global` reaches the Copilot CLI through its user settings, `~/.copilot/settings.json` (`$COPILOT_HOME/settings.json` when that variable is set). Symposium registers the staging root `~/.symposium/installed/`, which carries `.claude-plugin/marketplace.json`, as a directory marketplace and enables each plugin from it:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "symposium": {
+      "source": { "source": "directory", "path": "/home/alex/.symposium/installed" }
+    }
+  },
+  "enabledPlugins": {
+    "pdf-tools@symposium": true
+  }
+}
+```
+
+These are the two entries `copilot plugin marketplace add` and `copilot plugin install pdf-tools@symposium` write, and nothing else: no `installedPlugins` record in `config.json` and no copy under `~/.copilot/installed-plugins/`. Copilot loads a path-sourced plugin of a directory marketplace in place, so an edit reaches the next session without a version change.
+
+Symposium owns the `symposium` marketplace entry and the `<plugin>@symposium` keys, nothing else in the file. A `false` is the user's (`copilot plugin disable` and `copilot plugin uninstall` both write one for such a plugin) and stays, even after the plugin stops applying. A `symposium` marketplace pointing anywhere else is not symposium's: the plugins then arrive as per-skill copies, with a warning. The file is read as strict JSON, although Copilot accepts comments in it; one that does not parse is reported and left untouched, and the skills arrive per project instead.
+
+Verified against the Copilot CLI 1.0.89 by asking the agent (`copilot plugin list --json`, `copilot skill list --json`, the `/skills` dashboard, and the skills a `-p` session offers its model):
+
+- The plugin is listed (`"source": "live"`) and its skills are offered in the first session after `cargo agents sync`, interactive and `-p` alike. They keep their plain names (`/<skill>`), with no `<plugin>:` prefix.
+- An edit at the same version reaches the next session, and Copilot never rewrites the two entries.
+- Removing the entries and the directory removes the plugin, with no residue and no error. An entry left behind for a missing root makes every session warn that the marketplace was skipped, so the entry goes as soon as the set is empty.
+- A plugin registered during the `sessionStart` hook (symposium's auto-sync) is offered after `/restart` or in the next session; `/skills reload` does not pick it up.
+- `COPILOT_HOME` relocates the file.
+- A skill of the same name in `~/.copilot/skills/`, `~/.agents/skills/` or the project's `.agents/skills/` silently replaces the plugin's. A per-skill copy symposium still writes there for another agent (OpenCode, for one) is such a skill, so Copilot reads the skill from that copy.
+- User-level Claude Code files are not read: the skills-directory plugins under `~/.claude/skills/<plugin>/` do not reach Copilot.
+
+Copilot CLI 1.0.79 and 1.0.80 do not load a plugin from these entries alone. An interactive session installs a copy and a record of its own the first time it starts, a `-p` session never does, and that copy goes stale and outlives the entries. Copilot updates itself by default: an npm install of 1.0.79 was found running 1.0.89.
+
+### Project scope
+
+A `.github/copilot/settings.local.json` at the repository root (the git root, not a nested Cargo workspace) holding the same two entries loads the plugin in that repository only, in `-p` sessions and trusted interactive sessions, with a relative `path` resolved against the repository root. Its marketplace name has to differ from the user-level one, which wins a clash silently; the same name in two repositories is fine. `copilot plugin list` and `copilot skill list` do not show such a plugin, only a session does. Copilot also reads Claude Code's project `.claude/settings.json` and `.claude/settings.local.json` registrations, and finds a compiled directory in a project's `.claude/skills/<plugin>/` as a project skill. Symposium does not write project-scoped plugins for Copilot yet.
