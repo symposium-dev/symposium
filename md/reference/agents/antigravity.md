@@ -11,7 +11,16 @@ what symposium writes applies to all of them.
 | Scope | Path |
 |-------|------|
 | Project | `.agents/skills/<name>/SKILL.md` |
-| Global | `~/.gemini/config/skills/<name>/SKILL.md` |
+
+## Plugins
+
+A plugin enabled with `cargo agents use --global` is installed for you as a plugin directory:
+
+| Scope | Path |
+|-------|------|
+| Global | `~/.gemini/config/plugins/<plugin>/` |
+
+Antigravity loads it in every project, and its skills are invoked as `/<plugin>:<skill>`. Symposium writes nothing else, so turning the plugin off in Antigravity is a choice symposium leaves alone. A plugin installed while a session runs appears after `/skills reload`, or in the next session.
 
 ## Hooks
 
@@ -36,11 +45,6 @@ only a denial's reason is shown.
 **Caveat:** `PreInvocation` stands in for symposium's `user-prompt-submit`
 because Antigravity has no prompt event. It fires before *every* model call, so
 symposium runs the prompt event only on the first invocation of a turn.
-
-**Caveat:** in headless print mode (`agy -p`), Antigravity adopts no workspace
-unless it is given `--add-dir <absolute path>` — it cannot read project files and
-loads no project `.agents/` configuration. A relative path is ignored. Ordinary
-interactive use is unaffected; this only matters for automation and CI.
 
 ## MCP servers
 
