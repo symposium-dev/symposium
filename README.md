@@ -54,9 +54,10 @@ Run `init` once per machine to record which agents you use and register hooks:
 cargo agents init
 ```
 
-`init` prompts for your agents (select one or more) and for hook scope:
+`init` prompts for your agents, with the ones installed on your machine already checked, and for hook scope:
 
 ```text
+ℹ️  Detected: Codex CLI, Kiro
 Which agents do you use? (space to select, enter to confirm):
 > [ ] Antigravity CLI
   [ ] Claude Code
@@ -64,7 +65,7 @@ Which agents do you use? (space to select, enter to confirm):
   [ ] GitHub Copilot
   [ ] Goose
   [x] Kiro
-  [x] OpenCode
+  [ ] OpenCode
 ```
 
 - **Global** hook scope (default) registers Symposium for the selected agents in your home directory, so it activates in every Rust project.
