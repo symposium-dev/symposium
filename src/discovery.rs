@@ -80,6 +80,7 @@ pub struct DiscoveredPlugin {
     pub description: Option<String>,
     /// How the `[plugins]` config decided this offer.
     pub enablement: Enablement,
+    pub agent_plugin: bool,
 }
 
 impl DiscoveredPlugin {
@@ -134,6 +135,7 @@ pub async fn discover(sym: &Symposium, deps: &Arc<WorkspaceDeps>) -> Discovery {
             let enablement = decide(sym, &name, &workspace_root);
             let discovered = DiscoveredPlugin {
                 registry: inst.name.clone(),
+                agent_plugin: plugin.agent_plugin_root.is_some(),
                 id: plugin.canonical,
                 recommends: name,
                 description,

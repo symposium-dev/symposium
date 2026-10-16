@@ -1,0 +1,10 @@
+hook-scope = "project"
+auto-update = "off"
+
+[defaults]
+symposium-recommendations = false
+user-plugins = true
+
+[[registry]]
+name = "package-as-registry"
+path = "plugins/pdf-tools"

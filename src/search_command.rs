@@ -29,6 +29,7 @@ pub struct SearchMatch {
     pub name: String,
     pub version: Option<String>,
     pub description: Option<String>,
+    pub format: Option<&'static str>,
 }
 
 /// Case-insensitive substring match — the same looseness `cargo search` has.
@@ -43,24 +44,37 @@ pub async fn find_matches(sym: &Symposium, query: &str) -> Vec<SearchMatch> {
     let registry = crate::plugins::load_registry(sym).await;
     for parsed in &registry.plugins {
         if name_matches(&parsed.manifest.name, query) {
+            let dormant = parsed
+                .manifest
+                .requires_use
+                .then_some("dormant: enable with `cargo agents use`");
+            let description = match (parsed.manifest.description.as_deref(), dormant) {
+                (Some(description), Some(dormant)) => Some(format!("{description} ({dormant})")),
+                (description, dormant) => description.or(dormant).map(str::to_string),
+            };
             matches.push(SearchMatch {
                 origin: parsed.canonical.pm.clone(),
                 name: parsed.manifest.name.clone(),
-                version: None,
-                description: parsed
-                    .manifest
-                    .requires_use
-                    .then(|| "dormant — enable with `cargo agents use`".to_string()),
+                version: parsed.manifest.version.clone(),
+                description,
+                format: parsed.format(),
             });
         }
     }
     // Search is workspace-independent; a detached resolver stands in.
     for (instance, info) in sym.detached_managers().search(query).await {
+        if matches
+            .iter()
+            .any(|m| m.origin == instance && m.name == info.id.name)
+        {
+            continue;
+        }
         matches.push(SearchMatch {
             origin: instance,
             name: info.id.name.clone(),
             version: Some(info.id.version.clone()),
             description: info.description,
+            format: None,
         });
     }
 
@@ -99,6 +113,7 @@ pub async fn search(sym: &Symposium, query: &str) -> Result<()> {
                     name: m.name.clone(),
                     version: m.version.clone(),
                     description: m.description.clone(),
+                    format: m.format.map(str::to_string),
                 },
             );
         }

@@ -54,6 +54,14 @@ And when two walks over one tree feed each other — a copy, and the comparison 
 
 Plugin content must not decide where Symposium writes. A name it supplies, such as a skill's `name`, can resolve outside the directory it is joined onto (`Path::join` does not confine it), so it never becomes part of a path unchecked. Validate it with `skills::is_safe_dir_name`, which also covers Windows-specific path forms, rather than with a check of your own.
 
+## Agent Plugins manifests are closed but forgiving
+
+`plugin.json` has a closed schema, yet the format requires an unknown top-level field, or an `extensions` that is not an object, to be reported and ignored while the package still loads. `#[serde(deny_unknown_fields)]` would reject the package instead, and a plain `Option<String>` would quietly accept `null`, which the schema does not. That is why `plugins/agent_plugin.rs` checks the manifest by hand over a `serde_json::Value`. The one namespace Symposium owns, `extensions.dev.symposium`, is the opposite case: it is strict, because ignoring a typo there would make a package apply more widely than its author meant.
+
+## Installed copies are never sources
+
+A directory Symposium installed carries a `.symposium` marker file, and the trees it installs into can also be read as sources: `.agents/skills/` is a workspace skill group, and a compiled plugin directory holds a `plugin.json` just like a package. Any walk that discovers sources has to skip marked directories, as `find_skill_files_recursive` and the registry layout walk do, or a sync reads its own output back and installs it again. The layout walk checks that the marker is a file, because a project root can hold a `.symposium/` directory that is not a marker.
+
 ## Windows portability (tests)
 
 The test suite runs on `windows-latest`, where CI passes `--no-fail-fast` so that one failing test binary does not hide the failures in every binary cargo would otherwise skip. A few patterns recur when writing tests that touch paths or scripts:

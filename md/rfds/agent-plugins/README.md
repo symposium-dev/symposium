@@ -78,8 +78,9 @@ A user working on a Rust project wants the table-extraction guidance that a conf
 
 ```console
 $ cargo agents search pdf
-user-plugins
-  pdf-tools    Table extraction guidance    agent plugin
+ℹ️  from user-plugins:
+  pdf-tools 1.2.0 (agent plugin)
+      Table extraction guidance (dormant: enable with `cargo agents use`)
 
 $ cargo agents use pdf-tools
 enabled pdf-tools for /home/alex/work/reporter
@@ -296,8 +297,21 @@ Codex CLI's install step copies a package into a version-keyed cache under `$COD
 
 Gemini CLI needs no configuration write at all: a package present at `~/.gemini/extensions/<name>/` is listed and enabled. Its own `extensions link` command blocks waiting on input, which is another reason the file is written directly rather than shelling out.
 
+### Reading packages
+
+Implementation steps 5 to 7 landed with these details:
+
+- **Entry kinds.** Precedence runs `Symposium.toml`, `plugin.json`, `SKILL.md`. Registry enumeration skips a directory holding the `.symposium` marker file, so a compiled directory is never read back as a source; a `.symposium/` directory is not a marker.
+- **One group per skill.** A package becomes an ordinary plugin manifest with one `[[skills]] source.path = "skills/<child>"` group per immediate child holding a `SKILL.md`. That gives the format's one-level discovery without adding a depth field to the manifest schema, which would otherwise travel to TOML and across the package-manager boundary.
+- **Version fields.** `version` and `description` are now optional fields of every plugin manifest, filled from `plugin.json` and shown by `search` and `status`. A binary older than this change rejects a TOML manifest using them, so registries should adopt them only after a release.
+- **Positions.** A gate-less registry package is dormant. A workspace member package turns the default `skills/` group off but keeps the `workspace-member()`-gated `.agents/skills` group, so adding a `plugin.json` to a member does not drop its maintainer skills. A dependency package also turns the default group off, and a crate whose `plugin.json` is invalid offers nothing rather than falling back to its `skills/` folder.
+- **Skill validity.** Symposium's own skill loader is the definition of a conforming skill. In a workspace member it is as lenient as for every workspace skill.
+- **Structural containment.** The manifest, the `skills` folder and each `SKILL.md` are resolved and checked against the resolved package folder. Links inside a skill's other files are not checked yet.
+- **Provenance.** A package manager flags a manifest it translated from `plugin.json` (`agent_plugin` on the wire, omitted when false), and the validated plugin keeps its resolved package folder, which the `agent plugin` label keys on.
+- **Notices.** Unknown fields, a non-object `extensions`, an `mcp.json`, a `SKILL.md` at the package root and an invalid `plugin.json` beside a `Symposium.toml` are reported as warnings for registry and workspace packages, only logged for dependencies, and attached to the package by `plugin validate`.
+
 ## Implementation status
 
-This RFD describes proposed work. Implementation has not begun.
+Reading packages (implementation plan steps 5 to 7) is implemented: a `plugin.json` package loads as a registry entry, a workspace member and a dependency, its skills resolve, `dev.symposium` gating is honored, and `plugin validate`, `search`, `status` and `use` cover these packages. Containment covers the package structure; checking links inside skill content against the package folder is not implemented yet. Compiling and installing plugin directories (steps 2 to 4) has not begun.
 
-See [Proposed: Agent Plugins packages](./proposed-reference.md) for the intended authoring reference and [Proposed: How extensions are installed](./proposed-install.md) for the resulting install locations.
+See [Agent Plugins packages](../../reference/agent-plugins.md) for the authoring reference and [Proposed: How extensions are installed](./proposed-install.md) for the resulting install locations.

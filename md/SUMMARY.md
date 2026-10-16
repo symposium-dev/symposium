@@ -54,6 +54,7 @@
   - [Configuration](./reference/configuration.md)
   - [Plugin sources](./reference/plugin-source.md)
   - [Plugin definition](./reference/plugin-definition.md)
+  - [Agent Plugins packages](./reference/agent-plugins.md)
   - [Symposium hook events](./reference/hook-events.md)
   - [Skill definition](./reference/skill-definition.md)
   - [Dependency predicates (`depends-on`)](./reference/depends-on.md)
@@ -101,7 +102,6 @@
       - [`cargo agents telemetry`](./rfds/telemetry-recording/reference/telemetry-command.md)
       - [Telemetry configuration](./rfds/telemetry-recording/reference/configuration.md)
     - [Agent Plugins interoperability](./rfds/agent-plugins/README.md)
-      - [Proposed: Agent Plugins packages](./rfds/agent-plugins/proposed-reference.md)
       - [Proposed: How extensions are installed](./rfds/agent-plugins/proposed-install.md)
   - [Completed](./rfds/completed.md) <!-- move completed rfds to this section -->
     - [Configuration parsing and normalization](./rfds/config-normalization/README.md)

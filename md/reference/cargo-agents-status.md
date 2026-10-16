@@ -29,9 +29,13 @@ Each line is in one of four states:
 Discovery is cache-only, so a dependency whose source has not been fetched yet
 is simply not listed as a candidate. Enabling it by name still works.
 
+An [Agent Plugins package](./agent-plugins.md) is labeled `(agent plugin)`
+after its name and version.
+
 With `--json`, each line is emitted as a `plugin_status` event carrying
-`name`, `state`, `root`, and — for a discovered dependency plugin — the
-resolved `version`.
+`name`, `state`, `root`, a `version` (the resolved version for a discovered
+dependency plugin, the manifest's `version` for the others, when it has one),
+and `"format": "agent plugin"` for an Agent Plugins package.
 
 ## Example
 

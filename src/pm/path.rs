@@ -54,14 +54,21 @@ impl PackageManager for PathPm {
         let entries = match layout::enumerate(&self.dir) {
             Ok(e) => e,
             Err(e) => {
-                tracing::warn!(registry = %self.name, error = %e, "cannot list registry");
+                tracing::warn!(
+                    report = %ReportEvent::Warning {
+                        message: format!("cannot list registry `{}`: {e:#}", self.name),
+                    },
+                );
                 return Vec::new();
             }
         };
         let mut out = Vec::new();
         for entry in entries {
             match crate::plugins::entry_plugin(&self.dir, &entry.subpath, &self.name) {
-                Some(Ok(p)) => out.push(p),
+                Some(Ok((p, notices))) => {
+                    crate::plugins::report_notices(&self.dir.join(&entry.subpath), &notices);
+                    out.push(p);
+                }
                 Some(Err(e)) => tracing::warn!(
                     report = %ReportEvent::Warning {
                         message: format!(
@@ -82,7 +89,10 @@ impl PackageManager for PathPm {
             return Vec::new();
         }
         match crate::plugins::entry_plugin(&self.dir, Path::new(&id.name), &self.name) {
-            Some(Ok(p)) => vec![p],
+            Some(Ok((p, notices))) => {
+                crate::plugins::report_notices(&self.dir.join(&id.name), &notices);
+                vec![p]
+            }
             Some(Err(e)) => {
                 tracing::warn!(registry = %self.name, id = %id, error = %e, "failed to load plugin");
                 Vec::new()

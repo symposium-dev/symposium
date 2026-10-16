@@ -23,9 +23,12 @@ instance each hit came from:
 1. **Already loaded** — plugin names in the plugin registry (a bare `SKILL.md`
    is loaded as a plugin, so it appears here too). A configured registry is a
    trust root, so a hit here is available now, with no `use` needed (unless the
-   plugin is dormant, which is noted).
+   plugin is dormant, which is noted). The version and description come from
+   the plugin's manifest, and an [Agent Plugins package](./agent-plugins.md) is
+   labeled `agent plugin`.
 2. **Offered by a package manager** — each configured
-   [registry's](./plugin-source.md) package manager is searched in turn.
+   [registry's](./plugin-source.md) package manager is searched in turn. An
+   entry the first arm already listed under the same name is not listed again.
 
 A package manager without a searchable registry contributes nothing rather
 than failing, and an instance that errors outright (an offline registry, say)
@@ -34,7 +37,8 @@ the command.
 
 With `--json`, each hit is emitted as a `search_match` event carrying its
 `origin`, `name`, and — where the registry provides them — `version` and
-`description`.
+`description`. A hit for an Agent Plugins package also carries
+`"format": "agent plugin"`.
 
 ## Example
 
@@ -43,6 +47,8 @@ $ cargo agents search widget
 ℹ️  from user-plugins:
   widget-guidance
       Guidance for working with widgets
+  widget-tables 1.2.0 (agent plugin)
+      Table guidance for widgets (dormant: enable with `cargo agents use`)
 ℹ️  from symposium-recommendations:
   widget-skills 1.2.3
       Skills for widget
