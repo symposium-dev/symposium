@@ -16,8 +16,13 @@ use crate::telemetry::{
 
 mod admission;
 
-#[cfg(test)]
-pub(in crate::telemetry) use admission::PluginHookAggregateStore;
+#[expect(
+    unused_imports,
+    reason = "the final staging seam lands before its recording coordinator"
+)]
+pub(in crate::telemetry) use admission::{
+    PluginHookAdmissionError, PluginHookAggregateStage, PluginHookAggregateStore,
+};
 
 /// Identity fields admitted for one plugin-hook aggregate row.
 ///
@@ -90,16 +95,20 @@ impl AdmittedPluginBucket {
         }
     }
 
+    #[must_use]
+    const fn public_identity(&self) -> Option<(&PublicPluginCoordinate, PluginSubject)> {
+        match &self.0 {
+            AdmittedPluginBucketKind::Public { plugin, subject } => Some((plugin, *subject)),
+            AdmittedPluginBucketKind::Unnamed | AdmittedPluginBucketKind::Overflow => None,
+        }
+    }
+
     pub(in crate::telemetry::state) const fn key(&self) -> PluginBucketKey {
         match self.0 {
             AdmittedPluginBucketKind::Public { subject, .. } => PluginBucketKey::Public(subject),
             AdmittedPluginBucketKind::Unnamed => PluginBucketKey::Unnamed,
             AdmittedPluginBucketKind::Overflow => PluginBucketKey::Overflow,
         }
-    }
-
-    const fn is_public(&self) -> bool {
-        matches!(self.0, AdmittedPluginBucketKind::Public { .. })
     }
 }
 
@@ -166,8 +175,26 @@ impl PluginHookAggregateState {
     /// Start private state for a newly admitted aggregate key.
     #[must_use]
     fn new(key: &PluginHookMetricsKey, bucket: AdmittedPluginBucket) -> Self {
+        Self::with_event_id(key, bucket, EventId::new())
+    }
+
+    /// Recover private state for a surviving public row.
+    #[must_use]
+    fn recovered(
+        key: &PluginHookMetricsKey,
+        bucket: AdmittedPluginBucket,
+        event_id: EventId,
+    ) -> Self {
+        Self::with_event_id(key, bucket, event_id)
+    }
+
+    fn with_event_id(
+        key: &PluginHookMetricsKey,
+        bucket: AdmittedPluginBucket,
+        event_id: EventId,
+    ) -> Self {
         Self {
-            event_id: EventId::new(),
+            event_id,
             bucket,
             session_counts: HookSessionCountTracker::new(key.clone()),
         }
@@ -251,7 +278,7 @@ impl SelectedPluginHookAggregate<'_> {
 
 /// A private-state entry selected with another plugin-hook aggregate key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PluginHookAggregateSelectionError;
+pub(in crate::telemetry) struct PluginHookAggregateSelectionError;
 
 impl fmt::Display for PluginHookAggregateSelectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
