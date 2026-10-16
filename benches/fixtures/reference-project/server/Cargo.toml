@@ -1,0 +1,9 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+domain = { version = "0.1.0", path = "../domain" }
+storage = { version = "0.1.0", path = "../storage" }
