@@ -195,7 +195,7 @@ mod tests {
     use crate::telemetry::{
         schema::{DroppedOperation, LowVolumeRow, StorageLimitV1, UtcDay},
         state::{IDENTIFIER_WINDOW_TEST_STATE, TelemetryStateV1},
-        storage::{LockedStorage, metrics::MetricSnapshot, private_state::ReplaceStateError},
+        storage::{LockedStorage, metrics::MetricSnapshot, private_state::PreparedPrivateState},
     };
 
     fn day() -> UtcDay {
@@ -232,7 +232,8 @@ mod tests {
         let events = event_batch();
         let metrics = metric_snapshot();
 
-        storage.replace_state(&state).unwrap();
+        let state = PreparedPrivateState::new(&state).unwrap();
+        storage.replace_private_state(&state).unwrap();
         storage.append_event_batch(&events).unwrap();
         storage.replace_metric_snapshot(&metrics).unwrap();
 
@@ -256,9 +257,10 @@ mod tests {
         let mut storage = LockedStorage::try_acquire_with_writer(temporary.path(), writes).unwrap();
         fs::write(storage.paths.state_file(), b"old state").unwrap();
 
-        let error = storage.replace_state(&state()).unwrap_err();
+        let state = PreparedPrivateState::new(&state()).unwrap();
+        let error = storage.replace_private_state(&state).unwrap_err();
 
-        assert!(matches!(error, ReplaceStateError::Replace(_)));
+        assert!(matches!(error, AtomicReplaceError::Write(_)));
         assert_eq!(fs::read(storage.paths.state_file()).unwrap(), b"old state");
     }
 
