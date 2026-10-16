@@ -39,9 +39,9 @@
 //! # Package managers
 //!
 //! [`manifest`] is the `Symposium.toml` schema and [`pm`] the package
-//! identity. Together they are what crosses the package-manager boundary: a PM
-//! answers with a [`pm::PackageId`], a content directory, and a
-//! [`manifest::RawPluginManifest`] it parsed, translated, or synthesized.
+//! identity and provenance vocabulary. A [`pm::PackageId`] names a package;
+//! [`pm::SourcedPackage`] couples that identity to the source that supplied
+//! it.
 //! Validating that manifest (defaults, dormancy, trust) is Symposium's job,
 //! not the PM's.
 

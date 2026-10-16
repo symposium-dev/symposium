@@ -7,7 +7,7 @@ Symposium is a Rust crate with both a library (`src/lib.rs`) and a binary (`src/
 Depended on by both Symposium and anything that extends it. Beyond the hook handler SDK, it carries what a package manager needs to speak:
 
 - `manifest`: the unvalidated `Symposium.toml` schema (the `Raw*` types), `Serialize` as well as `Deserialize` so a manifest can travel on the wire. Retired fields (`crates`, `source.crate`, git/path chained sources) still *parse*, so validation can reject them with a migration hint rather than an unknown-field error.
-- `pm`: `PackageId`, `PluginInfo`, and `UnvalidatedPlugin` (what a package manager answers with: Symposium validates it into a `Plugin`), re-exported from Symposium's `pm` module.
+- `pm`: `PackageId`, `PackageProvenance`, `SourcedPackage`, `PluginInfo`, and `UnvalidatedPlugin`, re-exported from Symposium's `pm` module. `SourcedPackage` couples routing identity to the source fact reported by a package manager without claiming that its version is exact; public-identity policy remains in core.
 - `predicate::syntax`: the predicate tree and its parsing.
 - `hook::HookAgent`, `manifest::HookFormat`, `manifest::Audience`: named by manifests, so they travel with the schema. Mapping a `HookAgent` to its wire-format handler needs Symposium's agent modules, so that stays behind as `hook_schema::agent_event`.
 
@@ -92,6 +92,8 @@ Defines `Source` (the `source = "..."`-tagged enum: `cargo`, `github`) and `acqu
 Validates skill group source constraints during manifest validation: a group must set exactly one of `source.path` or `source.git` — a missing `source` (or an empty `source = {}`) is rejected, as are both together. A crate is not a skill-group source — `source = "crate"` (and the legacy `source.crate` table) is rejected with a hint to use a `[[plugins]] source.cargo` chained reference instead.
 
 ### `pm/` — package managers
+
+`ConfiguredRegistrySource` describes how a configured `[[registry]]` instance obtains its content. `PackageProvenance` is deliberately separate: it describes where an individual package came from, so a configured registry transport cannot be confused with a package ecosystem registry.
 
 The in-process seam from the [registry-centric plugin distribution RFD](../rfds/registry-centric-plugins/README.md). A `PackageId` is the canonical `(pm, name, version)` tuple; `version` may still be a requirement (a semver range, or `*` for "no requirement"), and `fetch` canonicalizes it — a `FetchedPackage` carries the exact resolved id plus the content directory. A `PluginInfo` (id plus optional description) is the lightweight result of `search`.
 

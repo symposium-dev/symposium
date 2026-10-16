@@ -888,8 +888,8 @@ pub async fn list_plugins(sym: &Symposium) -> Vec<ProviderInfo> {
         .filter(|i| i.trusted)
         .map(|inst| {
             let (source_type, git_url, path) = match inst.pm.registry_source() {
-                Some(crate::pm::RegistrySource::Git { url }) => ("git", Some(url), None),
-                Some(crate::pm::RegistrySource::Path { dir }) => {
+                Some(crate::pm::ConfiguredRegistrySource::Git { url }) => ("git", Some(url), None),
+                Some(crate::pm::ConfiguredRegistrySource::Path { dir }) => {
                     ("path", None, Some(dir.display().to_string()))
                 }
                 None => ("unknown", None, None),

@@ -53,6 +53,44 @@ impl std::fmt::Display for PackageId {
     }
 }
 
+/// Where a package's source content came from.
+///
+/// This is a transport fact reported by the package manager. Symposium owns
+/// any policy that decides whether the source may become a public identity.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
+pub enum PackageProvenance {
+    /// A package registry identified by its URL.
+    Registry { url: String },
+    /// A Git repository identified by its URL.
+    Git { url: String },
+    /// A local path outside the active workspace's member set.
+    Path,
+    /// A member of the active workspace.
+    Workspace,
+    /// A source the package manager could not classify.
+    Unknown,
+}
+
+/// A package identity coupled to the source that supplied it.
+///
+/// The identity may still contain a version requirement. This type preserves
+/// provenance; it does not claim that resolution has produced an exact
+/// version.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SourcedPackage {
+    /// The package-manager identity used for routing and deduplication.
+    pub id: PackageId,
+    /// The source fact reported by the package manager.
+    pub provenance: PackageProvenance,
+}
+
+impl SourcedPackage {
+    pub fn new(id: PackageId, provenance: PackageProvenance) -> Self {
+        Self { id, provenance }
+    }
+}
+
 /// What a search knows about a candidate package before its content is on
 /// disk: its identity and an optional description.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,5 +179,59 @@ mod tests {
         let id = PackageId::new("cargo", "serde", "1.0.210");
         let json = serde_json::to_string(&id).unwrap();
         assert_eq!(serde_json::from_str::<PackageId>(&json).unwrap(), id);
+    }
+
+    #[test]
+    fn package_provenance_round_trips_every_variant() {
+        let provenances = [
+            PackageProvenance::Registry {
+                url: "https://packages.example/index".to_owned(),
+            },
+            PackageProvenance::Git {
+                url: "https://git.example/plugins".to_owned(),
+            },
+            PackageProvenance::Path,
+            PackageProvenance::Workspace,
+            PackageProvenance::Unknown,
+        ];
+
+        for provenance in provenances {
+            let json = serde_json::to_string(&provenance).unwrap();
+            assert_eq!(
+                serde_json::from_str::<PackageProvenance>(&json).unwrap(),
+                provenance
+            );
+        }
+    }
+
+    #[test]
+    fn sourced_package_round_trips_requirement_versions() {
+        let package = SourcedPackage::new(
+            PackageId::any_version(CARGO_PM, "example"),
+            PackageProvenance::Registry {
+                url: "https://github.com/rust-lang/crates.io-index".to_owned(),
+            },
+        );
+
+        let json = serde_json::to_string(&package).unwrap();
+        assert_eq!(
+            serde_json::from_str::<SourcedPackage>(&json).unwrap(),
+            package
+        );
+    }
+
+    #[test]
+    fn sourced_package_rejects_a_missing_provenance_field() {
+        let legacy = r#"{
+            "id": {
+                "pm": "cargo",
+                "name": "example",
+                "version": "*"
+            }
+        }"#;
+
+        let error = serde_json::from_str::<SourcedPackage>(legacy)
+            .expect_err("provenance must not default to an unknown source");
+        assert!(error.to_string().contains("missing field `provenance`"));
     }
 }

@@ -43,7 +43,10 @@ pub use path::PathPm;
 
 /// The identity types are the SDK's, since they cross the PM boundary: a
 /// package-manager binary speaks in them too.
-pub use symposium_sdk::pm::{ANY_VERSION, CARGO_PM, PackageId, PluginInfo, UnvalidatedPlugin};
+pub use symposium_sdk::pm::{
+    ANY_VERSION, CARGO_PM, PackageId, PackageProvenance, PluginInfo, SourcedPackage,
+    UnvalidatedPlugin,
+};
 
 /// A fetched package: the exact id it resolved to, plus the directory
 /// holding its content.
@@ -122,14 +125,14 @@ pub trait PackageManager {
     /// How a registry instance's content is sourced, for `plugin list`
     /// display. `None` for the cargo transport, which is not a configured
     /// registry.
-    fn registry_source(&self) -> Option<RegistrySource> {
+    fn registry_source(&self) -> Option<ConfiguredRegistrySource> {
         None
     }
 }
 
 /// Where a registry instance's content comes from — the git-vs-path
 /// distinction, made visible on the PM itself rather than inferred elsewhere.
-pub enum RegistrySource {
+pub enum ConfiguredRegistrySource {
     /// A git repository, fetched into the plugin-source cache.
     Git { url: String },
     /// A local directory.

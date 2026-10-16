@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use symposium_install::UpdateLevel;
 
 use super::{
-    ANY_VERSION, FetchedPackage, PackageId, PackageManager, PluginInfo, RegistrySource,
+    ANY_VERSION, ConfiguredRegistrySource, FetchedPackage, PackageId, PackageManager, PluginInfo,
     UnvalidatedPlugin, layout,
 };
 use crate::report::ReportEvent;
@@ -125,8 +125,8 @@ impl PackageManager for PathPm {
         })
     }
 
-    fn registry_source(&self) -> Option<RegistrySource> {
-        Some(RegistrySource::Path {
+    fn registry_source(&self) -> Option<ConfiguredRegistrySource> {
+        Some(ConfiguredRegistrySource::Path {
             dir: self.dir.clone(),
         })
     }
