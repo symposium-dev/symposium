@@ -7,9 +7,10 @@
 > **Primary sources:**
 > [Extensions](https://block.github.io/goose/docs/guides/using-extensions)
 > · [Configuration](https://block.github.io/goose/docs/guides/config-files)
+> · [Plugins](https://goose-docs.ai/docs/guides/context-engineering/plugins)
 > · [GitHub repo](https://github.com/block/goose)
 
-**Goose does not implement lifecycle hooks.** There are no shell-command or programmatic interception points for tool execution, session start/stop, or prompt submission. No hooks.json equivalent. No JSON stdin/stdout protocol.
+**Symposium registers no hooks for Goose.** Goose has lifecycle hooks now (a `hooks/hooks.json`, which a plugin can carry), but symposium does not use them yet: it reaches Goose through MCP server registration and [plugin delivery](#plugin-delivery).
 
 ## What Goose Offers Instead
 
@@ -55,8 +56,8 @@ Shell scripts can detect whether they're running under Goose and alter behavior 
 
 ## MCP Server Registration
 
-Since Goose has no lifecycle hooks, symposium integrates exclusively via
-MCP server registration. Symposium registers itself as an extension in
+Without hook registration, symposium integrates with Goose through MCP server
+registration and plugin delivery. Symposium registers itself as an extension in
 the Goose config file.
 
 ### Configuration structure
@@ -93,9 +94,23 @@ extensions:
       Authorization: Bearer t
 ```
 
-- **User-level**: `~/.config/goose/config.yaml`
+- **User-level**: `~/.config/goose/config.yaml` (`$GOOSE_PATH_ROOT/config/config.yaml`
+  when that variable is set, else `$XDG_CONFIG_HOME/goose/config.yaml` when
+  that one is)
 - **Project-level**: none - Goose reads only the user-level file, so
   project-scoped registration resolves there.
+
+`GOOSE_PATH_ROOT` moves both places symposium writes: when it is set, Goose
+reads `$GOOSE_PATH_ROOT/config/config.yaml`, whatever `XDG_CONFIG_HOME` says,
+and its user plugins from `$GOOSE_PATH_ROOT/.agents/plugins/`; an empty value
+counts as unset. Symposium writes its MCP servers and
+[plugins](#plugin-delivery) there too. Verified against Goose 1.54.0 with a
+different MCP server in each candidate file, by which one `goose run --text hi`
+started: the one under `$GOOSE_PATH_ROOT` when both variables were set, and the
+`XDG_CONFIG_HOME` one when `GOOSE_PATH_ROOT` was empty. Through `cargo agents
+sync` with the variable set, a server left in `~/.config/goose/config.yaml`
+never started, while the one symposium wrote under `$GOOSE_PATH_ROOT` started
+and was offered to the model as a tool.
 
 Two ways to check a change without a configured LLM provider: `goose recipe
 validate` on a recipe holding the entry (it deserializes the same
@@ -105,3 +120,45 @@ cannot tell an accepted entry from a rejected one.
 
 Registration is idempotent — if the entry already exists with the correct
 values, no changes are made. Stale entries are updated in place.
+
+## Plugin Delivery
+
+A plugin enabled with `use --global` reaches Goose as a copy of the compiled
+plugin directory in `~/.agents/plugins/<plugin>/`
+(`$GOOSE_PATH_ROOT/.agents/plugins/<plugin>/` when that variable is set;
+`XDG_CONFIG_HOME` moves Goose's `config.yaml` but not its plugins). Goose
+discovers every directory there, reads the root `plugin.json` (`.claude-plugin/`
+and the `.symposium` marker are ignored), and loads the skills under `skills/` in
+every project. The directory name is the plugin's identity.
+
+Its skills keep the name their `SKILL.md` gives them. Goose prefixes skill names
+with `<plugin>:` only when `goose plugin install` installs a plugin, by rewriting
+each `SKILL.md`; symposium copies skills unchanged, so they share the namespace
+of standalone skills, where one name loads once.
+
+Goose records each plugin directory it discovers in its `config.yaml`, under
+`plugins.<absolute path>.enabled`. Symposium never edits that map: a user's
+`enabled: false` there keeps the plugin hidden across syncs, and an entry left
+after a plugin is removed is harmless.
+
+Verified against Goose 1.53.0 through `cargo agents sync`, by asking the agent
+(`goose skills list`, and the system prompt a `goose session` sends to a local
+model endpoint):
+
+- The plugin's skill is listed from `~/.agents/plugins/<plugin>/skills/<skill>`
+  after the sync.
+- An edit at the same version reaches the next listing: the copy is read in
+  place.
+- Removing the directory removes the skill, with no error.
+- Goose discovers plugins again on every turn, so a plugin a sync installs while
+  a session runs is offered from the next message.
+- A per-skill copy in the project's `.agents/skills/` with the same name is
+  listed instead of the plugin's skill.
+- `GOOSE_PATH_ROOT` relocates the directory symposium writes and Goose reads.
+
+### Project scope
+
+Goose also loads `<working directory>/.agents/plugins/<plugin>/`, from the
+working directory only, with no trust prompt. A project plugin wins over a user
+plugin of the same name, and Antigravity reads the same folder. Symposium does
+not write project-scoped plugins for Goose yet.

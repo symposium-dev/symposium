@@ -7,18 +7,25 @@ Config name: `goose`
 | Scope | Path |
 |-------|------|
 | Project | `.agents/skills/<name>/SKILL.md` |
-| Global | `~/.agents/skills/<name>/SKILL.md` |
+
+## Plugins
+
+A plugin enabled with `cargo agents use --global` is installed for you as a plugin directory:
+
+| Scope | Path |
+|-------|------|
+| Global | `~/.agents/plugins/<plugin>/` (`$GOOSE_PATH_ROOT/.agents/plugins/<plugin>/` when set) |
+
+Goose loads it in every project. Its skills keep their own names, since Goose adds the `<plugin>:` prefix only to plugins it installs itself, so a skill of the same name elsewhere, such as a per-project copy, is the one Goose uses. Goose remembers each plugin it finds in its `config.yaml`; turning one off there is a choice symposium leaves alone. A plugin installed while a session runs is available from the next message.
 
 ## Hooks
 
-**Not supported.** Goose has no hook system. It uses MCP extensions for extensibility.
-
-Skill files are installed but `cargo agents hook` will never be called by this agent.
+**Not registered.** Goose has hooks of its own, but symposium does not register any for it, so `cargo agents hook` is never called by this agent.
 
 ## MCP servers
 
 | Scope | File | Key |
 |-------|------|-----|
-| Global | `~/.config/goose/config.yaml` | `extensions.<name>` |
+| Global | `~/.config/goose/config.yaml` (`$GOOSE_PATH_ROOT/config/config.yaml` when set) | `extensions.<name>` |
 
 Goose reads no project-level MCP file, so a project-scoped registration goes to the global file.

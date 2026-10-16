@@ -30,10 +30,11 @@ Project scope works in ordinary interactive use: `agy` walks up from the working
 directory to find `.agents/`, and loads project hooks on a second pass once it has
 adopted the workspace.
 
-**Headless print mode is the exception.** `agy -p` adopts no workspace unless
-given `--add-dir <absolute path>` — it cannot read project files and loads no
-project `.agents/` configuration. A relative `--add-dir .` is ignored. Automation
-driving `agy -p` against a project must pass an absolute path.
+Headless print mode (`agy -p`) adopts the repository it starts in the same way,
+without `--add-dir`: project hooks fire with `workspacePaths` populated and
+project plugins load. It loads project plugins in a folder the user never trusted,
+too, since the trust dialog only guards the interactive TUI. Verified on 1.2.14;
+1.2.7 adopted no workspace without `--add-dir <absolute path>`.
 
 ### Configuration structure
 
@@ -111,9 +112,9 @@ All keys are camelCase (protojson).
 }
 ```
 
-`workspacePaths` is populated once the workspace is adopted, and **empty** under
-`agy -p` without `--add-dir`. A hook's working directory is always the directory
-holding its own `hooks.json`, never the user's project.
+`workspacePaths` is populated once the workspace is adopted, in print mode too.
+A hook's working directory is always the directory holding its own `hooks.json`,
+never the user's project.
 
 ### PreToolUse / PostToolUse additions
 
@@ -224,6 +225,53 @@ and a symlink of the folder itself. A separate report of symlinked skills being
 ignored concerns the IDE and `~/.gemini/antigravity/skills/`.
 
 `plugins.json` follows the same schema for plugin directories.
+
+## Plugin Delivery
+
+A plugin enabled with `use --global` reaches Antigravity as a copy of the
+compiled plugin directory in `~/.gemini/config/plugins/<plugin>/`, the global
+folder every Antigravity surface discovers. `agy plugin install <dir>` copies a
+directory to the same place, unchanged. Antigravity loads it in every project as
+the plugin `<plugin>` and offers its skills as `/<plugin>:<skill>`. The directory
+name, not the manifest `name`, is the plugin's identity. The `$schema` and
+`version` fields, `.claude-plugin/` and the `.symposium` marker are ignored.
+
+Symposium writes nothing else. Antigravity keeps its own state about the plugins
+it finds, which symposium leaves alone: `plugins.<dir>.enabled` in
+`~/.gemini/config/config.json` (a user's `false` there hides the plugin;
+Antigravity seeds these entries once, for the plugins present the first time it
+runs) and `~/.gemini/antigravity-cli/plugin_data/<dir>/`, which it removes itself
+once the plugin is gone. `agy plugin list` prints only
+`~/.gemini/config/import_manifest.json`, Antigravity's record of its own
+installs, so it never shows a plugin symposium installed; `/skills` does.
+
+Verified against agy 1.2.14 through `cargo agents sync`, by asking the agent
+(`/skills` in the TUI, and the model request of `agy -p`):
+
+- The plugin is listed in the first session after the sync, as
+  `<plugin>:<skill>` from `~/.gemini/config/plugins/<plugin>`, with no bare
+  duplicate.
+- An edit at the same version reaches the next session: the copy is read in
+  place.
+- Removing the directory removes the plugin, with no error.
+- A plugin written during the `SessionStart` hook (symposium's auto-sync) is not
+  offered in that session, also a while later, until `/skills reload` or a new
+  session.
+- A project plugin of the same name wins over the user copy, silently.
+- A per-skill copy in the project's `.agents/skills/` next to the plugin is
+  listed twice, as `<skill>` and as `<plugin>:<skill>`.
+
+`~/.gemini/config/plugins.json` can register a plugin directory by path instead,
+but a plugin loaded that way lists its skills without the `<plugin>:` prefix and
+ranks below the built-in customizations, so symposium copies.
+
+### Project scope
+
+A `<repo>/.agents/plugins/<plugin>/` folder loads as a project plugin, found by
+walking up to the git root, in a folder the user has trusted (headless `agy -p`
+loads it in an untrusted one too). Two repositories with the same plugin name
+each see their own. Goose reads the same folder. Symposium does not write
+project-scoped plugins for Antigravity yet.
 
 ## MCP server configuration
 

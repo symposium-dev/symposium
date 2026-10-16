@@ -25,6 +25,17 @@ Scans workspace dependencies, installs applicable skills into agent directories,
 
 8. **Register hooks** — ensure symposium's global hook handler and MCP servers are registered for all configured agents. Unregister hooks for agents no longer in the config. Only symposium's own handler is registered (e.g., `cargo-agents hook claude pre-tool-use`) — individual plugin hooks are never written into agent configs. See [Hooks](./hooks.md) for the dispatch model.
 
+## Plugins enabled for every workspace
+
+Between matching skills (step 4) and installing them (step 5), the plugins a `use --global` entry names are compiled for the user. `hook-scope` plays no part: it decides where symposium registers its own hook and MCP servers, not where plugins go.
+
+1. **Attribute and select**: every applicable skill knows the index of the plugin in the active set it was collected for (`SkillWithGroupContext::plugin_index`). After the usual dedup, where the first plugin to reach a skill keeps it, the skills of each plugin that `compile::installs_globally` accepts are grouped per plugin: a `[plugins] use` entry without a workspace names it (by manifest name or package name, hyphen/underscore-insensitively), and it is not a workspace member. A plugin left without skills is not compiled.
+2. **Compile**: each selected plugin becomes one directory under the staging root `~/.symposium/installed/` (the `installed` subdirectory of the config dir): `plugin.json` and `.claude-plugin/plugin.json` with the same `$schema`, `name` and `version` (`0.0.0`), the `.symposium` marker, and each skill's whole directory, symlinks followed, under `skills/<skill-name>/`. The plugin name is normalized to lowercase `[a-z0-9-]`, at most 64 characters; a name two plugins share, or whose slot holds a directory symposium does not own, gets a hash suffix. The expected tree is compared with what is on disk and written to a sibling and renamed into place only when it differs. The root also carries `.claude-plugin/marketplace.json` listing every compiled plugin, for agents pointed at it as a marketplace. Marked directories not compiled this run are removed; unmarked ones are left alone.
+3. **Deliver**: after its hooks and MCP servers, each configured agent's `Agent::sync_user_plugins` reconciles its user-level copy with the compiled set. When it reports that it took delivery, the per-skill loop skips those plugins' skills for that agent, so the stale-skill cleanup removes copies a previous sync left. Agents that cannot take a user-level plugin keep receiving per-skill copies in the project.
+4. **Unregister**: every agent that is no longer configured is called with an empty set, by `sync` and by `init` alike, so a removed agent loses the plugins symposium installed for it.
+
+The selection is user-level state, so every workspace compiles the same plugins, but their content is resolved in the workspace being synced: a plugin or skill that does not apply there is removed from user scope by that sync, and comes back when a workspace where it applies syncs.
+
 ## Marker file
 
 Each skill directory symposium installs contains an empty `.symposium` file. Cleanup walks every agent's skills parent directory (`.claude/skills/`, `.agents/skills/`, `.kiro/skills/`) and reaps any subdirectory whose marker is present but which wasn't installed this sync. This lets symposium reclaim stale skills (including those left behind by agents removed from the config) without touching user-managed skills, which are identified by the absence of the marker.
