@@ -929,6 +929,7 @@ pub(crate) fn entry_plugin(
     root: &Path,
     subpath: &Path,
     source_name: &str,
+    provenance: crate::pm::PackageProvenance,
 ) -> Option<Result<UnvalidatedPlugin>> {
     let dir = root.join(subpath);
     Some(match crate::pm::layout::classify(&dir)? {
@@ -938,7 +939,10 @@ pub(crate) fn entry_plugin(
             let base = toml_path.parent().unwrap_or(&dir).to_path_buf();
             let name = manifest.name.clone().unwrap_or_default();
             Ok(UnvalidatedPlugin::new(
-                PackageId::new(source_name, name, ANY_VERSION),
+                crate::pm::SourcedPackage::new(
+                    PackageId::new(source_name, name, ANY_VERSION),
+                    provenance.clone(),
+                ),
                 base,
                 manifest,
             )
@@ -950,7 +954,10 @@ pub(crate) fn entry_plugin(
             let base = skill_md.parent().unwrap_or(&dir).to_path_buf();
             let name = manifest.name.clone().unwrap_or_default();
             Ok(UnvalidatedPlugin::new(
-                PackageId::new(source_name, name, ANY_VERSION),
+                crate::pm::SourcedPackage::new(
+                    PackageId::new(source_name, name, ANY_VERSION),
+                    provenance,
+                ),
                 base,
                 manifest,
             )
@@ -971,7 +978,7 @@ pub(crate) fn entry_plugin(
 /// `kind` comes from the instance that answered, never from the plugin, so a PM
 /// cannot elect its own policy.
 pub(crate) fn validate_plugin(plugin: UnvalidatedPlugin, kind: PluginKind) -> Result<Plugin> {
-    let package_name = plugin.id.name.clone();
+    let package_name = plugin.package.id.name.clone();
     let origin = match kind {
         PluginKind::Registry => ManifestOrigin::Registry,
         PluginKind::Package => ManifestOrigin::Crate {
@@ -979,7 +986,7 @@ pub(crate) fn validate_plugin(plugin: UnvalidatedPlugin, kind: PluginKind) -> Re
         },
     };
     let UnvalidatedPlugin {
-        id,
+        package,
         root,
         manifest,
         label_root,
@@ -988,7 +995,7 @@ pub(crate) fn validate_plugin(plugin: UnvalidatedPlugin, kind: PluginKind) -> Re
         .with_context(|| format!("invalid plugin at `{}`", crate::output::display_path(&root)))?;
     resolve_group_sources(&mut plugin, &root, label_root.as_deref().unwrap_or(&root));
     Ok(Plugin {
-        canonical: id,
+        canonical: package.id,
         manifest: plugin,
         // Only the workspace-plugin loader stamps true; nothing a PM offers is
         // a workspace member.
@@ -1352,7 +1359,12 @@ fn scan_source_dir<P: AsRef<Path>>(dir: P, source_name: &str) -> Result<SourceDi
     let mut plugins = Vec::new();
 
     for entry in crate::pm::layout::enumerate(dir)? {
-        let Some(plugin) = entry_plugin(dir, &entry.subpath, source_name) else {
+        let Some(plugin) = entry_plugin(
+            dir,
+            &entry.subpath,
+            source_name,
+            crate::pm::PackageProvenance::Path,
+        ) else {
             continue;
         };
         let plugin = plugin.and_then(|p| validate_plugin(p, PluginKind::Registry));
@@ -2494,10 +2506,15 @@ mod tests {
 
         // A skill that names a dependency: the frontmatter gate is hoisted to
         // the plugin, which takes the skill's declared name and is not dormant.
-        let gated = entry_plugin(tmp.path(), Path::new("gated"), "recs")
-            .expect("the entry is a bare skill")
-            .and_then(|o| validate_plugin(o, PluginKind::Registry))
-            .unwrap();
+        let gated = entry_plugin(
+            tmp.path(),
+            Path::new("gated"),
+            "recs",
+            crate::pm::PackageProvenance::Path,
+        )
+        .expect("the entry is a bare skill")
+        .and_then(|o| validate_plugin(o, PluginKind::Registry))
+        .unwrap();
         assert_eq!(gated.manifest.name, "gated-skill");
         assert!(!gated.manifest.requires_use);
         assert!(gated.manifest.predicates.references_dep("serde"));
@@ -2506,10 +2523,15 @@ mod tests {
 
         // A bare skill names no dependency anywhere, so the ordinary dormancy
         // rule leaves it dormant until `use`d.
-        let bare = entry_plugin(tmp.path(), Path::new("bare"), "recs")
-            .expect("the entry is a bare skill")
-            .and_then(|o| validate_plugin(o, PluginKind::Registry))
-            .unwrap();
+        let bare = entry_plugin(
+            tmp.path(),
+            Path::new("bare"),
+            "recs",
+            crate::pm::PackageProvenance::Path,
+        )
+        .expect("the entry is a bare skill")
+        .and_then(|o| validate_plugin(o, PluginKind::Registry))
+        .unwrap();
         assert_eq!(bare.manifest.name, "bare-skill");
         assert!(bare.manifest.requires_use);
     }

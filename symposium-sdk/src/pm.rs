@@ -23,8 +23,9 @@ pub const ANY_VERSION: &str = "*";
 /// which version.
 ///
 /// `version` may still be a *requirement* (a semver range, or
-/// [`ANY_VERSION`]); fetching canonicalizes it: the id on a fetched package
-/// always names the exact resolved version.
+/// [`ANY_VERSION`]). Package managers with versioned ecosystems canonicalize
+/// it while fetching; sources without a version coordinate retain
+/// [`ANY_VERSION`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct PackageId {
     pub pm: String,
@@ -92,22 +93,22 @@ impl SourcedPackage {
 }
 
 /// What a search knows about a candidate package before its content is on
-/// disk: its identity and an optional description.
+/// disk: its sourced identity and an optional description.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PluginInfo {
-    /// Canonical identity. The version component may still be a requirement
-    /// that fetch canonicalizes.
-    pub id: PackageId,
+    /// Candidate package and the source that supplied it. Its version may
+    /// still be a requirement that fetch canonicalizes.
+    pub package: SourcedPackage,
     /// Human-oriented description when the PM's registry provides one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
 
 impl PluginInfo {
-    /// An info with just the identity.
-    pub fn from_id(id: PackageId) -> Self {
+    /// An info with just the sourced package identity.
+    pub fn from_package(package: SourcedPackage) -> Self {
         Self {
-            id,
+            package,
             description: None,
         }
     }
@@ -125,8 +126,11 @@ impl PluginInfo {
 /// configuration and from the source the plugin came from.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UnvalidatedPlugin {
-    /// The exact resolved identity: never a version requirement.
-    pub id: PackageId,
+    /// The package identity and its source provenance.
+    ///
+    /// Registry and workspace loaders may use [`ANY_VERSION`] when their
+    /// package format has no version coordinate.
+    pub package: SourcedPackage,
     /// Directory holding the package's content. Relative `source.path` skill
     /// groups resolve against this. The PM owns it and guarantees it stays
     /// valid for the connection's lifetime; Symposium only reads.
@@ -143,9 +147,13 @@ pub struct UnvalidatedPlugin {
 
 impl UnvalidatedPlugin {
     /// A plugin whose paths are displayed relative to its own root.
-    pub fn new(id: PackageId, root: impl Into<PathBuf>, manifest: RawPluginManifest) -> Self {
+    pub fn new(
+        package: SourcedPackage,
+        root: impl Into<PathBuf>,
+        manifest: RawPluginManifest,
+    ) -> Self {
         Self {
-            id,
+            package,
             root: root.into(),
             manifest,
             label_root: None,

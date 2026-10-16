@@ -17,7 +17,6 @@ use symposium_install::UpdateLevel;
 use crate::crate_sources::RustCrateFetch;
 
 pub mod workspace;
-#[cfg(test)]
 pub(crate) use workspace::CRATES_IO_REGISTRY_URL;
 pub(crate) use workspace::classify_package_source;
 pub use workspace::{
@@ -25,7 +24,8 @@ pub use workspace::{
 };
 
 use super::{
-    ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, UnvalidatedPlugin,
+    ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PackageProvenance,
+    PluginInfo, SourcedPackage, UnvalidatedPlugin,
 };
 
 /// How many crates.io hits a search returns — enough to surface the crate a
@@ -52,6 +52,31 @@ impl CargoPm {
         PackageId::new(CARGO_PM, name, version.unwrap_or(ANY_VERSION))
     }
 
+    /// A workspace member whose name and version satisfy `id`.
+    fn matching_member<'a>(&'a self, id: &PackageId) -> Option<&'a WorkspaceCrate> {
+        let requirement = semver::VersionReq::parse(&id.version).ok()?;
+        let normalized = crate::crate_sources::normalize_crate_name(&id.name);
+        self.workspace.member_crates().iter().find(|package| {
+            crate::crate_sources::normalize_crate_name(&package.name) == normalized
+                && requirement.matches(&package.version)
+        })
+    }
+
+    /// A dependency record that names this exact sourced package.
+    ///
+    /// Looking it up as a complete sourced package matters when a workspace
+    /// member and a dependency have the same Cargo name: a name-only fetch
+    /// deliberately prefers the member, while dependency discovery must keep
+    /// inspecting the dependency that `cargo metadata` reported.
+    fn matching_dependency<'a>(&'a self, package: &SourcedPackage) -> Option<&'a WorkspaceCrate> {
+        let normalized = crate::crate_sources::normalize_crate_name(&package.id.name);
+        self.workspace.crates().iter().find(|candidate| {
+            crate::crate_sources::normalize_crate_name(&candidate.name) == normalized
+                && candidate.version.to_string() == package.id.version
+                && candidate.provenance == package.provenance
+        })
+    }
+
     /// Build the [`UnvalidatedPlugin`] for an already-fetched crate, layering its
     /// manifest sources: `[package.metadata.symposium]` in `Cargo.toml` and a
     /// `Symposium.toml` at the root: via
@@ -61,7 +86,7 @@ impl CargoPm {
     /// manifest, which validation turns into a plugin whose only content is the
     /// default `skills/` group.
     fn plugin_from_fetched(&self, fetched: FetchedPackage) -> UnvalidatedPlugin {
-        let name = &fetched.id.name;
+        let name = &fetched.package.id.name;
         let metadata = crate::crate_metadata::symposium_metadata(&fetched.root.join("Cargo.toml"))
             .unwrap_or_else(|e| {
                 tracing::warn!(
@@ -90,7 +115,7 @@ impl CargoPm {
         };
 
         let manifest = crate::plugins::merge_crate_manifest(metadata, file.as_deref(), name);
-        UnvalidatedPlugin::new(fetched.id, fetched.root, manifest)
+        UnvalidatedPlugin::new(fetched.package, fetched.root, manifest)
     }
 }
 
@@ -155,20 +180,39 @@ impl PackageManager for CargoPm {
     /// source `cargo metadata` already extracted — no probe, no network — so
     /// registry dependencies are surfaced exactly like path ones. A dependency
     /// whose source can't be served from cache is skipped.
-    async fn active_plugins(&self, deps: &[PackageId]) -> Vec<UnvalidatedPlugin> {
+    async fn active_plugins(&self, deps: &[SourcedPackage]) -> Vec<UnvalidatedPlugin> {
         let mut out = Vec::new();
-        for id in deps.iter().filter(|id| id.pm == CARGO_PM) {
-            // Fetch by name only: the concrete version in `id` would make
-            // `fetch` treat it as an explicit `--version` and probe, bypassing
-            // the workspace-source shortcut.
-            let fetched = match self
-                .fetch(&Self::id_for(&id.name, None), UpdateLevel::None)
-                .await
-            {
-                Ok(f) => f,
-                Err(e) => {
-                    tracing::debug!(id = %id, error = %e, "cannot serve dependency source from cache; skipping");
+        for package in deps.iter().filter(|package| package.id.pm == CARGO_PM) {
+            let id = &package.id;
+            // `deps` normally came from `list_deps`, so preserve that exact
+            // record instead of resolving its name again. The fallback keeps
+            // the trait method useful to callers that supply another Cargo id.
+            let fetched = if let Some(candidate) = self.matching_dependency(package) {
+                let Some(root) = candidate.source_dir.clone() else {
+                    tracing::debug!(id = %id, "dependency has no source directory; skipping");
                     continue;
+                };
+                FetchedPackage {
+                    package: SourcedPackage::new(
+                        PackageId::new(
+                            CARGO_PM,
+                            candidate.name.clone(),
+                            candidate.version.to_string(),
+                        ),
+                        candidate.provenance.clone(),
+                    ),
+                    root,
+                }
+            } else {
+                match self
+                    .fetch(&Self::id_for(&id.name, None), UpdateLevel::None)
+                    .await
+                {
+                    Ok(f) => f,
+                    Err(e) => {
+                        tracing::debug!(id = %id, error = %e, "cannot serve dependency source from cache; skipping");
+                        continue;
+                    }
                 }
             };
             // Only surface dependencies that actually embed plugin content.
@@ -215,7 +259,12 @@ impl PackageManager for CargoPm {
             .crates
             .into_iter()
             .map(|c| PluginInfo {
-                id: PackageId::new(CARGO_PM, c.name, c.max_version),
+                package: SourcedPackage::new(
+                    PackageId::new(CARGO_PM, c.name, c.max_version),
+                    PackageProvenance::Registry {
+                        url: CRATES_IO_REGISTRY_URL.to_owned(),
+                    },
+                ),
                 description: c.description,
             })
             .collect())
@@ -223,25 +272,51 @@ impl PackageManager for CargoPm {
 
     async fn fetch(&self, id: &PackageId, _update: UpdateLevel) -> Result<FetchedPackage> {
         debug_assert_eq!(id.pm, CARGO_PM);
+
+        // Members are not dependencies, so resolve a matching member before
+        // the ordinary workspace-source lookup. A version that the member does
+        // not satisfy continues through normal package resolution.
+        if let Some(member) = self.matching_member(id) {
+            let root = member.source_dir.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("workspace member `{}` has no source directory", member.name)
+            })?;
+            return Ok(FetchedPackage {
+                package: SourcedPackage::new(
+                    PackageId::new(CARGO_PM, member.name.clone(), member.version.to_string()),
+                    member.provenance.clone(),
+                ),
+                root: root.clone(),
+            });
+        }
+
         // `crates()` drives the lazy `cargo metadata` resolution — the cargo PM
         // owns the call, resolving against its own workspace.
-        let mut fetch = RustCrateFetch::new(&id.name, self.workspace.crates());
+        let workspace = self.workspace.crates();
+        let mut fetch = RustCrateFetch::new(&id.name, workspace);
         if id.version != ANY_VERSION {
             fetch = fetch.version(&id.version);
         }
         let result = fetch.fetch().await?;
         Ok(FetchedPackage {
-            id: PackageId::new(CARGO_PM, result.name, result.version),
+            package: SourcedPackage::new(
+                PackageId::new(CARGO_PM, result.name, result.version),
+                result.provenance,
+            ),
             root: result.path,
         })
     }
 
-    async fn list_deps(&self) -> Result<Vec<PackageId>> {
+    async fn list_deps(&self) -> Result<Vec<SourcedPackage>> {
         Ok(self
             .workspace
             .crates()
             .iter()
-            .map(|c| PackageId::new(CARGO_PM, c.name.clone(), c.version.to_string()))
+            .map(|c| {
+                SourcedPackage::new(
+                    PackageId::new(CARGO_PM, c.name.clone(), c.version.to_string()),
+                    c.provenance.clone(),
+                )
+            })
             .collect())
     }
 }
@@ -276,6 +351,18 @@ mod tests {
         .with_source_dir(Some(source_dir))
     }
 
+    fn git_dep(name: &str, source_dir: PathBuf) -> WorkspaceCrate {
+        WorkspaceCrate::new(
+            name.to_string(),
+            semver::Version::new(1, 0, 0),
+            PackageProvenance::Git {
+                url: "https://git.example/dependency".to_owned(),
+            },
+            None,
+        )
+        .with_source_dir(Some(source_dir))
+    }
+
     #[tokio::test]
     async fn offers_dependencies_whose_sources_embed_plugin_content() {
         let tmp = tempfile::tempdir().unwrap();
@@ -290,30 +377,150 @@ mod tests {
         std::fs::create_dir_all(&registry_embedded).unwrap();
         std::fs::write(registry_embedded.join("Symposium.toml"), "").unwrap();
 
+        let git_embedded = tmp.path().join("git-embedded");
+        std::fs::create_dir_all(&git_embedded).unwrap();
+        std::fs::write(git_embedded.join("Symposium.toml"), "").unwrap();
+
         let plain = tmp.path().join("plain");
         std::fs::create_dir_all(plain.join("src")).unwrap();
 
         let crates = vec![
             path_dep("with-skills", with_skills),
             registry_dep("registry-embedded", registry_embedded),
+            git_dep("git-embedded", git_embedded),
             path_dep("plain", plain),
         ];
-        let deps: Vec<PackageId> = crates
-            .iter()
-            .map(|c| PackageId::new(CARGO_PM, &c.name, c.version.to_string()))
-            .collect();
         let pm = CargoPm::new(crate::pm::WorkspaceDeps::fixture(
             tmp.path().to_path_buf(),
             crates,
         ));
 
+        let deps = pm.list_deps().await.unwrap();
         let active = pm.active_plugins(&deps).await;
-        let got: Vec<&str> = active.iter().map(|o| o.id.name.as_str()).collect();
+        let got: Vec<&str> = active
+            .iter()
+            .map(|unplug| unplug.package.id.name.as_str())
+            .collect();
         // `plain` embeds nothing, so it is not surfaced.
-        assert_eq!(got, vec!["with-skills", "registry-embedded"]);
-        assert!(active.iter().all(|o| o.id.pm == CARGO_PM));
+        assert_eq!(
+            got,
+            vec!["with-skills", "registry-embedded", "git-embedded"]
+        );
+        assert!(active.iter().all(|unplug| unplug.package.id.pm == CARGO_PM));
+        assert_eq!(active[0].package.provenance, PackageProvenance::Path);
+        assert_eq!(
+            active[1].package.provenance,
+            PackageProvenance::Registry {
+                url: workspace::CRATES_IO_REGISTRY_URL.to_owned(),
+            }
+        );
+        assert_eq!(
+            active[2].package.provenance,
+            PackageProvenance::Git {
+                url: "https://git.example/dependency".to_owned(),
+            }
+        );
+
+        for expected in &deps {
+            let loaded = pm
+                .load_plugin(&PackageId::any_version(CARGO_PM, &expected.id.name))
+                .await;
+            assert_eq!(loaded.len(), 1);
+            assert_eq!(loaded[0].package.provenance, expected.provenance);
+        }
         // The plugin points at the crate source; the default `skills/` group is
         // added by validation, not by the PM.
         assert!(active[0].root.join("skills").is_dir());
+    }
+
+    #[tokio::test]
+    async fn explicit_workspace_member_keeps_workspace_provenance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let member_dir = tmp.path().join("member");
+        std::fs::create_dir_all(member_dir.join("skills/guidance")).unwrap();
+        std::fs::write(member_dir.join("skills/guidance/SKILL.md"), "").unwrap();
+
+        let member = WorkspaceCrate::new(
+            "member".to_owned(),
+            semver::Version::new(0, 1, 0),
+            PackageProvenance::Workspace,
+            Some(member_dir.clone()),
+        );
+        let pm = CargoPm::new(crate::pm::WorkspaceDeps::fixture_with_members(
+            tmp.path(),
+            Vec::new(),
+            vec![member],
+        ));
+
+        assert!(pm.list_deps().await.unwrap().is_empty());
+        for requested in [ANY_VERSION, "0.1.0"] {
+            let loaded = pm
+                .load_plugin(&PackageId::new(CARGO_PM, "member", requested))
+                .await;
+            assert_eq!(loaded.len(), 1);
+            assert_eq!(loaded[0].package.id.version, "0.1.0");
+            assert_eq!(loaded[0].package.provenance, PackageProvenance::Workspace);
+            assert_eq!(loaded[0].root, member_dir);
+        }
+        assert!(
+            pm.matching_member(&PackageId::new(CARGO_PM, "member", "2.0.0"))
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_member_without_a_source_directory_fails_closed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let member = WorkspaceCrate::new(
+            "member".to_owned(),
+            semver::Version::new(0, 1, 0),
+            PackageProvenance::Workspace,
+            None,
+        );
+        let pm = CargoPm::new(crate::pm::WorkspaceDeps::fixture_with_members(
+            tmp.path(),
+            Vec::new(),
+            vec![member],
+        ));
+
+        let error = pm
+            .fetch(
+                &PackageId::any_version(CARGO_PM, "member"),
+                UpdateLevel::None,
+            )
+            .await
+            .expect_err("a known member must not fall through to crates.io");
+        assert!(error.to_string().contains("has no source directory"));
+    }
+
+    #[tokio::test]
+    async fn same_named_dependency_is_not_replaced_by_a_workspace_member() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dependency_dir = tmp.path().join("dependency");
+        let member_dir = tmp.path().join("member");
+        std::fs::create_dir_all(&dependency_dir).unwrap();
+        std::fs::create_dir_all(&member_dir).unwrap();
+        std::fs::write(dependency_dir.join("Symposium.toml"), "").unwrap();
+        std::fs::write(member_dir.join("Symposium.toml"), "").unwrap();
+
+        let dependency = registry_dep("shared-name", dependency_dir.clone());
+        let member = WorkspaceCrate::new(
+            "shared-name".to_owned(),
+            semver::Version::new(1, 0, 0),
+            PackageProvenance::Workspace,
+            Some(member_dir),
+        );
+        let pm = CargoPm::new(crate::pm::WorkspaceDeps::fixture_with_members(
+            tmp.path(),
+            vec![dependency],
+            vec![member],
+        ));
+
+        let deps = pm.list_deps().await.unwrap();
+        let active = pm.active_plugins(&deps).await;
+
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].root, dependency_dir);
+        assert_eq!(active[0].package, deps[0]);
     }
 }

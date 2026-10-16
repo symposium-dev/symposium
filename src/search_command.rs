@@ -58,8 +58,8 @@ pub async fn find_matches(sym: &Symposium, query: &str) -> Vec<SearchMatch> {
     for (instance, info) in sym.detached_managers().search(query).await {
         matches.push(SearchMatch {
             origin: instance,
-            name: info.id.name.clone(),
-            version: Some(info.id.version.clone()),
+            name: info.package.id.name.clone(),
+            version: Some(info.package.id.version.clone()),
             description: info.description,
         });
     }
