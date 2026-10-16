@@ -138,6 +138,7 @@ async fn session_start_tells_the_agent_how_to_load_the_plugins_its_sync_installe
         (HookAgent::Claude, "/reload-plugins"),
         (HookAgent::Codex, "new session"),
         (HookAgent::Copilot, "/restart"),
+        (HookAgent::Antigravity, "/skills reload"),
     ] {
         with_fixture(
             TestMode::SimulationOnly,
