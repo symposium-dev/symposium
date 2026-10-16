@@ -15,7 +15,7 @@ The [`init` command](./reference/cargo-agents-init.md) will guide you through pi
 
 ## Leveraging the wisdom of crates.io
 
-To truly get the most out of Symposium, you also want to install it into your project. When you run `cargo agents init` in a project directory, it will scan your dependencies and create customized skills, tools, and other improvements. These extensions are source either from our central [recommendations repository](https://github.com/symposium-dev/recommendations). In the future, we plan to enable crate authors to embed extensions within their crates themselves and skip the central repo altogether.
+To truly get the most out of Symposium, use it in your Rust projects. When your agent starts a session in one, or when you run `cargo agents sync`, Symposium scans your dependencies and installs customized skills, tools, and other improvements. These extensions come from our central [recommendations repository](https://github.com/symposium-dev/recommendations) and from the crates themselves: crate authors can embed extensions in their crates, and you enable them with a single confirmation.
 
 ## Everybody picks their own agent
 
