@@ -87,6 +87,8 @@
     - [OpenCode](./design/agent-details/opencode.md)
 - [RFDs](./rfds/README.md)
   - [Template](./rfds/TEMPLATE/README.md)
+  - [Draft: Evaluating agent tasks with and without Symposium](./rfds/skill-evaluation/README.md)
+    - [Reference: evaluating agent tasks](./rfds/skill-evaluation/reference.md)
   - [Accepted](./rfds/accepted.md) <!-- put accepted rfds in this section; the file goes in the rfds directory -->
     - [MCP meta-server](./rfds/mcp-meta-server/README.md)
     - [Registry-centric plugin distribution](./rfds/registry-centric-plugins/README.md)
