@@ -21,33 +21,37 @@ The agent name is stored in `[agent] name` in either the user or project config.
 For each agent, `cargo agents` needs to know how to:
 
 1. **Register hooks** — write the hook configuration so the agent calls `cargo-agents hook` on the right events.
-2. **Install extensions** — place skill files (and eventually workflow/MCP definitions) where the agent expects them.
+2. **Install extensions**: place skills where the agent loads them, as per-skill directories in the project or as a compiled plugin directory for the user.
 
-Where these files go depends on whether the agent is configured at the user level or the project level (see [`sync --agent`](./sync-agent-flow.md)).
+Hooks and MCP servers follow `hook-scope`. Skills follow the scope of whatever enabled them (see [`sync`](./sync-agent-flow.md)).
 
 ## Extension locations
 
-When installing skills, `cargo agents` prefers vendor-neutral paths where possible:
+Skills reach an agent in one of two units.
 
-| Scope | Path | Supported by |
-|-------|------|-------------|
-| Project skills | `.agents/skills/<skill-name>/SKILL.md` | Antigravity, Copilot, Codex, OpenCode, Goose |
-| Project skills | `.claude/skills/<skill-name>/SKILL.md` | Claude Code (does not support `.agents/skills/`) |
-| Project skills | `.kiro/skills/<skill-name>/SKILL.md` | Kiro (uses its own path) |
+**Per-skill directories in the project.** Everything that applies to the workspace (registry plugins active by their own gate, workspace members, dependencies, workspace-scoped `use` entries) installs one directory per skill, preferring the vendor-neutral path:
 
-At the project level, Claude Code requires `.claude/skills/`, Kiro requires `.kiro/skills/`, while Antigravity, Copilot, Codex, OpenCode, and Goose all support `.agents/skills/`. `cargo agents` uses the vendor-neutral `.agents/skills/` path whenever the agent supports it.
+| Path | Agents |
+|------|--------|
+| `.agents/skills/<skill-name>/SKILL.md` | Antigravity, Copilot, Codex, OpenCode, Goose |
+| `.claude/skills/<skill-name>/SKILL.md` | Claude Code (does not read `.agents/skills/`) |
+| `.kiro/skills/<skill-name>/SKILL.md` | Kiro |
 
-At the global level, each agent has its own path:
+Symposium never writes per-skill directories at user scope.
 
-| Agent | Global skills path |
-|-------|-------------------|
-| Antigravity CLI | `~/.gemini/config/skills/<skill-name>/SKILL.md` |
-| Claude Code | `~/.claude/skills/<skill-name>/SKILL.md` |
-| Copilot | *(no global skills path)* |
-| Codex | `~/.agents/skills/<skill-name>/SKILL.md` |
-| Kiro | `~/.kiro/skills/<skill-name>/SKILL.md` |
-| OpenCode | `~/.agents/skills/<skill-name>/SKILL.md` |
-| Goose | `~/.agents/skills/<skill-name>/SKILL.md` |
+**Compiled plugin directories for the user.** A plugin that a `use --global` entry names, whatever `hook-scope` says, is compiled once into `~/.symposium/installed/<plugin>/`, an [Agent Plugins](https://agent-plugins.org/) directory carrying `plugin.json`, `.claude-plugin/plugin.json` with the same content, the `.symposium` marker and `skills/<skill>/`. Each agent that can install a plugin for the user receives it through `Agent::sync_user_plugins`, and then gets no per-skill copies of that plugin's skills:
+
+| Agent | Delivery of a compiled plugin |
+|-------|-------------------------------|
+| Antigravity CLI | not yet: per-skill copies in the project |
+| Claude Code | copied to `~/.claude/skills/<plugin>/` (`$CLAUDE_CONFIG_DIR/skills/` when set), loaded as `<plugin>@skills-dir` |
+| Codex CLI | not yet: per-skill copies in the project |
+| GitHub Copilot | not yet: per-skill copies in the project |
+| Goose | not yet: per-skill copies in the project |
+| Kiro | no plugin unit: per-skill copies in the project |
+| OpenCode | no plugin unit: per-skill copies in the project |
+
+Symposium writes these files itself and never runs an agent's own plugin command: delivery also runs inside the `SessionStart` hook, where nothing can answer a prompt. See [Claude Code plugin delivery](./agent-details/claude-code.md#plugin-delivery) for what was verified.
 
 ---
 

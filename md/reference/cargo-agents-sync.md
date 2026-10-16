@@ -28,6 +28,24 @@ Must be run from within a Rust workspace. Performs the following steps:
 
 7. **Register hooks** — ensures hooks and MCP servers are registered for all configured agents. Registers both global hooks (for all projects) and project-specific hooks (for the current project). Unregisters hooks for agents no longer in the config.
 
+## Plugins enabled for every workspace
+
+A plugin you enabled with [`cargo agents use --global`](./cargo-agents-use.md) is installed for you, not copied into each project. Sync compiles it into one plugin directory under `~/.symposium/installed/<plugin>/` and gives that directory to every configured agent that can install a plugin for the user, whatever [`hook-scope`](./configuration.md) says:
+
+| Agent | Where the plugin goes |
+|-------|-----------------------|
+| Antigravity CLI | its skills, per project, as above |
+| Claude Code | `~/.claude/skills/<plugin>/` (or `$CLAUDE_CONFIG_DIR/skills/<plugin>/`), loaded as the plugin `<plugin>` in every project |
+| Codex CLI | its skills, per project, as above |
+| GitHub Copilot | its skills, per project, as above |
+| Goose | its skills, per project, as above |
+| Kiro | its skills, per project, as above |
+| OpenCode | its skills, per project, as above |
+
+An agent that received the plugin gets no per-project copy of its skills, and copies an earlier sync left are cleaned up. Agents load plugins when a session starts, so a plugin installed by the automatic sync at session start appears in the next session (in Claude Code, `/reload-plugins` loads it right away).
+
+The plugin's skills are still selected in the workspace being synced, so a skill that does not apply there is left out until a workspace where it applies syncs. Dropping the `--global` entry, or removing the agent with `cargo agents init --remove-agent`, removes what symposium installed.
+
 ## Consent prompt
 
 Before syncing, an interactive `cargo agents sync` asks about each dependency
