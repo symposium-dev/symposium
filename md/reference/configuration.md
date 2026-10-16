@@ -120,6 +120,8 @@ Defines additional registries — directories or repositories offering plugins. 
 | `path` | string | — | Local directory containing plugins. Relative paths are resolved from `~/.symposium/`. |
 | `auto-update` | bool | `true` | Check for updates on startup. Only applies to `git` registries. |
 
+A registry that cannot be read in full (a `path` that is missing or unreadable, or a `git` registry whose cached copy is missing or incomplete) is reported, and [`cargo agents sync`](./cargo-agents-sync.md) removes no installed skills until it can be read again. Run `cargo agents plugin sync <name>` to fetch a `git` registry's copy on demand.
+
 ## `[plugins]`
 
 Enablement: which plugins are allowed to run at all, as distinct from the [predicates](./predicates.md) that decide *when* an enabled plugin applies.

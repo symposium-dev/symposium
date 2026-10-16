@@ -87,6 +87,12 @@ pub trait PackageManager {
     /// plugin is *trusted* is the caller's decision — see [`PmInstance::trusted`].
     async fn active_plugins(&self, deps: &[PackageId]) -> Vec<UnvalidatedPlugin>;
 
+    /// Fails instead of returning a short list when the source could not be
+    /// read in full, since sync removes what a registry stops offering.
+    async fn registry_plugins(&self) -> Result<Vec<UnvalidatedPlugin>> {
+        Ok(self.active_plugins(&[]).await)
+    }
+
     /// The plugin(s) a specific id maps to — zero, one, or many. Used for
     /// `[[plugins]]` chained references and explicitly enabled crates.
     async fn load_plugin(&self, id: &PackageId) -> Vec<UnvalidatedPlugin>;
@@ -167,6 +173,20 @@ impl PmInstance {
     /// validation is logged and dropped: best-effort, like the PM layer above.
     pub async fn active_plugins(&self, deps: &[PackageId]) -> Vec<Plugin> {
         self.validate_all(self.pm.active_plugins(deps).await)
+    }
+
+    pub async fn registry_plugins(&self) -> Option<Vec<Plugin>> {
+        match self.pm.registry_plugins().await {
+            Ok(plugins) => Some(self.validate_all(plugins)),
+            Err(e) => {
+                tracing::warn!(
+                    report = %crate::report::ReportEvent::Warning {
+                        message: format!("{e:#}"),
+                    },
+                );
+                None
+            }
+        }
     }
 
     /// The plugin(s) an id maps to, validated.
@@ -363,6 +383,117 @@ mod tests {
     async fn invalid_package_plugin_is_not_reported() {
         let reports = reports_for_invalid_plugin(PluginKind::Package).await;
         assert!(reports.is_empty(), "{reports:?}");
+    }
+
+    #[tokio::test]
+    async fn registry_plugins_tells_an_unreadable_source_from_an_empty_one() {
+        async fn read(pm: impl PackageManager + Sync) -> Option<usize> {
+            pm.registry_plugins().await.ok().map(|found| found.len())
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let skill = |dir: PathBuf| {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("SKILL.md"), "---\nname: s\ndescription: d\n---\n").unwrap();
+        };
+        let git = |repo: &str| {
+            let url = format!("https://github.com/example/{repo}");
+            let ctx = symposium_install::InstallContext::new(root.join("cache"));
+            let cache = symposium_install::git::GitCacheManager::new(
+                &ctx,
+                crate::config::REGISTRY_CACHE_SUBDIR,
+            )
+            .cache_path_for_url(&url)
+            .unwrap();
+            (GitPm::new(repo, url, false, ctx).unwrap(), cache)
+        };
+
+        let missing = root.join("missing");
+        let malformed = root.join("malformed");
+        skill(malformed.join("good"));
+        std::fs::create_dir_all(malformed.join("bad")).unwrap();
+        std::fs::write(
+            malformed.join("bad").join(layout::MANIFEST_FILE),
+            "not toml {{{",
+        )
+        .unwrap();
+        let (fetched, cache) = git("fetched");
+        skill(cache.join("s"));
+        std::fs::write(
+            cache.join(".symposium-cache-meta.json"),
+            r#"{"commit_sha":"0","fetched_at":"2026-01-01T00:00:00Z","source_url":""}"#,
+        )
+        .unwrap();
+        let (never_fetched, _) = git("never-fetched");
+        let (incomplete, cache) = git("incomplete");
+        skill(cache.join("s"));
+
+        let rows = vec![
+            (
+                "missing configured directory",
+                read(PathPm::new("r", &missing)).await,
+                None,
+            ),
+            (
+                "missing builtin directory",
+                read(PathPm::new("r", &missing).allow_missing()).await,
+                Some(0),
+            ),
+            (
+                "one malformed entry",
+                read(PathPm::new("r", &malformed)).await,
+                Some(1),
+            ),
+            ("fetched git registry", read(fetched).await, Some(1)),
+            (
+                "git registry never fetched",
+                read(never_fetched).await,
+                None,
+            ),
+            (
+                "git cache without its meta file",
+                read(incomplete).await,
+                None,
+            ),
+        ];
+
+        #[cfg(unix)]
+        let rows = {
+            use std::os::unix::fs::{PermissionsExt, symlink};
+            let mut rows = rows;
+            let set_mode = |dir: &PathBuf, bits| {
+                std::fs::set_permissions(dir, std::fs::Permissions::from_mode(bits)).unwrap()
+            };
+
+            let dangling = root.join("dangling");
+            symlink(root.join("gone"), &dangling).unwrap();
+            let pm = PathPm::new("r", dangling).allow_missing();
+            rows.push((
+                "builtin directory behind a dangling link",
+                read(pm).await,
+                None,
+            ));
+
+            let unreadable = root.join("unreadable");
+            skill(unreadable.join("s"));
+            let nested = root.join("nested");
+            skill(nested.join("ok"));
+            skill(nested.join("group/s"));
+            let locked = [unreadable.clone(), nested.join("group")];
+            locked.iter().for_each(|dir| set_mode(dir, 0o000));
+            if std::fs::read_dir(&unreadable).is_err() {
+                let pm = PathPm::new("r", unreadable);
+                rows.push(("unreadable directory", read(pm).await, None));
+                let pm = PathPm::new("r", nested);
+                rows.push(("unreadable nested directory", read(pm).await, None));
+            }
+            locked.iter().for_each(|dir| set_mode(dir, 0o755));
+            rows
+        };
+
+        for (label, got, expected) in rows {
+            assert_eq!(got, expected, "{label}");
+        }
     }
 
     #[tokio::test]

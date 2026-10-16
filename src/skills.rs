@@ -1169,6 +1169,7 @@ mod tests {
                 workspace_member: false,
             }],
             warnings: vec![],
+            unreadable_registries: vec![],
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
@@ -1228,6 +1229,7 @@ mod tests {
                 workspace_member: false,
             }],
             warnings: vec![],
+            unreadable_registries: vec![],
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
@@ -1305,6 +1307,7 @@ mod tests {
                 workspace_member: false,
             }],
             warnings: vec![],
+            unreadable_registries: vec![],
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
@@ -1387,6 +1390,7 @@ mod tests {
                 workspace_member: false,
             }],
             warnings: vec![],
+            unreadable_registries: vec![],
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
@@ -1470,6 +1474,7 @@ mod tests {
                 workspace_member: false,
             }],
             warnings: vec![],
+            unreadable_registries: vec![],
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
@@ -1598,6 +1603,7 @@ mod tests {
                 workspace_member: false,
             }],
             warnings: vec![],
+            unreadable_registries: vec![],
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 

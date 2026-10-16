@@ -1,0 +1,14 @@
+hook-scope = "project"
+
+[defaults]
+symposium-recommendations = false
+user-plugins = false
+
+[[registry]]
+name = "ext"
+path = "$TEST_DIR/ext"
+
+[[registry]]
+name = "gitreg"
+git = "https://github.com/example/reap-probe"
+auto-update = false

@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use symposium_install::UpdateLevel;
 
 use super::{
@@ -27,7 +27,8 @@ use crate::report::ReportEvent;
 /// collection of plugin entries.
 pub struct PathPm {
     name: String,
-    dir: PathBuf,
+    pub(super) dir: PathBuf,
+    allow_missing: bool,
 }
 
 impl PathPm {
@@ -36,6 +37,14 @@ impl PathPm {
         Self {
             name: name.into(),
             dir: dir.into(),
+            allow_missing: false,
+        }
+    }
+
+    pub fn allow_missing(self) -> Self {
+        Self {
+            allow_missing: true,
+            ..self
         }
     }
 }
@@ -51,13 +60,20 @@ impl PackageManager for PathPm {
     /// plugin applies is decided later by its own predicates. A registry is a
     /// trust root, so these activate without consent.
     async fn active_plugins(&self, _deps: &[PackageId]) -> Vec<UnvalidatedPlugin> {
-        let entries = match layout::enumerate(&self.dir) {
-            Ok(e) => e,
-            Err(e) => {
-                tracing::warn!(registry = %self.name, error = %e, "cannot list registry");
-                return Vec::new();
-            }
-        };
+        self.registry_plugins().await.unwrap_or_else(|e| {
+            tracing::warn!(error = %format!("{e:#}"), "cannot list registry");
+            Vec::new()
+        })
+    }
+
+    async fn registry_plugins(&self) -> Result<Vec<UnvalidatedPlugin>> {
+        let missing = std::fs::symlink_metadata(&self.dir)
+            .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound);
+        if missing && self.allow_missing {
+            return Ok(Vec::new());
+        }
+        let entries = layout::enumerate(&self.dir)
+            .with_context(|| format!("cannot read registry `{}`", self.name))?;
         let mut out = Vec::new();
         for entry in entries {
             match crate::plugins::entry_plugin(&self.dir, &entry.subpath, &self.name) {
@@ -73,7 +89,7 @@ impl PackageManager for PathPm {
                 None => {}
             }
         }
-        out
+        Ok(out)
     }
 
     /// The entry an id names (`id.name` is the entry's subpath key).

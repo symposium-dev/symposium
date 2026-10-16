@@ -371,6 +371,112 @@ async fn sync_preserves_user_managed_skills() {
     .unwrap();
 }
 
+#[derive(Clone, Copy, Debug)]
+enum Unreadable {
+    Moved,
+    #[cfg(unix)]
+    Locked,
+    GitCacheMoved,
+}
+
+impl Unreadable {
+    fn apply(self, source: &Path, aside: &Path) {
+        match self {
+            #[cfg(unix)]
+            Self::Locked => set_mode(source, 0o000),
+            _ => std::fs::rename(source, aside).unwrap(),
+        }
+    }
+
+    fn undo(self, source: &Path, aside: &Path) {
+        match self {
+            #[cfg(unix)]
+            Self::Locked => set_mode(source, 0o755),
+            _ => std::fs::rename(aside, source).unwrap(),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, bits: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(bits)).unwrap();
+}
+
+#[tokio::test]
+async fn sync_keeps_skills_of_a_registry_it_cannot_read() {
+    let modes = [
+        Unreadable::Moved,
+        #[cfg(unix)]
+        Unreadable::Locked,
+        Unreadable::GitCacheMoved,
+    ];
+    for mode in modes {
+        with_fixture(
+            TestMode::SimulationOnly,
+            &["unreadable-registry0", "workspace-empty0"],
+            async |mut ctx| {
+                ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+                ctx.symposium(&["sync"]).await?;
+
+                let skills = ctx.workspace_root.as_ref().unwrap().join(".claude/skills");
+                let installed = |name| !find_installed_skills(&skills, name).is_empty();
+                assert!(installed("house-style") && installed("git-style"));
+
+                let (registry, source, skill, other) = match mode {
+                    Unreadable::GitCacheMoved => (
+                        "gitreg",
+                        ctx.sym
+                            .cache_dir()
+                            .join("plugin-sources/example--reap-probe"),
+                        "git-style",
+                        "house-style",
+                    ),
+                    _ => ("ext", ctx.tempdir.join("ext"), "house-style", "git-style"),
+                };
+                let aside = ctx.tempdir.join("aside");
+
+                mode.apply(&source, &aside);
+                if std::fs::read_dir(&source).is_ok() {
+                    eprintln!("{mode:?}: source still readable (running as root?), skipping");
+                    mode.undo(&source, &aside);
+                    return Ok(());
+                }
+
+                let events = ctx.sync_with_report(tracing::Level::INFO).await?;
+                assert!(installed(skill) && installed(other), "{mode:?}");
+                assert!(
+                    events.iter().any(|e| e["kind"] == "warning"
+                        && e["message"].as_str().is_some_and(|m| {
+                            m.contains(&format!("`{registry}`")) && m.contains("skipped cleanup")
+                        })),
+                    "{mode:?}: expected a warning naming `{registry}`, got: {events:?}"
+                );
+
+                ctx.prompt_or_hook(
+                    "test",
+                    &[symposium_testlib::HookStep::session_start()],
+                    symposium::hook_schema::HookAgent::Claude,
+                )
+                .await?;
+                assert!(installed(skill) && installed(other), "{mode:?}");
+
+                mode.undo(&source, &aside);
+                std::fs::remove_dir_all(source.join(skill)).unwrap();
+                ctx.symposium(&["sync"]).await?;
+                assert!(
+                    !installed(skill),
+                    "{mode:?}: the dropped entry should be removed"
+                );
+                assert!(installed(other), "{mode:?}");
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+    }
+}
+
 /// Copilot uses vendor-neutral `.agents/skills/` path, not `.claude/skills/`.
 #[test]
 fn copilot_uses_vendor_neutral_skill_path() {

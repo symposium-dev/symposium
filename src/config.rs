@@ -612,31 +612,35 @@ impl Symposium {
     /// git URL, or an entry naming neither `git` nor `path`) is skipped with a
     /// warning.
     pub fn registry_instances(&self) -> Vec<crate::pm::PmInstance> {
-        let mut configs: Vec<RegistryConfig> = Vec::new();
+        let mut instances = Vec::new();
 
         if self.config.defaults.symposium_recommendations {
-            configs.push(RegistryConfig {
+            instances.extend(self.registry_instance(RegistryConfig {
                 name: "symposium-recommendations".to_string(),
                 git: Some(BUILTIN_RECOMMENDATIONS_URL.to_string()),
                 path: None,
                 auto_update: true,
-            });
+            }));
         }
 
         if self.config.defaults.user_plugins {
-            configs.push(RegistryConfig {
+            let dir = self.dirs.config_dir.join("plugins");
+            instances.push(crate::pm::PmInstance {
                 name: "user-plugins".to_string(),
-                git: None,
-                path: Some("plugins".to_string()),
-                auto_update: true,
+                trusted: true,
+                kind: crate::pm::PluginKind::Registry,
+                pm: Box::new(crate::pm::PathPm::new("user-plugins", dir).allow_missing()),
             });
         }
 
-        configs.extend(self.config.registries.iter().cloned());
-        configs
-            .into_iter()
-            .filter_map(|cfg| self.registry_instance(cfg))
-            .collect()
+        instances.extend(
+            self.config
+                .registries
+                .iter()
+                .cloned()
+                .filter_map(|cfg| self.registry_instance(cfg)),
+        );
+        instances
     }
 
     /// Build the registry instance for one config entry. Relative `path` values

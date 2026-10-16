@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
 /// Plugin manifest filename that marks a directory as a plugin entry.
 pub const MANIFEST_FILE: &str = "Symposium.toml";
@@ -54,9 +54,6 @@ pub struct RegistryEntry {
     pub subpath: PathBuf,
 }
 
-/// Enumerate the entries in the flat-layout registry source rooted at `root`,
-/// sorted by subpath. A missing root yields no entries; a root that is itself
-/// an entry is an error (a source should *contain* plugins, not be one).
 pub fn enumerate(root: &Path) -> Result<Vec<RegistryEntry>> {
     match classify(root) {
         Some(EntryKind::Plugin(_)) => anyhow::bail!(
@@ -70,16 +67,16 @@ pub fn enumerate(root: &Path) -> Result<Vec<RegistryEntry>> {
         None => {}
     }
     let mut entries = Vec::new();
-    walk(root, Path::new(""), &mut entries);
+    walk(root, Path::new(""), &mut entries)?;
     entries.sort_by(|a, b| a.subpath.cmp(&b.subpath));
     Ok(entries)
 }
 
 /// Recursively collect entry directories under `dir`, unsorted and without
 /// the root guard. Subpaths are relative to `rel`.
-pub(crate) fn walk(dir: &Path, rel: &Path, entries: &mut Vec<RegistryEntry>) {
+pub(crate) fn walk(dir: &Path, rel: &Path, entries: &mut Vec<RegistryEntry>) -> Result<()> {
     let mut ancestors = crate::dir_walk::Ancestors::rooted_at(dir);
-    walk_in(dir, rel, &mut ancestors, entries);
+    walk_in(dir, rel, &mut ancestors, entries)
 }
 
 fn walk_in(
@@ -87,11 +84,10 @@ fn walk_in(
     rel: &Path,
     ancestors: &mut crate::dir_walk::Ancestors,
     entries: &mut Vec<RegistryEntry>,
-) {
-    let Ok(read) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in read.flatten() {
+) -> Result<()> {
+    let unreadable = || crate::output::display_path(dir);
+    for entry in std::fs::read_dir(dir).with_context(unreadable)? {
+        let entry = entry.with_context(unreadable)?;
         let path = entry.path();
         // `is_dir` follows symlinks, so a linked directory is an entry like any
         // other — and can name a directory this walk is already inside.
@@ -102,10 +98,11 @@ fn walk_in(
         if classify(&path).is_some() {
             entries.push(RegistryEntry { subpath: sub });
         } else if ancestors.enter(&path) {
-            walk_in(&path, &sub, ancestors, entries);
+            walk_in(&path, &sub, ancestors, entries)?;
             ancestors.leave();
         }
     }
+    Ok(())
 }
 
 /// A subpath as it appears in a package id: slash-separated, so ids are
@@ -140,8 +137,7 @@ mod tests {
             vec![PathBuf::from("group/deep/skill"), PathBuf::from("plug")]
         );
 
-        // Missing root: no entries, no error.
-        assert!(enumerate(&tmp.path().join("nope")).unwrap().is_empty());
+        assert!(enumerate(&tmp.path().join("nope")).is_err());
     }
 
     /// A registry directory that links back into itself still enumerates.

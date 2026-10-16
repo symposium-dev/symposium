@@ -54,6 +54,12 @@ And when two walks over one tree feed each other — a copy, and the comparison 
 
 Plugin content must not decide where Symposium writes. A name it supplies, such as a skill's `name`, can resolve outside the directory it is joined onto (`Path::join` does not confine it), so it never becomes part of a path unchecked. Validate it with `skills::is_safe_dir_name`, which also covers Windows-specific path forms, rather than with a check of your own.
 
+## A source that reads as empty is not an empty source
+
+A listing that swallows read errors returns the same empty list for "nothing there" and "could not look". Anything that removes what is no longer offered turns the second into data loss: a `[[registry]]` path on an unmounted share would make `sync` delete every skill installed from it, on the hook path too, without a word. So registry reads fail instead of coming back short (`PackageManager::registry_plugins`: a missing configured directory, any directory that cannot be read, a git registry whose local copy is missing or incomplete), and `PluginRegistry::unreadable_registries` carries the failures to `sync`, which skips its stale-skill cleanup while that list is non-empty. Any new pass that removes things because a source stopped offering them belongs behind the same condition.
+
+The opposite mistake matters as much: a source that is legitimately absent must stay empty, or cleanup never runs again. The built-in `~/.symposium/plugins/` need not exist (`PathPm::allow_missing`), and an entry whose manifest fails to load leaves its registry readable, so that entry's skills are removed like any other dropped entry.
+
 ## Windows portability (tests)
 
 The test suite runs on `windows-latest`, where CI passes `--no-fail-fast` so that one failing test binary does not hide the failures in every binary cargo would otherwise skip. A few patterns recur when writing tests that touch paths or scripts:

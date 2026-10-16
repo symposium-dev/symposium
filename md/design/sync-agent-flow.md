@@ -8,7 +8,7 @@ Scans workspace dependencies, installs applicable skills into agent directories,
 
 1. **Find workspace root** — run `cargo metadata` to locate the workspace manifest directory.
 
-2. **Load registries** — read the user config's `[[registry]]` entries, ask each one's package manager for the plugin-bearing entries it offers, and load their plugin manifests. For git registries, fetch/update as needed.
+2. **Load registries**: read the user config's `[[registry]]` entries, ask each one's package manager for the plugin-bearing entries it offers, and load their plugin manifests. Git registries are read from their local copy; the binary refreshes it before running any command, unless the registry sets `auto-update = false`. A registry that cannot be read in full is reported and remembered for step 7: a configured directory that is missing, any directory in it that cannot be read, or a git registry whose local copy is missing or incomplete. The built-in `~/.symposium/plugins/` is the one exception: nobody configured it, so when it does not exist it is simply empty.
 
 3. **Scan dependencies** — read the full dependency graph from the workspace.
 
@@ -17,11 +17,11 @@ Scans workspace dependencies, installs applicable skills into agent directories,
 5. **Install skills per agent** — for each configured agent:
    - Copy applicable `SKILL.md` files into the agent's expected skill directory.
    - Drop a `.symposium` marker file into each installed skill directory so future syncs (and other tools) can recognize it as symposium-managed.
-   - For every skill directory symposium creates along the way (the skill directory itself or its `skills/` parent), write a `.gitignore` containing a single `*` so symposium-managed files stay out of version control.
+   - Write a `.gitignore` containing a single `*` into each installed skill directory so symposium-managed files stay out of version control. Parent directories such as `.claude/skills/` get none.
 
 6. **Workspace `.agents/skills/` (agents-syncing)** — not a separate step: when `agents-syncing` is enabled, each workspace plugin carries a `workspace-member()`-gated default group for `.agents/skills/`, so maintainer skills resolve and install through the same pipeline as everything else. Two marker guards make `.agents/skills/` safe as both a source and (for vendor-neutral agents) a destination: discovery skips `.symposium`-marked directories (installed copies are never sources), and a skill whose source already sits at an agent's install slot is skipped for that agent (no self-copy, no suffixed duplicate).
 
-7. **Reap stale skills** — across every known agent's skills parent directory, remove any subdirectory that contains the `.symposium` marker but wasn't installed this sync. Directories without the marker (user-managed) are left untouched.
+7. **Reap stale skills**: across every known agent's skills parent directory, remove any subdirectory that contains the `.symposium` marker but wasn't installed this sync. Directories without the marker (user-managed) are left untouched. When step 2 found a registry it could not read in full, this step is skipped and a warning names each such registry: an unreadable registry offered nothing this time, so everything it installed would look stale. Everything that did load is still installed and updated, and the next sync that reads every registry cleans up as usual. A registry that reads fine still loses what it no longer offers, including an entry whose manifest fails to load: that entry is reported, and its skills are removed.
 
 8. **Register hooks** — ensure symposium's global hook handler and MCP servers are registered for all configured agents. Unregister hooks for agents no longer in the config. Only symposium's own handler is registered (e.g., `cargo-agents hook claude pre-tool-use`) — individual plugin hooks are never written into agent configs. See [Hooks](./hooks.md) for the dispatch model.
 
@@ -31,10 +31,10 @@ Each skill directory symposium installs contains an empty `.symposium` file. Cle
 
 ## Gitignore
 
-Each skill directory symposium creates (and its `skills/` parent if new) receives a `.gitignore` containing just `*`. Pre-existing directories are left alone. The wildcard also hides the marker file and the gitignore itself, so `git status` stays clean.
+Each skill directory symposium installs receives a `.gitignore` containing just `*`; parent directories such as `.claude/` or `.claude/skills/` are left alone. The wildcard also hides the marker file and the gitignore itself, so `git status` stays clean.
 
 ## Auto-sync
 
-When `auto-sync = true` is set in the user config, the hook handler runs `sync` automatically during agent sessions. This keeps skills in sync as dependencies change.
+When `auto-sync = true` is set in the user config, the hook handler runs `sync` automatically during agent sessions. This keeps skills in sync as dependencies change. It is the same `sync`, so a registry that becomes unreadable mid-session (an unmounted share, say) never removes skills from under the agent; the warning goes to the log, since a hook's output belongs to the agent.
 
 On most hook events, auto-sync is gated on `Cargo.lock` (and `battery-pack.toml`) mtime via per-workspace state, so an unchanged workspace doesn't pay for `cargo metadata` on every event. `SessionStart` is the exception: it runs once per session, ignores that gate, and passes `UpdateLevel::Check` down through skill resolution so `source.git` skill groups are re-fetched when their upstream moved. This is what makes upstream skill updates land even when the workspace's own dependencies haven't changed. `sync` takes the `UpdateLevel` as a parameter; the binary's global `--update` flag threads through the same path for manual `cargo agents sync`.

@@ -767,6 +767,7 @@ pub struct PluginRegistry {
     pub plugins: Vec<Plugin>,
     /// Non-fatal load warnings for entries that were skipped.
     pub warnings: Vec<LoadWarning>,
+    pub unreadable_registries: Vec<String>,
     /// Global custom predicate registry. Built from all plugins' `custom_predicates`.
     pub custom_predicates: CustomPredicateRegistry,
 }
@@ -869,7 +870,7 @@ pub async fn list_plugins(sym: &Symposium) -> Vec<ProviderInfo> {
 
     // Trusted instances only: registry entries, not dependency-embedded crates.
     for inst in pms.instances().filter(|i| i.trusted) {
-        for p in inst.active_plugins(&[]).await {
+        for p in inst.registry_plugins().await.unwrap_or_default() {
             by_registry
                 .entry(inst.name.clone())
                 .or_default()
@@ -908,7 +909,7 @@ pub async fn list_plugins(sym: &Symposium) -> Vec<ProviderInfo> {
 pub async fn find_plugin(sym: &Symposium, name: &str) -> Option<Plugin> {
     let pms = sym.detached_managers();
     for inst in pms.instances().filter(|i| i.trusted) {
-        for parsed in inst.active_plugins(&[]).await {
+        for parsed in inst.registry_plugins().await.unwrap_or_default() {
             if parsed.manifest.name == name {
                 return Some(parsed);
             }
@@ -1088,13 +1089,17 @@ async fn load_registry_impl(
     let pms = sym.detached_managers();
     let mut plugins = Vec::new();
     let mut warnings = Vec::new();
+    let mut unreadable_registries = Vec::new();
 
     // Trust roots only: the configured registries (and, below, the workspace).
     // Dependency-embedded crate plugins are not trust roots — they reach the
     // active set through discovery / consent and the driver's `load_plugin`,
     // never here. Each registry instance logs its own load failures.
     for inst in pms.instances().filter(|i| i.trusted) {
-        plugins.extend(inst.active_plugins(&[]).await);
+        match inst.registry_plugins().await {
+            Some(found) => plugins.extend(found),
+            None => unreadable_registries.push(inst.name.clone()),
+        }
     }
 
     if let Some(ws) = workspace {
@@ -1111,6 +1116,7 @@ async fn load_registry_impl(
     PluginRegistry {
         plugins,
         warnings,
+        unreadable_registries,
         custom_predicates,
     }
 }
@@ -2516,8 +2522,7 @@ mod tests {
 
     #[test]
     fn scan_source_dir_missing() {
-        let contents = scan_source_dir("/nonexistent/path/abc123", "").unwrap();
-        assert!(contents.plugins.is_empty());
+        assert!(scan_source_dir("/nonexistent/path/abc123", "").is_err());
     }
 
     #[test]

@@ -64,6 +64,19 @@ impl PackageManager for GitPm {
         self.inner.active_plugins(deps).await
     }
 
+    async fn registry_plugins(&self) -> Result<Vec<UnvalidatedPlugin>> {
+        let cache = GitCacheManager::new(&self.ctx, REGISTRY_CACHE_SUBDIR);
+        if cache.read_meta_for(&self.inner.dir).is_none() {
+            anyhow::bail!(
+                "cannot read registry `{}`: its copy at {} is missing or incomplete; run `cargo agents plugin sync {}`",
+                self.name,
+                crate::output::display_path(&self.inner.dir),
+                self.name,
+            );
+        }
+        self.inner.registry_plugins().await
+    }
+
     async fn load_plugin(&self, id: &PackageId) -> Vec<UnvalidatedPlugin> {
         self.inner.load_plugin(id).await
     }
