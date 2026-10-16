@@ -394,7 +394,7 @@ fn load_workspace(cwd: &Path, cargo_path: Option<&Path>) -> Option<LoadedWorkspa
     })
 }
 
-fn classify_package_source(
+pub(crate) fn classify_package_source(
     source: Option<&Source>,
     is_workspace_member: bool,
 ) -> PackageProvenance {

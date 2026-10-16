@@ -19,6 +19,7 @@ use crate::crate_sources::RustCrateFetch;
 pub mod workspace;
 #[cfg(test)]
 pub(crate) use workspace::CRATES_IO_REGISTRY_URL;
+pub(crate) use workspace::classify_package_source;
 pub use workspace::{
     LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
 };

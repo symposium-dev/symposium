@@ -10,9 +10,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use cargo_metadata::MetadataCommand;
+use cargo_metadata::{MetadataCommand, Source};
 
 use super::{FetchResult, normalize_crate_name};
+use crate::pm::classify_package_source;
 
 const PROBE_PACKAGE: &str = "symposium-crate-probe";
 
@@ -127,6 +128,7 @@ fn find_crate_in_metadata(dir: &Path, crate_name: &str) -> Result<Option<FetchRe
         name: package.name.to_string(),
         version: package.version.to_string(),
         path,
+        provenance: classify_package_source(package.source.as_ref(), false),
     }))
 }
 
@@ -145,11 +147,15 @@ fn find_crate_in_lockfile(dir: &Path, crate_name: &str, cargo_home: &Path) -> Re
         .and_then(|packages| packages.as_array())
         .map(Vec::as_slice)
         .unwrap_or_default();
-    let (name, version) = locked_probe_dependency(packages, crate_name).ok_or_else(|| {
-        anyhow::anyhow!(
-            "crate '{crate_name}' not found in cargo metadata or the probe's Cargo.lock"
-        )
-    })?;
+    let (name, version, source) =
+        locked_probe_dependency(packages, crate_name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "crate '{crate_name}' not found in cargo metadata or the probe's Cargo.lock"
+            )
+        })?;
+    let source = source.map(|repr| Source {
+        repr: repr.to_owned(),
+    });
 
     let registry_src = cargo_home.join("registry/src");
     let entries = std::fs::read_dir(&registry_src)
@@ -169,11 +175,12 @@ fn find_crate_in_lockfile(dir: &Path, crate_name: &str, cargo_home: &Path) -> Re
         name: name.to_string(),
         version: version.to_string(),
         path,
+        provenance: classify_package_source(source.as_ref(), false),
     })
 }
 
-/// The `(name, version)` the probe package's dependency on `crate_name` locked
-/// to.
+/// The `(name, version, source)` the probe package's dependency on
+/// `crate_name` locked to.
 ///
 /// Read through the probe's own `dependencies` entry rather than the first
 /// package with a matching name: the target may also appear, at another
@@ -182,34 +189,39 @@ fn find_crate_in_lockfile(dir: &Path, crate_name: &str, cargo_home: &Path) -> Re
 fn locked_probe_dependency<'a>(
     packages: &'a [toml::Value],
     crate_name: &str,
-) -> Option<(&'a str, &'a str)> {
+) -> Option<(&'a str, &'a str, Option<&'a str>)> {
     let field = |package: &'a toml::Value, key: &str| package.get(key)?.as_str();
     let probe = packages
         .iter()
         .find(|package| field(package, "name") == Some(PROBE_PACKAGE))?;
 
     let normalized = normalize_crate_name(crate_name);
-    let mut entry = probe
+    let entry = probe
         .get("dependencies")?
         .as_array()?
         .iter()
         .filter_map(|dep| dep.as_str())
-        .map(|dep| dep.split(' '))
-        .find(|parts| {
-            parts
-                .clone()
+        .find(|dep| {
+            dep.split(' ')
                 .next()
                 .is_some_and(|name| normalize_crate_name(name) == normalized)
         })?;
-    let name = entry.next()?;
-    let version = match entry.next() {
-        Some(version) => version,
-        None => packages
-            .iter()
-            .find(|package| field(package, "name") == Some(name))
-            .and_then(|package| field(package, "version"))?,
-    };
-    Some((name, version))
+    let mut parts = entry.splitn(3, ' ');
+    let name = parts.next()?;
+    let version = parts.next();
+    let source = parts
+        .next()
+        .and_then(|source| source.strip_prefix('(')?.strip_suffix(')'));
+    let package = packages.iter().find(|package| {
+        field(package, "name") == Some(name)
+            && version.is_none_or(|version| field(package, "version") == Some(version))
+            && source.is_none_or(|source| field(package, "source") == Some(source))
+    })?;
+    Some((
+        field(package, "name")?,
+        field(package, "version")?,
+        field(package, "source"),
+    ))
 }
 
 #[cfg(test)]
@@ -255,6 +267,12 @@ mod tests {
         assert_eq!(found.name, "bin_only");
         assert_eq!(found.version, "0.1.1");
         assert_eq!(found.path, source);
+        assert_eq!(
+            found.provenance,
+            crate::pm::PackageProvenance::Registry {
+                url: crate::pm::CRATES_IO_REGISTRY_URL.to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -274,12 +292,17 @@ mod tests {
                 name = "tool"
                 version = "2.0.0"
                 source = "registry+https://github.com/rust-lang/crates.io-index"
+
+                [[package]]
+                name = "tool"
+                version = "2.0.0"
+                source = "registry+https://packages.example/index"
                 dependencies = ["tool 1.0.0"]
 
                 [[package]]
                 name = "symposium-crate-probe"
                 version = "0.0.0"
-                dependencies = ["tool 2.0.0"]
+                dependencies = ["tool 2.0.0 (registry+https://packages.example/index)"]
             "#},
         );
         let cargo_home = tempfile::tempdir().unwrap();
@@ -289,5 +312,11 @@ mod tests {
         let found = find_crate_in_lockfile(probe.path(), "tool", cargo_home.path()).unwrap();
         assert_eq!(found.version, "2.0.0");
         assert_eq!(found.path, source);
+        assert_eq!(
+            found.provenance,
+            crate::pm::PackageProvenance::Registry {
+                url: "https://packages.example/index".to_owned(),
+            }
+        );
     }
 }
