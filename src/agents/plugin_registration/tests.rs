@@ -27,7 +27,7 @@ fn a_directory_symposium_does_not_own_keeps_its_slot() {
     write(&skills.join("taken/SKILL.md"), "mine");
     let staging = tmp.path().join("installed");
 
-    deliver_user_plugins(
+    Agent::Claude.deliver_user_plugins(
         &sym,
         &[compiled(&staging, "taken"), compiled(&staging, "free")],
     );
@@ -50,7 +50,7 @@ fn only_plugin_directories_symposium_installed_are_reaped() {
     write(&skills.join("stale/.claude-plugin/plugin.json"), "");
     write(&skills.join("stale/.symposium"), "");
 
-    deliver_user_plugins(&sym, &[]);
+    Agent::Claude.deliver_user_plugins(&sym, &[]);
 
     assert!(!skills.join("stale").exists());
     for kept in ["users-skill", "users-plugin", "per-skill-copy", "packaged"] {
@@ -66,7 +66,7 @@ fn delivery_never_writes_claude_settings() {
     let disabled = r#"{"enabledPlugins": {"fresh@skills-dir": false}}"#;
     write(&settings, disabled);
 
-    deliver_user_plugins(&sym, &[compiled(&tmp.path().join("installed"), "fresh")]);
+    Agent::Claude.deliver_user_plugins(&sym, &[compiled(&tmp.path().join("installed"), "fresh")]);
 
     assert!(tmp.path().join(".claude/skills/fresh").is_dir());
     assert_eq!(fs::read_to_string(&settings).unwrap(), disabled);

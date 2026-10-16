@@ -370,14 +370,29 @@ impl Agent {
         sym: &Symposium,
         plugins: &[CompiledPlugin],
     ) -> Option<Vec<String>> {
-        match self {
-            Agent::Claude => Some(plugin_registration::claude::deliver_user_plugins(
-                sym, plugins,
-            )),
-            Agent::Codex => plugin_registration::codex::deliver_user_plugins(sym, plugins),
-            Agent::Copilot => plugin_registration::copilot::deliver_user_plugins(sym, plugins),
-            Agent::Antigravity | Agent::Goose | Agent::Kiro | Agent::OpenCode => None,
-        }
+        let plugins_dir = match self {
+            Agent::Antigravity => sym
+                .home_dir()
+                .join(".gemini")
+                .join("config")
+                .join("plugins"),
+            Agent::Claude => claude_config_dir(sym).join("skills"),
+            Agent::Codex => return plugin_registration::codex::deliver_user_plugins(sym, plugins),
+            Agent::Copilot => {
+                return plugin_registration::copilot::deliver_user_plugins(sym, plugins);
+            }
+            Agent::Goose => goose_path_root(sym)
+                .unwrap_or_else(|| sym.home_dir().to_path_buf())
+                .join(".agents")
+                .join("plugins"),
+            Agent::Kiro | Agent::OpenCode => return None,
+        };
+        Some(plugin_registration::deliver_copies(
+            sym,
+            *self,
+            &plugins_dir,
+            plugins,
+        ))
     }
 
     /// Remove hooks from the project-level agent config.
