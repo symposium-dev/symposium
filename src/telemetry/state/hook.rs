@@ -16,9 +16,8 @@ use crate::telemetry::schema::{HookAgent, HookMetricsKey, HookSurface, UtcDay};
 /// survive a failed snapshot replacement, or be absent while a row survives.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::telemetry) struct HookAggregateStore {
-    pub(in crate::telemetry::state) day: OpenDay,
-    pub(in crate::telemetry::state) entries:
-        BTreeMap<HookMetricsKey, HookSessionCountTracker<HookMetricsKey>>,
+    day: OpenDay,
+    entries: BTreeMap<HookMetricsKey, HookSessionCountTracker<HookMetricsKey>>,
 }
 
 impl HookAggregateStore {
@@ -27,6 +26,36 @@ impl HookAggregateStore {
         Self {
             day: OpenDay::new(day),
             entries: BTreeMap::new(),
+        }
+    }
+
+    /// Return the UTC day owned by this private aggregate store.
+    #[must_use]
+    pub(in crate::telemetry::state) const fn day(&self) -> UtcDay {
+        self.day.day()
+    }
+
+    /// Borrow entries in their deterministic persistence order.
+    pub(in crate::telemetry::state) fn persistence_entries(
+        &self,
+    ) -> impl ExactSizeIterator<Item = (&HookMetricsKey, &HookSessionCountTracker<HookMetricsKey>)>
+    {
+        self.entries.iter()
+    }
+
+    /// Rebuild a store from decoded private-state fields.
+    ///
+    /// The persistence caller must run its store-level validator before
+    /// returning this value; construction alone does not prove that every key
+    /// and tracker carry consistent identity.
+    #[must_use]
+    pub(in crate::telemetry::state) fn from_persisted(
+        day: UtcDay,
+        entries: BTreeMap<HookMetricsKey, HookSessionCountTracker<HookMetricsKey>>,
+    ) -> Self {
+        Self {
+            day: OpenDay::new(day),
+            entries,
         }
     }
 

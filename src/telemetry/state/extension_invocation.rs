@@ -2,6 +2,9 @@
 
 mod admission;
 
+pub(in crate::telemetry::state) use admission::{
+    AdmittedExtensionBucket, ExtensionInvocationAggregateKey, ExtensionInvocationAggregateState,
+};
 pub(in crate::telemetry) use admission::{
     ExtensionInvocationAdmissionError, ExtensionInvocationAggregateStage,
 };
@@ -125,8 +128,36 @@ impl<K> ExtensionSessionCountTracker<K> {
 
     /// Return the aggregate key this private state belongs to.
     #[must_use]
-    const fn key(&self) -> &K {
+    pub(in crate::telemetry::state) const fn key(&self) -> &K {
         &self.key
+    }
+
+    /// Borrow contribution counts and the bounded session pair for persistence.
+    #[must_use]
+    pub(in crate::telemetry::state) const fn persistence_parts(
+        &self,
+    ) -> (u64, u64, &TrackedSessionPair) {
+        (
+            self.attempted_contributions,
+            self.completed_contributions,
+            &self.sessions,
+        )
+    }
+
+    /// Rebuild a tracker from validated private-state fields.
+    #[must_use]
+    pub(in crate::telemetry::state) const fn from_persisted(
+        key: K,
+        attempted_contributions: u64,
+        completed_contributions: u64,
+        sessions: TrackedSessionPair,
+    ) -> Self {
+        Self {
+            key,
+            attempted_contributions,
+            completed_contributions,
+            sessions,
+        }
     }
 
     fn counter_mut(&mut self, phase: TrackedPhase) -> &mut u64 {
