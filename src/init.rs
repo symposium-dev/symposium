@@ -102,6 +102,7 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
 
     // Persist and apply.
     sym.save_config().context("failed to write user config")?;
+    crate::sync::unregister_user_plugins(sym, out);
 
     let config_path = sym.config_dir().join("config.toml");
 
