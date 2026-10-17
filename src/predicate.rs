@@ -77,7 +77,7 @@ pub struct PredicateContext<'a> {
     pub deps: &'a [PackageId],
     /// Whether the plugin currently being evaluated is defined by a member
     /// of the active workspace. This is *provenance*, not a workspace fact:
-    /// the loader stamps it per plugin (via `Plugin::applies`) before
+    /// `Plugin::applies` derives it from the plugin's sourced package before
     /// that plugin's predicate sets are evaluated.
     workspace_member: bool,
     /// Plugin names enabled by the applicable `[plugins] use` entries,

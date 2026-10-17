@@ -310,7 +310,7 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
             // A plugin is identified by its id; render its effective (resolved)
             // configuration rather than re-reading a manifest file.
             Some(p) => {
-                println!("# {}", p.canonical);
+                println!("# {}", p.package.id);
                 match toml::to_string_pretty(&p.manifest) {
                     Ok(rendered) => {
                         println!();
@@ -318,7 +318,7 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                         ExitCode::SUCCESS
                     }
                     Err(e) => {
-                        eprintln!("cannot render `{}`: {e}", p.canonical);
+                        eprintln!("cannot render `{}`: {e}", p.package.id);
                         ExitCode::FAILURE
                     }
                 }

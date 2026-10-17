@@ -35,6 +35,15 @@ mod cargo;
 mod git;
 pub mod layout;
 mod path;
+#[cfg_attr(
+    not(test),
+    expect(
+        unused_imports,
+        reason = "the telemetry naming policy consumes this in the next stacked branch"
+    )
+)]
+pub(crate) use cargo::CRATES_IO_REGISTRY_URL;
+pub(crate) use cargo::classify_package_source;
 pub use cargo::{
     CargoPm, LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
 };
@@ -43,13 +52,16 @@ pub use path::PathPm;
 
 /// The identity types are the SDK's, since they cross the PM boundary: a
 /// package-manager binary speaks in them too.
-pub use symposium_sdk::pm::{ANY_VERSION, CARGO_PM, PackageId, PluginInfo, UnvalidatedPlugin};
+pub use symposium_sdk::pm::{
+    ANY_VERSION, CARGO_PM, PackageId, PackageProvenance, PluginInfo, SourcedPackage,
+    UnvalidatedPlugin,
+};
 
-/// A fetched package: the exact id it resolved to, plus the directory
-/// holding its content.
+/// A fetched package: its sourced identity plus the directory holding its
+/// content.
 #[derive(Debug, Clone)]
 pub struct FetchedPackage {
-    pub id: PackageId,
+    pub package: SourcedPackage,
     pub root: PathBuf,
 }
 
@@ -67,13 +79,16 @@ pub struct FetchedPackage {
 /// entries; the cargo transport surfaces dependency-embedded plugins);
 /// [`load_plugin`](Self::load_plugin) resolves a *specific* id named elsewhere
 /// (a `[[plugins]]` chained reference, an explicitly enabled crate). Both
-/// answer with [`UnvalidatedPlugin`]s: an id, a content directory, and an
-/// *unvalidated* manifest, and are best-effort: failures are logged and
-/// dropped, not surfaced, so one bad plugin never aborts a sync or hook.
+/// answer with [`UnvalidatedPlugin`]s: a sourced id, a content directory, and
+/// an *unvalidated* manifest. They are best-effort: failures are logged and
+/// dropped, so one bad plugin never aborts a sync or hook. Every
+/// result-bearing operation carries a [`SourcedPackage`], so source provenance
+/// cannot be separated from package identity while it crosses the PM boundary.
 ///
 /// Validating an [`UnvalidatedPlugin`] into a [`Plugin`] is [`PmInstance`]'s
-/// job, not the PM's, because the policy depends on where the plugin came from rather than
-/// on what it says. That is the whole trust boundary: see [`PluginKind`].
+/// job, not the PM's, because the policy depends on where the plugin came from
+/// rather than on what it says. That is the whole trust boundary: see
+/// [`PluginKind`].
 #[async_trait::async_trait]
 pub trait PackageManager {
     /// The PM's registry name — the `pm` component of every id it owns. For
@@ -81,25 +96,27 @@ pub trait PackageManager {
     /// instance it is the configured registry's name.
     fn name(&self) -> &str;
 
-    /// The plugins this PM activates for the workspace's dependency set. A
-    /// registry lists its own entries (deps ignored); the cargo transport
-    /// surfaces the plugins its dependencies embed. Whether a dependency-embedded
-    /// plugin is *trusted* is the caller's decision — see [`PmInstance::trusted`].
-    async fn active_plugins(&self, deps: &[PackageId]) -> Vec<UnvalidatedPlugin>;
+    /// The plugins this PM activates for the workspace's sourced dependency
+    /// set. A registry lists its own entries (deps ignored); the cargo
+    /// transport surfaces the plugins its dependencies embed. Whether a
+    /// dependency-embedded plugin is *trusted* is the caller's decision — see
+    /// [`PmInstance::trusted`].
+    async fn active_plugins(&self, deps: &[SourcedPackage]) -> Vec<UnvalidatedPlugin>;
 
     /// The plugin(s) a specific id maps to — zero, one, or many. Used for
     /// `[[plugins]]` chained references and explicitly enabled crates.
     async fn load_plugin(&self, id: &PackageId) -> Vec<UnvalidatedPlugin>;
 
-    /// The package ids the current workspace depends on. Empty for PMs with no
-    /// workspace notion.
-    async fn list_deps(&self) -> Result<Vec<PackageId>>;
+    /// The sourced packages the current workspace depends on. Empty for PMs
+    /// with no workspace notion.
+    async fn list_deps(&self) -> Result<Vec<SourcedPackage>>;
 
     /// Find packages matching a partial query (backs `use` / `search`). PMs
     /// without a searchable registry return an empty list.
     async fn search(&self, query: &str) -> Result<Vec<PluginInfo>>;
 
-    /// Acquire a package's source content, canonicalizing the id's version.
+    /// Acquire a package's source content, resolving its version when the
+    /// ecosystem has one and reporting the source that supplied it.
     /// `update` controls how aggressively an already-cached package is refreshed.
     async fn fetch(&self, id: &PackageId, update: UpdateLevel) -> Result<FetchedPackage>;
 
@@ -116,14 +133,14 @@ pub trait PackageManager {
     /// How a registry instance's content is sourced, for `plugin list`
     /// display. `None` for the cargo transport, which is not a configured
     /// registry.
-    fn registry_source(&self) -> Option<RegistrySource> {
+    fn registry_source(&self) -> Option<ConfiguredRegistrySource> {
         None
     }
 }
 
 /// Where a registry instance's content comes from — the git-vs-path
 /// distinction, made visible on the PM itself rather than inferred elsewhere.
-pub enum RegistrySource {
+pub enum ConfiguredRegistrySource {
     /// A git repository, fetched into the plugin-source cache.
     Git { url: String },
     /// A local directory.
@@ -165,7 +182,7 @@ pub struct PmInstance {
 impl PmInstance {
     /// This instance's active plugins, validated. A plugin that fails
     /// validation is logged and dropped: best-effort, like the PM layer above.
-    pub async fn active_plugins(&self, deps: &[PackageId]) -> Vec<Plugin> {
+    pub async fn active_plugins(&self, deps: &[SourcedPackage]) -> Vec<Plugin> {
         self.validate_all(self.pm.active_plugins(deps).await)
     }
 
@@ -181,7 +198,7 @@ impl PmInstance {
         unvalidated
             .into_iter()
             .filter_map(|plugin| {
-                let id = plugin.id.clone();
+                let id = plugin.package.id.clone();
                 match crate::plugins::validate_plugin(plugin, self.kind) {
                     Ok(p) => Some(p),
                     Err(e) => {
@@ -236,12 +253,26 @@ impl PmRegistry {
 
     /// Union of `list_deps` across the instances — the workspace's full
     /// dependency set for discovery and `depends-on` predicate evaluation.
-    pub async fn list_deps(&self) -> Result<Vec<PackageId>> {
+    pub async fn list_deps(&self) -> Result<Vec<SourcedPackage>> {
         let mut deps = Vec::new();
         for inst in &self.instances {
             deps.extend(inst.pm.list_deps().await?);
         }
         Ok(deps)
+    }
+
+    /// Plugins embedded in the exact dependency packages supplied by the
+    /// workspace resolver.
+    ///
+    /// Only untrusted transports participate: configured registries are trust
+    /// roots already present in the plugin registry, while a dependency needs
+    /// the user's enablement decision before its plugin becomes active.
+    pub async fn plugins_for_dependencies(&self, deps: &[SourcedPackage]) -> Vec<Plugin> {
+        let mut plugins = Vec::new();
+        for instance in self.instances.iter().filter(|instance| !instance.trusted) {
+            plugins.extend(instance.active_plugins(deps).await);
+        }
+        plugins
     }
 
     /// Load the plugin(s) an id maps to, asking every instance. Any instance may
@@ -282,7 +313,9 @@ pub async fn workspace_dep_ids(
     deps: &Arc<WorkspaceDeps>,
 ) -> Vec<PackageId> {
     match sym.package_managers(deps).list_deps().await {
-        Ok(deps) => deps,
+        // Predicates compare package coordinates only. Keep this projection
+        // explicit so source policy never grows an inference from `id.pm`.
+        Ok(deps) => deps.into_iter().map(|package| package.id).collect(),
         Err(e) => {
             tracing::warn!(error = %e, "failed to list workspace dependencies");
             Vec::new()
@@ -308,13 +341,16 @@ mod tests {
         fn name(&self) -> &str {
             "stub"
         }
-        async fn active_plugins(&self, _deps: &[PackageId]) -> Vec<UnvalidatedPlugin> {
+        async fn active_plugins(&self, _deps: &[SourcedPackage]) -> Vec<UnvalidatedPlugin> {
             let manifest = symposium_sdk::manifest::RawPluginManifest::parse(
                 "name = \"broken\"\n[[skills]]\n",
             )
             .unwrap();
             vec![UnvalidatedPlugin::new(
-                PackageId::any_version("stub", "broken"),
+                SourcedPackage::new(
+                    PackageId::any_version("stub", "broken"),
+                    PackageProvenance::Unknown,
+                ),
                 PathBuf::from("/nonexistent/broken"),
                 manifest,
             )]
@@ -322,7 +358,7 @@ mod tests {
         async fn load_plugin(&self, _id: &PackageId) -> Vec<UnvalidatedPlugin> {
             Vec::new()
         }
-        async fn list_deps(&self) -> Result<Vec<PackageId>> {
+        async fn list_deps(&self) -> Result<Vec<SourcedPackage>> {
             Ok(Vec::new())
         }
         async fn search(&self, _query: &str) -> Result<Vec<PluginInfo>> {

@@ -178,7 +178,7 @@ async fn resolve_name(
         .search(name)
         .await
         .iter()
-        .any(|(_, info)| normalize_crate_name(&info.id.name) == normalized);
+        .any(|(_, info)| normalize_crate_name(&info.package.id.name) == normalized);
     if found {
         return Ok(());
     }

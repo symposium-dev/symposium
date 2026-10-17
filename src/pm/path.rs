@@ -18,8 +18,8 @@ use anyhow::Result;
 use symposium_install::UpdateLevel;
 
 use super::{
-    ANY_VERSION, FetchedPackage, PackageId, PackageManager, PluginInfo, RegistrySource,
-    UnvalidatedPlugin, layout,
+    ANY_VERSION, ConfiguredRegistrySource, FetchedPackage, PackageId, PackageManager,
+    PackageProvenance, PluginInfo, SourcedPackage, UnvalidatedPlugin, layout,
 };
 use crate::report::ReportEvent;
 
@@ -38,6 +38,10 @@ impl PathPm {
             dir: dir.into(),
         }
     }
+
+    fn provenance(&self) -> PackageProvenance {
+        PackageProvenance::Path
+    }
 }
 
 #[async_trait::async_trait]
@@ -50,7 +54,7 @@ impl PackageManager for PathPm {
     /// local registry's contents don't vary with the workspace; whether each
     /// plugin applies is decided later by its own predicates. A registry is a
     /// trust root, so these activate without consent.
-    async fn active_plugins(&self, _deps: &[PackageId]) -> Vec<UnvalidatedPlugin> {
+    async fn active_plugins(&self, _deps: &[SourcedPackage]) -> Vec<UnvalidatedPlugin> {
         let entries = match layout::enumerate(&self.dir) {
             Ok(e) => e,
             Err(e) => {
@@ -60,7 +64,12 @@ impl PackageManager for PathPm {
         };
         let mut out = Vec::new();
         for entry in entries {
-            match crate::plugins::entry_plugin(&self.dir, &entry.subpath, &self.name) {
+            match crate::plugins::entry_plugin(
+                &self.dir,
+                &entry.subpath,
+                &self.name,
+                self.provenance(),
+            ) {
                 Some(Ok(p)) => out.push(p),
                 Some(Err(e)) => tracing::warn!(
                     report = %ReportEvent::Warning {
@@ -81,7 +90,12 @@ impl PackageManager for PathPm {
         if id.pm != self.name {
             return Vec::new();
         }
-        match crate::plugins::entry_plugin(&self.dir, Path::new(&id.name), &self.name) {
+        match crate::plugins::entry_plugin(
+            &self.dir,
+            Path::new(&id.name),
+            &self.name,
+            self.provenance(),
+        ) {
             Some(Ok(p)) => vec![p],
             Some(Err(e)) => {
                 tracing::warn!(registry = %self.name, id = %id, error = %e, "failed to load plugin");
@@ -92,7 +106,7 @@ impl PackageManager for PathPm {
     }
 
     /// A local directory contributes no workspace dependencies.
-    async fn list_deps(&self) -> Result<Vec<PackageId>> {
+    async fn list_deps(&self) -> Result<Vec<SourcedPackage>> {
         Ok(Vec::new())
     }
 
@@ -104,20 +118,25 @@ impl PackageManager for PathPm {
             .into_iter()
             .map(|entry| layout::subpath_key(&entry.subpath))
             .filter(|key| key.contains(query))
-            .map(|key| PluginInfo::from_id(PackageId::new(&self.name, key, ANY_VERSION)))
+            .map(|key| {
+                PluginInfo::from_package(SourcedPackage::new(
+                    PackageId::new(&self.name, key, ANY_VERSION),
+                    self.provenance(),
+                ))
+            })
             .collect())
     }
 
     /// The entry directory an id names — path entries are their own cache.
     async fn fetch(&self, id: &PackageId, _update: UpdateLevel) -> Result<FetchedPackage> {
         Ok(FetchedPackage {
-            id: id.clone(),
+            package: SourcedPackage::new(id.clone(), self.provenance()),
             root: self.dir.join(&id.name),
         })
     }
 
-    fn registry_source(&self) -> Option<RegistrySource> {
-        Some(RegistrySource::Path {
+    fn registry_source(&self) -> Option<ConfiguredRegistrySource> {
+        Some(ConfiguredRegistrySource::Path {
             dir: self.dir.clone(),
         })
     }
@@ -148,7 +167,12 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names, vec!["style", "tools"]);
-        assert!(active.iter().all(|o| o.id.pm == "user-plugins"));
+        assert!(active.iter().all(|o| o.package.id.pm == "user-plugins"));
+        assert!(
+            active
+                .iter()
+                .all(|o| o.package.provenance == PackageProvenance::Path)
+        );
 
         // A bare SKILL.md is synthesized into a manifest with one group.
         let style = active
@@ -163,10 +187,40 @@ mod tests {
             .await;
         assert_eq!(one.len(), 1);
         assert_eq!(one[0].manifest.name.as_deref(), Some("tools"));
+        assert_eq!(one[0].package.provenance, PackageProvenance::Path);
+
+        assert!(pm.list_deps().await.unwrap().is_empty());
 
         let hits = pm.search("too").await.unwrap();
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].id.name, "tools");
+        assert_eq!(hits[0].package.id.name, "tools");
+        assert_eq!(hits[0].package.provenance, PackageProvenance::Path);
+    }
+
+    #[tokio::test]
+    async fn same_named_entries_keep_distinct_routing_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("registry");
+        for parent in ["foo", "bar"] {
+            let entry = source.join(parent).join("my-skill");
+            std::fs::create_dir_all(&entry).unwrap();
+            std::fs::write(
+                entry.join("SKILL.md"),
+                "---\nname: my-skill\ndescription: d\n---\nbody",
+            )
+            .unwrap();
+        }
+
+        let pm = PathPm::new("user-plugins", source);
+        let mut ids: Vec<_> = pm
+            .active_plugins(&[])
+            .await
+            .into_iter()
+            .map(|plugin| plugin.package.id.name)
+            .collect();
+        ids.sort();
+
+        assert_eq!(ids, ["bar/my-skill", "foo/my-skill"]);
     }
 
     #[tokio::test]
@@ -176,6 +230,7 @@ mod tests {
         let id = PackageId::new("local", "tools", ANY_VERSION);
         let fetched = pm.fetch(&id, UpdateLevel::None).await.unwrap();
         assert_eq!(fetched.root, tmp.path().join("registry/tools"));
-        assert_eq!(fetched.id, id);
+        assert_eq!(fetched.package.id, id);
+        assert_eq!(fetched.package.provenance, PackageProvenance::Path);
     }
 }

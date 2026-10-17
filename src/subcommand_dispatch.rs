@@ -202,7 +202,10 @@ mod tests {
         subcommands: BTreeMap<String, Subcommand>,
     ) -> Plugin {
         Plugin {
-            canonical: PackageId::new("test", name, ANY_VERSION),
+            package: crate::pm::SourcedPackage::new(
+                PackageId::new("test", name, ANY_VERSION),
+                crate::pm::PackageProvenance::Unknown,
+            ),
             manifest: PluginManifest {
                 name: name.into(),
                 predicates: crate_set(depends_on),
@@ -215,7 +218,6 @@ mod tests {
                 chained: vec![],
                 requires_use: false,
             },
-            workspace_member: false,
         }
     }
 
