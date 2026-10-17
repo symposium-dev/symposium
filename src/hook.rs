@@ -1307,8 +1307,10 @@ mod tests {
         };
         crate::plugins::Plugin {
             manifest: plugin,
-            workspace_member: false,
-            canonical: PackageId::new("test", "test-plugin", ANY_VERSION),
+            package: crate::pm::SourcedPackage::new(
+                PackageId::new("test", "test-plugin", ANY_VERSION),
+                crate::pm::PackageProvenance::Unknown,
+            ),
         }
     }
 

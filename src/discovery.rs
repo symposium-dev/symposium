@@ -129,12 +129,14 @@ pub async fn discover(sym: &Symposium, deps: &Arc<WorkspaceDeps>) -> Discovery {
     // each against the `[plugins]` config.
     for inst in pms.instances().filter(|i| !i.trusted) {
         for plugin in inst.active_plugins(&dep_ids).await {
-            let name = plugin.canonical.name.clone();
+            let name = plugin.package.id.name.clone();
             let description = Some(describe_plugin(&plugin.manifest));
             let enablement = decide(sym, &name, &workspace_root);
+            // Discovery persists routing identity only. Source policy remains
+            // on the live `Plugin` and must not be reconstructed from this id.
             let discovered = DiscoveredPlugin {
                 registry: inst.name.clone(),
-                id: plugin.canonical,
+                id: plugin.package.id,
                 recommends: name,
                 description,
                 enablement,

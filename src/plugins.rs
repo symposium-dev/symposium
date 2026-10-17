@@ -8,7 +8,9 @@ use serde::Serialize;
 use crate::config::Symposium;
 use crate::hook::HookEvent;
 use crate::hook_schema::HookAgent;
-use crate::pm::{ANY_VERSION, PackageId, PluginKind, UnvalidatedPlugin};
+use crate::pm::{
+    ANY_VERSION, PackageId, PackageProvenance, PluginKind, SourcedPackage, UnvalidatedPlugin,
+};
 use symposium_install::Source;
 
 pub use symposium_sdk::manifest::{Audience, HookFormat};
@@ -299,28 +301,31 @@ pub struct Plugin {
     /// absolute directory.
     pub manifest: PluginManifest,
 
-    /// Whether this plugin is defined by a member of the active workspace.
-    /// Provenance, stamped by the loader: registry sources stamp `false`;
-    /// the workspace-plugin loader (workspace-local extensions) will stamp
-    /// `true`. Backs the `workspace-member()` predicate.
-    pub workspace_member: bool,
-
-    /// The plugin's canonical package identity. Set to the resolved crate id for
-    /// a plugin loaded through a `[[plugins]] source.cargo` chained reference (a
-    /// crate carrying its own manifest). Registry and workspace plugins have no
-    /// real package identity, so this is a placeholder id tagged with the source
-    /// name (registry) or `"local"` (workspace).
+    /// The plugin's package identity and the source that supplied it. A plugin
+    /// loaded through a `[[plugins]] source.cargo` chained reference keeps the
+    /// resolved crate package, as does a plugin defined by a workspace member.
+    /// Registry plugins and virtual workspace roots use routing/display
+    /// placeholders, but provenance remains the authoritative source fact.
     ///
-    /// Used only to key chained-plugin cycle/diamond detection on the normalized
-    /// crate name (see `skills::expand_chained_plugins`). It does *not* affect
-    /// skill identity — that is the `SKILL.md` path hash.
-    ///
-    /// FIXME: the registry/workspace placeholder `pm` tags (`"user-plugins"`,
-    /// `"local"`, …) should become real `path` PM ids once that PM lands.
-    pub canonical: crate::pm::PackageId,
+    /// The id supplies routing, display, discovery, and chained-plugin
+    /// deduplication. Provenance supplies public-attribution policy and whether
+    /// `workspace-member()` holds. Neither affects skill identity, which is the
+    /// `SKILL.md` path hash.
+    pub package: SourcedPackage,
 }
 
 impl Plugin {
+    /// Whether this plugin's package is a member of the active workspace.
+    ///
+    /// This controls the `workspace-member()` predicate. Skill groups record
+    /// separately whether they were validated through the workspace loader,
+    /// because that origin also selects lenient workspace frontmatter rules.
+    /// A metadata-only member reached through Cargo can therefore return true
+    /// here while its groups retain crate frontmatter rules.
+    pub fn is_workspace_member(&self) -> bool {
+        matches!(self.package.provenance, PackageProvenance::Workspace)
+    }
+
     /// Evaluate the plugin-level predicate set, stamping this plugin's
     /// provenance into the context first. Use this — not
     /// `plugin.applies()` directly — when iterating loaded plugins, so
@@ -328,7 +333,7 @@ impl Plugin {
     /// carries over to the plugin's nested component evaluations (groups,
     /// skills, hooks, MCP servers, subcommands) on the same context.
     pub fn applies(&self, ctx: &mut crate::predicate::PredicateContext) -> bool {
-        ctx.set_workspace_member(self.workspace_member);
+        ctx.set_workspace_member(self.is_workspace_member());
         self.manifest.applies(ctx)
     }
 }
@@ -362,7 +367,7 @@ pub struct PluginManifest {
     pub custom_predicates: Vec<CustomPredicate>,
     /// Chained plugin references (`[[plugins]]`): whenever this plugin is
     /// active and any per-edge predicates hold, the referenced plugin loads
-    /// too. Expanded during skill resolution by `skills::expand_chained_plugins`.
+    /// too. Expanded while [`active_plugins`] resolves the active plugin set.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub chained: Vec<ChainedPlugin>,
     /// A registry plugin whose manifest references no dependency anywhere
@@ -995,11 +1000,8 @@ pub(crate) fn validate_plugin(plugin: UnvalidatedPlugin, kind: PluginKind) -> Re
         .with_context(|| format!("invalid plugin at `{}`", crate::output::display_path(&root)))?;
     resolve_group_sources(&mut plugin, &root, label_root.as_deref().unwrap_or(&root));
     Ok(Plugin {
-        canonical: package.id,
+        package,
         manifest: plugin,
-        // Only the workspace-plugin loader stamps true; nothing a PM offers is
-        // a workspace member.
-        workspace_member: false,
     })
 }
 
@@ -1110,9 +1112,8 @@ async fn load_registry_impl(
     }
 
     if let Some(ws) = workspace {
-        let member_dirs = ws.member_dirs();
         let (ws_plugins, ws_warnings) =
-            workspace_plugins(&ws.root, &member_dirs, sym.config.agents_syncing);
+            workspace_plugins(&ws.root, &ws.member_crates, sym.config.agents_syncing);
         plugins.extend(ws_plugins);
         warnings.extend(ws_warnings);
     }
@@ -1140,9 +1141,10 @@ async fn load_registry_impl(
 /// plugin-level gate; a facet still calls [`Plugin::applies`] before its
 /// own predicates, to re-stamp `workspace-member()` for the plugin being read.
 ///
-/// Crate loading goes through `pms` ([`crate::pm::PmRegistry::load_plugin`]),
-/// which fetches cache-only, so this is safe on the per-event hook path.
-/// `ctx.deps` supplies the dependency list expansion evaluates against.
+/// Crate loading goes through `pms` ([`crate::pm::PmRegistry::load_plugin`]).
+/// Known workspace packages reuse their resolved source, while an unknown
+/// chained crate may still invoke Cargo. `ctx.deps` supplies the dependency
+/// list expansion evaluates against.
 pub async fn active_plugins(
     sym: &Symposium,
     registry: &PluginRegistry,
@@ -1151,33 +1153,67 @@ pub async fn active_plugins(
     ctx: &mut crate::predicate::PredicateContext<'_>,
 ) -> Vec<Plugin> {
     let mut active = Vec::new();
-    // Crate identities already loaded through the set, keyed on `(pm, name)` so
-    // a crate reached through two chains — or a chain and dependency enablement —
-    // loads once (its hooks don't double-fire, its subcommands aren't a false
-    // conflict), while a registry plugin and a crate of the same name stay
-    // distinct.
+    // Sourced package identities already active through the set. Version and
+    // provenance distinguish same-named packages from different sources while
+    // normalized names collapse hyphen/underscore spellings of one package.
     let mut visited = std::collections::HashSet::new();
     // Package ids still to resolve through the set.
     let mut worklist: Vec<crate::pm::PackageId> = Vec::new();
 
     // Seed with the trust-root plugins (registry + workspace), gated.
     for parsed in &registry.plugins {
-        record_active(parsed.clone(), ctx, &mut active, &mut worklist);
+        record_active(
+            parsed.clone(),
+            ctx,
+            &mut visited,
+            &mut active,
+            &mut worklist,
+        );
     }
 
-    // Enabled crates: consented dependencies and `use`d crates that aren't
-    // dependencies. A name a registry already provides as a plugin was seeded
-    // above, so skip it here rather than also fetching it as a crate.
+    // Enabled crates: consented dependencies keep the exact sourced package
+    // that workspace resolution returned. A `use`d crate that is not a known
+    // dependency still enters the ordinary name-based worklist.
     if let Some(root) = workspace_root {
-        let registry_names: std::collections::HashSet<String> = registry
+        // A `use` entry also wakes a dormant trust-root plugin. Keep those
+        // names out of Cargo's name-based worklist: the registry already
+        // supplied the plugin, and probing crates.io here would put network
+        // I/O on every hook.
+        let trust_root_names: std::collections::HashSet<_> = registry
             .plugins
             .iter()
-            .map(|p| crate::crate_sources::normalize_crate_name(&p.manifest.name))
+            .map(|plugin| crate::crate_sources::normalize_crate_name(&plugin.manifest.name))
             .collect();
-        for name in crate::discovery::enabled_dependencies(sym, ctx.deps, root) {
-            if !registry_names.contains(&crate::crate_sources::normalize_crate_name(&name)) {
+        let names = crate::discovery::enabled_dependencies(sym, ctx.deps, root);
+        // `ctx.deps` deliberately contains only package ids. Re-read the
+        // memoized resolver here to recover each dependency's typed source.
+        let dependencies = match pms.list_deps().await {
+            Ok(dependencies) => dependencies,
+            Err(error) => {
+                tracing::debug!(%error, "failed to list sourced dependencies for plugin loading");
+                Vec::new()
+            }
+        };
+        let mut enabled_packages = Vec::new();
+        for name in names {
+            let normalized = crate::crate_sources::normalize_crate_name(&name);
+            let before = enabled_packages.len();
+            enabled_packages.extend(
+                dependencies
+                    .iter()
+                    .filter(|package| {
+                        package.id.pm == crate::pm::CARGO_PM
+                            && crate::crate_sources::normalize_crate_name(&package.id.name)
+                                == normalized
+                    })
+                    .cloned(),
+            );
+            if enabled_packages.len() == before && !trust_root_names.contains(&normalized) {
                 worklist.push(crate::pm::CargoPm::id_for(&name, None));
             }
+        }
+        for plugin in pms.plugins_for_dependencies(&enabled_packages).await {
+            record_active(plugin, ctx, &mut visited, &mut active, &mut worklist);
         }
     }
 
@@ -1185,24 +1221,23 @@ pub async fn active_plugins(
     // enqueue its own chained references.
     while let Some(id) = worklist.pop() {
         for plugin in pms.load_plugin(&id).await {
-            if visited.insert(plugin_key(&plugin.canonical)) {
-                record_active(plugin, ctx, &mut active, &mut worklist);
-            }
+            record_active(plugin, ctx, &mut visited, &mut active, &mut worklist);
         }
     }
 
     active
 }
 
-/// The dedup key for a loaded crate plugin: its ecosystem plus normalized name,
-/// so hyphen/underscore spellings collapse but a registry plugin and a crate of
-/// the same name stay distinct.
-fn plugin_key(id: &crate::pm::PackageId) -> String {
-    format!(
-        "{}/{}",
-        id.pm,
-        crate::crate_sources::normalize_crate_name(&id.name)
-    )
+/// The dedup key for one sourced package.
+///
+/// Loaded Cargo packages carry exact versions. Keeping that version and the
+/// typed provenance prevents a workspace member from hiding a same-named
+/// registry dependency; normalizing only the name still collapses Cargo's
+/// hyphen/underscore spellings for one package.
+fn plugin_key(package: &SourcedPackage) -> SourcedPackage {
+    let mut key = package.clone();
+    key.id.name = crate::crate_sources::normalize_crate_name(&key.id.name);
+    key
 }
 
 /// Gate `plugin` and, if it passes, record it into `active` and enqueue its
@@ -1211,6 +1246,7 @@ fn plugin_key(id: &crate::pm::PackageId) -> String {
 fn record_active(
     plugin: Plugin,
     ctx: &mut crate::predicate::PredicateContext<'_>,
+    visited: &mut std::collections::HashSet<SourcedPackage>,
     active: &mut Vec<Plugin>,
     worklist: &mut Vec<crate::pm::PackageId>,
 ) {
@@ -1224,6 +1260,16 @@ fn record_active(
         );
         return;
     }
+    if !visited.insert(plugin_key(&plugin.package)) {
+        tracing::debug!(
+            report = %crate::report::ReportEvent::PluginConsidered {
+                plugin: plugin.manifest.name.clone(),
+                matched: false,
+                reason: Some("duplicate sourced package identity".into()),
+            },
+        );
+        return;
+    }
     tracing::debug!(
         report = %crate::report::ReportEvent::PluginConsidered {
             plugin: plugin.manifest.name.clone(),
@@ -1233,7 +1279,7 @@ fn record_active(
     );
     warn_undispatched_crate_features(&plugin);
     for edge in &plugin.manifest.chained {
-        ctx.set_workspace_member(plugin.workspace_member);
+        ctx.set_workspace_member(plugin.is_workspace_member());
         if edge.predicates.evaluate(ctx) {
             worklist.push(crate::pm::CargoPm::id_for(&edge.name, None));
         }
@@ -1256,8 +1302,6 @@ fn warn_undispatched_crate_features(parsed: &Plugin) {
     }
 }
 
-/// Display name workspace plugins are attributed to. Parenthesized so it
-/// can't collide with a configured plugin-source name.
 /// Load the plugins defined by the active workspace: the workspace root
 /// plus every member package directory.
 ///
@@ -1268,24 +1312,43 @@ fn warn_undispatched_crate_features(parsed: &Plugin) {
 /// group — is appended unless the manifest opts out with
 /// `[defaults] skills = false`.
 ///
-/// Workspace plugins are stamped `workspace_member = true` (the producer of
-/// the `workspace-member()` predicate) and attributed to the
-/// `"(workspace)"` source with skill paths relative to the workspace root,
-/// so equal-named skills in different members stay distinct.
+/// A member-backed plugin keeps that member's Cargo package identity. A
+/// virtual workspace root, which has no package, uses a local placeholder.
+/// Both carry `Workspace` provenance, which produces the
+/// `workspace-member()` predicate. Skill paths are relative to the workspace
+/// root, so equal-named skills in different members stay distinct.
 pub fn workspace_plugins(
     root: &Path,
-    members: &[PathBuf],
+    members: &[crate::pm::WorkspaceCrate],
     agents_skills: bool,
 ) -> (Vec<Plugin>, Vec<LoadWarning>) {
+    let mut members_by_dir: Vec<(PathBuf, &crate::pm::WorkspaceCrate)> = members
+        .iter()
+        .filter_map(|package| {
+            let dir = package.source_dir.as_ref()?;
+            let dir = fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
+            Some((dir, package))
+        })
+        .collect();
+    members_by_dir.sort_by(|(left, _), (right, _)| left.cmp(right));
+    let root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let root_member = members_by_dir
+        .iter()
+        .find_map(|(dir, package)| (dir == &root).then_some(*package));
+
     let mut seen = std::collections::HashSet::new();
     let mut plugins = Vec::new();
     let mut warnings = Vec::new();
-    for dir in std::iter::once(&root.to_path_buf()).chain(members.iter()) {
-        let dir = fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
+    let directories = std::iter::once((root.clone(), root_member)).chain(
+        members_by_dir
+            .into_iter()
+            .map(|(dir, package)| (dir, Some(package))),
+    );
+    for (dir, member) in directories {
         if !seen.insert(dir.clone()) {
             continue;
         }
-        match workspace_plugin_for_dir(root, &dir, agents_skills) {
+        match workspace_plugin_for_dir(&root, &dir, member, agents_skills) {
             Ok(Some(parsed)) => plugins.push(parsed),
             Ok(None) => {}
             Err(e) => {
@@ -1305,19 +1368,46 @@ pub fn workspace_plugins(
 fn workspace_plugin_for_dir(
     workspace_root: &Path,
     dir: &Path,
+    member: Option<&crate::pm::WorkspaceCrate>,
     agents_skills: bool,
 ) -> Result<Option<Plugin>> {
     let manifest_path = dir.join(crate::pm::layout::MANIFEST_FILE);
     let bare_convention = dir.join(CRATE_DEFAULT_SKILLS_PATH).is_dir()
         || (agents_skills && dir.join(AGENTS_SKILLS_PATH).is_dir());
-    let raw: RawPluginManifest = if manifest_path.is_file() {
-        toml::from_str(&fs::read_to_string(&manifest_path)?)?
+    let file = if manifest_path.is_file() {
+        Some(fs::read_to_string(&manifest_path)?)
     } else if bare_convention {
-        // Bare convention: a `skills/` (or `.agents/skills/`) directory with
-        // no manifest is an all-defaults plugin.
-        toml::from_str("").expect("empty manifest parses")
+        None
     } else {
         return Ok(None);
+    };
+
+    let raw = match member {
+        Some(member) => {
+            let cargo_toml = dir.join("Cargo.toml");
+            let metadata = if cargo_toml.is_file() {
+                crate::crate_metadata::symposium_metadata(&cargo_toml).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        crate_name = %member.name,
+                        error = %e,
+                        "failed to read workspace member Cargo.toml; ignoring \
+                         [package.metadata.symposium]"
+                    );
+                    None
+                })
+            } else {
+                None
+            };
+            let metadata = parse_crate_metadata(metadata, &member.name);
+            let file = file.as_deref().map(raw_crate_manifest).transpose()?;
+            merge_raw_crate_manifests(metadata, file)
+        }
+        None => match file {
+            Some(file) => toml::from_str(&file)?,
+            // Bare convention: a `skills/` (or `.agents/skills/`) directory
+            // with no manifest is an all-defaults plugin.
+            None => RawPluginManifest::default(),
+        },
     };
 
     let dir_name = dir
@@ -1334,10 +1424,24 @@ fn workspace_plugin_for_dir(
     .with_context(|| format!("validating `{}`", manifest_path.display()))?;
     resolve_group_sources(&mut plugin, dir, workspace_root);
 
+    let package = match member {
+        Some(member) => SourcedPackage::new(
+            PackageId::new(
+                crate::pm::CARGO_PM,
+                member.name.clone(),
+                member.version.to_string(),
+            ),
+            member.provenance.clone(),
+        ),
+        None => SourcedPackage::new(
+            PackageId::new("local", &plugin.name, ANY_VERSION),
+            PackageProvenance::Workspace,
+        ),
+    };
+
     Ok(Some(Plugin {
-        canonical: PackageId::new("local", &plugin.name, ANY_VERSION),
+        package,
         manifest: plugin,
-        workspace_member: true,
     }))
 }
 
@@ -1352,8 +1456,9 @@ fn workspace_plugin_for_dir(
 /// This is the *offline* form used by the `plugin validate` CLI, which
 /// points at an arbitrary directory rather than a configured registry.
 /// Registry loading goes through the package-manager instances instead
-/// ([`load_registry`]). `source_name` becomes each `Plugin`'s
-/// canonical `pm` tag; callers that don't care pass `""`.
+/// ([`load_registry`]). `source_name` becomes the routing/display `pm`
+/// component; explicit `Path` provenance remains the source fact. Callers
+/// that don't care about the label pass `""`.
 fn scan_source_dir<P: AsRef<Path>>(dir: P, source_name: &str) -> Result<SourceDirContents> {
     let dir = dir.as_ref();
     let mut plugins = Vec::new();
@@ -1419,7 +1524,7 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
         let (id, plugin, result) = match plugin_result {
             // The plugin's own name is its id; the error names the directory it
             // came from.
-            Ok(parsed) => (parsed.canonical.name.clone(), Some(parsed), Ok(())),
+            Ok(parsed) => (parsed.package.id.name.clone(), Some(parsed), Ok(())),
             Err(e) => ("<unknown>".to_string(), None, Err(e)),
         };
 
@@ -1529,7 +1634,8 @@ pub async fn check_crate_exists(crate_name: &str) -> bool {
 /// Load and validate a single plugin from a TOML manifest.
 ///
 /// `source_name` and `source_dir` describe the plugin source the manifest was
-/// found through. `source_name` becomes the plugin's canonical `pm` tag;
+/// found through. `source_name` becomes the package id's routing/display `pm`
+/// component while the loader records `Path` provenance separately;
 /// `source_dir` is the base for its `source.path` groups. Standalone callers —
 /// like the `plugin validate` CLI — that need neither can pass an empty string
 /// and the manifest's parent directory.
@@ -1558,11 +1664,11 @@ fn load_plugin_as(
     let base = manifest_path.parent().unwrap_or(source_dir);
     resolve_group_sources(&mut plugin, base, source_dir);
     Ok(Plugin {
-        canonical: PackageId::new(source_name, &plugin.name, ANY_VERSION),
+        package: SourcedPackage::new(
+            PackageId::new(source_name, &plugin.name, ANY_VERSION),
+            PackageProvenance::Path,
+        ),
         manifest: plugin,
-        // Registry sources are never workspace members; the workspace-plugin
-        // loader is the only place that stamps true.
-        workspace_member: false,
     })
 }
 
@@ -1591,8 +1697,29 @@ pub(crate) fn merge_crate_manifest(
     file: Option<&str>,
     crate_name: &str,
 ) -> RawPluginManifest {
-    let meta = metadata.and_then(
-        |t| match toml::Value::Table(t).try_into::<RawPluginManifest>() {
+    let metadata = parse_crate_metadata(metadata, crate_name);
+    let file = file.and_then(|content| match raw_crate_manifest(content) {
+        Ok(manifest) => Some(manifest),
+        Err(error) => {
+            tracing::warn!(
+                crate_name = %crate_name,
+                error = %error,
+                "ignoring malformed crate Symposium.toml"
+            );
+            None
+        }
+    });
+    merge_raw_crate_manifests(metadata, file)
+}
+
+/// Parse package metadata leniently: a malformed optional manifest layer must
+/// not prevent the rest of the package from loading.
+fn parse_crate_metadata(
+    metadata: Option<toml::Table>,
+    crate_name: &str,
+) -> Option<RawPluginManifest> {
+    metadata.and_then(
+        |table| match toml::Value::Table(table).try_into::<RawPluginManifest>() {
             Ok(m) => Some(m),
             Err(e) => {
                 tracing::warn!(
@@ -1603,19 +1730,14 @@ pub(crate) fn merge_crate_manifest(
                 None
             }
         },
-    );
-    let file = file.and_then(|c| match raw_crate_manifest(c) {
-        Ok(m) => Some(m),
-        Err(e) => {
-            tracing::warn!(
-                crate_name = %crate_name,
-                error = %e,
-                "ignoring malformed crate Symposium.toml"
-            );
-            None
-        }
-    });
-    match (meta, file) {
+    )
+}
+
+fn merge_raw_crate_manifests(
+    metadata: Option<RawPluginManifest>,
+    file: Option<RawPluginManifest>,
+) -> RawPluginManifest {
+    match (metadata, file) {
         (Some(a), Some(b)) => a.merge(b),
         (Some(m), None) | (None, Some(m)) => m,
         (None, None) => RawPluginManifest::default(),
@@ -1946,6 +2068,8 @@ mod tests {
     use super::*;
     use indoc::indoc;
     use std::collections::BTreeMap;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::predicate::PredicateSet;
 
@@ -1965,6 +2089,45 @@ mod tests {
     fn from_str_as(s: &str, origin: ManifestOrigin<'_>) -> Result<PluginManifest> {
         let manifest: RawPluginManifest = toml::from_str(s)?;
         validate_manifest(manifest, origin)
+    }
+
+    struct CountingCargoPm {
+        load_calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::pm::PackageManager for CountingCargoPm {
+        fn name(&self) -> &str {
+            crate::pm::CARGO_PM
+        }
+
+        async fn active_plugins(
+            &self,
+            _deps: &[SourcedPackage],
+        ) -> Vec<crate::pm::UnvalidatedPlugin> {
+            Vec::new()
+        }
+
+        async fn load_plugin(&self, _id: &PackageId) -> Vec<crate::pm::UnvalidatedPlugin> {
+            self.load_calls.fetch_add(1, Ordering::Relaxed);
+            Vec::new()
+        }
+
+        async fn list_deps(&self) -> Result<Vec<SourcedPackage>> {
+            Ok(Vec::new())
+        }
+
+        async fn search(&self, _query: &str) -> Result<Vec<crate::pm::PluginInfo>> {
+            Ok(Vec::new())
+        }
+
+        async fn fetch(
+            &self,
+            id: &PackageId,
+            _update: UpdateLevel,
+        ) -> Result<crate::pm::FetchedPackage> {
+            bail!("unexpected fetch for {id}")
+        }
     }
 
     /// A flat registry plugin gates itself on its own `depends-on`, evaluated
@@ -2519,7 +2682,8 @@ mod tests {
         assert!(!gated.manifest.requires_use);
         assert!(gated.manifest.predicates.references_dep("serde"));
         assert_eq!(gated.manifest.skills.len(), 1);
-        assert_eq!(gated.canonical.pm, "recs");
+        assert_eq!(gated.package.id.pm, "recs");
+        assert_eq!(gated.package.provenance, PackageProvenance::Path);
 
         // A bare skill names no dependency anywhere, so the ordinary dormancy
         // rule leaves it dormant until `use`d.
@@ -2534,6 +2698,36 @@ mod tests {
         .unwrap();
         assert_eq!(bare.manifest.name, "bare-skill");
         assert!(bare.manifest.requires_use);
+    }
+
+    #[test]
+    fn validation_retains_the_package_managers_sourced_package() {
+        let tmp = tempfile::tempdir().unwrap();
+        let package = SourcedPackage::new(
+            PackageId::new("registry", "plugin", ANY_VERSION),
+            PackageProvenance::Git {
+                url: "https://git.example/plugins".to_owned(),
+            },
+        );
+        let manifest = RawPluginManifest::parse("name = \"plugin\"").unwrap();
+        let unvalidated =
+            UnvalidatedPlugin::new(package.clone(), tmp.path().to_path_buf(), manifest);
+
+        let plugin = validate_plugin(unvalidated, PluginKind::Registry).unwrap();
+
+        assert_eq!(plugin.package, package);
+    }
+
+    #[test]
+    fn offline_manifest_loader_stamps_path_provenance() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest_path = tmp.path().join("Symposium.toml");
+        std::fs::write(&manifest_path, "name = \"plugin\"").unwrap();
+
+        let plugin = load_plugin(&manifest_path, "validate", tmp.path()).unwrap();
+
+        assert_eq!(plugin.package.id.pm, "validate");
+        assert_eq!(plugin.package.provenance, PackageProvenance::Path);
     }
 
     #[test]
@@ -2988,7 +3182,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_plugins_interpret_member_dirs() {
+    fn workspace_plugins_interpret_member_packages() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
 
@@ -3018,7 +3212,26 @@ mod tests {
         let empty = root.join("member-empty");
         std::fs::create_dir_all(&empty).unwrap();
 
-        let members = vec![bare.clone(), optout.clone(), empty.clone()];
+        let members = vec![
+            crate::pm::WorkspaceCrate::new(
+                "member-bare".to_owned(),
+                semver::Version::new(0, 1, 0),
+                PackageProvenance::Workspace,
+                Some(bare.clone()),
+            ),
+            crate::pm::WorkspaceCrate::new(
+                "member-optout".to_owned(),
+                semver::Version::new(0, 1, 0),
+                PackageProvenance::Workspace,
+                Some(optout.clone()),
+            ),
+            crate::pm::WorkspaceCrate::new(
+                "member-empty".to_owned(),
+                semver::Version::new(0, 1, 0),
+                PackageProvenance::Workspace,
+                Some(empty.clone()),
+            ),
+        ];
         let (plugins, warnings) = workspace_plugins(root, &members, true);
         assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
@@ -3027,7 +3240,8 @@ mod tests {
         assert_eq!(names, vec![root_name, "member-bare", "explicit-name"]);
 
         for parsed in &plugins {
-            assert!(parsed.workspace_member);
+            assert!(parsed.is_workspace_member());
+            assert_eq!(parsed.package.provenance, PackageProvenance::Workspace);
             // Groups carry the provenance too: workspace skills load with
             // lenient frontmatter rules.
             assert!(parsed.manifest.skills.iter().all(|g| g.workspace_member));
@@ -3056,6 +3270,35 @@ mod tests {
     }
 
     #[test]
+    fn malformed_workspace_member_manifest_is_reported() {
+        let tmp = tempfile::tempdir().unwrap();
+        let member_dir = tmp.path().join("member");
+        std::fs::create_dir_all(&member_dir).unwrap();
+        let manifest_path = member_dir.join("Symposium.toml");
+        std::fs::write(&manifest_path, "[[skills]").unwrap();
+        let members = vec![crate::pm::WorkspaceCrate::new(
+            "member".to_owned(),
+            semver::Version::new(0, 1, 0),
+            PackageProvenance::Workspace,
+            Some(member_dir),
+        )];
+
+        let (plugins, warnings) = workspace_plugins(tmp.path(), &members, true);
+
+        assert!(plugins.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(
+            std::fs::canonicalize(&warnings[0].path).unwrap(),
+            std::fs::canonicalize(&manifest_path).unwrap()
+        );
+        assert!(
+            warnings[0]
+                .message
+                .contains("failed to load workspace plugin")
+        );
+    }
+
+    #[test]
     fn agents_syncing_disabled_omits_agents_skills_group() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path();
@@ -3063,7 +3306,12 @@ mod tests {
         // A member defined only by `.agents/skills/`.
         let member = root.join("member");
         std::fs::create_dir_all(member.join(".agents/skills")).unwrap();
-        let members = vec![member.clone()];
+        let members = vec![crate::pm::WorkspaceCrate::new(
+            "member".to_owned(),
+            semver::Version::new(0, 1, 0),
+            PackageProvenance::Workspace,
+            Some(member.clone()),
+        )];
 
         let (plugins, _) = workspace_plugins(root, &members, true);
         let names: Vec<&str> = plugins.iter().map(|p| p.manifest.name.as_str()).collect();
@@ -3073,6 +3321,224 @@ mod tests {
         let names: Vec<&str> = plugins.iter().map(|p| p.manifest.name.as_str()).collect();
         assert!(!names.contains(&"member"), "{names:?}");
         assert_eq!(plugins[0].manifest.skills.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn chained_workspace_member_is_active_once_under_its_cargo_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let member_dir = root.join("member-dir");
+        std::fs::create_dir_all(&member_dir).unwrap();
+        std::fs::write(
+            root.join("config.toml"),
+            indoc! {"
+                [defaults]
+                symposium-recommendations = false
+                user-plugins = false
+            "},
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("Symposium.toml"),
+            indoc! {r#"
+                name = "root-plugin"
+                depends-on = ["*"]
+
+                [[plugins]]
+                source.cargo = "member-crate"
+            "#},
+        )
+        .unwrap();
+        std::fs::write(
+            member_dir.join("Symposium.toml"),
+            indoc! {r#"
+                name = "different-plugin-name"
+                depends-on = ["*"]
+            "#},
+        )
+        .unwrap();
+        std::fs::create_dir_all(member_dir.join("metadata-skills")).unwrap();
+        std::fs::write(
+            member_dir.join("Cargo.toml"),
+            indoc! {r#"
+                [package]
+                name = "member-crate"
+                version = "0.1.0"
+
+                [[package.metadata.symposium.skills]]
+                source.path = "metadata-skills"
+            "#},
+        )
+        .unwrap();
+
+        let member_package = crate::pm::WorkspaceCrate::new(
+            "member-crate".to_owned(),
+            semver::Version::new(0, 1, 0),
+            PackageProvenance::Workspace,
+            Some(member_dir),
+        );
+        let workspace =
+            crate::pm::WorkspaceDeps::fixture_with_members(root, Vec::new(), vec![member_package]);
+        let sym = Symposium::from_dir(root);
+        let registry =
+            load_registry_with_workspace(&sym, workspace.load().map(AsRef::as_ref)).await;
+        let pms = sym.package_managers(&workspace);
+        let deps = Vec::new();
+        let mut context = crate::predicate::PredicateContext::new(&deps);
+
+        let active = active_plugins(&sym, &registry, &pms, Some(root), &mut context).await;
+        let matching: Vec<_> = active
+            .iter()
+            .filter(|plugin| plugin.manifest.name == "different-plugin-name")
+            .collect();
+
+        assert_eq!(matching.len(), 1);
+        assert_eq!(matching[0].package.id.pm, crate::pm::CARGO_PM);
+        assert_eq!(matching[0].package.id.name, "member-crate");
+        assert!(matching[0].is_workspace_member());
+        assert!(
+            matching[0]
+                .manifest
+                .skills
+                .iter()
+                .all(|group| group.workspace_member)
+        );
+        assert!(matching[0].manifest.skills.iter().any(|group| {
+            matches!(
+                &group.source,
+                PluginSource::Path(path) if path.ends_with("metadata-skills")
+            )
+        }));
+    }
+
+    #[tokio::test]
+    async fn used_trust_root_does_not_enter_the_cargo_worklist() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let mut sym = Symposium::from_dir(root);
+        // Config drives loading; the context separately opens the dormancy gate.
+        sym.config
+            .plugins
+            .used
+            .push(crate::config::UseEntry::Global("dormant-plugin".into()));
+
+        let manifest = from_str("name = \"dormant-plugin\"").unwrap();
+        assert!(manifest.requires_use);
+        let registry = PluginRegistry {
+            plugins: vec![Plugin {
+                manifest,
+                package: SourcedPackage::new(
+                    PackageId::new("registry", "dormant-plugin", ANY_VERSION),
+                    PackageProvenance::Path,
+                ),
+            }],
+            warnings: Vec::new(),
+            unreadable_registries: Vec::new(),
+            custom_predicates: CustomPredicateRegistry::default(),
+        };
+        let load_calls = Arc::new(AtomicUsize::new(0));
+        let pms = crate::pm::PmRegistry::new(vec![crate::pm::PmInstance {
+            name: crate::pm::CARGO_PM.to_owned(),
+            trusted: false,
+            kind: PluginKind::Package,
+            pm: Box::new(CountingCargoPm {
+                load_calls: Arc::clone(&load_calls),
+            }),
+        }]);
+        let dependencies = Vec::new();
+        let mut context = ctx(&dependencies).with_used_names(&["dormant-plugin"]);
+
+        let active = active_plugins(&sym, &registry, &pms, Some(root), &mut context).await;
+
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].manifest.name, "dormant-plugin");
+        assert_eq!(load_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn same_named_member_and_enabled_dependency_remain_distinct() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let member_dir = root.join("member");
+        let dependency_dir = root.join("dependency");
+        std::fs::create_dir_all(&member_dir).unwrap();
+        std::fs::create_dir_all(&dependency_dir).unwrap();
+        std::fs::write(
+            root.join("config.toml"),
+            indoc! {r#"
+                [defaults]
+                symposium-recommendations = false
+                user-plugins = false
+
+                [plugins]
+                auto-enable = ["shared-name"]
+            "#},
+        )
+        .unwrap();
+        std::fs::write(
+            member_dir.join("Symposium.toml"),
+            "name = \"member-plugin\"\ndepends-on = [\"*\"]",
+        )
+        .unwrap();
+        std::fs::write(
+            dependency_dir.join("Symposium.toml"),
+            "name = \"dependency-plugin\"\ndepends-on = [\"*\"]",
+        )
+        .unwrap();
+
+        let member_package = crate::pm::WorkspaceCrate::new(
+            "shared-name".to_owned(),
+            semver::Version::new(1, 0, 0),
+            PackageProvenance::Workspace,
+            Some(member_dir),
+        );
+        let dependency_package = crate::pm::WorkspaceCrate::new(
+            "shared-name".to_owned(),
+            semver::Version::new(1, 0, 0),
+            PackageProvenance::Registry {
+                url: crate::pm::CRATES_IO_REGISTRY_URL.to_owned(),
+            },
+            None,
+        )
+        .with_source_dir(Some(dependency_dir));
+        let workspace = crate::pm::WorkspaceDeps::fixture_with_members(
+            root,
+            vec![dependency_package],
+            vec![member_package],
+        );
+        let sym = Symposium::from_dir(root);
+        let registry =
+            load_registry_with_workspace(&sym, workspace.load().map(AsRef::as_ref)).await;
+        let pms = sym.package_managers(&workspace);
+        let deps: Vec<_> = pms
+            .list_deps()
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|package| package.id)
+            .collect();
+        let mut context = crate::predicate::PredicateContext::new(&deps);
+
+        let active = active_plugins(&sym, &registry, &pms, Some(root), &mut context).await;
+        let member_plugin = active
+            .iter()
+            .find(|plugin| plugin.manifest.name == "member-plugin")
+            .unwrap();
+        let dependency_plugin = active
+            .iter()
+            .find(|plugin| plugin.manifest.name == "dependency-plugin")
+            .unwrap();
+
+        assert_eq!(
+            member_plugin.package.provenance,
+            PackageProvenance::Workspace
+        );
+        assert_eq!(
+            dependency_plugin.package.provenance,
+            PackageProvenance::Registry {
+                url: crate::pm::CRATES_IO_REGISTRY_URL.to_owned(),
+            }
+        );
     }
 
     #[test]
@@ -3188,14 +3654,114 @@ mod tests {
         };
         let mut parsed = Plugin {
             manifest: plugin,
-            workspace_member: false,
-            canonical: PackageId::new("test", "test", ANY_VERSION),
+            package: SourcedPackage::new(
+                PackageId::new("test", "test", ANY_VERSION),
+                PackageProvenance::Unknown,
+            ),
         };
         let deps: Vec<crate::pm::PackageId> = Vec::new();
         let mut c = ctx(&deps);
         assert!(!parsed.applies(&mut c));
-        parsed.workspace_member = true;
+        parsed.package.provenance = PackageProvenance::Workspace;
         assert!(parsed.applies(&mut c));
+    }
+
+    #[test]
+    fn inactive_plugin_does_not_reserve_its_sourced_package_key() {
+        let package = SourcedPackage::new(
+            PackageId::new(crate::pm::CARGO_PM, "same-package", "1.0.0"),
+            PackageProvenance::Workspace,
+        );
+        let plugin = |depends_on: &str| Plugin {
+            manifest: from_str(&format!(
+                "name = \"same-package\"\ndepends-on = [\"{depends_on}\"]"
+            ))
+            .unwrap(),
+            package: package.clone(),
+        };
+        let deps = Vec::new();
+        let mut context = ctx(&deps);
+        let mut visited = std::collections::HashSet::new();
+        let mut active = Vec::new();
+        let mut worklist = Vec::new();
+
+        record_active(
+            plugin("missing-dependency"),
+            &mut context,
+            &mut visited,
+            &mut active,
+            &mut worklist,
+        );
+        assert!(visited.is_empty());
+
+        record_active(
+            plugin("*"),
+            &mut context,
+            &mut visited,
+            &mut active,
+            &mut worklist,
+        );
+        assert_eq!(active.len(), 1);
+        assert_eq!(visited, std::iter::once(plugin_key(&package)).collect());
+    }
+
+    #[test]
+    fn duplicate_sourced_package_is_reported() {
+        symposium_testlib::install_tracing_baseline();
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let (layer, reports) =
+            crate::report::ReportLayer::new(crate::report::ReportMode::Json, tracing::Level::DEBUG);
+        let _guard = tracing::subscriber::set_default(tracing_subscriber::registry().with(layer));
+        let plugin = Plugin {
+            manifest: from_str("name = \"duplicate\"\ndepends-on = [\"*\"]").unwrap(),
+            package: SourcedPackage::new(
+                PackageId::new("registry", "duplicate", ANY_VERSION),
+                PackageProvenance::Path,
+            ),
+        };
+        let dependencies = Vec::new();
+        let mut context = ctx(&dependencies);
+        let mut visited = std::collections::HashSet::new();
+        let mut active = Vec::new();
+        let mut worklist = Vec::new();
+
+        record_active(
+            plugin.clone(),
+            &mut context,
+            &mut visited,
+            &mut active,
+            &mut worklist,
+        );
+        record_active(
+            plugin,
+            &mut context,
+            &mut visited,
+            &mut active,
+            &mut worklist,
+        );
+
+        assert_eq!(active.len(), 1);
+        assert!(reports.drain().iter().any(|report| {
+            report["kind"] == "plugin_considered"
+                && report["plugin"] == "duplicate"
+                && report["matched"] == false
+                && report["reason"] == "duplicate sourced package identity"
+        }));
+    }
+
+    #[test]
+    fn sourced_package_key_distinguishes_same_named_sources() {
+        let id = PackageId::new(crate::pm::CARGO_PM, "same-package", "1.0.0");
+        let workspace = SourcedPackage::new(id.clone(), PackageProvenance::Workspace);
+        let registry = SourcedPackage::new(
+            id,
+            PackageProvenance::Registry {
+                url: crate::pm::CRATES_IO_REGISTRY_URL.to_owned(),
+            },
+        );
+
+        assert_ne!(plugin_key(&workspace), plugin_key(&registry));
     }
 
     #[test]
@@ -4637,8 +5203,10 @@ mod tests {
                 chained: vec![],
                 requires_use: false,
             },
-            workspace_member: false,
-            canonical: PackageId::new("test", plugin_name, ANY_VERSION),
+            package: SourcedPackage::new(
+                PackageId::new("test", plugin_name, ANY_VERSION),
+                PackageProvenance::Unknown,
+            ),
         }
     }
 

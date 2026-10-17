@@ -281,6 +281,20 @@ impl PmRegistry {
         Ok(deps)
     }
 
+    /// Plugins embedded in the exact dependency packages supplied by the
+    /// workspace resolver.
+    ///
+    /// Only untrusted transports participate: configured registries are trust
+    /// roots already present in the plugin registry, while a dependency needs
+    /// the user's enablement decision before its plugin becomes active.
+    pub async fn plugins_for_dependencies(&self, deps: &[SourcedPackage]) -> Vec<Plugin> {
+        let mut plugins = Vec::new();
+        for instance in self.instances.iter().filter(|instance| !instance.trusted) {
+            plugins.extend(instance.active_plugins(deps).await);
+        }
+        plugins
+    }
+
     /// Load the plugin(s) an id maps to, asking every instance. Any instance may
     /// contribute a plugin relevant to the id, so this can return several. Each
     /// instance's plugins are validated under its own [`PluginKind`].

@@ -156,7 +156,7 @@ pub(crate) async fn collect_skills(
 ) -> Vec<SkillWithGroupContext> {
     let mut results = Vec::new();
     for parsed in active {
-        ctx.set_workspace_member(parsed.workspace_member);
+        ctx.set_workspace_member(parsed.is_workspace_member());
         for group in &parsed.manifest.skills {
             let skills = load_skills_for_group(sym, parsed, group, ctx, update).await;
             for (skill, origin_hash) in skills {
@@ -237,7 +237,7 @@ async fn load_skills_for_group(
 /// skills discovered inside it. Both `source` variants reduce to this: `Path` is
 /// already on disk; `Git` is fetched via the git cache. (A crate is not a group
 /// source — it becomes a plugin through a `[[plugins]]` chained reference; see
-/// [`expand_chained_plugins`].)
+/// [`crate::plugins::active_plugins`].)
 struct ResolvedSkillDir {
     dir: PathBuf,
     /// `SkillSourceSearched` report `plugin` label.
@@ -679,13 +679,20 @@ mod tests {
     use std::fs;
 
     use crate::{
-        pm::{ANY_VERSION, PackageId},
+        pm::{ANY_VERSION, PackageId, PackageProvenance, SourcedPackage},
         predicate::Predicate,
     };
 
     /// Build a predicate set from dependency atoms (the `depends-on` field form).
     fn pred_set(s: &str) -> PredicateSet {
         PredicateSet::from_depends_on(s).unwrap()
+    }
+
+    fn test_package(pm: &str, name: &str) -> SourcedPackage {
+        SourcedPackage::new(
+            PackageId::new(pm, name, ANY_VERSION),
+            PackageProvenance::Unknown,
+        )
     }
 
     /// Discovery follows directory links, so a skills tree that links back
@@ -1175,9 +1182,8 @@ mod tests {
 
         let registry = PluginRegistry {
             plugins: vec![Plugin {
-                canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
+                package: test_package("test", &plugin.name),
                 manifest: plugin,
-                workspace_member: false,
             }],
             warnings: vec![],
             unreadable_registries: vec![],
@@ -1231,9 +1237,8 @@ mod tests {
 
         let registry = PluginRegistry {
             plugins: vec![Plugin {
-                canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
+                package: test_package("test", &plugin.name),
                 manifest: plugin,
-                workspace_member: false,
             }],
             warnings: vec![],
             unreadable_registries: vec![],
@@ -1305,9 +1310,8 @@ mod tests {
 
         let registry = PluginRegistry {
             plugins: vec![Plugin {
-                canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
+                package: test_package("test", &plugin.name),
                 manifest: plugin,
-                workspace_member: false,
             }],
             warnings: vec![],
             unreadable_registries: vec![],
@@ -1384,9 +1388,8 @@ mod tests {
 
         let registry = PluginRegistry {
             plugins: vec![Plugin {
-                canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
+                package: test_package("test", &plugin.name),
                 manifest: plugin,
-                workspace_member: false,
             }],
             warnings: vec![],
             unreadable_registries: vec![],
@@ -1464,9 +1467,8 @@ mod tests {
 
         let registry = PluginRegistry {
             plugins: vec![Plugin {
-                canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
+                package: test_package("test", &plugin.name),
                 manifest: plugin,
-                workspace_member: false,
             }],
             warnings: vec![],
             unreadable_registries: vec![],
@@ -1589,9 +1591,8 @@ mod tests {
         };
         let registry = PluginRegistry {
             plugins: vec![Plugin {
-                canonical: crate::pm::PackageId::any_version("recs", "my-skill"),
+                package: test_package("recs", "my-skill"),
                 manifest: plugin,
-                workspace_member: false,
             }],
             warnings: vec![],
             unreadable_registries: vec![],

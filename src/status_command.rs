@@ -87,12 +87,12 @@ pub async fn workspace_status(
     let used_names = sym.config.plugins.used_names_in(&ws.root);
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used_names(&used_names);
     for parsed in &registry.plugins {
-        let root = if parsed.workspace_member {
+        let root = if parsed.is_workspace_member() {
             "workspace member".to_string()
         } else if parsed.manifest.requires_use && ctx.is_used(&parsed.manifest.name) {
             "`[plugins] use`".to_string()
         } else {
-            format!("registry `{}`", parsed.canonical.pm)
+            format!("registry `{}`", parsed.package.id.pm)
         };
         let active = parsed.applies(&mut ctx);
         entries.push(StatusEntry {

@@ -84,20 +84,6 @@ pub struct LoadedWorkspace {
     pub member_crates: Vec<WorkspaceCrate>,
 }
 
-impl LoadedWorkspace {
-    /// Member directories used for workspace-plugin discovery.
-    pub fn member_dirs(&self) -> Vec<PathBuf> {
-        let mut dirs: Vec<_> = self
-            .member_crates
-            .iter()
-            .filter_map(|package| package.source_dir.clone())
-            .collect();
-        dirs.sort();
-        dirs.dedup();
-        dirs
-    }
-}
-
 /// On-disk cache format. Adding a field is a compatible cache bump: an old
 /// cache file fails to deserialize, reads as a miss, and is rebuilt.
 #[derive(Serialize, Deserialize)]
@@ -553,7 +539,6 @@ mod tests {
         assert_eq!(decoded.root, loaded.root);
         assert_eq!(decoded.crates, loaded.crates);
         assert_eq!(decoded.member_crates, loaded.member_crates);
-        assert_eq!(decoded.member_dirs(), vec![member_dir]);
     }
 
     #[test]

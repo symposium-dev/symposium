@@ -44,7 +44,7 @@ pub async fn find_matches(sym: &Symposium, query: &str) -> Vec<SearchMatch> {
     for parsed in &registry.plugins {
         if name_matches(&parsed.manifest.name, query) {
             matches.push(SearchMatch {
-                origin: parsed.canonical.pm.clone(),
+                origin: parsed.package.id.pm.clone(),
                 name: parsed.manifest.name.clone(),
                 version: None,
                 description: parsed
