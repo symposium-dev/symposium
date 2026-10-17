@@ -16,6 +16,9 @@ mod plugin_hook;
 mod resolution;
 
 pub(in crate::telemetry) use agent::{HookAgent, SupportedAgent, VendorSessionId};
+pub(in crate::telemetry) use extension::{
+    ExtensionKind, PublicExtensionCoordinate, PublicExtensionSource,
+};
 pub(in crate::telemetry) use extension_invocation::{
     ExtensionInvocationAgent, ExtensionInvocationAttribution, ExtensionInvocationMetricObservation,
     ExtensionInvocationMetricsUpdateError, ExtensionInvocationMetricsV1, ExtensionInvocationPhase,
@@ -33,6 +36,10 @@ pub(in crate::telemetry) use plugin_hook::{
     PublicPluginCoordinate,
 };
 pub(in crate::telemetry) use resolution::extension::SafeSkillAttribution;
+pub(in crate::telemetry) use resolution::{
+    UnnamedPackageReason,
+    package::{PackageEcosystem, PublicPackageCoordinate},
+};
 
 use std::{fmt, num::NonZeroU64, str::FromStr, sync::LazyLock};
 
