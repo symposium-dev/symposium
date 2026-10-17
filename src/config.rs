@@ -407,7 +407,8 @@ pub struct RegistryConfig {
 /// Cache subdirectory holding git registries' unpacked content.
 pub const REGISTRY_CACHE_SUBDIR: &str = "plugin-sources";
 
-const BUILTIN_RECOMMENDATIONS_URL: &str = "https://github.com/symposium-dev/recommendations";
+pub(crate) const BUILTIN_RECOMMENDATIONS_URL: &str =
+    "https://github.com/symposium-dev/recommendations";
 
 /// Full application context: parsed config + resolved directory paths.
 ///
