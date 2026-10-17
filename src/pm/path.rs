@@ -207,6 +207,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn same_named_entries_keep_distinct_routing_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("registry");
+        for parent in ["foo", "bar"] {
+            let entry = source.join(parent).join("my-skill");
+            std::fs::create_dir_all(&entry).unwrap();
+            std::fs::write(
+                entry.join("SKILL.md"),
+                "---\nname: my-skill\ndescription: d\n---\nbody",
+            )
+            .unwrap();
+        }
+
+        let pm = PathPm::new("user-plugins", source);
+        let mut ids: Vec<_> = pm
+            .active_plugins(&[])
+            .await
+            .into_iter()
+            .map(|plugin| plugin.package.id.name)
+            .collect();
+        ids.sort();
+
+        assert_eq!(ids, ["bar/my-skill", "foo/my-skill"]);
+    }
+
+    #[tokio::test]
     async fn fetch_returns_the_local_entry_directory() {
         let tmp = tempfile::tempdir().unwrap();
         let pm = PathPm::new("local", tmp.path().join("registry"));

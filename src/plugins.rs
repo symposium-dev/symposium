@@ -937,15 +937,15 @@ pub(crate) fn entry_plugin(
     provenance: crate::pm::PackageProvenance,
 ) -> Option<Result<UnvalidatedPlugin>> {
     let dir = root.join(subpath);
+    let entry_key = crate::pm::layout::subpath_key(subpath);
     Some(match crate::pm::layout::classify(&dir)? {
         crate::pm::layout::EntryKind::Plugin(toml_path) => (|| -> Result<UnvalidatedPlugin> {
             let content = fs::read_to_string(&toml_path)?;
             let manifest = RawPluginManifest::parse(&content)?;
             let base = toml_path.parent().unwrap_or(&dir).to_path_buf();
-            let name = manifest.name.clone().unwrap_or_default();
             Ok(UnvalidatedPlugin::new(
                 crate::pm::SourcedPackage::new(
-                    PackageId::new(source_name, name, ANY_VERSION),
+                    PackageId::new(source_name, entry_key.as_str(), ANY_VERSION),
                     provenance.clone(),
                 ),
                 base,
@@ -957,10 +957,9 @@ pub(crate) fn entry_plugin(
         crate::pm::layout::EntryKind::Skill(skill_md) => (|| -> Result<UnvalidatedPlugin> {
             let manifest = standalone_skill_manifest(&skill_md)?;
             let base = skill_md.parent().unwrap_or(&dir).to_path_buf();
-            let name = manifest.name.clone().unwrap_or_default();
             Ok(UnvalidatedPlugin::new(
                 crate::pm::SourcedPackage::new(
-                    PackageId::new(source_name, name, ANY_VERSION),
+                    PackageId::new(source_name, entry_key.as_str(), ANY_VERSION),
                     provenance,
                 ),
                 base,
