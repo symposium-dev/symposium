@@ -505,6 +505,8 @@ pub struct ClaudeSessionStartHookOutput {
     pub hook_event_name: String,
     #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
     pub additional_context: Option<String>,
+    #[serde(rename = "reloadSkills", skip_serializing_if = "Option::is_none")]
+    pub reload_skills: Option<bool>,
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
@@ -557,17 +559,33 @@ impl AgentHookOutput for ClaudeSessionStartOutput {
         Ok(serde_json::from_slice(output)?)
     }
     fn from_symposium(event: &symposium::OutputEvent) -> Self {
-        match claude_hook_output_from_symposium("SessionStart", event) {
-            Some(v) => serde_json::from_value(v).unwrap_or_default(),
-            None => Self::default(),
+        let symposium::OutputEvent::SessionStart(output) = event else {
+            panic!("wrong event type")
+        };
+        let needs_hook_output = output.additional_context.is_some()
+            || output.reload_skills == Some(true);
+        if !needs_hook_output {
+            return Self::default();
+        }
+        Self {
+            hook_specific_output: Some(ClaudeSessionStartHookOutput {
+                hook_event_name: "SessionStart".into(),
+                additional_context: output.additional_context.clone(),
+                reload_skills: output.reload_skills,
+                rest: serde_json::Map::new(),
+            }),
+            ..Self::default()
         }
     }
     fn to_symposium(&self) -> symposium::OutputEvent {
-        symposium::OutputEvent::SessionStart(symposium::SessionStartOutput::new(
-            self.hook_specific_output
-                .as_ref()
-                .and_then(|h| h.additional_context.clone()),
-        ))
+        let hook = self.hook_specific_output.as_ref();
+        let mut output = symposium::SessionStartOutput::new(
+            hook.and_then(|h| h.additional_context.clone()),
+        );
+        if hook.and_then(|h| h.reload_skills) == Some(true) {
+            output = output.with_reload_skills();
+        }
+        symposium::OutputEvent::SessionStart(output)
     }
     fn to_hook_output(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap()
