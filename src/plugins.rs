@@ -26,7 +26,7 @@ use symposium_sdk::manifest::{
 use sacp::schema::McpServer;
 
 mod agent_plugin;
-pub(crate) use agent_plugin::{agent_plugin_manifest, fill_from_agent_plugin};
+pub(crate) use agent_plugin::{agent_plugin_manifest, fill_from_agent_plugin, resolves_inside};
 
 pub const AGENT_PLUGIN_FORMAT: &str = "agent plugin";
 

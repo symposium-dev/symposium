@@ -111,11 +111,18 @@ type TreeEntry = (PathBuf, EntryKind);
 ///
 /// Sorting by relative path puts each directory before its children, so a
 /// caller may create or read the entries in order.
-fn walk_tree(root: &Path) -> Result<(Vec<TreeEntry>, Vec<String>)> {
+fn walk_tree(root: &Path, package_root: Option<&Path>) -> Result<(Vec<TreeEntry>, Vec<String>)> {
     let mut entries = Vec::new();
     let mut skipped = Vec::new();
     let mut ancestors = dir_walk::Ancestors::rooted_at(root);
-    walk_tree_inner(root, root, &mut ancestors, &mut entries, &mut skipped)?;
+    walk_tree_inner(
+        root,
+        root,
+        package_root,
+        &mut ancestors,
+        &mut entries,
+        &mut skipped,
+    )?;
     entries.sort_by(|a, b| a.0.cmp(&b.0));
     Ok((entries, skipped))
 }
@@ -123,6 +130,7 @@ fn walk_tree(root: &Path) -> Result<(Vec<TreeEntry>, Vec<String>)> {
 fn walk_tree_inner(
     root: &Path,
     dir: &Path,
+    package_root: Option<&Path>,
     ancestors: &mut dir_walk::Ancestors,
     entries: &mut Vec<TreeEntry>,
     skipped: &mut Vec<String>,
@@ -138,6 +146,15 @@ fn walk_tree_inner(
         let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
         let file_type = entry.file_type()?;
         match dir_walk::resolved_kind(&path, file_type) {
+            Ok(Some(_))
+                if package_root
+                    .is_some_and(|package| !plugins::resolves_inside(package, &path)) =>
+            {
+                skipped.push(format!(
+                    "skipping {}: resolves outside the package",
+                    display_path(&path)
+                ));
+            }
             Ok(Some(EntryKind::Dir)) => {
                 if !ancestors.enter(&path) {
                     skipped.push(format!(
@@ -147,7 +164,7 @@ fn walk_tree_inner(
                     continue;
                 }
                 entries.push((rel, EntryKind::Dir));
-                walk_tree_inner(root, &path, ancestors, entries, skipped)?;
+                walk_tree_inner(root, &path, package_root, ancestors, entries, skipped)?;
                 ancestors.leave();
             }
             Ok(Some(EntryKind::File)) => entries.push((rel, EntryKind::File)),
@@ -168,8 +185,13 @@ fn walk_tree_inner(
 ///
 /// Entries the walk cannot follow are reported and skipped, so a single broken
 /// link leaves the rest of the skill installed instead of failing the sync.
-fn copy_dir_recursive(src: &Path, dst: &Path, warned: &mut BTreeSet<String>) -> Result<()> {
-    let (entries, skipped) = walk_tree(src)?;
+fn copy_dir_recursive(
+    src: &Path,
+    dst: &Path,
+    package_root: Option<&Path>,
+    warned: &mut BTreeSet<String>,
+) -> Result<()> {
+    let (entries, skipped) = walk_tree(src, package_root)?;
     report_skipped(skipped, warned);
     fs::create_dir_all(dst).with_context(|| format!("create {}", dst.display()))?;
     for (rel, kind) in entries {
@@ -199,8 +221,11 @@ pub(crate) type TreeContents = Vec<(PathBuf, Option<Vec<u8>>)>;
 ///
 /// Skips the `.symposium` marker and `.gitignore`, which are managed metadata
 /// rather than skill content.
-pub(crate) fn collect_dir_contents(dir: &Path) -> Result<(TreeContents, Vec<String>)> {
-    let (entries, skipped) = walk_tree(dir)?;
+pub(crate) fn collect_dir_contents(
+    dir: &Path,
+    package_root: Option<&Path>,
+) -> Result<(TreeContents, Vec<String>)> {
+    let (entries, skipped) = walk_tree(dir, package_root)?;
     let mut out = Vec::with_capacity(entries.len());
     for (rel, kind) in entries {
         let name = rel.to_string_lossy();
@@ -240,7 +265,7 @@ pub(crate) fn sync_tree(dest: &Path, sorted: &TreeContents) -> Result<bool> {
     if slot_taken(dest) && !is_managed_skill_dir(dest) {
         anyhow::bail!("{} is not managed by symposium", display_path(dest));
     }
-    if dest.is_dir() && collect_dir_contents(dest)?.0 == *sorted {
+    if dest.is_dir() && collect_dir_contents(dest, None)?.0 == *sorted {
         touch_marker(&dest.join(MARKER_FILE))?;
         return Ok(false);
     }
@@ -267,7 +292,7 @@ pub(crate) fn sync_plugin_dir(source: &Path, dest: &Path, debounce: Duration) ->
     {
         return Ok(false);
     }
-    sync_tree(dest, &collect_dir_contents(source)?.0)
+    sync_tree(dest, &collect_dir_contents(source, None)?.0)
 }
 
 pub(crate) fn reap_unlisted(parent: &Path, keep: impl Fn(&Path) -> bool) {
@@ -300,9 +325,13 @@ pub(crate) fn reap_unlisted(parent: &Path, keep: impl Fn(&Path) -> bool) {
 
 /// Returns true if the source directory's content differs from the
 /// destination's content (ignoring managed metadata files).
-fn dir_contents_differ(source_dir: &Path, dest_dir: &Path) -> Result<bool> {
-    let (src, _) = collect_dir_contents(source_dir)?;
-    let (dst, _) = collect_dir_contents(dest_dir)?;
+fn dir_contents_differ(
+    source_dir: &Path,
+    dest_dir: &Path,
+    package_root: Option<&Path>,
+) -> Result<bool> {
+    let (src, _) = collect_dir_contents(source_dir, package_root)?;
+    let (dst, _) = collect_dir_contents(dest_dir, None)?;
     Ok(src != dst)
 }
 
@@ -325,6 +354,7 @@ fn sync_skill_dir(
     project_root: &Path,
     debounce: Duration,
     warned: &mut BTreeSet<String>,
+    package_root: Option<&Path>,
 ) -> Result<bool> {
     if dest_dir == source_dir {
         return Ok(false);
@@ -332,7 +362,7 @@ fn sync_skill_dir(
 
     // If the destination doesn't exist yet, do a fresh install.
     if !slot_taken(dest_dir) {
-        install_skill_dir(source_dir, dest_dir, project_root, warned)?;
+        install_skill_dir(source_dir, dest_dir, project_root, warned, package_root)?;
         return Ok(true);
     }
 
@@ -344,14 +374,14 @@ fn sync_skill_dir(
 
     // Compare content (excluding managed metadata).
     let marker_path = dest_dir.join(MARKER_FILE);
-    if !dir_contents_differ(source_dir, dest_dir)? {
+    if !dir_contents_differ(source_dir, dest_dir, package_root)? {
         // Content is identical — just touch the marker to reset debounce.
         touch_marker(&marker_path)?;
         return Ok(false);
     }
 
     // Content changed: replace entirely.
-    install_skill_dir(source_dir, dest_dir, project_root, warned)?;
+    install_skill_dir(source_dir, dest_dir, project_root, warned, package_root)?;
     Ok(true)
 }
 
@@ -360,12 +390,13 @@ fn install_skill_dir(
     dest_dir: &Path,
     project_root: &Path,
     warned: &mut BTreeSet<String>,
+    package_root: Option<&Path>,
 ) -> Result<()> {
     let parent = dest_dir.parent().expect("skill dir must have parent");
     create_managed_dir_all(parent, project_root)?;
     install_staged(dest_dir, |staging| {
         mark_generated_skill_directory(staging)?;
-        copy_dir_recursive(source_dir, staging, warned)?;
+        copy_dir_recursive(source_dir, staging, package_root, warned)?;
         mark_generated_skill_directory(staging)
     })
 }
@@ -532,12 +563,17 @@ pub async fn sync(
     // plain name and their origin hash so we can decide later whether each one
     // needs an `<name>-<hash>` suffix to avoid collisions.
     let mut seen: BTreeSet<(String, String)> = BTreeSet::new();
-    let mut to_install: Vec<(String, String, &std::path::Path)> = Vec::new();
+    let mut to_install: Vec<(String, String, &Path, Option<&Path>)> = Vec::new();
 
     for entry in &applicable {
         let name = entry.skill.name().to_string();
         if seen.insert((name.clone(), entry.origin_hash.clone())) {
-            to_install.push((name, entry.origin_hash.clone(), &entry.skill.path));
+            to_install.push((
+                name,
+                entry.origin_hash.clone(),
+                &entry.skill.path,
+                entry.agent_plugin_root.as_deref(),
+            ));
         }
     }
 
@@ -621,7 +657,7 @@ pub async fn sync(
         }
         let agent_copies: Vec<_> = to_install
             .iter()
-            .filter(|(_, origin_hash, _)| !as_plugins.contains(origin_hash))
+            .filter(|(_, origin_hash, _, _)| !as_plugins.contains(origin_hash))
             .collect();
         copied
             .entry(skills_parent_dir(agent, &project_root))
@@ -629,7 +665,7 @@ pub async fn sync(
             .extend(
                 agent_copies
                     .iter()
-                    .map(|(name, origin_hash, _)| (name, origin_hash)),
+                    .map(|(name, origin_hash, _, _)| (name, origin_hash)),
             );
         copies.insert(agent_name, agent_copies);
     }
@@ -717,7 +753,7 @@ pub async fn sync(
             *name_counts.entry(*skill_name).or_default() += 1;
         }
 
-        for (skill_name, origin_hash, skill_source) in &copies[agent_name.as_str()] {
+        for (skill_name, origin_hash, skill_source, package_root) in &copies[agent_name.as_str()] {
             // `skill_source` is the path to the SKILL.md file; the skill
             // directory is its parent.
             let source_dir = match skill_source.parent() {
@@ -772,7 +808,14 @@ pub async fn sync(
             }
 
             installed_dirs.insert(dest_dir.clone());
-            match sync_skill_dir(source_dir, &dest_dir, &project_root, debounce, &mut warned) {
+            match sync_skill_dir(
+                source_dir,
+                &dest_dir,
+                &project_root,
+                debounce,
+                &mut warned,
+                *package_root,
+            ) {
                 Ok(true) => {
                     tracing::info!(
                         report = %crate::report::ReportEvent::SkillInstalled {
@@ -1072,7 +1115,7 @@ mod tests {
         let src = tree_with_symlinks(tmp.path());
         let dst = tmp.path().join("dst");
 
-        copy_dir_recursive(&src, &dst, &mut BTreeSet::new()).unwrap();
+        copy_dir_recursive(&src, &dst, None, &mut BTreeSet::new()).unwrap();
 
         assert!(
             !fs::symlink_metadata(dst.join("lib.txt"))
@@ -1108,7 +1151,7 @@ mod tests {
         );
 
         assert!(
-            !dir_contents_differ(&src, &dst).unwrap(),
+            !dir_contents_differ(&src, &dst, None).unwrap(),
             "the source scan must see exactly what the copier wrote, or every \
              sync turns into a full recopy"
         );
@@ -1120,7 +1163,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let src = tree_with_symlinks(tmp.path());
 
-        let (_, skipped) = walk_tree(&src).unwrap();
+        let (_, skipped) = walk_tree(&src, None).unwrap();
 
         assert!(
             skipped
@@ -1143,11 +1186,46 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let src = tree_with_symlinks(tmp.path());
         let dst = tmp.path().join("dst");
-        copy_dir_recursive(&src, &dst, &mut BTreeSet::new()).unwrap();
+        copy_dir_recursive(&src, &dst, None, &mut BTreeSet::new()).unwrap();
 
         fs::write(tmp.path().join("outside/lib.txt"), "edited").unwrap();
 
-        assert!(dir_contents_differ(&src, &dst).unwrap());
+        assert!(dir_contents_differ(&src, &dst, None).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_package_root_skips_what_resolves_outside_it() {
+        use std::os::unix::fs::symlink;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        fs::create_dir(root.join("outside")).unwrap();
+        fs::write(root.join("outside/lib.txt"), "outside").unwrap();
+        let package = root.join("package");
+        let skill = package.join("skills/s");
+        fs::create_dir_all(&skill).unwrap();
+        fs::create_dir(package.join("shared")).unwrap();
+        fs::write(package.join("shared/notes.txt"), "inside").unwrap();
+        fs::write(skill.join("SKILL.md"), "skill").unwrap();
+        symlink("../../shared/notes.txt", skill.join("notes.txt")).unwrap();
+        symlink("../../shared", skill.join("shared")).unwrap();
+        symlink("../../../outside/lib.txt", skill.join("lib.txt")).unwrap();
+        symlink("../../../outside", skill.join("vendor")).unwrap();
+        symlink("../../outside", package.join("skills/linked")).unwrap();
+
+        let inside = ["SKILL.md", "notes.txt", "shared", "shared/notes.txt"];
+        let cases: [(&str, &[&str], usize); 2] =
+            [("skills/s", &inside, 2), ("skills/linked", &[], 1)];
+        for (dir, kept, refused) in cases {
+            let (entries, skipped) = walk_tree(&package.join(dir), Some(&package)).unwrap();
+            let entries: Vec<&str> = entries
+                .iter()
+                .map(|(rel, _)| rel.to_str().unwrap())
+                .collect();
+            assert_eq!(entries, kept, "{dir}");
+            assert_eq!(skipped.len(), refused, "{dir}: {skipped:?}");
+        }
     }
 
     #[test]
@@ -1180,10 +1258,10 @@ mod tests {
         fs::write(src.join("sub/a.txt"), "a").unwrap();
         let dst = tmp.path().join("dst");
 
-        copy_dir_recursive(&src, &dst, &mut BTreeSet::new()).unwrap();
+        copy_dir_recursive(&src, &dst, None, &mut BTreeSet::new()).unwrap();
 
         assert_eq!(fs::read_to_string(dst.join("sub/a.txt")).unwrap(), "a");
-        assert!(!dir_contents_differ(&src, &dst).unwrap());
+        assert!(!dir_contents_differ(&src, &dst, None).unwrap());
     }
 
     /// Managed metadata is excluded from the comparison, so writing the marker
@@ -1196,10 +1274,10 @@ mod tests {
         fs::write(src.join("SKILL.md"), "skill").unwrap();
         let dst = tmp.path().join("dst");
 
-        copy_dir_recursive(&src, &dst, &mut BTreeSet::new()).unwrap();
+        copy_dir_recursive(&src, &dst, None, &mut BTreeSet::new()).unwrap();
         mark_generated_skill_directory(&dst).unwrap();
 
-        assert!(!dir_contents_differ(&src, &dst).unwrap());
+        assert!(!dir_contents_differ(&src, &dst, None).unwrap());
     }
 
     #[test]
@@ -1224,6 +1302,7 @@ mod tests {
             tmp.path(),
             Duration::ZERO,
             &mut BTreeSet::new(),
+            None,
         );
 
         assert_eq!(
@@ -1252,13 +1331,29 @@ mod tests {
         let dst = skills.join("alpha");
 
         assert!(
-            sync_skill_dir(&src, &dst, tmp.path(), Duration::ZERO, &mut BTreeSet::new()).is_err()
+            sync_skill_dir(
+                &src,
+                &dst,
+                tmp.path(),
+                Duration::ZERO,
+                &mut BTreeSet::new(),
+                None
+            )
+            .is_err()
         );
         assert_eq!(fs::read_dir(&skills).unwrap().count(), 0);
 
         fs::set_permissions(&notes, fs::Permissions::from_mode(0o644)).unwrap();
         assert!(
-            sync_skill_dir(&src, &dst, tmp.path(), Duration::ZERO, &mut BTreeSet::new()).unwrap()
+            sync_skill_dir(
+                &src,
+                &dst,
+                tmp.path(),
+                Duration::ZERO,
+                &mut BTreeSet::new(),
+                None
+            )
+            .unwrap()
         );
         assert!(dst.join(MARKER_FILE).exists());
         assert_eq!(fs::read_to_string(dst.join("notes.txt")).unwrap(), "notes");

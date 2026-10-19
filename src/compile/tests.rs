@@ -46,6 +46,7 @@ fn skill(name: &str, origin: &str, skill_md: &Path, plugin_index: usize) -> Skil
         },
         origin_hash: origin.into(),
         plugin_index,
+        agent_plugin_root: None,
     }
 }
 

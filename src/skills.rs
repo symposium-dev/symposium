@@ -103,6 +103,7 @@ pub struct SkillWithGroupContext {
     /// and dedup at sync time.
     pub origin_hash: String,
     pub plugin_index: usize,
+    pub agent_plugin_root: Option<PathBuf>,
 }
 
 /// Resolve all applicable skills from the registry.
@@ -168,6 +169,7 @@ pub(crate) async fn collect_skills(
                     skill,
                     origin_hash,
                     plugin_index,
+                    parsed.agent_plugin_root.as_deref(),
                     &parsed.manifest.name,
                     ctx,
                     &mut results,
@@ -582,6 +584,7 @@ fn collect_skill_applicable_to(
     skill: Skill,
     origin_hash: String,
     plugin_index: usize,
+    agent_plugin_root: Option<&Path>,
     plugin_name: &str,
     ctx: &mut PredicateContext,
     results: &mut Vec<SkillWithGroupContext>,
@@ -610,6 +613,7 @@ fn collect_skill_applicable_to(
         skill,
         origin_hash,
         plugin_index,
+        agent_plugin_root: agent_plugin_root.map(Path::to_path_buf),
     });
 }
 
