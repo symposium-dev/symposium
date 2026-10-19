@@ -363,18 +363,21 @@ impl Agent {
         }
     }
 
-    pub(crate) fn deliver_user_plugins(&self, sym: &Symposium, plugins: &[CompiledPlugin]) -> bool {
+    pub(crate) fn deliver_user_plugins(
+        &self,
+        sym: &Symposium,
+        plugins: &[CompiledPlugin],
+    ) -> Option<Vec<String>> {
         match self {
-            Agent::Claude => {
-                plugin_registration::claude::deliver_user_plugins(sym, plugins);
-                true
-            }
+            Agent::Claude => Some(plugin_registration::claude::deliver_user_plugins(
+                sym, plugins,
+            )),
             Agent::Antigravity
             | Agent::Codex
             | Agent::Copilot
             | Agent::Goose
             | Agent::Kiro
-            | Agent::OpenCode => false,
+            | Agent::OpenCode => None,
         }
     }
 
