@@ -7,11 +7,12 @@ use crate::config::Symposium;
 use crate::output::display_path;
 use crate::report::ReportEvent;
 
-pub(crate) fn deliver_user_plugins(sym: &Symposium, plugins: &[CompiledPlugin]) {
+pub(crate) fn deliver_user_plugins(sym: &Symposium, plugins: &[CompiledPlugin]) -> Vec<String> {
     let skills_dir = user_skills_dir(sym);
     let agent = Agent::Claude.config_name();
     let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     let mut installed = BTreeSet::new();
+    let mut updated = Vec::new();
     for plugin in plugins {
         let dest = skills_dir.join(&plugin.name);
         match crate::sync::sync_plugin_dir(&plugin.dir, &dest, debounce) {
@@ -24,6 +25,7 @@ pub(crate) fn deliver_user_plugins(sym: &Symposium, plugins: &[CompiledPlugin]) 
                             dest: display_path(&dest),
                         },
                     );
+                    updated.push(plugin.name.clone());
                 }
                 installed.insert(dest);
             }
@@ -37,6 +39,7 @@ pub(crate) fn deliver_user_plugins(sym: &Symposium, plugins: &[CompiledPlugin]) 
     crate::sync::reap_unlisted(&skills_dir, |dir| {
         installed.contains(dir) || !crate::compile::is_plugin_dir(dir)
     });
+    updated
 }
 
 /// When set, `CLAUDE_CONFIG_DIR` replaces `~/.claude` and Claude Code ignores
