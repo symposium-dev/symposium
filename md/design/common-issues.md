@@ -101,6 +101,14 @@ Where one rule guards several passes, bind it once and have every guard read tha
 
 A cache keyed on "have my inputs changed?" has to name the files whose *appearance* changes the answer, not just the ones it read. `ProjectInfo::inputs` is the files a package manager's answers depend on, and the mtime of a file that does not exist records as `None`, so a path reported while absent and later found present reads as a change. That is what lets a hook notice a workspace it could not have read before: a `Cargo.toml` appearing between the session's starting directory and the cached root re-roots the workspace, and no lockfile under the old root would ever show it. A package manager that reports only the files it actually opened will pin a stale root for the rest of the session. The matching rule on the consumer side is already in `WorkspaceState::fresh`: a workspace that names no inputs is never fresh, since nothing would tell that its answers had changed.
 
+## Agent Plugins manifests are closed but forgiving
+
+`plugin.json` has a closed schema, yet the format requires an unknown top-level field, or an `extensions` that is not an object, to be reported and ignored while the package still loads. `#[serde(deny_unknown_fields)]` would reject the package instead, and a plain `Option<String>` would accept the `null` the schema forbids, which is why `plugins/agent_plugin.rs` checks the manifest by hand over a `serde_json::Value`. Its `dev.symposium` namespace is the opposite case and stays strict, because ignoring a typo there would make a package apply more widely than its author meant.
+
+## Installed copies are never sources
+
+A directory Symposium installed carries a `.symposium` marker file, and the trees it installs into can also be read as sources (`.agents/skills/` is a workspace skill group, and a registry can point at a tree holding copies). Any walk that discovers sources skips marked directories, as `find_skill_files_recursive` and the registry layout walk do, or a sync reads its own output back. The layout walk checks that the marker is a file, because a project root can hold a `.symposium/` directory that is not a marker.
+
 ## Windows portability (tests)
 
 The test suite runs on `windows-latest`, where CI passes `--no-fail-fast` so that one failing test binary does not hide the failures in every binary cargo would otherwise skip. A few patterns recur when writing tests that touch paths or scripts:
