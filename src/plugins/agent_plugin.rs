@@ -254,7 +254,7 @@ fn skill_children(root: &Path, notices: &mut Vec<String>) -> Vec<String> {
     children
 }
 
-fn resolves_inside(root: &Path, path: &Path) -> bool {
+pub(crate) fn resolves_inside(root: &Path, path: &Path) -> bool {
     fs::canonicalize(path).is_ok_and(|resolved| resolved.starts_with(root))
 }
 

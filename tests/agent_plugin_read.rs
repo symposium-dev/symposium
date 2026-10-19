@@ -213,6 +213,44 @@ async fn a_dependency_package_waits_for_consent_and_reports_what_it_skips() {
     .unwrap();
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn a_package_skill_link_outside_the_package_is_skipped_and_reported() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["agent-plugin-registry0"],
+        async |mut ctx| {
+            let root = ctx.workspace_root.clone().unwrap();
+            let skill = ctx
+                .sym
+                .config_dir()
+                .join("plugins/gated-tools/skills/serde-tables");
+            std::os::unix::fs::symlink(root.join("Cargo.toml"), skill.join("notes.md"))?;
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.sym.config.sync_debounce_secs = 0;
+            let events = ctx.sync_with_report(tracing::Level::INFO).await?;
+
+            let installed = root.join(".claude/skills/serde-tables");
+            assert!(installed.join("SKILL.md").is_file());
+            assert!(!installed.join("notes.md").exists());
+            assert_warned(
+                &events,
+                &["serde-tables/notes.md: resolves outside the package"],
+            );
+
+            let events = ctx.sync_with_report(tracing::Level::INFO).await?;
+            assert!(
+                !events.iter().any(|e| e["kind"] == "skill_installed"),
+                "an unchanged package reinstalls nothing: {events:#?}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 fn validate(ctx: &TestContext, path: &Path) -> String {
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_cargo-agents"))
         .args(["plugin", "validate", "--no-check-crates"])
