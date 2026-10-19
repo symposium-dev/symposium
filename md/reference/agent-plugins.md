@@ -115,4 +115,4 @@ Symposium reads a package's manifest and skills only from inside the package fol
 cargo agents plugin validate path/to/pdf-tools
 ```
 
-The path can be the package folder or a plugin source holding several packages. Warnings, such as an unknown field or an `mcp.json`, do not make the command fail; a rejected package or a broken skill does.
+The path can be the package folder, its `plugin.json`, or a plugin source holding several packages. Warnings, such as an unknown field or an `mcp.json`, do not make the command fail; a rejected package or a broken skill does.
