@@ -1,0 +1,7 @@
+[workspace]
+members = [".", "tools"]
+
+[package]
+name = "member-host"
+version = "0.1.0"
+edition = "2021"

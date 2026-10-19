@@ -6,13 +6,6 @@
 //! convention and lives here, in the package-manager layer; *interpreting*
 //! an entry's manifest (the TOML schema, predicates, gating) stays in
 //! [`crate::plugins`].
-//!
-//! The flat layout defined here — every directory containing a
-//! [`MANIFEST_FILE`] or [`SKILL_FILE`] is an entry, discovered recursively,
-//! and a claimed directory is not recursed into — backs [`PathPm`](super::PathPm),
-//! the single registry-instance PM. An entry declares which dependencies
-//! activate it through its own manifest `depends-on`, evaluated when the
-//! plugin is loaded; the layout carries no dependency information itself.
 
 use std::path::{Path, PathBuf};
 
@@ -24,21 +17,26 @@ pub const MANIFEST_FILE: &str = "Symposium.toml";
 /// Skill file that marks a directory as a standalone-skill entry.
 pub const SKILL_FILE: &str = "SKILL.md";
 
+pub const AGENT_PLUGIN_FILE: &str = "plugin.json";
+
 /// What kind of entry a directory is.
 #[derive(Debug)]
 pub enum EntryKind {
     /// A plugin entry; carries the path to its `Symposium.toml`.
     Plugin(PathBuf),
+    AgentPlugin(PathBuf),
     /// A standalone-skill entry; carries the path to its `SKILL.md`.
     Skill(PathBuf),
 }
 
-/// Classify a directory as an entry, or `None` when it is neither.
-/// [`MANIFEST_FILE`] takes precedence over [`SKILL_FILE`].
 pub fn classify(dir: &Path) -> Option<EntryKind> {
     let manifest = dir.join(MANIFEST_FILE);
     if manifest.is_file() {
         return Some(EntryKind::Plugin(manifest));
+    }
+    let agent_plugin = dir.join(AGENT_PLUGIN_FILE);
+    if agent_plugin.is_file() {
+        return Some(EntryKind::AgentPlugin(agent_plugin));
     }
     let skill_md = dir.join(SKILL_FILE);
     if skill_md.is_file() {
@@ -61,6 +59,10 @@ pub fn enumerate(root: &Path) -> Result<Vec<RegistryEntry>> {
     match classify(root) {
         Some(EntryKind::Plugin(_)) => anyhow::bail!(
             "plugin source root contains Symposium.toml — it should contain subdirectories with plugins, not be a plugin itself: {}",
+            root.display()
+        ),
+        Some(EntryKind::AgentPlugin(_)) => anyhow::bail!(
+            "plugin source root contains {AGENT_PLUGIN_FILE}; it should contain subdirectories with plugins, not be a plugin itself: {}",
             root.display()
         ),
         Some(EntryKind::Skill(_)) => anyhow::bail!(
@@ -95,7 +97,7 @@ fn walk_in(
         let path = entry.path();
         // `is_dir` follows symlinks, so a linked directory is an entry like any
         // other — and can name a directory this walk is already inside.
-        if !path.is_dir() {
+        if !path.is_dir() || is_installed_copy(&path) {
             continue;
         }
         let sub = rel.join(entry.file_name());
@@ -106,6 +108,10 @@ fn walk_in(
             ancestors.leave();
         }
     }
+}
+
+fn is_installed_copy(dir: &Path) -> bool {
+    dir.join(crate::sync::MARKER_FILE).is_file()
 }
 
 /// A subpath as it appears in a package id: slash-separated, so ids are
@@ -132,12 +138,20 @@ mod tests {
         // Claimed as a plugin — the nested skill is not a separate entry.
         touch(&tmp.path().join("plug/inner/SKILL.md"));
         touch(&tmp.path().join("group/deep/skill/SKILL.md"));
+        touch(&tmp.path().join("pdf-tools/plugin.json"));
+        touch(&tmp.path().join("pdf-tools/vendored/plugin.json"));
+        touch(&tmp.path().join("installed/plugin.json"));
+        touch(&tmp.path().join("installed").join(crate::sync::MARKER_FILE));
+        let project_copy = tmp.path().join("project/.symposium/plugins/x");
+        touch(&project_copy.join("plugin.json"));
+        touch(&project_copy.join(crate::sync::MARKER_FILE));
+        touch(&tmp.path().join("project/tools/plugin.json"));
 
         let entries = enumerate(tmp.path()).unwrap();
         let subpaths: Vec<_> = entries.iter().map(|e| e.subpath.clone()).collect();
         assert_eq!(
             subpaths,
-            vec![PathBuf::from("group/deep/skill"), PathBuf::from("plug")]
+            ["group/deep/skill", "pdf-tools", "plug", "project/tools"].map(PathBuf::from)
         );
 
         // Missing root: no entries, no error.
@@ -165,5 +179,26 @@ mod tests {
         touch(&tmp.path().join("SKILL.md"));
         let err = enumerate(tmp.path()).unwrap_err();
         assert!(err.to_string().contains("not be a skill itself"));
+
+        touch(&tmp.path().join(AGENT_PLUGIN_FILE));
+        let err = enumerate(tmp.path()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains(&format!("contains {AGENT_PLUGIN_FILE};")),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn classify_prefers_the_symposium_manifest_then_plugin_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        touch(&tmp.path().join(SKILL_FILE));
+        touch(&tmp.path().join(AGENT_PLUGIN_FILE));
+        assert!(matches!(
+            classify(tmp.path()),
+            Some(EntryKind::AgentPlugin(_))
+        ));
+        touch(&tmp.path().join(MANIFEST_FILE));
+        assert!(matches!(classify(tmp.path()), Some(EntryKind::Plugin(_))));
     }
 }
