@@ -252,6 +252,10 @@ async fn plugin_validate_reports_packages_and_fails_only_on_errors() {
                   ⚠️  pdf-tools (agent plugin): plugin `pdf-tools` references no dependency; it stays dormant until enabled with `cargo agents use pdf-tools`
                   ✅ extract-tables (skill)
             "#]].assert_eq(&validate(&ctx, &plugins.join("pdf-tools")));
+            assert_eq!(
+                validate(&ctx, &plugins.join("pdf-tools/plugin.json")),
+                validate(&ctx, &plugins.join("pdf-tools"))
+            );
             Ok(())
         },
     )

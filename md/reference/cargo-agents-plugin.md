@@ -44,5 +44,5 @@ Validate a plugin source directory, an [Agent Plugins package](./agent-plugins.m
 
 | Flag | Description |
 |------|-------------|
-| `<PATH>` | Path to a directory or a single `.toml` file |
+| `<PATH>` | Path to a directory, a package's `plugin.json`, or a single `.toml` file |
 | `--no-check-crates` | Skip checking that crate names in predicates exist on crates.io |
