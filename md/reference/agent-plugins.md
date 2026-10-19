@@ -109,6 +109,8 @@ Problems are contained to the smallest part affected. Each one is reported as a 
 
 Symposium reads a package's manifest and skills only from inside the package folder. A `plugin.json`, a `skills` folder, or a skill's `SKILL.md` that resolves outside it, for instance through a link, is refused at the smallest level that applies: the whole package, its skills, or that one skill.
 
+Installing one of its skills follows the links in it only as far as the package folder: a file or folder that resolves outside it is left out of the installed copy and reported, and the rest of the skill installs.
+
 ## Validation
 
 ```bash

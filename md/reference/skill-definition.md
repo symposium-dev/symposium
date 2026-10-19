@@ -43,6 +43,10 @@ dependency does not run without your consent, and a registry is a trust root you
 added yourself. Symposium does not put a second, filesystem-shaped boundary on
 top of it.
 
+An [Agent Plugins package](./agent-plugins.md#security) is the one exception:
+its format requires every path in it to resolve inside the package, so a link in
+one of its skills that resolves outside the package is skipped with a warning.
+
 Two links are skipped rather than followed, each with a warning, and neither
 fails the sync:
 
