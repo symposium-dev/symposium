@@ -1,10 +1,12 @@
+mod copilot;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use symposium::config::{RegistryConfig, UseEntry};
 use symposium_testlib::{TestMode, with_fixture};
 
-const SCOPES: &[&str] = &["agent-plugin-scopes0"];
+pub(crate) const SCOPES: &[&str] = &["agent-plugin-scopes0"];
 
 struct DeliveringAgent {
     name: &'static str,
@@ -14,13 +16,22 @@ struct DeliveringAgent {
     plugin_dir: fn(&Path, &str) -> PathBuf,
 }
 
-const AGENTS: &[DeliveringAgent] = &[DeliveringAgent {
-    name: "claude",
-    project_skills: ".claude/skills",
-    relocation_var: "CLAUDE_CONFIG_DIR",
-    config_root: |home| home.join(".claude"),
-    plugin_dir: |root, plugin| root.join("skills").join(plugin),
-}];
+const AGENTS: &[DeliveringAgent] = &[
+    DeliveringAgent {
+        name: "claude",
+        project_skills: ".claude/skills",
+        relocation_var: "CLAUDE_CONFIG_DIR",
+        config_root: |home| home.join(".claude"),
+        plugin_dir: |root, plugin| root.join("skills").join(plugin),
+    },
+    DeliveringAgent {
+        name: "copilot",
+        project_skills: ".agents/skills",
+        relocation_var: "COPILOT_HOME",
+        config_root: |home| home.join(".copilot"),
+        plugin_dir: copilot::plugin_dir,
+    },
+];
 
 fn write(path: &Path, contents: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -34,7 +45,7 @@ async fn every_delivering_agent_keeps_the_delivery_contracts() {
             let name = agent.name;
             let root = (agent.config_root)(ctx.sym.home_dir());
             let installed =
-                (agent.plugin_dir)(&root, "global-guide").join("skills/global-guide/SKILL.md");
+                || (agent.plugin_dir)(&root, "global-guide").join("skills/global-guide/SKILL.md");
             let users_own = (agent.plugin_dir)(&root, "users-own").join("notes.md");
             let workspace = ctx.workspace_root.clone().unwrap();
             let project_copy = workspace
@@ -44,7 +55,10 @@ async fn every_delivering_agent_keeps_the_delivery_contracts() {
 
             ctx.symposium(&["init", "--add-agent", name]).await?;
             ctx.symposium(&["sync"]).await?;
-            assert!(installed.is_file(), "{name}: the plugin reaches the agent");
+            assert!(
+                installed().is_file(),
+                "{name}: the plugin reaches the agent"
+            );
             assert!(!project_copy.exists(), "{name}: and only as a plugin");
 
             ctx.symposium(&["init", "--add-agent", "opencode"]).await?;
@@ -63,14 +77,14 @@ async fn every_delivering_agent_keeps_the_delivery_contracts() {
             );
             ctx.symposium(&["sync"]).await?;
             assert!(
-                fs::read_to_string(&installed)?.contains("edited"),
+                fs::read_to_string(installed())?.contains("edited"),
                 "{name}: an edit propagates"
             );
 
             ctx.symposium(&["use", "--remove", "--global", "global-guide"])
                 .await?;
             assert!(
-                !installed.exists(),
+                !installed().exists(),
                 "{name}: dropping the global entry removes the plugin"
             );
 
@@ -84,7 +98,7 @@ async fn every_delivering_agent_keeps_the_delivery_contracts() {
             ctx.symposium(&["use", "--global", "global-guide"]).await?;
             ctx.symposium(&["init", "--remove-agent", name]).await?;
             assert!(
-                !installed.exists(),
+                !installed().exists(),
                 "{name}: removing the agent removes the plugin"
             );
 

@@ -133,25 +133,42 @@ async fn agents_that_read_context_after_a_tool_call_get_the_notice() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn session_start_tells_claude_to_reload_the_plugins_its_sync_installed() {
-    with_fixture(
-        TestMode::SimulationOnly,
-        &["agent-plugin-scopes0"],
-        async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+async fn session_start_tells_the_agent_how_to_load_the_plugins_its_sync_installed() {
+    for (agent, load_now) in [
+        (HookAgent::Claude, "/reload-plugins"),
+        (HookAgent::Copilot, "/restart"),
+    ] {
+        with_fixture(
+            TestMode::SimulationOnly,
+            &["agent-plugin-scopes0"],
+            async |mut ctx| {
+                ctx.symposium(&["init", "--add-agent", agent.as_str()])
+                    .await?;
 
-            let installed = respond(&ctx, HookAgent::Claude, HookStep::session_start()).await;
-            serde_json::from_str::<Value>(&installed)?;
-            assert!(
-                installed.contains("global-guide") && installed.contains("/reload-plugins"),
-                "{installed}"
-            );
+                let installed = respond(&ctx, agent, HookStep::session_start()).await;
+                serde_json::from_str::<Value>(&installed)?;
+                assert!(
+                    installed.contains("global-guide") && installed.contains(load_now),
+                    "{installed}"
+                );
 
-            let unchanged = respond(&ctx, HookAgent::Claude, HookStep::session_start()).await;
-            assert!(!unchanged.contains("/reload-plugins"), "{unchanged}");
-            Ok(())
-        },
-    )
-    .await
-    .unwrap();
+                let unchanged = respond(&ctx, agent, HookStep::session_start()).await;
+                assert!(!unchanged.contains(load_now), "{unchanged}");
+
+                let skill = ctx.sym.config_dir().join("plugins/global-guide/SKILL.md");
+                std::fs::write(
+                    &skill,
+                    "---\nname: global-guide\ndescription: edited\n---\n",
+                )?;
+                let edited = respond(&ctx, agent, HookStep::session_start()).await;
+                assert!(
+                    edited.contains("global-guide") && edited.contains(load_now),
+                    "{edited}"
+                );
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+    }
 }
