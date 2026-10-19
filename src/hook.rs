@@ -483,9 +483,9 @@ fn plugin_reload_notice(
 ) -> Option<String> {
     let load_now = match agent {
         HookAgent::Claude => "Tell the user to run `/reload-plugins` to load them now.",
+        HookAgent::Copilot => "Tell the user to run `/restart` to load them now.",
         HookAgent::Antigravity
         | HookAgent::Codex
-        | HookAgent::Copilot
         | HookAgent::Goose
         | HookAgent::Kiro
         | HookAgent::OpenCode => return None,

@@ -372,12 +372,10 @@ impl Agent {
             Agent::Claude => Some(plugin_registration::claude::deliver_user_plugins(
                 sym, plugins,
             )),
-            Agent::Antigravity
-            | Agent::Codex
-            | Agent::Copilot
-            | Agent::Goose
-            | Agent::Kiro
-            | Agent::OpenCode => None,
+            Agent::Copilot => plugin_registration::copilot::deliver_user_plugins(sym, plugins),
+            Agent::Antigravity | Agent::Codex | Agent::Goose | Agent::Kiro | Agent::OpenCode => {
+                None
+            }
         }
     }
 
