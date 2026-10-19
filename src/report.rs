@@ -140,6 +140,8 @@ pub enum ReportEvent {
         version: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        format: Option<String>,
     },
 
     /// A `[plugins] use` entry was recorded by `cargo agents use`.
@@ -158,6 +160,8 @@ pub enum ReportEvent {
         root: String,
         /// `active`, `dormant`, `candidate`, or `declined`.
         state: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        format: Option<String>,
     },
 
     /// A provider was listed with its plugins.
@@ -314,10 +318,14 @@ impl ReportEvent {
                 name,
                 version,
                 description,
+                format,
             } => {
                 let mut line = format!("  {name}");
                 if let Some(v) = version {
                     line.push_str(&format!(" {v}"));
+                }
+                if let Some(f) = format {
+                    line.push_str(&format!(" ({f})"));
                 }
                 if let Some(d) = description {
                     line.push_str(&format!("\n      {d}"));
@@ -345,6 +353,7 @@ impl ReportEvent {
                 version,
                 root,
                 state,
+                format,
             } => {
                 let marker = match state.as_str() {
                     "active" => "✅",
@@ -356,6 +365,10 @@ impl ReportEvent {
                     .as_deref()
                     .map(|v| format!(" {v}"))
                     .unwrap_or_default();
+                let version = match format {
+                    Some(label) => format!("{version} ({label})"),
+                    None => version,
+                };
                 format!("{marker} {name}{version} — {root}")
             }
 

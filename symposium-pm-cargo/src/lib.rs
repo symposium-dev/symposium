@@ -131,6 +131,23 @@ impl CargoPm {
             None
         };
 
+        if metadata.is_none()
+            && file.is_none()
+            && fetched
+                .root
+                .join(symposium_sdk::manifest::AGENT_PLUGIN_FILE)
+                .is_file()
+        {
+            return UnvalidatedPlugin {
+                agent_plugin: true,
+                ..UnvalidatedPlugin::new(
+                    fetched.id,
+                    fetched.root,
+                    symposium_sdk::manifest::RawPluginManifest::default(),
+                )
+            };
+        }
+
         let manifest = manifest::merge(metadata, file.as_deref(), name);
         UnvalidatedPlugin::new(fetched.id, fetched.root, manifest)
     }

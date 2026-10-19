@@ -27,6 +27,8 @@ use crate::predicate::{DependsOnList, PredicateSet};
 /// entry, a workspace member, or a package's source.
 pub const MANIFEST_FILE: &str = "Symposium.toml";
 
+pub const AGENT_PLUGIN_FILE: &str = "plugin.json";
+
 /// Default subdirectory scanned for skills when a manifest says nothing.
 pub const DEFAULT_SKILLS_PATH: &str = "skills";
 
@@ -42,6 +44,10 @@ pub struct RawPluginManifest {
     /// directory or package name) elsewhere.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Default-content opt-outs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub defaults: Option<RawDefaults>,
@@ -104,6 +110,12 @@ impl RawPluginManifest {
             .extend(over.predicates.predicates);
         if over.name.is_some() {
             self.name = over.name;
+        }
+        if over.version.is_some() {
+            self.version = over.version;
+        }
+        if over.description.is_some() {
+            self.description = over.description;
         }
         if over.defaults.is_some() {
             self.defaults = over.defaults;
@@ -434,6 +446,8 @@ mod tests {
     fn manifest_round_trips_through_json() {
         let src = r#"
 name = "demo"
+version = "1.2.0"
+description = "Demo plugin"
 depends-on = ["serde", "tokio>=1.0.0"]
 predicates = ["env(CI)"]
 
@@ -501,6 +515,8 @@ command = "linter"
         let base = RawPluginManifest::parse(
             r#"
 name = "base"
+version = "1.0.0"
+description = "base description"
 depends-on = ["serde"]
 [[skills]]
 source.path = "a"
@@ -510,6 +526,7 @@ source.path = "a"
         let over = RawPluginManifest::parse(
             r#"
 name = "over"
+version = "2.0.0"
 depends-on = ["tokio"]
 [[skills]]
 source.path = "b"
@@ -519,6 +536,8 @@ source.path = "b"
 
         let merged = base.merge(over);
         assert_eq!(merged.name.as_deref(), Some("over"));
+        assert_eq!(merged.version.as_deref(), Some("2.0.0"));
+        assert_eq!(merged.description.as_deref(), Some("base description"));
         assert_eq!(merged.skills.len(), 2);
         assert_eq!(merged.depends_on.0.len(), 2);
     }
