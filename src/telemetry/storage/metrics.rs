@@ -410,62 +410,10 @@ impl LockedStorage {
         &self,
         day: UtcDay,
     ) -> Result<MetricSnapshot, LoadMetricSnapshotError> {
-        let path = self.paths.metrics_file(day);
-        let Some(bytes) = read_bounded_snapshot(&path)? else {
+        let Some(bytes) = read_bounded_snapshot(&self.paths.metrics_file(day))? else {
             return Ok(MetricSnapshot::empty(day));
         };
-        if bytes.is_empty() {
-            return Ok(MetricSnapshot::empty(day));
-        }
-        if bytes.last() != Some(&b'\n') {
-            return Err(LoadMetricSnapshotError::UnterminatedFinalLine {
-                line: bytes.iter().filter(|byte| **byte == b'\n').count() + 1,
-            });
-        }
-
-        let mut snapshot = MetricSnapshot::empty(day);
-        let mut first_line_by_event = BTreeMap::new();
-        for (index, physical_line) in bytes.split_inclusive(|byte| *byte == b'\n').enumerate() {
-            let line_number = index + 1;
-            let json = std::str::from_utf8(&physical_line[..physical_line.len() - 1])
-                .map_err(|_| LoadMetricSnapshotError::MalformedLine { line: line_number })?;
-            let row = match classify_row(json) {
-                RowClassification::Supported(TelemetryRow::Aggregate(row)) => row,
-                RowClassification::Supported(TelemetryRow::LowVolume(_)) => {
-                    return Err(LoadMetricSnapshotError::UnexpectedRow {
-                        line: line_number,
-                        reason: UnexpectedMetricRow::LowVolume,
-                    });
-                }
-                RowClassification::UnknownSchema => {
-                    return Err(LoadMetricSnapshotError::UnknownSchema { line: line_number });
-                }
-                RowClassification::Invalid => {
-                    return Err(LoadMetricSnapshotError::InvalidRow { line: line_number });
-                }
-                RowClassification::Malformed => {
-                    return Err(LoadMetricSnapshotError::MalformedLine { line: line_number });
-                }
-            };
-            if row.day() != day {
-                return Err(LoadMetricSnapshotError::UnexpectedRow {
-                    line: line_number,
-                    reason: UnexpectedMetricRow::DayMismatch,
-                });
-            }
-            if let Some(first_line) = first_line_by_event.insert(row.event_id(), line_number) {
-                return Err(LoadMetricSnapshotError::DuplicateEventId {
-                    first_line,
-                    duplicate_line: line_number,
-                });
-            }
-            snapshot.rows.push(StoredAggregateRow {
-                row,
-                original_line: Some(Box::from(physical_line)),
-            });
-        }
-
-        Ok(snapshot)
+        decode_metric_snapshot(&bytes, day)
     }
 
     /// Select whether a fully prepared snapshot fits both storage ceilings.
@@ -501,7 +449,77 @@ impl LockedStorage {
             prepared,
         )
     }
+}
 
+/// Decode one already bounded snapshot with the recorder's exact validation.
+///
+/// The encoded-size ceiling belongs to this boundary rather than its
+/// filesystem adapter so every caller, including unlocked status inspection,
+/// applies the same admission rule.
+pub(super) fn decode_metric_snapshot(
+    bytes: &[u8],
+    day: UtcDay,
+) -> Result<MetricSnapshot, LoadMetricSnapshotError> {
+    if bytes.len() > MAX_METRIC_SNAPSHOT_BYTES {
+        return Err(LoadMetricSnapshotError::TooLarge {
+            maximum: MAX_METRIC_SNAPSHOT_BYTES,
+        });
+    }
+    if bytes.is_empty() {
+        return Ok(MetricSnapshot::empty(day));
+    }
+    if bytes.last() != Some(&b'\n') {
+        return Err(LoadMetricSnapshotError::UnterminatedFinalLine {
+            line: bytes.iter().filter(|byte| **byte == b'\n').count() + 1,
+        });
+    }
+
+    let mut snapshot = MetricSnapshot::empty(day);
+    let mut first_line_by_event = BTreeMap::new();
+    for (index, physical_line) in bytes.split_inclusive(|byte| *byte == b'\n').enumerate() {
+        let line_number = index + 1;
+        let json = std::str::from_utf8(&physical_line[..physical_line.len() - 1])
+            .map_err(|_| LoadMetricSnapshotError::MalformedLine { line: line_number })?;
+        let row = match classify_row(json) {
+            RowClassification::Supported(TelemetryRow::Aggregate(row)) => row,
+            RowClassification::Supported(TelemetryRow::LowVolume(_)) => {
+                return Err(LoadMetricSnapshotError::UnexpectedRow {
+                    line: line_number,
+                    reason: UnexpectedMetricRow::LowVolume,
+                });
+            }
+            RowClassification::UnknownSchema => {
+                return Err(LoadMetricSnapshotError::UnknownSchema { line: line_number });
+            }
+            RowClassification::Invalid => {
+                return Err(LoadMetricSnapshotError::InvalidRow { line: line_number });
+            }
+            RowClassification::Malformed => {
+                return Err(LoadMetricSnapshotError::MalformedLine { line: line_number });
+            }
+        };
+        if row.day() != day {
+            return Err(LoadMetricSnapshotError::UnexpectedRow {
+                line: line_number,
+                reason: UnexpectedMetricRow::DayMismatch,
+            });
+        }
+        if let Some(first_line) = first_line_by_event.insert(row.event_id(), line_number) {
+            return Err(LoadMetricSnapshotError::DuplicateEventId {
+                first_line,
+                duplicate_line: line_number,
+            });
+        }
+        snapshot.rows.push(StoredAggregateRow {
+            row,
+            original_line: Some(Box::from(physical_line)),
+        });
+    }
+
+    Ok(snapshot)
+}
+
+impl LockedStorage {
     /// Atomically replace one fully prepared aggregate snapshot.
     ///
     /// # Errors
@@ -585,12 +603,6 @@ fn read_bounded_snapshot(
         .expect("BUG: metric-snapshot read limit must fit in u64");
     let mut bytes = Vec::new();
     file.take(limit).read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_METRIC_SNAPSHOT_BYTES {
-        return Err(LoadMetricSnapshotError::TooLarge {
-            maximum: MAX_METRIC_SNAPSHOT_BYTES,
-        });
-    }
-
     Ok(Some(bytes))
 }
 
