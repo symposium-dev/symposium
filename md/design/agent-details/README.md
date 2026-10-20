@@ -51,7 +51,7 @@ The tables below summarize the answers for each agent. Individual agent pages co
 | Kiro | 30,000 | milliseconds (`timeout_ms`) |
 | OpenCode | 60,000 | milliseconds (community hooks plugin) |
 | Goose | N/A | N/A |
-| Pi extension | 30 | seconds |
+| Pi extension | 600 | seconds |
 
 ## Event names
 
