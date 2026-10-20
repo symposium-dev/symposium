@@ -60,8 +60,9 @@ async fn mismatched_output_is_skipped_in_pipeline_and_cli() {
             let output = ctx
                 .invoke_hook(HookAgent::Pi, HookEvent::Stop, &payload)
                 .await?;
+            assert_eq!(output.exit_code, 0);
             assert_eq!(
-                serde_json::from_slice::<serde_json::Value>(&output)?,
+                serde_json::from_slice::<serde_json::Value>(&output.stdout)?,
                 expected
             );
 
@@ -118,7 +119,8 @@ async fn pi_native_hook_takes_priority_over_symposium() {
                     }),
                 )
                 .await?;
-            let output: serde_json::Value = serde_json::from_slice(&output)?;
+            assert_eq!(output.exit_code, 0);
+            let output: serde_json::Value = serde_json::from_slice(&output.stdout)?;
             assert_eq!(output["decision"], "deny");
             assert_eq!(output["updatedInput"]["command"], "pwd");
             assert_eq!(output["additionalContext"], "pi-hook-fired");
