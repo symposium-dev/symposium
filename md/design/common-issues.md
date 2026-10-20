@@ -135,6 +135,16 @@ shared two-second deadline, including initialization and subsequent operations.
 Expiry fails PM work and leaves time for healthy local plugins to return their
 decisions; timing out the whole hook would discard those decisions too.
 
+## Config load failures are not uninstall requests
+
+A malformed or unreadable user config falls back to defaults for read-only callers,
+including an empty agent list. Never reconcile installations or save that fallback
+as if the user deliberately removed every agent. `Symposium::ensure_config_usable`
+guards sync, hook registration, init, and config writes using the startup load
+result. A missing config still supports first-run init. `tests/config_load.rs`
+covers failure, retry, repair, and deliberate removal for Claude and Pi at both
+scopes.
+
 ## A source that reads as empty is not an empty source
 
 A listing that swallows read errors returns the same empty list for "nothing there" and "could not look", and anything that removes what a source stopped offering turns the second into data loss: a `[[registry]]` path on an unmounted share would make `sync` delete every skill installed from it. So `PackageManager::registry_plugins` fails when a registry cannot be read and otherwise says whether every entry loaded, `PluginRegistry::unreadable_registries` carries a registry that failed either way to `sync`, and `sync` skips its stale-skill and project MCP cleanup while that list is not empty. An entry whose manifest fails to parse is the same case on a smaller scale: the plugin did not withdraw what it installed. Any new pass that removes things because a source stopped offering them belongs behind the same condition. The user config is such a source for the agent list: one that cannot be read loads with no agents, so `sync` refuses to run on it rather than reaping every agent's skills and hooks. The opposite mistake is as bad: a source that is legitimately absent must not count as unreadable, or cleanup never runs again, which is why the built-in `~/.symposium/plugins/` is left out when nothing exists at that path.

@@ -484,7 +484,7 @@ pub(crate) async fn sync_disabling(
     update: UpdateLevel,
     withdrawn_mcp_servers: &BTreeSet<String>,
 ) -> Result<Synced> {
-    ensure_config_readable(sym)?;
+    sym.ensure_config_usable()?;
     let out = &Output::quiet();
     let loaded = ws.require_info().await?.clone();
     let project_root = loaded.root.clone();
@@ -938,7 +938,7 @@ pub(crate) async fn sync_user_plugins(
     update: UpdateLevel,
     withdrawn_mcp_servers: &BTreeSet<String>,
 ) -> Result<()> {
-    ensure_config_readable(sym)?;
+    sym.ensure_config_usable()?;
     let here = ws.start().context("no directory to resolve from")?;
     let dep_ids = ws.dep_ids().await.to_vec();
     let registry = plugins::load_registry(sym).await;
@@ -1022,16 +1022,6 @@ pub(crate) async fn sync_user_plugins(
     Ok(())
 }
 
-fn ensure_config_readable(sym: &Symposium) -> Result<()> {
-    if let Some(error) = sym.config_error() {
-        anyhow::bail!(
-            "not syncing: {} could not be read; fix or remove it, then run the command again\n{error}",
-            display_path(&sym.config_dir().join("config.toml")),
-        );
-    }
-    Ok(())
-}
-
 fn cleanup_held_back(registry: &plugins::PluginRegistry, failed_pms: &[String]) -> bool {
     !registry.unreadable_registries.is_empty() || !failed_pms.is_empty()
 }
@@ -1088,6 +1078,7 @@ fn unregister_project_plugins(sym: &Symposium, project_root: &Path) {
 /// Register hooks for all configured agents. Uses `home_dir` (global scope).
 /// Called from `init` after writing the user config.
 pub fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
+    sym.ensure_config_usable()?;
     let agent_names: Vec<String> = sym.config.agents.iter().map(|a| a.name.clone()).collect();
 
     // `init` has no workspace to evaluate a plugin's gate against, so MCP
