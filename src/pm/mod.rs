@@ -35,6 +35,7 @@ mod cargo;
 mod git;
 pub mod layout;
 mod path;
+pub(crate) use cargo::embedded_plugin_kind;
 pub use cargo::{
     CargoPm, LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
 };
