@@ -470,12 +470,7 @@ pub async fn sync(
     ws: &Arc<Workspace>,
     update: UpdateLevel,
 ) -> Result<Vec<(Agent, Vec<String>)>> {
-    if let Some(error) = sym.config_error() {
-        anyhow::bail!(
-            "not syncing: {} could not be read; fix or remove it, then run the command again\n{error}",
-            display_path(&sym.config_dir().join("config.toml")),
-        );
-    }
+    sym.ensure_config_usable()?;
     let out = &Output::quiet();
     let loaded = ws.require_info().await?.clone();
     let project_root = loaded.root.clone();
@@ -984,6 +979,7 @@ fn unregister_project_plugins(sym: &Symposium, project_root: &Path) {
 /// Register hooks for all configured agents. Uses `home_dir` (global scope).
 /// Called from `init` after writing the user config.
 pub fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
+    sym.ensure_config_usable()?;
     let agent_names: Vec<String> = sym.config.agents.iter().map(|a| a.name.clone()).collect();
 
     // `init` has no workspace to evaluate a plugin's gate against, so MCP
