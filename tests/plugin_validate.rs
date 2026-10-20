@@ -4,10 +4,10 @@ use symposium_testlib::{TestMode, with_fixture};
 fn outline(results: &[ValidationResult]) -> Vec<String> {
     let mut lines = Vec::new();
     for result in results {
-        let status = match (&result.result, &result.warning) {
-            (Err(e), _) => format!("error: {e:#}"),
-            (Ok(()), Some(warning)) => format!("warning: {warning}"),
-            (Ok(()), None) => "ok".to_string(),
+        let status = match &result.result {
+            Err(e) => format!("error: {e:#}"),
+            Ok(()) if result.warnings.is_empty() => "ok".to_string(),
+            Ok(()) => format!("warning: {}", result.warnings.join("; ")),
         };
         lines.push(format!("{} {} {status}", result.kind, result.id));
         lines.extend(
