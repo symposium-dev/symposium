@@ -46,8 +46,9 @@ async fn pi_stop_returns_empty_output_in_pipeline_and_cli() {
             let output = ctx
                 .invoke_hook(HookAgent::Pi, HookEvent::Stop, &payload)
                 .await?;
+            assert_eq!(output.exit_code, 0);
             assert_eq!(
-                serde_json::from_slice::<serde_json::Value>(&output)?,
+                serde_json::from_slice::<serde_json::Value>(&output.stdout)?,
                 serde_json::json!({})
             );
 
@@ -124,6 +125,10 @@ async fn removing_the_final_project_agent_reaps_its_extension_and_skills() {
         TestMode::SimulationOnly,
         &["workspace-plugin0"],
         async |mut ctx| {
+            // An unfetched registry now prevents cleanup. This test only uses
+            // workspace skills, so it needs no recommendations registry.
+            ctx.sym.config.defaults.symposium_recommendations = false;
+            ctx.sym.save_config()?;
             ctx.symposium(&["init", "--add-agent", "pi", "--hook-scope", "project"])
                 .await?;
             ctx.symposium(&["sync"]).await?;
