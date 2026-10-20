@@ -151,6 +151,12 @@ pub enum ReportEvent {
     /// A `[plugins] use` entry was dropped by `cargo agents use --remove`.
     PluginRemoved { name: String, global: bool },
 
+    /// A local plugin was linked by `cargo agents plugin try`.
+    PluginTried { name: String },
+
+    /// A trial was discarded by `cargo agents plugin try --remove`.
+    PluginTrialRemoved { name: String },
+
     /// One line of the `cargo agents status` enablement report.
     PluginStatus {
         name: String,
@@ -349,6 +355,12 @@ impl ReportEvent {
                 };
                 format!("➖ removed the {name} enablement for {scope}")
             }
+            Self::PluginTried { name } => {
+                format!(
+                    "trying {name} in every workspace; edits reach your agents on the next sync"
+                )
+            }
+            Self::PluginTrialRemoved { name } => format!("stopped trying {name}"),
             Self::PluginStatus {
                 name,
                 version,

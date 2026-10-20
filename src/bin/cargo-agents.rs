@@ -150,7 +150,7 @@ async fn main() -> ExitCode {
         // Commands that need direct I/O (stdin/stdout) stay in the binary
         Some(Commands::Hook { agent, event }) => hook::run(&sym, agent, event).await,
 
-        Some(Commands::Plugin { command }) => {
+        Some(Commands::Plugin { command }) if !matches!(command, PluginCommand::Try { .. }) => {
             let code = handle_plugin_command(&sym, command).await;
             let events = report_handle.drain();
             if !events.is_empty() {
@@ -364,6 +364,7 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                 ExitCode::FAILURE
             }
         },
+        PluginCommand::Try { .. } => unreachable!("plugin try runs through the library"),
     }
 }
 

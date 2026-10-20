@@ -1,0 +1,4 @@
+name = "dormant-kit"
+
+[[skills]]
+source.path = "skills"
