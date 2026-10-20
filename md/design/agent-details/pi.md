@@ -91,6 +91,11 @@ Pi 1.0 reads `mcpServers` from `.pi/mcp.json` and
 transport fields while preserving Pi-specific user options. SSE is unsupported
 and is skipped with a warning.
 
+## Telemetry vocabulary
+
+The daily agent-configuration schema includes `pi`. Version 1 skill-invocation
+telemetry remains Claude-only; Pi is explicitly unsupported by that conversion.
+
 ## Tests
 
 ```bash
