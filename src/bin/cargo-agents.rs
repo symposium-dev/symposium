@@ -322,6 +322,26 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                 }
             }
         }
+        PluginCommand::Import { path, out } => {
+            let dest = match symposium::plugin_import::import_claude_plugin(&path, &out) {
+                Ok(dest) => dest,
+                Err(e) => {
+                    eprintln!("{}: {e:#}", path.display());
+                    return ExitCode::FAILURE;
+                }
+            };
+            println!("Imported {} into {}", path.display(), dest.display());
+            match plugins::validate_source_dir(&dest) {
+                Ok(results) if results.iter().map(emit_validation_results).sum::<usize>() == 0 => {
+                    ExitCode::SUCCESS
+                }
+                Ok(_) => ExitCode::FAILURE,
+                Err(e) => {
+                    eprintln!("{}: {e:#}", dest.display());
+                    ExitCode::FAILURE
+                }
+            }
+        }
         PluginCommand::Show { plugin } => match plugins::find_plugin(sym, &plugin).await {
             // A plugin is identified by its id; render its effective (resolved)
             // configuration rather than re-reading a manifest file.

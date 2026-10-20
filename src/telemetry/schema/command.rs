@@ -34,6 +34,7 @@ pub(in crate::telemetry) enum BuiltinCommand {
     PluginList,
     PluginShow,
     PluginValidate,
+    PluginImport,
     SelfUpdate,
     CrateInfo,
 }
@@ -66,6 +67,7 @@ impl BuiltinCommand {
             PluginCommand::List => Self::PluginList,
             PluginCommand::Show { .. } => Self::PluginShow,
             PluginCommand::Validate { .. } => Self::PluginValidate,
+            PluginCommand::Import { .. } => Self::PluginImport,
         }
     }
 
@@ -83,6 +85,7 @@ impl BuiltinCommand {
             Self::PluginList => "plugin_list",
             Self::PluginShow => "plugin_show",
             Self::PluginValidate => "plugin_validate",
+            Self::PluginImport => "plugin_import",
             Self::SelfUpdate => "self_update",
             Self::CrateInfo => "crate_info",
         }
@@ -359,6 +362,10 @@ mod tests {
                 &["plugin", "validate", "."],
                 Some(BuiltinCommand::PluginValidate),
             ),
+            (
+                &["plugin", "import", "."],
+                Some(BuiltinCommand::PluginImport),
+            ),
             (&["self-update"], Some(BuiltinCommand::SelfUpdate)),
             (&["crate-info", "serde"], Some(BuiltinCommand::CrateInfo)),
             (&["hook", "claude", "session-start"], None),
@@ -386,6 +393,7 @@ mod tests {
             (BuiltinCommand::PluginList, "plugin_list"),
             (BuiltinCommand::PluginShow, "plugin_show"),
             (BuiltinCommand::PluginValidate, "plugin_validate"),
+            (BuiltinCommand::PluginImport, "plugin_import"),
             (BuiltinCommand::SelfUpdate, "self_update"),
             (BuiltinCommand::CrateInfo, "crate_info"),
         ];

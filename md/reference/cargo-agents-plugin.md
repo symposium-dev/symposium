@@ -58,3 +58,41 @@ Besides errors, it warns about a plugin that loads but does not work the same on
 - an Agent Plugins package with no `version`, which agents that cache plugins by version, such as Codex, may not refresh;
 - a hook event handled only by agent-format hooks, which fire on that agent alone (see [Agent-specific hooks](../crate-authors/authoring-a-plugin.md#agent-specific-hooks));
 - a skill file or folder that is not installed: a link that resolves outside its package, a broken link, or a link back into the skill.
+
+### `cargo agents plugin import`
+
+```bash
+cargo agents plugin import <PATH> [--out <DIR>]
+```
+
+Turn a Claude Code plugin into an [Agent Plugins package](./agent-plugins.md) that Symposium loads, written to `<DIR>/<name>/`. The command refuses to overwrite an existing folder, and validates the result as [`plugin validate`](#cargo-agents-plugin-validate) does.
+
+| Flag | Description |
+|------|-------------|
+| `<PATH>` | The Claude Code plugin folder, the one holding `.claude-plugin/plugin.json` |
+| `--out <DIR>` | Where to write the package. Defaults to the current directory |
+
+What each part of the Claude Code plugin becomes:
+
+| Claude Code | Package |
+|-------------|---------|
+| `.claude-plugin/plugin.json` | `plugin.json`, keeping `name`, `version`, `description`, `author`, `homepage`, `repository`, `license` and `keywords`. The name is rewritten to follow the [name rule](./agent-plugins.md#names). Without the file, the folder name is used. |
+| `skills/` | Copied unchanged |
+| `commands/*.md` | A skill each, `skills/<command>/SKILL.md`, named after the command. A command with no `description`, or whose name an existing skill already has, is left out. |
+| `hooks/hooks.json` | `[[hooks]]` entries with `format = "claude"` in a `Symposium.toml`, each running its original command through `sh -c` |
+| `.mcp.json` | `[[mcp_servers]]` entries in the same `Symposium.toml` |
+| Other files | Copied unchanged, so the scripts a hook runs come along |
+
+A `Symposium.toml` is written only when there are hooks or MCP servers. It then also declares `[[skills]] source.path = "skills"`, since a `Symposium.toml` beside `plugin.json` gets no default skill group.
+
+Symposium runs a `format = "claude"` hook only in Claude Code, with `CLAUDE_PLUGIN_ROOT` set to the package folder, so the hook works as it did in the plugin. To run a hook in the other agents, add a [`format = "symposium"`](./plugin-definition.md#agent-specific-hooks) hook next to it.
+
+Everything that is not imported is reported, one line each:
+
+- `agents/`, `.lsp.json`, and `plugin.json` fields outside the list above, such as `userConfig`. The package format has no place for them.
+- Hooks for an event Symposium does not handle, hooks whose `type` is not `command`, and hooks using a field other than `command` and `timeout`, such as `if` or `async`. `timeout` itself is dropped.
+- MCP servers that use `${CLAUDE_PLUGIN_ROOT}`, which agents do not expand outside a Claude Code plugin.
+
+A skill that mentions `${CLAUDE_PLUGIN_ROOT}` is copied, with a warning: Claude Code only fills that in for the skills of its own plugins.
+
+The imported plugin names no crate, so in a plugin source it stays dormant until enabled with [`cargo agents use`](./cargo-agents-use.md).
