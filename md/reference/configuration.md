@@ -4,6 +4,8 @@
 
 If the file cannot be read or parsed, `cargo agents` prints a warning and runs with the defaults and `auto-update` off. Commands that would save the configuration, such as `init` or `use`, stop with an error instead of overwriting it, so fix or remove the file and run them again. `sync` stops too, rather than treating every agent as removed.
 
+Sync also fails without removing installed skills or hooks. A missing file uses first-run defaults; a valid empty agent list still permits cleanup after deliberate removal.
+
 ## Full example
 
 ```toml

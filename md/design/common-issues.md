@@ -94,6 +94,16 @@ Plugin content must not decide where Symposium writes. A name it supplies, such 
 
 Whether two names are the same package is the package manager's rule, not a string comparison: cargo treats `widget-lib` and `widget_lib` as one crate, while a registry compares its plugin names exactly. So code that matches a name typed by the user against a plugin or a dependency resolves both through `PmRegistry::identify` or `PmRegistry::identity` and compares the results, rather than comparing strings or applying one ecosystem's normalization to every name. Nor is a name a crate by default: `identify` asks the package managers whether they have it and fails with `no package named ...` when none does. A `[plugins]` entry names no package manager, so the `PluginsConfig` queries take the `PackageId` being checked and compare the entry under that id's package manager: `disable = ["my_plugin"]` covers the crate `my-plugin` but not a registry plugin named `my-plugin`. A `"*"` entry is a pattern, not a name: the `PluginsConfig` queries treat it as matching everything, so code that lists entries skips it rather than reporting it as a plugin.
 
+## Config load failures are not uninstall requests
+
+A malformed or unreadable user config falls back to defaults for read-only callers,
+including an empty agent list. Never reconcile installations or save that fallback
+as if the user deliberately removed every agent. `Symposium::ensure_config_usable`
+guards sync, hook registration, init, and config writes using the startup load
+result. A missing config still supports first-run init. `tests/config_load.rs`
+covers failure, retry, repair, and deliberate removal for Claude and Pi at both
+scopes.
+
 ## A source that reads as empty is not an empty source
 
 A listing that swallows read errors returns the same empty list for "nothing there" and "could not look", and anything that removes what a source stopped offering turns the second into data loss: a `[[registry]]` path on an unmounted share would make `sync` delete every skill installed from it. So `PackageManager::registry_plugins` fails when a registry cannot be read and otherwise says whether every entry loaded, `PluginRegistry::unreadable_registries` carries a registry that failed either way to `sync`, and `sync` skips its stale-skill and project MCP cleanup while that list is not empty. An entry whose manifest fails to parse is the same case on a smaller scale: the plugin did not withdraw what it installed. Any new pass that removes things because a source stopped offering them belongs behind the same condition. The user config is such a source for the agent list: one that cannot be read loads with no agents, so `sync` refuses to run on it rather than reaping every agent's skills and hooks. The opposite mistake is as bad: a source that is legitimately absent must not count as unreadable, or cleanup never runs again, which is why the built-in `~/.symposium/plugins/` is left out when nothing exists at that path.
