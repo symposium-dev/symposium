@@ -412,6 +412,7 @@ Hooks are spawned with the following extras on top of the parent environment:
 |----------|----------|-------|
 | `$SYMPOSIUM_DIR_<name>` | Installation has a symposium-managed cache (scoped cargo, github) | Absolute path to the cache / clone directory. |
 | `$SYMPOSIUM_<name>` | Installation resolves to a runnable with an absolute path | Absolute path to the resolved executable / script. |
+| `$CLAUDE_PLUGIN_ROOT` | The hook has `format = "claude"` | Absolute path to the plugin's directory, as Claude Code sets it for its own plugins. |
 | `$PATH` | One or more dependencies contribute a runnable with an absolute path | Each runnable's parent dir is prepended, with the hook's `command` first. |
 
 `<name>` is the installation name with non-alphanumeric characters replaced by `_` (e.g. `mytool-hooks` -> `SYMPOSIUM_DIR_mytool_hooks`). Both the hook's `command` installation and every requirement (recursively, one level via installation-level requirements) contribute.

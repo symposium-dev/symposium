@@ -222,6 +222,7 @@ mod tests {
             },
             workspace_member: false,
             agent_plugin_root: None,
+            root: std::path::PathBuf::new(),
         }
     }
 
