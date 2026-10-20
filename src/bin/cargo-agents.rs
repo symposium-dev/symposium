@@ -1,6 +1,6 @@
 use clap::Parser;
 use std::env;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use symposium::cli::{Cli, Commands, PluginCommand};
@@ -235,12 +235,19 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
             path,
             no_check_crates,
         } => {
-            let path = if path.file_name() == Some(AGENT_PLUGIN_FILE.as_ref()) && path.is_file() {
-                path.parent()
-                    .filter(|parent| !parent.as_os_str().is_empty())
-                    .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
-            } else {
-                path
+            let manifest_file = matches!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some(symposium::pm::layout::MANIFEST_FILE | AGENT_PLUGIN_FILE | "Cargo.toml")
+            );
+            let path = match path.parent() {
+                Some(parent) if manifest_file && path.is_file() => {
+                    if parent.as_os_str().is_empty() {
+                        PathBuf::from(".")
+                    } else {
+                        parent.to_path_buf()
+                    }
+                }
+                _ => path,
             };
             if path.is_dir() {
                 let mut errors = 0;

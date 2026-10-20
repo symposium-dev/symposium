@@ -10,7 +10,7 @@ Symposium scans a registry recursively to find plugins and standalone skills:
 * An [Agent Plugins package](./agent-plugins.md) is a directory that contains a `plugin.json` and no `Symposium.toml`.
 * A directory that contains a `SKILL.md` and neither of those manifests is loaded as a plugin with default values: named for the skill's frontmatter `name` (required, as for every registry skill), with the skill's frontmatter `depends-on` and `predicates` acting as the plugin's activation gate. `depends-on` is optional: a skill that names no dependency loads *dormant* (it activates once you enable it by name with [`cargo agents use`](./cargo-agents-use.md)), exactly like a gateless `Symposium.toml` plugin.
 
-**We do not allow these entries to be nested within one another.** When we find a directory that is a plugin, a package or a skill, we do not search its contents any further. The registry root itself must not be an entry: a root that contains a `Symposium.toml`, a `plugin.json` or a `SKILL.md` is an error (a configured registry loads nothing, and `cargo agents plugin validate` fails, except that it reads a `plugin.json` root as that one package). Put each plugin or skill in a subdirectory instead.
+**We do not allow these entries to be nested within one another.** When we find a directory that is a plugin, a package or a skill, we do not search its contents any further. The registry root itself must not be an entry: a configured registry whose root contains a `Symposium.toml`, a `plugin.json` or a `SKILL.md` is reported and loads nothing. Put each plugin or skill in a subdirectory instead.
 
 A Claude Code plugin (a directory with a `.claude-plugin/plugin.json` and no `Symposium.toml` or `plugin.json` of its own) is not read: it is skipped with a warning, and none of its skills load. Since nothing in it could load, the registry's other plugins are still removed when they go away. A registry root that is a Claude Code plugin is an error.
 
@@ -54,4 +54,4 @@ cargo agents plugin validate path/to/plugin-source/
 cargo agents plugin validate path/to/plugin-source/ --no-check-crates
 ```
 
-This scans the directory, attempts to load all plugins and skills, and reports any errors found.
+This scans the directory, attempts to load all plugins and skills, and reports any errors found. A directory that is itself a plugin or a skill is validated as that one entry.

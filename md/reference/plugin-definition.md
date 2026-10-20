@@ -686,4 +686,4 @@ env = []
 cargo agents plugin validate path/to/Symposium.toml
 ```
 
-This parses the manifest and reports any errors. The file must be named `Symposium.toml` for Symposium to discover it; to validate every entry in a registry directory, pass the directory instead (see [Plugin sources](./plugin-source.md#validation)). Crate name checking against crates.io is on by default; use `--no-check-crates` to skip it.
+This validates the plugin in that directory and reports any errors: as a crate plugin when the directory holds a `Cargo.toml` with a `[package]` table, otherwise as a registry entry. The file must be named `Symposium.toml` for Symposium to discover it; to validate every entry in a registry directory, pass the directory instead (see [Plugin sources](./plugin-source.md#validation)). Crate name checking against crates.io is on by default; use `--no-check-crates` to skip it.

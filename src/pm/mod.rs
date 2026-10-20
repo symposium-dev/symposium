@@ -39,6 +39,7 @@ pub use remote::{RemotePm, RemotePmCommand};
 /// The cargo package manager is its own crate, because it has to be one to run
 /// as its own binary. Re-exported here so the rest of Symposium keeps naming one `pm`
 /// module regardless of where a PM's code lives.
+pub(crate) use symposium_pm_cargo::embedded_plugin_kind;
 pub use symposium_pm_cargo::{
     CargoPm, LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
 };

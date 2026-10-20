@@ -40,9 +40,14 @@ Show a plugin: its id and its effective configuration as TOML, after validation 
 cargo agents plugin validate <PATH> [--no-check-crates]
 ```
 
-Validate a plugin source directory, an [Agent Plugins package](./agent-plugins.md) folder, or a single TOML manifest file. Useful when authoring plugins. Each item is reported with its kind: `plugin`, `agent plugin` or `skill`.
+Validate plugins without installing anything. Useful when authoring plugins. Each item is reported with its kind: `plugin`, `agent plugin` or `skill`. `<PATH>` is one of:
+
+- A crate: a directory whose `Cargo.toml` has a `[package]` table, or that `Cargo.toml` or the crate's `Symposium.toml`. The crate is validated as its users get it: `[package.metadata.symposium]` and `Symposium.toml` merged, named after the crate, with the default `skills/` group. A malformed `[package.metadata.symposium]` or `Symposium.toml`, which loading skips with only a log entry, is an error here, and so is a crate with no plugin content.
+- A plugin or skill directory, or an [Agent Plugins package](./agent-plugins.md) directory or its `plugin.json`, validated as that one entry.
+- A [plugin source](./plugin-source.md) directory, such as a checkout of the recommendations repository: every entry in it.
+- Any other `.toml` file, validated as a registry plugin manifest.
 
 | Flag | Description |
 |------|-------------|
-| `<PATH>` | Path to a directory, a package's `plugin.json`, or a single `.toml` file |
+| `<PATH>` | Path to a directory or a manifest file |
 | `--no-check-crates` | Skip checking that crate names in predicates exist on crates.io |
