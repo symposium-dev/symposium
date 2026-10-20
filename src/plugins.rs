@@ -1534,7 +1534,7 @@ pub struct ValidationResult {
     /// `Ok(())` if valid, `Err` with the validation error.
     pub result: Result<()>,
     /// Optional warning (non-fatal).
-    pub warning: Option<String>,
+    pub warnings: Vec<String>,
     /// Child results (e.g., skills belonging to a plugin).
     pub children: Vec<ValidationResult>,
 }
@@ -1588,22 +1588,31 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
                             id: group_label,
                             kind: ValidationKind::Skill,
                             result: Ok(()),
-                            warning: Some(
+                            warnings: vec![
                                 "skill group source.path contains no SKILL.md files".into(),
-                            ),
+                            ],
                             children: Vec::new(),
                         });
                     } else {
                         for skill_result in found {
-                            let (skill_id, result) = match skill_result {
-                                Ok(skill) => (skill.name().to_string(), Ok(())),
-                                Err(e) => (group_label.clone(), Err(e)),
+                            let (skill_id, result, warnings) = match skill_result {
+                                Ok(skill) => (
+                                    skill.name().to_string(),
+                                    Ok(()),
+                                    skill.path.parent().map_or_else(Vec::new, |dir| {
+                                        crate::sync::unfollowed_entries(
+                                            dir,
+                                            parsed.agent_plugin_root.as_deref(),
+                                        )
+                                    }),
+                                ),
+                                Err(e) => (group_label.clone(), Err(e), Vec::new()),
                             };
                             children.push(ValidationResult {
                                 id: skill_id,
                                 kind: ValidationKind::Skill,
                                 result,
-                                warning: None,
+                                warnings,
                                 children: Vec::new(),
                             });
                         }
@@ -1612,15 +1621,17 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
             }
         }
 
-        let warning = plugin.as_ref().and_then(|parsed| {
-            parsed.manifest.requires_use.then(|| {
-                format!(
+        let mut warnings = Vec::new();
+        if let Some(parsed) = &plugin {
+            if parsed.manifest.requires_use {
+                warnings.push(format!(
                     "plugin `{name}` references no dependency; it stays dormant until enabled \
                      with `cargo agents use {name}`",
                     name = parsed.manifest.name,
-                )
-            })
-        });
+                ));
+            }
+            warnings.extend(portability_warnings(parsed));
+        }
         let kind = match plugin.as_ref().and_then(|parsed| parsed.format()) {
             Some(_) => ValidationKind::AgentPlugin,
             None => ValidationKind::Plugin,
@@ -1629,7 +1640,7 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
             id,
             kind,
             result,
-            warning,
+            warnings,
             children,
         });
     }
@@ -1643,6 +1654,51 @@ fn entry_location(dir: &Path, subpath: &Path) -> String {
     } else {
         crate::pm::layout::subpath_key(subpath)
     }
+}
+
+fn portability_warnings(plugin: &Plugin) -> Vec<String> {
+    use crate::pm::layout::AGENT_PLUGIN_FILE;
+    let manifest = &plugin.manifest;
+    let mut warnings = Vec::new();
+    if manifest.name.contains('.') {
+        warnings.push(format!(
+            "plugin name `{}` contains `.`, which Antigravity rejects; use `-` instead",
+            manifest.name
+        ));
+    }
+    if plugin.format().is_some() && manifest.version.is_none() {
+        warnings.push(format!(
+            "`{AGENT_PLUGIN_FILE}` sets no `version`; agents that cache plugins by version, \
+             such as Codex, can keep an outdated copy"
+        ));
+    }
+    let mut portable = std::collections::BTreeSet::new();
+    let mut agent_only = std::collections::BTreeMap::<String, Vec<String>>::new();
+    for hook in &manifest.hooks {
+        let event = format!("{:?}", hook.event);
+        match hook.format.as_agent() {
+            None => {
+                portable.insert(event);
+            }
+            Some(_) => {
+                let format = format!("`{:?}`", hook.format).to_lowercase();
+                let formats = agent_only.entry(event).or_default();
+                if !formats.contains(&format) {
+                    formats.push(format);
+                }
+            }
+        }
+    }
+    for (event, formats) in agent_only {
+        if !portable.contains(&event) {
+            warnings.push(format!(
+                "`{event}` hooks have only the {} format, so they fire on no other agent; \
+                 add a `format = \"symposium\"` hook for the others",
+                formats.join(", ")
+            ));
+        }
+    }
+    warnings
 }
 
 /// Collect all crate names referenced in predicates across a plugin source directory.
@@ -3513,11 +3569,124 @@ mod tests {
         assert!(results.iter().all(|r| r.result.is_ok()));
         let warnings: Vec<&str> = results
             .iter()
-            .filter_map(|r| r.warning.as_deref())
+            .flat_map(|r| r.warnings.iter().map(String::as_str))
             .collect();
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("no-crates-plugin"), "{warnings:?}");
         assert!(warnings[0].contains("dormant"), "{warnings:?}");
+    }
+
+    const SCHEMA: &str = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
+    const PORTABLE_SKILL: &str = "---\nname: guide\ndescription: d\n---\n";
+
+    fn validation_warnings(dir: &Path) -> Vec<String> {
+        fn collect(results: &[ValidationResult], out: &mut Vec<String>) {
+            for result in results {
+                assert!(result.result.is_ok(), "{:?}", result.result);
+                out.extend(result.warnings.iter().cloned());
+                collect(&result.children, out);
+            }
+        }
+        let mut warnings = Vec::new();
+        collect(&validate_source_dir(dir).unwrap(), &mut warnings);
+        warnings
+    }
+
+    #[test]
+    fn validate_warns_about_a_dot_in_a_plugin_name() {
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[File(
+            "my.plugin/Symposium.toml",
+            "name = \"my.plugin\"\ndepends-on = [\"*\"]\n",
+        )]);
+        let warnings = validation_warnings(tmp.path());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("Antigravity rejects"), "{warnings:?}");
+    }
+
+    #[test]
+    fn validate_warns_about_a_package_without_a_version() {
+        use crate::test_utils::{File, instantiate_fixture};
+        let gate = r#""extensions": {"dev.symposium": {"depends-on": ["*"]}}"#;
+        for (fields, expected) in [
+            (format!(r#""name": "pkg", {gate}"#), 1),
+            (format!(r#""name": "pkg", "version": "1.0.0", {gate}"#), 0),
+        ] {
+            let tmp = instantiate_fixture(&[
+                File(
+                    "pkg/plugin.json",
+                    &format!(r#"{{"$schema": "{SCHEMA}", {fields}}}"#),
+                ),
+                File("pkg/skills/guide/SKILL.md", PORTABLE_SKILL),
+            ]);
+            let warnings = validation_warnings(tmp.path());
+            assert_eq!(warnings.len(), expected, "{warnings:?}");
+            assert!(warnings.iter().all(|w| w.contains("no `version`")));
+        }
+    }
+
+    #[test]
+    fn validate_warns_about_hooks_that_fire_on_one_agent() {
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[File(
+            "hooks/Symposium.toml",
+            indoc! {r#"
+                name = "hooks"
+                depends-on = ["*"]
+
+                [[hooks]]
+                name = "native"
+                event = "PreToolUse"
+                format = "claude"
+                command = { script = "native.sh" }
+
+                [[hooks]]
+                name = "covered-native"
+                event = "PostToolUse"
+                format = "claude"
+                command = { script = "native.sh" }
+
+                [[hooks]]
+                name = "covered"
+                event = "PostToolUse"
+                command = { script = "portable.sh" }
+            "#},
+        )]);
+        let warnings = validation_warnings(tmp.path());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].starts_with("`PreToolUse` hooks have only the `claude` format"),
+            "{warnings:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_warns_about_package_skill_content_outside_the_package() {
+        use crate::test_utils::{File, instantiate_fixture};
+        let tmp = instantiate_fixture(&[
+            File(
+                "pkg/plugin.json",
+                &format!(
+                    r#"{{"$schema": "{SCHEMA}", "name": "pkg", "version": "1.0.0",
+                        "extensions": {{"dev.symposium": {{"depends-on": ["*"]}}}}}}"#
+                ),
+            ),
+            File("pkg/skills/guide/SKILL.md", PORTABLE_SKILL),
+            File("pkg/notes.md", "inside"),
+            File("outside.md", "outside"),
+        ]);
+        let skill = tmp.path().join("pkg/skills/guide");
+        std::os::unix::fs::symlink(tmp.path().join("pkg/notes.md"), skill.join("inside.md"))
+            .unwrap();
+        std::os::unix::fs::symlink(tmp.path().join("outside.md"), skill.join("outside.md"))
+            .unwrap();
+        let warnings = validation_warnings(&tmp.path().join("pkg"));
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].contains("outside.md: resolves outside the package"),
+            "{warnings:?}"
+        );
     }
 
     #[test]

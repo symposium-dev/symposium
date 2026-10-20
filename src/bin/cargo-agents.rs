@@ -350,16 +350,29 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
 fn emit_validation_results(r: &plugins::ValidationResult) -> usize {
     let mut errors = 0;
     match &r.result {
-        Ok(()) => {
+        Ok(()) if r.warnings.is_empty() => {
             tracing::info!(
                 report = %report::ReportEvent::Validated {
                     path: r.id.clone(),
                     item_kind: r.kind.to_string(),
                     valid: true,
                     error: None,
-                    warning: r.warning.clone(),
+                    warning: None,
                 },
             );
+        }
+        Ok(()) => {
+            for warning in &r.warnings {
+                tracing::info!(
+                    report = %report::ReportEvent::Validated {
+                        path: r.id.clone(),
+                        item_kind: r.kind.to_string(),
+                        valid: true,
+                        error: None,
+                        warning: Some(warning.clone()),
+                    },
+                );
+            }
         }
         Err(e) => {
             tracing::info!(

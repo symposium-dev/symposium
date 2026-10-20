@@ -51,3 +51,10 @@ Validate plugins without installing anything. Useful when authoring plugins. Eac
 |------|-------------|
 | `<PATH>` | Path to a directory or a manifest file |
 | `--no-check-crates` | Skip checking that crate names in predicates exist on crates.io |
+
+Besides errors, it warns about a plugin that loads but does not work the same on every agent:
+
+- a plugin name containing `.`, which Antigravity rejects;
+- an Agent Plugins package with no `version`, which agents that cache plugins by version, such as Codex, may not refresh;
+- a hook event handled only by agent-format hooks, which fire on that agent alone (see [Agent-specific hooks](../crate-authors/authoring-a-plugin.md#agent-specific-hooks));
+- a skill file or folder that is not installed: a link that resolves outside its package, a broken link, or a link back into the skill.

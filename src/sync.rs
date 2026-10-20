@@ -98,6 +98,12 @@ type TreeEntry = (PathBuf, EntryKind);
 ///
 /// Sorting by relative path puts each directory before its children, so a
 /// caller may create or read the entries in order.
+pub(crate) fn unfollowed_entries(root: &Path, package_root: Option<&Path>) -> Vec<String> {
+    walk_tree(root, package_root)
+        .map(|(_, skipped)| skipped)
+        .unwrap_or_default()
+}
+
 fn walk_tree(root: &Path, package_root: Option<&Path>) -> Result<(Vec<TreeEntry>, Vec<String>)> {
     let mut entries = Vec::new();
     let mut skipped = Vec::new();

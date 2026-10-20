@@ -37,7 +37,7 @@ The manifest is closed, meaning only known fields are allowed:
 |-------|------|----------|-------------|
 | `$schema` | string | yes | `https://agent-plugins.org/schemas/1.0.0/plugin.schema.json`, or the same with `1.1.0`. Any other value, including a newer or draft version of the format, rejects the package. |
 | `name` | string | yes | The plugin name. See [Names](#names). |
-| `version` | string | no | Shown by `search` and `status`. Not required to be a semantic version. |
+| `version` | string | no | Shown by `search` and `status`. Not required to be a semantic version. `plugin validate` warns when it is missing, since some agents cache plugins by version. |
 | `description` | string | no | Shown by `search`. |
 | `author` | object | no | Only `name`, `email` and `url`, each a string. |
 | `homepage` | string | no | |
