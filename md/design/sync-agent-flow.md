@@ -23,7 +23,7 @@ Scans workspace dependencies, installs applicable skills into agent directories,
 
    An `[[agent]]` name this version does not know is skipped with a warning that names `cargo agents init --remove-agent`; every other agent syncs as usual.
 
-6. **Workspace `.agents/skills/` (agents-syncing)** — not a separate step: when `agents-syncing` is enabled, each workspace plugin carries a `workspace-member()`-gated default group for `.agents/skills/`, so maintainer skills resolve and install through the same pipeline as everything else. Two marker guards make `.agents/skills/` safe as both a source and (for vendor-neutral agents) a destination: discovery skips `.symposium`-marked directories (installed copies are never sources), and a skill whose source already sits at an agent's install slot is skipped for that agent (no self-copy, no suffixed duplicate).
+6. **Workspace `.agents/skills/` (agents-syncing)**, not a separate step: when `agents-syncing` is enabled, each workspace plugin carries a `workspace-member()`-gated default group for `.agents/skills/`, so maintainer skills resolve and install through the same pipeline as everything else. Two marker guards make `.agents/skills/` safe as both a source and (for vendor-neutral agents) a destination: discovery skips `.symposium`-marked directories (installed copies are never sources), and a skill whose source already sits where an agent reads it (its install slot, or `.agents/skills/` for OpenCode) is skipped for that agent (no self-copy, no suffixed duplicate).
 
 7. **Reap stale skills**: across every known agent's skills parent directory, remove any subdirectory that contains the `.symposium` marker but wasn't installed this sync. Directories without the marker (user-managed) are left untouched, and so is any symlink, whatever it points to. Paths are compared resolved, so a skills directory that is a link to another agent's (`.claude/skills -> ../.agents/skills`) is scanned once and what this sync installed there is kept.
 
@@ -46,7 +46,7 @@ Between matching skills (step 4) and installing them (step 5), the plugins a `us
 
 ## Marker file
 
-Each skill directory symposium installs contains an empty `.symposium` file. Cleanup walks every agent's skills parent directory (`.claude/skills/`, `.agents/skills/`, `.kiro/skills/`) and reaps any subdirectory whose marker is present but which wasn't installed this sync. This lets symposium reclaim stale skills (including those left behind by agents removed from the config) without touching user-managed skills, which are identified by the absence of the marker. Symposium never creates a symlink, so a link found in a skills directory is user content and is never followed or removed.
+Each skill directory symposium installs contains an empty `.symposium` file. Cleanup walks every agent's skills parent directory (`.claude/skills/`, `.agents/skills/`, `.kiro/skills/`, `.opencode/skills/`) and reaps any subdirectory whose marker is present but which wasn't installed this sync. This lets symposium reclaim stale skills (including those left behind by agents removed from the config) without touching user-managed skills, which are identified by the absence of the marker. Symposium never creates a symlink, so a link found in a skills directory is user content and is never followed or removed.
 
 ## Gitignore
 

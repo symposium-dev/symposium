@@ -135,7 +135,10 @@ impl Agent {
             }
             Agent::Goose => project_root.join(".agents").join("skills").join(skill_name),
             Agent::Kiro => project_root.join(".kiro").join("skills").join(skill_name),
-            Agent::OpenCode => project_root.join(".agents").join("skills").join(skill_name),
+            Agent::OpenCode => project_root
+                .join(".opencode")
+                .join("skills")
+                .join(skill_name),
         }
     }
 
@@ -160,6 +163,15 @@ impl Agent {
             Agent::Goose => Some(home.join(".agents").join("skills").join(skill_name)),
             Agent::Kiro => Some(home.join(".kiro").join("skills").join(skill_name)),
             Agent::OpenCode => Some(home.join(".agents").join("skills").join(skill_name)),
+        }
+    }
+
+    pub(crate) fn reads_vendor_neutral_skills(&self) -> bool {
+        match self {
+            Agent::Antigravity | Agent::Codex | Agent::Copilot | Agent::Goose | Agent::OpenCode => {
+                true
+            }
+            Agent::Claude | Agent::Kiro => false,
         }
     }
 
@@ -1699,11 +1711,11 @@ mod tests {
     }
 
     #[test]
-    fn opencode_project_skill_dir_uses_vendor_neutral() {
+    fn opencode_project_skill_dir() {
         let root = Path::new("/project");
         assert_eq!(
             Agent::OpenCode.project_skill_dir(root, "tokio"),
-            PathBuf::from("/project/.agents/skills/tokio")
+            PathBuf::from("/project/.opencode/skills/tokio")
         );
     }
 

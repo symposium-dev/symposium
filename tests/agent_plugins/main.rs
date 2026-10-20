@@ -87,9 +87,13 @@ async fn every_delivering_agent_keeps_the_delivery_contracts() {
             ctx.symposium(&["sync"]).await?;
             assert!(
                 workspace
-                    .join(".agents/skills/global-guide/SKILL.md")
+                    .join(".opencode/skills/global-guide/SKILL.md")
                     .is_file(),
                 "{name}: the per-skill copy another agent reads is kept"
+            );
+            assert!(
+                !project_copy.exists(),
+                "{name}: in a folder this agent does not read"
             );
 
             let source = ctx.sym.config_dir().join("plugins/global-guide/SKILL.md");
@@ -274,10 +278,11 @@ async fn a_skill_an_agent_takes_as_a_plugin_does_not_rename_its_namesake() {
             kiro.len() == 2 && kiro.iter().all(|name| name.starts_with("guide-")),
             "an agent copying both still needs the suffix: {kiro:?}"
         );
-        let shared = guides(".agents/skills");
+        assert_eq!(guides(".agents/skills"), ["guide"]);
+        let opencode = guides(".opencode/skills");
         assert!(
-            shared.len() == 2 && shared.iter().all(|name| name.starts_with("guide-")),
-            "agents sharing a directory agree on each name: {shared:?}"
+            opencode.len() == 2 && opencode.iter().all(|name| name.starts_with("guide-")),
+            "an agent copying both still needs the suffix: {opencode:?}"
         );
         Ok(())
     })
