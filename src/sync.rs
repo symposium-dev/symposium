@@ -178,7 +178,11 @@ fn walk_tree_inner(
 ///
 /// Entries the walk cannot follow are reported and skipped, so a single broken
 /// link leaves the rest of the skill installed instead of failing the sync.
-fn copy_dir_recursive(src: &Path, dst: &Path, package_root: Option<&Path>) -> Result<()> {
+pub(crate) fn copy_dir_recursive(
+    src: &Path,
+    dst: &Path,
+    package_root: Option<&Path>,
+) -> Result<()> {
     let (entries, skipped) = walk_tree(src, package_root)?;
     for message in skipped {
         tracing::info!(report = %crate::report::ReportEvent::Warning { message });

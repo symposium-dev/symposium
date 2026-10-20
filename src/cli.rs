@@ -203,6 +203,16 @@ pub enum PluginCommand {
         #[arg(long)]
         no_check_crates: bool,
     },
+
+    /// Turn a Claude Code plugin into an Agent Plugins package
+    Import {
+        /// Path to the Claude Code plugin directory
+        path: std::path::PathBuf,
+
+        /// Directory to write the package into, as `<out>/<name>/`
+        #[arg(long, default_value = ".")]
+        out: std::path::PathBuf,
+    },
 }
 
 /// Run a parsed CLI command.
