@@ -701,16 +701,15 @@ pub async fn sync(
                 }
             };
 
-            // The skill's source already sits at this agent's install slot
-            // (a workspace `.agents/skills/` skill, on an agent that reads
-            // that same directory) — it is in place as user content, not
-            // something to copy.
             let plain_dir = agent.project_skill_dir(&project_root, skill_name);
-            let in_place = match (source_dir.canonicalize(), plain_dir.canonicalize()) {
+            let shared_dir = project_root.join(".agents").join("skills").join(skill_name);
+            let is_source = |dir: &Path| match (source_dir.canonicalize(), dir.canonicalize()) {
                 (Ok(a), Ok(b)) => a == b,
                 _ => false,
             };
-            if in_place {
+            let already_in_place = is_source(&plain_dir)
+                || (agent.reads_vendor_neutral_skills() && is_source(&shared_dir));
+            if already_in_place {
                 continue;
             }
 
