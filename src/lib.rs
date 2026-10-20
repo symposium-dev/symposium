@@ -19,6 +19,7 @@ pub mod state;
 pub mod status_command;
 pub mod subcommand_dispatch;
 pub mod telemetry;
+pub mod try_command;
 pub mod use_command;
 pub mod workspace_state;
 

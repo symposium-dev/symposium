@@ -46,7 +46,13 @@ Always call `.validate()` before passing widgets to the runtime.
 
 ### 1.3 Check it
 
-**Author tools.** `cargo agents plugin validate .`, run in the crate (the directory with `Cargo.toml`), checks the plugin as users get it, with no agent configured and nothing installed: `[package.metadata.symposium]` and `Symposium.toml` merged, named after the crate, with the default `skills/` group. It prints every error that loading only writes to the log (1.4), and checks that each crate named in `depends-on` exists on crates.io (`--no-check-crates` skips that). It also takes a plugin or skill directory, or a recommendations checkout (2.1). Run it first, then try the plugin in a project.
+**Author tools.** Three `cargo agents plugin` commands help while writing a plugin:
+
+- `validate <path>`, run in the crate (the directory with `Cargo.toml`), checks the plugin as users get it, with no agent configured and nothing installed: `[package.metadata.symposium]` and `Symposium.toml` merged, named after the crate, with the default `skills/` group. It prints every error that loading only writes to the log (1.4), warns about what does not work the same on every agent, and checks that each crate named in `depends-on` exists on crates.io (`--no-check-crates` skips that). It also takes a plugin, skill or Agent Plugins package directory, or a recommendations checkout (2.1).
+- `try <path>` installs a plugin, skill or Agent Plugins package directory in the configured agents and reports which agents list its skills; `try --remove <path>` discards it (2.1). A crate is tried through a path dependency instead, as below.
+- `import <path>` turns a Claude Code plugin (the folder holding `.claude-plugin/plugin.json`) into an Agent Plugins package: skills and commands become skills, hooks and MCP servers go into a `Symposium.toml`, and what cannot carry over is reported.
+
+Run `validate` first, then try the plugin in a project.
 
 Prerequisite: the CLI from the `symposium` crate (`cargo binstall symposium` or `cargo install symposium`), set up for the user's agent with `cargo agents init --add-agent <agent>` (`claude`, `codex`, `copilot`, `kiro`, `antigravity`, `opencode`, or `goose`; repeat the flag for several). With no agent configured, `cargo agents use` installs nothing. Without `--add-agent`, `init` asks interactively, which needs a terminal. `init` writes the user's Symposium configuration and their agents' hook settings, so ask the user before running it.
 
@@ -99,7 +105,7 @@ cargo agents plugin validate .
 cargo agents plugin validate . --no-check-crates   # skip the crates.io name check
 ```
 
-To try the entry before opening the pull request, copy its directory into `~/.symposium/plugins/`, a registry Symposium reads by default (`mkdir -p ~/.symposium/plugins && cp -R widgetlib ~/.symposium/plugins/`), and run `cargo agents sync` in a project that depends on the crate. Afterwards, delete the copy and run `cargo agents sync` again. Once a shared entry is merged, remove any personal copy of the same skill, or both copies install.
+To try the entry before opening the pull request, run `cargo agents plugin try widgetlib/` from the checkout: it links the directory into `~/.symposium/plugins/`, syncs the current project, and reports which configured agents list its skills (Claude Code, Antigravity and Kiro have no listing command; check with `/skills` in a new session). The entry stays gated by its `depends-on`, so use it in a project that depends on the crate; Symposium reads the directory in place, so edits reach the agents on the next `cargo agents sync`. Afterwards, `cargo agents plugin try --remove widgetlib/` removes the link and syncs; other projects are cleaned on their next sync. Once a shared entry is merged, remove any personal copy of the same skill, or both copies install.
 
 Reference: https://symposium.dev/reference/plugin-source.html
 

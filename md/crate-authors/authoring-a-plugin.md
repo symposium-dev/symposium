@@ -257,6 +257,8 @@ command = "my-crate-cli" # the [[installations]] entry that provides the tool
 Symposium's tools for plugin authors live under `cargo agents plugin`:
 
 - **`cargo agents plugin validate <path>`** checks a plugin without installing anything: missing fields, bad crate predicates, unreachable skill paths, invalid skills, and crate names that don't exist on crates.io. `<path>` is your crate (its directory, `Cargo.toml` or `Symposium.toml`), a recommendations entry, or a whole checkout of the recommendations repo. A crate is checked as your users get it, so a mistake in `[package.metadata.symposium]` or `Symposium.toml` that Symposium would otherwise only log is reported here. See the [reference](../reference/cargo-agents-plugin.md#cargo-agents-plugin-validate).
+- **`cargo agents plugin try <path>`** installs a plugin, skill or [Agent Plugins package](../reference/agent-plugins.md) directory in your agents the way a user would get it, so you can use it while you write it, and reports which agents list its skills. Symposium reads the directory in place, so edits reach your agents on the next sync. `cargo agents plugin try --remove <path>` discards the trial. A crate is tried through a path dependency instead, as in step 4. See the [reference](../reference/cargo-agents-plugin.md#cargo-agents-plugin-try).
+- **`cargo agents plugin import <path>`** turns a Claude Code plugin into an Agent Plugins package that Symposium loads: its skills and commands become skills, its hooks and MCP servers go into a `Symposium.toml`, and anything it cannot carry over is reported. See the [reference](../reference/cargo-agents-plugin.md#cargo-agents-plugin-import).
 
 ```bash
 # In your crate
@@ -270,7 +272,7 @@ cargo agents plugin validate .
 cargo agents plugin validate . --no-check-crates
 ```
 
-To try the entry before opening the pull request, copy its directory into `~/.symposium/plugins/` (a registry Symposium reads by default), run `cargo agents sync` in a project that depends on the crate, and delete the copy when you are done.
+To try the entry before opening the pull request, install it in your agents with `cargo agents plugin try my-crate/` and use it in a project that depends on the crate: edits reach your agents on the next sync. Discard the trial with `cargo agents plugin try --remove my-crate/`. See the [reference](../reference/cargo-agents-plugin.md#cargo-agents-plugin-try).
 
 ## Step 4. Try it in a project
 

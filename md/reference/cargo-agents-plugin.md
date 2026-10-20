@@ -96,3 +96,34 @@ Everything that is not imported is reported, one line each:
 A skill that mentions `${CLAUDE_PLUGIN_ROOT}` is copied, with a warning: Claude Code only fills that in for the skills of its own plugins.
 
 The imported plugin names no crate, so in a plugin source it stays dormant until enabled with [`cargo agents use`](./cargo-agents-use.md).
+
+### `cargo agents plugin try`
+
+```bash
+cargo agents plugin try <PATH>
+cargo agents plugin try --remove <PATH or NAME>
+```
+
+Install a plugin you are writing in your agents, the way a user would have it, so you can open an agent and use it. `<PATH>` is a plugin directory (with a `Symposium.toml`), an [Agent Plugins package](./agent-plugins.md) directory (with a `plugin.json`) or a skill directory (with a `SKILL.md`).
+
+The plugin is linked into `~/.symposium/plugins/` under its name, then the current workspace is synced. A plugin that names no dependency is also enabled in every workspace, as [`cargo agents use --global`](./cargo-agents-use.md) would. Symposium reads your directory in place, so an edit reaches your agents on the next sync: `cargo agents sync`, or the automatic one when an agent starts a session. Most agents then need a new session (Claude Code also takes `/reload-plugins`, Copilot CLI `/restart`).
+
+A plugin with its own `depends-on` or predicates is left to them, as it is for its users: it is active only in workspaces where they hold. `try` names the dependency and warns when the current workspace does not have it.
+
+After syncing, `try` asks each configured agent what it loaded, using the agent's own listing command (none of them calls a model), and reports the plugin's skills it does not list:
+
+| Agent | Command |
+|-------|---------|
+| Codex CLI | `codex debug prompt-input hi` |
+| GitHub Copilot | `copilot skill list --json` |
+| Goose | `goose skills list` |
+| OpenCode | `opencode debug skill` |
+
+Claude Code, Antigravity CLI and Kiro have no such command: start a new session in the project and run `/skills`. An agent whose command is not on `PATH` is skipped.
+
+`--remove` discards the trial: it removes the link and the enablement `try` added, and syncs, which removes everything installed for the plugin in the current workspace. Other workspaces are cleaned on their next sync. A directory in `~/.symposium/plugins/` that `try` did not link is left alone.
+
+| Flag | Description |
+|------|-------------|
+| `<PATH>` | Path to the plugin or skill directory; with `--remove`, its path or the plugin name |
+| `--remove` | Discard the trial |
