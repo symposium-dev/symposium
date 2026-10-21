@@ -46,7 +46,7 @@ async fn failed_config_load_preserves_installations_and_recovers_after_repair() 
                             _ => unreachable!(),
                         };
                         let mcp_scope = if scope == "global" { McpScope::User } else { McpScope::Project };
-                        let mcp_path = agent.mcp_config_path(mcp_scope, &root, ctx.sym.home_dir());
+                        let mcp_path = agent.mcp_config_path(mcp_scope, &root, &ctx.sym);
                         let skill = agent.project_skill_dir(&root, "ws-hello");
                         let personal = agent.project_skill_dir(&root, "personal");
                         fs::create_dir_all(&personal)?;
