@@ -91,7 +91,7 @@ async fn pi_session_start_installs_skills_automatically() {
             ctx.symposium(&["init", "--add-agent", "pi"]).await?;
             ctx.sym.config.auto_update = symposium::config::AutoUpdate::Off;
             let root = ctx.workspace_root.as_ref().unwrap().clone();
-            let global = Agent::Pi.mcp_config_path(McpScope::User, &root, ctx.sym.home_dir());
+            let global = Agent::Pi.mcp_config_path(McpScope::User, &root, &ctx.sym);
             let extension = global.parent().unwrap().join("extensions/symposium.ts");
             assert!(extension.exists(), "init installs the Pi extension");
             assert!(!root.join(".agents/skills/ws-hello").exists());
@@ -158,7 +158,7 @@ async fn pi_scope_changes_leave_one_generated_extension() {
         async |mut ctx| {
             ctx.symposium(&["init", "--add-agent", "pi"]).await?;
             let root = ctx.workspace_root.as_ref().unwrap().clone();
-            let global = Agent::Pi.mcp_config_path(McpScope::User, &root, ctx.sym.home_dir());
+            let global = Agent::Pi.mcp_config_path(McpScope::User, &root, &ctx.sym);
             let global = global.parent().unwrap().join("extensions/symposium.ts");
             let project = root.join(".pi/extensions/symposium.ts");
             assert!(global.exists());
