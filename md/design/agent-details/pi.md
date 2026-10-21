@@ -9,7 +9,9 @@ and [MCP](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/d
 `src/agents/pi.rs` installs the embedded `src/agents/pi/extension.ts` into
 `.pi/extensions/symposium.ts` at project scope or
 `~/.pi/agent/extensions/symposium.ts` at user scope. The user path honors
-`PI_CODING_AGENT_DIR`. Registration compares content before writing. The generated
+`PI_CODING_AGENT_DIR`, including a leading `~/`. Both extension and MCP paths use
+Symposium's environment lookup so tests can relocate them without changing the
+process environment. Registration compares content before writing. The generated
 header identifies files that Symposium may update or remove. An existing file
 without that header is not overwritten or removed. When hook scope changes,
 `sync` calls `Agent::register_scoped_hooks`, which removes the generated extension
