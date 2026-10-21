@@ -63,6 +63,7 @@ fn resolve_agents(
 /// Prompts for agents (unless provided), writes
 /// `~/.symposium/config.toml`, and registers global hooks.
 pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<()> {
+    sym.ensure_config_usable()?;
     tracing::info!("init started");
     out.println("Setting up symposium for your user account.\n");
 

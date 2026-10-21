@@ -252,7 +252,7 @@ Each `[[hooks]]` entry declares a hook that responds to agent events. For the JS
 | `args` | array (optional) | Invocation arguments. Forbidden when the installation also declares `args`. |
 | `requirements` | array (optional) | Installations to acquire before running. Same shape as `command` (string name or inline declaration). |
 | `agent` | string (optional) | Restrict the hook to a specific agent (`antigravity`, `claude`, `copilot`, `kiro`, ...). It does not change the input; `format` still decides that (canonical JSON by default). |
-| `format` | string | Wire format the handler expects on stdin. `symposium` (default): symposium converts the agent's event to its canonical format before delivering. Any agent name (`antigravity`, `claude`, `codex`, `copilot`, `kiro`): the hook fires only when Symposium runs for that agent, and receives that agent's native input unchanged; on every other agent it does not fire, and nothing is converted. Pair it with a `format = "symposium"` hook to cover the other agents (see [Agent-specific hooks](#agent-specific-hooks)). Symposium always intermediates: it never registers plugin hooks directly into agent configs. See [Hooks](../crate-authors/authoring-a-plugin.md#hooks). |
+| `format` | string | Wire format the handler expects on stdin. `symposium` (default): symposium converts the agent's event to its canonical format before delivering. Any agent name (`antigravity`, `claude`, `codex`, `copilot`, `kiro`, `pi`): the hook fires only when Symposium runs for that agent, and receives that agent's native input unchanged; on every other agent it does not fire, and nothing is converted. Pair it with a `format = "symposium"` hook to cover the other agents (see [Agent-specific hooks](#agent-specific-hooks)). Symposium always intermediates: it never registers plugin hooks directly into agent configs. See [Hooks](../crate-authors/authoring-a-plugin.md#hooks). |
 | `predicates` | array (optional) | Predicates (`depends-on`, `shell`, `path_exists`, `env`, `workspace-member`, `not`, `any`, `all`) that must all hold for the hook to dispatch. Evaluated per-dispatch. A hook has no `depends-on` field: gate it on a dependency with `predicates = ["depends-on(serde)"]`. See [Predicates](./predicates.md). |
 
 ### Examples
@@ -448,7 +448,7 @@ echo '{"session_id":"s","cwd":"/path/to/project","hook_event_name":"PreToolUse",
   | cargo agents hook claude pre-tool-use
 ```
 
-This runs the full dispatch (including the automatic sync, when `auto-sync` is on) for the workspace at `cwd`, so the plugin must be installed and active there; the output is in the agent's own format. The payload must be the named agent's native JSON: you can also use `antigravity`, `copilot`, `codex`, or `kiro` as the agent name, each with that agent's payload. To test a symposium-format handler on its own, pipe canonical JSON straight into it (see [Testing](./hook-events.md#testing)).
+This runs the full dispatch (including the automatic sync, when `auto-sync` is on) for the workspace at `cwd`, so the plugin must be installed and active there; the output is in the agent's own format. The payload must be the named agent's native JSON: you can also use `antigravity`, `copilot`, `codex`, `kiro`, or `pi` as the agent name, each with that agent's payload. To test a symposium-format handler on its own, pipe canonical JSON straight into it (see [Testing](./hook-events.md#testing)).
 
 ## `[[predicate]]`
 
@@ -610,6 +610,7 @@ All supported agents have MCP server configuration. Symposium handles the format
 | Kiro | `.kiro/settings/mcp.json` | `mcpServers.<name>` |
 | OpenCode | `opencode.json` | `mcp.<name>` |
 | Goose | `~/.config/goose/config.yaml` (no project file) | `extensions.<name>` |
+| Pi | `.pi/mcp.json` | `mcpServers.<name>` |
 
 Servers are registered at the scope chosen by the `hook-scope` setting (see [Configuration](./configuration.md)): with `"project"`, in the files above; with `"global"` (the default), in each agent's user-level configuration. Agents without a project-level file always get the user-level one. See each agent's page under [Supported agents](./supported-agents.md) for the global locations.
 

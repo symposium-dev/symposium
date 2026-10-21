@@ -241,6 +241,7 @@ pub async fn run(
         }
 
         Commands::Sync => {
+            sym.ensure_config_usable()?;
             let deps = sym.workspace_deps(cwd);
             // The consent prompt belongs to a human running `cargo agents
             // sync`; it is inert unless `out` is interactive, and the

@@ -59,6 +59,21 @@ cargo test --test hook_agent -- --nocapture
 
 On failure, the test's temporary directory is preserved and its path is printed to stderr so you can inspect the fixture state.
 
+## Pi extension
+
+The Pi bridge also has TypeScript and Node tests:
+
+```bash
+cd src/agents/pi
+npm ci --ignore-scripts
+npm run check
+npm test
+```
+
+Use Node.js 22.19 or later. These tests do not call a model. They check event
+mapping and use Pi's skill loader to verify that generated, gitignored skills
+load. CI runs them on Linux, macOS, and Windows.
+
 ## Windows
 
 CI runs the full test suite on `windows-latest` as part of the `test` matrix (see `.github/workflows/ci.yml`). To run the tests locally on Windows:

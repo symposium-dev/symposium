@@ -415,6 +415,8 @@ const BUILTIN_RECOMMENDATIONS_URL: &str = "https://github.com/symposium-dev/reco
 #[derive(Clone)]
 pub struct Symposium {
     pub config: Config,
+    // Defaults keep read-only callers usable, but are not an uninstall request.
+    config_load_error: Option<String>,
     dirs: crate::dirs::SymposiumDirs,
     home_dir: PathBuf,
     env: EnvLookup,
@@ -435,13 +437,14 @@ impl Symposium {
         let _ = fs::create_dir_all(&dirs.config_dir);
         let _ = fs::create_dir_all(&dirs.cache_dir);
 
-        let config = load_config_from(&dirs.config_dir);
+        let (config, config_load_error) = load_config_from(&dirs.config_dir);
 
         // Note: can't use tracing here — logging isn't initialized yet.
         // init_logging() is called after construction.
 
         Self {
             config,
+            config_load_error,
             dirs,
             home_dir,
             env: Arc::new(|name| env::var_os(name)),
@@ -450,12 +453,12 @@ impl Symposium {
 
     /// Test constructor: everything rooted under a single directory.
     ///
-    /// Creates `config.toml` from the provided config if not already present.
+    /// Missing config files use defaults; read and parse errors are retained.
     pub fn from_dir(root: &Path) -> Self {
         let config_dir = root.to_path_buf();
         let _ = fs::create_dir_all(&config_dir);
 
-        let config = load_config_from(&config_dir);
+        let (config, config_load_error) = load_config_from(&config_dir);
 
         let cache_dir = config_dir.join("cache");
         let _ = fs::create_dir_all(&cache_dir);
@@ -468,6 +471,7 @@ impl Symposium {
 
         Self {
             config,
+            config_load_error,
             dirs,
             home_dir,
             env: Arc::new(|_| None),
@@ -697,8 +701,18 @@ impl Symposium {
         })
     }
 
-    /// Write the user config to disk.
+    /// Refuse mutations based on defaults substituted for a failed config load.
+    /// Repairing the file takes effect when a new context loads it.
+    pub(crate) fn ensure_config_usable(&self) -> anyhow::Result<()> {
+        if let Some(error) = &self.config_load_error {
+            anyhow::bail!("{error}; repair the user config and retry");
+        }
+        Ok(())
+    }
+
+    /// Write the user config to disk without overwriting a failed load.
     pub fn save_config(&self) -> anyhow::Result<()> {
+        self.ensure_config_usable()?;
         let path = self.dirs.config_dir.join("config.toml");
         let contents = toml::to_string_pretty(&self.config)?;
         fs::write(&path, contents)?;
@@ -747,16 +761,27 @@ fn resolve_logs_dir(config_dir: &Path) -> PathBuf {
 }
 
 /// Load config from a config directory.
-fn load_config_from(config_dir: &Path) -> Config {
+fn load_config_from(config_dir: &Path) -> (Config, Option<String>) {
     let path = config_dir.join("config.toml");
-    match fs::read_to_string(&path) {
+    let result = match fs::read_to_string(&path) {
         Ok(contents) => toml::from_str::<RawConfig>(&contents)
-            .unwrap_or_else(|e| {
-                eprintln!("warning: failed to parse {}: {e}", path.display());
-                RawConfig::default()
-            })
-            .validate(),
-        Err(_) => Config::default(),
+            .map(RawConfig::validate)
+            .map_err(|e| format!("failed to parse {}: {e}", path.display())),
+        // A missing config is normal before the first `init`.
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                && matches!(fs::symlink_metadata(&path), Err(e) if e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return (Config::default(), None);
+        }
+        Err(e) => Err(format!("failed to read {}: {e}", path.display())),
+    };
+    match result {
+        Ok(config) => (config, None),
+        Err(error) => {
+            eprintln!("warning: {error}");
+            (Config::default(), Some(error))
+        }
     }
 }
 
@@ -883,6 +908,43 @@ mod tests {
         assert!(sym.config.defaults.symposium_recommendations);
         assert_eq!(sym.config_dir(), tmp.path());
         assert_eq!(sym.cache_dir(), tmp.path().join("cache"));
+        sym.save_config().unwrap();
+        assert!(tmp.path().join("config.toml").is_file());
+    }
+
+    #[test]
+    fn empty_config_is_valid_and_writable() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("config.toml"), "").unwrap();
+        let sym = Symposium::from_dir(tmp.path());
+        assert!(sym.config.agents.is_empty());
+        sym.save_config().unwrap();
+    }
+
+    #[test]
+    fn failed_load_remains_unusable_until_a_new_context_loads_the_repair() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, "[[agent").unwrap();
+        let sym = Symposium::from_dir(tmp.path());
+        let cloned = sym.clone();
+        fs::write(&path, "# repaired\n").unwrap();
+        assert!(sym.save_config().is_err());
+        assert!(cloned.save_config().is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# repaired\n");
+        Symposium::from_dir(tmp.path()).save_config().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_config_symlink_is_not_a_first_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("missing-target.toml");
+        std::os::unix::fs::symlink(&target, tmp.path().join("config.toml")).unwrap();
+        let sym = Symposium::from_dir(tmp.path());
+        assert!(sym.ensure_config_usable().is_err());
+        assert!(sym.save_config().is_err());
+        assert!(!target.exists());
     }
 
     #[test]

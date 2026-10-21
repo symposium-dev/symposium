@@ -15,9 +15,43 @@ A deny or rewrite that the translation drops fails open: the tool runs, and sinc
 
 Copilot CLI reads `.claude/settings.json` as well as its own hook files. In a project where both agents are configured, every Copilot event runs `cargo agents hook` twice: as `copilot` from `.github/hooks/symposium.json`, and as `claude` from Claude's settings. Plugin hooks with side effects run twice, and whatever symposium tells the agent once (such as a notice) is taken by whichever invocation runs first.
 
+## Hook output event types
+
+Keep input and output event types equal. Empty built-in outputs must use the
+input event type. Before agent conversion, check tagged canonical plugin outputs
+with the SDK's `Output::event()`. Log and skip a mismatch so later plugins can
+run. Valid JSON can still have the wrong event tag. Keep agent adapter type checks
+strict. `tests/hook_format_priority.rs` covers the pipeline and real CLI.
+
 ## Hook stdout belongs to the agent
 
 An agent parses everything `cargo agents hook` writes to stdout. One line ahead of the JSON and Claude Code falls back to treating it all as plain text (which reaches the model only on `SessionStart` and `UserPromptSubmit`), while Copilot drops the output entirely. The in-process test pipeline cannot see this, because the leaks come from around it: the report layer, which the binary installs (and leaves out for hooks), and child processes that inherit stdout (plugin `install_commands` send theirs to stderr). Anything new that prints during a hook, or spawns a child that might, needs the same care; `tests/hook_stdout.rs` runs the real binary to catch it.
+
+## Pi skips gitignored skills
+
+Pi's skill-directory scanner respects `.gitignore`, including the `*` rule in
+Symposium-generated skill directories. Sharing `.agents/skills/` is not enough
+to make those skills visible. The Pi extension returns explicit `SKILL.md` paths
+through `resources_discover`, after session-start sync. Keep this registration
+when changing the bridge. The Node regression test uses Pi's real skill loader.
+See [Pi integration](./agent-details/pi.md#generated-skill-discovery).
+
+## Pi hook failures and context timing
+
+Pi blocks a tool if its `tool_call` extension handler throws. Catch Symposium
+hook errors, warn only once per session, and let the tool run; only an explicit
+`deny` decision blocks it. User cancellation must not produce a warning. A
+missing binary or slow first-time install must not disable all tools in a trusted
+project.
+
+Allow enough time for installation on every event, not just `SessionStart`.
+Session-start refresh skips tools that are not installed. A tool hook can start
+its first installation later. The Pi bridge uses a 10-minute timeout.
+
+Pi's `deliverAs: "nextTurn"` queue waits for the next user prompt. Do not use it
+for pre-tool context. Store that context by `toolCallId` and append it in
+`tool_result`, including when the post-hook fails. Clear pending context at turn
+and session boundaries. The Node tests cover both rules.
 
 ## Antigravity footguns
 
@@ -53,6 +87,16 @@ And when two walks over one tree feed each other — a copy, and the comparison 
 ## Plugin-supplied names are untrusted input
 
 Plugin content must not decide where Symposium writes. A name it supplies, such as a skill's `name`, can resolve outside the directory it is joined onto (`Path::join` does not confine it), so it never becomes part of a path unchecked. Validate it with `skills::is_safe_dir_name`, which also covers Windows-specific path forms, rather than with a check of your own.
+
+## Config load failures are not uninstall requests
+
+A malformed or unreadable user config falls back to defaults for read-only callers,
+including an empty agent list. Never reconcile installations or save that fallback
+as if the user deliberately removed every agent. `Symposium::ensure_config_usable`
+guards sync, hook registration, init, and config writes using the startup load
+result. A missing config still supports first-run init. `tests/config_load.rs`
+covers failure, retry, repair, and deliberate removal for Claude and Pi at both
+scopes.
 
 ## A source that reads as empty is not an empty source
 

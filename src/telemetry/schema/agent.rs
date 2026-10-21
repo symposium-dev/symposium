@@ -31,6 +31,7 @@ pub(in crate::telemetry) enum SupportedAgent {
     #[serde(rename = "opencode")]
     OpenCode,
     Goose,
+    Pi,
 }
 
 impl SupportedAgent {
@@ -45,6 +46,7 @@ impl SupportedAgent {
             Self::Kiro => "kiro",
             Self::OpenCode => "opencode",
             Self::Goose => "goose",
+            Self::Pi => "pi",
         }
     }
 }
@@ -68,6 +70,7 @@ impl From<Agent> for SupportedAgent {
             Agent::Kiro => Self::Kiro,
             Agent::OpenCode => Self::OpenCode,
             Agent::Goose => Self::Goose,
+            Agent::Pi => Self::Pi,
         }
     }
 }
@@ -626,6 +629,7 @@ mod tests {
             (SupportedAgent::Kiro, "kiro"),
             (SupportedAgent::OpenCode, "opencode"),
             (SupportedAgent::Goose, "goose"),
+            (SupportedAgent::Pi, "pi"),
         ];
 
         assert_contract_names_with_labels(&cases, SupportedAgent::as_str);
