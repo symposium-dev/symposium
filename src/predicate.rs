@@ -42,10 +42,13 @@ impl PredicateEval for Predicate {
     /// false.
     fn evaluate(&self, ctx: &mut PredicateContext) -> bool {
         match self {
-            Predicate::DependsOn(name, version_req) => ctx
-                .deps
-                .iter()
-                .any(|dep| dep_matches(dep, name, version_req.as_ref())),
+            Predicate::DependsOn(name, version_req) => {
+                ctx.dependencies_satisfied
+                    || ctx
+                        .deps
+                        .iter()
+                        .any(|dep| dep_matches(dep, name, version_req.as_ref()))
+            }
             Predicate::DependsOnWildcard => true,
             Predicate::Shell(cmd) => run_shell(cmd),
             Predicate::PathExists(arg) => path_exists(arg),
@@ -80,6 +83,7 @@ pub struct PredicateContext<'a> {
     /// the loader stamps it per plugin (via `Plugin::applies`) before
     /// that plugin's predicate sets are evaluated.
     workspace_member: bool,
+    dependencies_satisfied: bool,
     /// Plugin names enabled by the applicable `[plugins] use` entries,
     /// normalized. A plugin with no gate of its own
     /// ([`PluginManifest::requires_use`](crate::plugins::PluginManifest::requires_use)) is
@@ -100,6 +104,7 @@ impl<'a> PredicateContext<'a> {
         Self {
             deps,
             workspace_member: false,
+            dependencies_satisfied: false,
             used_names: std::collections::HashSet::new(),
             custom_entries: std::collections::HashMap::new(),
             custom_cache: std::collections::HashMap::new(),
@@ -166,6 +171,10 @@ impl<'a> PredicateContext<'a> {
     /// skills, hooks, MCP servers, subcommands).
     pub fn set_workspace_member(&mut self, workspace_member: bool) {
         self.workspace_member = workspace_member;
+    }
+
+    pub(crate) fn set_dependencies_satisfied(&mut self, satisfied: bool) {
+        self.dependencies_satisfied = satisfied;
     }
 
     /// Evaluate a custom predicate by name and argument, returning the cached

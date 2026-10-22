@@ -6,8 +6,12 @@ Config name: `opencode`
 
 | Scope | Path |
 |-------|------|
-| Project | `.agents/skills/<name>/SKILL.md` |
+| Project | `.opencode/skills/<name>/SKILL.md` |
 | Global | `~/.agents/skills/<name>/SKILL.md` |
+
+OpenCode also reads `.agents/skills/`, so skills you author there reach it without a copy.
+
+OpenCode also loads the skills of a plugin installed for Claude Code with `cargo agents use --global`, in every folder and whether or not OpenCode is among your agents; set `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` to keep it out of Claude Code's skills.
 
 ## Hooks
 

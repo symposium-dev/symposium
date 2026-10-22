@@ -13,6 +13,16 @@ what symposium writes applies to all of them.
 | Project | `.agents/skills/<name>/SKILL.md` |
 | Global | `~/.gemini/config/skills/<name>/SKILL.md` |
 
+## Plugins
+
+A plugin enabled with `cargo agents use --global` is installed for you as a plugin directory:
+
+| Scope | Path |
+|-------|------|
+| Global | `~/.gemini/config/plugins/<plugin>/` |
+
+Antigravity loads it in every project, and its skills are invoked as `/<plugin>:<skill>`. Symposium writes no settings for it, so turning the plugin off in Antigravity stays in effect. A plugin installed while a session runs appears in the next session, or after `/skills reload`.
+
 ## Hooks
 
 Symposium merges a single named entry, `symposium`, into Antigravity's

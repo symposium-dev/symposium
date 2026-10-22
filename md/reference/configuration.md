@@ -56,7 +56,7 @@ Skills you author in `.agents/skills/` therefore flow through the same pipeline 
 Two `.symposium`-marker rules keep sources and copies distinct (symposium never writes a marker into a source, only into directories it installs):
 
 - Skill discovery skips marker-bearing directories, so copies symposium installed into `.agents/skills/` (for agents that read it natively) are never re-discovered as sources.
-- For an agent whose skill directory *is* `.agents/skills/`, a skill whose source already sits at its install slot is left in place — nothing is copied.
+- For an agent that reads `.agents/skills/` (every agent but Claude Code and Kiro), a skill whose source already sits there is left in place: nothing is copied.
 
 Installed copies receive the same marker and `*` `.gitignore` that plugin-installed skills get, which means: updates to the source are re-copied on each sync; removing the source removes the copies on the next sync (the normal stale-skill reap); disabling `agents-syncing = false` does the same; and a pre-existing user-managed directory in a target is never overwritten (the skill installs under a suffixed name instead).
 
@@ -133,7 +133,7 @@ Trust follows whoever supplies the *content*, not the package the content is abo
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `auto-enable` | array of strings | `[]` | Dependency names whose embedded plugins load without being asked about. `"*"` pre-consents to every dependency. |
-| `use` | array | `[]` | Plugins enabled deliberately. Each entry is either a plain name (enabled in every workspace) or `{ name = "...", workspace = "/path" }` (enabled only while working in that workspace root). |
+| `use` | array | `[]` | Plugins enabled deliberately. Each entry is either a plain name (enabled in every workspace, and installed for you as a plugin directory on the agents that support it) or `{ name = "...", workspace = "/path" }` (enabled only while working in that workspace root). |
 | `disable` | array of strings | `[]` | Names that must never be enabled. Takes precedence over `auto-enable`, including over `"*"`. |
 
 Names are matched hyphen/underscore-insensitively, like crate names: `widget-lib` and `widget_lib` are the same entry.
@@ -169,5 +169,6 @@ User-wide data lives under `~/.symposium/` by default. Override with environment
 | `~/.symposium/state.toml` | Persistent state (binary version stamp, last update check) |
 | `~/.symposium/telemetry/` | Telemetry event log, one JSONL file per day (created when `[telemetry] enabled = true` and events are recorded) |
 | `~/.symposium/plugins/` | User-defined plugins |
+| `~/.symposium/installed/` | Plugins enabled with `use --global`, compiled for the agents to install |
 | `~/.symposium/cache/` | Cache directory (crate sources, plugin sources) |
 | `~/.symposium/logs/` | Log files (one per invocation, timestamped) |

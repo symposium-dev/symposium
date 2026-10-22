@@ -179,6 +179,12 @@ impl PluginsConfig {
             .any(|entry| name_matches(entry, name))
     }
 
+    pub(crate) fn is_used_globally(&self, name: &str) -> bool {
+        self.used
+            .iter()
+            .any(|entry| matches!(entry, UseEntry::Global(entry) if name_matches(entry, name)))
+    }
+
     /// Whether any enablement entry could pull in a crate plugin. With neither
     /// `auto-enable` nor `use` naming anything,
     /// [`enabled_dependencies`](crate::discovery::enabled_dependencies) is empty
@@ -406,6 +412,8 @@ pub struct RegistryConfig {
 
 /// Cache subdirectory holding git registries' unpacked content.
 pub const REGISTRY_CACHE_SUBDIR: &str = "plugin-sources";
+
+pub const INSTALLED_PLUGINS_SUBDIR: &str = "installed";
 
 const BUILTIN_RECOMMENDATIONS_URL: &str = "https://github.com/symposium-dev/recommendations";
 
@@ -1006,6 +1014,8 @@ mod tests {
         );
         assert!(config.plugins.is_used_in("scoped", Path::new("/ws/a")));
         assert!(!config.plugins.is_used_in("scoped", Path::new("/ws/other")));
+        assert!(config.plugins.is_used_globally("everywhere"));
+        assert!(!config.plugins.is_used_globally("scoped"));
 
         // Entries survive a round trip through the config file.
         let reparsed = parse_config(&toml::to_string_pretty(&config).unwrap());

@@ -168,6 +168,29 @@ async fn use_registry_content_is_a_noop() {
     .unwrap();
 }
 
+#[tokio::test]
+async fn use_global_installs_registry_content_for_the_user() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["use", "--global", "serde-guidance"])
+                .await?;
+            assert!(
+                read_config(&ctx).contains("serde-guidance"),
+                "{}",
+                read_config(&ctx)
+            );
+            let plugin = ctx.sym.home_dir().join(".claude/skills/serde-guidance");
+            assert!(plugin.join("skills/serde-guidance/SKILL.md").is_file());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// `use` wakes a dormant registry plugin (one no dependency gates), and
 /// `--remove` puts it back to sleep, reaping its skills.
 #[tokio::test]

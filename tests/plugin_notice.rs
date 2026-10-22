@@ -131,3 +131,35 @@ async fn agents_that_read_context_after_a_tool_call_get_the_notice() {
         .unwrap();
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn session_start_tells_the_agent_how_to_load_the_plugins_its_sync_installed() {
+    for (agent, load_now) in [
+        (HookAgent::Claude, "/reload-plugins"),
+        (HookAgent::Codex, "new session"),
+        (HookAgent::Copilot, "/restart"),
+        (HookAgent::Antigravity, "/skills reload"),
+    ] {
+        with_fixture(
+            TestMode::SimulationOnly,
+            &["agent-plugin-scopes0"],
+            async |mut ctx| {
+                ctx.symposium(&["init", "--add-agent", agent.as_str()])
+                    .await?;
+
+                let installed = respond(&ctx, agent, HookStep::session_start()).await;
+                serde_json::from_str::<Value>(&installed)?;
+                assert!(
+                    installed.contains("global-guide") && installed.contains(load_now),
+                    "{installed}"
+                );
+
+                let unchanged = respond(&ctx, agent, HookStep::session_start()).await;
+                assert!(!unchanged.contains(load_now), "{unchanged}");
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+    }
+}

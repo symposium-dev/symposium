@@ -11,6 +11,16 @@ Config name: `copilot`
 
 Copilot has no global skills path.
 
+## Plugins
+
+A plugin enabled with `cargo agents use --global` is installed for you as a Copilot CLI plugin:
+
+| Scope | File |
+|-------|------|
+| Global | `~/.copilot/settings.json` (`$COPILOT_HOME/settings.json` when set) |
+
+Symposium registers `~/.symposium/installed/` there as the plugin marketplace `symposium` and enables `<plugin>@symposium`, and Copilot loads the plugin from that directory in every project. `copilot plugin disable <plugin>@symposium` turns it off, and symposium leaves that choice alone. A plugin installed while a session runs appears after `/restart` or in the next session. If symposium cannot read your `settings.json`, for example because it contains comments, it leaves the file untouched and installs the plugin's skills in each project instead.
+
 ## Hooks
 
 Symposium creates a `symposium.json` file in the project hooks directory, and merges entries into the `hooks` key of the global settings.

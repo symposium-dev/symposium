@@ -66,11 +66,12 @@ pub enum ReportEvent {
         reason: Option<String>,
     },
 
-    /// A skill was installed to an agent's directory.
+    /// A skill or a plugin was installed to an agent's directory.
     SkillInstalled {
         skill: String,
         agent: String,
         dest: String,
+        plugin: bool,
     },
 
     /// A stale skill directory was removed.
@@ -228,9 +229,17 @@ impl ReportEvent {
                     format!("      skill {skill} ({plugin}): skipped ({r})")
                 }
             }
-            Self::SkillInstalled { skill, agent, dest } => {
+            Self::SkillInstalled {
+                skill,
+                agent,
+                dest,
+                plugin: false,
+            } => {
                 format!("✅ installed skill {skill} for {agent} → {dest}")
             }
+            Self::SkillInstalled {
+                skill, agent, dest, ..
+            } => format!("installed plugin {skill} for {agent} -> {dest}"),
             Self::SkillRemoved { path } => {
                 format!("➖ removed {path}")
             }
