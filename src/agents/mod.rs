@@ -7,6 +7,7 @@
 mod mcp_server_registration;
 
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -1033,21 +1034,40 @@ fn event_hooks<'a>(
 /// Code rewrites `~/.claude.json` throughout a session) and a truncating write
 /// that loses a race leaves a document the agent cannot parse.
 ///
+/// The rename replaces whatever `path` names, so a symlink is resolved first
+/// and its target replaced instead, and the temp file takes the target's mode
+/// before any content is written: these files can hold tokens, and dotfile
+/// setups link them. The new inode still drops any hard links.
+///
 /// Bounds torn reads, not lost updates. What keeps that window from mattering is
 /// that registration writes only when an entry actually differs.
 fn save_json(path: &Path, value: &serde_json::Value) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let contents = serde_json::to_string_pretty(value)?;
+    let target = if fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        fs::canonicalize(path)
+            .with_context(|| format!("cannot resolve symlink {}", display_path(path)))?
+    } else {
+        path.to_path_buf()
+    };
+    let parent = target
+        .parent()
+        .with_context(|| format!("{} has no parent directory", display_path(&target)))?;
+    fs::create_dir_all(parent)?;
 
-    // Pid-suffixed so two concurrent syncs cannot share a temp path.
-    let temp = path.with_extension(format!("symposium-tmp-{}", std::process::id()));
-    fs::write(&temp, contents)?;
-    if let Err(e) = fs::rename(&temp, path) {
-        let _ = fs::remove_file(&temp);
-        return Err(e.into());
+    let mut builder = tempfile::Builder::new();
+    builder.prefix(".symposium-tmp-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        builder.permissions(fs::Permissions::from_mode(0o666));
     }
+    let mut temp = builder.tempfile_in(parent)?;
+    #[cfg(unix)]
+    if let Ok(meta) = fs::metadata(&target) {
+        temp.as_file().set_permissions(meta.permissions())?;
+    }
+    temp.write_all(contents.as_bytes())?;
+    temp.persist(&target).map_err(|e| e.error)?;
     Ok(())
 }
 

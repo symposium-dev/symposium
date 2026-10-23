@@ -1395,4 +1395,70 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert!(config["mcp"].get("symposium").is_none());
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_writes_keep_the_file_mode() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let tmp = tempfile::tempdir().unwrap();
+        let settings = tmp.path().join("settings.json");
+        let copilot = tmp.path().join("mcp-config.json");
+        for path in [&settings, &copilot] {
+            fs::write(path, "{}").unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+
+        crate::agents::register_claude_hooks(&settings, &Output::quiet()).unwrap();
+        register_copilot_mcp_servers(&copilot, &test_servers(), &Output::quiet()).unwrap();
+
+        for path in [&settings, &copilot] {
+            assert!(fs::read_to_string(path).unwrap().len() > 2);
+            let mode = fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "{}", path.display());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_writes_go_through_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("dotfiles/opencode.json");
+        let link = tmp.path().join("ws/opencode.json");
+        fs::create_dir_all(target.parent().unwrap()).unwrap();
+        fs::create_dir_all(link.parent().unwrap()).unwrap();
+        fs::write(&target, r#"{"theme": "dark"}"#).unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        register_opencode_mcp_servers(&link, &test_servers(), &Output::quiet()).unwrap();
+
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&target).unwrap()).unwrap();
+        assert_eq!(config["theme"], "dark");
+        assert!(config["mcp"].get("symposium").is_some(), "got: {config}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_config_symlink_is_an_error_and_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("missing/opencode.json");
+        let link = tmp.path().join("opencode.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        assert!(register_opencode_mcp_servers(&link, &test_servers(), &Output::quiet()).is_err());
+
+        assert!(
+            fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(!target.exists());
+    }
 }
