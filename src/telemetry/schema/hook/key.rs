@@ -104,7 +104,8 @@ mod tests {
     };
 
     fn hook_subject(agent: HookAgent, hook: HookSurface) -> HookSubject {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let observation = recording_observation(&mut state);
         let dimension = HookDimension::new(agent, hook);
 
@@ -151,7 +152,8 @@ mod tests {
 
     #[test]
     fn hook_key_rebuilds_from_source_dimensions() {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
         let key = HookMetricsKey::new(&recording, HookAgent::Claude, HookSurface::PreToolUse);
 

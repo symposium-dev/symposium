@@ -264,7 +264,8 @@ mod tests {
     fn resolution_summary(
         fields: ResolutionSummaryFields<'_>,
     ) -> Result<ResolutionSummaryV1, ResolutionSummaryError> {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let observation = recording_observation(&mut state);
 
         ResolutionSummaryV1::new(&observation, fields)

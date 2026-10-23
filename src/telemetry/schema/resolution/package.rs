@@ -303,7 +303,8 @@ mod tests {
     }
 
     fn package_resolution_for(package_name: &str) -> PackageResolutionV1 {
-        let mut state: TelemetryStateV1 = toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap();
+        let mut state: TelemetryStateV1 =
+            TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let observation = recording_observation(&mut state);
 
         PackageResolutionV1::new(
@@ -380,7 +381,7 @@ mod tests {
 
     #[test]
     fn public_package_names_require_an_ascii_letter_first() {
-        let cases = ["1crate", "-crate", "_crate", "écrate"];
+        let cases = ["1crate", "-crate", "_crate", "ÃƒÂ©crate"];
 
         for value in cases {
             assert_eq!(
@@ -392,7 +393,7 @@ mod tests {
 
     #[test]
     fn public_package_names_reject_unsupported_characters() {
-        let cases = ["crate.name", "crate/name", "crate name", "craté"];
+        let cases = ["crate.name", "crate/name", "crate name", "cratÃƒÂ©"];
 
         for value in cases {
             assert_eq!(

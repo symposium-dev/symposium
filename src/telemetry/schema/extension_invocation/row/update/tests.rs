@@ -19,7 +19,7 @@ use crate::telemetry::{
 };
 
 fn state() -> TelemetryStateV1 {
-    toml::from_str(IDENTIFIER_WINDOW_TEST_STATE).unwrap()
+    TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE)
 }
 
 fn empty_recovery(day: UtcDay) -> AggregateRecoveryIndex {
