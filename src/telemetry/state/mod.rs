@@ -117,6 +117,8 @@ impl<'de> Deserialize<'de> for StateVersion {
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub(super) struct TelemetryStateV1 {
     version: StateVersion,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage_limit_day: Option<UtcDay>,
     identity: IdentityState,
 }
 
@@ -140,6 +142,7 @@ impl TelemetryStateV1 {
     fn with_key(identifier_window_anchor: UtcDay, key: IdentityKey) -> Self {
         Self {
             version: StateVersion,
+            storage_limit_day: None,
             identity: IdentityState {
                 key,
                 identifier_window_anchor,
@@ -153,6 +156,31 @@ impl TelemetryStateV1 {
     #[must_use]
     pub(in crate::telemetry) fn latest_opened_day(&self) -> UtcDay {
         self.identity.latest_opened_day
+    }
+
+    /// Return the UTC day whose low-volume event log has been closed.
+    #[must_use]
+    pub(in crate::telemetry) fn storage_limit_day(&self) -> Option<UtcDay> {
+        self.storage_limit_day
+    }
+
+    /// Whether low-volume event appends have stopped for `day`.
+    #[must_use]
+    pub(in crate::telemetry) fn event_recording_is_stopped(&self, day: UtcDay) -> bool {
+        self.storage_limit_day == Some(day)
+    }
+
+    /// Stop low-volume event appends for one UTC day.
+    ///
+    /// A later day does not match this value, so day rollover restores event
+    /// recording without a second mutable flag.
+    pub(in crate::telemetry) fn stop_event_recording(&mut self, day: UtcDay) {
+        self.storage_limit_day = Some(day);
+    }
+
+    /// Forget the stopped day after telemetry data is cleared.
+    pub(in crate::telemetry) fn clear_storage_limit(&mut self) {
+        self.storage_limit_day = None;
     }
 
     /// Bind the stored key to the active identifier-window anchor.
@@ -264,6 +292,32 @@ mod tests {
         assert_eq!(state.identity.identifier_window_anchor, day);
         assert!(state.identity.return_cohort_anchor.is_none());
         assert_eq!(state.latest_opened_day(), day);
+        assert!(!state.event_recording_is_stopped(day));
+    }
+
+    #[test]
+    fn storage_limit_day_round_trips_and_only_stops_its_own_day() {
+        let stopped_day = day(2026, 9, 10);
+        let mut state = TelemetryStateV1::new(stopped_day).unwrap();
+        state.stop_event_recording(stopped_day);
+
+        let encoded = toml::to_string_pretty(&state).unwrap();
+        let decoded: TelemetryStateV1 = toml::from_str(&encoded).unwrap();
+
+        assert_eq!(decoded.storage_limit_day(), Some(stopped_day));
+        assert!(decoded.event_recording_is_stopped(stopped_day));
+        assert!(!decoded.event_recording_is_stopped(day(2026, 9, 11)));
+    }
+
+    #[test]
+    fn clear_restores_low_volume_event_recording() {
+        let stopped_day = day(2026, 9, 10);
+        let mut state = TelemetryStateV1::new(stopped_day).unwrap();
+        state.stop_event_recording(stopped_day);
+
+        state.clear_storage_limit();
+
+        assert!(!state.event_recording_is_stopped(stopped_day));
     }
 
     #[test]

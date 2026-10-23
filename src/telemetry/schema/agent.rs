@@ -462,8 +462,9 @@ mod tests {
     use chrono::{TimeZone, Utc};
 
     use super::super::{
-        IDENTIFIER_WINDOW_TEST_STATE, RowClassification, TelemetryRow, assert_contract_names,
-        assert_contract_names_with_labels, classify_row, recording_observation,
+        IDENTIFIER_WINDOW_TEST_STATE, LowVolumeRow, RowClassification, TelemetryRow,
+        assert_contract_names, assert_contract_names_with_labels, classify_row,
+        recording_observation,
     };
     use super::*;
     use crate::telemetry::{identity::encode_dimension_for_test, state::TelemetryStateV1};
@@ -828,7 +829,9 @@ mod tests {
 
         let json = serde_json::to_string(&row).unwrap();
         let value = serde_json::from_str::<serde_json::Value>(&json).unwrap();
-        let RowClassification::Supported(TelemetryRow::SessionStart(decoded)) = classify_row(&json)
+        let RowClassification::Supported(TelemetryRow::LowVolume(LowVolumeRow::SessionStart(
+            decoded,
+        ))) = classify_row(&json)
         else {
             panic!("session_start without a session id was not classified as supported");
         };

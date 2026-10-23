@@ -317,7 +317,7 @@ Commands are measured once at top-level dispatch. Raw errors never enter telemet
 
 Low-volume rows append to `events-YYYY-MM-DD.jsonl`. Current daily hook, plugin-hook, and extension-invocation aggregates live in a bounded, atomically replaced `metrics-YYYY-MM-DD.jsonl` snapshot under the inspectable telemetry data directory.
 
-The sibling private `telemetry-state.toml` holds the identity key, cohort and cleanup metadata, the latest opened UTC day, marker state, and temporary keyed aggregate entries. Each plugin-hook entry keeps its stable row `event_id`, session-count sets, and contribution count together. The identifier also appears in the metric row and is not secret; the session sets are never emitted. Complete entries expire at day rollover and are removed by `clear` or `reset-identifiers`. The telemetry lock remains in the data directory and guards data and private state mutations.
+The sibling private `telemetry-state.toml` holds the identity key, cohort and cleanup metadata, the latest opened UTC day, an optional stopped day for the daily storage marker, and temporary keyed aggregate entries. A matching stopped day suppresses only low-volume event appends; day rollover restores them, `clear` removes the value, and `reset-identifiers` preserves it. Each plugin-hook entry keeps its stable row `event_id`, session-count sets, and contribution count together. The identifier also appears in the metric row and is not secret; the session sets are never emitted. Complete entries expire at day rollover and are removed by `clear` or `reset-identifiers`. The telemetry lock remains in the data directory and guards data and private state mutations.
 
 #### Closed days
 
@@ -337,9 +337,9 @@ Aggregate counters are lower bounds. No durable counter can quantify observation
 
 #### Size and retention
 
-The event file, aggregate snapshot, and reserved maximum-size `storage_limit` row share 8 MiB per day. This is a safety ceiling, not expected volume or preallocation. It bounds damage from a producer bug or unexpectedly large resolution batch; normal recording should remain well below it.
+The event file, aggregate snapshot, and reserved maximum-size `storage_limit` row share 8 MiB per day. A version 1 marker line is at most 2 KiB including its line feed. This is a safety ceiling, not expected volume or preallocation. It bounds damage from a producer bug or unexpectedly large resolution batch; normal recording should remain well below it.
 
-Together with D31 expiry, the daily allowance bounds ordinary retained telemetry near 248 MiB, excluding temporary files and private state. Aggregate metrics receive at most 512 KiB. An oversized metric update is dropped without stopping low-volume events. An ordinary batch that cannot fit is replaced by the daily marker, and ordinary recording stops for that day. Relationship batches are never split. Private-state reads have a separate 16 MiB safety ceiling.
+Together with D31 expiry, the daily allowance bounds ordinary retained telemetry near 248 MiB, excluding temporary files and private state. Aggregate metrics receive at most 512 KiB. An oversized metric update is dropped without stopping low-volume events. An ordinary batch that cannot fit is replaced by the daily marker, and ordinary event recording stops for that day while aggregate updates continue independently. Relationship batches are never split. Private-state reads have a separate 16 MiB safety ceiling.
 
 Files survive D30 and become eligible for lazy deletion when `current_day - file_day > 30`, first on D31. `clear` deletes event and metric files plus pending count sets, but preserves consent, identity/cohort state, and the latest-opened-day high-water mark. `reset-identifiers` rotates future identifiers without rewriting old files or moving the high-water mark backward.
 

@@ -419,7 +419,7 @@ Public plugin-command names use a fixed version 1 grammar: 1 through 64 ASCII by
 
 This row means that the next complete low-volume event batch did not fit in the shared daily 8 MiB allowance. In addition to the common fields, `dropped_operation` is `session_start`, `manual_sync`, `use`, `remove`, `init`, `configuration`, or `command`. It identifies the top-level operation whose batch was rejected.
 
-The row appears at most once per UTC day, and the marker itself counts toward 8 MiB. An aggregate-metric update that would exceed its separate 512 KiB maximum or the remaining shared allowance is dropped without this marker and does not stop low-volume recording. The marker does not report lock-contention, aggregate-update, or crash losses.
+The row appears at most once per UTC day, and the marker itself counts toward 8 MiB. A version 1 `storage_limit` physical JSONL line, including its terminating line feed, is at most 2 KiB. Producers reserve the largest marker line their running version can emit. A producer that cannot encode its marker within the version 1 bound suppresses only that attempted low-volume event append and does not write a marker; the day remains open, and marker absence therefore does not prove that capacity remained. An aggregate-metric update that would exceed its separate 512 KiB maximum or the remaining shared allowance is dropped without this marker and does not stop low-volume recording. The marker does not report lock-contention, aggregate-update, or crash losses.
 
 ## What is never recorded
 
@@ -442,6 +442,8 @@ The row appears at most once per UTC day, and the marker itself counts toward 8 
 
 Low-volume events are appended as JSON lines in `events-YYYY-MM-DD.jsonl` under the inspectable `<config-dir>/telemetry/` data directory (default `~/.symposium/telemetry/`). Current cumulative hook, plugin-hook, and extension-invocation aggregates are JSON lines in `metrics-YYYY-MM-DD.jsonl`. Symposium rewrites this bounded snapshot atomically after a merge.
 
+One operation serializes its complete low-volume batch before opening the event file and appends it with one batch write. If an earlier failed append left a nonempty final line without a newline, the next append first writes one newline so the new batch cannot be swallowed into that malformed line. The repair byte counts toward the daily allowance.
+
 The lock in the telemetry directory also guards sibling private state. A recorder makes one non-waiting lock attempt. It may drop a complete buffered event batch or aggregate observation rather than delay your hook or command. Recording failures never change the user operation's result.
 
 Under that lock, a recording operation captures its completion timestamp once, uses its UTC day, and rejects it when it precedes the latest-opened-day high-water mark. It calculates the identifier-window transition, applies it with any high-water advancement to one in-memory state, atomically replaces private state once, and only then binds the timestamp, day, and identifier window for row construction. The replacement also occurs when the selected window remains current, so every operation has the same persist-before-bind boundary. Every row in one operation reuses that bound recording context. In particular, a full resolution uses one context for its summary, package, and extension rows.
@@ -456,11 +458,15 @@ The event file, aggregate-metric snapshot, and reserved maximum-size `storage_li
 
 Aggregate metrics may use at most 512 KiB, so high-volume hook and skill activity cannot consume the allowance reserved for resolution and configuration events.
 
+Event batches publish before the aggregate snapshot. The event decision measures the current snapshot as a lower bound; the later snapshot decision remeasures the enlarged event file and drops that update if it no longer fits. A final `storage_limit` row is always the event file's last line. A complete final marker is authoritative even if a failed append omitted its terminating line feed. Private state records the stopped day before marker publication, so a failed marker append may leave the day stopped without a visible marker. If usage cannot be inspected or the running build cannot prepare a valid marker, Symposium suppresses only that event append without closing the day; aggregate publication still makes its independent decision.
+
 A file is eligible for deletion only when `current_utc_day - file_utc_day > 30`. A D0 file remains throughout D30 and is first eligible on D31. Together with D31 expiry, the daily limit bounds ordinary retained telemetry near 248 MiB, excluding temporary files and private state. Cleanup is lazy, so an old file remains until a recording-capable invocation or telemetry command runs.
 
 ### Private state
 
 The sibling private `<config-dir>/telemetry-state.toml` holds the identity key, current identifier-window anchor, optional return-cohort anchor, the latest opened UTC day, cleanup and marker metadata, bounded keyed session sets, snapshot contribution counts used to calculate complete distinct-session counts, the stable row `event_id` in each aggregate entry that cannot reconstruct its identity from the row, and separate per-day public-row admission counts for plugin-hook and extension-invocation metrics. The row identifier is not secret; the corresponding metric row contains the same value.
+
+Marker metadata is an optional stopped UTC day. A value matching the current day suppresses further low-volume event appends; an older value does not suppress a later day. `telemetry clear` removes it, while `telemetry reset-identifiers` preserves it. The final event-file marker is a second source for the same decision, allowing a surviving file to restore lost or reinitialized private metadata. Stopping event appends does not stop aggregate updates.
 
 Symposium creates and replaces it atomically with owner-only permissions where supported. Replacement uses a same-directory temporary file beside `config.toml`; abandoned state temporaries are ignored and cleaned lazily under the telemetry lock.
 
