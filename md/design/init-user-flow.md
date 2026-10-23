@@ -18,4 +18,6 @@ Sets up the user-wide configuration.
 
 3. **Register hooks** — register global hooks and MCP servers for each selected agent. Also unregisters hooks for any agents that were removed.
 
+4. **Reap removed agents' skills** - when an agent was removed and `init` runs inside a Rust workspace, run `sync` there, whose stale-skill cleanup takes out that agent's marked copies. Symposium keeps no list of the workspaces it installed into, so copies elsewhere stay until `sync` runs in each one; `sync` with no agents configured still cleans up for this reason.
+
 If `--add-agent` or `--remove-agent` flags are provided, the interactive prompt is skipped and the specified changes are applied to the existing agent list.

@@ -189,6 +189,39 @@ async fn sync_installs_workspace_plugin_skills() {
     .unwrap();
 }
 
+#[tokio::test]
+async fn sync_reports_a_skill_whose_name_is_rejected() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["workspace-plugin0"],
+        async |mut ctx| {
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            let bad = workspace_root.join("skills/bad");
+            std::fs::create_dir_all(&bad)?;
+            std::fs::write(
+                bad.join("SKILL.md"),
+                "---\nname: \"a/b\"\ndescription: An unsafe name.\n---\n",
+            )?;
+
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let events = ctx.sync_with_report(tracing::Level::INFO).await?;
+            assert!(
+                events.iter().any(|e| e["kind"] == "warning"
+                    && e["message"]
+                        .as_str()
+                        .map(|m| m.replace('\\', "/"))
+                        .is_some_and(|m| m.contains("skills/bad/SKILL.md")
+                            && m.contains("plain directory name"))),
+                "the rejected skill should be reported: {events:?}"
+            );
+            find_installed_skill(&workspace_root.join(".claude/skills"), "ws-hello");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// Antigravity reads the vendor-neutral skills path, keeps MCP in its own file,
 /// and takes hooks in a named-entry `hooks.json` — none of which share a
 /// location with its global equivalents, so project scope is worth pinning.
@@ -605,6 +638,61 @@ async fn removing_agent_removes_hooks() {
         );
         Ok(())
     })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn removing_an_agent_reaps_its_skills_in_the_workspace() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude", "--add-agent", "codex"])
+                .await?;
+            ctx.symposium(&["sync"]).await?;
+            let root = ctx.workspace_root.clone().unwrap();
+            let claude_skills = root.join(".claude/skills");
+            let codex_skills = root.join(".agents/skills");
+            assert!(!find_installed_skills(&claude_skills, "serde-guidance").is_empty());
+            assert!(!find_installed_skills(&codex_skills, "serde-guidance").is_empty());
+
+            ctx.symposium(&["init", "--remove-agent", "claude"]).await?;
+            assert!(find_installed_skills(&claude_skills, "serde-guidance").is_empty());
+            assert!(!find_installed_skills(&codex_skills, "serde-guidance").is_empty());
+
+            ctx.symposium(&["init", "--remove-agent", "codex"]).await?;
+            assert!(find_installed_skills(&codex_skills, "serde-guidance").is_empty());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn sync_without_agents_still_reaps_stale_skills() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--remove-agent", "claude"]).await?;
+
+            let stale = ctx
+                .workspace_root
+                .as_ref()
+                .unwrap()
+                .join(".claude/skills/left-behind");
+            std::fs::create_dir_all(&stale)?;
+            std::fs::write(stale.join("SKILL.md"), "old")?;
+            std::fs::write(stale.join(".symposium"), "")?;
+
+            ctx.symposium(&["sync"]).await?;
+            assert!(!stale.exists());
+            Ok(())
+        },
+    )
     .await
     .unwrap();
 }

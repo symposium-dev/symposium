@@ -7,13 +7,10 @@ Config name: `goose`
 | Scope | Path |
 |-------|------|
 | Project | `.agents/skills/<name>/SKILL.md` |
-| Global | `~/.agents/skills/<name>/SKILL.md` |
 
 ## Hooks
 
-**Not supported.** Goose has no hook system. It uses MCP extensions for extensibility.
-
-Skill files are installed but `cargo agents hook` will never be called by this agent.
+**Not registered.** Goose has hooks of its own, but symposium does not register any for it, so `cargo agents hook` is never called by this agent.
 
 ## MCP servers
 

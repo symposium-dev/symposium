@@ -12,12 +12,12 @@ Scans workspace dependencies, installs applicable skills into agent directories,
 
 3. **Scan dependencies** — read the full dependency graph from the workspace.
 
-4. **Match skills to dependencies** — for each plugin, parse `SKILL.md` YAML frontmatter, reject malformed or non-string metadata, warn about skipped invalid skills, then evaluate skill group dependency predicates and individual skill `depends-on` frontmatter against the workspace dependencies.
+4. **Match skills to dependencies**: for each plugin, parse `SKILL.md` YAML frontmatter, reject malformed YAML or a non-string value in a field Symposium reads, warn about skipped invalid skills, then evaluate skill group dependency predicates and individual skill `depends-on` frontmatter against the workspace dependencies.
 
 5. **Install skills per agent** — for each configured agent:
    - Copy applicable `SKILL.md` files into the agent's expected skill directory.
    - Drop a `.symposium` marker file into each installed skill directory so future syncs (and other tools) can recognize it as symposium-managed.
-   - For every skill directory symposium creates along the way (the skill directory itself or its `skills/` parent), write a `.gitignore` containing a single `*` so symposium-managed files stay out of version control.
+   - Write a `.gitignore` containing a single `*` into each installed skill directory, not its `skills/` parent, so symposium-managed files stay out of version control.
 
 6. **Workspace `.agents/skills/` (agents-syncing)** — not a separate step: when `agents-syncing` is enabled, each workspace plugin carries a `workspace-member()`-gated default group for `.agents/skills/`, so maintainer skills resolve and install through the same pipeline as everything else. Two marker guards make `.agents/skills/` safe as both a source and (for vendor-neutral agents) a destination: discovery skips `.symposium`-marked directories (installed copies are never sources), and a skill whose source already sits at an agent's install slot is skipped for that agent (no self-copy, no suffixed duplicate).
 
@@ -33,7 +33,7 @@ Each skill directory symposium installs contains an empty `.symposium` file. Cle
 
 ## Gitignore
 
-Each skill directory symposium creates (and its `skills/` parent if new) receives a `.gitignore` containing just `*`. Pre-existing directories are left alone. The wildcard also hides the marker file and the gitignore itself, so `git status` stays clean.
+Each skill directory symposium installs receives a `.gitignore` containing just `*`; parent directories such as `.claude/skills/` get none. The wildcard also hides the marker file and the gitignore itself, so `git status` stays clean.
 
 ## Auto-sync
 

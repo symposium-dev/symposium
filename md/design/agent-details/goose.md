@@ -9,7 +9,7 @@
 > · [Configuration](https://block.github.io/goose/docs/guides/config-files)
 > · [GitHub repo](https://github.com/block/goose)
 
-**Goose does not implement lifecycle hooks.** There are no shell-command or programmatic interception points for tool execution, session start/stop, or prompt submission. No hooks.json equivalent. No JSON stdin/stdout protocol.
+**Symposium registers no hooks for Goose.** Goose has lifecycle hooks of its own (a plugin can carry them in `hooks/hooks.json`), but symposium does not use them; it reaches Goose through MCP server registration.
 
 ## What Goose Offers Instead
 
@@ -55,7 +55,7 @@ Shell scripts can detect whether they're running under Goose and alter behavior 
 
 ## MCP Server Registration
 
-Since Goose has no lifecycle hooks, symposium integrates exclusively via
+Since symposium registers no hooks for Goose, it integrates exclusively via
 MCP server registration. Symposium registers itself as an extension in
 the Goose config file.
 

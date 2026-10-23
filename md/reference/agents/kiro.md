@@ -7,7 +7,6 @@ Config name: `kiro`
 | Scope | Path |
 |-------|------|
 | Project | `.kiro/skills/<name>/SKILL.md` |
-| Global | `~/.kiro/skills/<name>/SKILL.md` |
 
 Kiro uses its own skill path, not the vendor-neutral `.agents/skills/`.
 

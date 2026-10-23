@@ -237,7 +237,7 @@ pub async fn run(
                 remove_agents,
                 hook_scope,
             };
-            init::init(sym, out, &opts).await
+            init::init(sym, cwd, out, &opts, update).await
         }
 
         Commands::Sync => {

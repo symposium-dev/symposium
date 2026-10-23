@@ -7,7 +7,6 @@ Config name: `claude`
 | Scope | Path |
 |-------|------|
 | Project | `.claude/skills/<name>/SKILL.md` |
-| Global | `~/.claude/skills/<name>/SKILL.md` |
 
 Claude Code does not support the vendor-neutral `.agents/skills/` path.
 

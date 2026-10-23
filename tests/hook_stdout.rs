@@ -70,6 +70,35 @@ async fn install_command_output_stays_off_hook_stdout() {
     .unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn rejected_skill_warning_stays_off_hook_stdout() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["workspace-plugin0"],
+        async |mut ctx| {
+            let workspace = ctx.workspace_root.clone().unwrap();
+            let bad = workspace.join("skills/bad");
+            std::fs::create_dir_all(&bad)?;
+            std::fs::write(
+                bad.join("SKILL.md"),
+                "---\nname: \"a/b\"\ndescription: An unsafe name.\n---\n",
+            )?;
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+            let output = run_session_start(&ctx, HookAgent::Claude, &workspace);
+            assert!(output.status.success());
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert!(!stdout.contains("plain directory name"), "stdout: {stdout}");
+            serde_json::from_slice::<Value>(&output.stdout)
+                .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {stdout}"));
+            assert!(workspace.join(".claude/skills/ws-hello").is_dir());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// Run `cargo agents hook <agent> session-start` as the agent would, from `cwd`.
 fn run_session_start(
     ctx: &TestContext,

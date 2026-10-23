@@ -18,13 +18,13 @@ Must be run from within a Rust workspace. Performs the following steps:
 
 2. **Scan dependencies**: reads the full dependency graph from the workspace.
 
-3. **Discover applicable skills**: loads plugin sources (from user config) and matches skill predicates against workspace dependencies.
+3. **Discover applicable skills**: loads plugin sources (from user config) and matches skill predicates against workspace dependencies. A `SKILL.md` that fails to load, such as one whose frontmatter is invalid or whose `name` is not a plain directory name, is skipped with a warning naming the file.
 
 4. **Install skills**: for each configured agent, copies applicable `SKILL.md` files into the agent's expected skill directory (e.g., `.claude/skills/` for Claude Code, `.agents/skills/` for Antigravity/Copilot/Codex). A `.gitignore` containing `*` is written into every new skill directory, and an empty `.symposium` marker file is dropped into each installed skill directory.
 
 5. **Mirror workspace skills**: if `agents-syncing` is enabled (default), user-authored skills in `<workspace>/.agents/skills/` are propagated into the skill directories of any configured agent that doesn't natively use `.agents/skills/` (e.g., `.claude/skills/`, `.kiro/skills/`). See [Workspace skills](../workspace-skills.md).
 
-6. **Clean up stale skills**: scans every agent's skills parent directory and removes any subdirectory containing the `.symposium` marker that wasn't installed (or propagated) this sync. Directories without the marker (user-managed) are left untouched. If a registry cannot be read (a `path` that is missing, unreadable or itself a plugin, or a `git` registry that has not been fetched yet), sync warns, naming the registry, and skips this step: nothing is removed until it can be read again.
+6. **Clean up stale skills**: scans every agent's skills parent directory and removes any subdirectory containing the `.symposium` marker that wasn't installed (or propagated) this sync. Directories without the marker (user-managed) are left untouched. This step runs even when no agent is configured, so it also removes what was installed for agents since removed. If a registry cannot be read (a `path` that is missing, unreadable or itself a plugin, or a `git` registry that has not been fetched yet), sync warns, naming the registry, and skips this step: nothing is removed until it can be read again.
 
 7. **Register hooks**: ensures hooks and MCP servers are registered for all configured agents, at the scope set by `hook-scope`: the user's home directory for `"global"` (the default), the project for `"project"` (MCP servers fall back to the user level for agents without a project-level file). Unregisters hooks for agents no longer in the config. An agent config file symposium cannot parse is left untouched: sync names it in a warning and carries on with the skills and the other agents, while `cargo agents init` stops with that error.
 

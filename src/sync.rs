@@ -454,7 +454,6 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
                 message: "no agents configured, run `cargo agents init` to add one".into(),
             },
         );
-        return Ok(());
     }
 
     // Track every skill directory we (re)install during this sync. Anything

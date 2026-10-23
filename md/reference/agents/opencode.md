@@ -7,7 +7,6 @@ Config name: `opencode`
 | Scope | Path |
 |-------|------|
 | Project | `.agents/skills/<name>/SKILL.md` |
-| Global | `~/.agents/skills/<name>/SKILL.md` |
 
 ## Hooks
 

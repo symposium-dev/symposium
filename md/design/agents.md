@@ -25,6 +25,8 @@ For each agent, `cargo agents` needs to know how to:
 
 Where these files go depends on whether the agent is configured at the user level or the project level (see [`sync --agent`](./sync-agent-flow.md)).
 
+Unregistering takes symposium's entries out of a hooks file it shares with the user, along with the event arrays and the `hooks` object that this leaves empty. Whatever else is in the file stays as it was.
+
 ## Extension locations
 
 When installing skills, `cargo agents` prefers vendor-neutral paths where possible:
@@ -389,7 +391,7 @@ OpenCode's plugin system supports these events, but Symposium does not currently
 
 ### Hook registration
 
-**Goose does not implement lifecycle hooks.** It uses MCP extensions for extensibility. `symposium` cannot register hooks for Goose.
+**Symposium registers no hooks for Goose.** Goose has lifecycle hooks of its own (a plugin can carry them in `hooks/hooks.json`), but symposium does not use them.
 
 Goose is supported as a **skills-only** agent — `cargo agents sync` will install skill files in the vendor-neutral `.agents/skills/` path.
 

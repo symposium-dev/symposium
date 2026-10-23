@@ -30,10 +30,9 @@ Project scope works in ordinary interactive use: `agy` walks up from the working
 directory to find `.agents/`, and loads project hooks on a second pass once it has
 adopted the workspace.
 
-**Headless print mode is the exception.** `agy -p` adopts no workspace unless
-given `--add-dir <absolute path>` — it cannot read project files and loads no
-project `.agents/` configuration. A relative `--add-dir .` is ignored. Automation
-driving `agy -p` against a project must pass an absolute path.
+Headless print mode (`agy -p`) adopts the repository it starts in the same way,
+without `--add-dir`: project hooks fire with `workspacePaths` populated. Verified
+on 1.2.14; 1.2.7 adopted no workspace without `--add-dir <absolute path>`.
 
 ### Configuration structure
 
@@ -111,8 +110,8 @@ All keys are camelCase (protojson).
 }
 ```
 
-`workspacePaths` is populated once the workspace is adopted, and **empty** under
-`agy -p` without `--add-dir`. A hook's working directory is always the directory
+`workspacePaths` is populated once the workspace is adopted, in print mode too.
+A hook's working directory is always the directory
 holding its own `hooks.json`, never the user's project.
 
 ### PreToolUse / PostToolUse additions

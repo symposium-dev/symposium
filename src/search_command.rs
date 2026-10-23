@@ -56,6 +56,12 @@ pub async fn find_matches(sym: &Symposium, query: &str) -> Vec<SearchMatch> {
     }
     // Search is workspace-independent; a detached resolver stands in.
     for (instance, info) in sym.detached_managers().search(query).await {
+        if matches
+            .iter()
+            .any(|m| m.origin == instance && m.name == info.id.name)
+        {
+            continue;
+        }
         matches.push(SearchMatch {
             origin: instance,
             name: info.id.name.clone(),

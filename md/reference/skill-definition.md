@@ -1,6 +1,6 @@
 # Skill definitions
 
-A skill is a `SKILL.md` file inside a skill directory. Skills follow the [agentskills.io](https://agentskills.io/specification.md) format, with one restriction: every frontmatter value must be a string, so the spec's `metadata` map (or any other list or map) is rejected. See [Frontmatter fields](#frontmatter-fields).
+A skill is a `SKILL.md` file inside a skill directory. Skills follow the [agentskills.io](https://agentskills.io/specification.md) format. See [Frontmatter fields](#frontmatter-fields).
 
 Skills can be supplied by a [plugin](./plugin-definition.md) or [by adding skills into the `.agents/skills` directory within the workspace](../workspace-skills.md).
 
@@ -73,14 +73,14 @@ Prefer deriving `Serialize` and `Deserialize` on data types.
 | `depends-on` | string | no | Comma-separated dependency atoms this skill is about (e.g., `depends-on: serde, tokio>=1.0`). Narrows the enclosing `[[skills]]` group scope; it cannot widen it. |
 | `predicates` | string | no | Comma-separated predicates (`depends-on`, `shell`, `path_exists`, `env`, `workspace-member`, `not`, `any`, `all`); all must hold for the skill to activate. ANDed with plugin- and group-level predicates. See [Predicates](./predicates.md). |
 
-Other string fields from the agentskills.io spec, such as `license`, are accepted and kept. These rules apply to every field:
+Other fields, such as `license`, `allowed-tools`, or the agentskills.io `metadata` map, are accepted with any YAML value and installed unchanged. These rules apply to the fields above:
 
-- Every value must be a YAML string. Lists, maps (including the agentskills.io `metadata` map), numbers, booleans, and empty values are rejected, so quote anything YAML would read otherwise (`version: "1.0"`).
+- Every value must be a YAML string. Lists, maps, numbers, booleans, and empty values are rejected, so quote anything YAML would read otherwise.
 - Quote a value that contains `: ` or ` #`. Unquoted, YAML rejects the first and treats everything after ` #` as a comment, silently shortening the value.
 - The `crates` field is rejected; use `depends-on`.
 - In [workspace skills](../workspace-skills.md) the frontmatter is optional: `name` defaults to the name of the skill's directory, and `description` may be omitted. Skills from a registry or a crate need both.
 
-> **Security:** a skill's `name` comes from plugin content and becomes a directory on disk, so Symposium treats it as untrusted input. A name that would resolve outside the agent's skills directory is rejected: the skill fails to load instead of being installed, and `cargo agents plugin validate` reports it.
+> **Security:** a skill's `name` comes from plugin content and becomes a directory on disk, so Symposium treats it as untrusted input. A name that would resolve outside the agent's skills directory is rejected: the skill fails to load instead of being installed, and `cargo agents sync` and `cargo agents plugin validate` report it.
 
 ## Crate atoms
 

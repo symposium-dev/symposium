@@ -1,7 +1,10 @@
 //! Init command: `cargo agents init`.
 
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use dialoguer::MultiSelect;
+use symposium_install::UpdateLevel;
 
 use crate::agents::Agent;
 use crate::config::{AgentEntry, Symposium};
@@ -62,7 +65,13 @@ fn resolve_agents(
 ///
 /// Prompts for agents (unless provided), writes
 /// `~/.symposium/config.toml`, and registers global hooks.
-pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<()> {
+pub async fn init(
+    sym: &mut Symposium,
+    cwd: &Path,
+    out: &Output,
+    opts: &InitOpts,
+    update: UpdateLevel,
+) -> Result<()> {
     tracing::info!("init started");
     out.println("Setting up symposium for your user account.\n");
 
@@ -72,6 +81,11 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
 
     // Resolve each setting: CLI flag > interactive prompt > keep existing.
     let agents = resolve_agents(opts, &sym.config.agents, should_prompt)?;
+    let removed_agent = sym
+        .config
+        .agents
+        .iter()
+        .any(|e| !agents.iter().any(|a| a.config_name() == e.name));
 
     sym.config.agents = agents
         .iter()
@@ -114,7 +128,7 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
             "{}: wrote user config (no agents — symposium uninstalled)",
             display_path(&config_path),
         ));
-        return Ok(());
+        return reap_removed_agent_skills(sym, cwd, out, update).await;
     }
 
     let agent_names: Vec<_> = agents.iter().map(|a| a.display_name()).collect();
@@ -130,6 +144,23 @@ pub async fn init(sym: &mut Symposium, out: &Output, opts: &InitOpts) -> Result<
             .context("failed to register global hooks")?;
     }
 
+    if removed_agent {
+        reap_removed_agent_skills(sym, cwd, out, update).await?;
+    }
+    Ok(())
+}
+
+async fn reap_removed_agent_skills(
+    sym: &Symposium,
+    cwd: &Path,
+    out: &Output,
+    update: UpdateLevel,
+) -> Result<()> {
+    let deps = sym.workspace_deps(cwd);
+    if deps.load().is_some() {
+        crate::sync::sync(sym, &deps, update).await?;
+    }
+    out.info("skills installed in other workspaces stay until `cargo agents sync` runs there");
     Ok(())
 }
 

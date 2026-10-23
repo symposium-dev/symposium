@@ -25,7 +25,8 @@ instance each hit came from:
    trust root, so a hit here is available now, with no `use` needed (unless the
    plugin is dormant, which is noted).
 2. **Offered by a package manager** — each configured
-   [registry's](./plugin-source.md) package manager is searched in turn.
+   [registry's](./plugin-source.md) package manager is searched in turn. An
+   entry the first arm already listed under the same name is not listed again.
 
 A package manager without a searchable registry contributes nothing rather
 than failing, and an instance that errors outright (an offline registry, say)

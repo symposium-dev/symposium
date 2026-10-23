@@ -36,7 +36,7 @@ MCP registration is its own axis, and the one place where guessing is expensive:
 
 ### `init.rs` — initialization command
 
-Implements `cargo agents init`. Prompts for agents (or accepts `--add-agent`/`--remove-agent` flags), hook scope, auto-update behavior, and opt-in [telemetry](./telemetry.md); writes user config; and registers global hooks.
+Implements `cargo agents init`. Prompts for agents (or accepts `--add-agent`/`--remove-agent` flags), hook scope, auto-update behavior, and opt-in [telemetry](./telemetry.md); writes user config; and registers global hooks. Removing an agent re-runs `sync` in the current workspace, if any, so that agent's installed skills are reaped there.
 
 ### `sync.rs` — synchronization command
 
@@ -166,7 +166,7 @@ The user-facing surface over `discovery` and `[plugins]`.
 
 `use_command` records enablement. `use_plugin` first checks whether a configured registry already offers the name — registries are trust roots, so that is a no-op — with dormant plugins the exception, since `use` is exactly how they wake. It then requires the name to resolve to *something* (a workspace dependency, checked offline first, or a `PmRegistry::search` hit — which reaches crates.io via `CargoPm::search`, so a crate you don't depend on still resolves) before pushing a `UseEntry` (workspace-scoped by default, `Global` with `--global`) and saving. Both it and `remove_plugin` re-run `sync::sync` afterward, so skills install or are reaped immediately. `remove_plugin` matches on scope and errors when nothing matched rather than silently succeeding.
 
-`search_command` unions two arms: plugin names in the loaded `PluginRegistry` (bare skills included, since they are now plugins) and `PmRegistry::search` across every instance (which matches registry entry subpaths, e.g. a skill's directory name). A PM without a searchable registry returns an empty list and a failing instance is skipped, so an offline registry degrades the results instead of failing the command. Hits are grouped by originating instance for display; the `SearchMatch` report event carries the origin for the JSON form.
+`search_command` unions two arms: plugin names in the loaded `PluginRegistry` (bare skills included, since they are now plugins) and `PmRegistry::search` across every instance (which matches registry entry subpaths, e.g. a skill's directory name). A PM without a searchable registry returns an empty list and a failing instance is skipped, so an offline registry degrades the results instead of failing the command. Hits are grouped by originating instance for display; the `SearchMatch` report event carries the origin for the JSON form. A second-arm hit with the same origin and name as a first-arm one is dropped.
 
 `status_command` renders the enablement report. `workspace_status` walks the registry plugins (root: workspace membership, `use`, or the registry name; state from `Plugin::applies` plus the `requires_use` gate) — this is where every recommendations-registry plugin appears — then every `Discovery` bucket of dependency-embedded plugins (`Used` / `AutoEnabled` → active with that root, `Candidate` → awaiting consent, `Declined`), then the `use`d crates that aren't dependency offers (from `enabled_dependencies`, e.g. `use`-ing a crate the workspace doesn't depend on — otherwise invisible to discovery), then any `[plugins] disable` name discovery never saw. The four `StatusState` values — `Active`, `Dormant`, `Candidate`, `Declined` — are the report's vocabulary.
 

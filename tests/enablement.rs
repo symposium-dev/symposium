@@ -295,6 +295,27 @@ async fn search_finds_registry_content_tagged_by_origin() {
     .unwrap();
 }
 
+#[tokio::test]
+async fn search_lists_a_registry_entry_once() {
+    with_fixture(TestMode::SimulationOnly, &["plugins0"], async |ctx| {
+        let entry = ctx.sym.config_dir().join("plugins/tokio-guidance");
+        std::fs::create_dir_all(&entry)?;
+        std::fs::write(
+            entry.join("SKILL.md"),
+            "---\nname: tokio-guidance\ndescription: Guidance for tokio\ndepends-on: tokio\n---\n",
+        )?;
+        let matches = symposium::search_command::find_matches(&ctx.sym, "tokio-guidance").await;
+        let hits: Vec<_> = matches
+            .iter()
+            .filter(|m| m.origin == "user-plugins" && m.name == "tokio-guidance")
+            .collect();
+        assert_eq!(hits.len(), 1, "{matches:#?}");
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
 /// The rendered report groups hits under their origin and carries the
 /// per-hit detail.
 #[tokio::test]
