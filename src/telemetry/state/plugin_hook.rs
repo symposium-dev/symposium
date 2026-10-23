@@ -7,7 +7,7 @@ use super::{
     HookSessionCountUpdateError,
 };
 use crate::telemetry::{
-    identity::{PluginSubject, SessionId},
+    identity::{IdentifierWindowScope, PluginSubject, SessionId},
     schema::{
         EventId, HookAgent, HookMetricsKey, HookSurface, PluginHookAttribution, PluginHookOutcome,
         PluginScope, PublicPluginCoordinate, UtcDay,
@@ -43,14 +43,25 @@ impl AdmittedPluginBucket {
     ) -> Self {
         match attribution {
             PluginHookAttribution::Public(plugin) => {
-                let subject = recording.identifier_window_scope().derive(&plugin);
-                Self(AdmittedPluginBucketKind::Public { plugin, subject })
+                Self::public(recording.identifier_window_scope(), plugin)
             }
-            PluginHookAttribution::Unnamed => Self(AdmittedPluginBucketKind::Unnamed),
+            PluginHookAttribution::Unnamed => Self::unnamed(),
         }
     }
 
-    const fn overflow() -> Self {
+    pub(in crate::telemetry::state) fn public(
+        scope: &IdentifierWindowScope<'_>,
+        plugin: PublicPluginCoordinate,
+    ) -> Self {
+        let subject = scope.derive(&plugin);
+        Self(AdmittedPluginBucketKind::Public { plugin, subject })
+    }
+
+    pub(in crate::telemetry::state) const fn unnamed() -> Self {
+        Self(AdmittedPluginBucketKind::Unnamed)
+    }
+
+    pub(in crate::telemetry::state) const fn overflow() -> Self {
         Self(AdmittedPluginBucketKind::Overflow)
     }
 
@@ -79,7 +90,7 @@ impl AdmittedPluginBucket {
         }
     }
 
-    const fn key(&self) -> PluginBucketKey {
+    pub(in crate::telemetry::state) const fn key(&self) -> PluginBucketKey {
         match self.0 {
             AdmittedPluginBucketKind::Public { subject, .. } => PluginBucketKey::Public(subject),
             AdmittedPluginBucketKind::Unnamed => PluginBucketKey::Unnamed,
@@ -93,7 +104,7 @@ impl AdmittedPluginBucket {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-enum PluginBucketKey {
+pub(in crate::telemetry::state) enum PluginBucketKey {
     Public(PluginSubject),
     Unnamed,
     Overflow,
@@ -102,12 +113,12 @@ enum PluginBucketKey {
 /// Stable lookup key shared by a plugin-hook row and its private state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct PluginHookMetricsKey {
-    day: UtcDay,
+    pub(in crate::telemetry::state) day: UtcDay,
     // The row needs these plaintext values; `hook` separates identity epochs.
-    agent: HookAgent,
-    surface: HookSurface,
-    hook: HookMetricsKey,
-    bucket: PluginBucketKey,
+    pub(in crate::telemetry::state) agent: HookAgent,
+    pub(in crate::telemetry::state) surface: HookSurface,
+    pub(in crate::telemetry::state) hook: HookMetricsKey,
+    pub(in crate::telemetry::state) bucket: PluginBucketKey,
 }
 
 impl PluginHookMetricsKey {
@@ -117,11 +128,27 @@ impl PluginHookMetricsKey {
         surface: HookSurface,
         bucket: &AdmittedPluginBucket,
     ) -> Self {
-        Self {
-            day: recording.day(),
+        Self::from_scope(
+            recording.day(),
+            recording.identifier_window_scope(),
             agent,
             surface,
-            hook: HookMetricsKey::new(recording, agent, surface),
+            bucket,
+        )
+    }
+
+    pub(in crate::telemetry::state) fn from_scope(
+        day: UtcDay,
+        scope: &IdentifierWindowScope<'_>,
+        agent: HookAgent,
+        surface: HookSurface,
+        bucket: &AdmittedPluginBucket,
+    ) -> Self {
+        Self {
+            day,
+            agent,
+            surface,
+            hook: HookMetricsKey::from_scope(day, scope, agent, surface),
             bucket: bucket.key(),
         }
     }
@@ -362,6 +389,32 @@ mod tests {
         assert_ne!(baseline, another_hook);
         assert_ne!(baseline, another_day);
         assert_ne!(unnamed, another_epoch);
+    }
+
+    #[test]
+    fn plugin_hook_key_rebuilds_from_admitted_source_identity() {
+        let mut state = state();
+        let recording = recording_observation(&mut state);
+        let bucket = AdmittedPluginBucket::public(
+            recording.identifier_window_scope(),
+            public_plugin("example-tools"),
+        );
+        let key = PluginHookMetricsKey::new(
+            &recording,
+            HookAgent::Claude,
+            HookSurface::PreToolUse,
+            &bucket,
+        );
+
+        let rebuilt = PluginHookMetricsKey::from_scope(
+            recording.day(),
+            recording.identifier_window_scope(),
+            HookAgent::Claude,
+            HookSurface::PreToolUse,
+            &bucket,
+        );
+
+        assert_eq!(rebuilt, key);
     }
 
     #[test]
