@@ -46,6 +46,7 @@ pub(in crate::telemetry) use extension_invocation::{
     ExtensionSessionCountBaseline, ExtensionSessionCountSnapshot, ExtensionSessionCountUpdateError,
     SelectedExtensionInvocationAggregate,
 };
+pub(in crate::telemetry) use lifecycle::MaintenanceDue;
 pub(in crate::telemetry) use lifecycle::{BoundRecordingObservation, BoundSessionObservation};
 pub(in crate::telemetry) use open_day::DayBeforeCurrent;
 pub(in crate::telemetry) use plugin_hook::SelectedPluginHookAggregate;
@@ -150,6 +151,7 @@ impl<'de> Deserialize<'de> for StateVersion {
 pub(super) struct TelemetryStateV1 {
     version: StateVersion,
     storage_limit_day: Option<UtcDay>,
+    last_maintenance_attempt_day: Option<UtcDay>,
     identity: IdentityState,
     aggregates: aggregate::AggregateState,
 }
@@ -181,6 +183,7 @@ impl TelemetryStateV1 {
         Self {
             version: StateVersion,
             storage_limit_day: None,
+            last_maintenance_attempt_day: None,
             identity: IdentityState {
                 key,
                 identifier_window_anchor,
@@ -272,12 +275,15 @@ impl IdentityState {
 mod tests {
     use std::convert::Infallible;
 
-    use chrono::NaiveDate;
+    use chrono::{NaiveDate, TimeZone as _, Utc};
 
     use super::{
         IdentityKey, StateContentError, StateDecodeError, TelemetryStateV1, decode, encode,
     };
-    use crate::telemetry::{identity::RetentionDimension, schema::UtcDay};
+    use crate::telemetry::{
+        identity::RetentionDimension,
+        schema::{UtcDay, UtcSecond},
+    };
 
     const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const GENERATED_KEY_BYTE: u8 = 0x42;
@@ -377,6 +383,23 @@ mod tests {
         state.clear_recorded_data();
 
         assert!(!state.event_recording_is_stopped(stopped_day));
+    }
+
+    #[test]
+    fn clear_preserves_the_maintenance_throttle() {
+        let accepted_day = day(2026, 9, 10);
+        let mut state = TelemetryStateV1::new(accepted_day).unwrap();
+        let accepted = state
+            .observe_recording(UtcSecond::from_datetime(
+                Utc.with_ymd_and_hms(2026, 9, 10, 12, 0, 0).unwrap(),
+            ))
+            .unwrap();
+        let _ = state.schedule_maintenance(&accepted).unwrap();
+
+        state.clear_recorded_data();
+
+        assert_eq!(state.last_maintenance_attempt_day, Some(accepted_day));
+        assert!(state.schedule_maintenance(&accepted).is_none());
     }
 
     #[test]

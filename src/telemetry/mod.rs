@@ -18,8 +18,8 @@ mod storage;
 
 /// Namespace reserved for temporary files owned by telemetry storage.
 ///
-/// Lazy cleanup may delete every file carrying this prefix, and status excludes
-/// the same files from its stored-file and byte counts.
+/// Lazy cleanup may delete every regular file carrying this prefix, and status
+/// excludes the same files from its stored-file and byte counts.
 const TEMPORARY_FILE_PREFIX: &str = ".telemetry-tmp-";
 
 use std::fs::{self, OpenOptions};
@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 
-/// Daily event files older than this are deleted on roll-off.
+/// Daily event and metric files older than this are deleted during maintenance.
 pub const RETENTION_DAYS: i64 = 30;
 
 /// A single telemetry event: a timestamp plus a kind-tagged payload.
