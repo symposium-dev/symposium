@@ -130,7 +130,10 @@ pub async fn discover(sym: &Symposium, deps: &Arc<WorkspaceDeps>) -> Discovery {
     for inst in pms.instances().filter(|i| !i.trusted) {
         for plugin in inst.active_plugins(&dep_ids).await {
             let name = plugin.canonical.name.clone();
-            let description = Some(describe_plugin(&plugin.manifest));
+            let description = Some(match plugin.format() {
+                Some(_) => format!("the Agent Plugins package `{}`", plugin.manifest.name),
+                None => describe_plugin(&plugin.manifest),
+            });
             let enablement = decide(sym, &name, &workspace_root);
             let discovered = DiscoveredPlugin {
                 registry: inst.name.clone(),

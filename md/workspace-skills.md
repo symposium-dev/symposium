@@ -13,7 +13,7 @@ The default skill location therefore varies depending on the intended audience:
 
 ## Workspace plugins
 
-The workspace root and every member crate directory can define a *workspace plugin*: add a `Symposium.toml` manifest (see the [plugin definition](./reference/plugin-definition.md)), or just a bare `skills/` directory — a directory with skills and no manifest counts as a plugin whose only content is those skills.
+The workspace root and every member crate directory can define a *workspace plugin*: add a `Symposium.toml` manifest (see the [plugin definition](./reference/plugin-definition.md)), an [Agent Plugins](./reference/agent-plugins.md) `plugin.json`, or just a bare `skills/` directory. A directory with skills and no manifest counts as a plugin whose only content is those skills.
 
 Workspace plugins are always active while you work in that workspace: no plugin source configuration or `depends-on` gate is needed. A `skills/` directory in a member crate serves double duty: it installs for everyone working in the workspace *and*, once published, for projects that depend on the crate and enable its plugin.
 
@@ -29,6 +29,8 @@ source.path = ".agents/skills"
 ```
 
 The second group is how the `.agents/skills` convention works: it is gated by the [`workspace-member()` predicate](./reference/predicates.md), so maintainer skills apply while working in the workspace but never install for dependents of a published crate. (The group can also be turned off globally with `agents-syncing = false` in the [user config](./reference/configuration.md).)
+
+A member whose plugin is an Agent Plugins `plugin.json` gets the skills the format defines, one per direct child of its `skills/` folder, in place of the first group, and keeps the `.agents/skills` group.
 
 Two details specific to workspace manifests:
 

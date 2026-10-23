@@ -40,6 +40,7 @@ struct ResolvedHook {
     /// Hook-level `script` override.
     hook_script: Option<String>,
     args: Vec<String>,
+    plugin_root: PathBuf,
 }
 
 impl ResolvedHook {
@@ -68,6 +69,7 @@ impl ResolvedHook {
             hook_executable: hook.executable.clone(),
             hook_script: hook.script.clone(),
             args: hook.args.clone(),
+            plugin_root: parsed_plugin.root.clone(),
         })
     }
 }
@@ -178,7 +180,13 @@ async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Resul
     .await?;
 
     acquired.push(command_acquired.clone());
-    let env = build_env(&acquired);
+    let mut env = build_env(&acquired);
+    if hook.format == HookFormat::Claude {
+        env.push((
+            "CLAUDE_PLUGIN_ROOT".to_string(),
+            hook.plugin_root.display().to_string(),
+        ));
+    }
 
     let label = format!("hook `{}`", hook.hook_name);
     let runnable = resolve_runnable(command_acquired, &label)?;
@@ -1293,6 +1301,8 @@ mod tests {
             .collect();
         let plugin = PluginManifest {
             name: "test-plugin".into(),
+            version: None,
+            description: None,
             predicates: crate::predicate::PredicateSet {
                 predicates: plugin_predicates,
             },
@@ -1309,6 +1319,8 @@ mod tests {
             manifest: plugin,
             workspace_member: false,
             canonical: PackageId::new("test", "test-plugin", ANY_VERSION),
+            agent_plugin_root: None,
+            root: PathBuf::new(),
         }
     }
 

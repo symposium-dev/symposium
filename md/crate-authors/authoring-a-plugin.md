@@ -252,21 +252,27 @@ command = "my-crate-cli" # the [[installations]] entry that provides the tool
 
 `cargo agents --help` lists the subcommand under "Commands for agents" with its `description`, and on agents that run hooks, Symposium suggests running `cargo agents --help` at the start of each session in a project that has one. Your tool's output and exit code are passed through. See the [plugin definition reference](../reference/plugin-definition.md) for the other `[subcommand.<name>]` fields.
 
-## Step 3. Validate your plugin
+## Step 3. Check it with the author tools
 
-Before submitting a PR to the recommendations repo, validate your entry to catch errors early: missing fields, bad crate predicates, unreachable skill paths, and crate names that don't exist on crates.io. Run this from the root of your local checkout once you've prepared your changes:
+Symposium's tools for plugin authors live under `cargo agents plugin`:
+
+- **`cargo agents plugin validate <path>`** checks a plugin without installing anything: missing fields, bad crate predicates, unreachable skill paths, invalid skills, and crate names that don't exist on crates.io. `<path>` is your crate (its directory, `Cargo.toml` or `Symposium.toml`), a recommendations entry, or a whole checkout of the recommendations repo. A crate is checked as your users get it, so a mistake in `[package.metadata.symposium]` or `Symposium.toml` that Symposium would otherwise only log is reported here. See the [reference](../reference/cargo-agents-plugin.md#cargo-agents-plugin-validate).
+- **`cargo agents plugin try <path>`** installs a plugin, skill or [Agent Plugins package](../reference/agent-plugins.md) directory in your agents the way a user would get it, so you can use it while you write it, and reports which agents list its skills. Symposium reads the directory in place, so edits reach your agents on the next sync. `cargo agents plugin try --remove <path>` discards the trial. A crate is tried through a path dependency instead, as in step 4. See the [reference](../reference/cargo-agents-plugin.md#cargo-agents-plugin-try).
+- **`cargo agents plugin import <path>`** turns a Claude Code plugin into an Agent Plugins package that Symposium loads: its skills and commands become skills, its hooks and MCP servers go into a `Symposium.toml`, and anything it cannot carry over is reported. See the [reference](../reference/cargo-agents-plugin.md#cargo-agents-plugin-import).
 
 ```bash
-# Validate every entry in the checkout
+# In your crate
+cargo agents plugin validate .
+
+# A recommendations entry, or every entry from the root of the checkout
+cargo agents plugin validate my-crate/
 cargo agents plugin validate .
 
 # Skip the crates.io name check (e.g., for private crates)
 cargo agents plugin validate . --no-check-crates
 ```
 
-Pass the directory that contains your entry, not the entry's own directory: a directory holding a `Symposium.toml` or `SKILL.md` is an entry, not a registry.
-
-To try the entry before opening the pull request, copy its directory into `~/.symposium/plugins/` (a registry Symposium reads by default), run `cargo agents sync` in a project that depends on the crate, and delete the copy when you are done.
+To try the entry before opening the pull request, install it in your agents with `cargo agents plugin try my-crate/` and use it in a project that depends on the crate: edits reach your agents on the next sync. Discard the trial with `cargo agents plugin try --remove my-crate/`. See the [reference](../reference/cargo-agents-plugin.md#cargo-agents-plugin-try).
 
 ## Step 4. Try it in a project
 

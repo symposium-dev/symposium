@@ -7,9 +7,12 @@ A **plugin source**, configured as a [`[[registry]]`](./configuration.md#registr
 Symposium scans a registry recursively to find plugins and standalone skills:
 
 * A [plugin](./plugin-definition.md) is a directory that contains a `Symposium.toml` file. A registry plugin gets no default `skills/` group: its skills load only through the `[[skills]]` groups its manifest declares (for example `source.path = "skills"`).
-* A directory that contains a `SKILL.md` and no `Symposium.toml` is loaded as a plugin with default values: named for the skill's frontmatter `name` (required, as for every registry skill), with the skill's frontmatter `depends-on` and `predicates` acting as the plugin's activation gate. `depends-on` is optional: a skill that names no dependency loads *dormant* (it activates once you enable it by name with [`cargo agents use`](./cargo-agents-use.md)), exactly like a gateless `Symposium.toml` plugin.
+* An [Agent Plugins package](./agent-plugins.md) is a directory that contains a `plugin.json` and no `Symposium.toml`.
+* A directory that contains a `SKILL.md` and neither of those manifests is loaded as a plugin with default values: named for the skill's frontmatter `name` (required, as for every registry skill), with the skill's frontmatter `depends-on` and `predicates` acting as the plugin's activation gate. `depends-on` is optional: a skill that names no dependency loads *dormant* (it activates once you enable it by name with [`cargo agents use`](./cargo-agents-use.md)), exactly like a gateless `Symposium.toml` plugin.
 
-**We do not allow these entries to be nested within one another.** When we find a directory that is either a plugin or a skill, we do not search its contents any further. The registry root itself must not be an entry: a root that contains a `Symposium.toml` or a `SKILL.md` is an error (`cargo agents plugin validate` fails, and a configured registry loads nothing). Put each plugin or skill in a subdirectory instead.
+**We do not allow these entries to be nested within one another.** When we find a directory that is a plugin, a package or a skill, we do not search its contents any further. The registry root itself must not be an entry: a configured registry whose root contains a `Symposium.toml`, a `plugin.json` or a `SKILL.md` is reported and loads nothing. Put each plugin or skill in a subdirectory instead.
+
+A directory that Symposium installed itself, marked by a `.symposium` file inside it, is skipped: installed copies are never read back as sources.
 
 ### Example structure
 
@@ -29,6 +32,8 @@ plugin-source/
   mixed/
     Symposium.toml        # plugin
     SKILL.md              # ignored (the plugin takes precedence)
+  pdf-tools/
+    plugin.json           # Agent Plugins package
 ```
 
 ## Configuration
@@ -47,4 +52,4 @@ cargo agents plugin validate path/to/plugin-source/
 cargo agents plugin validate path/to/plugin-source/ --no-check-crates
 ```
 
-This scans the directory, attempts to load all plugins and skills, and reports any errors found.
+This scans the directory, attempts to load all plugins and skills, and reports any errors found. A directory that is itself a plugin or a skill is validated as that one entry.

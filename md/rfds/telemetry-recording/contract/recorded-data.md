@@ -401,7 +401,7 @@ This row records one completed eligible top-level user command.
 
 Arguments are never recorded. Internal `hook`, all `telemetry` commands, and ineligible external/plugin commands do not produce command events.
 
-Built-in command operations are `init`, `sync`, `search`, `use`, `remove`, `status`, `plugin_sync`, `plugin_list`, `plugin_show`, `plugin_validate`, `self_update`, and `crate_info`. `remove` is the telemetry name for `cargo agents use --remove`; it is not a separate CLI subcommand.
+Built-in command operations are `init`, `sync`, `search`, `use`, `remove`, `status`, `plugin_sync`, `plugin_list`, `plugin_show`, `plugin_validate`, `plugin_import`, `plugin_try`, `plugin_try_remove`, `self_update`, and `crate_info`. `remove` is the telemetry name for `cargo agents use --remove` and `plugin_try_remove` for `cargo agents plugin try --remove`; neither is a separate CLI subcommand.
 
 ```json
 {"type":"builtin","name":"use"}

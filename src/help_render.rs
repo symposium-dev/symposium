@@ -223,6 +223,8 @@ mod tests {
         Plugin {
             manifest: PluginManifest {
                 name: name.into(),
+                version: None,
+                description: None,
                 hooks: vec![],
                 predicates: crate_set(depends_on),
                 skills: vec![],
@@ -235,6 +237,8 @@ mod tests {
             },
             workspace_member: false,
             canonical: PackageId::new("test", name, ANY_VERSION),
+            agent_plugin_root: None,
+            root: std::path::PathBuf::new(),
         }
     }
 

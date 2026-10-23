@@ -4,6 +4,8 @@ A **symposium plugin** collects together all the extensions offered for a partic
 
 Plugins enable capabilities beyond standalone skills — they're needed when you want to add hooks or MCP servers. For simple skill publishing, see [Authoring a plugin](../crate-authors/authoring-a-plugin.md) instead.
 
+A plugin directory can also hold an [Agent Plugins](./agent-plugins.md) `plugin.json`, instead of or next to its `Symposium.toml`.
+
 ## Example: a plugin definition with inline skills
 
 You could define a plugin definition with inline skills by having a directory struct like this:
@@ -33,6 +35,8 @@ source.path = "skills"
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | registry manifests only | Plugin name. Used in logs and CLI output. Required in a registry manifest. A crate manifest defaults it to the crate name, and a workspace manifest to the name of its directory. |
+| `version` | string | no | Plugin version, shown by [`search`](./cargo-agents-search.md) and [`status`](./cargo-agents-status.md). Free-form. |
+| `description` | string | no | Short description, shown by [`search`](./cargo-agents-search.md). |
 | `depends-on` | string or array | no | Which crates this plugin applies to. Use `["*"]` for all crates. See [Plugin-level filtering](#plugin-level-filtering). |
 | `predicates` | array of strings | no | Predicates (`depends-on`, `shell`, `path_exists`, `env`, `workspace-member`, `not`, `any`, `all`) that must all hold for the plugin to apply. See [Predicates](./predicates.md). |
 | `installations` | array of tables | no | Named installation declarations (`[[installations]]`). Hooks, subcommands, and custom predicates reference these by name. See [Installations](#installations). |
@@ -109,7 +113,7 @@ The edge's `depends-on` decides *whether* to load the referenced crate; the crat
 
 A referenced crate describes its plugin with the ordinary plugin-manifest schema, from **two interchangeable sources**: a `Symposium.toml` at its source root, and/or a `[package.metadata.symposium]` table in its `Cargo.toml`. Both are honored the same as a registry manifest: `[[skills]]` groups, per-group predicates, `source.path` / `source.git` sources, and further `[[plugins]]` chained references. The crate's effective manifest is the two sources merged over the crate defaults (merge order **defaults -> `[package.metadata.symposium]` -> `Symposium.toml`**): list entries from both are kept; where the two set the same scalar, the file wins. Each source is parsed leniently: a malformed layer is logged and dropped, and the crate still resolves through the remaining layers (at minimum the default `skills/` group). A merged manifest that parses but fails validation (for example a hook naming an unknown installation) disables the crate's whole plugin, default `skills/` group included.
 
-Because the chained reference is already the gate, a crate manifest may omit `name` (defaults to the crate) and a top-level `depends-on`; the default `skills/` group is appended unless `[defaults] skills = false`. A crate with no manifest sources at all still resolves as a plugin whose only content is that default `skills/` group.
+Because the chained reference is already the gate, a crate manifest may omit `name` (defaults to the crate) and a top-level `depends-on`; the default `skills/` group is appended unless `[defaults] skills = false`. A crate with no manifest at all (no `[package.metadata.symposium]`, `Symposium.toml` or `plugin.json`) still resolves as a plugin whose only content is that default `skills/` group.
 
 **The opt-out belongs to the referenced crate, not the referrer.** The edge decides only *whether* to load the crate (via its `depends-on` / `predicates`); it cannot toggle the crate's defaults. So for an active edge to crate `foo`:
 
@@ -408,6 +412,7 @@ Hooks are spawned with the following extras on top of the parent environment:
 |----------|----------|-------|
 | `$SYMPOSIUM_DIR_<name>` | Installation has a symposium-managed cache (scoped cargo, github) | Absolute path to the cache / clone directory. |
 | `$SYMPOSIUM_<name>` | Installation resolves to a runnable with an absolute path | Absolute path to the resolved executable / script. |
+| `$CLAUDE_PLUGIN_ROOT` | The hook has `format = "claude"` | Absolute path to the plugin's directory, as Claude Code sets it for its own plugins. |
 | `$PATH` | One or more dependencies contribute a runnable with an absolute path | Each runnable's parent dir is prepended, with the hook's `command` first. |
 
 `<name>` is the installation name with non-alphanumeric characters replaced by `_` (e.g. `mytool-hooks` -> `SYMPOSIUM_DIR_mytool_hooks`). Both the hook's `command` installation and every requirement (recursively, one level via installation-level requirements) contribute.
@@ -682,4 +687,4 @@ env = []
 cargo agents plugin validate path/to/Symposium.toml
 ```
 
-This parses the manifest and reports any errors. The file must be named `Symposium.toml` for Symposium to discover it; to validate every entry in a registry directory, pass the directory instead (see [Plugin sources](./plugin-source.md#validation)). Crate name checking against crates.io is on by default; use `--no-check-crates` to skip it.
+This validates the plugin in that directory and reports any errors: as a crate plugin when the directory holds a `Cargo.toml` with a `[package]` table, otherwise as a registry entry. The file must be named `Symposium.toml` for Symposium to discover it; to validate every entry in a registry directory, pass the directory instead (see [Plugin sources](./plugin-source.md#validation)). Crate name checking against crates.io is on by default; use `--no-check-crates` to skip it.

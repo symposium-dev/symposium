@@ -31,6 +31,11 @@ pub(crate) fn symposium_metadata_str(content: &str) -> Result<Option<toml::Table
         .and_then(|m| m.symposium))
 }
 
+pub(crate) fn package_name_str(content: &str) -> Result<Option<String>> {
+    let doc: CargoToml = toml::from_str(content)?;
+    Ok(doc.package.and_then(|p| p.name))
+}
+
 // --- serde types for the Cargo.toml structure we navigate ---
 
 #[derive(Deserialize)]
@@ -40,6 +45,7 @@ struct CargoToml {
 
 #[derive(Deserialize)]
 struct CargoPackage {
+    name: Option<String>,
     metadata: Option<PackageMetadata>,
     #[serde(flatten)]
     _rest: toml::Table,

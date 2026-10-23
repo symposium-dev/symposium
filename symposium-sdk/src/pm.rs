@@ -78,13 +78,6 @@ impl PluginInfo {
 /// What a package manager answers with when asked for a plugin: the package's
 /// resolved identity, where its content is on disk, and a manifest describing
 /// it.
-///
-/// The manifest is the point. A PM may have parsed it from a `Symposium.toml`,
-/// translated it from its ecosystem's own manifest, or synthesized it for a
-/// package that describes itself not at all. Symposium cannot tell, and does
-/// not need to. A package manager says which plugins exist and what they
-/// contain; whether any of them runs is decided separately, from the user's
-/// configuration and from the source the plugin came from.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UnvalidatedPlugin {
     /// The exact resolved identity: never a version requirement.
@@ -101,6 +94,8 @@ pub struct UnvalidatedPlugin {
     /// PM knows its own layout, so it is the one that can say.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label_root: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub agent_plugin: bool,
 }
 
 impl UnvalidatedPlugin {
@@ -111,6 +106,7 @@ impl UnvalidatedPlugin {
             root: root.into(),
             manifest,
             label_root: None,
+            agent_plugin: false,
         }
     }
 

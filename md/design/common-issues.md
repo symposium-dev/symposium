@@ -60,6 +60,14 @@ Plugin content must not decide where Symposium writes. A name it supplies, such 
 
 A listing that swallows read errors returns the same empty list for "nothing there" and "could not look", and anything that removes what a source stopped offering turns the second into data loss: a `[[registry]]` path on an unmounted share would make `sync` delete every skill installed from it. So `PackageManager::registry_plugins` fails when a registry cannot be read, `PluginRegistry::unreadable_registries` carries that to `sync`, and `sync` skips its stale-skill cleanup while that list is not empty. Any new pass that removes things because a source stopped offering them belongs behind the same condition. The opposite mistake is as bad: a source that is legitimately absent must not count as unreadable, or cleanup never runs again, which is why the built-in `~/.symposium/plugins/` is left out when nothing exists at that path.
 
+## Agent Plugins manifests are closed but forgiving
+
+`plugin.json` has a closed schema, yet the format requires an unknown top-level field, or an `extensions` that is not an object, to be reported and ignored while the package still loads. `#[serde(deny_unknown_fields)]` would reject the package instead, and a plain `Option<String>` would accept the `null` the schema forbids, which is why `plugins/agent_plugin.rs` checks the manifest by hand over a `serde_json::Value`. Its `dev.symposium` namespace is the opposite case and stays strict, because ignoring a typo there would make a package apply more widely than its author meant.
+
+## Installed copies are never sources
+
+A directory Symposium installed carries a `.symposium` marker file, and the trees it installs into can also be read as sources (`.agents/skills/` is a workspace skill group, and a registry can point at a tree holding copies). Any walk that discovers sources skips marked directories, as `find_skill_files_recursive` and the registry layout walk do, or a sync reads its own output back. The layout walk checks that the marker is a file, because a project root can hold a `.symposium/` directory that is not a marker.
+
 ## Windows portability (tests)
 
 The test suite runs on `windows-latest`, where CI passes `--no-fail-fast` so that one failing test binary does not hide the failures in every binary cargo would otherwise skip. A few patterns recur when writing tests that touch paths or scripts:

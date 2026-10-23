@@ -83,7 +83,7 @@ async fn symposium_hook_fires_when_no_native_match() {
 /// When running on Claude and the plugin only has `format = "claude"` (no
 /// symposium fallback), the hook fires.
 #[tokio::test(flavor = "multi_thread")]
-async fn claude_only_hook_fires_on_claude() {
+async fn claude_only_hook_fires_on_claude_with_its_plugin_root() {
     with_fixture(
         TestMode::SimulationOnly,
         &["plugin-hooks-format"],
@@ -100,8 +100,13 @@ async fn claude_only_hook_fires_on_claude() {
                 .await?;
 
             assert!(
-                result.has_context_containing("claude-only-fired"),
+                result.has_context_containing("claude-only-fired from "),
                 "expected claude-only hook to fire on Claude, got: {:#?}",
+                result.outputs_for(HookEvent::PreToolUse),
+            );
+            assert!(
+                result.has_context_containing("/plugins/claude-only-plugin"),
+                "expected CLAUDE_PLUGIN_ROOT to name the plugin directory, got: {:#?}",
                 result.outputs_for(HookEvent::PreToolUse),
             );
             Ok(())
