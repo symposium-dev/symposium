@@ -205,6 +205,8 @@ mod tests {
             canonical: PackageId::new("test", name, ANY_VERSION),
             manifest: PluginManifest {
                 name: name.into(),
+                version: None,
+                description: None,
                 predicates: crate_set(depends_on),
                 installations: vec![],
                 hooks: vec![],
@@ -216,6 +218,7 @@ mod tests {
                 requires_use: false,
             },
             workspace_member: false,
+            agent_plugin_root: None,
         }
     }
 

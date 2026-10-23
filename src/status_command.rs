@@ -58,13 +58,12 @@ impl StatusState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusEntry {
     pub name: String,
-    /// Resolved version for a discovered dependency plugin; `None` for
-    /// manifest plugins, whose identity is their source, not a version.
     pub version: Option<String>,
     /// The enablement root, or — for the states that don't have one — why
     /// the plugin will not load.
     pub root: String,
     pub state: StatusState,
+    pub format: Option<&'static str>,
 }
 
 /// Compute the enablement report for the workspace `deps` points at.
@@ -97,7 +96,8 @@ pub async fn workspace_status(
         let active = parsed.applies(&mut ctx);
         entries.push(StatusEntry {
             name: parsed.manifest.name.clone(),
-            version: None,
+            version: parsed.manifest.version.clone(),
+            format: parsed.format(),
             root: if active || !parsed.manifest.requires_use {
                 root
             } else {
@@ -152,11 +152,24 @@ pub async fn workspace_status(
         if shown.contains(&normalize(&name)) {
             continue;
         }
+        let dependency = dep_ids
+            .iter()
+            .any(|id| normalize(&id.name) == normalize(&name));
         entries.push(StatusEntry {
             name,
             version: None,
-            root: "`[plugins] use` (not a dependency)".to_string(),
-            state: StatusState::Active,
+            root: if dependency {
+                "`[plugins] use` (offers no plugin)"
+            } else {
+                "`[plugins] use` (not a dependency)"
+            }
+            .to_string(),
+            state: if dependency {
+                StatusState::Dormant
+            } else {
+                StatusState::Active
+            },
+            format: None,
         });
     }
 
@@ -171,6 +184,7 @@ pub async fn workspace_status(
             version: None,
             root: "declined (`[plugins] disable`)".to_string(),
             state: StatusState::Declined,
+            format: None,
         });
     }
 
@@ -200,6 +214,7 @@ fn entry_for(found: &DiscoveredPlugin) -> StatusEntry {
         version: Some(found.id.version.clone()),
         root,
         state,
+        format: None,
     }
 }
 
@@ -222,6 +237,7 @@ pub async fn status(sym: &Symposium, cwd: &Path) -> Result<()> {
                 version: entry.version,
                 root: entry.root,
                 state: entry.state.as_str().to_string(),
+                format: entry.format.map(str::to_string),
             },
         );
     }

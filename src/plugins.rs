@@ -17,12 +17,17 @@ pub use symposium_sdk::manifest::{Audience, HookFormat};
 /// turning one into a validated [`PluginManifest`]: applying defaults, promoting
 /// inline installations, and deciding dormancy.
 use symposium_sdk::manifest::{
-    RawChainedCargo, RawChainedPlugin, RawCustomPredicate, RawHook, RawInlineInstallation,
-    RawInstallationRef, RawNamedInstallation, RawPluginManifest, RawPluginMcpServer,
-    RawPluginSource, RawSkillGroup, RawSubcommand,
+    RawChainedCargo, RawChainedPlugin, RawCustomPredicate, RawDefaults, RawHook,
+    RawInlineInstallation, RawInstallationRef, RawNamedInstallation, RawPluginManifest,
+    RawPluginMcpServer, RawPluginSource, RawSkillGroup, RawSubcommand,
 };
 
 use sacp::schema::McpServer;
+
+mod agent_plugin;
+pub(crate) use agent_plugin::{agent_plugin_manifest, fill_from_agent_plugin, resolves_inside};
+
+pub const AGENT_PLUGIN_FORMAT: &str = "agent plugin";
 
 /// An MCP server entry in a plugin manifest.
 pub type McpServerEntry = McpServer;
@@ -305,6 +310,8 @@ pub struct Plugin {
     /// `true`. Backs the `workspace-member()` predicate.
     pub workspace_member: bool,
 
+    pub agent_plugin_root: Option<PathBuf>,
+
     /// The plugin's canonical package identity. Set to the resolved crate id for
     /// a plugin loaded through a `[[plugins]] source.cargo` chained reference (a
     /// crate carrying its own manifest). Registry and workspace plugins have no
@@ -331,6 +338,12 @@ impl Plugin {
         ctx.set_workspace_member(self.workspace_member);
         self.manifest.applies(ctx)
     }
+
+    pub fn format(&self) -> Option<&'static str> {
+        self.agent_plugin_root
+            .is_some()
+            .then_some(AGENT_PLUGIN_FORMAT)
+    }
 }
 
 /// A loaded, *validated* plugin manifest.
@@ -341,6 +354,10 @@ impl Plugin {
 #[derive(Debug, Clone, Serialize)]
 pub struct PluginManifest {
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Activation predicates for this plugin — the plugin's `depends-on`
     /// (lowered to `any(depends-on(...))`) merged with its `predicates`. Holds
     /// when every entry holds. Evaluated at sync time (for skills/MCP), at
@@ -918,11 +935,6 @@ pub async fn find_plugin(sym: &Symposium, name: &str) -> Option<Plugin> {
     None
 }
 
-/// The unvalidated plugin for a registry entry at `root/subpath`: a `Symposium.toml`
-/// manifest read as-is, or a bare `SKILL.md` synthesized into one
-/// ([`standalone_skill_manifest`]). `None` when the directory is neither.
-/// Called by [`PathPm`](crate::pm::PathPm).
-///
 /// Skill paths are displayed relative to the registry root, so an entry reads
 /// as `path:<entry>/skills` rather than `path:skills`.
 pub(crate) fn entry_plugin(
@@ -934,7 +946,8 @@ pub(crate) fn entry_plugin(
     Some(match crate::pm::layout::classify(&dir)? {
         crate::pm::layout::EntryKind::Plugin(toml_path) => (|| -> Result<UnvalidatedPlugin> {
             let content = fs::read_to_string(&toml_path)?;
-            let manifest = RawPluginManifest::parse(&content)?;
+            let mut manifest = RawPluginManifest::parse(&content)?;
+            fill_from_agent_plugin(&mut manifest, &dir);
             let base = toml_path.parent().unwrap_or(&dir).to_path_buf();
             let name = manifest.name.clone().unwrap_or_default();
             Ok(UnvalidatedPlugin::new(
@@ -945,6 +958,22 @@ pub(crate) fn entry_plugin(
             .with_label_root(root))
         })()
         .with_context(|| format!("loading plugin from `{}`", toml_path.display())),
+        crate::pm::layout::EntryKind::AgentPlugin(json_path) => {
+            (|| -> Result<UnvalidatedPlugin> {
+                let manifest = agent_plugin_manifest(&dir)?;
+                let name = manifest.name.clone().unwrap_or_default();
+                Ok(UnvalidatedPlugin {
+                    agent_plugin: true,
+                    ..UnvalidatedPlugin::new(
+                        PackageId::new(source_name, name, ANY_VERSION),
+                        dir.clone(),
+                        manifest,
+                    )
+                    .with_label_root(root)
+                })
+            })()
+            .with_context(|| format!("loading agent plugin from `{}`", json_path.display()))
+        }
         crate::pm::layout::EntryKind::Skill(skill_md) => (|| -> Result<UnvalidatedPlugin> {
             let manifest = standalone_skill_manifest(&skill_md)?;
             let base = skill_md.parent().unwrap_or(&dir).to_path_buf();
@@ -962,12 +991,6 @@ pub(crate) fn entry_plugin(
 
 /// Turn a package manager's [`UnvalidatedPlugin`] into a validated [`Plugin`].
 ///
-/// This is the seam the whole out-of-process design rests on. A PM produces a
-/// manifest (parsed, translated, or synthesized; Symposium cannot tell) and
-/// everything that decides what the manifest is *allowed to mean* happens
-/// here: schema validation, inline-installation promotion, default content,
-/// dormancy, and resolving `source.path` groups against the plugin's root.
-///
 /// `kind` comes from the instance that answered, never from the plugin, so a PM
 /// cannot elect its own policy.
 pub(crate) fn validate_plugin(plugin: UnvalidatedPlugin, kind: PluginKind) -> Result<Plugin> {
@@ -983,6 +1006,7 @@ pub(crate) fn validate_plugin(plugin: UnvalidatedPlugin, kind: PluginKind) -> Re
         root,
         manifest,
         label_root,
+        agent_plugin,
     } = plugin;
     let mut plugin = validate_manifest(manifest, origin)
         .with_context(|| format!("invalid plugin at `{}`", crate::output::display_path(&root)))?;
@@ -993,6 +1017,7 @@ pub(crate) fn validate_plugin(plugin: UnvalidatedPlugin, kind: PluginKind) -> Re
         // Only the workspace-plugin loader stamps true; nothing a PM offers is
         // a workspace member.
         workspace_member: false,
+        agent_plugin_root: agent_plugin.then(|| fs::canonicalize(&root).unwrap_or(root)),
     })
 }
 
@@ -1058,12 +1083,6 @@ pub(crate) fn standalone_skill_manifest(skill_md: &Path) -> Result<RawPluginMani
 }
 
 /// Load the plugin registry from the active package-manager instances.
-///
-/// Each registry instance lists the plugin-bearing entries it offers
-/// (`list_plugins`, no network), and each entry is loaded as a plugin: a
-/// `Symposium.toml` manifest, or a bare `SKILL.md` synthesized into a default
-/// plugin. Refreshing git registries is a separate concern
-/// ([`ensure_registries`]).
 ///
 /// This form loads registries only; workspace-scoped callers use
 /// [`load_registry_with_workspace`] to also pick up plugins defined by the
@@ -1253,13 +1272,6 @@ fn warn_undispatched_crate_features(parsed: &Plugin) {
 /// Load the plugins defined by the active workspace: the workspace root
 /// plus every member package directory.
 ///
-/// A directory defines a workspace plugin when it has a `Symposium.toml`
-/// manifest (whose `name` defaults to the directory name) or a `skills/`
-/// directory (a manifest-less plugin whose only content is the default
-/// skills group). Default content — the `[[skills]] source.path = "skills"`
-/// group — is appended unless the manifest opts out with
-/// `[defaults] skills = false`.
-///
 /// Workspace plugins are stamped `workspace_member = true` (the producer of
 /// the `workspace-member()` predicate) and attributed to the
 /// `"(workspace)"` source with skill paths relative to the workspace root,
@@ -1283,7 +1295,7 @@ pub fn workspace_plugins(
             Err(e) => {
                 tracing::warn!(dir = %dir.display(), error = %e, "failed to load workspace plugin");
                 warnings.push(LoadWarning {
-                    path: dir.join(crate::pm::layout::MANIFEST_FILE),
+                    path: dir.clone(),
                     message: format!("failed to load workspace plugin: {e}"),
                 });
             }
@@ -1300,10 +1312,21 @@ fn workspace_plugin_for_dir(
     agents_skills: bool,
 ) -> Result<Option<Plugin>> {
     let manifest_path = dir.join(crate::pm::layout::MANIFEST_FILE);
+    let agent_plugin_path = dir.join(crate::pm::layout::AGENT_PLUGIN_FILE);
     let bare_convention = dir.join(CRATE_DEFAULT_SKILLS_PATH).is_dir()
         || (agents_skills && dir.join(AGENTS_SKILLS_PATH).is_dir());
+    let agent_plugin = !manifest_path.is_file() && agent_plugin_path.is_file();
     let raw: RawPluginManifest = if manifest_path.is_file() {
-        toml::from_str(&fs::read_to_string(&manifest_path)?)?
+        let mut raw: RawPluginManifest = toml::from_str(&fs::read_to_string(&manifest_path)?)?;
+        fill_from_agent_plugin(&mut raw, dir);
+        raw
+    } else if agent_plugin {
+        let mut raw = agent_plugin_manifest(dir)?;
+        raw.defaults = Some(RawDefaults { skills: false });
+        if agents_skills {
+            raw.skills.push(agents_skills_group());
+        }
+        raw
     } else if bare_convention {
         // Bare convention: a `skills/` (or `.agents/skills/`) directory with
         // no manifest is an all-defaults plugin.
@@ -1330,16 +1353,12 @@ fn workspace_plugin_for_dir(
         canonical: PackageId::new("local", &plugin.name, ANY_VERSION),
         manifest: plugin,
         workspace_member: true,
+        agent_plugin_root: agent_plugin.then(|| dir.to_path_buf()),
     }))
 }
 
 /// Scan a directory laid out like a plugin source, loading its plugin
 /// manifests and collecting its standalone skills.
-///
-/// Entry discovery is the [flat layout](crate::pm::layout): a directory with
-/// a `Symposium.toml` is a plugin, one with a `SKILL.md` is a standalone
-/// skill (manifest wins when both are present), and a claimed directory is
-/// not recursed into.
 ///
 /// This is the *offline* form used by the `plugin validate` CLI, which
 /// points at an arbitrary directory rather than a configured registry.
@@ -1350,12 +1369,19 @@ fn scan_source_dir<P: AsRef<Path>>(dir: P, source_name: &str) -> Result<SourceDi
     let dir = dir.as_ref();
     let mut plugins = Vec::new();
 
-    for entry in crate::pm::layout::enumerate(dir)? {
-        let Some(plugin) = entry_plugin(dir, &entry.subpath, source_name) else {
+    let subpaths = match crate::pm::layout::classify(dir) {
+        Some(crate::pm::layout::EntryKind::AgentPlugin(_)) => vec![PathBuf::new()],
+        _ => crate::pm::layout::enumerate(dir)?
+            .into_iter()
+            .map(|entry| entry.subpath)
+            .collect(),
+    };
+    for subpath in subpaths {
+        let Some(plugin) = entry_plugin(dir, &subpath, source_name) else {
             continue;
         };
         let plugin = plugin.and_then(|p| validate_plugin(p, PluginKind::Registry));
-        tracing::debug!(subpath = %entry.subpath.display(), ok = plugin.is_ok(), "loaded entry");
+        tracing::debug!(subpath = %subpath.display(), ok = plugin.is_ok(), "loaded entry");
         plugins.push(plugin);
     }
 
@@ -1382,6 +1408,7 @@ pub struct ValidationResult {
 #[derive(Debug)]
 pub enum ValidationKind {
     Plugin,
+    AgentPlugin,
     Skill,
 }
 
@@ -1389,15 +1416,12 @@ impl std::fmt::Display for ValidationKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ValidationKind::Plugin => write!(f, "plugin"),
+            ValidationKind::AgentPlugin => write!(f, "{AGENT_PLUGIN_FORMAT}"),
             ValidationKind::Skill => write!(f, "skill"),
         }
     }
 }
 
-/// Validate a directory as a plugin source.
-///
-/// Scans for TOML plugin manifests and standalone SKILL.md files,
-/// attempts to load each, and returns validation results for all items found.
 pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
     let contents = scan_source_dir(dir, "")?;
     let mut results = Vec::new();
@@ -1464,9 +1488,13 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
                 )
             })
         });
+        let kind = match plugin.as_ref().and_then(|parsed| parsed.format()) {
+            Some(_) => ValidationKind::AgentPlugin,
+            None => ValidationKind::Plugin,
+        };
         results.push(ValidationResult {
             id,
-            kind: ValidationKind::Plugin,
+            kind,
             result,
             warning,
             children,
@@ -1478,8 +1506,6 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
 
 /// Collect all crate names referenced in predicates across a plugin source directory.
 ///
-/// Scans TOML plugin manifests (skill group `depends-on`) and
-/// standalone SKILL.md files, returning deduplicated crate names.
 /// Items that fail to load are silently skipped.
 pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
     let contents = scan_source_dir(dir, "")?;
@@ -1550,6 +1576,7 @@ fn load_plugin_as(
         // Registry sources are never workspace members; the workspace-plugin
         // loader is the only place that stamps true.
         workspace_member: false,
+        agent_plugin_root: None,
     })
 }
 
@@ -1563,12 +1590,6 @@ fn raw_crate_manifest(content: &str) -> Result<RawPluginManifest> {
 /// layers win / append):
 /// 1. `[package.metadata.symposium]` from `Cargo.toml` (`metadata`);
 /// 2. a `Symposium.toml` file at the crate root (`file`).
-///
-/// Both use the same schema as any plugin manifest. Each is parsed
-/// independently and **leniently**: a malformed layer is logged and dropped so
-/// the crate still resolves through the remaining layers. A crate with neither
-/// yields an empty manifest, which validation still turns into a plugin
-/// carrying the default `skills/` group, so any fetchable crate is offerable.
 ///
 /// The default group itself is appended by [`validate_manifest`] under
 /// [`ManifestOrigin::Crate`], not here: defaults are policy, and policy is
@@ -1609,6 +1630,14 @@ pub(crate) fn merge_crate_manifest(
     }
 }
 
+fn agents_skills_group() -> RawSkillGroup {
+    toml::from_str(indoc::indoc! {r#"
+        predicates = ["workspace-member()"]
+        source.path = ".agents/skills"
+    "#})
+    .expect("static default group")
+}
+
 /// Convert a raw manifest into a validated `PluginManifest`.
 ///
 /// User-declared `[[installations]]` come first in the resulting list, in
@@ -1638,12 +1667,7 @@ fn validate_manifest(
                     toml::from_str(r#"source.path = "skills""#).expect("static default group");
                 manifest.skills.push(group);
                 if *agents_skills {
-                    let group: RawSkillGroup = toml::from_str(indoc::indoc! {r#"
-                        predicates = ["workspace-member()"]
-                        source.path = ".agents/skills"
-                    "#})
-                    .expect("static default group");
-                    manifest.skills.push(group);
+                    manifest.skills.push(agents_skills_group());
                 }
             }
         }
@@ -1780,6 +1804,8 @@ fn validate_manifest(
 
     Ok(PluginManifest {
         name,
+        version: manifest.version,
+        description: manifest.description,
         predicates,
         installations,
         hooks,
@@ -2906,6 +2932,8 @@ mod tests {
         // Plugin with wildcard - should apply to all
         let plugin_wildcard = PluginManifest {
             name: "wildcard".to_string(),
+            version: None,
+            description: None,
             predicates: pred_set("*"),
             hooks: vec![],
             skills: vec![],
@@ -2921,6 +2949,8 @@ mod tests {
         // Plugin targeting serde - should apply
         let plugin_serde = PluginManifest {
             name: "serde-plugin".to_string(),
+            version: None,
+            description: None,
             predicates: pred_set("serde"),
             hooks: vec![],
             skills: vec![],
@@ -2936,6 +2966,8 @@ mod tests {
         // Plugin targeting non-existent crate - should not apply
         let plugin_other = PluginManifest {
             name: "other-plugin".to_string(),
+            version: None,
+            description: None,
             predicates: pred_set("other-crate"),
             hooks: vec![],
             skills: vec![],
@@ -2951,6 +2983,8 @@ mod tests {
         // Plugin with version predicate - should reject wrong version
         let plugin_version = PluginManifest {
             name: "version-plugin".to_string(),
+            version: None,
+            description: None,
             predicates: pred_set("tokio>=2.0"),
             hooks: vec![],
             skills: vec![],
@@ -3151,6 +3185,8 @@ mod tests {
     fn parsed_plugin_applies_stamps_workspace_member() {
         let plugin = PluginManifest {
             name: "ws-plugin".to_string(),
+            version: None,
+            description: None,
             predicates: PredicateSet {
                 predicates: vec![crate::predicate::Predicate::WorkspaceMember],
             },
@@ -3166,6 +3202,7 @@ mod tests {
         let mut parsed = Plugin {
             manifest: plugin,
             workspace_member: false,
+            agent_plugin_root: None,
             canonical: PackageId::new("test", "test", ANY_VERSION),
         };
         let deps: Vec<crate::pm::PackageId> = Vec::new();
@@ -4592,6 +4629,8 @@ mod tests {
         Plugin {
             manifest: PluginManifest {
                 name: plugin_name.to_string(),
+                version: None,
+                description: None,
                 predicates: pred_set("*"),
                 installations: vec![Installation {
                     name: "checker".to_string(),
@@ -4615,6 +4654,7 @@ mod tests {
                 requires_use: false,
             },
             workspace_member: false,
+            agent_plugin_root: None,
             canonical: PackageId::new("test", plugin_name, ANY_VERSION),
         }
     }

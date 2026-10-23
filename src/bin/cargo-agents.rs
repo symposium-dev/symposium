@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::env;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use symposium::cli::{Cli, Commands, PluginCommand};
@@ -8,6 +9,7 @@ use symposium::help_render;
 use symposium::hook;
 use symposium::output::Output;
 use symposium::plugins;
+use symposium::pm::layout::AGENT_PLUGIN_FILE;
 use symposium::report;
 use symposium::self_update;
 use symposium::state;
@@ -233,6 +235,13 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
             path,
             no_check_crates,
         } => {
+            let path = if path.file_name() == Some(AGENT_PLUGIN_FILE.as_ref()) && path.is_file() {
+                path.parent()
+                    .filter(|parent| !parent.as_os_str().is_empty())
+                    .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+            } else {
+                path
+            };
             if path.is_dir() {
                 let mut errors = 0;
 
