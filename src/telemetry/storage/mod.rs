@@ -15,6 +15,7 @@ mod lock;
 pub(in crate::telemetry) mod metrics;
 mod paths;
 mod private_state;
+mod recording;
 mod writes;
 
 use std::path::Path;
@@ -25,11 +26,23 @@ use lock::TelemetryLock;
 use paths::StoragePaths;
 use writes::{FsWrites, RecordingWriteAccess, RecordingWrites};
 
+/// Authority to move a staged recording into the locked storage transaction.
+///
+/// The state layer can require this value without being able to construct it,
+/// so unpublished aggregate rows cannot be extracted by another telemetry
+/// caller.
+#[derive(Clone, Copy)]
+pub(in crate::telemetry) struct RecordingPersistenceAccess {
+    _private: (),
+}
+
+impl RecordingPersistenceAccess {
+    const fn new() -> Self {
+        Self { _private: () }
+    }
+}
+
 #[cfg(test)]
-#[expect(
-    unused_imports,
-    reason = "the recording transaction consumes this test seam in the next branch"
-)]
 use writes::{TestWriteOperation, TestWrites};
 
 /// Exclusive access to all local telemetry files and sibling private state.
