@@ -54,6 +54,36 @@ fn find_installed_skill(parent: &Path, skill_name: &str) -> PathBuf {
     hits.pop().unwrap()
 }
 
+/// A first `init` records the agents it detected in `state.toml`.
+#[tokio::test]
+async fn init_records_detected_agents_on_first_run() {
+    with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
+        std::fs::create_dir(ctx.sym.home_dir().join(".codex"))?;
+        ctx.symposium(&["init"]).await?;
+
+        let state = symposium::state::load(ctx.sym.config_dir()).expect("state.toml");
+        assert!(state.detected_agents.contains(&"codex".to_string()));
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+/// `init --add-agent` leaves the detection record alone.
+#[tokio::test]
+async fn init_with_flags_does_not_record_detected_agents() {
+    with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
+        std::fs::create_dir(ctx.sym.home_dir().join(".codex"))?;
+        ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+
+        let state = symposium::state::load(ctx.sym.config_dir());
+        assert!(state.is_none_or(|s| s.detected_agents.is_empty()));
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
 /// `init` defaults to global hook scope — hooks go to home dir.
 #[tokio::test]
 async fn init_defaults_to_global_hooks() {

@@ -25,6 +25,9 @@ pub struct State {
     /// Last time we checked crates.io for a newer version.
     #[serde(default, rename = "last-update-check")]
     pub last_update_check: Option<DateTime<Utc>>,
+
+    #[serde(default, rename = "detected-agents")]
+    pub detected_agents: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,6 +35,8 @@ struct RawState {
     version: String,
     #[serde(default, rename = "last-update-check")]
     last_update_check: Option<DateTime<Utc>>,
+    #[serde(default, rename = "detected-agents")]
+    detected_agents: Vec<String>,
 }
 
 impl RawState {
@@ -39,6 +44,7 @@ impl RawState {
         State {
             version: self.version,
             last_update_check: self.last_update_check,
+            detected_agents: self.detected_agents,
         }
     }
 }
@@ -48,6 +54,7 @@ impl Default for State {
         Self {
             version: CURRENT_VERSION.to_string(),
             last_update_check: None,
+            detected_agents: Vec::new(),
         }
     }
 }
@@ -114,6 +121,12 @@ pub fn record_update_check(config_dir: &Path) {
     save(config_dir, &state);
 }
 
+pub fn record_detected_agents(config_dir: &Path, agents: Vec<String>) {
+    let mut state = load(config_dir).unwrap_or_default();
+    state.detected_agents = agents;
+    save(config_dir, &state);
+}
+
 fn state_path(config_dir: &Path) -> PathBuf {
     config_dir.join(STATE_FILE)
 }
@@ -121,6 +134,16 @@ fn state_path(config_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detected_agents_round_trip() {
+        let tmp = tempfile::tempdir().unwrap();
+        record_update_check(tmp.path());
+        record_detected_agents(tmp.path(), vec!["claude".into(), "codex".into()]);
+        let state = load(tmp.path()).unwrap();
+        assert_eq!(state.detected_agents, ["claude", "codex"]);
+        assert!(state.last_update_check.is_some());
+    }
 
     #[test]
     fn stamp_creates_file() {
@@ -145,7 +168,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let old = State {
             version: "0.1.0".to_string(),
-            last_update_check: None,
+            ..State::default()
         };
         fs::write(
             tmp.path().join(STATE_FILE),

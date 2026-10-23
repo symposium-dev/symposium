@@ -36,7 +36,7 @@ MCP registration is its own axis, and the one place where guessing is expensive:
 
 ### `init.rs` — initialization command
 
-Implements `cargo agents init`. Prompts for agents (or accepts `--add-agent`/`--remove-agent` flags), hook scope, auto-update behavior, and opt-in [telemetry](./telemetry.md); writes user config; and registers global hooks.
+Implements `cargo agents init`. Prompts for agents (or accepts `--add-agent`/`--remove-agent` flags), hook scope, auto-update behavior, and opt-in [telemetry](./telemetry.md); writes user config; and registers global hooks. The agent prompt preselects the agents `Agent::detect_installed` finds by their user config directory that are configured or were not detected on the previous run (recorded in `state.toml`), so a deselected agent stays unchecked; later runs report which ones appeared or disappeared since the last setup.
 
 ### `sync.rs` — synchronization command
 
@@ -192,7 +192,7 @@ On `SessionStart`, `handle_session_start` composes three independently-computed 
 
 ### `state.rs` — persistent state
 
-Manages `state.toml` in the config directory. Deserializes through `RawState` and validates into the runtime `State`. Tracks the semver of the binary that last touched the directory (for future migration hooks) and the timestamp of the last update check (to throttle crates.io queries to once per 24 hours). `ensure_current()` is called on startup to silently stamp the current version. `should_check_for_update()` / `record_update_check()` gate the auto-update flow.
+Manages `state.toml` in the config directory. Deserializes through `RawState` and validates into the runtime `State`. Tracks the semver of the binary that last touched the directory (for future migration hooks) the timestamp of the last update check (to throttle crates.io queries to once per 24 hours), and the agents the last `init` detected (`record_detected_agents`, so the next `init` pre-checks only newly installed agents). `ensure_current()` is called on startup to silently stamp the current version. `should_check_for_update()` / `record_update_check()` gate the auto-update flow.
 
 ### `telemetry/` — opt-in usage telemetry
 
