@@ -30,8 +30,8 @@ pub async fn dispatch_crate(
         Ok(result) => {
             let output = format!(
                 "Crate: {}\nVersion: {}\nSource: {}\n",
-                result.id.name,
-                result.id.version,
+                result.package.id.name,
+                result.package.id.version,
                 result.root.display()
             );
             tracing::trace!(%output, "crate-info output");
