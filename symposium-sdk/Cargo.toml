@@ -1,6 +1,6 @@
 [package]
 name = "symposium-sdk"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 description = "SDK for writing symposium plugins (hooks, custom predicates, subcommands)"
@@ -17,6 +17,6 @@ sacp = "11"
 semver = { version = "1.0", features = ["serde"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-symposium-install = { version = "0.1.1", path = "../symposium-install" }
+symposium-install = { version = "0.1.2", path = "../symposium-install" }
 tokio = { version = "1", features = ["macros", "rt"] }
 toml = "0.8"
