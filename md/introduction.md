@@ -16,6 +16,8 @@
             <a href="./install.md">Install</a>
             <span>⁄</span>
             <a href="./blog/outline.md">Blog</a>
+            <span>⁄</span>
+            <a href="./videos.md">Videos</a>
         </div>
     </div>
 </div>
