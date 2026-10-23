@@ -55,6 +55,10 @@ macro_rules! strict_versioned_row {
         }
 
         impl $crate::telemetry::schema::VersionedRow for $row {
+            fn event_id(&self) -> $crate::telemetry::schema::EventId {
+                self.event_id
+            }
+
             fn day(&self) -> $crate::telemetry::schema::UtcDay {
                 self.day
             }

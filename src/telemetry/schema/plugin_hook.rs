@@ -5,7 +5,7 @@ use std::fmt;
 use outcome::PluginHookOutcomeCounters;
 
 use super::{
-    RowKind, SymposiumVersion,
+    AggregateSortKey, RowKind, SymposiumVersion,
     agent::HookAgent,
     hook::HookSurface,
     macros::strict_versioned_row,
@@ -45,6 +45,23 @@ strict_versioned_row! {
     kind: RowKind::PluginHookMetrics,
     raw: RawPluginHookMetricsV1,
     validate: validate_plugin_hook_metrics,
+}
+
+impl PluginHookMetricsV1 {
+    pub(in crate::telemetry::schema) fn snapshot_sort_key(&self) -> AggregateSortKey<'_> {
+        let (source, name) = self.plugin.as_ref().map_or((None, None), |plugin| {
+            (Some(plugin.source().as_str()), Some(plugin.name().as_str()))
+        });
+
+        AggregateSortKey::plugin_hook(
+            self.agent.as_str(),
+            self.hook.as_str(),
+            self.plugin_scope.as_str(),
+            source,
+            name,
+            self.event_id,
+        )
+    }
 }
 
 fn validate_plugin_hook_metrics(
@@ -237,7 +254,7 @@ impl std::error::Error for PluginHookMetricsError {}
 #[cfg(test)]
 mod tests {
     use super::super::{
-        RowClassification, TelemetryRow, classify_row,
+        AggregateRow, RowClassification, TelemetryRow, classify_row,
         metrics::{MAX_IDENTIFIED_SESSIONS, SessionSet, SessionSetError},
         recorded_data_example_row,
     };
@@ -264,7 +281,7 @@ mod tests {
     fn plugin_hook_metrics_example_round_trips_through_the_classifier() {
         let source = recorded_data_example_row("plugin_hook_metrics");
 
-        let RowClassification::Supported(TelemetryRow::PluginHookMetrics(row)) =
+        let RowClassification::Supported(TelemetryRow::Aggregate(AggregateRow::PluginHook(row))) =
             classify_row(source)
         else {
             panic!("documented plugin-hook metrics row was not classified as supported");
