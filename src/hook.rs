@@ -268,7 +268,9 @@ pub async fn execute_hook(
         // Auto-sync: install applicable skills into agent dirs (non-fatal).
         // SessionStart refreshes source caches and syncs unconditionally.
         let session_start = event == HookEvent::SessionStart;
-        let notify_about_possible_new_plugins = run_auto_sync(sym, &deps, session_start).await;
+        let (notify_about_possible_new_plugins, session_start_synced) =
+            run_auto_sync(sym, &deps, session_start).await;
+        let reload_skills_after_sync = session_start && session_start_synced;
 
         // SessionStart (once per session) also refreshes every hook's already-
         // cached source, so later events dispatch fresh binaries without per-
@@ -278,8 +280,14 @@ pub async fn execute_hook(
         }
 
         // Builtin dispatch → symposium output → host agent output as Value
-        let builtin_sym_output =
-            dispatch_builtin(sym, &sym_input, &deps, notify_about_possible_new_plugins).await;
+        let builtin_sym_output = dispatch_builtin(
+            sym,
+            &sym_input,
+            &deps,
+            notify_about_possible_new_plugins,
+            reload_skills_after_sync,
+        )
+        .await;
         let builtin_agent_output = handler.translate_output(&builtin_sym_output);
         let prior_output = builtin_agent_output.to_hook_output();
 
@@ -292,6 +300,7 @@ pub async fn execute_hook(
             payload.as_ref(),
             prior_output,
             builtin_sym_output.additional_context().map(String::from),
+            reload_skills_after_sync,
             &deps,
         )
         .await
@@ -413,11 +422,18 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, response: &
 /// the `Cargo.lock` freshness gate — upstream skill changes land even when the
 /// workspace's dependencies are unchanged.
 ///
-/// Returns whether it re-synced because `Cargo.lock` changed mid-session.
-async fn run_auto_sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, session_start: bool) -> bool {
+/// Returns `(notify_about_possible_new_plugins, session_start_synced)`.
+///
+/// The second flag is true when a `SessionStart` hook completed auto-sync
+/// successfully (skills may have been installed or refreshed).
+async fn run_auto_sync(
+    sym: &Symposium,
+    deps: &Arc<WorkspaceDeps>,
+    session_start: bool,
+) -> (bool, bool) {
     if !sym.config.auto_sync {
         tracing::debug!("auto-sync disabled, skipping");
-        return false;
+        return (false, false);
     }
 
     let cwd = deps.cwd().to_path_buf();
@@ -433,7 +449,7 @@ async fn run_auto_sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, session_start
         let state = crate::workspace_state::WorkspaceState::load(sym, root);
         if state.sync_is_fresh(root) {
             tracing::debug!("auto-sync skipped: Cargo.lock unchanged since last sync");
-            return false;
+            return (false, false);
         }
     }
     let dependencies_changed = !session_start && workspace_root.is_some();
@@ -447,7 +463,7 @@ async fn run_auto_sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, session_start
     tracing::debug!("auto-sync running");
     if let Err(e) = crate::sync::sync(sym, deps, update).await {
         tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
-        return false;
+        return (false, false);
     }
 
     // Record successful sync. If we didn't find the root earlier,
@@ -459,7 +475,11 @@ async fn run_auto_sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, session_start
         state.workspace_root = Some(root.clone());
         state.save(sym, root);
     }
-    dependencies_changed
+    if session_start {
+        (dependencies_changed, true)
+    } else {
+        (dependencies_changed, false)
+    }
 }
 
 /// Whether the hook pipeline must resolve the workspace crate graph before
@@ -552,6 +572,7 @@ pub async fn dispatch_builtin(
     input: &symposium::InputEvent,
     deps: &Arc<WorkspaceDeps>,
     notify_about_possible_new_plugins: bool,
+    reload_skills_after_sync: bool,
 ) -> symposium::OutputEvent {
     match input {
         symposium::InputEvent::PreToolUse(_) => {
@@ -564,7 +585,7 @@ pub async fn dispatch_builtin(
             handle_user_prompt_submit(sym, prompt, notify_about_possible_new_plugins).await
         }
         symposium::InputEvent::SessionStart(session) => {
-            handle_session_start(sym, session, deps).await
+            handle_session_start(sym, session, deps, reload_skills_after_sync).await
         }
         _ => symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
     }
@@ -577,6 +598,7 @@ async fn handle_session_start(
     sym: &Symposium,
     _payload: &SessionStartInput,
     deps: &Arc<WorkspaceDeps>,
+    reload_skills_after_sync: bool,
 ) -> OutputEvent {
     let fragments = [
         discovery_hint(sym, deps).await,
@@ -587,11 +609,15 @@ async fn handle_session_start(
     .flatten()
     .collect::<Vec<String>>();
 
-    if fragments.is_empty() {
-        OutputEvent::empty_for(HookEvent::SessionStart)
+    let mut output = if fragments.is_empty() {
+        symposium::SessionStartOutput::default()
     } else {
-        OutputEvent::with_context(HookEvent::SessionStart, fragments.join("\n\n"))
+        symposium::SessionStartOutput::context(fragments.join("\n\n"))
+    };
+    if reload_skills_after_sync {
+        output = output.with_reload_skills();
     }
+    OutputEvent::SessionStart(output)
 }
 
 /// Suggest `cargo agents --help` when the active workspace exposes crate-aware plugin subcommands.
@@ -723,6 +749,7 @@ pub async fn dispatch_plugin_hooks(
     original_input: &dyn AgentHookInput,
     prior_output: serde_json::Value,
     prior_context: Option<String>,
+    reload_skills_after_sync: bool,
     deps: &Arc<WorkspaceDeps>,
 ) -> Result<serde_json::Value, Vec<u8>> {
     let workspace = deps.load().cloned();
@@ -757,7 +784,7 @@ pub async fn dispatch_plugin_hooks(
     let hooks = dispatched_hooks_for_payload(&plugins, sym_input, host_agent, &mut ctx);
 
     let mut output = prior_output;
-    let mut context = JoinedContext::new(event, prior_context);
+    let mut context = JoinedContext::new(event, prior_context, reload_skills_after_sync);
 
     for hook in hooks {
         tracing::info!(
@@ -903,11 +930,16 @@ pub async fn dispatch_plugin_hooks(
 struct JoinedContext {
     event: HookEvent,
     text: Option<String>,
+    reload_skills_after_sync: bool,
 }
 
 impl JoinedContext {
-    fn new(event: HookEvent, prior: Option<String>) -> Self {
-        Self { event, text: prior }
+    fn new(event: HookEvent, prior: Option<String>, reload_skills_after_sync: bool) -> Self {
+        Self {
+            event,
+            text: prior,
+            reload_skills_after_sync,
+        }
     }
 
     /// Add `hook_output`'s context and write the joined text back into
@@ -932,7 +964,15 @@ impl JoinedContext {
             });
         }
         if let Some(text) = &self.text {
-            let joined = OutputEvent::with_context(self.event, text.clone());
+            let joined = if self.event == HookEvent::SessionStart {
+                let mut session = symposium::SessionStartOutput::context(text.clone());
+                if self.reload_skills_after_sync {
+                    session = session.with_reload_skills();
+                }
+                OutputEvent::SessionStart(session)
+            } else {
+                OutputEvent::with_context(self.event, text.clone())
+            };
             merge(output, handler.translate_output(&joined).to_hook_output());
         }
     }
@@ -1201,7 +1241,7 @@ mod tests {
             None,
             None,
         ));
-        let output = dispatch_builtin(&sym, &input, &deps, false).await;
+        let output = dispatch_builtin(&sym, &input, &deps, false, false).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -1217,7 +1257,7 @@ mod tests {
             Some("test-session".to_string()),
             Some("/tmp".to_string()),
         ));
-        let output = dispatch_builtin(&sym, &input, &deps, false).await;
+        let output = dispatch_builtin(&sym, &input, &deps, false, false).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -1231,8 +1271,24 @@ mod tests {
             Some("test-session".to_string()),
             Some("/tmp".to_string()),
         ));
-        let output = dispatch_builtin(&sym, &input, &deps, false).await;
+        let output = dispatch_builtin(&sym, &input, &deps, false, false).await;
         assert!(output.additional_context().is_none());
+    }
+
+    #[tokio::test]
+    async fn session_start_requests_skill_reload_after_auto_sync() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(tmp.path());
+        let deps = sym.workspace_deps(tmp.path());
+        let input = symposium::InputEvent::SessionStart(symposium::SessionStartInput::new(
+            Some("sess".to_string()),
+            Some(tmp.path().display().to_string()),
+        ));
+        let output = dispatch_builtin(&sym, &input, &deps, false, true).await;
+        let symposium::OutputEvent::SessionStart(session) = output else {
+            panic!("expected SessionStart output");
+        };
+        assert_eq!(session.reload_skills, Some(true));
     }
 
     #[test]

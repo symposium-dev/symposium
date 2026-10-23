@@ -478,17 +478,32 @@ pub struct SessionStartOutput {
         skip_serializing_if = "Option::is_none"
     )]
     pub additional_context: Option<String>,
+    #[serde(
+        rename = "reloadSkills",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub reload_skills: Option<bool>,
 }
 
 impl SessionStartOutput {
     /// Create an output with all fields specified.
     pub fn new(additional_context: Option<String>) -> Self {
-        Self { additional_context }
+        Self {
+            additional_context,
+            reload_skills: None,
+        }
     }
 
     /// Create an output that injects additional context.
     pub fn context(text: impl Into<String>) -> Self {
         Self::new(Some(text.into()))
+    }
+
+    /// Ask Claude Code to rescan skills after this hook installs or updates them.
+    pub fn with_reload_skills(mut self) -> Self {
+        self.reload_skills = Some(true);
+        self
     }
 }
 

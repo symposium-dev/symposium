@@ -41,6 +41,28 @@ async fn sync_progress_stays_off_hook_stdout() {
     .unwrap();
 }
 
+/// After a successful SessionStart auto-sync, Claude Code receives
+/// `reloadSkills: true` so skills installed during the hook are visible
+/// in the same session (see #344).
+#[tokio::test(flavor = "multi_thread")]
+async fn session_start_requests_skill_reload_on_claude() {
+    with_fixture(TestMode::SimulationOnly, &["plugins0", "workspace0"], async |ctx| {
+        let workspace = ctx.workspace_root.clone().unwrap();
+        let output = run_session_start(&ctx, HookAgent::Claude, &workspace);
+        assert!(output.status.success());
+        let stdout: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            stdout["hookSpecificOutput"]["reloadSkills"],
+            true,
+            "stdout: {}",
+            stdout
+        );
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
 /// A plugin's install commands run on every dispatch of the hook that needs
 /// them; what they print must not reach the agent's stdout.
 #[tokio::test(flavor = "multi_thread")]
