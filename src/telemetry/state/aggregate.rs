@@ -1,5 +1,6 @@
 //! Disjoint private stores for cumulative telemetry rows.
 
+mod persistence;
 pub(in crate::telemetry) mod recording;
 
 use std::fmt;
