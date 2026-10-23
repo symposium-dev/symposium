@@ -22,7 +22,7 @@ pub(super) enum PublicRowAdmission {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct DailyPublicRowBudget {
     day: OpenDay,
-    admitted: u64,
+    spent: u64,
 }
 
 impl DailyPublicRowBudget {
@@ -30,7 +30,7 @@ impl DailyPublicRowBudget {
     pub(super) const fn new(day: UtcDay) -> Self {
         Self {
             day: OpenDay::new(day),
-            admitted: 0,
+            spent: 0,
         }
     }
 
@@ -43,21 +43,38 @@ impl DailyPublicRowBudget {
     pub(super) fn select_day(&mut self, day: UtcDay) -> Result<OpenDayUpdate, DayBeforeCurrent> {
         let update = self.day.select(day)?;
         if update == OpenDayUpdate::Advanced {
-            self.admitted = 0;
+            self.spent = 0;
         }
 
         Ok(update)
     }
 
+    /// Reconcile private spend with public rows that survived in the snapshot.
+    ///
+    /// Day selection happens first so a closed day's spend cannot constrain a
+    /// newly opened day. Saturation keeps corrupted or future snapshot counts
+    /// conservative without allowing more than the daily maximum.
+    pub(super) fn reconcile(
+        &mut self,
+        day: UtcDay,
+        surviving_public_rows: u64,
+    ) -> Result<OpenDayUpdate, DayBeforeCurrent> {
+        let update = self.select_day(day)?;
+        self.spent = self
+            .spent
+            .max(surviving_public_rows.min(MAX_PUBLIC_ROWS_PER_DAY));
+        Ok(update)
+    }
+
     /// Consume one allowance slot for a new public aggregate.
     #[must_use]
-    pub(super) fn admit_new(&mut self) -> PublicRowAdmission {
-        if self.admitted >= MAX_PUBLIC_ROWS_PER_DAY {
+    pub(super) const fn admit_new(&mut self) -> PublicRowAdmission {
+        if self.spent >= MAX_PUBLIC_ROWS_PER_DAY {
             return PublicRowAdmission::Overflow;
         }
 
-        self.admitted = self
-            .admitted
+        self.spent = self
+            .spent
             .checked_add(1)
             .expect("BUG: the public-row allowance is bounded before incrementing");
         PublicRowAdmission::Public
@@ -66,18 +83,18 @@ impl DailyPublicRowBudget {
     /// Return whether a new public aggregate must join overflow.
     #[must_use]
     pub(super) const fn is_exhausted(self) -> bool {
-        self.admitted >= MAX_PUBLIC_ROWS_PER_DAY
+        self.spent >= MAX_PUBLIC_ROWS_PER_DAY
     }
 
     /// Restore the current day's allowance after telemetry clear.
-    pub(super) fn clear(&mut self) {
-        self.admitted = 0;
+    pub(super) const fn clear(&mut self) {
+        self.spent = 0;
     }
 
     #[cfg(test)]
     #[must_use]
-    pub(super) const fn admitted(self) -> u64 {
-        self.admitted
+    pub(super) const fn spent(self) -> u64 {
+        self.spent
     }
 }
 
@@ -95,13 +112,13 @@ mod tests {
     fn the_128th_public_row_is_admitted_and_the_129th_overflows() {
         let mut budget = DailyPublicRowBudget::new(day(3));
 
-        for admitted in 1..=MAX_PUBLIC_ROWS_PER_DAY {
+        for spent in 1..=MAX_PUBLIC_ROWS_PER_DAY {
             assert_eq!(budget.admit_new(), PublicRowAdmission::Public);
-            assert_eq!(budget.admitted(), admitted);
+            assert_eq!(budget.spent(), spent);
         }
         assert_eq!(budget.admit_new(), PublicRowAdmission::Overflow);
 
-        assert_eq!(budget.admitted(), MAX_PUBLIC_ROWS_PER_DAY);
+        assert_eq!(budget.spent(), MAX_PUBLIC_ROWS_PER_DAY);
     }
 
     #[test]
@@ -110,10 +127,10 @@ mod tests {
         assert_eq!(budget.admit_new(), PublicRowAdmission::Public);
 
         assert_eq!(budget.select_day(day(3)), Ok(OpenDayUpdate::Current));
-        assert_eq!(budget.admitted(), 1);
+        assert_eq!(budget.spent(), 1);
         assert_eq!(budget.select_day(day(4)), Ok(OpenDayUpdate::Advanced));
 
-        assert_eq!(budget.admitted(), 0);
+        assert_eq!(budget.spent(), 0);
     }
 
     #[test]
@@ -141,7 +158,44 @@ mod tests {
 
         budget.clear();
 
-        assert_eq!(budget.admitted(), 0);
+        assert_eq!(budget.spent(), 0);
         assert_eq!(budget.select_day(day(3)), Ok(OpenDayUpdate::Current));
+    }
+
+    #[test]
+    fn reconciliation_keeps_the_larger_persisted_or_surviving_spend() {
+        let mut budget = DailyPublicRowBudget::new(day(3));
+        assert_eq!(budget.admit_new(), PublicRowAdmission::Public);
+        assert_eq!(budget.admit_new(), PublicRowAdmission::Public);
+
+        assert_eq!(budget.reconcile(day(3), 1), Ok(OpenDayUpdate::Current));
+        assert_eq!(budget.spent(), 2);
+        assert_eq!(budget.reconcile(day(3), 4), Ok(OpenDayUpdate::Current));
+        assert_eq!(budget.spent(), 4);
+    }
+
+    #[test]
+    fn reconciliation_advances_the_day_before_counting_surviving_rows() {
+        let mut budget = DailyPublicRowBudget::new(day(3));
+        for _ in 0..MAX_PUBLIC_ROWS_PER_DAY {
+            assert_eq!(budget.admit_new(), PublicRowAdmission::Public);
+        }
+
+        assert_eq!(budget.reconcile(day(4), 1), Ok(OpenDayUpdate::Advanced));
+
+        assert_eq!(budget.spent(), 1);
+    }
+
+    #[test]
+    fn reconciliation_saturates_snapshot_counts_at_the_daily_maximum() {
+        let mut budget = DailyPublicRowBudget::new(day(3));
+
+        assert_eq!(
+            budget.reconcile(day(3), u64::MAX),
+            Ok(OpenDayUpdate::Current)
+        );
+
+        assert_eq!(budget.spent(), MAX_PUBLIC_ROWS_PER_DAY);
+        assert!(budget.is_exhausted());
     }
 }
