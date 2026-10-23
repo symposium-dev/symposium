@@ -36,7 +36,7 @@ fn public_plugin(name: &str) -> PublicPluginCoordinate {
 }
 
 fn empty_recovery(day: UtcDay) -> AggregateRecoveryIndex {
-    MetricSnapshot::empty(day).recovery_index()
+    MetricSnapshot::empty_for_test(day).recovery_index()
 }
 
 fn event_id(value: u128) -> EventId {
@@ -69,7 +69,7 @@ fn plugin_recovery(
     subject: PluginSubject,
     event_ids: impl IntoIterator<Item = EventId>,
 ) -> AggregateRecoveryIndex {
-    let mut snapshot = MetricSnapshot::empty(day);
+    let mut snapshot = MetricSnapshot::empty_for_test(day);
     for event_id in event_ids {
         snapshot
             .insert(plugin_row(plugin, subject, event_id))
