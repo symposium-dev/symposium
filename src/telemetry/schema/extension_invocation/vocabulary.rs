@@ -97,6 +97,12 @@ impl ExtensionInvocationPhase {
     }
 }
 
+impl fmt::Display for ExtensionInvocationPhase {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.counter_name())
+    }
+}
+
 /// Identity exposure assigned to one extension-invocation aggregate bucket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -204,6 +210,7 @@ mod tests {
 
         for (phase, expected) in cases {
             assert_eq!(phase.counter_name(), expected);
+            assert_eq!(phase.to_string(), expected);
         }
     }
 
