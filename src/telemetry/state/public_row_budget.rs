@@ -34,6 +34,24 @@ impl DailyPublicRowBudget {
         }
     }
 
+    /// Borrow the day and spent count for private-state persistence.
+    #[must_use]
+    pub(in crate::telemetry::state) const fn persistence_parts(self) -> (UtcDay, u64) {
+        (self.day.day(), self.spent)
+    }
+
+    /// Rebuild a budget from decoded private-state fields.
+    ///
+    /// The persistence caller must validate the spent count before returning
+    /// the aggregate store that owns this value.
+    #[must_use]
+    pub(in crate::telemetry::state) const fn from_persisted(day: UtcDay, spent: u64) -> Self {
+        Self {
+            day: OpenDay::new(day),
+            spent,
+        }
+    }
+
     /// Select a day, restoring the allowance after forward UTC-day rollover.
     ///
     /// # Errors

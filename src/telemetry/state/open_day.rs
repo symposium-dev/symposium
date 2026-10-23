@@ -25,6 +25,11 @@ impl OpenDay {
         Self(day)
     }
 
+    #[must_use]
+    pub(super) const fn day(self) -> UtcDay {
+        self.0
+    }
+
     /// Select `observed`, advancing this value only when it is later.
     ///
     /// # Errors
