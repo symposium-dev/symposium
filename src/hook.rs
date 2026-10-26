@@ -1,8 +1,10 @@
 use crate::predicate::PredicateEval;
 use std::{
-    io::{Read, Write},
+    fs::File,
+    io::{Read, Seek, Write},
     path::{Path, PathBuf},
-    process::{Command, ExitCode, Stdio},
+    process::{Command, ExitCode, Output, Stdio},
+    time::{Duration, Instant},
 };
 
 use symposium_install::Runnable;
@@ -197,7 +199,11 @@ async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Resul
     })
 }
 
-fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
+fn spawn_from_spec(
+    spec: SpawnSpec,
+    stdout: &File,
+    stderr: &File,
+) -> std::io::Result<std::process::Child> {
     match spec {
         SpawnSpec::Script { path, args, env } => {
             let mut cmd = Command::new("sh");
@@ -206,8 +212,8 @@ fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
                 cmd.env(k, v);
             }
             cmd.stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
+                .stdout(stdout.try_clone()?)
+                .stderr(stderr.try_clone()?)
                 .spawn()
         }
         SpawnSpec::Exec { path, args, env } => {
@@ -217,11 +223,54 @@ fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
                 cmd.env(k, v);
             }
             cmd.stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
+                .stdout(stdout.try_clone()?)
+                .stderr(stderr.try_clone()?)
                 .spawn()
         }
     }
+}
+
+const PLUGIN_HOOK_TIMEOUT: Duration = Duration::from_secs(5);
+const PLUGIN_HOOKS_BUDGET: Duration = Duration::from_secs(8);
+
+/// Returns `None` when the hook was killed at `deadline`. Output goes to files,
+/// not pipes, so neither a full pipe nor a background job can hold dispatch.
+fn run_with_deadline(
+    spec: SpawnSpec,
+    input: Vec<u8>,
+    deadline: Instant,
+) -> std::io::Result<Option<Output>> {
+    let stdout = tempfile::tempfile()?;
+    let stderr = tempfile::tempfile()?;
+    let mut child = spawn_from_spec(spec, &stdout, &stderr)?;
+    if let Some(mut stdin) = child.stdin.take() {
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        });
+    }
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            child.wait()?;
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    Ok(Some(Output {
+        status,
+        stdout: read_from_start(stdout)?,
+        stderr: read_from_start(stderr)?,
+    }))
+}
+
+fn read_from_start(mut file: File) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    file.rewind()?;
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 // Re-export hook schema types for convenience.
@@ -761,8 +810,17 @@ pub async fn dispatch_plugin_hooks(
 
     let mut output = prior_output;
     let mut context = JoinedContext::new(event, prior_context);
+    let dispatch_deadline = Instant::now() + PLUGIN_HOOKS_BUDGET;
 
     for hook in hooks {
+        if Instant::now() >= dispatch_deadline {
+            tracing::warn!(
+                plugin = %hook.plugin_name,
+                hook = %hook.hook_name,
+                "plugin hooks used up their time budget; skipping hook"
+            );
+            continue;
+        }
         tracing::info!(
             plugin = %hook.plugin_name,
             hook = %hook.hook_name,
@@ -788,28 +846,19 @@ pub async fn dispatch_plugin_hooks(
             }
         };
 
-        let spawn_res = match build_spawn_spec(sym, &hook).await {
-            Ok(spec) => spawn_from_spec(spec),
+        let run_res = match build_spawn_spec(sym, &hook).await {
+            Ok(spec) => {
+                let deadline = dispatch_deadline.min(Instant::now() + PLUGIN_HOOK_TIMEOUT);
+                run_with_deadline(spec, stdin_str.into_bytes(), deadline)
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "failed to prepare hook command");
                 continue;
             }
         };
 
-        match spawn_res {
-            Ok(mut child) => {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(stdin_str.as_bytes());
-                }
-
-                let child_out = match child.wait_with_output() {
-                    Ok(o) => o,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed waiting for hook process");
-                        continue;
-                    }
-                };
-
+        match run_res {
+            Ok(Some(child_out)) => {
                 tracing::trace!(?child_out, "hook finished");
 
                 let exit_code = child_out.status.code();
@@ -880,6 +929,21 @@ pub async fn dispatch_plugin_hooks(
                     }
                 }
             }
+            Ok(None) => {
+                tracing::debug!(
+                    report = %crate::report::ReportEvent::HookDispatched {
+                        plugin: hook.plugin_name.clone(),
+                        hook: hook.hook_name.clone(),
+                        exit_code: None,
+                        error: Some("timed out".to_string()),
+                    },
+                );
+                tracing::warn!(
+                    plugin = %hook.plugin_name,
+                    hook = %hook.hook_name,
+                    "plugin hook timed out and was killed; its output is ignored"
+                );
+            }
             Err(e) => {
                 tracing::debug!(
                     report = %crate::report::ReportEvent::HookDispatched {
@@ -889,7 +953,7 @@ pub async fn dispatch_plugin_hooks(
                         error: Some(e.to_string()),
                     },
                 );
-                tracing::warn!(error = %e, "failed to spawn hook command");
+                tracing::warn!(error = %e, "failed to run hook command");
             }
         }
     }
@@ -1238,6 +1302,54 @@ mod tests {
         ));
         let output = dispatch_builtin(&sym, &input, &deps, false).await;
         assert!(output.additional_context().is_none());
+    }
+
+    fn run_script(body: &str, input: Vec<u8>, timeout: Duration) -> Option<Output> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hook.sh");
+        std::fs::write(&path, body).unwrap();
+        let spec = SpawnSpec::Script {
+            path,
+            args: vec![],
+            env: vec![],
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(run_with_deadline(spec, input, Instant::now() + timeout).unwrap());
+        });
+        rx.recv_timeout(timeout + Duration::from_secs(5))
+            .expect("the hook returns by its deadline")
+    }
+
+    #[test]
+    fn hook_that_ignores_a_large_input_and_writes_a_lot_completes() {
+        let body = "i=0\nwhile [ $i -lt 4000 ]; do echo \"warning: unused variable at src/lib.rs:$i\" >&2; i=$((i+1)); done\necho done\n";
+        let output = run_script(body, vec![b'x'; 300_000], Duration::from_secs(10))
+            .expect("the hook finishes before its deadline");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"done\n");
+        assert!(output.stderr.len() > 150_000, "{}", output.stderr.len());
+    }
+
+    #[test]
+    fn background_job_does_not_hold_the_hook() {
+        let started = Instant::now();
+        let output = run_script(
+            "cat >/dev/null\nsleep 5 &\necho started\n",
+            b"{}".to_vec(),
+            Duration::from_secs(10),
+        )
+        .expect("the hook finishes before its deadline");
+        assert_eq!(output.stdout, b"started\n");
+        assert!(started.elapsed() < Duration::from_secs(4));
+    }
+
+    #[test]
+    fn hook_past_its_deadline_is_killed() {
+        let started = Instant::now();
+        let output = run_script("sleep 30\n", b"{}".to_vec(), Duration::from_millis(200));
+        assert!(output.is_none());
+        assert!(started.elapsed() < Duration::from_secs(4));
     }
 
     #[test]

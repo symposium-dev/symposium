@@ -50,6 +50,8 @@ The tables below summarize the answers for each agent. Individual agent pages co
 | OpenCode | 60,000 | milliseconds (community hooks plugin) |
 | Goose | N/A | N/A |
 
+Symposium registers 10 seconds for Codex and Copilot and 30 for Antigravity, and leaves the others at their defaults. Plugin hooks run inside that budget, limited to 5 seconds each and 8 together (see [the hook flow](../hook-flow.md)).
+
 ## Event names
 
 Symposium registers hooks for four events on every agent with shell hooks, plus `stop` on Antigravity and Claude Code. Each agent uses different names and casing conventions; *not registered* marks an event the agent has but symposium does not hook.
