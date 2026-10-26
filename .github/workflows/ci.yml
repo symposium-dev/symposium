@@ -88,6 +88,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target || '' }}
+          # symposium-eval's tests and `--check-tasks` run `cargo fmt --check`.
+          components: rustfmt
 
       - name: Install musl tools
         if: matrix.target == 'x86_64-unknown-linux-musl'
@@ -141,6 +143,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4

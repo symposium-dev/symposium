@@ -50,7 +50,7 @@ pub(crate) struct Report {
 /// One check run on the submission.
 #[derive(Debug)]
 pub(crate) struct Step {
-    /// The Cargo subcommand, such as `build`.
+    /// The Cargo subcommand and its arguments, such as `test --lib`.
     pub(crate) command: &'static str,
     pub(crate) outcome: Outcome,
 }
@@ -61,15 +61,18 @@ pub(crate) struct Step {
 pub(crate) enum Outcome {
     Passed,
     Failed {
-        /// The end of the command's error output.
+        /// The end of the command's output; a failing test reports on stdout.
+        stdout: String,
         stderr: String,
-        /// Whether earlier error output was left out of `stderr`; the log has it all.
+        /// Whether earlier output was left out of either; the logs have it all.
         truncated: bool,
     },
     TimedOut,
+    /// Not run, because the build failed.
+    Skipped,
 }
 
-/// How much of a failed step's error output a message shows; the log has all of it.
+/// How much of a failed step's output a message shows; the logs have all of it.
 const SHOWN_LINES: usize = 20;
 
 impl fmt::Display for Step {
@@ -78,9 +81,10 @@ impl fmt::Display for Step {
         match &self.outcome {
             Outcome::Passed => write!(f, "passes `cargo {command}`"),
             Outcome::TimedOut => write!(f, "did not finish `cargo {command}` in time"),
-            Outcome::Failed { stderr, .. } => {
+            Outcome::Skipped => write!(f, "skips `cargo {command}` after the build failed"),
+            Outcome::Failed { stdout, stderr, .. } => {
                 write!(f, "fails `cargo {command}`:")?;
-                let lines: Vec<&str> = stderr.trim_end().lines().collect();
+                let lines: Vec<&str> = stdout.lines().chain(stderr.lines()).collect();
                 for line in &lines[lines.len().saturating_sub(SHOWN_LINES)..] {
                     write!(f, "\n{line}")?;
                 }
@@ -122,16 +126,75 @@ fn try_grade(
         budget: Budget::new(limits.commands),
         logs,
     };
-    let copy = GradingCopy::from_trusted(evals, task)?;
-    let cargo = Cargo::new(copy.project(), copy.scratch());
-    let build_scripts =
-        read_build_scripts(&cargo, &copy.project(), &mut commands, limits.metadata)?;
-    let outside_editable = import_submission(&copy, task.editable(), &build_scripts, submission)?;
-    let build = run_step("build", &cargo.build(), &mut commands, limits.build)?;
+    let prepared = prepare(evals, task, &mut commands, limits)?;
+    let outside_editable = import_submission(
+        &prepared.copy,
+        task.editable(),
+        &prepared.starter_owned,
+        submission,
+    )?;
+    let steps = run_steps(task, &prepared.cargo, &mut commands, limits)?;
     Ok(Report {
         outside_editable,
-        steps: vec![build],
+        steps,
     })
+}
+
+/// A grading copy of the trusted starter, checked before any submission reaches it.
+struct Prepared {
+    copy: GradingCopy,
+    cargo: Cargo,
+    /// Paths the import keeps the starter's beyond the protected names.
+    starter_owned: BTreeSet<String>,
+}
+
+/// Copies the trusted starter and checks it, and the machine, before the submission is
+/// imported, so a failure here is never the submission's.
+fn prepare(
+    evals: &Evals,
+    task: &Task,
+    commands: &mut Commands<'_, impl Backend>,
+    limits: &GradeLimits,
+) -> Result<Prepared, GradeError> {
+    let copy = GradingCopy::from_trusted(evals, task)?;
+    let cargo = Cargo::new(copy.project(), copy.scratch());
+    let starter_owned = read_build_scripts(&cargo, &copy.project(), commands, limits.metadata)?;
+    if task.fmt_check() {
+        preflight(commands, &cargo.fmt_version(), "fmt --version", limits.fmt)?;
+    }
+    Ok(Prepared {
+        copy,
+        cargo,
+        starter_owned,
+    })
+}
+
+/// Builds the imported submission, then runs each later step, or skips it when the build
+/// failed.
+fn run_steps(
+    task: &Task,
+    cargo: &Cargo,
+    commands: &mut Commands<'_, impl Backend>,
+    limits: &GradeLimits,
+) -> Result<Vec<Step>, GradeError> {
+    let build = run_step("build", &cargo.build(), commands, limits.build)?;
+    let build_passed = build.outcome == Outcome::Passed;
+    let mut later = vec![("test --lib", cargo.test_lib(), limits.test)];
+    if task.fmt_check() {
+        later.push(("fmt --check", cargo.fmt_check(), limits.fmt));
+    }
+    let mut steps = vec![build];
+    for (command, invocation, cap) in later {
+        steps.push(if build_passed {
+            run_step(command, &invocation, commands, cap)?
+        } else {
+            Step {
+                command,
+                outcome: Outcome::Skipped,
+            }
+        });
+    }
+    Ok(steps)
 }
 
 /// Runs grading's commands through one backend, charging each to the command budget.
@@ -178,8 +241,9 @@ fn run_step(
         Outcome::Passed
     } else {
         Outcome::Failed {
+            stdout: finished.stdout.tail(),
             stderr: finished.stderr.tail(),
-            truncated: finished.stderr.truncated(),
+            truncated: finished.stdout.truncated() || finished.stderr.truncated(),
         }
     };
     Ok(Step { command, outcome })
@@ -194,20 +258,31 @@ fn read_build_scripts(
     commands: &mut Commands<'_, impl Backend>,
     cap: Duration,
 ) -> Result<BTreeSet<String>, GradeError> {
-    const STEP: &str = "metadata";
+    let finished = preflight(commands, &cargo.metadata(), "metadata", cap)?;
+    cargo::build_scripts(finished.stdout.log(), project)
+}
+
+/// Runs a command that must succeed on the trusted starter. Its failure is the task's or
+/// the machine's, never the submission's.
+fn preflight(
+    commands: &mut Commands<'_, impl Backend>,
+    invocation: &Invocation,
+    step: &'static str,
+    cap: Duration,
+) -> Result<Finished, GradeError> {
     let finished = commands
-        .run(&cargo.metadata(), cap)
-        .map_err(|source| GradeError::Process { step: STEP, source })?;
+        .run(invocation, cap)
+        .map_err(|source| GradeError::Process { step, source })?;
     if finished.timed_out() {
-        return Err(GradeError::TimedOut { step: STEP });
+        return Err(GradeError::TimedOut { step });
     }
     if !finished.succeeded() {
         return Err(GradeError::Preflight {
-            step: STEP,
+            step,
             stderr: finished.stderr.tail().trim().to_owned(),
         });
     }
-    cargo::build_scripts(finished.stdout.log(), project)
+    Ok(finished)
 }
 
 #[cfg(test)]
@@ -223,11 +298,15 @@ mod tests {
     use crate::grade::process::Local;
     use crate::grade::testing::TaskFixture;
 
+    fn grade(fixture: &TaskFixture, lib_rs: &str) -> Report {
+        grade_with(fixture, lib_rs, &GradeLimits::default())
+    }
+
     fn grade_with(fixture: &TaskFixture, lib_rs: &str, limits: &GradeLimits) -> Report {
         let submission = fixture.submission();
         fs::write(submission.path().join("src/lib.rs"), lib_rs).unwrap();
         let logs = TempDir::new().unwrap();
-        match grade(
+        match super::grade(
             fixture.evals(),
             fixture.task(),
             submission.path(),
@@ -312,22 +391,72 @@ mod tests {
     fn a_submission_that_builds_passes_the_build_step() {
         let fixture = TaskFixture::new("");
 
-        let report = grade_with(&fixture, "pub fn works() {}", &GradeLimits::default());
+        let report = grade(&fixture, "pub fn works() {}");
 
-        assert_eq!(report.steps.len(), 1);
+        assert_eq!(report.steps.len(), 2);
         assert_eq!(report.steps[0].outcome, Outcome::Passed);
+        assert_eq!(report.steps[1].outcome, Outcome::Passed);
     }
 
     #[test]
     fn a_build_failure_is_the_submissions_outcome() {
         let fixture = TaskFixture::new("");
 
-        let report = grade_with(&fixture, "pub fn broken( {}", &GradeLimits::default());
+        let report = grade(&fixture, "pub fn broken( {}");
 
         assert!(
             matches!(&report.steps[0].outcome, Outcome::Failed { stderr, .. } if stderr.contains("error")),
             "{report:?}"
         );
+    }
+
+    #[test]
+    fn a_build_failure_skips_the_later_steps() {
+        let fixture = TaskFixture::new("fmt_check = true\n");
+
+        let report = grade(&fixture, "pub fn broken( {}");
+
+        let outcomes: Vec<&Outcome> = report.steps.iter().map(|step| &step.outcome).collect();
+        assert!(matches!(
+            outcomes[..],
+            [Outcome::Failed { .. }, Outcome::Skipped, Outcome::Skipped]
+        ));
+    }
+
+    #[test]
+    fn a_failing_unit_test_fails_the_test_step_with_its_output() {
+        let fixture = TaskFixture::new("");
+
+        let report = grade(
+            &fixture,
+            "#[test]\nfn fails() {\n    panic!(\"boom\");\n}\n",
+        );
+
+        assert_eq!(report.steps[0].outcome, Outcome::Passed);
+        assert_eq!(report.steps[1].command, "test --lib");
+        assert!(
+            matches!(&report.steps[1].outcome, Outcome::Failed { stdout, .. } if stdout.contains("boom")),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn the_fmt_check_runs_only_when_the_task_asks() {
+        let unformatted = "pub fn   spaced ( ) {}\n";
+
+        let report = grade(&TaskFixture::new(""), unformatted);
+        assert_eq!(report.steps.len(), 2);
+
+        let fixture = TaskFixture::new("fmt_check = true\n");
+        let report = grade(&fixture, unformatted);
+        assert_eq!(report.steps[2].command, "fmt --check");
+        assert!(
+            matches!(report.steps[2].outcome, Outcome::Failed { .. }),
+            "{report:?}"
+        );
+
+        let report = grade(&fixture, "pub fn formatted() {}\n");
+        assert_eq!(report.steps[2].outcome, Outcome::Passed);
     }
 
     #[test]

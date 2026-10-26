@@ -108,6 +108,10 @@ impl Task {
         &self.fixtures
     }
 
+    pub(crate) fn fmt_check(&self) -> bool {
+        self.fmt_check
+    }
+
     pub(crate) fn editable(&self) -> &[EditablePattern] {
         &self.editable
     }

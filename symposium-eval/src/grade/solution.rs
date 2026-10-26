@@ -75,7 +75,7 @@ fn report_errors(report: Report) -> Vec<TaskError> {
     let failures = report
         .steps
         .into_iter()
-        .filter(|step| step.outcome != Outcome::Passed)
+        .filter(|step| !matches!(step.outcome, Outcome::Passed | Outcome::Skipped))
         .map(TaskError::SolutionStep);
     edits.chain(failures).collect()
 }
@@ -187,6 +187,7 @@ mod tests {
             "{message}"
         );
         assert!(message.contains("error"), "{message}");
+        assert!(!message.contains("skips"), "{message}");
     }
 
     #[test]

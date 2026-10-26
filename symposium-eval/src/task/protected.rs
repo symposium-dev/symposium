@@ -1,7 +1,9 @@
 //! Paths grading always takes from the starter, whatever `editable` says.
 //!
-//! Each one changes how Cargo builds the crate or runs code while it builds, so a
-//! submission that could replace one could change what grading measures. Grading never
+//! Each one changes how Cargo builds the crate, runs code while it builds, or how
+//! rustfmt judges it, so a submission that could replace one could change what grading
+//! measures. rustfmt reads a config in every directory above a source file, so a
+//! `rustfmt.toml` beside the code would loosen the fmt check. Grading never
 //! imports them; `--check-tasks` rejects an `editable` pattern that would match one, so
 //! an author learns early instead of from a silently ignored file.
 //!
@@ -15,13 +17,15 @@
 /// Components that protect a path wherever they appear. Every `build.rs` counts, not only
 /// the root's: each package's default build script sits at its own root, and a workspace
 /// member's root is a subdirectory.
-const PROTECTED_COMPONENTS: [&str; 6] = [
+const PROTECTED_COMPONENTS: [&str; 8] = [
     "Cargo.toml",
     "Cargo.lock",
     ".cargo",
     "rust-toolchain",
     "rust-toolchain.toml",
     "build.rs",
+    "rustfmt.toml",
+    ".rustfmt.toml",
 ];
 
 /// Whether `path`, relative to the project root with `/` separators, is protected.
@@ -50,6 +54,8 @@ mod tests {
             "nested/rust-toolchain.toml",
             "build.rs",
             "member/build.rs",
+            "src/rustfmt.toml",
+            "src/nested/.rustfmt.toml",
         ] {
             assert!(is_protected(path), "{path}");
         }

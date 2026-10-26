@@ -13,6 +13,8 @@ pub(crate) struct GradeLimits {
     pub(crate) commands: Duration,
     pub(crate) metadata: Duration,
     pub(crate) build: Duration,
+    pub(crate) test: Duration,
+    pub(crate) fmt: Duration,
 }
 
 /// The command time left for one grading. Only time spent running commands is charged,
@@ -28,6 +30,8 @@ impl Default for GradeLimits {
             commands: Duration::from_mins(5),
             metadata: Duration::from_mins(1),
             build: Duration::from_mins(5),
+            test: Duration::from_mins(2),
+            fmt: Duration::from_mins(1),
         }
     }
 }

@@ -86,6 +86,8 @@ impl Cargo {
         env.push(("CARGO_TARGET_DIR".into(), scratch.join("target").into()));
         env.push(("CARGO_HOME".into(), scratch.join("cargo-home").into()));
         env.push(("CARGO_INCREMENTAL".into(), "0".into()));
+        // `cargo fmt` has no `--offline` flag; this covers every subcommand.
+        env.push(("CARGO_NET_OFFLINE".into(), "true".into()));
         for (variable, tool) in [("RUSTC", "rustc"), ("RUSTDOC", "rustdoc")] {
             if let Some(path) = beside(&program, tool) {
                 env.push((variable.into(), path.into()));
@@ -108,6 +110,21 @@ impl Cargo {
 
     pub(crate) fn build(&self) -> Invocation {
         self.invocation("build", &["build", "--locked", "--offline"])
+    }
+
+    /// The tests the submission wrote in its library, however many there are.
+    pub(crate) fn test_lib(&self) -> Invocation {
+        self.invocation("test-lib", &["test", "--lib", "--locked", "--offline"])
+    }
+
+    /// Whether `cargo fmt` is installed, checked before anything is imported.
+    pub(crate) fn fmt_version(&self) -> Invocation {
+        self.invocation("fmt-version", &["fmt", "--version"])
+    }
+
+    /// rustfmt colors its diff even into a pipe, so color is turned off for the log.
+    pub(crate) fn fmt_check(&self) -> Invocation {
+        self.invocation("fmt", &["fmt", "--check", "--", "--color", "never"])
     }
 
     pub(super) fn invocation(&self, log_name: &'static str, args: &[&str]) -> Invocation {
@@ -256,6 +273,7 @@ mod tests {
                 ),
                 ("CARGO_HOME".to_owned(), path(dir.path().join("cargo-home"))),
                 ("CARGO_INCREMENTAL".to_owned(), "0".to_owned()),
+                ("CARGO_NET_OFFLINE".to_owned(), "true".to_owned()),
                 ("RUSTC".to_owned(), path(exe("rustc"))),
                 ("RUSTDOC".to_owned(), path(exe("rustdoc"))),
             ]
