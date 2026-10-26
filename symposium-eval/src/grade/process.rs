@@ -53,7 +53,7 @@ pub(crate) struct Invocation {
     /// The command's whole environment; nothing is inherited.
     pub(crate) env: Vec<(OsString, OsString)>,
     /// Names the log files, such as `metadata` for `metadata.stdout.log`.
-    pub(crate) log_name: &'static str,
+    pub(crate) log_name: String,
 }
 
 /// How a command ended.
@@ -644,7 +644,7 @@ mod tests {
             args: Vec::new(),
             dir: dir.path().to_owned(),
             env: Vec::new(),
-            log_name: "absent",
+            log_name: "absent".to_owned(),
         };
 
         let error = Local

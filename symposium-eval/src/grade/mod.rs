@@ -7,23 +7,24 @@
 
 mod cargo;
 mod error;
+mod hidden;
 mod import;
 mod limits;
 mod process;
 mod solution;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-pub(crate) use error::{GradeError, ImportError, ProcessError};
+pub(crate) use error::{GradeError, ImportError, ListingProblem, ProcessError};
 pub(crate) use import::OutsideEdit;
 pub(crate) use solution::check_solution;
 
 use crate::evals::Evals;
-use crate::task::Task;
-use cargo::Cargo;
+use crate::task::{CheckName, Task};
+use cargo::{Cargo, StarterTargets};
 use import::{GradingCopy, import_submission};
 use limits::{Budget, GradeLimits};
 use process::{Backend, Finished, Invocation};
@@ -59,6 +60,8 @@ pub(crate) struct Step {
 pub(crate) enum StepKind {
     Build,
     TestLib,
+    /// One hidden check, run as exactly one test.
+    Hidden(CheckName),
     Fmt,
 }
 
@@ -75,6 +78,13 @@ pub(crate) enum Outcome {
         truncated: bool,
     },
     TimedOut,
+    /// Exited successfully, but its output did not confirm exactly one passing test.
+    Unconfirmed {
+        stdout: String,
+        stderr: String,
+        /// Whether earlier output was left out of either; the logs have it all.
+        truncated: bool,
+    },
     /// Not run, because the build failed.
     Skipped,
 }
@@ -83,17 +93,20 @@ impl StepKind {
     /// The command line the step runs, for messages.
     pub(crate) fn command(&self) -> String {
         match self {
-            Self::Build => "cargo build",
-            Self::TestLib => "cargo test --lib",
-            Self::Fmt => "cargo fmt --check",
+            Self::Build => "cargo build".to_owned(),
+            Self::TestLib => "cargo test --lib".to_owned(),
+            Self::Hidden(check) => format!("cargo test --test {check}"),
+            Self::Fmt => "cargo fmt --check".to_owned(),
         }
-        .to_owned()
     }
 }
 
 impl fmt::Display for StepKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "`{}`", self.command())
+        match self {
+            Self::Hidden(check) => write!(f, "hidden check `{check}`"),
+            other => write!(f, "`{}`", other.command()),
+        }
     }
 }
 
@@ -103,19 +116,27 @@ const SHOWN_LINES: usize = 20;
 impl fmt::Display for Step {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let kind = &self.kind;
-        match &self.outcome {
-            Outcome::Passed => write!(f, "passes {kind}"),
-            Outcome::TimedOut => write!(f, "did not finish {kind} in time"),
-            Outcome::Skipped => write!(f, "skips {kind} after the build failed"),
+        let output = match &self.outcome {
+            Outcome::Passed => return write!(f, "passes {kind}"),
+            Outcome::TimedOut => return write!(f, "did not finish {kind} in time"),
+            Outcome::Skipped => return write!(f, "skips {kind} after the build failed"),
             Outcome::Failed { stdout, stderr, .. } => {
                 write!(f, "fails {kind}:")?;
-                let lines: Vec<&str> = stdout.lines().chain(stderr.lines()).collect();
-                for line in &lines[lines.len().saturating_sub(SHOWN_LINES)..] {
-                    write!(f, "\n{line}")?;
-                }
-                Ok(())
+                [stdout.as_str(), stderr.as_str()]
             }
+            Outcome::Unconfirmed { stdout, stderr, .. } => {
+                write!(
+                    f,
+                    "exits successfully from {kind}, but its output does not confirm one passing test:"
+                )?;
+                [stdout.as_str(), stderr.as_str()]
+            }
+        };
+        let lines: Vec<&str> = output.iter().flat_map(|text| text.lines()).collect();
+        for line in &lines[lines.len().saturating_sub(SHOWN_LINES)..] {
+            write!(f, "\n{line}")?;
         }
+        Ok(())
     }
 }
 
@@ -183,7 +204,10 @@ fn prepare(
 ) -> Result<Prepared, GradeError> {
     let copy = GradingCopy::from_trusted(evals, task)?;
     let cargo = Cargo::new(copy.project(), copy.scratch());
-    let starter_owned = read_build_scripts(&cargo, &copy.project(), commands, limits.metadata)?;
+    let starter = inspect_starter(&cargo, "metadata", &copy, commands, limits.metadata)?;
+    place_checks(evals, task, &copy, &starter.tests)?;
+    let placed = inspect_starter(&cargo, "metadata-checks", &copy, commands, limits.metadata)?;
+    verify_check_targets(task.checks(), &placed.tests)?;
     if task.fmt_check() {
         preflight(
             commands,
@@ -195,8 +219,31 @@ fn prepare(
     Ok(Prepared {
         copy,
         cargo,
-        starter_owned,
+        starter_owned: starter_owned(starter.build_scripts, task.checks()),
     })
+}
+
+/// Places each hidden check in the copy at `tests/<check>.rs`, once the starter is shown
+/// not to declare a test of that name itself.
+fn place_checks(
+    evals: &Evals,
+    task: &Task,
+    copy: &GradingCopy,
+    declared: &BTreeMap<String, Vec<String>>,
+) -> Result<(), GradeError> {
+    reject_declared_checks(task.checks(), declared)?;
+    for check in task.checks() {
+        copy.place_check(&evals.check_file(task.name(), check), check)?;
+    }
+    Ok(())
+}
+
+/// The paths the import keeps the starter's beyond the protected names: build scripts at
+/// custom paths, and the placed hidden checks.
+fn starter_owned(build_scripts: BTreeSet<String>, checks: &[CheckName]) -> BTreeSet<String> {
+    let mut owned = build_scripts;
+    owned.extend(checks.iter().map(|check| format!("tests/{check}.rs")));
+    owned
 }
 
 /// Builds the imported submission, then runs each later step, or skips it when the build
@@ -210,6 +257,7 @@ fn run_steps(
     let build = run_step(StepKind::Build, &cargo.build(), commands, limits.build)?;
     let build_passed = build.outcome == Outcome::Passed;
     let mut later = vec![StepKind::TestLib];
+    later.extend(task.checks().iter().cloned().map(StepKind::Hidden));
     if task.fmt_check() {
         later.push(StepKind::Fmt);
     }
@@ -220,6 +268,7 @@ fn run_steps(
                 kind,
                 outcome: Outcome::Skipped,
             },
+            StepKind::Hidden(check) => hidden::run(cargo, commands, &check, limits.test)?,
             StepKind::TestLib => run_step(kind, &cargo.test_lib(), commands, limits.test)?,
             StepKind::Fmt => run_step(kind, &cargo.fmt_check(), commands, limits.fmt)?,
             StepKind::Build => unreachable!("the build runs first"),
@@ -290,14 +339,53 @@ fn outcome_of(finished: &Finished) -> Outcome {
 /// Resolves the trusted starter against its lockfile and finds its build scripts at
 /// custom paths, before anything from the submission is in the copy. A failure here is
 /// the task's or the machine's: the submission has not been imported yet.
-fn read_build_scripts(
+fn inspect_starter(
     cargo: &Cargo,
-    project: &Path,
+    log_name: &str,
+    copy: &GradingCopy,
     commands: &mut Commands<'_, impl Backend>,
     cap: Duration,
-) -> Result<BTreeSet<String>, GradeError> {
-    let finished = preflight(commands, &cargo.metadata(), "cargo metadata", cap)?;
-    cargo::build_scripts(finished.stdout.log(), project)
+) -> Result<StarterTargets, GradeError> {
+    let finished = preflight(commands, &cargo.metadata(log_name), "cargo metadata", cap)?;
+    cargo::starter_targets(finished.stdout.log(), &copy.project())
+}
+
+/// Before the checks are placed, no test target may carry a check's name. Metadata does
+/// not report `harness`, so a declared target with `harness = false` would look the same
+/// as the placed check afterwards, and its test would never run under libtest.
+fn reject_declared_checks(
+    checks: &[CheckName],
+    tests: &BTreeMap<String, Vec<String>>,
+) -> Result<(), GradeError> {
+    match checks
+        .iter()
+        .find(|check| tests.contains_key(check.as_str()))
+    {
+        Some(check) => Err(GradeError::CheckDeclared {
+            check: check.clone(),
+        }),
+        None => Ok(()),
+    }
+}
+
+/// Each hidden check must be the only test target named after it, built from the file
+/// grading placed. A manifest can turn off test discovery or point a target elsewhere,
+/// and `cargo test --test <check>` would then run some other test.
+fn verify_check_targets(
+    checks: &[CheckName],
+    tests: &BTreeMap<String, Vec<String>>,
+) -> Result<(), GradeError> {
+    for check in checks {
+        let placed = format!("tests/{check}.rs");
+        let found = tests.get(check.as_str()).map_or(&[][..], Vec::as_slice);
+        if found != [placed] {
+            return Err(GradeError::CheckTarget {
+                check: check.clone(),
+                found: found.to_vec(),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Runs a command that must succeed on the trusted starter. Its failure is the task's or
@@ -339,7 +427,7 @@ mod tests {
 
     use super::*;
     use crate::grade::process::Local;
-    use crate::grade::testing::TaskFixture;
+    use crate::grade::testing::{STARTER_MANIFEST, TaskFixture};
 
     fn grade(fixture: &TaskFixture, lib_rs: &str) -> Report {
         grade_with(fixture, lib_rs, &GradeLimits::default())
@@ -436,9 +524,8 @@ mod tests {
 
         let report = grade(&fixture, "pub fn works() {}");
 
-        assert_eq!(report.steps.len(), 2);
-        assert_eq!(report.steps[0].outcome, Outcome::Passed);
-        assert_eq!(report.steps[1].outcome, Outcome::Passed);
+        let outcomes: Vec<&Outcome> = report.steps.iter().map(|step| &step.outcome).collect();
+        assert_eq!(outcomes, [&Outcome::Passed; 3]);
     }
 
     #[test]
@@ -462,7 +549,12 @@ mod tests {
         let outcomes: Vec<&Outcome> = report.steps.iter().map(|step| &step.outcome).collect();
         assert!(matches!(
             outcomes[..],
-            [Outcome::Failed { .. }, Outcome::Skipped, Outcome::Skipped]
+            [
+                Outcome::Failed { .. },
+                Outcome::Skipped,
+                Outcome::Skipped,
+                Outcome::Skipped
+            ]
         ));
     }
 
@@ -488,17 +580,213 @@ mod tests {
         let unformatted = "pub fn   spaced ( ) {}\n";
 
         let report = grade(&TaskFixture::new(""), unformatted);
-        assert_eq!(report.steps.len(), 2);
+        assert_eq!(report.steps.len(), 3);
 
         let fixture = TaskFixture::new("fmt_check = true\n");
         let report = grade(&fixture, unformatted);
-        assert_eq!(report.steps[2].kind, StepKind::Fmt);
+        assert_eq!(report.steps[3].kind, StepKind::Fmt);
         assert!(
-            matches!(report.steps[2].outcome, Outcome::Failed { .. }),
+            matches!(report.steps[3].outcome, Outcome::Failed { .. }),
             "{report:?}"
         );
 
         let report = grade(&fixture, "pub fn formatted() {}\n");
+        assert_eq!(report.steps[3].outcome, Outcome::Passed);
+    }
+
+    /// Grades `lib_rs` against the hidden check `works` rewritten as `check`.
+    fn grade_check(lib_rs: &str, check: &str) -> Grading {
+        let fixture = TaskFixture::new("");
+        fs::write(fixture.check_file("works"), check).unwrap();
+        let submission = fixture.submission();
+        fs::write(submission.path().join("src/lib.rs"), lib_rs).unwrap();
+        let logs = TempDir::new().unwrap();
+        super::grade(
+            fixture.evals(),
+            fixture.task(),
+            submission.path(),
+            &Local,
+            &GradeLimits::default(),
+            logs.path(),
+        )
+    }
+
+    fn hidden_outcome(grading: &Grading) -> &Outcome {
+        let Grading::Graded(report) = grading else {
+            panic!("expected a report, got {grading:?}");
+        };
+        &report.steps[2].outcome
+    }
+
+    const DOUBLE_CHECK: &str =
+        "#[test]\nfn doubles() {\n    assert_eq!(demo::double(21), 42);\n}\n";
+
+    #[test]
+    fn a_hidden_check_passes_against_a_correct_submission() {
+        let grading = grade_check("pub fn double(x: i32) -> i32 { x * 2 }", DOUBLE_CHECK);
+
+        assert_eq!(hidden_outcome(&grading), &Outcome::Passed);
+    }
+
+    #[test]
+    fn a_hidden_check_that_does_not_compile_fails_the_submission() {
+        let grading = grade_check("pub fn triple(x: i32) -> i32 { x * 3 }", DOUBLE_CHECK);
+
+        assert!(
+            matches!(hidden_outcome(&grading), Outcome::Failed { stderr, .. } if stderr.contains("double")),
+            "{grading:?}"
+        );
+    }
+
+    #[test]
+    fn a_failing_hidden_check_fails_the_submission() {
+        let grading = grade_check("pub fn double(x: i32) -> i32 { x * 3 }", DOUBLE_CHECK);
+
+        assert!(
+            matches!(hidden_outcome(&grading), Outcome::Failed { stdout, .. } if stdout.contains("63")),
+            "{grading:?}"
+        );
+    }
+
+    #[test]
+    fn exiting_before_the_summary_is_unconfirmed() {
+        let grading = grade_check(
+            "pub fn double(_: i32) -> i32 { std::process::exit(0) }",
+            DOUBLE_CHECK,
+        );
+
+        assert!(
+            matches!(hidden_outcome(&grading), Outcome::Unconfirmed { .. }),
+            "{grading:?}"
+        );
+    }
+
+    #[test]
+    fn a_partial_fake_summary_is_unconfirmed() {
+        let grading = grade_check(
+            "pub fn double(_: i32) -> i32 { println!(\"test result: ok. 1 passed\"); std::process::exit(0) }",
+            DOUBLE_CHECK,
+        );
+
+        assert!(
+            matches!(hidden_outcome(&grading), Outcome::Unconfirmed { .. }),
+            "{grading:?}"
+        );
+    }
+
+    #[test]
+    fn a_check_listing_two_tests_is_a_task_error() {
+        let grading = grade_check(
+            "pub fn double(x: i32) -> i32 { x * 2 }",
+            "#[test]\nfn first() {}\n#[test]\nfn second() {}\n",
+        );
+
+        assert!(
+            matches!(
+                &grading,
+                Grading::Infrastructure(GradeError::Listing {
+                    problem: ListingProblem::Count {
+                        entries: 2,
+                        ignored: 0
+                    },
+                    ..
+                })
+            ),
+            "{grading:?}"
+        );
+    }
+
+    #[test]
+    fn a_manifest_that_claims_a_hidden_checks_file_is_a_task_error() {
+        let fixture = TaskFixture::new("");
+        let manifest = format!(
+            "{STARTER_MANIFEST}autotests = false\n\n[[test]]\nname = \"smoke\"\npath = \"tests/works.rs\"\n"
+        );
+        fs::write(fixture.starter().join("Cargo.toml"), manifest).unwrap();
+        let submission = fixture.submission();
+        let logs = TempDir::new().unwrap();
+
+        let grading = super::grade(
+            fixture.evals(),
+            fixture.task(),
+            submission.path(),
+            &Local,
+            &GradeLimits::default(),
+            logs.path(),
+        );
+
+        assert!(
+            matches!(&grading, Grading::Infrastructure(GradeError::CheckTarget { found, .. }) if found.is_empty()),
+            "{grading:?}"
+        );
+    }
+
+    #[test]
+    fn a_starter_that_declares_a_hidden_checks_target_is_a_task_error() {
+        let fixture = TaskFixture::new("");
+        let manifest = format!(
+            "{STARTER_MANIFEST}autotests = false\n\n[[test]]\nname = \"works\"\npath = \"tests/works.rs\"\nharness = false\n"
+        );
+        fs::write(fixture.starter().join("Cargo.toml"), manifest).unwrap();
+        let submission = fixture.submission();
+        let logs = TempDir::new().unwrap();
+
+        let grading = super::grade(
+            fixture.evals(),
+            fixture.task(),
+            submission.path(),
+            &Local,
+            &GradeLimits::default(),
+            logs.path(),
+        );
+
+        assert!(
+            matches!(&grading, Grading::Infrastructure(GradeError::CheckDeclared { check }) if check.as_str() == "works"),
+            "{grading:?}"
+        );
+    }
+
+    #[test]
+    fn a_submission_cannot_replace_a_placed_hidden_check() {
+        let fixture = TaskFixture::new("editable = [\"src/**\", \"tests/**\"]\n");
+        let submission = fixture.submission();
+        fs::write(submission.path().join("src/lib.rs"), "").unwrap();
+        fs::create_dir_all(submission.path().join("tests")).unwrap();
+        fs::write(
+            submission.path().join("tests/works.rs"),
+            "#[test]\nfn works() {}\n",
+        )
+        .unwrap();
+        fs::write(fixture.check_file("works"), DOUBLE_CHECK).unwrap();
+        let logs = TempDir::new().unwrap();
+
+        let grading = super::grade(
+            fixture.evals(),
+            fixture.task(),
+            submission.path(),
+            &Local,
+            &GradeLimits::default(),
+            logs.path(),
+        );
+
+        // The real check calls `double`, which this submission lacks.
+        assert!(
+            matches!(hidden_outcome(&grading), Outcome::Failed { .. }),
+            "{grading:?}"
+        );
+    }
+
+    #[test]
+    fn a_library_test_failure_does_not_skip_the_hidden_checks() {
+        let grading = grade_check(
+            "pub fn double(x: i32) -> i32 { x * 2 }\n#[test]\nfn fails() { panic!() }\n",
+            DOUBLE_CHECK,
+        );
+
+        let Grading::Graded(report) = &grading else {
+            panic!("{grading:?}");
+        };
+        assert!(matches!(report.steps[1].outcome, Outcome::Failed { .. }));
         assert_eq!(report.steps[2].outcome, Outcome::Passed);
     }
 
@@ -527,7 +815,7 @@ pub(crate) mod testing {
     use super::ImportError;
     use super::import::{GradingCopy, OutsideEdit, copy_tree, import_submission};
     use crate::evals::Evals;
-    use crate::task::{Task, TaskName};
+    use crate::task::{CheckName, Task, TaskName};
 
     pub(crate) const STARTER_MANIFEST: &str =
         "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n";
@@ -594,6 +882,11 @@ pub(crate) mod testing {
 
         pub(crate) fn solution(&self) -> PathBuf {
             self.evals.solution_dir(self.task.name())
+        }
+
+        pub(crate) fn check_file(&self, check: &str) -> PathBuf {
+            self.evals
+                .check_file(self.task.name(), &CheckName::new(check).unwrap())
         }
 
         /// A copy of the starter, as an agent that changed nothing would leave it.

@@ -18,7 +18,7 @@ use tempfile::TempDir;
 
 use super::ImportError;
 use crate::evals::Evals;
-use crate::task::{EditablePattern, Task, is_protected};
+use crate::task::{CheckName, EditablePattern, Task, is_protected};
 use crate::tree::{self, EntryKind, TreeEntry, WalkError};
 
 /// A task's trusted project and fixtures in a private temporary directory, laid out as in
@@ -27,6 +27,9 @@ use crate::tree::{self, EntryKind, TreeEntry, WalkError};
 #[derive(Debug)]
 pub(crate) struct GradingCopy {
     root: TempDir,
+    /// The starter as `evals/` holds it, listed before grading adds anything such as the
+    /// hidden checks: the state a submission's changes are measured against.
+    starter: Listing,
 }
 
 /// A change the submission made that grading ignores.
@@ -70,8 +73,9 @@ impl fmt::Display for OutsideEdit {
 }
 
 /// Takes the editable entries of `submission` into `copy`, which still holds the trusted
-/// starter. `build_scripts` are the starter's build scripts at custom paths, which stay
-/// the starter's like every protected file. Returns the outside edits, sorted by path.
+/// starter. `starter_owned` names paths that stay the starter's like every protected
+/// file: build scripts at custom paths, and the hidden checks grading placed. Returns
+/// the outside edits, sorted by path.
 ///
 /// # Errors
 ///
@@ -80,15 +84,15 @@ impl fmt::Display for OutsideEdit {
 pub(crate) fn import_submission(
     copy: &GradingCopy,
     patterns: &[EditablePattern],
-    build_scripts: &BTreeSet<String>,
+    starter_owned: &BTreeSet<String>,
     submission: &Path,
 ) -> Result<Vec<OutsideEdit>, ImportError> {
-    let editable = Editable::new(patterns, build_scripts);
+    let editable = Editable::new(patterns, starter_owned);
     let submission = Submission::list(submission, &editable)?;
-    let starter = copy.listing()?;
-    let mut outside_editable = outside_edits(&starter, &submission, &copy.project(), &editable)?;
-    copy.clear_editable(&starter, &editable)?;
-    outside_editable.extend(copy.import(&submission, &starter, &editable)?);
+    let starter = &copy.starter;
+    let mut outside_editable = outside_edits(starter, &submission, &copy.project(), &editable)?;
+    copy.clear_editable(starter, &editable)?;
+    outside_editable.extend(copy.import(&submission, starter, &editable)?);
     outside_editable.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(outside_editable)
 }
@@ -112,14 +116,12 @@ impl GradingCopy {
                 &format!("fixtures/{fixture}"),
             )?;
         }
-        Ok(Self { root })
-    }
-
-    fn listing(&self) -> Result<Listing, ImportError> {
-        listing(&self.project()).map_err(|source| ImportError::Trusted {
-            tree: "starter".to_owned(),
-            source,
-        })
+        let starter =
+            listing(&root.path().join("project")).map_err(|source| ImportError::Trusted {
+                tree: "starter".to_owned(),
+                source,
+            })?;
+        Ok(Self { root, starter })
     }
 
     /// Removes the starter's editable files, then each editable directory this leaves
@@ -219,6 +221,23 @@ impl<'a> Submission<'a> {
     }
 }
 
+impl GradingCopy {
+    /// Copies a hidden check to `tests/<check>.rs` in the trusted starter, before
+    /// `cargo metadata` runs; the import keeps that path the starter's.
+    pub(crate) fn place_check(&self, source: &Path, check: &CheckName) -> Result<(), ImportError> {
+        let tests = self.project().join("tests");
+        clear_other_type(&tests, EntryKind::Dir)?;
+        create_dir(&tests)?;
+        let target = tests.join(format!("{check}.rs"));
+        clear_other_type(&target, EntryKind::File)?;
+        fs::copy(source, &target).map_err(|source| ImportError::Write {
+            path: target,
+            source,
+        })?;
+        Ok(())
+    }
+}
+
 /// Copies a tree the repository owns, which holds only files and directories. Existing
 /// entries are overlaid, replacing an entry of the other type, so a second tree can be
 /// laid over a first.
@@ -295,19 +314,20 @@ fn clear_other_type(target: &Path, kind: EntryKind) -> Result<(), ImportError> {
 /// The compiled `editable` patterns, and what they may never reach.
 struct Editable {
     matchers: Vec<GlobMatcher>,
-    /// Build scripts at custom paths, in ASCII lowercase like every protected name.
-    build_scripts: BTreeSet<String>,
+    /// Paths that stay the starter's beyond the protected names, in ASCII lowercase like
+    /// every protected name.
+    starter_owned: BTreeSet<String>,
     /// Each pattern's literal prefix, such as `src` for `src/**`.
     roots: Vec<String>,
 }
 
 impl Editable {
-    fn new(patterns: &[EditablePattern], build_scripts: &BTreeSet<String>) -> Self {
+    fn new(patterns: &[EditablePattern], starter_owned: &BTreeSet<String>) -> Self {
         Self {
             matchers: patterns.iter().map(EditablePattern::matcher).collect(),
-            build_scripts: build_scripts
+            starter_owned: starter_owned
                 .iter()
-                .map(|script| script.to_ascii_lowercase())
+                .map(|path| path.to_ascii_lowercase())
                 .collect(),
             roots: patterns
                 .iter()
@@ -319,7 +339,7 @@ impl Editable {
     /// Whether grading takes `path` from the submission.
     fn imports(&self, path: &str) -> bool {
         !is_protected(path)
-            && !self.build_scripts.contains(&path.to_ascii_lowercase())
+            && !self.starter_owned.contains(&path.to_ascii_lowercase())
             && self.matchers.iter().any(|matcher| matcher.is_match(path))
     }
 

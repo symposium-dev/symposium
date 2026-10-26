@@ -38,6 +38,10 @@ pub(crate) enum CheckError {
         #[source]
         source: NameError,
     },
+    #[error(
+        "`checks/{0}` must be named like a Rust identifier (letters, digits, `_`, `-`), since Cargo builds it as a test target of that name"
+    )]
+    TargetName(String),
     #[error("cannot read `checks/{file}`")]
     Read {
         file: String,
@@ -137,6 +141,10 @@ fn check_file(entry: &fs::DirEntry, errors: &mut Vec<CheckError>) -> Option<Chec
             return None;
         }
     };
+    if !is_target_name(stem) {
+        errors.push(CheckError::TargetName(file));
+        return Some(name);
+    }
     match fs::read_to_string(entry.path()) {
         Ok(source) => errors.extend(check_source(&file, &source)),
         Err(source) => errors.push(CheckError::Read { file, source }),
@@ -443,6 +451,16 @@ fn path_text(attribute: &Attribute) -> String {
         .join("::")
 }
 
+/// Cargo names a test target after its file, and the target is compiled as a crate, so
+/// the name must work as a crate name: an identifier, where `-` stands for `_`.
+fn is_target_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|rest| rest.is_ascii_alphanumeric() || rest == '_' || rest == '-')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,6 +470,22 @@ mod tests {
             .iter()
             .map(ToString::to_string)
             .collect()
+    }
+
+    #[test]
+    fn check_names_must_work_as_cargo_targets() {
+        for name in [
+            "works",
+            "settings_survive_reopen",
+            "store-durability",
+            "_private",
+            "v2",
+        ] {
+            assert!(is_target_name(name), "{name}");
+        }
+        for name in ["a.b", "2fast", "-dash", "café", ""] {
+            assert!(!is_target_name(name), "{name}");
+        }
     }
 
     #[test]

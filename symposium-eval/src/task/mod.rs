@@ -108,6 +108,11 @@ impl Task {
         &self.fixtures
     }
 
+    /// The hidden checks, in name order.
+    pub(crate) fn checks(&self) -> &[CheckName] {
+        &self.checks
+    }
+
     pub(crate) fn fmt_check(&self) -> bool {
         self.fmt_check
     }
@@ -137,6 +142,7 @@ impl Task {
             errors.extend(check_errors.into_iter().map(TaskError::from));
             Vec::new()
         });
+        errors.extend(check_collisions(&evals.starter_dir(name), &checks));
         errors.extend(duplicates("plugins", &raw.plugins));
         errors.extend(duplicates("fixtures", &raw.fixtures));
         errors.extend(duplicates("editable", &editable));
@@ -252,6 +258,22 @@ fn check_starter(starter: &Path, editable: &[EditablePattern]) -> Vec<TaskError>
         }
     }
     errors
+}
+
+/// Grading places each hidden check at `tests/<check>.rs`, so the starter cannot have a
+/// file there: it would be silently replaced.
+fn check_collisions<'a>(
+    starter: &'a Path,
+    checks: &'a [CheckName],
+) -> impl Iterator<Item = TaskError> + 'a {
+    checks.iter().filter_map(move |check| {
+        let path = starter.join("tests").join(format!("{check}.rs"));
+        match fs::symlink_metadata(&path) {
+            Ok(_) => Some(TaskError::CheckCollision(check.clone())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(source) => Some(TaskError::Inspect { path, source }),
+        }
+    })
 }
 
 fn default_editable() -> Vec<EditablePattern> {
@@ -573,6 +595,23 @@ mod tests {
                 "editable pattern `member/**` matches `starter/member/Cargo.toml`, which grading always takes from the starter",
                 "editable pattern `.cargo/*` matches `starter/.cargo/config.toml`, which grading always takes from the starter",
                 "editable pattern `build.rs` matches `starter/build.rs`, which grading always takes from the starter",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_starter_test_cannot_share_a_hidden_checks_name() {
+        let (root, evals) = evals_with_task("kind = \"regression\"\nprompt = \"x\"\n");
+        let tests = root.path().join("tasks/demo/starter/tests");
+        fs::create_dir_all(&tests).unwrap();
+        fs::write(tests.join("works.rs"), "").unwrap();
+
+        let errors = load_demo(&evals).unwrap_err();
+
+        assert_eq!(
+            messages(&errors),
+            [
+                "`starter/tests/works.rs` has the name of the hidden check `works`, which grading puts there"
             ]
         );
     }

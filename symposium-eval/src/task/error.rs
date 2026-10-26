@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-use super::{CheckError, EditablePattern, FixtureName, PluginName, SkillList, SkillName};
+use super::{
+    CheckError, CheckName, EditablePattern, FixtureName, PluginName, SkillList, SkillName,
+};
 use crate::evals::EntryError;
 use crate::grade::{GradeError, OutsideEdit, Step};
 use crate::tree::WalkError;
@@ -63,6 +65,10 @@ pub(crate) enum TaskError {
     },
     #[error(transparent)]
     Check(#[from] CheckError),
+    #[error(
+        "`starter/tests/{0}.rs` has the name of the hidden check `{0}`, which grading puts there"
+    )]
+    CheckCollision(CheckName),
     #[error("`solution/` {0}")]
     SolutionDir(DirProblem),
     #[error("cannot grade `solution/`")]
