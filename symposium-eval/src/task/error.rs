@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use super::{CheckError, EditablePattern, FixtureName, PluginName, SkillList, SkillName};
 use crate::evals::EntryError;
-use crate::grade::{GradeError, OutsideEdit};
+use crate::grade::{GradeError, OutsideEdit, Step};
 use crate::tree::WalkError;
 
 /// Why a path that must be a real directory is not one. A failure to inspect the path
@@ -69,6 +69,8 @@ pub(crate) enum TaskError {
     SolutionGrading(#[source] GradeError),
     #[error("`solution/` {0}, outside `editable`; grading ignores it")]
     SolutionOutsideEditable(OutsideEdit),
+    #[error("`solution/` {0}")]
+    SolutionStep(Step),
     #[error("`{list}` lists `{value}` more than once")]
     Duplicate { list: &'static str, value: String },
     #[error("skill `{skill}` is in both `{first}` and `{second}`")]

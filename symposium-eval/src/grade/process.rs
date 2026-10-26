@@ -106,6 +106,15 @@ struct Supervised {
 }
 
 impl Finished {
+    /// A command never started because no time was left for it; it counts as timed out.
+    pub(crate) fn never_started() -> Self {
+        Self {
+            status: None,
+            stdout: Output::default(),
+            stderr: Output::default(),
+        }
+    }
+
     pub(crate) fn timed_out(&self) -> bool {
         self.status.is_none()
     }
@@ -122,13 +131,6 @@ impl Output {
     }
 
     /// Whether earlier output was dropped from [`tail`](Self::tail).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the grading report shows truncation in a later commit"
-        )
-    )]
     pub(crate) fn truncated(&self) -> bool {
         self.truncated
     }

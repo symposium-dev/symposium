@@ -5,21 +5,21 @@
 //! by entry-count and size quotas once grading accepts untrusted submissions, through the
 //! `srt` backend.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct GradeLimits {
     /// For all of grading's commands together.
     pub(crate) commands: Duration,
     pub(crate) metadata: Duration,
-    #[expect(dead_code, reason = "the build step reads this in the next commit")]
     pub(crate) build: Duration,
 }
 
-/// The command time left for one grading.
+/// The command time left for one grading. Only time spent running commands is charged,
+/// so preparing files between commands never shortens the next one's allowance.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Budget {
-    ends: Instant,
+    remaining: Duration,
 }
 
 impl Default for GradeLimits {
@@ -33,15 +33,20 @@ impl Default for GradeLimits {
 }
 
 impl Budget {
-    pub(crate) fn start(commands: Duration) -> Self {
+    pub(crate) fn new(commands: Duration) -> Self {
         Self {
-            ends: Instant::now() + commands,
+            remaining: commands,
         }
     }
 
-    /// A command's deadline: its own cap, or what is left of the budget if that is less.
-    pub(crate) fn deadline(&self, cap: Duration) -> Duration {
-        cap.min(self.ends.saturating_duration_since(Instant::now()))
+    /// A command's allowance: its own cap, or what is left of the budget if that is less.
+    pub(crate) fn allowance(&self, cap: Duration) -> Duration {
+        cap.min(self.remaining)
+    }
+
+    /// Records time a command spent running.
+    pub(crate) fn charge(&mut self, spent: Duration) {
+        self.remaining = self.remaining.saturating_sub(spent);
     }
 }
 
@@ -50,20 +55,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_command_gets_the_smaller_of_its_cap_and_the_time_left() {
-        let budget = Budget::start(Duration::from_secs(10));
+    fn a_command_gets_the_smaller_of_its_cap_and_the_budget_left() {
+        let mut budget = Budget::new(Duration::from_secs(10));
 
         assert_eq!(
-            budget.deadline(Duration::from_secs(1)),
+            budget.allowance(Duration::from_secs(1)),
             Duration::from_secs(1)
         );
-        assert!(budget.deadline(Duration::from_secs(60)) <= Duration::from_secs(10));
+        budget.charge(Duration::from_secs(4));
+        assert_eq!(
+            budget.allowance(Duration::from_secs(60)),
+            Duration::from_secs(6)
+        );
     }
 
     #[test]
     fn a_spent_budget_leaves_no_time() {
-        let budget = Budget::start(Duration::ZERO);
+        let mut budget = Budget::new(Duration::from_secs(1));
 
-        assert_eq!(budget.deadline(Duration::from_secs(60)), Duration::ZERO);
+        budget.charge(Duration::from_secs(5));
+
+        assert_eq!(budget.allowance(Duration::from_secs(60)), Duration::ZERO);
     }
 }

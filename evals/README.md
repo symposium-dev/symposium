@@ -14,4 +14,4 @@ evals/
 ```
 
 Adding an evaluation means adding a directory here. The format and its rules are in [the RFD reference](../md/rfds/skill-evaluation/reference.md#task-format).
-Validate every task with `cargo xtask agent-eval --check-tasks`.
+Validate every task with `cargo xtask agent-eval --check-tasks`. When a task has a `solution/`, it is graded too.

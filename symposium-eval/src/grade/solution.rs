@@ -9,7 +9,7 @@ use tempfile::TempDir;
 use super::import::copy_tree;
 use super::limits::GradeLimits;
 use super::process::Local;
-use super::{Grading, ImportError, Report, grade};
+use super::{Grading, ImportError, Outcome, Report, grade};
 use crate::evals::Evals;
 use crate::task::{DirProblem, Task, TaskError, TaskErrors};
 
@@ -68,11 +68,16 @@ fn grade_solution(evals: &Evals, task: &Task, solution: &Path) -> Result<Report,
 
 /// What a solution's report shows wrong with the task.
 fn report_errors(report: Report) -> Vec<TaskError> {
-    report
+    let edits = report
         .outside_editable
         .into_iter()
-        .map(TaskError::SolutionOutsideEditable)
-        .collect()
+        .map(TaskError::SolutionOutsideEditable);
+    let failures = report
+        .steps
+        .into_iter()
+        .filter(|step| step.outcome != Outcome::Passed)
+        .map(TaskError::SolutionStep);
+    edits.chain(failures).collect()
 }
 
 /// A scratch directory holding `submission/`, the starter with `solution/` copied over
@@ -167,6 +172,21 @@ mod tests {
             ),
             "{message}"
         );
+    }
+
+    #[test]
+    fn a_solution_that_does_not_build_is_rejected() {
+        let fixture = TaskFixture::new("");
+        fs::create_dir_all(fixture.solution().join("src")).unwrap();
+        fs::write(fixture.solution().join("src/lib.rs"), "pub fn broken( {}").unwrap();
+
+        let message = check(&fixture).unwrap_err();
+
+        assert!(
+            message.starts_with("`solution/` fails `cargo build`:"),
+            "{message}"
+        );
+        assert!(message.contains("error"), "{message}");
     }
 
     #[test]

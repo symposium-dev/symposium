@@ -106,6 +106,10 @@ impl Cargo {
         )
     }
 
+    pub(crate) fn build(&self) -> Invocation {
+        self.invocation("build", &["build", "--locked", "--offline"])
+    }
+
     pub(super) fn invocation(&self, log_name: &'static str, args: &[&str]) -> Invocation {
         Invocation {
             program: self.program.clone(),

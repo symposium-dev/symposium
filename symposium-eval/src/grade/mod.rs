@@ -13,8 +13,9 @@ mod process;
 mod solution;
 
 use std::collections::BTreeSet;
+use std::fmt;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub(crate) use error::{GradeError, ImportError, ProcessError};
 pub(crate) use import::OutsideEdit;
@@ -25,7 +26,7 @@ use crate::task::Task;
 use cargo::Cargo;
 use import::{GradingCopy, import_submission};
 use limits::{Budget, GradeLimits};
-use process::Backend;
+use process::{Backend, Finished, Invocation};
 
 /// What grading concluded about one submission.
 #[derive(Debug)]
@@ -42,6 +43,51 @@ pub(crate) enum Grading {
 pub(crate) struct Report {
     /// Sorted by path.
     pub(crate) outside_editable: Vec<OutsideEdit>,
+    /// The checks run on the submission, in order.
+    pub(crate) steps: Vec<Step>,
+}
+
+/// One check run on the submission.
+#[derive(Debug)]
+pub(crate) struct Step {
+    /// The Cargo subcommand, such as `build`.
+    pub(crate) command: &'static str,
+    pub(crate) outcome: Outcome,
+}
+
+/// How a check went. Every outcome here is the submission's: a command that could not be
+/// run at all is a [`GradeError`] instead.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Outcome {
+    Passed,
+    Failed {
+        /// The end of the command's error output.
+        stderr: String,
+        /// Whether earlier error output was left out of `stderr`; the log has it all.
+        truncated: bool,
+    },
+    TimedOut,
+}
+
+/// How much of a failed step's error output a message shows; the log has all of it.
+const SHOWN_LINES: usize = 20;
+
+impl fmt::Display for Step {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let command = self.command;
+        match &self.outcome {
+            Outcome::Passed => write!(f, "passes `cargo {command}`"),
+            Outcome::TimedOut => write!(f, "did not finish `cargo {command}` in time"),
+            Outcome::Failed { stderr, .. } => {
+                write!(f, "fails `cargo {command}`:")?;
+                let lines: Vec<&str> = stderr.trim_end().lines().collect();
+                for line in &lines[lines.len().saturating_sub(SHOWN_LINES)..] {
+                    write!(f, "\n{line}")?;
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Grades `submission` against `task`, running commands through `backend` and writing
@@ -71,18 +117,72 @@ fn try_grade(
     limits: &GradeLimits,
     logs: &Path,
 ) -> Result<Report, GradeError> {
-    let budget = Budget::start(limits.commands);
+    let mut commands = Commands {
+        backend,
+        budget: Budget::new(limits.commands),
+        logs,
+    };
     let copy = GradingCopy::from_trusted(evals, task)?;
     let cargo = Cargo::new(copy.project(), copy.scratch());
-    let build_scripts = read_build_scripts(
-        &cargo,
-        &copy.project(),
-        backend,
-        budget.deadline(limits.metadata),
-        logs,
-    )?;
+    let build_scripts =
+        read_build_scripts(&cargo, &copy.project(), &mut commands, limits.metadata)?;
     let outside_editable = import_submission(&copy, task.editable(), &build_scripts, submission)?;
-    Ok(Report { outside_editable })
+    let build = run_step("build", &cargo.build(), &mut commands, limits.build)?;
+    Ok(Report {
+        outside_editable,
+        steps: vec![build],
+    })
+}
+
+/// Runs grading's commands through one backend, charging each to the command budget.
+struct Commands<'a, B> {
+    backend: &'a B,
+    budget: Budget,
+    logs: &'a Path,
+}
+
+impl<B: Backend> Commands<'_, B> {
+    /// Runs `invocation` for at most `cap`, or what is left of the budget if that is less.
+    /// With no time left, the command is not started at all, so a spent budget cannot keep
+    /// launching and stopping commands.
+    fn run(&mut self, invocation: &Invocation, cap: Duration) -> Result<Finished, ProcessError> {
+        let allowance = self.budget.allowance(cap);
+        if allowance.is_zero() {
+            return Ok(Finished::never_started());
+        }
+        let started = Instant::now();
+        let finished = self.backend.run(invocation, allowance, self.logs);
+        self.budget.charge(started.elapsed());
+        finished
+    }
+}
+
+/// Runs one check on the imported submission. A failure or deadline Cargo reports is the
+/// submission's outcome; a failure to start, supervise, stop, or collect the command is
+/// an infrastructure error.
+fn run_step(
+    command: &'static str,
+    invocation: &Invocation,
+    commands: &mut Commands<'_, impl Backend>,
+    cap: Duration,
+) -> Result<Step, GradeError> {
+    let finished = commands
+        .run(invocation, cap)
+        .map_err(|source| GradeError::Process {
+            step: command,
+            source,
+        })?;
+    let outcome = if finished.timed_out() {
+        Outcome::TimedOut
+    } else if finished.succeeded() {
+        Outcome::Passed
+    } else {
+        Outcome::Failed {
+            stderr: finished.stderr.tail(),
+            truncated: finished.stderr.truncated(),
+        }
+    };
+    Ok(Step { command, outcome })
 }
 
 /// Resolves the trusted starter against its lockfile and finds its build scripts at
@@ -91,13 +191,12 @@ fn try_grade(
 fn read_build_scripts(
     cargo: &Cargo,
     project: &Path,
-    backend: &impl Backend,
-    deadline: Duration,
-    logs: &Path,
+    commands: &mut Commands<'_, impl Backend>,
+    cap: Duration,
 ) -> Result<BTreeSet<String>, GradeError> {
     const STEP: &str = "metadata";
-    let finished = backend
-        .run(&cargo.metadata(), deadline, logs)
+    let finished = commands
+        .run(&cargo.metadata(), cap)
         .map_err(|source| GradeError::Process { step: STEP, source })?;
     if finished.timed_out() {
         return Err(GradeError::TimedOut { step: STEP });
@@ -109,6 +208,140 @@ fn read_build_scripts(
         });
     }
     cargo::build_scripts(finished.stdout.log(), project)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+    use std::fs;
+    use std::thread;
+    use std::time::Duration;
+
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::grade::process::Local;
+    use crate::grade::testing::TaskFixture;
+
+    fn grade_with(fixture: &TaskFixture, lib_rs: &str, limits: &GradeLimits) -> Report {
+        let submission = fixture.submission();
+        fs::write(submission.path().join("src/lib.rs"), lib_rs).unwrap();
+        let logs = TempDir::new().unwrap();
+        match grade(
+            fixture.evals(),
+            fixture.task(),
+            submission.path(),
+            &Local,
+            limits,
+            logs.path(),
+        ) {
+            Grading::Graded(report) => report,
+            other => panic!("expected a report, got {other:?}"),
+        }
+    }
+
+    /// Records each allowance it is given, then spends `running` as if a command ran.
+    struct Recording {
+        allowances: RefCell<Vec<Duration>>,
+        running: Duration,
+    }
+
+    impl Backend for Recording {
+        fn run(
+            &self,
+            _invocation: &Invocation,
+            deadline: Duration,
+            _logs: &Path,
+        ) -> Result<Finished, ProcessError> {
+            self.allowances.borrow_mut().push(deadline);
+            thread::sleep(self.running);
+            Err(ProcessError::OutputNotClosed)
+        }
+    }
+
+    #[test]
+    fn time_between_commands_is_not_charged() {
+        let backend = Recording {
+            allowances: RefCell::new(Vec::new()),
+            running: Duration::from_millis(100),
+        };
+        let logs = TempDir::new().unwrap();
+        let mut commands = Commands {
+            backend: &backend,
+            budget: Budget::new(Duration::from_secs(10)),
+            logs: logs.path(),
+        };
+        let invocation = Cargo::new(logs.path().to_owned(), logs.path()).build();
+
+        let _ = commands.run(&invocation, Duration::from_secs(60));
+        // Preparing files between commands, such as importing the submission. The gap is
+        // far longer than the command, so a slow machine cannot blur the two.
+        thread::sleep(Duration::from_secs(3));
+        let _ = commands.run(&invocation, Duration::from_secs(60));
+
+        let allowances = backend.allowances.borrow();
+        assert_eq!(allowances[0], Duration::from_secs(10));
+        let charged = Duration::from_secs(10).saturating_sub(allowances[1]);
+        assert!(
+            charged >= Duration::from_millis(100) && charged < Duration::from_secs(2),
+            "{charged:?}"
+        );
+    }
+
+    #[test]
+    fn a_spent_budget_starts_no_command() {
+        let backend = Recording {
+            allowances: RefCell::new(Vec::new()),
+            running: Duration::ZERO,
+        };
+        let logs = TempDir::new().unwrap();
+        let mut commands = Commands {
+            backend: &backend,
+            budget: Budget::new(Duration::ZERO),
+            logs: logs.path(),
+        };
+        let invocation = Cargo::new(logs.path().to_owned(), logs.path()).build();
+
+        let finished = commands.run(&invocation, Duration::from_secs(60)).unwrap();
+
+        assert!(finished.timed_out());
+        assert!(backend.allowances.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_submission_that_builds_passes_the_build_step() {
+        let fixture = TaskFixture::new("");
+
+        let report = grade_with(&fixture, "pub fn works() {}", &GradeLimits::default());
+
+        assert_eq!(report.steps.len(), 1);
+        assert_eq!(report.steps[0].outcome, Outcome::Passed);
+    }
+
+    #[test]
+    fn a_build_failure_is_the_submissions_outcome() {
+        let fixture = TaskFixture::new("");
+
+        let report = grade_with(&fixture, "pub fn broken( {}", &GradeLimits::default());
+
+        assert!(
+            matches!(&report.steps[0].outcome, Outcome::Failed { stderr, .. } if stderr.contains("error")),
+            "{report:?}"
+        );
+    }
+
+    #[test]
+    fn a_build_past_its_deadline_times_out() {
+        let fixture = TaskFixture::new("");
+        let limits = GradeLimits {
+            build: Duration::ZERO,
+            ..GradeLimits::default()
+        };
+
+        let report = grade_with(&fixture, "pub fn works() {}", &limits);
+
+        assert_eq!(report.steps[0].outcome, Outcome::TimedOut);
+    }
 }
 
 #[cfg(test)]
