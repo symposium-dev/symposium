@@ -131,3 +131,23 @@ async fn agents_that_read_context_after_a_tool_call_get_the_notice() {
         .unwrap();
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_workspace_seen_for_the_first_time_gets_no_notice() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-notice0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let stdout = respond(&ctx, HookAgent::Claude, HookStep::user_prompt("first")).await;
+            assert!(!stdout.contains(NOTICE), "first prompt: {stdout}");
+
+            add_crate_b(ctx.workspace_root.as_ref().unwrap());
+            let stdout = respond(&ctx, HookAgent::Claude, HookStep::user_prompt("next")).await;
+            assert_notice(HookAgent::Claude, &stdout);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
