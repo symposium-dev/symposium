@@ -340,13 +340,14 @@ pub(super) fn register_pi_mcp_servers(
     path: &Path,
     servers: &[McpServer],
     out: &Output,
-) -> Result<()> {
+) -> Result<Vec<String>> {
     let mut config = load_json_or_empty(path)?;
     anyhow::ensure!(config.is_object(), "Pi MCP config must be an object");
     if !config.get("mcpServers").is_some_and(|v| v.is_object()) {
         config["mcpServers"] = json!({});
     }
     let mut changed = false;
+    let mut registered = Vec::new();
     for server in servers {
         if matches!(server, McpServer::Sse(_)) {
             out.warn(format!(
@@ -356,6 +357,7 @@ pub(super) fn register_pi_mcp_servers(
             continue;
         }
         let name = server_name(server);
+        registered.push(name.to_string());
         let mut expected = config["mcpServers"][name].clone();
         if !expected.is_object() {
             expected = json!({});
@@ -382,7 +384,7 @@ pub(super) fn register_pi_mcp_servers(
     if changed {
         save_json(path, &config)?;
     }
-    Ok(())
+    Ok(registered)
 }
 
 pub(super) fn unregister_pi_mcp_servers(path: &Path, names: &[&str], out: &Output) -> Result<()> {
@@ -888,7 +890,10 @@ mod tests {
                 "personal": {"command": "personal-server"}
             }
         }).to_string()).unwrap();
-        register_pi_mcp_servers(&path, &env_and_remote_servers(), &Output::quiet()).unwrap();
+        assert_eq!(
+            register_pi_mcp_servers(&path, &env_and_remote_servers(), &Output::quiet()).unwrap(),
+            ["withenv", "remote"]
+        );
         let content = fs::read_to_string(&path).unwrap();
         let config: serde_json::Value = serde_json::from_str(&content).unwrap();
         assert_eq!(config["mcpServers"]["withenv"]["env"]["TOKEN"], "abc");
@@ -900,7 +905,10 @@ mod tests {
             "Bearer t"
         );
         assert_eq!(config["autoEnableCodemode"], false);
-        register_pi_mcp_servers(&path, &env_and_remote_servers(), &Output::quiet()).unwrap();
+        assert_eq!(
+            register_pi_mcp_servers(&path, &env_and_remote_servers(), &Output::quiet()).unwrap(),
+            ["withenv", "remote"]
+        );
         assert_eq!(fs::read_to_string(&path).unwrap(), content);
         unregister_pi_mcp_servers(&path, &["withenv", "remote"], &Output::quiet()).unwrap();
         let config: serde_json::Value =
@@ -921,7 +929,11 @@ mod tests {
             "legacy",
             "https://example.com/sse",
         ));
-        register_pi_mcp_servers(&path, &[server], &Output::quiet()).unwrap();
+        assert!(
+            register_pi_mcp_servers(&path, &[server], &Output::quiet())
+                .unwrap()
+                .is_empty()
+        );
         assert!(
             !path.exists(),
             "Pi must not receive an unsupported transport"

@@ -91,7 +91,9 @@ Pi 1.0 reads `mcpServers` from `.pi/mcp.json` and
 `~/.pi/agent/mcp.json`. Entries use `command`, `args`, and `env` for stdio, or
 `url` and `headers` for streamable HTTP. `register_pi_mcp_servers` updates the
 transport fields while preserving Pi-specific user options. SSE is unsupported
-and is skipped with a warning.
+and is skipped with a warning. Registration returns the supported server names,
+including unchanged entries, for the MCP ownership ledger; skipped SSE servers
+are not recorded.
 
 ## Telemetry vocabulary
 
