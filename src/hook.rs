@@ -508,6 +508,10 @@ async fn run_auto_sync(
         deps.reuse(workspace, dep_ids);
         return (false, Vec::new());
     }
+    let inputs_changed = state
+        .last_sync
+        .as_ref()
+        .is_some_and(|last| !last.inputs.is_empty());
     if deps.info().await.is_none() {
         tracing::debug!("auto-sync skipped: not in a workspace");
         return (false, Vec::new());
@@ -532,7 +536,7 @@ async fn run_auto_sync(
         state.record_sync(workspace, deps.dep_ids().await);
         state.save(sym, &start);
     }
-    (!session_start, plugin_changes)
+    (!session_start && inputs_changed, plugin_changes)
 }
 
 fn plugin_reload_notice(
