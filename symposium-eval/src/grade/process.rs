@@ -61,13 +61,6 @@ pub(crate) struct Invocation {
 pub(crate) struct Finished {
     /// `None` when the deadline passed and the command was killed.
     pub(crate) status: Option<ExitStatus>,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "build-script discovery reads it in the next commit"
-        )
-    )]
     pub(crate) stdout: Output,
     pub(crate) stderr: Output,
 }
@@ -140,13 +133,6 @@ impl Output {
         self.truncated
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "build-script discovery reads it in the next commit"
-        )
-    )]
     pub(crate) fn log(&self) -> &Path {
         &self.log
     }

@@ -12,6 +12,7 @@ mod limits;
 mod process;
 mod solution;
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
@@ -73,20 +74,27 @@ fn try_grade(
     let budget = Budget::start(limits.commands);
     let copy = GradingCopy::from_trusted(evals, task)?;
     let cargo = Cargo::new(copy.project(), copy.scratch());
-    resolve_starter(&cargo, backend, budget.deadline(limits.metadata), logs)?;
-    let outside_editable = import_submission(&copy, task.editable(), submission)?;
+    let build_scripts = read_build_scripts(
+        &cargo,
+        &copy.project(),
+        backend,
+        budget.deadline(limits.metadata),
+        logs,
+    )?;
+    let outside_editable = import_submission(&copy, task.editable(), &build_scripts, submission)?;
     Ok(Report { outside_editable })
 }
 
-/// Resolves the trusted starter against its lockfile, before anything from the
-/// submission is in the copy. A failure here is the task's or the machine's: the
-/// submission has not been imported yet.
-fn resolve_starter(
+/// Resolves the trusted starter against its lockfile and finds its build scripts at
+/// custom paths, before anything from the submission is in the copy. A failure here is
+/// the task's or the machine's: the submission has not been imported yet.
+fn read_build_scripts(
     cargo: &Cargo,
+    project: &Path,
     backend: &impl Backend,
     deadline: Duration,
     logs: &Path,
-) -> Result<(), GradeError> {
+) -> Result<BTreeSet<String>, GradeError> {
     const STEP: &str = "metadata";
     let finished = backend
         .run(&cargo.metadata(), deadline, logs)
@@ -100,11 +108,12 @@ fn resolve_starter(
             stderr: finished.stderr.tail().trim().to_owned(),
         });
     }
-    Ok(())
+    cargo::build_scripts(finished.stdout.log(), project)
 }
 
 #[cfg(test)]
 pub(crate) mod testing {
+    use std::collections::BTreeSet;
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -190,8 +199,16 @@ pub(crate) mod testing {
         }
 
         pub(crate) fn build_copy(&self, submission: &Path) -> Result<Imported, ImportError> {
+            self.build_copy_with(submission, &BTreeSet::new())
+        }
+
+        pub(crate) fn build_copy_with(
+            &self,
+            submission: &Path,
+            build_scripts: &BTreeSet<String>,
+        ) -> Result<Imported, ImportError> {
             let copy = GradingCopy::from_trusted(&self.evals, &self.task)?;
-            let edits = import_submission(&copy, self.task.editable(), submission)?;
+            let edits = import_submission(&copy, self.task.editable(), build_scripts, submission)?;
             Ok(Imported { copy, edits })
         }
     }

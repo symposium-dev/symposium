@@ -93,6 +93,14 @@ pub(crate) enum GradeError {
     TimedOut { step: &'static str },
     #[error("`cargo {step}` failed on the trusted starter: {stderr}")]
     Preflight { step: &'static str, stderr: String },
+    #[error("cannot read `{}`", .path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("`cargo metadata` printed something other than its documented format")]
+    Metadata(#[source] serde_json::Error),
 }
 
 impl ImportError {

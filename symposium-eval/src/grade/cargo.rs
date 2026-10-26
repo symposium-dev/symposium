@@ -1,4 +1,4 @@
-//! The Cargo commands grading runs.
+//! The Cargo commands grading runs, and what it reads from them.
 //!
 //! Every command runs in the grading copy with `--locked --offline`, a private target
 //! directory and `CARGO_HOME`, and incremental compilation off. Its environment is built,
@@ -12,9 +12,14 @@
 //! grading copy, which can include the developer's home. Only a run directory whose
 //! ancestors grading controls closes that, which the `srt` backend provides.
 
+use std::collections::BTreeSet;
 use std::ffi::OsString;
+use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
+
+use super::GradeError;
 use super::process::Invocation;
 
 /// Variables passed through from the environment `cargo xtask` runs in, compared without
@@ -47,6 +52,23 @@ pub(crate) struct Cargo {
     program: OsString,
     project: PathBuf,
     env: Vec<(OsString, OsString)>,
+}
+
+/// The parts of `cargo metadata --format-version 1` grading reads.
+#[derive(Debug, Deserialize)]
+struct Metadata {
+    packages: Vec<Package>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Package {
+    targets: Vec<Target>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Target {
+    kind: Vec<String>,
+    src_path: PathBuf,
 }
 
 impl Cargo {
@@ -124,10 +146,52 @@ fn beside(program: &OsString, tool: &str) -> Option<PathBuf> {
     tool.is_file().then_some(tool)
 }
 
+/// The project-relative, `/`-separated paths of every build script inside `project`,
+/// read from the full `cargo metadata` output in `log`.
+///
+/// # Errors
+///
+/// When the log cannot be read or is not the metadata Cargo documents.
+pub(crate) fn build_scripts(log: &Path, project: &Path) -> Result<BTreeSet<String>, GradeError> {
+    let text = fs::read(log).map_err(|source| GradeError::Read {
+        path: log.to_owned(),
+        source,
+    })?;
+    let metadata: Metadata = serde_json::from_slice(&text).map_err(GradeError::Metadata)?;
+    let project = project.canonicalize().map_err(|source| GradeError::Read {
+        path: project.to_owned(),
+        source,
+    })?;
+    let mut scripts = BTreeSet::new();
+    for target in metadata
+        .packages
+        .iter()
+        .flat_map(|package| &package.targets)
+    {
+        if !target.kind.iter().any(|kind| kind == "custom-build") {
+            continue;
+        }
+        let script = target
+            .src_path
+            .canonicalize()
+            .map_err(|source| GradeError::Read {
+                path: target.src_path.clone(),
+                source,
+            })?;
+        // A fixture's build script lies outside the project, where nothing is editable.
+        if let Ok(relative) = script.strip_prefix(&project) {
+            let components: Vec<_> = relative
+                .components()
+                .map(|component| component.as_os_str().to_string_lossy())
+                .collect();
+            scripts.insert(components.join("/"));
+        }
+    }
+    Ok(scripts)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use tempfile::TempDir;
 
     use super::*;
@@ -192,5 +256,34 @@ mod tests {
                 ("RUSTDOC".to_owned(), path(exe("rustdoc"))),
             ]
         );
+    }
+
+    #[test]
+    fn build_scripts_inside_the_project_are_found_relative_to_it() {
+        let dir = TempDir::new().unwrap();
+        let project = dir.path().join("project");
+        let fixture = dir.path().join("fixtures/store");
+        fs::create_dir_all(project.join("tools")).unwrap();
+        fs::create_dir_all(&fixture).unwrap();
+        fs::write(project.join("tools/generate.rs"), "").unwrap();
+        fs::write(fixture.join("build.rs"), "").unwrap();
+        fs::write(project.join("main.rs"), "").unwrap();
+        let metadata = serde_json::json!({
+            "packages": [
+                { "targets": [
+                    { "kind": ["lib"], "src_path": project.join("main.rs") },
+                    { "kind": ["custom-build"], "src_path": project.join("tools/generate.rs") },
+                ] },
+                { "targets": [
+                    { "kind": ["custom-build"], "src_path": fixture.join("build.rs") },
+                ] },
+            ],
+        });
+        let log = dir.path().join("metadata.stdout.log");
+        fs::write(&log, metadata.to_string()).unwrap();
+
+        let scripts = build_scripts(&log, &project).unwrap();
+
+        assert_eq!(scripts, BTreeSet::from(["tools/generate.rs".to_owned()]));
     }
 }

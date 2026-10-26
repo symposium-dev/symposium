@@ -70,7 +70,8 @@ impl fmt::Display for OutsideEdit {
 }
 
 /// Takes the editable entries of `submission` into `copy`, which still holds the trusted
-/// starter. Returns the outside edits, sorted by path.
+/// starter. `build_scripts` are the starter's build scripts at custom paths, which stay
+/// the starter's like every protected file. Returns the outside edits, sorted by path.
 ///
 /// # Errors
 ///
@@ -79,9 +80,10 @@ impl fmt::Display for OutsideEdit {
 pub(crate) fn import_submission(
     copy: &GradingCopy,
     patterns: &[EditablePattern],
+    build_scripts: &BTreeSet<String>,
     submission: &Path,
 ) -> Result<Vec<OutsideEdit>, ImportError> {
-    let editable = Editable::new(patterns);
+    let editable = Editable::new(patterns, build_scripts);
     let submission = Submission::list(submission, &editable)?;
     let starter = copy.listing()?;
     let mut outside_editable = outside_edits(&starter, &submission, &copy.project(), &editable)?;
@@ -290,17 +292,23 @@ fn clear_other_type(target: &Path, kind: EntryKind) -> Result<(), ImportError> {
     }
 }
 
-/// The compiled `editable` patterns.
+/// The compiled `editable` patterns, and what they may never reach.
 struct Editable {
     matchers: Vec<GlobMatcher>,
+    /// Build scripts at custom paths, in ASCII lowercase like every protected name.
+    build_scripts: BTreeSet<String>,
     /// Each pattern's literal prefix, such as `src` for `src/**`.
     roots: Vec<String>,
 }
 
 impl Editable {
-    fn new(patterns: &[EditablePattern]) -> Self {
+    fn new(patterns: &[EditablePattern], build_scripts: &BTreeSet<String>) -> Self {
         Self {
             matchers: patterns.iter().map(EditablePattern::matcher).collect(),
+            build_scripts: build_scripts
+                .iter()
+                .map(|script| script.to_ascii_lowercase())
+                .collect(),
             roots: patterns
                 .iter()
                 .map(|pattern| pattern.literal_prefix().to_owned())
@@ -310,7 +318,9 @@ impl Editable {
 
     /// Whether grading takes `path` from the submission.
     fn imports(&self, path: &str) -> bool {
-        !is_protected(path) && self.matchers.iter().any(|matcher| matcher.is_match(path))
+        !is_protected(path)
+            && !self.build_scripts.contains(&path.to_ascii_lowercase())
+            && self.matchers.iter().any(|matcher| matcher.is_match(path))
     }
 
     /// Whether `path` is an editable root, inside one, or holds one: a link there would
@@ -710,6 +720,28 @@ mod tests {
     }
 
     #[test]
+    fn build_scripts_at_custom_paths_stay_the_starters() {
+        let fixture = TaskFixture::new("");
+        fs::write(fixture.starter().join("src/generate.rs"), "trusted").unwrap();
+        let submission = fixture.submission();
+        fs::write(submission.path().join("src/generate.rs"), "replaced").unwrap();
+        let build_scripts = BTreeSet::from(["src/generate.rs".to_owned()]);
+
+        let import = fixture
+            .build_copy_with(submission.path(), &build_scripts)
+            .unwrap();
+
+        assert_eq!(read_project(&import, "src/generate.rs").unwrap(), "trusted");
+        assert_eq!(
+            import.outside_editable(),
+            [OutsideEdit {
+                path: "src/generate.rs".to_owned(),
+                change: Change::Modified,
+            }]
+        );
+    }
+
+    #[test]
     fn protected_names_in_another_case_are_not_imported() {
         let fixture = TaskFixture::new("");
         let submission = fixture.submission();
@@ -774,14 +806,17 @@ mod tests {
 
     #[test]
     fn literal_prefixes_are_editable_roots() {
-        let editable = Editable::new(&[EditablePattern::new("src/**").unwrap()]);
+        let editable = Editable::new(&[EditablePattern::new("src/**").unwrap()], &BTreeSet::new());
 
         assert!(editable.reaches("src"));
         assert!(editable.reaches("src/nested/link"));
         assert!(!editable.reaches("srcs"));
         assert!(!editable.reaches("docs/link"));
 
-        let nested = Editable::new(&[EditablePattern::new("crates/core/src/*.rs").unwrap()]);
+        let nested = Editable::new(
+            &[EditablePattern::new("crates/core/src/*.rs").unwrap()],
+            &BTreeSet::new(),
+        );
         assert!(nested.reaches("crates"));
         assert!(nested.reaches("crates/core"));
         assert!(!nested.reaches("crates/other"));
