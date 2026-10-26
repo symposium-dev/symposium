@@ -31,7 +31,7 @@ The payload is parsed first, and the agent's parser can declare it not an occurr
        - Run the installation's `install_commands` (post-source) before invoking the runnable.
        - Spawn `path args…` directly for `Exec`, or `sh path args…` for `Script`.
      - Pass the event JSON (in the selected format) on stdin to the plugin's hook.
-     - Collect output from each handler.
+     - Collect output from each handler. Stdout is parsed for every exit code except 2 and a missing one, and a code other than 0 is logged as a warning.
      - Convert output back to the agent's wire format.
      - Merge results (e.g., allow/block decisions, output text) across all handlers. `merge` lets a later value replace an earlier one, so on `SessionStart`, `UserPromptSubmit` and `PostToolUse` a `JoinedContext` keeps every source's context (the builtin fragments first, then each hook) and writes the joined text back after each merge. `PreToolUse` and `Stop` are left out: there some agents keep context in the field that holds the decision.
      - Return the merged result to the agent.
