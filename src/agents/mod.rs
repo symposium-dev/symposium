@@ -381,7 +381,7 @@ impl Agent {
             Agent::OpenCode => {
                 mcp_server_registration::unregister_opencode_mcp_servers(path, names, out)
             }
-            Agent::Pi => mcp_server_registration::unregister_pi_mcp_servers(&path, names, out),
+            Agent::Pi => mcp_server_registration::unregister_pi_mcp_servers(path, names, out),
         }
     }
 
