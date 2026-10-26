@@ -44,6 +44,18 @@ Each module arrives with the RFD step that needs it:
 
 The crate exports only `run`; everything else is `pub(crate)` until another crate needs it. `Evals` holds the `evals/` layout so no other code joins those paths itself.
 
+## Grading
+
+Grading never runs a submission in place. `build_grading_copy` (in `grade::import`) builds a **grading copy** in a private temporary directory, laid out as in a trial (`project/` beside `fixtures/<name>/`, so path dependencies resolve): a fresh copy of the starter and fixtures, with only the submission's editable files taken from it.
+
+- Within `editable`, the starter's files are removed before the submission's are copied in, and so is each editable directory that leaves empty, so a file the agent deleted stays deleted and a directory can become a file or the reverse. A submitted file whose place is still held by trusted content (a protected file inside a directory it replaces, or the same name in another case on a case-insensitive filesystem) is not imported and is reported instead.
+- The submission is listed recursively without following links (`tree::walk`). Files and directories are both imported, so an empty directory survives grading. A link or special file at, inside, or above an editable root (a pattern's literal prefix, such as `src`) invalidates the submission; anywhere else it is only reported.
+- Protected files are never imported, even when `editable` matches them. Their names compare without regard to ASCII case on every platform.
+- Every other change is reported as an outside edit (added, modified, deleted, or type changed), sorted by path; a directory with contents is reported through them, and an empty one by itself; files are compared in fixed-size chunks, so a large one costs time, not memory. The top-level `target/` is ignored, since the agent runs Cargo in its project.
+- The starter and fixtures are trusted, but a link or special file in them is still a task error rather than something to copy.
+
+Invariant: only repository-owned code runs outside the `srt` backend. Until grading runs through `srt`, `--check-tasks` is the only caller: it lays each task's `solution/` over a copy of the starter (an entry of the other type is replaced, so a solution can turn a file into a directory or the reverse) and imports it like a submission, so a solution cannot pass by changing a file an agent may not contribute. A solution with a link, or with any outside edit, is a task error.
+
 ## Code comments
 
 Comments answer why, an invariant, or a surprising behavior of a client or tool. They never restate what the code says.

@@ -61,6 +61,14 @@ impl Evals {
         self.tasks_dir().join(name.as_str())
     }
 
+    pub(crate) fn starter_dir(&self, name: &TaskName) -> PathBuf {
+        self.task_dir(name).join("starter")
+    }
+
+    pub(crate) fn solution_dir(&self, name: &TaskName) -> PathBuf {
+        self.task_dir(name).join("solution")
+    }
+
     pub(crate) fn plugin_dir(&self, name: &PluginName) -> PathBuf {
         self.root.join("plugins").join(name.as_str())
     }

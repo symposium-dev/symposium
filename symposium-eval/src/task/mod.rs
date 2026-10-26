@@ -30,6 +30,7 @@ pub(crate) use name::{
     CheckName, FixtureName, HookName, NameError, PluginName, SkillName, TaskName,
 };
 pub(crate) use pattern::EditablePattern;
+pub(crate) use protected::is_protected;
 
 use crate::evals::Evals;
 use crate::tree::{self, EntryKind};
@@ -97,6 +98,18 @@ impl Task {
             fs::read_to_string(evals.task_dir(name).join("task.toml")).map_err(TaskError::Read)?;
         let raw: RawTask = toml::from_str(&text).map_err(TaskError::Parse)?;
         Self::validate(evals, name, raw)
+    }
+
+    pub(crate) fn name(&self) -> &TaskName {
+        &self.name
+    }
+
+    pub(crate) fn fixtures(&self) -> &[FixtureName] {
+        &self.fixtures
+    }
+
+    pub(crate) fn editable(&self) -> &[EditablePattern] {
+        &self.editable
     }
 
     /// Applies the rules a single field cannot express, as Cargo's `to_real_manifest`

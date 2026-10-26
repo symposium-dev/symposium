@@ -3,6 +3,7 @@
 //! Grading decides what crosses into the grading copy from this listing, so a link is
 //! reported as a link and never entered: a link could point anywhere on the machine.
 
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::Path;
@@ -16,6 +17,32 @@ pub(crate) enum EntryKind {
     Symlink,
     /// A socket, FIFO, device, or anything else that is neither file, directory, nor link.
     Other,
+}
+
+impl EntryKind {
+    /// The kind a `FileType` from a lookup that does not follow links describes.
+    pub(crate) fn of(file_type: fs::FileType) -> Self {
+        if file_type.is_symlink() {
+            Self::Symlink
+        } else if file_type.is_dir() {
+            Self::Dir
+        } else if file_type.is_file() {
+            Self::File
+        } else {
+            Self::Other
+        }
+    }
+}
+
+impl fmt::Display for EntryKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::File => "file",
+            Self::Dir => "directory",
+            Self::Symlink => "symlink",
+            Self::Other => "special file",
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -79,15 +106,7 @@ fn walk_into(dir: &Path, prefix: &str, entries: &mut Vec<TreeEntry>) -> Result<(
             path: join(prefix, &name.to_string_lossy()),
         })?;
         let path = join(prefix, &name);
-        let kind = if file_type.is_symlink() {
-            EntryKind::Symlink
-        } else if file_type.is_dir() {
-            EntryKind::Dir
-        } else if file_type.is_file() {
-            EntryKind::File
-        } else {
-            EntryKind::Other
-        };
+        let kind = EntryKind::of(file_type);
         entries.push(TreeEntry {
             path: path.clone(),
             kind,

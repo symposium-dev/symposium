@@ -14,8 +14,6 @@ globset = "0.4"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 serde = { version = "1", features = ["derive"] }
 syn = { version = "2", features = ["full"] }
+tempfile = "3"
 thiserror = "2"
 toml = "0.8"
-
-[dev-dependencies]
-tempfile = "3"

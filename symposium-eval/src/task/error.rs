@@ -10,6 +10,7 @@ use thiserror::Error;
 
 use super::{CheckError, EditablePattern, FixtureName, PluginName, SkillList, SkillName};
 use crate::evals::EntryError;
+use crate::grade::{ImportError, OutsideEdit};
 use crate::tree::WalkError;
 
 /// Why a path that must be a real directory is not one. A failure to inspect the path
@@ -62,6 +63,12 @@ pub(crate) enum TaskError {
     },
     #[error(transparent)]
     Check(#[from] CheckError),
+    #[error("`solution/` {0}")]
+    SolutionDir(DirProblem),
+    #[error("cannot import `solution/`")]
+    SolutionImport(#[source] ImportError),
+    #[error("`solution/` {0}, outside `editable`; grading ignores it")]
+    SolutionOutsideEditable(OutsideEdit),
     #[error("`{list}` lists `{value}` more than once")]
     Duplicate { list: &'static str, value: String },
     #[error("skill `{skill}` is in both `{first}` and `{second}`")]
@@ -113,6 +120,12 @@ impl TaskErrors {
 impl From<TaskError> for TaskErrors {
     fn from(error: TaskError) -> Self {
         Self(vec![error])
+    }
+}
+
+impl From<Vec<TaskError>> for TaskErrors {
+    fn from(errors: Vec<TaskError>) -> Self {
+        Self(errors)
     }
 }
 

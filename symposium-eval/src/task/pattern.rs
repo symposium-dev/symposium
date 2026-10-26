@@ -38,8 +38,7 @@ impl EditablePattern {
         if irregular || pattern.contains(['\\', ':']) {
             return Err(PatternError::NotRelative(pattern.to_owned()));
         }
-        let first = pattern.split('/').next().unwrap_or_default();
-        if first.contains(['*', '?', '[', ']', '{', '}']) {
+        if literal_prefix(pattern).is_empty() {
             return Err(PatternError::Unrooted(pattern.to_owned()));
         }
         GlobBuilder::new(pattern)
@@ -55,6 +54,24 @@ impl EditablePattern {
     pub(crate) fn matcher(&self) -> GlobMatcher {
         self.0.compile_matcher()
     }
+
+    /// The leading components without glob syntax, such as `src` for `src/**/*.rs`: the
+    /// part of the project the pattern can reach. Never empty.
+    pub(crate) fn literal_prefix(&self) -> &str {
+        literal_prefix(self.0.glob())
+    }
+}
+
+fn literal_prefix(pattern: &str) -> &str {
+    let mut end = 0;
+    for component in pattern.split('/') {
+        if component.contains(['*', '?', '[', ']', '{', '}']) {
+            break;
+        }
+        end += component.len() + 1;
+    }
+    // Each component counted its trailing `/`, which the last one does not have.
+    &pattern[..end.saturating_sub(1)]
 }
 
 impl TryFrom<String> for EditablePattern {
@@ -120,6 +137,21 @@ mod tests {
                     Err(PatternError::Unrooted(_))
                 ),
                 "{pattern:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn literal_prefix_stops_at_the_first_glob_component() {
+        for (pattern, prefix) in [
+            ("src/**", "src"),
+            ("src/*.rs", "src"),
+            ("src/lib.rs", "src/lib.rs"),
+            ("crates/core/src/**", "crates/core/src"),
+        ] {
+            assert_eq!(
+                EditablePattern::new(pattern).unwrap().literal_prefix(),
+                prefix
             );
         }
     }

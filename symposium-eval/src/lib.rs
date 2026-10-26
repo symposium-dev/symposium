@@ -7,6 +7,7 @@
 //! crate's modules.
 
 mod evals;
+mod grade;
 mod task;
 mod tree;
 
@@ -70,7 +71,7 @@ fn check_tasks(evals: &Evals) -> anyhow::Result<()> {
 /// Validates one entry of `tasks/` and prints its result; `true` when it passed.
 fn check_entry(evals: &Evals, entry: TaskEntry) -> bool {
     let outcome = match entry.task {
-        Ok(name) => Task::load(evals, &name).map(drop),
+        Ok(name) => Task::load(evals, &name).and_then(|task| grade::check_solution(evals, &task)),
         Err(error) => Err(TaskErrors::from(TaskError::from(error))),
     };
     match outcome {
