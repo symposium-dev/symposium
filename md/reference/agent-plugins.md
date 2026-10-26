@@ -1,6 +1,6 @@
 # Agent Plugins packages
 
-Symposium loads packages in the [Agent Plugins 1.0.0](https://agent-plugins.org/) format next to its own [plugin definitions](./plugin-definition.md). One of these packages is a folder with a `plugin.json` manifest and a `skills/` folder, the same package Codex CLI or the Copilot CLI read, so a package written for those agents works with Symposium unchanged, and its skills reach every agent you have set up.
+Symposium loads packages in the [Agent Plugins](https://agent-plugins.org/) format, versions 1.0.0 and 1.1.0, next to its own [plugin definitions](./plugin-definition.md). One of these packages is a folder with a `plugin.json` manifest and a `skills/` folder, the same package Codex CLI or the Copilot CLI read, so a package written for those agents works with Symposium unchanged, and its skills reach every agent you have set up.
 
 Symposium reads the skills half of the format. The format's other component type, MCP servers in an `mcp.json`, is reported as unsupported and ignored. Hooks, subcommands, installations and custom predicates are not in the format at all; use a [`Symposium.toml`](./plugin-definition.md) plugin when you need those.
 
@@ -34,7 +34,7 @@ The manifest is closed, meaning only known fields are allowed:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `$schema` | string | yes | Exactly `https://agent-plugins.org/schemas/1.0.0/plugin.schema.json`. Any other value, including a newer or draft version of the format, rejects the package. |
+| `$schema` | string | yes | `https://agent-plugins.org/schemas/1.0.0/plugin.schema.json`, or the same with `1.1.0`. Any other value, including a newer or draft version of the format, rejects the package. |
 | `name` | string | yes | The plugin name. See [Names](#names). |
 | `version` | string | no | Shown by `search` and `status`. Not required to be a semantic version. |
 | `description` | string | no | Shown by `search`. |

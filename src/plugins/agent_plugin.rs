@@ -8,7 +8,8 @@ use symposium_sdk::predicate::{DependsOnList, PredicateSet};
 
 use crate::pm::layout::{AGENT_PLUGIN_FILE, SKILL_FILE};
 
-const SUPPORTED_SCHEMAS: &[&str] = &["https://agent-plugins.org/schemas/1.0.0/plugin.schema.json"];
+const SCHEMA_VERSIONS: &[&str] = &["1.0.0", "1.1.0"];
+const PLUGIN_SCHEMA_FILE: &str = "plugin.schema.json";
 const SYMPOSIUM_NAMESPACE: &str = "dev.symposium";
 const SKILLS_DIR: &str = "skills";
 const MCP_FILE: &str = "mcp.json";
@@ -117,11 +118,9 @@ fn read_agent_plugin_json(root: &Path, notices: &mut Vec<String>) -> Result<Agen
 
     match fields.get("$schema") {
         None => bail!("missing required field `$schema`"),
-        Some(Value::String(schema)) if SUPPORTED_SCHEMAS.contains(&schema.as_str()) => {}
-        Some(Value::String(schema)) => bail!(
-            "unsupported `$schema` `{schema}`; supported: {}",
-            SUPPORTED_SCHEMAS.join(", ")
-        ),
+        Some(Value::String(schema)) => {
+            schema_version(schema, PLUGIN_SCHEMA_FILE)?;
+        }
         Some(_) => bail!("`$schema` must be a string"),
     }
 
@@ -161,6 +160,19 @@ fn read_agent_plugin_json(root: &Path, notices: &mut Vec<String>) -> Result<Agen
         description,
         gate,
     })
+}
+
+fn schema_version(schema: &str, file: &str) -> Result<&'static str> {
+    SCHEMA_VERSIONS
+        .iter()
+        .copied()
+        .find(|version| schema == format!("https://agent-plugins.org/schemas/{version}/{file}"))
+        .with_context(|| {
+            format!(
+                "unsupported `$schema` `{schema}`; supported: Agent Plugins {}",
+                SCHEMA_VERSIONS.join(" and ")
+            )
+        })
 }
 
 fn string_field(key: &str, value: &Value) -> Result<String> {
@@ -266,8 +278,10 @@ mod tests {
 
     const SKILL: &str = "---\nname: s\ndescription: d\n---\nBody.\n";
 
+    const SCHEMA: &str = "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json";
+
     fn with_schema(fields: &str) -> String {
-        format!(r#"{{"$schema": "{}", {fields}}}"#, SUPPORTED_SCHEMAS[0])
+        format!(r#"{{"$schema": "{SCHEMA}", {fields}}}"#)
     }
 
     fn package(plugin_json: &str, files: &[File]) -> tempfile::TempDir {
@@ -317,12 +331,16 @@ mod tests {
 
     #[test]
     fn rejects_a_manifest_that_breaks_the_schema() {
-        let cases: [(String, &str); 10] = [
+        let cases: [(String, &str); 11] = [
             ("{".into(), "is not valid JSON"),
             ("[]".into(), "must hold a JSON object"),
             (r#"{"name": "x"}"#.into(), "missing required field `$schema`"),
             (
-                r#"{"$schema": "https://agent-plugins.org/schemas/1.1.0/plugin.schema.json", "name": "x"}"#.into(),
+                r#"{"$schema": "https://agent-plugins.org/schemas/1.2.0/plugin.schema.json", "name": "x"}"#.into(),
+                "supported: Agent Plugins 1.0.0 and 1.1.0",
+            ),
+            (
+                r#"{"$schema": "https://agent-plugins.org/schemas/1.1.0/mcp.schema.json", "name": "x"}"#.into(),
                 "unsupported `$schema`",
             ),
             (r#"{"$schema": 1, "name": "x"}"#.into(), "`$schema` must be a string"),
@@ -336,6 +354,14 @@ mod tests {
             let err = format!("{:#}", translate(&json).unwrap_err());
             assert!(err.contains(expected), "{json}: {err}");
         }
+    }
+
+    #[test]
+    fn accepts_the_1_1_0_schema() {
+        let json = r#"{"$schema": "https://agent-plugins.org/schemas/1.1.0/plugin.schema.json", "name": "x"}"#;
+        let (manifest, notices) = translate(json).unwrap();
+        assert_eq!(manifest.name.as_deref(), Some("x"));
+        assert!(notices.is_empty(), "{notices:?}");
     }
 
     #[test]
