@@ -139,7 +139,11 @@ pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin])
         for plugin in inst.active_plugins(dep_ids).await {
             let name = plugin.canonical.name.clone();
             let description = Some(match plugin.format() {
-                Some(_) => format!("the Agent Plugins package `{}`", plugin.manifest.name),
+                Some(_) => format!(
+                    "the Agent Plugins package `{}` ({})",
+                    plugin.manifest.name,
+                    describe_plugin(&plugin.manifest)
+                ),
                 None => describe_plugin(&plugin.manifest),
             });
             let enablement = decide(sym, pms, &used, &plugin.canonical).await;
