@@ -50,9 +50,16 @@ pub(crate) struct Report {
 /// One check run on the submission.
 #[derive(Debug)]
 pub(crate) struct Step {
-    /// The Cargo subcommand and its arguments, such as `test --lib`.
-    pub(crate) command: &'static str,
+    pub(crate) kind: StepKind,
     pub(crate) outcome: Outcome,
+}
+
+/// Which check a step is, in the order grading runs them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StepKind {
+    Build,
+    TestLib,
+    Fmt,
 }
 
 /// How a check went. Every outcome here is the submission's: a command that could not be
@@ -72,18 +79,36 @@ pub(crate) enum Outcome {
     Skipped,
 }
 
+impl StepKind {
+    /// The command line the step runs, for messages.
+    pub(crate) fn command(&self) -> String {
+        match self {
+            Self::Build => "cargo build",
+            Self::TestLib => "cargo test --lib",
+            Self::Fmt => "cargo fmt --check",
+        }
+        .to_owned()
+    }
+}
+
+impl fmt::Display for StepKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "`{}`", self.command())
+    }
+}
+
 /// How much of a failed step's output a message shows; the logs have all of it.
 const SHOWN_LINES: usize = 20;
 
 impl fmt::Display for Step {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let command = self.command;
+        let kind = &self.kind;
         match &self.outcome {
-            Outcome::Passed => write!(f, "passes `cargo {command}`"),
-            Outcome::TimedOut => write!(f, "did not finish `cargo {command}` in time"),
-            Outcome::Skipped => write!(f, "skips `cargo {command}` after the build failed"),
+            Outcome::Passed => write!(f, "passes {kind}"),
+            Outcome::TimedOut => write!(f, "did not finish {kind} in time"),
+            Outcome::Skipped => write!(f, "skips {kind} after the build failed"),
             Outcome::Failed { stdout, stderr, .. } => {
-                write!(f, "fails `cargo {command}`:")?;
+                write!(f, "fails {kind}:")?;
                 let lines: Vec<&str> = stdout.lines().chain(stderr.lines()).collect();
                 for line in &lines[lines.len().saturating_sub(SHOWN_LINES)..] {
                     write!(f, "\n{line}")?;
@@ -160,7 +185,12 @@ fn prepare(
     let cargo = Cargo::new(copy.project(), copy.scratch());
     let starter_owned = read_build_scripts(&cargo, &copy.project(), commands, limits.metadata)?;
     if task.fmt_check() {
-        preflight(commands, &cargo.fmt_version(), "fmt --version", limits.fmt)?;
+        preflight(
+            commands,
+            &cargo.fmt_version(),
+            "cargo fmt --version",
+            limits.fmt,
+        )?;
     }
     Ok(Prepared {
         copy,
@@ -177,21 +207,22 @@ fn run_steps(
     commands: &mut Commands<'_, impl Backend>,
     limits: &GradeLimits,
 ) -> Result<Vec<Step>, GradeError> {
-    let build = run_step("build", &cargo.build(), commands, limits.build)?;
+    let build = run_step(StepKind::Build, &cargo.build(), commands, limits.build)?;
     let build_passed = build.outcome == Outcome::Passed;
-    let mut later = vec![("test --lib", cargo.test_lib(), limits.test)];
+    let mut later = vec![StepKind::TestLib];
     if task.fmt_check() {
-        later.push(("fmt --check", cargo.fmt_check(), limits.fmt));
+        later.push(StepKind::Fmt);
     }
     let mut steps = vec![build];
-    for (command, invocation, cap) in later {
-        steps.push(if build_passed {
-            run_step(command, &invocation, commands, cap)?
-        } else {
-            Step {
-                command,
+    for kind in later {
+        steps.push(match kind {
+            _ if !build_passed => Step {
+                kind,
                 outcome: Outcome::Skipped,
-            }
+            },
+            StepKind::TestLib => run_step(kind, &cargo.test_lib(), commands, limits.test)?,
+            StepKind::Fmt => run_step(kind, &cargo.fmt_check(), commands, limits.fmt)?,
+            StepKind::Build => unreachable!("the build runs first"),
         });
     }
     Ok(steps)
@@ -224,7 +255,7 @@ impl<B: Backend> Commands<'_, B> {
 /// submission's outcome; a failure to start, supervise, stop, or collect the command is
 /// an infrastructure error.
 fn run_step(
-    command: &'static str,
+    kind: StepKind,
     invocation: &Invocation,
     commands: &mut Commands<'_, impl Backend>,
     cap: Duration,
@@ -232,10 +263,18 @@ fn run_step(
     let finished = commands
         .run(invocation, cap)
         .map_err(|source| GradeError::Process {
-            step: command,
+            step: kind.command(),
             source,
         })?;
-    let outcome = if finished.timed_out() {
+    Ok(Step {
+        kind,
+        outcome: outcome_of(&finished),
+    })
+}
+
+/// The submission's outcome for a command that ran.
+fn outcome_of(finished: &Finished) -> Outcome {
+    if finished.timed_out() {
         Outcome::TimedOut
     } else if finished.succeeded() {
         Outcome::Passed
@@ -245,8 +284,7 @@ fn run_step(
             stderr: finished.stderr.tail(),
             truncated: finished.stdout.truncated() || finished.stderr.truncated(),
         }
-    };
-    Ok(Step { command, outcome })
+    }
 }
 
 /// Resolves the trusted starter against its lockfile and finds its build scripts at
@@ -258,7 +296,7 @@ fn read_build_scripts(
     commands: &mut Commands<'_, impl Backend>,
     cap: Duration,
 ) -> Result<BTreeSet<String>, GradeError> {
-    let finished = preflight(commands, &cargo.metadata(), "metadata", cap)?;
+    let finished = preflight(commands, &cargo.metadata(), "cargo metadata", cap)?;
     cargo::build_scripts(finished.stdout.log(), project)
 }
 
@@ -267,18 +305,23 @@ fn read_build_scripts(
 fn preflight(
     commands: &mut Commands<'_, impl Backend>,
     invocation: &Invocation,
-    step: &'static str,
+    step: &str,
     cap: Duration,
 ) -> Result<Finished, GradeError> {
     let finished = commands
         .run(invocation, cap)
-        .map_err(|source| GradeError::Process { step, source })?;
+        .map_err(|source| GradeError::Process {
+            step: step.to_owned(),
+            source,
+        })?;
     if finished.timed_out() {
-        return Err(GradeError::TimedOut { step });
+        return Err(GradeError::TimedOut {
+            step: step.to_owned(),
+        });
     }
     if !finished.succeeded() {
         return Err(GradeError::Preflight {
-            step,
+            step: step.to_owned(),
             stderr: finished.stderr.tail().trim().to_owned(),
         });
     }
@@ -433,7 +476,7 @@ mod tests {
         );
 
         assert_eq!(report.steps[0].outcome, Outcome::Passed);
-        assert_eq!(report.steps[1].command, "test --lib");
+        assert_eq!(report.steps[1].kind, StepKind::TestLib);
         assert!(
             matches!(&report.steps[1].outcome, Outcome::Failed { stdout, .. } if stdout.contains("boom")),
             "{report:?}"
@@ -449,7 +492,7 @@ mod tests {
 
         let fixture = TaskFixture::new("fmt_check = true\n");
         let report = grade(&fixture, unformatted);
-        assert_eq!(report.steps[2].command, "fmt --check");
+        assert_eq!(report.steps[2].kind, StepKind::Fmt);
         assert!(
             matches!(report.steps[2].outcome, Outcome::Failed { .. }),
             "{report:?}"

@@ -83,16 +83,16 @@ pub(crate) enum ProcessError {
 pub(crate) enum GradeError {
     #[error(transparent)]
     Import(#[from] ImportError),
-    #[error("cannot run `cargo {step}`")]
+    #[error("cannot run `{step}`")]
     Process {
-        step: &'static str,
+        step: String,
         #[source]
         source: ProcessError,
     },
-    #[error("`cargo {step}` did not finish in time")]
-    TimedOut { step: &'static str },
-    #[error("`cargo {step}` failed on the trusted starter: {stderr}")]
-    Preflight { step: &'static str, stderr: String },
+    #[error("`{step}` did not finish in time")]
+    TimedOut { step: String },
+    #[error("`{step}` failed on the trusted starter: {stderr}")]
+    Preflight { step: String, stderr: String },
     #[error("cannot read `{}`", .path.display())]
     Read {
         path: PathBuf,
