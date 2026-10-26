@@ -867,8 +867,16 @@ pub async fn dispatch_plugin_hooks(
                 );
                 match exit_code {
                     None | Some(2) => return Err(child_out.stderr),
-                    Some(0) if child_out.stdout.is_empty() => continue,
-                    Some(0) => {
+                    Some(code) => {
+                        if code != 0 {
+                            tracing::warn!(
+                                exit_code = code,
+                                "plugin hook exited with non-zero (continuing)"
+                            );
+                        }
+                        if child_out.stdout.is_empty() {
+                            continue;
+                        }
                         // Parse output and convert to host agent format.
                         // Two cases: native (same as host) or symposium.
                         let host_handler = crate::hook_schema::agent_event(host_agent, event);
@@ -913,12 +921,6 @@ pub async fn dispatch_plugin_hooks(
                             return Ok(output);
                         }
                         context.add(hook_output.as_ref(), &mut output, host_h.as_ref());
-                    }
-                    Some(code) => {
-                        tracing::warn!(
-                            exit_code = code,
-                            "plugin hook exited with non-zero (continuing)"
-                        );
                     }
                 }
             }

@@ -124,6 +124,25 @@ async fn plugin_exit_2_denies_the_tool_call_on_every_agent() {
     .unwrap();
 }
 
+/// Any exit code other than 2 still has its stdout read, so a hook that
+/// prints a denial and then fails keeps its denial.
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_deny_survives_a_non_zero_exit() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hook-decisions0"],
+        async |ctx| {
+            for agent in ALL_AGENTS {
+                let response = respond(&ctx, agent, tool_call("DenyExitOneProbe")).await;
+                assert_denied(agent, &response, DENY_REASON);
+            }
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// A rewrite reaches every agent that can apply it without approving the
 /// call on the user's behalf: Claude gets `ask`, so the user sees the
 /// rewritten call. Codex (allow-only) and Kiro (no rewrite) leave the call
