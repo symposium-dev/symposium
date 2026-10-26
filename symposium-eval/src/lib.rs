@@ -8,6 +8,7 @@
 
 mod evals;
 mod task;
+mod tree;
 
 use std::ffi::OsString;
 

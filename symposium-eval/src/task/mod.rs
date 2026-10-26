@@ -7,11 +7,13 @@
 //!
 //! Task, starter, plugin, fixture, and check directories must be real directories, not
 //! symlinks: their contents cross into trials and grading, which must see exactly what
-//! the checkout holds.
+//! the checkout holds. The starter ships a `Cargo.lock`, since grading runs Cargo with
+//! `--locked`, and `editable` never reaches its protected build files.
 
 mod checks;
 mod name;
 mod pattern;
+mod protected;
 mod schema;
 
 use std::collections::BTreeSet;
@@ -31,6 +33,7 @@ pub(crate) use name::{
 pub(crate) use pattern::EditablePattern;
 
 use crate::evals::{EntryError, Evals};
+use crate::tree::{self, EntryKind, WalkError};
 use schema::{RawSkills, RawTask};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -110,6 +113,17 @@ pub(crate) enum TaskError {
     EmptyPrompt,
     #[error("`starter/` {0}")]
     Starter(DirProblem),
+    #[error("cannot list `starter/`")]
+    StarterTree(#[source] WalkError),
+    #[error("`starter/` has no `Cargo.lock`; grading runs Cargo with `--locked`")]
+    MissingLockfile,
+    #[error(
+        "editable pattern `{pattern}` matches `starter/{path}`, which grading always takes from the starter"
+    )]
+    ProtectedEditable {
+        pattern: EditablePattern,
+        path: String,
+    },
     #[error("plugin `{name}` in evals/plugins/ {problem}")]
     Plugin {
         name: PluginName,
@@ -154,6 +168,8 @@ impl Task {
     /// turns a parsed `TomlManifest` into a `Manifest`.
     fn validate(evals: &Evals, name: &TaskName, raw: RawTask) -> Result<Self, TaskErrors> {
         let dir = evals.task_dir(name);
+        let editable = raw.editable.unwrap_or_else(default_editable);
+
         let mut errors = Vec::new();
         if raw.prompt.trim().is_empty() {
             errors.push(TaskError::EmptyPrompt);
@@ -163,6 +179,7 @@ impl Task {
             &dir,
             &raw.plugins,
             &raw.fixtures,
+            &editable,
         ));
         let checks = checks::load(&dir.join("checks")).unwrap_or_else(|check_errors| {
             errors.extend(check_errors.into_iter().map(TaskError::from));
@@ -170,10 +187,7 @@ impl Task {
         });
         errors.extend(duplicates("plugins", &raw.plugins));
         errors.extend(duplicates("fixtures", &raw.fixtures));
-        errors.extend(duplicates(
-            "editable",
-            raw.editable.as_deref().unwrap_or_default(),
-        ));
+        errors.extend(duplicates("editable", &editable));
         errors.extend(duplicates("hooks", &raw.expected.hooks));
         let expected_skills = resolve_skills(raw.expected.skills, &mut errors);
         if !errors.is_empty() {
@@ -187,7 +201,7 @@ impl Task {
             expected_output: raw.expected_output,
             plugins: raw.plugins,
             fixtures: raw.fixtures,
-            editable: raw.editable.unwrap_or_else(default_editable),
+            editable,
             fmt_check: raw.fmt_check,
             checks,
             expected_hooks: raw.expected.hooks,
@@ -195,15 +209,21 @@ impl Task {
         })
     }
 
-    /// `starter/`, then each named plugin and fixture directory.
+    /// `starter/` with its lockfile and protected files, then each named plugin and
+    /// fixture directory.
     fn directory_errors(
         evals: &Evals,
         dir: &Path,
         plugins: &[PluginName],
         fixtures: &[FixtureName],
+        editable: &[EditablePattern],
     ) -> Vec<TaskError> {
         let mut errors = Vec::new();
-        errors.extend(require_dir(dir.join("starter"), TaskError::Starter));
+        let starter = dir.join("starter");
+        match require_dir(starter.clone(), TaskError::Starter) {
+            Some(error) => errors.push(error),
+            None => errors.extend(check_starter(&starter, editable)),
+        }
         for plugin in distinct(plugins) {
             errors.extend(require_dir(evals.plugin_dir(plugin), |problem| {
                 TaskError::Plugin {
@@ -314,6 +334,35 @@ fn require_dir(
     }
 }
 
+/// The starter's `Cargo.lock`, and one error per `editable` pattern that reaches a
+/// protected file in it.
+fn check_starter(starter: &Path, editable: &[EditablePattern]) -> Vec<TaskError> {
+    let entries = match tree::walk(starter) {
+        Ok(entries) => entries,
+        Err(error) => return vec![TaskError::StarterTree(error)],
+    };
+    let mut errors = Vec::new();
+    let has_lockfile = entries
+        .iter()
+        .any(|entry| entry.path == "Cargo.lock" && entry.kind == EntryKind::File);
+    if !has_lockfile {
+        errors.push(TaskError::MissingLockfile);
+    }
+    for pattern in distinct(editable) {
+        let matcher = pattern.matcher();
+        let reached = entries
+            .iter()
+            .find(|entry| protected::is_protected(&entry.path) && matcher.is_match(&entry.path));
+        if let Some(entry) = reached {
+            errors.push(TaskError::ProtectedEditable {
+                pattern: pattern.clone(),
+                path: entry.path.clone(),
+            });
+        }
+    }
+    errors
+}
+
 fn default_editable() -> Vec<EditablePattern> {
     vec![EditablePattern::new("src/**").expect("the default pattern is valid")]
 }
@@ -416,11 +465,13 @@ mod tests {
 
     const ONE_CHECK: &str = "#[test]\nfn works() {}\n";
 
-    /// An `evals/` tree with one valid-looking task, `demo`: a starter and one check.
+    /// An `evals/` tree with one valid-looking task, `demo`: a starter with a lockfile
+    /// and one check.
     fn evals_with_task(task_toml: &str) -> (TempDir, Evals) {
         let root = TempDir::new().unwrap();
         let task_dir = root.path().join("tasks/demo");
         fs::create_dir_all(task_dir.join("starter")).unwrap();
+        fs::write(task_dir.join("starter/Cargo.lock"), "").unwrap();
         fs::create_dir_all(task_dir.join("checks")).unwrap();
         fs::write(task_dir.join("checks/works.rs"), ONE_CHECK).unwrap();
         fs::write(task_dir.join("task.toml"), task_toml).unwrap();
@@ -574,7 +625,7 @@ mod tests {
         fs::create_dir_all(root.path().join("plugins/present")).unwrap();
         fs::create_dir_all(root.path().join("fixtures")).unwrap();
         fs::write(root.path().join("fixtures/file"), "").unwrap();
-        fs::remove_dir(root.path().join("tasks/demo/starter")).unwrap();
+        fs::remove_dir_all(root.path().join("tasks/demo/starter")).unwrap();
         fs::remove_dir_all(root.path().join("tasks/demo/checks")).unwrap();
 
         let errors = load_demo(&evals).unwrap_err();
@@ -587,6 +638,50 @@ mod tests {
                 "plugin `absent` in evals/plugins/ does not exist",
                 "fixture `file` in evals/fixtures/ is not a directory",
                 "`checks/` does not exist",
+            ]
+        );
+    }
+
+    #[test]
+    fn starter_without_a_lockfile_is_rejected() {
+        let (root, evals) = evals_with_task("kind = \"regression\"\nprompt = \"x\"\n");
+        fs::remove_file(root.path().join("tasks/demo/starter/Cargo.lock")).unwrap();
+
+        let errors = load_demo(&evals).unwrap_err();
+
+        assert_eq!(
+            messages(&errors),
+            ["`starter/` has no `Cargo.lock`; grading runs Cargo with `--locked`"]
+        );
+    }
+
+    #[test]
+    fn editable_patterns_cannot_reach_protected_starter_files() {
+        let (root, evals) = evals_with_task(
+            r#"
+            kind = "regression"
+            prompt = "x"
+            editable = ["src/**", "member/**", ".cargo/*", "build.rs"]
+            "#,
+        );
+        let starter = root.path().join("tasks/demo/starter");
+        fs::create_dir_all(starter.join("src")).unwrap();
+        fs::create_dir_all(starter.join("member/src")).unwrap();
+        fs::create_dir_all(starter.join(".cargo")).unwrap();
+        fs::write(starter.join("src/lib.rs"), "").unwrap();
+        fs::write(starter.join("member/Cargo.toml"), "").unwrap();
+        fs::write(starter.join("member/src/lib.rs"), "").unwrap();
+        fs::write(starter.join(".cargo/config.toml"), "").unwrap();
+        fs::write(starter.join("build.rs"), "").unwrap();
+
+        let errors = load_demo(&evals).unwrap_err();
+
+        assert_eq!(
+            messages(&errors),
+            [
+                "editable pattern `member/**` matches `starter/member/Cargo.toml`, which grading always takes from the starter",
+                "editable pattern `.cargo/*` matches `starter/.cargo/config.toml`, which grading always takes from the starter",
+                "editable pattern `build.rs` matches `starter/build.rs`, which grading always takes from the starter",
             ]
         );
     }

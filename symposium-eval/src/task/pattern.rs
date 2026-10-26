@@ -1,20 +1,25 @@
 use std::fmt;
 
-use globset::{Glob, GlobBuilder};
+use globset::{Glob, GlobBuilder, GlobMatcher};
 use serde::Deserialize;
 use thiserror::Error;
 
 /// A relative, `/`-separated glob such as `src/**`, compiled when the task loads so an
 /// unusable pattern is an authoring error rather than a grading failure. `*` never
-/// crosses a `/`, on every platform.
+/// crosses a `/`, on every platform. The first component is literal, so a pattern names
+/// where in the project it applies; `**` or `*.toml` would reach every directory.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "String")]
 pub(crate) struct EditablePattern(Glob);
 
 #[derive(Debug, Error)]
 pub(crate) enum PatternError {
-    #[error("editable pattern `{0}` must be a relative path using `/`, without `..`")]
-    Escapes(String),
+    #[error(
+        "editable pattern `{0}` must be a relative path of names joined by single `/`, without `.` or `..`"
+    )]
+    NotRelative(String),
+    #[error("editable pattern `{0}` must start with a literal directory or file name")]
+    Unrooted(String),
     #[error("editable pattern `{pattern}` is not a valid glob")]
     Glob {
         pattern: String,
@@ -25,13 +30,17 @@ pub(crate) enum PatternError {
 
 impl EditablePattern {
     pub(crate) fn new(pattern: &str) -> Result<Self, PatternError> {
-        let escapes = pattern.split('/').any(|segment| segment == "..");
-        if pattern.is_empty()
-            || pattern.starts_with('/')
-            || pattern.contains(['\\', ':'])
-            || escapes
-        {
-            return Err(PatternError::Escapes(pattern.to_owned()));
+        // Tree paths have no empty, `.`, or `..` components, so a pattern with one would
+        // either match nothing or reach outside the project.
+        let irregular = pattern
+            .split('/')
+            .any(|component| matches!(component, "" | "." | ".."));
+        if irregular || pattern.contains(['\\', ':']) {
+            return Err(PatternError::NotRelative(pattern.to_owned()));
+        }
+        let first = pattern.split('/').next().unwrap_or_default();
+        if first.contains(['*', '?', '[', ']', '{', '}']) {
+            return Err(PatternError::Unrooted(pattern.to_owned()));
         }
         GlobBuilder::new(pattern)
             .literal_separator(true)
@@ -43,12 +52,8 @@ impl EditablePattern {
             })
     }
 
-    #[expect(
-        dead_code,
-        reason = "grading compiles these into a matcher in a later step"
-    )]
-    pub(crate) fn glob(&self) -> &Glob {
-        &self.0
+    pub(crate) fn matcher(&self) -> GlobMatcher {
+        self.0.compile_matcher()
     }
 }
 
@@ -84,10 +89,36 @@ mod tests {
     }
 
     #[test]
-    fn rejects_patterns_that_could_leave_the_project() {
-        for pattern in ["", "/src/**", "../src", "src/../..", r"src\**", "C:/src"] {
+    fn rejects_patterns_that_are_not_plain_relative_paths() {
+        for pattern in [
+            "",
+            "/src/**",
+            "../src",
+            "src/../..",
+            r"src\**",
+            "C:/src",
+            "./src/**",
+            "src//**",
+            "src/",
+        ] {
             assert!(
-                matches!(EditablePattern::new(pattern), Err(PatternError::Escapes(_))),
+                matches!(
+                    EditablePattern::new(pattern),
+                    Err(PatternError::NotRelative(_))
+                ),
+                "{pattern:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_patterns_without_a_literal_first_component() {
+        for pattern in ["**", "*.toml", "*/lib.rs", "{src,tests}/**", "s?c/**"] {
+            assert!(
+                matches!(
+                    EditablePattern::new(pattern),
+                    Err(PatternError::Unrooted(_))
+                ),
                 "{pattern:?}"
             );
         }
@@ -103,10 +134,7 @@ mod tests {
 
     #[test]
     fn star_does_not_cross_directories() {
-        let matcher = EditablePattern::new("src/*.rs")
-            .unwrap()
-            .0
-            .compile_matcher();
+        let matcher = EditablePattern::new("src/*.rs").unwrap().matcher();
 
         assert!(matcher.is_match("src/lib.rs"));
         assert!(!matcher.is_match("src/nested/lib.rs"));
