@@ -27,6 +27,7 @@ use std::sync::Arc;
 /// containing this marker that isn't in the freshly-installed set, leaving
 /// user-managed skill directories (which lack the marker) untouched.
 pub(crate) const MARKER_FILE: &str = ".symposium";
+const PLUGIN_DATA_DIR: &str = "plugin-data";
 
 /// Create `path` and any missing ancestors up to `boundary`.
 ///
@@ -485,7 +486,8 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
     let mut mcp_servers: Vec<sacp::schema::McpServer> = Vec::new();
     for p in &active {
         if p.applies(&mut ctx) {
-            mcp_servers.extend(p.manifest.applicable_mcp_servers(&mut ctx));
+            let servers = p.manifest.applicable_mcp_servers(&mut ctx);
+            mcp_servers.extend(package_mcp_servers(sym, p, servers));
         }
     }
     if let Err(e) = ctx.persist_disk_cache(&predicate_cache_path) {
@@ -809,7 +811,10 @@ pub async fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
     let mcp_servers: Vec<sacp::schema::McpServer> = registry
         .plugins
         .iter()
-        .flat_map(|p| p.manifest.mcp_servers.iter().map(|s| s.server.clone()))
+        .flat_map(|p| {
+            let servers = p.manifest.mcp_servers.iter().map(|s| s.server.clone());
+            package_mcp_servers(sym, p, servers.collect())
+        })
         .collect();
 
     let agent_names: Vec<String> = sym.config.agents.iter().map(|a| a.name.clone()).collect();
@@ -852,6 +857,51 @@ pub async fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn package_mcp_servers(
+    sym: &Symposium,
+    plugin: &plugins::Plugin,
+    servers: Vec<sacp::schema::McpServer>,
+) -> Vec<sacp::schema::McpServer> {
+    let Some(root) = &plugin.agent_plugin_root else {
+        return servers;
+    };
+    let stdio =
+        |server: &sacp::schema::McpServer| matches!(server, sacp::schema::McpServer::Stdio(_));
+    if !servers.iter().any(stdio) {
+        return servers;
+    }
+    match plugin_data_dir(sym, &plugin.canonical) {
+        Ok(data) => servers
+            .into_iter()
+            .map(|server| plugins::with_plugin_vars(server, root, &data))
+            .collect(),
+        Err(e) => {
+            tracing::info!(
+                report = %crate::report::ReportEvent::Warning {
+                    message: format!(
+                        "skipping the stdio MCP servers of plugin `{}`: {e:#}",
+                        plugin.manifest.name
+                    ),
+                },
+            );
+            servers
+                .into_iter()
+                .filter(|server| !stdio(server))
+                .collect()
+        }
+    }
+}
+
+fn plugin_data_dir(sym: &Symposium, id: &crate::pm::PackageId) -> Result<PathBuf> {
+    let dir = sym
+        .config_dir()
+        .join(PLUGIN_DATA_DIR)
+        .join(&id.pm)
+        .join(&id.name);
+    fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", display_path(&dir)))?;
+    Ok(fs::canonicalize(&dir)?)
 }
 
 fn record_mcp_registrations(sym: &Symposium, agent: Agent, file: &Path, names: Vec<String>) {

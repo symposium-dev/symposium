@@ -70,7 +70,7 @@ async fn registry_packages_install_their_skills_and_report_what_they_skip() {
                 &events,
                 &[
                     "unknown field `commands` ignored",
-                    "`mcp.json` is not supported",
+                    "MCP server `pdf-socket` skipped: unsupported transport `websocket`",
                     "invalid `name` `Rejected_Tools`",
                 ],
             );
@@ -92,8 +92,38 @@ async fn use_wakes_a_dormant_package_and_remove_reaps_it() {
             ctx.symposium(&["sync"]).await?;
             assert!(!installed_skills(&ctx).contains(&"extract-tables".to_string()));
 
+            let mcp_json = ctx.workspace_root.clone().unwrap().join(".mcp.json");
+            let pdf_server = || -> Option<Value> {
+                let text = std::fs::read_to_string(&mcp_json).ok()?;
+                let config: Value = serde_json::from_str(&text).unwrap();
+                config["mcpServers"].get("pdf-tables").cloned()
+            };
+            assert_eq!(pdf_server(), None);
+
             ctx.symposium(&["use", "pdf-tools"]).await?;
             assert_eq!(installed_skills(&ctx), ["extract-tables", "serde-tables"]);
+            let root = dunce::canonicalize(ctx.sym.config_dir().join("plugins/pdf-tools"))?;
+            let data = dunce::canonicalize(
+                ctx.sym
+                    .config_dir()
+                    .join("plugin-data/user-plugins/pdf-tools"),
+            )?;
+            let server = pdf_server().expect("pdf-tables registered");
+            let command = root.join("bin").join("pdf-server");
+            assert_eq!(server["command"], command.display().to_string());
+            let (root, data) = (root.display().to_string(), data.display().to_string());
+            assert_eq!(
+                server["args"],
+                serde_json::json!(["--config", format!("{root}/config.json")])
+            );
+            assert_eq!(
+                server["env"],
+                serde_json::json!({
+                    "CACHE": format!("{data}/cache"),
+                    "PLUGIN_ROOT": root,
+                    "PLUGIN_DATA": data,
+                })
+            );
 
             ctx.symposium(&["use", "--remove", "pdf-tools"]).await?;
             assert_eq!(installed_skills(&ctx), ["serde-tables"]);
@@ -172,6 +202,11 @@ async fn a_dependency_package_waits_for_consent_and_reports_what_it_skips() {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             ctx.symposium(&["sync"]).await?;
             assert!(installed_skills(&ctx).is_empty());
+            let mcp_json = ctx.workspace_root.clone().unwrap().join(".mcp.json");
+            let registered = || {
+                std::fs::read_to_string(&mcp_json).is_ok_and(|text| text.contains("portable-docs"))
+            };
+            assert!(!registered());
 
             let deps = ctx.sym.workspace(ctx.workspace_root.as_ref().unwrap());
             let status = |name: &'static str, entries: &[symposium::status_command::StatusEntry]| {
@@ -189,13 +224,14 @@ async fn a_dependency_package_waits_for_consent_and_reports_what_it_skips() {
                 .candidates;
             assert_eq!(
                 candidates[0].description.as_deref(),
-                Some("the Agent Plugins package `portable-guidance`")
+                Some("the Agent Plugins package `portable-guidance` (1 skill group, 1 MCP server)")
             );
 
             ctx.symposium(&["use", "portable-dep"]).await?;
             ctx.symposium(&["use", "invalid-dep"]).await?;
             let events = ctx.sync_with_report(tracing::Level::INFO).await?;
             assert_eq!(installed_skills(&ctx), ["dep-guide"]);
+            assert!(registered());
             assert_warned(
                 &events,
                 &[
@@ -276,7 +312,7 @@ async fn plugin_validate_reports_packages_and_fails_only_on_errors() {
             expect![[r#"
                 exit: 1
                 ⚠️  $CONFIG_DIR/plugins/pdf-tools: unknown field `commands` ignored
-                ⚠️  $CONFIG_DIR/plugins/pdf-tools: `mcp.json` is not supported yet; its MCP servers are ignored
+                ⚠️  $CONFIG_DIR/plugins/pdf-tools: MCP server `pdf-socket` skipped: unsupported transport `websocket`
                   ✅ gated-tools (agent plugin)
                   ✅ serde-tables (skill)
                   ⚠️  pdf-tools (agent plugin): plugin `pdf-tools` references no dependency; it stays dormant until enabled with `cargo agents use pdf-tools`
@@ -286,7 +322,7 @@ async fn plugin_validate_reports_packages_and_fails_only_on_errors() {
             expect![[r#"
                 exit: 0
                 ⚠️  $CONFIG_DIR/plugins/pdf-tools: unknown field `commands` ignored
-                ⚠️  $CONFIG_DIR/plugins/pdf-tools: `mcp.json` is not supported yet; its MCP servers are ignored
+                ⚠️  $CONFIG_DIR/plugins/pdf-tools: MCP server `pdf-socket` skipped: unsupported transport `websocket`
                   ⚠️  pdf-tools (agent plugin): plugin `pdf-tools` references no dependency; it stays dormant until enabled with `cargo agents use pdf-tools`
                   ✅ extract-tables (skill)
             "#]].assert_eq(&validate(&ctx, &plugins.join("pdf-tools")));
