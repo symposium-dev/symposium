@@ -1,32 +1,30 @@
-//! `--check-tasks` imports each task's `solution/` exactly as it would an agent's
+//! `--check-tasks` grades each task's `solution/` exactly as it would an agent's
 //! submission, so a solution cannot pass by changing a file an agent may not contribute.
 
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use tempfile::TempDir;
 
-use super::ImportError;
-use super::import::{Import, build_grading_copy, copy_tree};
+use super::import::copy_tree;
+use super::limits::GradeLimits;
+use super::process::Local;
+use super::{Grading, ImportError, Report, grade};
 use crate::evals::Evals;
 use crate::task::{DirProblem, Task, TaskError, TaskErrors};
 
-/// Imports `solution/`, when the task has one, laid over a copy of the starter.
+/// Grades `solution/`, when the task has one, laid over a copy of the starter.
 ///
 /// # Errors
 ///
-/// When `solution/` is not a real directory, holds a link or special file, or changes
-/// anything outside `editable`.
+/// When `solution/` is not a real directory, cannot be graded, or changes anything
+/// outside `editable`.
 pub(crate) fn check_solution(evals: &Evals, task: &Task) -> Result<(), TaskErrors> {
     let Some(solution) = solution_dir(evals, task)? else {
         return Ok(());
     };
-    let import = submit(evals, task, &solution).map_err(TaskError::SolutionImport)?;
-    let errors: Vec<TaskError> = import
-        .outside_editable()
-        .iter()
-        .cloned()
-        .map(TaskError::SolutionOutsideEditable)
-        .collect();
+    let report = grade_solution(evals, task, &solution)?;
+    let errors = report_errors(report);
     if errors.is_empty() {
         Ok(())
     } else {
@@ -48,25 +46,52 @@ fn solution_dir(evals: &Evals, task: &Task) -> Result<Option<PathBuf>, TaskError
     }
 }
 
-/// The starter with `solution/` copied over it, imported like a submission.
-fn submit(evals: &Evals, task: &Task, solution: &Path) -> Result<Import, ImportError> {
-    let submission = TempDir::new().map_err(|source| ImportError::Write {
+/// Grades `solution/` laid over the starter. Failing to grade a solution, for any reason,
+/// is the task's error.
+fn grade_solution(evals: &Evals, task: &Task, solution: &Path) -> Result<Report, TaskError> {
+    let scratch =
+        overlay(evals, task, solution).map_err(|error| TaskError::SolutionGrading(error.into()))?;
+    let grading = grade(
+        evals,
+        task,
+        &scratch.path().join("submission"),
+        &Local,
+        &GradeLimits::default(),
+        &scratch.path().join("logs"),
+    );
+    match grading {
+        Grading::Graded(report) => Ok(report),
+        Grading::InvalidSubmission(error) => Err(TaskError::SolutionGrading(error.into())),
+        Grading::Infrastructure(error) => Err(TaskError::SolutionGrading(error)),
+    }
+}
+
+/// What a solution's report shows wrong with the task.
+fn report_errors(report: Report) -> Vec<TaskError> {
+    report
+        .outside_editable
+        .into_iter()
+        .map(TaskError::SolutionOutsideEditable)
+        .collect()
+}
+
+/// A scratch directory holding `submission/`, the starter with `solution/` copied over
+/// it, and an empty `logs/`.
+fn overlay(evals: &Evals, task: &Task, solution: &Path) -> Result<TempDir, ImportError> {
+    let scratch = TempDir::new().map_err(|source| ImportError::Write {
         path: std::env::temp_dir(),
         source,
     })?;
-    copy_tree(
-        &evals.starter_dir(task.name()),
-        submission.path(),
-        "starter",
-    )?;
-    copy_tree(solution, submission.path(), "solution")?;
-    build_grading_copy(evals, task, submission.path())
+    let submission = scratch.path().join("submission");
+    copy_tree(&evals.starter_dir(task.name()), &submission, "starter")?;
+    copy_tree(solution, &submission, "solution")?;
+    let logs = scratch.path().join("logs");
+    fs::create_dir(&logs).map_err(|source| ImportError::Write { path: logs, source })?;
+    Ok(scratch)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-
     use super::*;
     use crate::grade::testing::TaskFixture;
 
@@ -125,6 +150,22 @@ mod tests {
                 "`solution/` modified `README.md`, outside `editable`; grading ignores it",
             ]
             .join("\n"))
+        );
+    }
+
+    #[test]
+    fn a_stale_starter_lockfile_is_reported() {
+        let fixture = TaskFixture::new("");
+        fs::write(fixture.starter().join("Cargo.lock"), "version = 4\n").unwrap();
+        fs::create_dir_all(fixture.solution()).unwrap();
+
+        let message = check(&fixture).unwrap_err();
+
+        assert!(
+            message.starts_with(
+                "cannot grade `solution/`: `cargo metadata` failed on the trusted starter: "
+            ),
+            "{message}"
         );
     }
 

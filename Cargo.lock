@@ -2495,12 +2495,14 @@ dependencies = [
  "anyhow",
  "clap",
  "globset",
+ "libc",
  "proc-macro2",
  "serde",
  "syn",
  "tempfile",
  "thiserror 2.0.18",
  "toml",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

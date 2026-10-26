@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use super::{CheckError, EditablePattern, FixtureName, PluginName, SkillList, SkillName};
 use crate::evals::EntryError;
-use crate::grade::{ImportError, OutsideEdit};
+use crate::grade::{GradeError, OutsideEdit};
 use crate::tree::WalkError;
 
 /// Why a path that must be a real directory is not one. A failure to inspect the path
@@ -65,8 +65,8 @@ pub(crate) enum TaskError {
     Check(#[from] CheckError),
     #[error("`solution/` {0}")]
     SolutionDir(DirProblem),
-    #[error("cannot import `solution/`")]
-    SolutionImport(#[source] ImportError),
+    #[error("cannot grade `solution/`")]
+    SolutionGrading(#[source] GradeError),
     #[error("`solution/` {0}, outside `editable`; grading ignores it")]
     SolutionOutsideEditable(OutsideEdit),
     #[error("`{list}` lists `{value}` more than once")]

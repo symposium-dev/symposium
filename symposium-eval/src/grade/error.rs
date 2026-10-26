@@ -1,5 +1,10 @@
 //! Everything grading can report.
+//!
+//! An error here is never a verdict on the code under grading. [`ImportError`] marks the
+//! submission invalid when [`ImportError::invalidates_submission`] says so; every other
+//! error is an infrastructure failure, which excludes the trial instead of failing it.
 
+use std::ffi::OsString;
 use std::io;
 use std::path::PathBuf;
 
@@ -41,4 +46,61 @@ pub(crate) enum ImportError {
     },
     #[error("`{path}` would resolve outside the grading copy")]
     Escape { path: String },
+}
+
+/// Why a command could not be run to an outcome.
+#[derive(Debug, Error)]
+pub(crate) enum ProcessError {
+    #[error("cannot start `{}`", .program.to_string_lossy())]
+    Spawn {
+        program: OsString,
+        #[source]
+        source: io::Error,
+    },
+    #[error("cannot create the log `{}`", .path.display())]
+    Log {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error("cannot wait for the command")]
+    Wait(#[source] io::Error),
+    #[error("cannot stop the command at its deadline")]
+    Kill(#[source] io::Error),
+    #[cfg(windows)]
+    #[error("cannot contain the command's process tree in a job object")]
+    Contain(#[source] io::Error),
+    #[error("cannot start a thread to read the command's output")]
+    Thread(#[source] io::Error),
+    #[error("cannot collect the command's output")]
+    Output(#[source] io::Error),
+    #[error("the command's output stayed open after it ended")]
+    OutputNotClosed,
+}
+
+/// Why grading could not reach a verdict.
+#[derive(Debug, Error)]
+pub(crate) enum GradeError {
+    #[error(transparent)]
+    Import(#[from] ImportError),
+    #[error("cannot run `cargo {step}`")]
+    Process {
+        step: &'static str,
+        #[source]
+        source: ProcessError,
+    },
+    #[error("`cargo {step}` did not finish in time")]
+    TimedOut { step: &'static str },
+    #[error("`cargo {step}` failed on the trusted starter: {stderr}")]
+    Preflight { step: &'static str, stderr: String },
+}
+
+impl ImportError {
+    /// Whether the submission, not the task or the machine, is at fault.
+    pub(crate) fn invalidates_submission(&self) -> bool {
+        matches!(
+            self,
+            Self::UnsupportedEntry { .. } | Self::SubmissionRoot(_) | Self::Submission(_)
+        )
+    }
 }

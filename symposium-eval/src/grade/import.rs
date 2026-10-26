@@ -29,13 +29,6 @@ pub(crate) struct GradingCopy {
     root: TempDir,
 }
 
-/// A grading copy and what the submission changed outside `editable`.
-#[derive(Debug)]
-pub(crate) struct Import {
-    copy: GradingCopy,
-    outside_editable: Vec<OutsideEdit>,
-}
-
 /// A change the submission made that grading ignores.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct OutsideEdit {
@@ -56,17 +49,11 @@ impl GradingCopy {
     pub(crate) fn project(&self) -> PathBuf {
         self.root.path().join("project")
     }
-}
 
-impl Import {
-    #[expect(dead_code, reason = "grading builds the project in a later commit")]
-    pub(crate) fn into_copy(self) -> GradingCopy {
-        self.copy
-    }
-
-    /// Sorted by path.
-    pub(crate) fn outside_editable(&self) -> &[OutsideEdit] {
-        &self.outside_editable
+    /// The copy's own directory, beside `project/`, for anything grading keeps out of
+    /// the project, such as Cargo's target directory.
+    pub(crate) fn scratch(&self) -> &Path {
+        self.root.path()
     }
 }
 
@@ -82,34 +69,31 @@ impl fmt::Display for OutsideEdit {
     }
 }
 
-/// Builds the grading copy of `task` with the editable entries of `submission`.
+/// Takes the editable entries of `submission` into `copy`, which still holds the trusted
+/// starter. Returns the outside edits, sorted by path.
 ///
 /// # Errors
 ///
-/// [`ImportError::UnsupportedEntry`] and [`ImportError::Submission`] are about the
-/// submission; every other error is about the task or the machine.
-pub(crate) fn build_grading_copy(
-    evals: &Evals,
-    task: &Task,
+/// [`ImportError::invalidates_submission`] tells an invalid submission from a failure of
+/// the task or the machine.
+pub(crate) fn import_submission(
+    copy: &GradingCopy,
+    patterns: &[EditablePattern],
     submission: &Path,
-) -> Result<Import, ImportError> {
-    let editable = Editable::new(task.editable());
+) -> Result<Vec<OutsideEdit>, ImportError> {
+    let editable = Editable::new(patterns);
     let submission = Submission::list(submission, &editable)?;
-    let copy = GradingCopy::from_trusted(evals, task)?;
     let starter = copy.listing()?;
     let mut outside_editable = outside_edits(&starter, &submission, &copy.project(), &editable)?;
     copy.clear_editable(&starter, &editable)?;
     outside_editable.extend(copy.import(&submission, &starter, &editable)?);
     outside_editable.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(Import {
-        copy,
-        outside_editable,
-    })
+    Ok(outside_editable)
 }
 
 impl GradingCopy {
     /// The starter and the task's fixtures, as `evals/` holds them.
-    fn from_trusted(evals: &Evals, task: &Task) -> Result<Self, ImportError> {
+    pub(crate) fn from_trusted(evals: &Evals, task: &Task) -> Result<Self, ImportError> {
         let root = TempDir::new().map_err(|source| ImportError::Write {
             path: std::env::temp_dir(),
             source,
@@ -546,9 +530,9 @@ fn is_within(path: &str, dir: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::grade::testing::{STARTER_MANIFEST, TaskFixture};
+    use crate::grade::testing::{Imported, STARTER_MANIFEST, TaskFixture};
 
-    fn read_project(import: &Import, path: &str) -> Option<String> {
+    fn read_project(import: &Imported, path: &str) -> Option<String> {
         fs::read_to_string(import.copy.project().join(path)).ok()
     }
 
