@@ -82,6 +82,8 @@ Workspace-scoped callers use `load_registry_with_workspace`, which additionally 
 
 The callers decide what is positional: a registry entry is translated as-is, so a gate-less package is dormant, while a workspace member and a crate turn the default `skills/` group off and the member adds the `.agents/skills` group back. A crate whose `plugin.json` is invalid offers no plugin, which is reported. The PM flags the result on the wire (`UnvalidatedPlugin::agent_plugin`), validation keeps the canonical package root as `Plugin::agent_plugin_root`, and `Plugin::format` turns it into the `agent plugin` label of `plugin validate`, `search` and `status`.
 
+`mcp.json` becomes the manifest's `[[mcp_servers]]`, checked by hand like `plugin.json`: a file that breaks the format drops only the servers, a server that breaks it drops only itself, and a `./` command is resolved against the canonical package root. The `${PLUGIN_ROOT}` and `${PLUGIN_DATA}` placeholders stay in the manifest, because the data directory belongs to the installation rather than the package: `sync` and `init` pass each package's servers through `with_plugin_vars` on the way to the agents, with a data directory under `plugin-data/` keyed on the plugin's canonical id, so it survives an update of the package.
+
 ### `dir_walk.rs` — following symlinks without looping
 
 The two rules every source-tree walk needs once symlinks are followed, in one place.
