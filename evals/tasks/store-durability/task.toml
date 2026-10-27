@@ -1,0 +1,10 @@
+kind = "capability"
+plugins = ["fixture-store"]
+fixtures = ["fixture-store"]
+prompt = """
+Add a function `pub fn save_settings(dir: &Path, settings: &[(&str, &str)]) -> std::io::Result<()>` to src/lib.rs that saves each key/value pair with fixture-store, using a `Store` opened at `dir`.
+"""
+expected_output = "save_settings writes every pair, and a new Store at the same directory reads them back."
+
+[expected.skills]
+installed = ["fixture-store"]
