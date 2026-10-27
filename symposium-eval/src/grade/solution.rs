@@ -82,7 +82,7 @@ fn report_errors(report: Report) -> Vec<TaskError> {
 
 /// A scratch directory holding `submission/`, the starter with `solution/` copied over
 /// it, and an empty `logs/`.
-fn overlay(evals: &Evals, task: &Task, solution: &Path) -> Result<TempDir, ImportError> {
+pub(super) fn overlay(evals: &Evals, task: &Task, solution: &Path) -> Result<TempDir, ImportError> {
     let scratch = TempDir::new().map_err(|source| ImportError::Write {
         path: std::env::temp_dir(),
         source,

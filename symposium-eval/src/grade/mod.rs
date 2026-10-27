@@ -11,6 +11,8 @@ mod hidden;
 mod import;
 mod limits;
 mod process;
+#[cfg(test)]
+mod repository_tasks;
 mod solution;
 
 use std::collections::{BTreeMap, BTreeSet};

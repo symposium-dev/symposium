@@ -315,7 +315,7 @@ Comparisons stay manual and hard to reproduce, no test covers first-session sync
 
 Add the `evals/` layout, `task.toml` parsing and validation, the `fixture-store` crate, and the two tasks with their starters, hidden tests, and the `store-durability` solution. Add the trusted grading copy, the one-test-per-hidden-test check, and `--check-tasks`, and run it in CI. Test that the solution passes, that extra agent-written unit tests do not change a grade, that an edit to `Cargo.toml` or the fixture crate does not either, and that contradictory expectations are rejected.
 
-- [ ] Task format, grading, and `--check-tasks`.
+- [x] Task format, grading, and `--check-tasks`.
 
 ### Step 2: Isolated trial setup
 

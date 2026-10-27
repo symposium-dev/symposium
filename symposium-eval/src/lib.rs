@@ -55,6 +55,9 @@ fn check_tasks(evals: &Evals) -> anyhow::Result<()> {
     let entries = evals
         .task_entries()
         .with_context(|| format!("cannot list `{}`", evals.tasks_dir().display()))?;
+    if entries.is_empty() {
+        bail!("`{}` holds no tasks", evals.tasks_dir().display());
+    }
     let total = entries.len();
     let failed = entries
         .into_iter()
@@ -99,12 +102,25 @@ fn plural(count: usize, noun: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use clap::CommandFactory;
+    use tempfile::TempDir;
 
     use super::*;
 
     #[test]
     fn cli_definition_is_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn checking_no_tasks_is_an_error() {
+        let root = TempDir::new().unwrap();
+        let evals = Evals::new(root.path());
+        assert!(check_tasks(&evals).is_err(), "without `tasks/`");
+
+        fs::create_dir(evals.tasks_dir()).unwrap();
+        assert!(check_tasks(&evals).is_err(), "with an empty `tasks/`");
     }
 }
