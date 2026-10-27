@@ -659,16 +659,26 @@ pub async fn dispatch_builtin(
         symposium::InputEvent::PreToolUse(_) => {
             symposium::OutputEvent::empty_for(HookEvent::PreToolUse)
         }
-        symposium::InputEvent::PostToolUse(_) => mid_session_sync_notices(
-            HookEvent::PostToolUse,
-            notify_about_possible_new_plugins,
-            plugin_reload_notice,
-        ),
-        symposium::InputEvent::UserPromptSubmit(_) => mid_session_sync_notices(
-            HookEvent::UserPromptSubmit,
-            notify_about_possible_new_plugins,
-            plugin_reload_notice,
-        ),
+        symposium::InputEvent::PostToolUse(_) => {
+            mid_session_sync_notices(
+                sym,
+                deps,
+                HookEvent::PostToolUse,
+                notify_about_possible_new_plugins,
+                plugin_reload_notice,
+            )
+            .await
+        }
+        symposium::InputEvent::UserPromptSubmit(_) => {
+            mid_session_sync_notices(
+                sym,
+                deps,
+                HookEvent::UserPromptSubmit,
+                notify_about_possible_new_plugins,
+                plugin_reload_notice,
+            )
+            .await
+        }
         symposium::InputEvent::SessionStart(session) => {
             handle_session_start(sym, session, deps, plugin_reload_notice).await
         }
@@ -775,17 +785,18 @@ fn update_nudge(sym: &Symposium) -> Option<String> {
     ))
 }
 
-fn mid_session_sync_notices(
+async fn mid_session_sync_notices(
+    sym: &Symposium,
+    deps: &Arc<Workspace>,
     event: HookEvent,
     notify_about_possible_new_plugins: bool,
     plugin_reload_notice: Option<String>,
 ) -> symposium::OutputEvent {
-    let possible_new_plugins = notify_about_possible_new_plugins.then(|| {
-        "The workspace's dependencies just changed, so there may be new agent plugins \
-         available from them. They stay off until the user consents: tell the user to run \
-         `cargo agents sync` in their terminal to review them. Do not enable them yourself."
-            .to_string()
-    });
+    let possible_new_plugins = if notify_about_possible_new_plugins {
+        consent_hint(sym, deps).await
+    } else {
+        None
+    };
     let fragments: Vec<String> = [possible_new_plugins, plugin_reload_notice]
         .into_iter()
         .flatten()
