@@ -1,0 +1,10 @@
+name = "format-on-stop"
+depends-on = ["*"]
+
+[[skills]]
+source.path = "skills"
+
+[[hooks]]
+name = "format-on-stop"
+event = "Stop"
+command = { script = "scripts/format-on-stop.sh" }

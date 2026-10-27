@@ -1,0 +1,13 @@
+kind = "regression"
+plugins = ["format-on-stop"]
+fmt_check = true
+prompt = """
+Use the rust-formatting skill. Add `pub fn double(x: i32) -> i32` to src/lib.rs.
+"""
+expected_output = "double returns twice its argument, and the crate is formatted."
+
+[expected]
+hooks = ["format-on-stop"]
+
+[expected.skills]
+installed = ["rust-formatting"]
