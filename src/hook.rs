@@ -1369,6 +1369,23 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(4));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn timed_out_hook_stops_its_child_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("child-ran");
+        let script = format!(
+            "sh -c 'sleep 0.5; echo survived > \"{}\"'\necho finished\n",
+            marker.display()
+        );
+        assert!(run_script(&script, b"{}".to_vec(), Duration::from_millis(100)).is_none());
+        std::thread::sleep(Duration::from_millis(700));
+        assert!(
+            !marker.exists(),
+            "child mutated files after the hook timed out"
+        );
+    }
+
     #[test]
     fn symposium_output_serializes_with_additional_context() {
         let output = symposium::OutputEvent::with_context(

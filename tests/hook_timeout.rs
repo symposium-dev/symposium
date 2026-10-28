@@ -48,6 +48,33 @@ fn finish(child: Child) -> Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn hook_setup_respects_the_total_budget() {
+    with_fixture(TestMode::SimulationOnly, &["hook-timeout0"], async |ctx| {
+        let plugin = ctx.sym.config_dir().join("plugins/a-hang");
+        let manifest = std::fs::read_to_string(plugin.join("Symposium.toml"))?;
+        std::fs::write(
+            plugin.join("Symposium.toml"),
+            manifest.replace(" }", ", install_commands = [\"sleep 9\"] }"),
+        )?;
+        std::fs::write(plugin.join("scripts/hang.sh"), "exit 0\n")?;
+        let start = std::time::Instant::now();
+        finish(spawn_pre_tool_use(
+            &ctx,
+            HookAgent::Antigravity,
+            "DenyProbe",
+        ));
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(8500),
+            "hook setup escaped the eight-second budget: {:?}",
+            start.elapsed()
+        );
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
 /// The calls run at once, so the test waits for the time limit only once.
 #[tokio::test(flavor = "multi_thread")]
 async fn timed_out_hook_fails_open() {
