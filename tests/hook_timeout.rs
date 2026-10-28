@@ -58,6 +58,9 @@ async fn hook_setup_respects_the_total_budget() {
             manifest.replace(" }", ", install_commands = [\"sleep 9\"] }"),
         )?;
         std::fs::write(plugin.join("scripts/hang.sh"), "exit 0\n")?;
+        Command::new(std::env::var("CARGO_BIN_EXE_cargo-agents")?)
+            .arg("--version")
+            .output()?;
         let start = std::time::Instant::now();
         finish(spawn_pre_tool_use(
             &ctx,
