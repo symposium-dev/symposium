@@ -220,6 +220,19 @@ async fn init_creates_config() {
 }
 
 #[tokio::test]
+async fn non_interactive_init_requires_detection_or_an_explicit_agent() {
+    with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
+        let error = ctx.symposium(&["init"]).await.unwrap_err();
+        assert!(error.to_string().contains("--add-agent"), "{error}");
+        assert!(ctx.sym.config.agents.is_empty());
+        assert!(!ctx.sym.home_dir().join(".claude/settings.json").exists());
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn init_does_not_overwrite_an_unparseable_config() {
     with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
         let config_dir = ctx.sym.config_dir().to_path_buf();
@@ -3726,4 +3739,57 @@ fn empty_env_dirs_are_ignored() {
         assert_eq!(std::fs::read_dir(&cwd).unwrap().count(), 0, "{vars:?}");
         assert!(config_dir.join("state.toml").exists(), "{vars:?}");
     }
+}
+
+#[tokio::test]
+async fn init_migrates_existing_choices_and_persists_explicit_add_remove() {
+    with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
+        ctx.sym.config.hook_scope = symposium::config::HookScope::Project;
+        ctx.sym.config.agents = vec![symposium::config::AgentEntry {
+            name: "claude".into(),
+        }];
+        ctx.symposium(&["init"]).await?;
+        let state = symposium::state::load(ctx.sym.config_dir()).unwrap();
+        assert_eq!(state.explicit_agents, Some(vec!["claude".into()]));
+        std::fs::create_dir_all(ctx.sym.home_dir().join(".codex"))?;
+        ctx.symposium(&["init", "--add-agent", "codex"]).await?;
+        assert_eq!(
+            symposium::state::load(ctx.sym.config_dir())
+                .unwrap()
+                .explicit_agents,
+            Some(vec!["claude".into(), "codex".into()])
+        );
+        ctx.symposium(&["init", "--remove-agent", "codex"]).await?;
+        let state = symposium::state::load(ctx.sym.config_dir()).unwrap();
+        assert_eq!(state.explicit_agents, Some(vec!["claude".into()]));
+        assert!(state.detected_agents.contains(&"codex".into()));
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn init_keeps_automatic_choices_automatic_on_rerun() {
+    with_fixture(TestMode::SimulationOnly, &[], async |mut ctx| {
+        ctx.sym.config.hook_scope = symposium::config::HookScope::Project;
+        std::fs::create_dir_all(ctx.sym.home_dir().join(".codex"))?;
+        ctx.symposium(&["init"]).await?;
+        assert_eq!(
+            symposium::state::load(ctx.sym.config_dir())
+                .unwrap()
+                .explicit_agents,
+            Some(vec![])
+        );
+        ctx.symposium(&["init"]).await?;
+        assert_eq!(
+            symposium::state::load(ctx.sym.config_dir())
+                .unwrap()
+                .explicit_agents,
+            Some(vec![])
+        );
+        Ok(())
+    })
+    .await
+    .unwrap();
 }

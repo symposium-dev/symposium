@@ -33,4 +33,16 @@ trial-use = ["dormant-kit"]
 
 `--remove` drops the entry only when the name is listed there. `cargo agents use --global --remove` clears the name too when it removes that entry, so an entry the user writes again afterwards is theirs. The user may have written the same entry before trying the plugin, and it must survive the trial; and the manifest may have gained a gate since, so whether the plugin is dormant now says nothing about who added the entry.
 
-Agent detection history is stored as `detected-agents` in `state.toml`; init uses it to preserve previous deselections.
+## Agent choices
+
+`detected-agents` records the last confirmed detection snapshot. `explicit-agents`
+records agents selected with `--add-agent` or by checking an initially unchecked
+box. These remain selected even when their config directory disappears. Accepting
+an automatically checked box does not make it explicit. Deselecting or removing an
+agent clears its explicit status; removing a currently detected agent also records
+it in detection history so the next prompt does not immediately re-add it.
+
+An absent `explicit-agents` field means the state predates choice tracking: the
+configured agents migrate as explicit choices. An empty array means migration has
+already happened and all selections are detection-managed. Updates preserve the
+MCP ledger and update-check timestamp.

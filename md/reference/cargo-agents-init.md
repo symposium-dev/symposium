@@ -26,7 +26,9 @@ The agents installed on your machine come preselected, so confirming is usually 
 
 When none is found, `init` says so and the list starts empty, so you pick the ones you use. On a first run, at least one agent must be selected. Without a terminal to prompt on, `init` configures the detected agents, or fails asking for `--add-agent` when none is found.
 
-On later runs, the list preselects the agents already configured plus any installed since the previous run (`Detected since last setup: ...`). A configured agent that is no longer found comes unchecked (`No longer detected: ...`), and so does an agent you deselected before, until it is uninstalled and installed again. Deselecting all of them removes Symposium's hooks and MCP servers. Without a terminal, later runs keep the configured agents as they are. `--add-agent` / `--remove-agent` ignore detection.
+On later runs, explicitly selected agents stay checked even if their config directory disappears. `--add-agent` and checking an initially unchecked box make a choice explicit; accepting an auto-selected checkbox leaves it managed by detection. Previously configured agents migrate as explicit choices when upgrading. To make an automatically selected agent explicit, use `--add-agent <name>`.
+
+Detection-managed agents are unchecked when no longer found (`No longer detected: ...`); newly detected agents are checked. Deselecting or removing an agent clears its explicit status and preserves that deselection while it remains detected. Deselecting every agent removes Symposium's hooks and MCP servers. Without a terminal, later runs keep the configured agents as they are.
 
 If a user config already exists, `init` updates it (preserving existing settings not affected by the flags).
 
