@@ -150,7 +150,11 @@ enum SpawnSpec {
     },
 }
 
-async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Result<SpawnSpec> {
+async fn build_spawn_spec(
+    sym: &Symposium,
+    hook: &ResolvedHook,
+    deadline: Instant,
+) -> anyhow::Result<SpawnSpec> {
     // Dispatch-time acquisition serves the cache (git checks debounced); the
     // `SessionStart` prewarm is what forces a freshness check once per session.
     let update = symposium_install::UpdateLevel::None;
@@ -158,7 +162,7 @@ async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Resul
     // Acquire requirements first so the command's PATH sees them.
     let mut acquired: Vec<AcquiredInstallation> = Vec::new();
     for requirement in &hook.requirements {
-        match acquire_installation(sym, requirement, None, None, update).await {
+        match acquire_installation(sym, requirement, None, None, update, Some(deadline)).await {
             Ok(a) => acquired.push(a),
             Err(e) => {
                 tracing::error!(
@@ -176,6 +180,7 @@ async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Resul
         hook.hook_executable.as_deref(),
         hook.hook_script.as_deref(),
         update,
+        Some(deadline),
     )
     .await?;
 
@@ -211,6 +216,7 @@ fn spawn_from_spec(
             for (k, v) in env {
                 cmd.env(k, v);
             }
+            crate::process_tree::own_group(&mut cmd);
             cmd.stdin(Stdio::piped())
                 .stdout(stdout.try_clone()?)
                 .stderr(stderr.try_clone()?)
@@ -222,6 +228,7 @@ fn spawn_from_spec(
             for (k, v) in env {
                 cmd.env(k, v);
             }
+            crate::process_tree::own_group(&mut cmd);
             cmd.stdin(Stdio::piped())
                 .stdout(stdout.try_clone()?)
                 .stderr(stderr.try_clone()?)
@@ -253,6 +260,7 @@ fn run_with_deadline(
             break status;
         }
         if Instant::now() >= deadline {
+            crate::process_tree::kill(child.id());
             let _ = child.kill();
             child.wait()?;
             return Ok(None);
@@ -863,7 +871,7 @@ pub async fn dispatch_plugin_hooks(
             }
         };
 
-        let run_res = match build_spawn_spec(sym, &hook).await {
+        let run_res = match build_spawn_spec(sym, &hook, dispatch_deadline).await {
             Ok(spec) => {
                 let deadline = dispatch_deadline.min(Instant::now() + PLUGIN_HOOK_TIMEOUT);
                 run_with_deadline(spec, stdin_str.into_bytes(), deadline)

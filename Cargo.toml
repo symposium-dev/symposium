@@ -45,7 +45,7 @@ sha2 = "0.10"
 tar = "0.4"
 tempfile = "3.10"
 symposium-sdk = { version = "0.1", path = "symposium-sdk", features = ["clap"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "registry"] }
@@ -57,6 +57,9 @@ url = "2.5.8"
 uuid = { version = "1.26.0", features = ["v4", "serde"] }
 hmac = "0.12.1"
 getrandom = "0.4.2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 assert_matches = "1.5"

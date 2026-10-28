@@ -29,6 +29,7 @@ pub mod sync;
 pub(crate) mod crate_sources;
 pub(crate) mod predicate;
 pub(crate) mod predicate_cache;
+pub(crate) mod process_tree;
 pub(crate) mod skills;
 
 pub use symposium_install::UpdateLevel;

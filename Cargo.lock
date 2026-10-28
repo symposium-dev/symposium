@@ -2466,6 +2466,7 @@ dependencies = [
  "hmac",
  "home",
  "indoc",
+ "libc",
  "regex",
  "reqwest 0.12.28",
  "sacp",

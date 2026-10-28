@@ -5,6 +5,8 @@
 //! resolve an installation to a runnable without duplicating the logic.
 
 use std::path::PathBuf;
+use std::process::ExitStatus;
+use std::time::Instant;
 
 use anyhow::{Result, bail};
 
@@ -17,19 +19,40 @@ use symposium_install::{Runnable, acquire_source, make_executable};
 ///
 /// Their stdout goes to stderr: these commands also run while dispatching a
 /// hook, where stdout carries the agent's protocol.
-pub async fn run_install_commands(commands: &[String]) -> Result<()> {
+pub async fn run_install_commands(commands: &[String], deadline: Option<Instant>) -> Result<()> {
     for cmd in commands {
-        let status = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(cmd)
-            .stdout(std::io::stderr())
-            .status()
-            .await?;
+        let mut command = std::process::Command::new("sh");
+        command.arg("-c").arg(cmd).stdout(std::io::stderr());
+        let status = match deadline {
+            Some(deadline) => status_by(command, deadline).await?,
+            None => Some(tokio::process::Command::from(command).status().await?),
+        };
+        let Some(status) = status else {
+            bail!("install command `{cmd}` ran past the hook time budget");
+        };
         if !status.success() {
             bail!("install command `{cmd}` exited with {status}");
         }
     }
     Ok(())
+}
+
+async fn status_by(
+    mut command: std::process::Command,
+    deadline: Instant,
+) -> std::io::Result<Option<ExitStatus>> {
+    crate::process_tree::own_group(&mut command);
+    let mut child = tokio::process::Command::from(command).spawn()?;
+    match tokio::time::timeout_at(deadline.into(), child.wait()).await {
+        Ok(status) => status.map(Some),
+        Err(_) => {
+            if let Some(pid) = child.id() {
+                crate::process_tree::kill(pid);
+            }
+            let _ = child.kill().await;
+            Ok(None)
+        }
+    }
 }
 
 /// Per-installation snapshot the dispatcher builds for the command and each
@@ -88,18 +111,32 @@ pub async fn acquire_installation(
     override_executable: Option<&str>,
     override_script: Option<&str>,
     update: symposium_install::UpdateLevel,
+    deadline: Option<Instant>,
 ) -> anyhow::Result<AcquiredInstallation> {
     let exec_choice = installation.executable.as_deref().or(override_executable);
     let script_choice = installation.script.as_deref().or(override_script);
 
     let acquired = match &installation.source {
         Some(source) => {
-            Some(acquire_source(&sym.install_context(), source, exec_choice, update).await?)
+            let context = sym.install_context();
+            let acquiring = acquire_source(&context, source, exec_choice, update);
+            let acquired = match deadline {
+                Some(deadline) => tokio::time::timeout_at(deadline.into(), acquiring)
+                    .await
+                    .map_err(|_| {
+                        anyhow::anyhow!(
+                            "acquiring `{}` ran past the hook time budget",
+                            installation.name
+                        )
+                    })?,
+                None => acquiring.await,
+            };
+            Some(acquired?)
         }
         None => None,
     };
 
-    run_install_commands(&installation.install_commands).await?;
+    run_install_commands(&installation.install_commands, deadline).await?;
 
     let runnable = match (&acquired, exec_choice, script_choice) {
         // Unmanaged source (global cargo): bare name, $PATH lookup at spawn.
@@ -164,7 +201,7 @@ pub async fn refresh_installation_if_present(
         symposium_install::refresh_source_if_present(&sym.install_context(), source, exec_choice)
             .await?;
     if refreshed {
-        run_install_commands(&installation.install_commands).await?;
+        run_install_commands(&installation.install_commands, None).await?;
     }
     Ok(())
 }
