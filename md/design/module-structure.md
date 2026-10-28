@@ -206,6 +206,8 @@ On `SessionStart`, `handle_session_start` composes three independently-computed 
 
 ### `state.rs` — persistent state
 
+Agent selection provenance is stored as `explicit-agents` alongside `detected-agents`. `record_agent_choices` preserves the other state fields; see [agent choices](./state.md#agent-choices) for migration and selection rules.
+
 Manages `state.toml` in the config directory. Deserializes through `RawState` and validates into the runtime `State`. Tracks the semver of the binary that last touched the directory (for future migration hooks) the timestamp of the last update check (to throttle crates.io queries to once per 24 hours), and the [MCP server ledger](./state.md#mcp-server-ledger): the `(agent, file, name)` of every MCP entry symposium wrote, so removal never touches an entry the user wrote under the same name. `ensure_current()` is called on startup to silently stamp the current version. `should_check_for_update()` / `record_update_check()` gate the auto-update flow.
 
 ### `telemetry/` — opt-in usage telemetry
@@ -330,5 +332,3 @@ Implements `cargo agents self-update`. Queries the registry for the latest publi
 ### `crate_command.rs` — crate source lookup
 
 Contains `dispatch_crate()`, which resolves a crate's version and fetches its source code. Called by the CLI's `crate-info` command. Path dependencies are resolved to their local source directory via `WorkspaceCrate.path`. Without `--version`, a workspace member is looked up in `member_crates` first and resolves to its own directory.
-
-Agent detection history is stored as `detected-agents` in `state.toml`; init uses it to preserve previous deselections.

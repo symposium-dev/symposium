@@ -23,4 +23,16 @@ The ledger exists because a server name is not proof of ownership. A user, or th
 
 The ledger is per machine. An entry Symposium did not write on this machine, including one written by an earlier version that had no ledger, is never removed automatically.
 
-Agent detection history is stored as `detected-agents` in `state.toml`; init uses it to preserve previous deselections.
+## Agent choices
+
+`detected-agents` records the last confirmed detection snapshot. `explicit-agents`
+records agents selected with `--add-agent` or by checking an initially unchecked
+box. These remain selected even when their config directory disappears. Accepting
+an automatically checked box does not make it explicit. Deselecting or removing an
+agent clears its explicit status; removing a currently detected agent also records
+it in detection history so the next prompt does not immediately re-add it.
+
+An absent `explicit-agents` field means the state predates choice tracking: the
+configured agents migrate as explicit choices. An empty array means migration has
+already happened and all selections are detection-managed. Updates preserve the
+MCP ledger and update-check timestamp.
