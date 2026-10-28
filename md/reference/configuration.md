@@ -4,6 +4,8 @@
 
 If the file cannot be read or parsed, `cargo agents` prints a warning and runs with the defaults and `auto-update` off. Commands that would save the configuration, such as `init` or `use`, stop with an error instead of overwriting it, so fix or remove the file and run them again.
 
+Sync also fails without removing installed skills or hooks. A missing file uses first-run defaults; a valid empty agent list still permits cleanup after deliberate removal.
+
 ## Full example
 
 ```toml
@@ -45,7 +47,7 @@ path = "my-plugins"
 
 ### Agents syncing: mirror user-authored skills
 
-Agents such as Antigravity, Copilot, Codex, Goose, and OpenCode all read skills from the vendor-neutral `.agents/skills/` directory, but Claude Code and Kiro use their own paths (`.claude/skills/` and `.kiro/skills/`). When `agents-syncing` is enabled, every [workspace plugin](../workspace-skills.md) — the workspace root and each member directory — carries a second default skill group, gated by the `workspace-member()` predicate:
+Agents such as Antigravity, Copilot, Codex, Goose, OpenCode, and Pi all read skills from the vendor-neutral `.agents/skills/` directory, but Claude Code and Kiro use their own paths (`.claude/skills/` and `.kiro/skills/`). When `agents-syncing` is enabled, every [workspace plugin](../workspace-skills.md) — the workspace root and each member directory — carries a second default skill group, gated by the `workspace-member()` predicate:
 
 ```toml
 [[skills]]
@@ -76,7 +78,7 @@ Each `[[agent]]` entry identifies an agent you use. You can configure multiple a
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `name` | string | *(required)* | Agent name: `antigravity`, `claude`, `codex`, `copilot`, `goose`, `kiro`, or `opencode`. |
+| `name` | string | *(required)* | Agent name: `antigravity`, `claude`, `codex`, `copilot`, `goose`, `kiro`, `opencode`, or `pi`. |
 
 ## `[logging]`
 

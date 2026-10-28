@@ -340,6 +340,7 @@ async fn resolve_custom_predicate_entries(
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
 pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLevel) -> Result<()> {
+    sym.ensure_config_usable()?;
     let out = &Output::quiet();
     let loaded = deps
         .load()
@@ -444,7 +445,8 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
                 message: "no agents configured, run `cargo agents init` to add one".into(),
             },
         );
-        return Ok(());
+        // Still run cleanup so removing the final agent also removes its
+        // project hooks and managed skills.
     }
 
     // Track every skill directory we (re)install during this sync. Anything
@@ -461,18 +463,8 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
             continue;
         };
 
-        // Hooks: the project and global locations are genuinely different files
-        // for some agents - Antigravity writes `.agents/hooks.json` but
-        // `~/.gemini/config/hooks.json`, and Copilot `.github/hooks/` but
-        // `~/.copilot/settings.json` - so project scope cannot be produced by
-        // rooting the global path at the workspace.
-        let hooks = match sym.config.hook_scope {
-            crate::config::HookScope::Global => agent.register_hooks(sym.home_dir(), sym, out),
-            crate::config::HookScope::Project => {
-                agent.register_project_hooks(&project_root, sym, out)
-            }
-        };
-        if let Err(e) = hooks {
+        // Agent-specific paths and scope cleanup live in the agent module.
+        if let Err(e) = agent.register_scoped_hooks(&project_root, sym, out) {
             tracing::info!(
                 report = %crate::report::ReportEvent::Warning {
                     message: format!("failed to register hooks for {agent_name}: {e:#}"),
@@ -684,7 +676,7 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
         out,
     );
 
-    if to_install.is_empty() {
+    if !agent_names.is_empty() && to_install.is_empty() {
         tracing::info!(
             report = %crate::report::ReportEvent::Info {
                 message: "no applicable skills found for workspace dependencies".into(),
@@ -699,6 +691,7 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
 /// Register hooks for all configured agents. Uses `home_dir` (global scope).
 /// Called from `init` after writing the user config.
 pub async fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
+    sym.ensure_config_usable()?;
     let registry = plugins::load_registry(sym).await;
     let mcp_servers: Vec<sacp::schema::McpServer> = registry
         .plugins

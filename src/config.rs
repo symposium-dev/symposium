@@ -427,7 +427,7 @@ impl Symposium {
 
     /// Test constructor: everything rooted under a single directory.
     ///
-    /// Creates `config.toml` from the provided config if not already present.
+    /// Missing config files use defaults; read and parse errors are retained.
     pub fn from_dir(root: &Path) -> Self {
         let config_dir = root.to_path_buf();
         let _ = fs::create_dir_all(&config_dir);
@@ -675,15 +675,22 @@ impl Symposium {
         })
     }
 
-    /// Write the user config to disk.
-    pub fn save_config(&self) -> anyhow::Result<()> {
-        let path = self.dirs.config_dir.join("config.toml");
+    /// Refuse mutations based on defaults substituted for a failed config load.
+    /// Repairing the file takes effect when a new context loads it.
+    pub(crate) fn ensure_config_usable(&self) -> anyhow::Result<()> {
         if let Some(error) = &self.config_error {
             anyhow::bail!(
                 "not overwriting {}: it could not be read; fix or remove it, then run the command again\n{error}",
-                path.display()
+                self.dirs.config_dir.join("config.toml").display()
             );
         }
+        Ok(())
+    }
+
+    /// Write the user config to disk without overwriting a failed load.
+    pub fn save_config(&self) -> anyhow::Result<()> {
+        self.ensure_config_usable()?;
+        let path = self.dirs.config_dir.join("config.toml");
         let contents = toml::to_string_pretty(&self.config)?;
         fs::write(&path, contents)?;
         Ok(())
@@ -734,7 +741,12 @@ fn resolve_logs_dir(config_dir: &Path) -> PathBuf {
 fn load_config_from(config_dir: &Path) -> (Config, Option<String>) {
     let path = config_dir.join("config.toml");
     let error = match fs::read_to_string(&path) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Config::default(), None),
+        Err(e)
+            if e.kind() == std::io::ErrorKind::NotFound
+                && matches!(fs::symlink_metadata(&path), Err(e) if e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return (Config::default(), None);
+        }
         Err(e) => e.to_string(),
         Ok(contents) => match toml::from_str::<RawConfig>(&contents) {
             Ok(raw) => return (raw.validate(), None),
@@ -878,6 +890,43 @@ mod tests {
         assert!(sym.config.defaults.symposium_recommendations);
         assert_eq!(sym.config_dir(), tmp.path());
         assert_eq!(sym.cache_dir(), tmp.path().join("cache"));
+        sym.save_config().unwrap();
+        assert!(tmp.path().join("config.toml").is_file());
+    }
+
+    #[test]
+    fn empty_config_is_valid_and_writable() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("config.toml"), "").unwrap();
+        let sym = Symposium::from_dir(tmp.path());
+        assert!(sym.config.agents.is_empty());
+        sym.save_config().unwrap();
+    }
+
+    #[test]
+    fn failed_load_remains_unusable_until_a_new_context_loads_the_repair() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("config.toml");
+        fs::write(&path, "[[agent").unwrap();
+        let sym = Symposium::from_dir(tmp.path());
+        let cloned = sym.clone();
+        fs::write(&path, "# repaired\n").unwrap();
+        assert!(sym.save_config().is_err());
+        assert!(cloned.save_config().is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "# repaired\n");
+        Symposium::from_dir(tmp.path()).save_config().unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_config_symlink_is_not_a_first_run() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("missing-target.toml");
+        std::os::unix::fs::symlink(&target, tmp.path().join("config.toml")).unwrap();
+        let sym = Symposium::from_dir(tmp.path());
+        assert!(sym.ensure_config_usable().is_err());
+        assert!(sym.save_config().is_err());
+        assert!(!target.exists());
     }
 
     #[test]

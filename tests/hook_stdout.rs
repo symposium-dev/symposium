@@ -19,6 +19,7 @@ async fn sync_progress_stays_off_hook_stdout() {
             HookAgent::Copilot,
             HookAgent::Antigravity,
             HookAgent::Kiro,
+            HookAgent::Pi,
         ] {
             let output = run_session_start(&ctx, agent, &workspace);
             let stdout = String::from_utf8_lossy(&output.stdout);

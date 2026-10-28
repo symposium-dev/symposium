@@ -1,0 +1,10 @@
+name = "z-valid-output"
+depends-on = ["*"]
+
+# Dispatch must continue to the next plugin after rejecting the mismatch.
+[[hooks]]
+name = "valid-stop"
+event = "Stop"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/z-valid-output/scripts/output.sh" }
+args = ['{"Stop":{"additionalContext":"valid-stop-output"}}']
