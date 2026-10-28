@@ -2491,6 +2491,7 @@ dependencies = [
  "getrandom 0.4.2",
  "hmac",
  "indoc",
+ "libc",
  "process-wrap",
  "regex",
  "reqwest 0.12.28",
