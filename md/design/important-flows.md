@@ -6,7 +6,7 @@ This section describes the logic of each `cargo agents` command.
 
 A plugin loads a crate as a plugin by naming that crate in a `[[plugins]]` chained reference (`source.cargo = "..."`); the user can also load one directly by enabling the dependency it lives in (see [enablement](#dependency-enablement) below). When the owning plugin is active and the edge's predicates hold, the crate is resolved into the **active plugin set** — the shared list every facet (skills, MCP servers, hooks, subcommands) resolves over, so a crate-sourced plugin's extensions dispatch exactly like a registry plugin's. A single path handles every crate — a crate is always a first-class plugin, whether it describes itself with a `Symposium.toml`, with `[package.metadata.symposium]`, with both, or with neither:
 
-1. `skills::active_plugins` seeds a worklist from the trust-root plugins the registry loaded: each active plugin's `plugin.chained` edges whose predicates hold (evaluated against the *owning* plugin's provenance) contribute a `source.cargo` crate id.
+1. `plugins::active_plugins` seeds a worklist from the trust-root plugins the registry loaded: each active plugin's `plugin.chained` edges whose predicates hold (evaluated against the *owning* plugin's provenance) contribute a `source.cargo` crate id.
 2. For each id the fixed-point calls `pms.load_plugin(id, update)` on the **package-manager set** `active_plugins` was handed (built once per invocation by `Symposium::workspace`). The id's `pm` routes it to the cargo transport, which:
    - `CargoPm::fetch` resolves the source via `RustCrateFetch`. A workspace dependency is served from the source `cargo metadata` already extracted (path overrides for local path deps). Any other crate is read under `UpdateLevel::None` from cargo's extracted crates.io sources (`$CARGO_HOME/registry/src/index.crates.io-*`, the registry the probe asks, so another registry's same-named crate is never substituted), with no process and no network, and goes through the crates.io probe under `Check` or `Fetch`. The per-invocation paths (`--help`, subcommand dispatch, hook dispatch) pass `None`, so they never spawn cargo; `sync` passes `Check`, so it downloads a crate cargo has not cached yet. The fetched id carries the exact resolved version.
    - `CargoPm::plugin_from_fetched` returns the crate as an unvalidated plugin, with a manifest the cargo PM's `manifest::merge` builds by layering two sources (merge order: `[package.metadata.symposium]` from `Cargo.toml` → `Symposium.toml` file). Both use the ordinary plugin-manifest schema and are parsed **leniently** (a malformed layer is logged and dropped).
@@ -16,7 +16,7 @@ A plugin loads a crate as a plugin by naming that crate in a `[[plugins]]` chain
 
 A skill's install identity is the hash of its on-disk `SKILL.md` path, so a crate reached two ways dedupes to one install. The edge's version requirement is recorded but not yet enforced — the crate resolves against the workspace (pin / path override).
 
-The key code paths are in `symposium-pm-cargo` (`CargoPm::load_plugin`, `plugin_from_fetched`, `manifest::merge`), `pm/mod.rs` (`PmInstance`, `PluginKind`), `plugins.rs` (`validate_plugin`, `ManifestOrigin::Crate`, `Plugin::canonical`), `skills.rs` (`active_plugins`, `record_active`, `plugin_key`, `collect_skills`, `hash_origin_key`), and, in `symposium-pm-cargo`, `metadata.rs` (`symposium_metadata`), `workspace.rs` (`WorkspaceDeps`, `WorkspaceCrate`), and `sources.rs` (`RustCrateFetch`).
+The key code paths are in `symposium-pm-cargo` (`CargoPm::load_plugin`, `plugin_from_fetched`, `manifest::merge`), `pm/mod.rs` (`PmInstance`, `PluginKind`), `plugins.rs` (`validate_plugin`, `ManifestOrigin::Crate`, `Plugin::canonical`), `plugins.rs` (`active_plugins`, `record_active`, `plugin_key`), `skills.rs` (`collect_skills`, `hash_origin_key`), and, in `symposium-pm-cargo`, `metadata.rs` (`symposium_metadata`), `workspace.rs` (`WorkspaceDeps`, `WorkspaceCrate`), and `sources.rs` (`RustCrateFetch`).
 
 ## Dependency enablement
 
@@ -28,7 +28,7 @@ A dependency's own plugin content — a `Symposium.toml`, `[package.metadata.sym
 
 Decisions are recorded by the consent prompt in an interactive `cargo agents sync` (`discovery::prompt_for_consent`, which writes `auto-enable` and `disable`) and by `cargo agents use` (`use` entries); `cargo agents status` reports what `[plugins]` currently decides. A hook never prompts: `SessionStart` names the pending candidates as context instead.
 
-The key code paths are in `discovery.rs`, `config.rs` (`PluginsConfig`, `UseEntry`), `symposium-pm-cargo` (`CargoPm::active_plugins`, `CargoPm::load_plugin`), `plugins.rs` (`PluginManifest::requires_use`), `predicate.rs` (`PredicateContext::is_used`), and `skills.rs` (`active_plugins`, `record_active`); bare names resolve in `discovery.rs` (`Names`, `used`).
+The key code paths are in `discovery.rs`, `config.rs` (`PluginsConfig`, `UseEntry`), `symposium-pm-cargo` (`CargoPm::active_plugins`, `CargoPm::load_plugin`), `plugins.rs` (`PluginManifest::requires_use`), `predicate.rs` (`PredicateContext::is_used`), and `plugins.rs` (`active_plugins`, `record_active`); bare names resolve in `discovery.rs` (`Names`, `used`).
 
 ## Help rendering
 
@@ -45,7 +45,7 @@ clap's auto help flag and help subcommand are disabled in `cli::Cli`; `--help`/`
 
 When the user runs `cargo agents <name>` for a name not built into the binary, clap's `allow_external_subcommands` routes it to `Commands::External(argv)`.
 
-1. The binary (or library `cli::run`) calls `subcommand_dispatch::dispatch_external(sym, cwd, argv)`, which first resolves the **active plugin set** (`skills::active_plugins` — registry plugins plus crate-sourced ones) so a crate's subcommands are dispatchable too.
+1. The binary (or library `cli::run`) calls `subcommand_dispatch::dispatch_external(sym, cwd, argv)`, which first resolves the **active plugin set** (`plugins::active_plugins` — registry plugins plus crate-sourced ones) so a crate's subcommands are dispatchable too.
 2. `find_subcommand` walks that set. For each plugin it applies the plugin-level `depends-on` predicate against the workspace, then looks up `argv[0]` in `plugin.subcommands`. If the entry has its own `depends-on` predicate, that must also match. Two or more matches → error.
 3. The matched subcommand's `command` field names an `Installation` on the same plugin. `installation::resolve_runnable` acquires the source if any, runs `install_commands`, and picks the `Runnable` (`Exec` for binaries, `Script` for shell scripts).
 4. The child is spawned with stdio inherited. Its exit code is collapsed to a `u8` — the binary wraps it in `ExitCode::from`; the library treats non-zero as an error so the test harness can assert on success/failure.

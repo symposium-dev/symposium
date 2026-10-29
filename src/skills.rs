@@ -238,7 +238,7 @@ async fn load_skills_for_group(
 /// skills discovered inside it. Both `source` variants reduce to this: `Path` is
 /// already on disk; `Git` is fetched via the git cache. (A crate is not a group
 /// source — it becomes a plugin through a `[[plugins]]` chained reference; see
-/// [`expand_chained_plugins`].)
+/// [`crate::plugins::active_plugins`].)
 struct ResolvedSkillDir {
     dir: PathBuf,
     /// `SkillSourceSearched` report `plugin` label.

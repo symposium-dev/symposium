@@ -307,9 +307,9 @@ pub struct Plugin {
     pub manifest: PluginManifest,
 
     /// Whether this plugin is defined by a member of the active workspace.
-    /// Provenance, stamped by the loader: registry sources stamp `false`;
-    /// the workspace-plugin loader (workspace-local extensions) will stamp
-    /// `true`. Backs the `workspace-member()` predicate.
+    /// Provenance, stamped by the loader: registry sources and packages stamp
+    /// `false`, workspace plugins `true`. Backs the `workspace-member()`
+    /// predicate.
     pub workspace_member: bool,
 
     /// The plugin's canonical package identity. Set to the resolved crate id for
