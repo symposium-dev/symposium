@@ -24,7 +24,6 @@
 //! the seam that spawns and talks to them.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::Result;
 use symposium_install::UpdateLevel;
@@ -43,7 +42,9 @@ pub use path::PathPm;
 
 /// The identity types are the SDK's, since they cross the PM boundary: a
 /// package-manager binary speaks in them too.
-pub use symposium_sdk::pm::{ANY_VERSION, CARGO_PM, PackageId, PluginInfo, UnvalidatedPlugin};
+pub use symposium_sdk::pm::{
+    ANY_VERSION, CARGO_PM, PackageId, PluginInfo, ProjectInfo, UnvalidatedPlugin,
+};
 
 /// A fetched package: the exact id it resolved to, plus the directory
 /// holding its content.
@@ -57,7 +58,7 @@ pub struct FetchedPackage {
 /// plugin distribution RFD).
 ///
 /// A PM is self-contained: it holds whatever it needs to resolve its own
-/// ecosystem ([`CargoPm`] owns an [`Arc<WorkspaceDeps>`], [`PathPm`] owns its
+/// ecosystem ([`CargoPm`] owns an [`Arc<WorkspaceDeps>`](std::sync::Arc), [`PathPm`] owns its
 /// directory), so operations take no ambient context. This mirrors the
 /// out-of-process shape — a PM spawned for a workspace answers RPC calls from
 /// its own state, with nothing workspace-shaped threaded per call.
@@ -114,6 +115,13 @@ pub trait PackageManager {
     /// The package ids the current workspace depends on. Empty for PMs with no
     /// workspace notion.
     async fn list_deps(&self) -> Result<Vec<PackageId>>;
+
+    /// The project this PM finds from its starting directory: its root, its
+    /// local packages, and the files whose change means its answers may have
+    /// changed. No root for a PM with no notion of a project.
+    async fn project_info(&self) -> Result<ProjectInfo> {
+        Ok(ProjectInfo::default())
+    }
 
     /// Find packages matching a partial query (backs `use` / `search`). PMs
     /// without a searchable registry return an empty list.
@@ -323,6 +331,23 @@ impl PmRegistry {
         Ok(deps)
     }
 
+    /// Each instance's [`ProjectInfo`], by instance name, and the names of the
+    /// instances that failed with why, as for [`list_deps`](Self::list_deps).
+    pub async fn project_info(&self) -> (Vec<(String, ProjectInfo)>, Vec<(String, String)>) {
+        let mut found = Vec::new();
+        let mut failed = Vec::new();
+        for inst in &self.instances {
+            match inst.pm.project_info().await {
+                Ok(project) => found.push((inst.name.clone(), project)),
+                Err(e) => {
+                    tracing::warn!(instance = %inst.name, error = %format!("{e:#}"), "failed to describe the project");
+                    failed.push((inst.name.clone(), format!("{e:#}")));
+                }
+            }
+        }
+        (found, failed)
+    }
+
     /// Load the plugin(s) an id maps to, asking every instance. Any instance may
     /// contribute a plugin relevant to the id, so this can return several. Each
     /// instance's plugins are validated under its own [`PluginKind`].
@@ -351,21 +376,198 @@ impl PmRegistry {
     }
 }
 
-/// The workspace's dependency set as package ids — every PM's `list_deps`
-/// unioned. This is what `depends-on` predicates evaluate against
-/// ([`crate::predicate::PredicateContext`]). Failures are logged and yield an
-/// empty list so predicate evaluation degrades to "no deps" rather than
-/// aborting the caller.
-pub async fn workspace_dep_ids(
-    sym: &crate::config::Symposium,
-    deps: &Arc<WorkspaceDeps>,
-) -> Vec<PackageId> {
-    match sym.package_managers(deps).list_deps().await {
-        Ok(deps) => deps,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to list workspace dependencies");
-            Vec::new()
+/// The workspace: the project the package managers report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceInfo {
+    /// The project's root, where project configuration is installed.
+    pub root: PathBuf,
+    /// Local packages the package managers reported, those inside `root` only.
+    /// Each may define a workspace plugin.
+    pub members: Vec<PathBuf>,
+    /// Files whose change means the package managers' answers may have changed.
+    pub inputs: Vec<PathBuf>,
+}
+
+impl WorkspaceInfo {
+    /// Combine each package manager's [`ProjectInfo`]. `None` when none found a
+    /// project; an error when two found different roots, since picking one
+    /// would install where the other ecosystem's tools do not look.
+    fn combine(found: Vec<(String, ProjectInfo)>) -> Result<Option<Self>, String> {
+        let mut root: Option<(String, PathBuf)> = None;
+        let mut members = Vec::new();
+        let mut inputs = Vec::new();
+        for (pm, project) in found {
+            inputs.extend(project.inputs);
+            let Some(found_root) = project.root else {
+                continue;
+            };
+            match &root {
+                None => root = Some((pm, found_root)),
+                Some((first, existing)) if canonical(existing) != canonical(&found_root) => {
+                    return Err(format!(
+                        "package managers disagree about the workspace root: `{first}` finds {}, `{pm}` finds {}",
+                        existing.display(),
+                        found_root.display()
+                    ));
+                }
+                Some(_) => {}
+            }
+            members.extend(project.local_packages);
         }
+        let Some((_, root)) = root else {
+            return Ok(None);
+        };
+        let canonical_root = canonical(&root);
+        members.retain(|member| canonical(member).starts_with(&canonical_root));
+        Ok(Some(Self {
+            root,
+            members,
+            inputs,
+        }))
+    }
+}
+
+fn canonical(path: &std::path::Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// The per-invocation workspace context: the package managers, plus the two
+/// facts about the workspace that everything above `pm/` needs: where it is
+/// and what it depends on.
+///
+/// Both are the package managers' answers. Where the workspace is, is the
+/// project they find from the starting directory, since where a project is
+/// rooted is each ecosystem's own rule. Both are resolved on first use and
+/// cached for the handle's lifetime, so one invocation shares one PM set: with
+/// a PM in another process, building the set per call would spawn a process
+/// per call. So it is threaded as an [`Arc`](std::sync::Arc).
+pub struct Workspace {
+    /// Where the package managers start looking. `None` for a
+    /// workspace-independent operation.
+    start: Option<PathBuf>,
+    pms: PmRegistry,
+    dep_ids: tokio::sync::OnceCell<Vec<PackageId>>,
+    info: tokio::sync::OnceCell<Result<Option<WorkspaceInfo>, String>>,
+}
+
+impl Workspace {
+    pub fn new(start: Option<PathBuf>, pms: PmRegistry) -> Self {
+        Self {
+            start,
+            pms,
+            dep_ids: tokio::sync::OnceCell::new(),
+            info: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// A context over a pre-resolved cargo workspace, for tests: no
+    /// `cargo metadata`, no registries, exactly `crates` rooted at `root`.
+    #[cfg(test)]
+    pub(crate) fn fixture(
+        root: impl Into<PathBuf>,
+        crates: Vec<WorkspaceCrate>,
+    ) -> std::sync::Arc<Self> {
+        let root = root.into();
+        let deps = WorkspaceDeps::fixture(root.clone(), crates);
+        std::sync::Arc::new(Self::new(
+            Some(root),
+            PmRegistry::new(vec![PmInstance {
+                name: CARGO_PM.to_string(),
+                kind: PluginKind::Package,
+                trusted: false,
+                pm: Box::new(CargoPm::new(deps)),
+            }]),
+        ))
+    }
+
+    /// The package managers active for this workspace.
+    pub fn pms(&self) -> &PmRegistry {
+        &self.pms
+    }
+
+    /// Where the package managers start looking, or `None` for a
+    /// workspace-independent operation.
+    pub fn start(&self) -> Option<&std::path::Path> {
+        self.start.as_deref()
+    }
+
+    async fn lookup(&self) -> &Result<Option<WorkspaceInfo>, String> {
+        self.info
+            .get_or_init(|| async {
+                if self.start.is_none() {
+                    return Ok(None);
+                }
+                // A package manager that fails is left out and the others
+                // decide, rather than failing the workspace: one broken PM must
+                // not stop syncing for every ecosystem. The design chapter on
+                // modules records the cost: the root it might have disagreed
+                // about.
+                let (found, failed) = self.pms.project_info().await;
+                match WorkspaceInfo::combine(found) {
+                    // With no project found, a failure is why: say so, rather
+                    // than that there is no project here.
+                    Ok(None) if !failed.is_empty() => Err(failed
+                        .iter()
+                        .map(|(name, e)| format!("`{name}` could not describe the project: {e}"))
+                        .collect::<Vec<_>>()
+                        .join("; ")),
+                    combined => combined,
+                }
+            })
+            .await
+    }
+
+    /// The workspace, or `None` when no package manager finds a project, or
+    /// when they disagree about where it is (logged).
+    pub async fn info(&self) -> Option<&WorkspaceInfo> {
+        match self.lookup().await {
+            Ok(info) => info.as_ref(),
+            Err(e) => {
+                tracing::warn!(error = %e, "no workspace");
+                None
+            }
+        }
+    }
+
+    /// The workspace, or an error saying why there is none.
+    pub async fn require_info(&self) -> Result<&WorkspaceInfo> {
+        match self.lookup().await {
+            Ok(Some(info)) => Ok(info),
+            Ok(None) => {
+                anyhow::bail!("not in a workspace: no package manager found a project here")
+            }
+            Err(e) => anyhow::bail!("{e}"),
+        }
+    }
+
+    /// The workspace root, or `None` outside a workspace.
+    pub async fn root(&self) -> Option<&std::path::Path> {
+        self.info().await.map(|info| info.root.as_path())
+    }
+
+    /// Use `info` and `dep_ids` instead of asking the package managers: what
+    /// they reported at a sync whose inputs have not changed since. Both, so
+    /// that an event with nothing changed asks no package manager either
+    /// question.
+    pub fn reuse(&self, info: WorkspaceInfo, dep_ids: Vec<PackageId>) {
+        let _ = self.info.set(Ok(Some(info)));
+        let _ = self.dep_ids.set(dep_ids);
+    }
+
+    /// The workspace's dependency set as package ids — every PM's `list_deps`
+    /// unioned. This is what `depends-on` predicates evaluate against
+    /// ([`crate::predicate::PredicateContext`]). Failures are logged and yield
+    /// an empty list, so predicate evaluation degrades to "no deps" rather than
+    /// aborting the caller.
+    pub async fn dep_ids(&self) -> &[PackageId] {
+        self.dep_ids
+            .get_or_init(|| async {
+                self.pms.list_deps().await.unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "failed to list workspace dependencies");
+                    Vec::new()
+                })
+            })
+            .await
     }
 }
 
@@ -417,6 +619,123 @@ mod tests {
         async fn fetch(&self, id: &PackageId, _update: UpdateLevel) -> Result<FetchedPackage> {
             anyhow::bail!("cannot fetch {id}")
         }
+    }
+
+    /// A PM that reports a fixed project.
+    struct ProjectPm {
+        name: &'static str,
+        project: ProjectInfo,
+    }
+
+    #[async_trait::async_trait]
+    impl PackageManager for ProjectPm {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn canonical_name(&self, name: &str) -> String {
+            name.to_string()
+        }
+        async fn active_plugins(&self, _deps: &[PackageId]) -> Vec<UnvalidatedPlugin> {
+            Vec::new()
+        }
+        async fn load_plugin(
+            &self,
+            _id: &PackageId,
+            _update: UpdateLevel,
+        ) -> Vec<UnvalidatedPlugin> {
+            Vec::new()
+        }
+        async fn list_deps(&self) -> Result<Vec<PackageId>> {
+            Ok(Vec::new())
+        }
+        async fn project_info(&self) -> Result<ProjectInfo> {
+            Ok(self.project.clone())
+        }
+        async fn search(&self, _query: &str) -> Result<Vec<PluginInfo>> {
+            Ok(Vec::new())
+        }
+        async fn fetch(&self, id: &PackageId, _update: UpdateLevel) -> Result<FetchedPackage> {
+            anyhow::bail!("cannot fetch {id}")
+        }
+    }
+
+    fn workspace_of(start: &std::path::Path, pms: Vec<(&'static str, ProjectInfo)>) -> Workspace {
+        Workspace::new(
+            Some(start.to_path_buf()),
+            PmRegistry::new(
+                pms.into_iter()
+                    .map(|(name, project)| PmInstance {
+                        name: name.into(),
+                        trusted: false,
+                        kind: PluginKind::Package,
+                        pm: Box::new(ProjectPm { name, project }),
+                    })
+                    .collect(),
+            ),
+        )
+    }
+
+    /// The workspace is the project its package managers report, which may be
+    /// rooted above the starting directory. A PM that finds no project
+    /// there leaves the root to the others; a local package outside the root
+    /// is dropped, since its plugin would be trusted.
+    #[tokio::test]
+    async fn the_workspace_is_the_project_the_package_managers_report() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        let member = root.join("crates/app");
+        let outside = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&member).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let ws = workspace_of(
+            &member,
+            vec![
+                ("npm", ProjectInfo::default()),
+                (
+                    "cargo",
+                    ProjectInfo {
+                        root: Some(root.clone()),
+                        local_packages: vec![member.clone(), outside],
+                        inputs: vec![root.join("Cargo.lock")],
+                    },
+                ),
+            ],
+        );
+        let info = ws.require_info().await.unwrap();
+        assert_eq!(info.root, root);
+        assert_eq!(info.members, vec![member]);
+        assert_eq!(info.inputs, vec![root.join("Cargo.lock")]);
+    }
+
+    /// Two package managers rooting the project in different places is an
+    /// error naming both, not a choice between them.
+    #[tokio::test]
+    async fn package_managers_that_disagree_about_the_root_are_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let web = tmp.path().join("web");
+        std::fs::create_dir_all(&web).unwrap();
+        let rooted_at = |dir: &std::path::Path| ProjectInfo {
+            root: Some(dir.to_path_buf()),
+            ..Default::default()
+        };
+
+        let ws = workspace_of(
+            &web,
+            vec![("cargo", rooted_at(tmp.path())), ("npm", rooted_at(&web))],
+        );
+        assert!(ws.info().await.is_none());
+        let err = format!("{:#}", ws.require_info().await.unwrap_err());
+        assert!(err.contains("`cargo`") && err.contains("`npm`"), "{err}");
+    }
+
+    /// Outside any project there is no workspace, and saying so is not an
+    /// error from any package manager.
+    #[tokio::test]
+    async fn no_project_means_no_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = workspace_of(tmp.path(), vec![("cargo", ProjectInfo::default())]);
+        assert!(ws.info().await.is_none());
     }
 
     /// The report events emitted while validating the stub's plugin under `kind`.
@@ -471,7 +790,7 @@ mod tests {
                 name: CARGO_PM.into(),
                 trusted: false,
                 kind: PluginKind::Package,
-                pm: Box::new(CargoPm::new(Arc::new(WorkspaceDeps::detached()))),
+                pm: Box::new(CargoPm::new(std::sync::Arc::new(WorkspaceDeps::detached()))),
             },
             PmInstance {
                 name: "reg".into(),

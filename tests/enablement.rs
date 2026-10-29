@@ -523,7 +523,7 @@ async fn status_reports_candidate_then_used() {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             let workspace_root = ctx.workspace_root.clone().unwrap();
 
-            let deps = ctx.sym.workspace_deps(&workspace_root);
+            let deps = ctx.sym.workspace(&workspace_root);
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
             let candidate = entries
                 .iter()
@@ -535,7 +535,7 @@ async fn status_reports_candidate_then_used() {
             ctx.symposium(&["use", "crate-a"]).await?;
             symposium::discovery::apply_consent(&mut ctx.sym, &[], &["noisy-crate".to_string()])?;
 
-            let deps = ctx.sym.workspace_deps(&workspace_root);
+            let deps = ctx.sym.workspace(&workspace_root);
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
             let used = entries
                 .iter()
@@ -582,7 +582,7 @@ async fn status_reports_dormant_registry_plugin() {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             let workspace_root = ctx.workspace_root.clone().unwrap();
 
-            let deps = ctx.sym.workspace_deps(&workspace_root);
+            let deps = ctx.sym.workspace(&workspace_root);
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
             let dormant = entries
                 .iter()
@@ -607,7 +607,7 @@ async fn status_reports_dormant_registry_plugin() {
             );
 
             ctx.symposium(&["use", "gateless-plugin"]).await?;
-            let deps = ctx.sym.workspace_deps(&workspace_root);
+            let deps = ctx.sym.workspace(&workspace_root);
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
             let awake = entries
                 .iter()
@@ -644,14 +644,14 @@ async fn consent_prompt_never_fires_non_interactively() {
 
             // There *is* something to ask about — so nothing below is
             // vacuous.
-            let deps = ctx.sym.workspace_deps(&workspace_root);
+            let deps = ctx.sym.workspace(&workspace_root);
             assert_eq!(
                 symposium::discovery::pending_candidates(&ctx.sym, &deps).await,
                 vec!["crate-a".to_string()]
             );
 
             // The prompt returns without reading stdin, recording nothing.
-            let deps = ctx.sym.workspace_deps(&workspace_root);
+            let deps = ctx.sym.workspace(&workspace_root);
             let out = Output::quiet();
             symposium::discovery::prompt_for_consent(&mut ctx.sym, &deps, &out).await?;
             assert!(ctx.sym.config.plugins.auto_enable.is_empty());
@@ -664,7 +664,7 @@ async fn consent_prompt_never_fires_non_interactively() {
             assert!(!config.contains("disable"), "{config}");
 
             // Still undecided, and still not installed.
-            let deps = ctx.sym.workspace_deps(&workspace_root);
+            let deps = ctx.sym.workspace(&workspace_root);
             assert_eq!(
                 symposium::discovery::pending_candidates(&ctx.sym, &deps).await,
                 vec!["crate-a".to_string()]
@@ -697,7 +697,7 @@ async fn apply_consent_records_both_answers() {
             ctx.symposium(&["sync"]).await?;
             find_installed_skill(&workspace_root.join(".claude/skills"), "a-guidance");
 
-            let deps = ctx.sym.workspace_deps(&workspace_root);
+            let deps = ctx.sym.workspace(&workspace_root);
             assert!(
                 symposium::discovery::pending_candidates(&ctx.sym, &deps)
                     .await
@@ -777,7 +777,7 @@ async fn status_reports_a_used_but_disabled_plugin_as_declined() {
             // but a hand-edited config can still hold both.
             symposium::discovery::apply_consent(&mut ctx.sym, &[], &["crate-a".to_string()])?;
 
-            let deps = ctx.sym.workspace_deps(&workspace_root);
+            let deps = ctx.sym.workspace(&workspace_root);
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
             let entry = entries
                 .iter()
@@ -803,7 +803,7 @@ async fn status_lists_each_declined_name_once() {
                 .map(String::from)
                 .to_vec();
 
-            let deps = ctx.sym.workspace_deps(&workspace_root);
+            let deps = ctx.sym.workspace(&workspace_root);
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
             let named = |name: &str| {
                 entries
@@ -844,7 +844,7 @@ async fn status_reports_a_pluginless_dependency_only_when_used() {
                 .used
                 .push(symposium::config::UseEntry::Global("not-a-dep".into()));
 
-            let deps = ctx.sym.workspace_deps(&workspace_root);
+            let deps = ctx.sym.workspace(&workspace_root);
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
             assert!(
                 !entries.iter().any(|e| e.name == "plain-dep"),
@@ -865,7 +865,7 @@ async fn status_reports_a_pluginless_dependency_only_when_used() {
 
             ctx.sym.config.plugins.auto_enable.clear();
             ctx.symposium(&["use", "plain-dep"]).await?;
-            let deps = ctx.sym.workspace_deps(&workspace_root);
+            let deps = ctx.sym.workspace(&workspace_root);
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
             let plain = entries
                 .iter()

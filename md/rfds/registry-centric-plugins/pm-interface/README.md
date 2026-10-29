@@ -119,6 +119,25 @@ Contract:
 - Direct dependencies only (not transitive).
 - Must be fast: this is on the hook path. Read lockfiles, don't query the network, cache on the lockfile's mtime.
 
+#### `project_info`
+
+```json
+// Response
+{ "result": { "project": {
+    "root": "/home/user/projects/my-app",
+    "local_packages": ["/home/user/projects/my-app/crates/core"],
+    "inputs": ["/home/user/projects/my-app/Cargo.lock"]
+} } }
+```
+
+The project this PM finds from the directory given at `initialize`. Symposium's workspace is that project: where a project is rooted is each ecosystem's own rule, cargo's being the workspace root above any member, so only a PM can say.
+
+- `root`: the project's root, where Symposium installs project configuration. Absent when this PM finds no project there. Every PM that finds one must report the same root; Symposium treats a disagreement as an error rather than choosing.
+- `local_packages`: the packages that are part of the project rather than dependencies of it (cargo workspace members, npm workspace packages). Each may define a workspace plugin, which is trusted, so Symposium uses only those inside the root: a PM cannot point it at content from anywhere else.
+- `inputs`: the files whose change means this PM's answers may have changed, such as its lockfile. Symposium records their modification times when it syncs, and decides whether a later hook event needs to sync from those times alone, so an unchanged workspace starts no PM.
+
+A PM with no notion of a project answers with no root and both lists empty.
+
 #### `search`
 
 ```json
@@ -341,7 +360,7 @@ The PM. Symposium sends `load_plugin` with the requirement in the id's version c
 
 ### What does this cost on the hook path?
 
-A process spawn per PM per invocation. The property worth protecting is not "no subprocess" but "no `cargo metadata`": that's the expensive part, since it reads and resolves the whole graph. The `update: "none"` contract keeps `fetch` offline, `list_deps` caches on the lockfile mtime, and lazy spawning means a workspace whose predicates never reference a dependency starts no PM at all.
+On most hook events, nothing: whether to sync is decided from the modification times of the files each PM named as `project_info` inputs at the last sync, so no PM is asked. When one is, a process spawn per PM per invocation. The property worth protecting is not "no subprocess" but "no `cargo metadata`": that's the expensive part, since it reads and resolves the whole graph. The `update: "none"` contract keeps `fetch` offline, `list_deps` caches on the lockfile mtime, and lazy spawning means a workspace whose predicates never reference a dependency starts no PM at all.
 
 If spawn cost does turn out to matter, the answer is a daemon mode for PMs (and for Symposium) rather than folding PMs back into the binary. That's a larger change and not proposed here.
 
@@ -376,12 +395,12 @@ Tests: a fixture PM binary that returns canned manifests, driven end to end; plu
 
 ### Step 4: Implement `symposium-pm-cargo`
 
-Port workspace resolution, crate fetching, and crate-manifest merging into the binary. Add whatever the workspace root and members need to cross the boundary, since core reads them in a dozen places.
+Port workspace resolution, crate fetching, and crate-manifest merging into the binary.
 
 Concretely:
 
 1. Split the cargo PM into a library the binary wraps, so unit tests can keep driving it in-process through the trait.
-2. Carry workspace information over the protocol. Core reads the workspace root and member directories off the cargo resolver in a dozen places, so this is the bulk of the change. Loading plugins *from* those directories stays in Symposium: they are local directory reads, and the workspace is a trust root whose policy core owns. The cargo PM's job is to report where the workspace is, not what it contains.
+2. Describe the workspace over the protocol. Core reads the workspace root and member directories in a dozen places; the cargo PM reports them, and its lockfile, through `project_info`, and its dependencies through `list_deps`. Loading plugins *from* those directories stays in Symposium: they are local directory reads, and the workspace is a trust root whose policy core owns.
 3. Forward `SYMPOSIUM_CARGO` into the child, since the test harness installs a fake cargo and a child inherits no environment.
 
 Tests: the existing integration suite, driven through the real subprocess.

@@ -150,6 +150,16 @@ impl WorkspaceDeps {
         }
     }
 
+    /// The workspace, `None` outside one, or why `cargo metadata` could not
+    /// describe it.
+    pub fn try_load(&self) -> Result<Option<&Arc<LoadedWorkspace>>, String> {
+        match self.cached.get_or_init(|| self.resolve()) {
+            Ok(loaded) => Ok(Some(loaded)),
+            Err(None) => Ok(None),
+            Err(Some(e)) => Err(e.clone()),
+        }
+    }
+
     /// Convenience: workspace root, or `None` if not in a workspace.
     pub fn workspace_root(&self) -> Option<&Path> {
         self.load().map(|w| w.root.as_path())

@@ -6,11 +6,11 @@ Scans workspace dependencies, installs applicable skills into agent directories,
 
 0. **Consent prompt** (interactive `cargo agents sync` only) — ask about each dependency plugin awaiting consent and record the answers in `[plugins]` before resolution runs, so an approval installs in this same sync. Gated on `Output::is_interactive()`: the hook-triggered auto-sync calls `sync::sync` directly and never reaches this step. See [dependency discovery](./module-structure.md#discoveryrs--dependency-discovery-and-enablement).
 
-1. **Find workspace root** — run `cargo metadata` to locate the workspace manifest directory.
+1. **Find the workspace**: ask each package manager for the project it finds from the starting directory (for a hook, the payload's `cwd`; for `cargo agents sync`, the current directory): its root, members and inputs, through `project_info`. Outside any project there is nothing to sync; package managers that disagree about the root are an error. For cargo this is the Cargo workspace, from `cargo metadata`.
 
 2. **Load registries** — read the user config's `[[registry]]` entries, ask each one's package manager for the plugin-bearing entries it offers, and load their plugin manifests. For git registries, fetch/update as needed.
 
-3. **Scan dependencies** — read the full dependency graph from the workspace.
+3. **Scan dependencies**: every package manager's `list_deps`, unioned.
 
 4. **Match skills to dependencies**: for each plugin, parse `SKILL.md` YAML frontmatter, reject malformed YAML or a non-string value in a field Symposium reads, warn about skipped invalid skills, then evaluate skill group dependency predicates and individual skill `depends-on` frontmatter against the workspace dependencies.
 
@@ -47,6 +47,6 @@ Each skill directory symposium installs receives a `.gitignore` containing just 
 
 When `auto-sync = true` is set in the user config, the hook handler runs `sync` automatically during agent sessions. This keeps skills in sync as dependencies change.
 
-On most hook events, auto-sync is gated on `Cargo.lock` (and `battery-pack.toml`) mtime via per-workspace state, so an unchanged workspace doesn't pay for `cargo metadata` on every event. `SessionStart` is the exception: it runs once per session, ignores that gate, and passes `UpdateLevel::Check` down through skill resolution so `source.git` skill groups are re-fetched when their upstream moved. This is what makes upstream skill updates land even when the workspace's own dependencies haven't changed. `sync` takes the `UpdateLevel` as a parameter; the binary's global `--update` flag threads through the same path for manual `cargo agents sync`.
+On most hook events, auto-sync is gated on per-workspace state: each package manager names the files its answers depend on (`ProjectInfo::inputs`; for cargo, `Cargo.lock` and `battery-pack.toml`), a sync records their mtimes and the workspace found, keyed on the directory the package managers started from, and a later event syncs only once one of those files has changed, appeared, or disappeared. Checking that reads only mtimes, so an unchanged workspace starts no package manager and runs no `cargo metadata`; the recorded workspace is reused instead. Nothing is recorded outside a project, so the next event asks again. `SessionStart` is the exception: it runs once per session, ignores that gate, and passes `UpdateLevel::Check` down through skill resolution so `source.git` skill groups are re-fetched when their upstream moved. This is what makes upstream skill updates land even when the workspace's own dependencies haven't changed. `sync` takes the `UpdateLevel` as a parameter; the binary's global `--update` flag threads through the same path for manual `cargo agents sync`.
 
 Crates reached through `[[plugins]]` chained references or `[plugins]` enablement are resolved with `UpdateLevel::Check` whatever `--update` says, so `sync` downloads one that cargo has not cached yet. The other paths that build the active plugin set (`--help`, subcommand dispatch, hook dispatch) only read the cargo cache.

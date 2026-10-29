@@ -156,9 +156,9 @@ async fn reap_removed_agent_skills(
     out: &Output,
     update: UpdateLevel,
 ) -> Result<()> {
-    let deps = sym.workspace_deps(cwd);
-    if deps.load().is_some() {
-        crate::sync::sync(sym, &deps, update).await?;
+    let ws = sym.workspace(cwd);
+    if ws.info().await.is_some() {
+        crate::sync::sync(sym, &ws, update).await?;
     }
     out.info("skills installed in other workspaces stay until `cargo agents sync` runs there");
     Ok(())

@@ -22,7 +22,7 @@
 
 use std::path::Path;
 
-use crate::pm::WorkspaceDeps;
+use crate::pm::Workspace;
 use anyhow::Result;
 use std::sync::Arc;
 use symposium_install::UpdateLevel;
@@ -72,9 +72,9 @@ pub struct StatusEntry {
 /// Compute the enablement report for the workspace `deps` points at.
 pub async fn workspace_status(
     sym: &Symposium,
-    deps: &Arc<WorkspaceDeps>,
+    workspace: &Arc<Workspace>,
 ) -> Result<Vec<StatusEntry>> {
-    let ws = deps.require()?.clone();
+    let ws = workspace.require_info().await?.clone();
 
     let mut entries = Vec::new();
 
@@ -82,9 +82,9 @@ pub async fn workspace_status(
     // trust roots, so the only questions are the `use` gate for dormant
     // plugins and whether the predicates hold.
     let registry = crate::plugins::load_registry_with_workspace(sym, Some(&ws)).await;
-    let dep_ids = crate::pm::workspace_dep_ids(sym, deps).await;
-    let pms = sym.package_managers(deps);
-    let used = crate::discovery::used_plugins(sym, &pms, &registry.plugins, &ws.root);
+    let dep_ids = workspace.dep_ids().await.to_vec();
+    let pms = workspace.pms();
+    let used = crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root);
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
     for parsed in &registry.plugins {
         let root = if parsed.workspace_member {
@@ -113,7 +113,7 @@ pub async fn workspace_status(
 
     // Dependency-embedded plugins, with the decision the config made about
     // each. This is the same view the consent prompt works from.
-    let discovery = crate::discovery::discover(sym, deps, &registry.plugins).await;
+    let discovery = crate::discovery::discover(sym, workspace, &registry.plugins).await;
     for found in discovery
         .active
         .iter()
@@ -145,7 +145,7 @@ pub async fn workspace_status(
         .collect();
     let enabled = crate::discovery::enabled_dependencies(
         sym,
-        &pms,
+        pms,
         &registry.plugins,
         &dep_ids,
         &ws.root,
@@ -153,7 +153,7 @@ pub async fn workspace_status(
     )
     .await;
     let used =
-        crate::discovery::resolve_used(sym, &pms, &registry.plugins, &ws.root, UpdateLevel::None)
+        crate::discovery::resolve_used(sym, pms, &registry.plugins, &ws.root, UpdateLevel::None)
             .await;
     for id in enabled {
         if shown.contains(&pms.identity(&id)) {
@@ -263,7 +263,7 @@ fn entry_for(found: &DiscoveredPlugin) -> StatusEntry {
 
 /// The `cargo agents status` entry point.
 pub async fn status(sym: &Symposium, cwd: &Path) -> Result<()> {
-    let deps = sym.workspace_deps(cwd);
+    let deps = sym.workspace(cwd);
     let entries = workspace_status(sym, &deps).await?;
     if entries.is_empty() {
         tracing::info!(

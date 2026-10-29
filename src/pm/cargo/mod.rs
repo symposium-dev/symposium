@@ -22,7 +22,8 @@ pub use workspace::{
 };
 
 use super::{
-    ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, UnvalidatedPlugin,
+    ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, ProjectInfo,
+    UnvalidatedPlugin,
 };
 
 /// How many crates.io hits a search returns — enough to surface the crate a
@@ -266,6 +267,26 @@ impl PackageManager for CargoPm {
             .iter()
             .map(|c| PackageId::new(CARGO_PM, c.name.clone(), c.version.to_string()))
             .collect())
+    }
+
+    /// The cargo workspace containing the directory: its root, its members,
+    /// and the files that change when its dependencies do.
+    async fn project_info(&self) -> Result<ProjectInfo> {
+        let Some(ws) = self.workspace.try_load().map_err(anyhow::Error::msg)? else {
+            return Ok(ProjectInfo::default());
+        };
+        Ok(ProjectInfo {
+            root: Some(ws.root.clone()),
+            local_packages: ws
+                .member_crates
+                .iter()
+                .filter_map(|member| member.path.clone())
+                .collect(),
+            inputs: vec![
+                ws.root.join("Cargo.lock"),
+                ws.root.join("battery-pack.toml"),
+            ],
+        })
     }
 }
 

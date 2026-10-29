@@ -33,8 +33,8 @@ pub async fn use_plugin(
     global: bool,
     update: UpdateLevel,
 ) -> Result<()> {
-    let deps = sym.workspace_deps(cwd);
-    let pms = sym.package_managers(&deps);
+    let deps = sym.workspace(cwd);
+    let pms = deps.pms();
     let registry = crate::plugins::load_registry(sym).await;
     let id = match pms
         .identify(&registry.plugins, name, UpdateLevel::Check)
@@ -51,7 +51,7 @@ pub async fn use_plugin(
     if sym
         .config
         .plugins
-        .is_disabled(&pms, &PackageId::any_version(&id.pm, name))
+        .is_disabled(pms, &PackageId::any_version(&id.pm, name))
     {
         bail!("`{name}` is disabled in `[plugins] disable`; remove that entry to enable it again");
     }
@@ -76,8 +76,8 @@ pub async fn use_plugin(
         return Ok(());
     }
 
-    let workspace_root = deps.load().map(|ws| ws.root.clone());
-    if !global && let Err(e) = deps.require() {
+    let workspace_root = deps.root().await.map(Path::to_path_buf);
+    if !global && let Err(e) = deps.require_info().await {
         bail!("{e}; pass --global to enable `{name}` everywhere");
     }
 
@@ -93,7 +93,7 @@ pub async fn use_plugin(
     let mut already_enabled = false;
     for e in &sym.config.plugins.used {
         if in_scope(e, global, workspace_root.as_deref())
-            && names(&pms, &registry.plugins, e.name(), name, Some(&id)).await
+            && names(pms, &registry.plugins, e.name(), name, Some(&id)).await
         {
             already_enabled = true;
             break;
@@ -136,9 +136,9 @@ pub async fn remove_plugin(
     global: bool,
     update: UpdateLevel,
 ) -> Result<()> {
-    let deps = sym.workspace_deps(cwd);
-    let workspace_root = deps.load().map(|ws| ws.root.clone());
-    let pms = sym.package_managers(&deps);
+    let deps = sym.workspace(cwd);
+    let workspace_root = deps.root().await.map(Path::to_path_buf);
+    let pms = deps.pms();
     let registry = crate::plugins::load_registry(sym).await;
     let id = pms
         .identify(&registry.plugins, name, UpdateLevel::Check)
@@ -149,7 +149,7 @@ pub async fn remove_plugin(
     let before = used.len();
     for entry in used {
         let remove = in_scope(&entry, global, workspace_root.as_deref())
-            && names(&pms, &registry.plugins, entry.name(), name, id.as_ref()).await;
+            && names(pms, &registry.plugins, entry.name(), name, id.as_ref()).await;
         if !remove {
             sym.config.plugins.used.push(entry);
         }

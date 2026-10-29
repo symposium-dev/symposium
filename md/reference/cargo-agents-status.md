@@ -8,7 +8,7 @@ Show which plugins are enabled for this workspace, and why.
 cargo agents status
 ```
 
-Must be run from within a Rust workspace.
+Must be run from within a workspace, as [`cargo agents sync`](./cargo-agents-sync.md) is.
 
 ## Behavior
 

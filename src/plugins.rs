@@ -1082,14 +1082,14 @@ pub async fn load_registry(sym: &Symposium) -> PluginRegistry {
 /// members. `None` (not in a workspace) degrades to registries only.
 pub async fn load_registry_with_workspace(
     sym: &Symposium,
-    workspace: Option<&crate::pm::LoadedWorkspace>,
+    workspace: Option<&crate::pm::WorkspaceInfo>,
 ) -> PluginRegistry {
     load_registry_impl(sym, workspace).await
 }
 
 async fn load_registry_impl(
     sym: &Symposium,
-    workspace: Option<&crate::pm::LoadedWorkspace>,
+    workspace: Option<&crate::pm::WorkspaceInfo>,
 ) -> PluginRegistry {
     let pms = sym.detached_managers();
     let mut plugins = Vec::new();
@@ -1113,13 +1113,8 @@ async fn load_registry_impl(
     }
 
     if let Some(ws) = workspace {
-        let member_dirs: Vec<PathBuf> = ws
-            .member_crates
-            .iter()
-            .filter_map(|m| m.path.clone())
-            .collect();
         let (ws_plugins, ws_warnings) =
-            workspace_plugins(&ws.root, &member_dirs, sym.config.agents_syncing);
+            workspace_plugins(&ws.root, &ws.members, sym.config.agents_syncing);
         plugins.extend(ws_plugins);
         warnings.extend(ws_warnings);
     }
