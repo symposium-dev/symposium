@@ -1,0 +1,8 @@
+[package]
+name = "dep-host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+invalid-dep = { path = "invalid-dep" }
+portable-dep = { path = "portable-dep" }

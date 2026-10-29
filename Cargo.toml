@@ -31,6 +31,7 @@ cargo_metadata = "0.18"
 chrono = "0.4"
 crates_io_api = { version = "0.12", default-features = false, features = ["rustls"] }
 dirs = "6"
+dunce = "1.0"
 flate2 = "1.0"
 indoc = "2.0"
 home = "0.5"

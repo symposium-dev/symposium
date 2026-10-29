@@ -60,13 +60,12 @@ impl StatusState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StatusEntry {
     pub name: String,
-    /// Resolved version for a discovered dependency plugin; `None` for
-    /// manifest plugins, whose identity is their source, not a version.
     pub version: Option<String>,
     /// The enablement root, or — for the states that don't have one — why
     /// the plugin will not load.
     pub root: String,
     pub state: StatusState,
+    pub format: Option<&'static str>,
 }
 
 /// Compute the enablement report for the workspace `deps` points at.
@@ -97,7 +96,8 @@ pub async fn workspace_status(
         let active = parsed.applies(&mut ctx);
         entries.push(StatusEntry {
             name: parsed.manifest.name.clone(),
-            version: None,
+            version: parsed.manifest.version.clone(),
+            format: parsed.format(),
             root: if active || !parsed.manifest.requires_use {
                 root
             } else {
@@ -180,6 +180,7 @@ pub async fn workspace_status(
             } else {
                 StatusState::Active
             },
+            format: None,
         });
     }
     let mut missing = std::collections::HashSet::new();
@@ -198,6 +199,7 @@ pub async fn workspace_status(
             root: "`[plugins] use` (not a registry plugin, a dependency or a cached crate)"
                 .to_string(),
             state: StatusState::Dormant,
+            format: None,
         });
     }
 
@@ -229,6 +231,7 @@ pub async fn workspace_status(
             version: None,
             root: "declined (`[plugins] disable`)".to_string(),
             state: StatusState::Declined,
+            format: None,
         });
     }
 
@@ -258,6 +261,7 @@ fn entry_for(found: &DiscoveredPlugin) -> StatusEntry {
         version: Some(found.id.version.clone()),
         root,
         state,
+        format: None,
     }
 }
 
@@ -280,6 +284,7 @@ pub async fn status(sym: &Symposium, cwd: &Path) -> Result<()> {
                 version: entry.version,
                 root: entry.root,
                 state: entry.state.as_str().to_string(),
+                format: entry.format.map(str::to_string),
             },
         );
     }
