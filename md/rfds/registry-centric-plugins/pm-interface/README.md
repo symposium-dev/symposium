@@ -3,7 +3,7 @@
 ## TL;DR
 
 - Define an operation set (`initialize`, `active_plugins`, `load_plugin`, `list_deps`, `project_info`, `search`, `fetch`, `refresh`) that all package managers implement. `initialize` is the handshake that constructs the PM; the rest are what Symposium asks of it.
-- PMs are separate binaries speaking newline-delimited JSON-RPC over stdio. One long-lived process per PM per Symposium invocation.
+- A PM is a binary speaking newline-delimited JSON-RPC over stdio, one long-lived process per PM per Symposium invocation. A PM written against the SDK can also run in Symposium's own process, which is how the cargo PM runs by default.
 - A PM returns plugin *manifests*, not just directories, so it can synthesize a plugin for a package with no `Symposium.toml`, or one whose manifest is in another ecosystem's format.
 - Trust is assigned by Symposium, never claimed by the PM.
 
@@ -327,11 +327,16 @@ constraint ever went away, either could become an ordinary PM binary without a
 protocol change.
 
 Every other PM needs ecosystem tooling that Symposium has no reason to carry, and
-is a separate binary.
+is a separate binary, with one exception: `cargo`.
 
 #### `cargo`
 
-Separate binary (`symposium-pm-cargo`). See the [cargo PM sub-RFD](../cargo-pm/README.md) for details.
+Its own crate, run in Symposium's process by default and as the
+`symposium-pm-cargo` binary when a `[[package-manager]]` entry named `cargo` asks
+for it. Both run the same implementation. Symposium is a cargo tool, so this is
+the one PM it cannot work without: it should not depend on finding a second
+binary, and the hook path should not pay a spawn for it. See the
+[cargo PM sub-RFD](../cargo-pm/README.md) for details.
 
 #### `git` as a chained source
 
@@ -346,6 +351,8 @@ It's the same pattern used by MCP servers and LSP: well-understood, language-agn
 ### Why not compile PMs into the binary?
 
 Language-agnosticism. We want npm/pypi PMs eventually, and those may be best written in JS/Python. Even for Rust-based PMs, the binary boundary keeps the core small and lets PMs be updated independently.
+
+The cargo PM is the exception, compiled in behind the same trait: every workspace Symposium runs in needs it, so it should not be one more thing to install or spawn.
 
 ### Why is the manifest on the wire instead of a directory?
 
@@ -364,9 +371,9 @@ The PM. Symposium sends `load_plugin` with the requirement in the id's version c
 
 ### What does this cost on the hook path?
 
-On most hook events, nothing: whether to sync is decided from the modification times of the files each PM named as `project_info` inputs at the last sync, so no PM is asked. When one is, a process spawn per PM per invocation. The property worth protecting is not "no subprocess" but "no `cargo metadata`": that's the expensive part, since it reads and resolves the whole graph. The `update: "none"` contract keeps `fetch` offline, `list_deps` caches on the lockfile mtime, and lazy spawning means an invocation that asks a PM nothing never starts it.
+On most hook events, nothing: whether to sync is decided from the modification times of the files each PM named as `project_info` inputs at the last sync, so no PM is asked. When one is, cargo costs nothing beyond the in-process work, since it runs in Symposium's process by default, and any other PM costs a process spawn per invocation. The property worth protecting is not "no subprocess" but "no `cargo metadata`": that's the expensive part, since it reads and resolves the whole graph. The `update: "none"` contract keeps `fetch` offline, `list_deps` caches on the lockfile mtime, and lazy spawning means an invocation that asks a PM nothing never starts it.
 
-If spawn cost does turn out to matter, the answer is a daemon mode for PMs (and for Symposium) rather than folding PMs back into the binary. That's a larger change and not proposed here.
+If spawn cost does turn out to matter for the configured PMs, the answer is a daemon mode for PMs (and for Symposium). That's a larger change and not proposed here.
 
 ## Implementation plan and status
 
@@ -408,9 +415,9 @@ Concretely:
 2. Describe the workspace over the protocol. Core reads the workspace root and member directories in a dozen places; the cargo PM reports them, and its lockfile, through `project_info`, and its dependencies through `list_deps`. Loading plugins *from* those directories stays in Symposium: they are local directory reads, and the workspace is a trust root whose policy core owns.
 3. Set `SYMPOSIUM_CARGO` in the child's environment, since the test harness's fake cargo is configured on Symposium's directories rather than in its process environment.
 
-Tests: the existing integration suite, driven through the real subprocess.
+Tests: the cargo PM driven end to end through the real binary.
 
-- [ ] PR: cargo PM binary + tests
+- [x] PR: cargo PM binary + tests
 
 
 ### Step 5: Configuration surface

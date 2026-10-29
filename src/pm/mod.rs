@@ -28,17 +28,20 @@ use symposium_install::UpdateLevel;
 
 use crate::plugins::Plugin;
 
-mod cargo;
 mod git;
 pub mod layout;
 mod path;
 pub mod remote;
-pub use cargo::{
-    CargoPm, LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
-};
+
 pub use git::GitPm;
 pub use path::PathPm;
 pub use remote::{RemotePm, RemotePmCommand};
+/// The cargo package manager is its own crate, because it has to be one to run
+/// as its own binary. Re-exported here so the rest of Symposium keeps naming one `pm`
+/// module regardless of where a PM's code lives.
+pub use symposium_pm_cargo::{
+    CargoPm, LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
+};
 
 /// The identity types and the operation set are the SDK's, since they cross
 /// the PM boundary: a package-manager binary speaks in them too.

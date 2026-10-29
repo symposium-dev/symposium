@@ -1,8 +1,9 @@
 //! Workspace dependency types and resolution.
 //!
 //! [`WorkspaceDeps`] resolves and caches the crate dependency graph for a Cargo
-//! workspace. Plugin binaries obtain one via
-//! [`SymposiumDirs::workspace_deps`](crate::dirs::SymposiumDirs::workspace_deps).
+//! workspace: the `cargo metadata` invocation, its disk cache, and the types
+//! that come out. This is the cargo PM's private business: Symposium learns
+//! the workspace through the PM's `project_info` and `list_deps`.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -82,27 +83,26 @@ struct DiskCache {
 /// result is memoized in a [`OnceLock`], so resolution happens at most once per
 /// instance and every method reads through a shared `&self` — which lets a
 /// single resolver be shared (held as an [`Arc`] by a
-/// [`CargoPm`](crate::pm::CargoPm), and read directly by core code that needs
-/// the workspace root or members) rather than each caller resolving its own.
+/// [`CargoPm`](crate::CargoPm)) rather than each caller resolving its own.
 pub struct WorkspaceDeps {
     cwd: PathBuf,
-    dirs: crate::dirs::SymposiumDirs,
+    config: crate::CargoPmConfig,
     cached: OnceLock<Result<Arc<LoadedWorkspace>, Option<String>>>,
 }
 
 impl WorkspaceDeps {
-    pub fn new(cwd: impl Into<PathBuf>, dirs: &crate::dirs::SymposiumDirs) -> Self {
+    pub fn new(cwd: impl Into<PathBuf>, config: crate::CargoPmConfig) -> Self {
         Self {
             cwd: cwd.into(),
-            dirs: dirs.clone(),
+            config,
             cached: OnceLock::new(),
         }
     }
 
     /// A pre-resolved resolver for tests: skips `cargo metadata` and returns
     /// exactly `crates` (rooted at `root`, no members).
-    #[cfg(test)]
-    pub(crate) fn fixture(root: impl Into<PathBuf>, crates: Vec<WorkspaceCrate>) -> Arc<Self> {
+    #[doc(hidden)]
+    pub fn fixture(root: impl Into<PathBuf>, crates: Vec<WorkspaceCrate>) -> Arc<Self> {
         let root = root.into();
         let cached = OnceLock::new();
         let _ = cached.set(Ok(Arc::new(LoadedWorkspace {
@@ -112,21 +112,20 @@ impl WorkspaceDeps {
         })));
         Arc::new(Self {
             cwd: root,
-            dirs: crate::dirs::SymposiumDirs::new(PathBuf::new(), PathBuf::new(), None),
+            config: crate::CargoPmConfig::default(),
             cached,
         })
     }
 
     /// A resolver pre-set to "no workspace" — it never runs `cargo metadata`.
-    /// Backs [`detached_managers`](crate::config::Symposium::detached_managers)
-    /// for workspace-independent operations (registry listing, crates.io
+    /// Backs workspace-independent operations (registry listing, crates.io
     /// search).
     pub fn detached() -> Self {
         let cached = OnceLock::new();
         let _ = cached.set(Err(None));
         Self {
             cwd: PathBuf::new(),
-            dirs: crate::dirs::SymposiumDirs::new(PathBuf::new(), PathBuf::new(), None),
+            config: crate::CargoPmConfig::default(),
             cached,
         }
     }
@@ -160,11 +159,6 @@ impl WorkspaceDeps {
         }
     }
 
-    /// Convenience: workspace root, or `None` if not in a workspace.
-    pub fn workspace_root(&self) -> Option<&Path> {
-        self.load().map(|w| w.root.as_path())
-    }
-
     /// Convenience: crate list (empty slice if not in a workspace).
     pub fn crates(&self) -> &[WorkspaceCrate] {
         match self.load() {
@@ -190,18 +184,17 @@ impl WorkspaceDeps {
             return Ok(Arc::new(loaded));
         }
 
-        let loaded =
-            load_workspace(&self.cwd, self.dirs.cargo_override.as_deref()).map_err(|e| {
-                if !self
-                    .cwd
-                    .ancestors()
-                    .any(|dir| dir.join("Cargo.toml").is_file())
-                {
-                    return None;
-                }
-                tracing::warn!(error = %e, "cargo metadata failed");
-                Some(e)
-            })?;
+        let loaded = load_workspace(&self.cwd, self.config.cargo.as_deref()).map_err(|e| {
+            if !self
+                .cwd
+                .ancestors()
+                .any(|dir| dir.join("Cargo.toml").is_file())
+            {
+                return None;
+            }
+            tracing::warn!(error = %e, "cargo metadata failed");
+            Some(e)
+        })?;
 
         if let Some(dir) = &cache_dir {
             write_disk_cache(dir, &loaded);
@@ -213,11 +206,12 @@ impl WorkspaceDeps {
     /// The workspace-specific cache directory, via `cargo locate-project
     /// --workspace` (~10ms, no dep resolution). `None` when not in a workspace.
     fn workspace_cache_dir(&self) -> Option<PathBuf> {
-        let root = locate_workspace_root(&self.cwd, self.dirs.cargo_override.as_deref())?;
+        let root = locate_workspace_root(&self.cwd, self.config.cargo.as_deref())?;
         let canonical = fs::canonicalize(&root).unwrap_or(root);
         Some(
-            self.dirs
+            self.config
                 .cache_dir
+                .as_ref()?
                 .join("workspaces")
                 .join(workspace_dir_name(&canonical)),
         )
