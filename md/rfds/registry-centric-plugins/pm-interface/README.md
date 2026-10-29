@@ -424,7 +424,8 @@ Tests: the cargo PM driven end to end through the real binary.
 
 The `[[package-manager]]` section and acquisition through the existing installation machinery, replacing the hard-coded lookup from step 3.
 
-- [ ] PR: PM configuration
+- [x] PR: `[[package-manager]]` configuration, `command` found on `PATH`
+- [ ] PR: acquisition through the installation machinery
 
 ### Step 6: A non-Rust-ecosystem reference PM
 
