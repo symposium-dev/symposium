@@ -160,12 +160,6 @@ async fn dispatch<P: PackageManager>(pm: &P, request: Request) -> Response {
     }
 
     match request.method.as_str() {
-        protocol::CANONICAL_NAMES => {
-            let p: CanonicalNames = parse!(CanonicalNames);
-            answer!(pm.canonical_names(&p.names).await, |names| CanonicalNames {
-                names
-            })
-        }
         protocol::ACTIVE_PLUGINS => {
             let p: ActivePluginsParams = parse!(ActivePluginsParams);
             answer!(pm.active_plugins(&p.deps).await, |listing| listing)
@@ -196,6 +190,12 @@ async fn dispatch<P: PackageManager>(pm: &P, request: Request) -> Response {
             let p: RefreshParams = parse!(RefreshParams);
             answer!(pm.refresh(p.update).await, |refreshed| {
                 RefreshResult { refreshed }
+            })
+        }
+        protocol::CANONICAL_NAME => {
+            let p: CanonicalName = parse!(CanonicalName);
+            answer!(pm.canonical_name(&p.name).await, |name| CanonicalName {
+                name
             })
         }
         other => Response::err(

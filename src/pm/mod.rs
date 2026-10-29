@@ -223,8 +223,8 @@ impl PmInstance {
         if self.trusted {
             return None;
         }
-        let wanted = self.canonical_name(name).await;
-        if let Ok(deps) = self.pm.list_deps().await {
+        let wanted = self.canonical_name(name).await.ok()?;
+        if let Ok(deps) = self.record_transport_failure("list_deps", self.pm.list_deps().await) {
             for dep in deps {
                 if self.names(&dep, &wanted).await {
                     return Some(dep);
@@ -232,7 +232,8 @@ impl PmInstance {
             }
         }
         let named = PackageId::any_version(&self.name, name);
-        if let Ok(cached) = self.pm.fetch(&named, UpdateLevel::None).await
+        if let Ok(cached) =
+            self.record_transport_failure("fetch", self.pm.fetch(&named, UpdateLevel::None).await)
             && self.names(&cached.id, &wanted).await
         {
             return Some(cached.id);
@@ -240,7 +241,10 @@ impl PmInstance {
         if matches!(update, UpdateLevel::None) {
             return None;
         }
-        for info in self.pm.search(name).await.ok()? {
+        for info in self
+            .record_transport_failure("search", self.pm.search(name).await)
+            .ok()?
+        {
             if self.names(&info.id, &wanted).await {
                 return Some(info.id);
             }
@@ -251,18 +255,19 @@ impl PmInstance {
     /// Whether `id` is this instance's package whose canonical name is
     /// `canonical`.
     async fn names(&self, id: &PackageId, canonical: &str) -> bool {
-        id.pm == self.name && self.canonical_name(&id.name).await == canonical
+        id.pm == self.name
+            && self
+                .canonical_name(&id.name)
+                .await
+                .is_ok_and(|name| name == canonical)
     }
 
-    /// `name` under this package manager's
-    /// [`canonical_name`](PackageManager::canonical_name), or as it is when
-    /// the package manager cannot say.
-    pub async fn canonical_name(&self, name: &str) -> String {
+    /// Normalize a name, recording failures so incomplete answers cannot
+    /// authorize cleanup or bypass a disable entry.
+    pub async fn canonical_name(&self, name: &str) -> Result<String> {
         match self.pm.canonical_name(name).await {
-            Ok(canonical) => canonical,
-            Err(e) => self
-                .failure::<String>("canonical_name", e)
-                .unwrap_or_else(|_| name.to_string()),
+            Ok(canonical) => Ok(canonical),
+            Err(e) => self.failure("canonical_name", e),
         }
     }
 
@@ -401,10 +406,10 @@ impl PmRegistry {
 
     /// `name` under the [`canonical_name`](PackageManager::canonical_name) of
     /// the package manager called `pm`, or as it is for one not configured.
-    pub async fn canonical_name(&self, pm: &str, name: &str) -> String {
+    pub async fn canonical_name(&self, pm: &str, name: &str) -> Result<String> {
         match self.instances.iter().find(|inst| inst.name == pm) {
             Some(inst) => inst.canonical_name(name).await,
-            None => name.to_string(),
+            None => Ok(name.to_string()),
         }
     }
 
@@ -1049,12 +1054,12 @@ mod tests {
             ),
         ]);
         assert_eq!(
-            pms.canonical_name(CARGO_PM, "widget_lib").await,
-            pms.canonical_name(CARGO_PM, "widget-lib").await
+            pms.canonical_name(CARGO_PM, "widget_lib").await.unwrap(),
+            pms.canonical_name(CARGO_PM, "widget-lib").await.unwrap()
         );
         assert_ne!(
-            pms.canonical_name("reg", "my_plugin").await,
-            pms.canonical_name("reg", "my-plugin").await
+            pms.canonical_name("reg", "my_plugin").await.unwrap(),
+            pms.canonical_name("reg", "my-plugin").await.unwrap()
         );
     }
 

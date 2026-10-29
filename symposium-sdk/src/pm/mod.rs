@@ -232,19 +232,6 @@ pub trait PackageManager: Send + Sync {
         Ok(name.to_string())
     }
 
-    /// Normalize a batch of names under this PM's rules, preserving order and
-    /// length. Remote implementations ask their process; failures must never
-    /// be interpreted as names comparing unequal (which could bypass disable).
-    /// Names need not refer to installed or existing packages. Normalization
-    /// must be idempotent and stable for the PM's lifetime so clients may cache it.
-    async fn canonical_names(&self, names: &[String]) -> Result<Vec<String>> {
-        let mut canonical = Vec::with_capacity(names.len());
-        for name in names {
-            canonical.push(self.canonical_name(name).await?);
-        }
-        Ok(canonical)
-    }
-
     /// The plugins this PM activates for the workspace's dependency set. A
     /// registry lists its own entries and ignores `deps`; an ecosystem
     /// surfaces the plugins its dependencies embed. Whether any of them may

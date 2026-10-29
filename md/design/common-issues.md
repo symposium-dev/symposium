@@ -69,14 +69,13 @@ Whether two names are the same package is the package manager's rule, not a stri
 ## Remote package managers need identity and lifecycle boundaries
 
 A remote PM's naming rules do not come from its configured name. Every PM
-implements `canonical_names` to answer batches of names;
+implements `canonical_name` to normalize names;
 lookup and config comparisons await that operation for both returned package
 names and user entries. Failed normalization marks the PM failed and cannot
 bypass `disable` or authorize cleanup. Consent decisions retain the discovered
-package's PM identity, and recording them uses that PM's naming rules for both
-approvals and declines. Activation includes enabled dependencies from every
-ecosystem. Consent recording propagates normalization errors instead of
-reporting an unwritten decision as saved.
+package's canonical PM identity for both approvals and declines. Activation
+includes enabled dependencies from every ecosystem. Failed name resolution
+cannot grant consent, and recording a decision propagates config write errors.
 
 A remote PM can die after successfully describing the project and dependencies.
 Transport failures carry an `Unavailable` error marker so `PmInstance` also

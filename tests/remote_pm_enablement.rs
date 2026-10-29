@@ -7,7 +7,7 @@ use std::{path::Path, sync::Arc, time::Duration};
 use anyhow::Result;
 use serde_json::Value;
 use symposium::UpdateLevel;
-use symposium::config::Symposium;
+use symposium::config::{PluginRef, Symposium};
 use symposium::pm::{
     PackageId, PluginKind, PmInstance, PmRegistry, RemotePm, RemotePmCommand, Workspace,
 };
@@ -27,7 +27,7 @@ while IFS= read -r line; do
   case "$line" in
     *'"initialize"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":1,"name":"%s"}}\n' "$id" "$name" ;;
-    *'"canonical_names"'*)
+    *'"canonical_name"'*)
       params=$(printf '%s' "$line" | sed 's/^.*"params"://; s/}$//')
       printf '{"jsonrpc":"2.0","id":%s,"result":%s}\n' "$id" "$params" ;;
     *'"project_info"'*)
@@ -95,7 +95,7 @@ async fn check_load_error_cleanup(mode: &str, preserve: bool) {
         &["dormant-plugin0"],
         async |mut ctx| {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
-            ctx.sym.config.plugins.auto_enable = vec!["*".to_string()];
+            ctx.sym.config.plugins.auto_enable = vec!["*".into()];
             let root = ctx.workspace_root.clone().unwrap();
             let content = content(&root)?;
             let healthy = workspace(&root, &content, "ok", "cargo")?;
@@ -162,16 +162,16 @@ async fn auto_enabled_noncargo_dependencies_install_skills_and_mcp() {
             let ws = workspace(&root, &content, "ok", "demo")?;
             let skill = root.join(".claude/skills/widget-lib/skills/widget-usage/SKILL.md");
             for entry in ["*", "widget_lib"] {
-                ctx.sym.config.plugins.auto_enable = vec![entry.to_string()];
+                ctx.sym.config.plugins.auto_enable = vec![entry.into()];
                 ctx.sym.config.plugins.disable.clear();
-                let discovered = symposium::discovery::discover(&ctx.sym, &ws, &[]).await;
+                let discovered = symposium::discovery::discover_for(&ctx.sym, &ws).await;
                 assert_eq!(discovered.auto_enabled.len(), 1, "{discovered:?}");
                 symposium::sync::sync(&ctx.sym, &ws, UpdateLevel::None).await?;
                 assert!(skill.is_file(), "{entry}");
                 assert!(mcp_config(&root)?["mcpServers"]["widget-server"].is_object());
 
                 // Explicit declines still take precedence over either spelling.
-                ctx.sym.config.plugins.disable = vec!["widget_lib".to_string()];
+                ctx.sym.config.plugins.disable = vec!["widget_lib".into()];
                 symposium::sync::sync(&ctx.sym, &ws, UpdateLevel::None).await?;
                 assert!(!skill.exists());
                 assert!(
@@ -197,26 +197,23 @@ async fn consent_preserves_distinct_noncargo_names_and_survives_reload() {
             let root = ctx.workspace_root.clone().unwrap();
             let content = content(&root)?;
             let ws = workspace(&root, &content, "ok", "demo")?;
-            ctx.sym.config.plugins.auto_enable = vec!["widget-lib".to_string()];
-            ctx.sym.config.plugins.disable = vec!["widget-lib".to_string()];
-            let discovery = symposium::discovery::discover(&ctx.sym, &ws, &[]).await;
+            ctx.sym.config.plugins.auto_enable = vec!["widget-lib".into()];
+            ctx.sym.config.plugins.disable = vec!["widget-lib".into()];
+            let discovery = symposium::discovery::discover_for(&ctx.sym, &ws).await;
             assert_eq!(discovery.candidates.len(), 1);
             let id = discovery.candidates[0].id.clone();
             assert_eq!(id, PackageId::new("demo", "widget_lib", "1.0.0"));
-            symposium::discovery::apply_consent(
-                &mut ctx.sym,
-                ws.pms(),
-                std::slice::from_ref(&id),
-                &[],
-            )
-            .await?;
+            symposium::discovery::apply_consent(&mut ctx.sym, std::slice::from_ref(&id), &[])?;
             let saved = Symposium::from_dir(ctx.sym.config_dir());
             assert_eq!(
                 saved.config.plugins.auto_enable,
-                ["widget-lib", "widget_lib"]
+                [
+                    PluginRef::bare("widget-lib"),
+                    PluginRef::new("demo", "widget_lib")
+                ]
             );
             assert!(
-                symposium::discovery::discover(&saved, &ws, &[])
+                symposium::discovery::discover_for(&saved, &ws)
                     .await
                     .candidates
                     .is_empty()
@@ -225,16 +222,16 @@ async fn consent_preserves_distinct_noncargo_names_and_survives_reload() {
             let skill = root.join(".claude/skills/widget-lib/skills/widget-usage/SKILL.md");
             assert!(skill.is_file());
 
-            symposium::discovery::apply_consent(
-                &mut ctx.sym,
-                ws.pms(),
-                &[],
-                std::slice::from_ref(&id),
-            )
-            .await?;
+            symposium::discovery::apply_consent(&mut ctx.sym, &[], std::slice::from_ref(&id))?;
             let saved = Symposium::from_dir(ctx.sym.config_dir());
-            assert_eq!(saved.config.plugins.disable, ["widget-lib", "widget_lib"]);
-            let discovery = symposium::discovery::discover(&saved, &ws, &[]).await;
+            assert_eq!(
+                saved.config.plugins.disable,
+                [
+                    PluginRef::bare("widget-lib"),
+                    PluginRef::new("demo", "widget_lib")
+                ]
+            );
+            let discovery = symposium::discovery::discover_for(&saved, &ws).await;
             assert_eq!(discovery.declined.len(), 1);
             assert!(discovery.candidates.is_empty());
             symposium::sync::sync(&saved, &ws, UpdateLevel::None).await?;

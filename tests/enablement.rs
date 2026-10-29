@@ -374,6 +374,9 @@ while IFS= read -r line; do
   case "$line" in
     *'"initialize"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":1,"name":"other"}}\n' "$id" ;;
+    *'"canonical_name"'*)
+      name=$(printf '%s' "$line" | sed 's/.*"name":"\([^"]*\)".*/\1/')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"name":"%s"}}\n' "$id" "$name" ;;
     *'"search"'*)
       q=$(printf '%s' "$line" | sed 's/.*"query":"\([^"]*\)".*/\1/')
       printf '{"jsonrpc":"2.0","id":%s,"result":{"plugins":[{"id":{"pm":"other","name":"%s","version":"*"}}]}}\n' "$id" "$q" ;;
@@ -922,15 +925,16 @@ async fn apply_consent_records_both_answers() {
                 &[],
             )?;
             assert!(read_config(&ctx).contains("auto-enable"));
-            // Cargo's two spellings still record one decision.
+            // Discovery supplies canonical identities; repeated consent is idempotent.
             symposium::discovery::apply_consent(
                 &mut ctx.sym,
-                &pms,
-                &[PackageId::any_version("cargo", "crate_a")],
+                &[PackageId::any_version("cargo", "crate-a")],
                 &[],
-            )
-            .await?;
-            assert_eq!(ctx.sym.config.plugins.auto_enable, ["crate-a"]);
+            )?;
+            assert_eq!(
+                ctx.sym.config.plugins.auto_enable,
+                [symposium::config::PluginRef::new("cargo", "crate-a")]
+            );
 
             ctx.symposium(&["sync"]).await?;
             find_installed_skill(&workspace_root.join(".agents/skills"), "a-guidance");

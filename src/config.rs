@@ -185,7 +185,7 @@ impl PluginsConfig {
                 spellings.names(entry, id)
                     && deps
                         .iter()
-                        .all(|dep| dep.pm == id.pm || !spellings.names(entry, dep))
+                        .all(|dep| dep.pm == id.pm || !spellings.might_name(entry, dep))
             }
         })
     }
@@ -194,7 +194,9 @@ impl PluginsConfig {
     /// turns off every plugin of that name, since turning off too much is the
     /// safe way to be wrong.
     pub fn is_disabled(&self, id: &PackageId, spellings: &Spellings) -> bool {
-        self.disable.iter().any(|entry| spellings.names(entry, id))
+        self.disable
+            .iter()
+            .any(|entry| spellings.might_name(entry, id))
     }
 
     /// Whether any enablement entry could pull in a crate plugin. With neither
@@ -216,19 +218,37 @@ impl PluginsConfig {
 /// [`Names::spell`](crate::discovery::Names::spell), and compared against from
 /// then on.
 #[derive(Debug, Default, Clone)]
-pub struct Spellings(Vec<(PluginRef, PackageId)>);
+pub struct Spellings {
+    aliases: Vec<(PluginRef, PackageId)>,
+    uncertain: Vec<(PluginRef, PackageId)>,
+}
 
 impl Spellings {
     /// Record that `entry` names `id`.
     pub fn add(&mut self, entry: PluginRef, id: PackageId) {
-        self.0.push((entry, id));
+        self.aliases.push((entry, id));
+    }
+
+    /// Record a failed comparison without granting consent for that spelling.
+    pub fn mark_uncertain(&mut self, entry: PluginRef, id: PackageId) {
+        self.uncertain.push((entry, id));
+    }
+
+    /// Could `entry` name `id`? Disables and ambiguity checks treat a failed
+    /// comparison conservatively, while consent requires a known match.
+    pub fn might_name(&self, entry: &PluginRef, id: &PackageId) -> bool {
+        self.names(entry, id)
+            || self
+                .uncertain
+                .iter()
+                .any(|(e, spelled)| e == entry && spelled.pm == id.pm && spelled.name == id.name)
     }
 
     /// Does `entry` name `id`, as spelled or under another spelling?
     pub fn names(&self, entry: &PluginRef, id: &PackageId) -> bool {
         entry.matches(id)
             || self
-                .0
+                .aliases
                 .iter()
                 .any(|(e, spelled)| e == entry && spelled.pm == id.pm && spelled.name == id.name)
     }

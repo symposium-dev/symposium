@@ -302,7 +302,14 @@ async fn entry_names(
 ) -> bool {
     let resolved = resolved_entry(names, pms, entry).await.and_then(|r| r.pm);
     let same = match &resolved {
-        Some(p) => pms.canonical_name(p, entry.name()).await == pms.canonical_name(p, name).await,
+        Some(p) => {
+            let Ok(known) = pms.canonical_name(p, entry.name()).await else {
+                return false;
+            };
+            pms.canonical_name(p, name)
+                .await
+                .is_ok_and(|wanted| known == wanted)
+        }
         None => entry.name() == name,
     };
     same && pm.is_none_or(|pm| resolved.as_deref() == Some(pm))
