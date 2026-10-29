@@ -406,3 +406,214 @@ async fn the_cargo_pm_reports_no_deps_outside_a_workspace() {
     // Cargo workspaces and must not treat that as a failure.
     assert_eq!(pm.list_deps().await.unwrap(), vec![]);
 }
+
+// --- `[[package-manager]]` config -------------------------------------------
+
+/// The whole path a configured PM travels: config file → `RemotePm` → a real
+/// subprocess → the dependencies core reads. Naming the entry `cargo`
+/// replaces the built-in in-process instance, so this also exercises running
+/// the cargo PM out of process end to end.
+#[tokio::test]
+async fn a_configured_package_manager_replaces_the_builtin_cargo_instance() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("ws");
+    let widget = tmp.path().join("widget");
+    std::fs::create_dir_all(&root).unwrap();
+    cargo_workspace(&root, &widget);
+
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config.toml"),
+        format!(
+            "[[package-manager]]\nname = \"cargo\"\ncommand = {:?}\n",
+            env!("CARGO_BIN_EXE_symposium-pm-cargo")
+        ),
+    )
+    .unwrap();
+
+    let sym = symposium::config::Symposium::from_dir(&config_dir);
+    assert_eq!(sym.config.package_managers.len(), 1);
+
+    let ws = sym.workspace(&root);
+    // Exactly one cargo instance: the configured one displaced the built-in.
+    assert_eq!(
+        ws.pms()
+            .instances()
+            .filter(|i| i.name == symposium::pm::CARGO_PM)
+            .count(),
+        1
+    );
+
+    // The workspace is Symposium's own reading; what it depends on is the PM's
+    // answer, from its own process.
+    assert_eq!(
+        ws.root().await.map(|r| std::fs::canonicalize(r).unwrap()),
+        Some(std::fs::canonicalize(&root).unwrap())
+    );
+    assert!(
+        ws.dep_ids().await.iter().any(|d| d.name == "widget"),
+        "got deps {:?}",
+        ws.dep_ids().await
+    );
+}
+
+#[tokio::test]
+async fn a_configured_package_manager_that_is_missing_degrades() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("ws");
+    let widget = tmp.path().join("widget");
+    std::fs::create_dir_all(&root).unwrap();
+    cargo_workspace(&root, &widget);
+
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config.toml"),
+        "[[package-manager]]\nname = \"npm\"\ncommand = \"/nonexistent/symposium-pm-npm\"\n",
+    )
+    .unwrap();
+
+    let sym = symposium::config::Symposium::from_dir(&config_dir);
+    let ws = sym.workspace(&root);
+    // A broken PM contributes nothing rather than breaking the invocation:
+    // the cargo instance is still there and its dependencies still count.
+    assert!(ws.pms().instances().any(|i| i.name == "npm"));
+    assert!(
+        ws.dep_ids().await.iter().any(|d| d.name == "widget"),
+        "got deps {:?}",
+        ws.dep_ids().await
+    );
+}
+
+/// A workspace-independent operation (registry listing, search) tells a
+/// spawned PM it has no workspace, rather than handing it an empty path to go
+/// looking in.
+#[tokio::test]
+async fn a_detached_operation_hands_the_pm_no_workspace() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Answers to its configured name only when `initialize` named no
+    // workspace, and is refused for a name mismatch otherwise.
+    let pm = script(
+        tmp.path(),
+        "pm-detached.sh",
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
+  case "$line" in
+    *'"initialize"'*'"workspace"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":1,"name":"given-a-workspace"}}\n' "$id"
+      ;;
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":1,"name":"demo"}}\n' "$id"
+      ;;
+    *)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"deps":[{"pm":"demo","name":"widget","version":"1.0.0"}]}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+    );
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config.toml"),
+        format!(
+            "[[package-manager]]\nname = \"demo\"\ncommand = \"/bin/sh\"\nargs = [{:?}]\n",
+            pm.display().to_string()
+        ),
+    )
+    .unwrap();
+    let sym = symposium::config::Symposium::from_dir(&config_dir);
+
+    let detached = sym.detached_managers();
+    assert!(detached.list_deps().await.iter().any(|d| d.pm == "demo"));
+    // The same PM, bound to a directory, is told about it.
+    let bound = sym.workspace(tmp.path());
+    assert!(!bound.dep_ids().await.iter().any(|d| d.pm == "demo"));
+}
+
+/// A package manager that appends a line to `log` each time it starts, finds
+/// a project at `ws`, and names `input` as the one file its answers depend on.
+fn logging_pm(dir: &Path, log: &Path, ws: &Path, input: &Path) -> std::path::PathBuf {
+    script(
+        dir,
+        "pm-logging.sh",
+        &format!(
+            r#"#!/bin/sh
+echo started >> "{log}"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":1,"name":"npm"}}}}\n' "$id" ;;
+    *'"project_info"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"project":{{"root":"{ws}","inputs":["{input}"]}}}}}}\n' "$id" ;;
+    *'"list_deps"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"deps":[]}}}}\n' "$id" ;;
+    *)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"plugins":[]}}}}\n' "$id" ;;
+  esac
+done
+"#,
+            log = log.display(),
+            ws = ws.display(),
+            input = input.display(),
+        ),
+    )
+}
+
+/// Deciding whether to sync reads the modification times recorded at the last
+/// sync, so an event where nothing changed starts no package manager. Once an
+/// input changes, the next event syncs, and asks it again.
+#[tokio::test]
+async fn an_event_where_nothing_changed_spawns_no_package_manager() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws_root = tmp.path().join("ws");
+    std::fs::create_dir_all(&ws_root).unwrap();
+    let log = tmp.path().join("spawns.log");
+    let input = ws_root.join("package-lock.json");
+    let pm = logging_pm(tmp.path(), &log, &ws_root, &input);
+
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config.toml"),
+        format!(
+            "[defaults]\nsymposium-recommendations = false\nuser-plugins = false\n\n\
+             [[package-manager]]\nname = \"npm\"\ncommand = \"/bin/sh\"\nargs = [{:?}]\n",
+            pm.display().to_string()
+        ),
+    )
+    .unwrap();
+
+    let agent = symposium::hook_schema::HookAgent::Claude;
+    let event = symposium::hook_schema::HookEvent::PreToolUse;
+    let step = symposium_testlib::HookStep::PreToolUse {
+        tool_name: "Bash".to_string(),
+        tool_input: serde_json::json!({}),
+    };
+    let payload = symposium::hook_schema::agent_event(agent, event)
+        .unwrap()
+        .translate_input(&step.to_input_event(&ws_root.to_string_lossy()))
+        .to_string()
+        .unwrap();
+    let spawned = |sym: &symposium::config::Symposium| {
+        let sym = sym.clone();
+        let payload = payload.clone();
+        let log = log.clone();
+        async move {
+            let _ = std::fs::remove_file(&log);
+            symposium::hook::execute_hook(&sym, agent, event, &payload)
+                .await
+                .unwrap();
+            log.exists()
+        }
+    };
+    let sym = symposium::config::Symposium::from_dir(&config_dir);
+
+    assert!(spawned(&sym).await, "the first event syncs, asking the PM");
+    assert!(!spawned(&sym).await, "nothing changed, so nothing is asked");
+    std::fs::write(&input, "{}").unwrap();
+    assert!(spawned(&sym).await, "an input appeared, so the event syncs");
+}
