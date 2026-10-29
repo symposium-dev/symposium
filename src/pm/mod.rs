@@ -211,10 +211,10 @@ impl PmInstance {
         }
     }
 
-    /// The package this instance has under `name`, compared under its name
-    /// rule: a dependency of that name; otherwise one already on disk (a
-    /// cache-only fetch); otherwise, above [`UpdateLevel::None`], one its
-    /// search turns up. A registry's packages are the plugins it lists, which
+    /// The package this instance has under `name`, compared under its
+    /// [`canonical_name`](Self::canonical_name): a dependency of that name;
+    /// otherwise one already on disk (a cache-only fetch); otherwise, above
+    /// [`UpdateLevel::None`], one its search turns up. A registry's packages are the plugins it lists, which
     /// callers hold already, so a trusted instance has none to find.
     ///
     /// Built from the operations every package manager has, so no package
@@ -223,55 +223,47 @@ impl PmInstance {
         if self.trusted {
             return None;
         }
-        if let Ok(deps) = self.record_transport_failure("list_deps", self.pm.list_deps().await)
-            && let Some(dep) = self.find_matching(name, deps).await
-        {
-            return Some(dep);
+        let wanted = self.canonical_name(name).await;
+        if let Ok(deps) = self.pm.list_deps().await {
+            for dep in deps {
+                if self.names(&dep, &wanted).await {
+                    return Some(dep);
+                }
+            }
         }
         let named = PackageId::any_version(&self.name, name);
-        if let Ok(cached) =
-            self.record_transport_failure("fetch", self.pm.fetch(&named, UpdateLevel::None).await)
-            && let Some(id) = self.find_matching(name, vec![cached.id]).await
+        if let Ok(cached) = self.pm.fetch(&named, UpdateLevel::None).await
+            && self.names(&cached.id, &wanted).await
         {
-            return Some(id);
+            return Some(cached.id);
         }
         if matches!(update, UpdateLevel::None) {
             return None;
         }
-        let found = self
-            .record_transport_failure("search", self.pm.search(name).await)
-            .ok()?;
-        self.find_matching(name, found.into_iter().map(|info| info.id).collect())
-            .await
-    }
-
-    async fn find_matching(&self, name: &str, ids: Vec<PackageId>) -> Option<PackageId> {
-        let ids: Vec<_> = ids.into_iter().filter(|id| id.pm == self.name).collect();
-        let names: Vec<_> = std::iter::once(name.to_string())
-            .chain(ids.iter().map(|id| id.name.clone()))
-            .collect();
-        let canonical = self.canonical_names(&names).await.ok()?;
-        ids.into_iter()
-            .zip(&canonical[1..])
-            .find(|(_, name)| **name == canonical[0])
-            .map(|(id, _)| id)
-    }
-
-    /// A failed normalization invalidates identity decisions for this PM and
-    /// prevents cleanup, just like an incomplete dependency listing.
-    async fn canonical_names(&self, names: &[String]) -> Result<Vec<String>> {
-        let result = self.pm.canonical_names(names).await.and_then(|canonical| {
-            anyhow::ensure!(
-                canonical.len() == names.len(),
-                "invalid canonical_names response length"
-            );
-            Ok(canonical)
-        });
-        if let Err(e) = &result {
-            self.failed.store(true, Ordering::Relaxed);
-            tracing::warn!(instance = %self.name, error = %e, "package name normalization failed");
+        for info in self.pm.search(name).await.ok()? {
+            if self.names(&info.id, &wanted).await {
+                return Some(info.id);
+            }
         }
-        result
+        None
+    }
+
+    /// Whether `id` is this instance's package whose canonical name is
+    /// `canonical`.
+    async fn names(&self, id: &PackageId, canonical: &str) -> bool {
+        id.pm == self.name && self.canonical_name(&id.name).await == canonical
+    }
+
+    /// `name` under this package manager's
+    /// [`canonical_name`](PackageManager::canonical_name), or as it is when
+    /// the package manager cannot say.
+    pub async fn canonical_name(&self, name: &str) -> String {
+        match self.pm.canonical_name(name).await {
+            Ok(canonical) => canonical,
+            Err(e) => self
+                .failure::<String>("canonical_name", e)
+                .unwrap_or_else(|_| name.to_string()),
+        }
     }
 
     /// Whether `id` belongs to this instance. Every id a PM answers with must:
@@ -400,36 +392,24 @@ impl PmRegistry {
             .collect()
     }
 
-    /// `id` in the form two ids of the same package compare equal in, under
-    /// its package manager's [`canonical_names`](PackageManager::canonical_names),
-    /// with the version dropped.
-    pub async fn identity(&self, id: &PackageId) -> Result<PackageId> {
-        let name = match self.owner(id) {
-            Some(inst) => inst
-                .canonical_names(std::slice::from_ref(&id.name))
-                .await?
-                .remove(0),
-            None => id.name.clone(),
-        };
-        Ok(PackageId::any_version(&id.pm, name))
+    /// `id` with its version dropped: the form two ids of the same package
+    /// compare equal in, since a package manager spells each of its packages
+    /// one way.
+    pub fn identity(&self, id: &PackageId) -> PackageId {
+        PackageId::any_version(&id.pm, &id.name)
     }
 
-    /// Whether the first name matches any subsequent name under this PM's
-    /// rule. All names, including arbitrary user/configuration entries, are
-    /// normalized together.
-    pub async fn names_match(&self, pm: &str, names: &[String]) -> Result<bool> {
-        if names.len() < 2 {
-            return Ok(false);
+    /// `name` under the [`canonical_name`](PackageManager::canonical_name) of
+    /// the package manager called `pm`, or as it is for one not configured.
+    pub async fn canonical_name(&self, pm: &str, name: &str) -> String {
+        match self.instances.iter().find(|inst| inst.name == pm) {
+            Some(inst) => inst.canonical_name(name).await,
+            None => name.to_string(),
         }
-        let canonical = match self.instances.iter().find(|inst| inst.name == pm) {
-            Some(inst) => inst.canonical_names(names).await?,
-            None => names.to_vec(),
-        };
-        Ok(canonical[1..].iter().any(|name| *name == canonical[0]))
     }
 
     /// The identity of the package a user-typed `name` refers to. A plugin in
-    /// `plugins` with that name under its registry's rule wins; otherwise the
+    /// `plugins` whose registry reads its name as `name` wins; otherwise the
     /// first package manager whose [`find`](PmInstance::find) has the name at
     /// `update` answers. A name no package manager has is an error.
     pub async fn identify(
@@ -439,20 +419,16 @@ impl PmRegistry {
         update: UpdateLevel,
     ) -> Result<PackageId> {
         for plugin in plugins {
-            if self
-                .names_match(
-                    &plugin.canonical.pm,
-                    &[plugin.manifest.name.clone(), name.to_string()],
-                )
-                .await
-                .unwrap_or(false)
+            let pm = &plugin.canonical.pm;
+            if self.canonical_name(pm, &plugin.manifest.name).await
+                == self.canonical_name(pm, name).await
             {
-                return self.identity(&plugin.canonical).await;
+                return Ok(self.identity(&plugin.canonical));
             }
         }
         for inst in &self.instances {
             if let Some(id) = inst.find(name, update).await {
-                return self.identity(&id).await;
+                return Ok(self.identity(&id));
             }
         }
         anyhow::bail!("no package named `{name}`")
@@ -1099,20 +1075,12 @@ mod tests {
             ),
         ]);
         assert_eq!(
-            pms.identity(&PackageId::new(CARGO_PM, "widget_lib", "1.0.0"))
-                .await
-                .unwrap(),
-            pms.identity(&PackageId::any_version(CARGO_PM, "widget-lib"))
-                .await
-                .unwrap()
+            pms.canonical_name(CARGO_PM, "widget_lib").await,
+            pms.canonical_name(CARGO_PM, "widget-lib").await
         );
         assert_ne!(
-            pms.identity(&PackageId::any_version("reg", "my_plugin"))
-                .await
-                .unwrap(),
-            pms.identity(&PackageId::any_version("reg", "my-plugin"))
-                .await
-                .unwrap()
+            pms.canonical_name("reg", "my_plugin").await,
+            pms.canonical_name("reg", "my-plugin").await
         );
     }
 
@@ -1160,7 +1128,7 @@ mod tests {
         let (pms, plugins) = registry_beside(cargo, &tmp.path().join("reg")).await;
         let registry_id = async |name: &str| {
             let plugin = plugins.iter().find(|p| p.manifest.name == name).unwrap();
-            pms.identity(&plugin.canonical).await.unwrap()
+            pms.identity(&plugin.canonical)
         };
 
         assert_eq!(
@@ -1181,11 +1149,12 @@ mod tests {
                 .unwrap(),
             registry_id("widget-lib").await
         );
+        // Spelled the way cargo reports the crate.
         assert_eq!(
             pms.identify(&plugins, "widget_lib", UpdateLevel::None)
                 .await
                 .unwrap(),
-            PackageId::any_version(CARGO_PM, "widget_lib")
+            PackageId::any_version(CARGO_PM, "widget-lib")
         );
     }
 

@@ -623,13 +623,15 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<Workspace>) {
         Vec::new()
     };
     let pms = deps.pms();
-    let used = match &workspace {
-        Some(ws) => crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root).await,
-        None => Vec::new(),
-    };
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids)
-        .with_used(&used)
-        .with_cwd(deps.start());
+    let used = crate::discovery::used_plugins(
+        sym,
+        workspace.as_ref().map(|ws| ws.root.as_path()),
+        &registry.plugins,
+        &dep_ids,
+        pms,
+    )
+    .await;
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used).with_cwd(deps.start());
     let plugins = crate::plugins::active_plugins(
         sym,
         &registry,
@@ -746,13 +748,15 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String
     let dep_ids = deps.dep_ids().await.to_vec();
 
     let pms = deps.pms();
-    let used = match &workspace {
-        Some(ws) => crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root).await,
-        None => Vec::new(),
-    };
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids)
-        .with_used(&used)
-        .with_cwd(deps.start());
+    let used = crate::discovery::used_plugins(
+        sym,
+        workspace.as_ref().map(|ws| ws.root.as_path()),
+        &registry.plugins,
+        &dep_ids,
+        pms,
+    )
+    .await;
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used).with_cwd(deps.start());
     let active = crate::plugins::active_plugins(
         sym,
         &registry,
@@ -891,14 +895,16 @@ pub async fn dispatch_plugin_hooks(
         Vec::new()
     };
     let pms = deps.pms();
-    let used = match &workspace {
-        Some(ws) => crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root).await,
-        None => Vec::new(),
-    };
+    let used = crate::discovery::used_plugins(
+        sym,
+        workspace.as_ref().map(|ws| ws.root.as_path()),
+        &registry.plugins,
+        &dep_ids,
+        pms,
+    )
+    .await;
     let dir = deps.start().filter(|dir| dir.is_dir());
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids)
-        .with_used(&used)
-        .with_cwd(dir);
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used).with_cwd(dir);
     // Dispatch over the active set — registry plugins plus crate-sourced ones —
     // so a crate plugin's hooks fire exactly like a registry plugin's.
     let plugins = crate::plugins::active_plugins(

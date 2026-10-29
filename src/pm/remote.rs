@@ -446,6 +446,10 @@ impl PackageManager for RemotePm {
         &self.name
     }
 
+    async fn canonical_name(&self, name: &str) -> Result<String> {
+        Ok(self.canonical_names(&[name.to_string()]).await?.remove(0))
+    }
+
     async fn canonical_names(&self, names: &[String]) -> Result<Vec<String>> {
         let mut cache = self.names.lock().await;
         let missing: Vec<_> = names

@@ -32,7 +32,7 @@
 
 use std::path::Path;
 
-use crate::pm::Workspace;
+use crate::pm::{PackageId, Workspace};
 use anyhow::Result;
 use std::sync::Arc;
 use symposium_install::UpdateLevel;
@@ -103,8 +103,10 @@ pub async fn workspace_status(
     let registry = crate::plugins::load_registry_with_workspace(sym, Some(&ws)).await;
     let dep_ids = workspace.dep_ids().await.to_vec();
     let pms = workspace.pms();
-    let used = crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root).await;
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
+    let names = crate::discovery::Names::new(&registry.plugins, &dep_ids, pms);
+    let used = crate::discovery::used(sym, &ws.root, &names).await;
+    let spellings = names.spellings(&sym.config.plugins).await;
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used.plugins);
     for parsed in &registry.plugins {
         let root = if parsed.workspace_member {
             "workspace member".to_string()
@@ -134,7 +136,7 @@ pub async fn workspace_status(
 
     // Dependency-embedded plugins, with the decision the config made about
     // each. This is the same view the consent prompt works from.
-    let discovery = crate::discovery::discover(sym, workspace, &registry.plugins).await;
+    let discovery = crate::discovery::discover(sym, workspace, &used.plugins, &spellings).await;
     for found in discovery
         .active
         .iter()
@@ -151,48 +153,39 @@ pub async fn workspace_status(
     // Discovery only sees dependencies, so these are invisible above; surface
     // them from the config the same way sync loads them
     // ([`enabled_dependencies`](crate::discovery::enabled_dependencies)).
-    let mut shown = std::collections::HashSet::new();
-    for id in registry.plugins.iter().map(|p| &p.canonical).chain(
-        discovery
-            .active
-            .iter()
-            .chain(&discovery.auto_enabled)
-            .chain(&discovery.candidates)
-            .chain(&discovery.declined)
-            .chain(&discovery.revoked)
-            .map(|d| &d.id),
-    ) {
-        if let Ok(id) = pms.identity(id).await {
-            shown.insert(id);
-        }
-    }
-    let mut dependency_ids = std::collections::HashSet::new();
-    for id in &dep_ids {
-        if let Ok(id) = pms.identity(id).await {
-            dependency_ids.insert(id);
-        }
-    }
+    let shown: std::collections::HashSet<PackageId> = registry
+        .plugins
+        .iter()
+        .map(|p| pms.identity(&p.canonical))
+        .chain(
+            discovery
+                .active
+                .iter()
+                .chain(&discovery.auto_enabled)
+                .chain(&discovery.candidates)
+                .chain(&discovery.declined)
+                .chain(&discovery.revoked)
+                .map(|d| pms.identity(&d.id)),
+        )
+        .collect();
     let enabled = crate::discovery::enabled_dependencies(
         sym,
         pms,
-        &registry.plugins,
         &dep_ids,
-        &ws.root,
+        &used,
+        &spellings,
         UpdateLevel::None,
     )
     .await;
-    let used =
-        crate::discovery::resolve_used(sym, pms, &registry.plugins, &ws.root, UpdateLevel::None)
-            .await;
     for id in enabled {
-        let Ok(identity) = pms.identity(&id).await else {
-            continue;
-        };
+        let identity = pms.identity(&id);
         if shown.contains(&identity) {
             continue;
         }
-        let dependency = dependency_ids.contains(&identity);
-        let named = used.iter().any(|(_, used)| *used == identity);
+        let dependency = dep_ids
+            .iter()
+            .any(|dep| pms.identity(dep) == pms.identity(&id));
+        let named = used.plugins.iter().any(|entry| entry.matches(&id));
         if dependency && !named {
             continue;
         }
@@ -236,18 +229,22 @@ pub async fn workspace_status(
             audit,
         });
     }
+    // Bare `use` names nothing here has: no registry plugin, dependency, or
+    // package on disk.
     let mut missing = std::collections::HashSet::new();
-    for name in sym.config.plugins.used_names_in(&ws.root) {
-        if !missing.insert(name)
-            || pms
-                .identify(&registry.plugins, name, UpdateLevel::None)
-                .await
-                .is_ok()
-        {
+    for entry in &used.unknown {
+        if !missing.insert(&entry.name) {
+            continue;
+        }
+        let mut found = false;
+        for inst in pms.instances() {
+            found |= inst.find(&entry.name, UpdateLevel::None).await.is_some();
+        }
+        if found {
             continue;
         }
         entries.push(StatusEntry {
-            name: name.to_string(),
+            name: entry.name.clone(),
             version: None,
             root: "`[plugins] use` (not a registry plugin, a dependency or a cached crate)"
                 .to_string(),
@@ -257,32 +254,45 @@ pub async fn workspace_status(
         });
     }
 
-    // Names declined without ever being discovered (a `disable` entry for a
-    // dependency whose source isn't on disk, or one added by hand). A name no
-    // package manager has can only be compared as written.
-    let mut declined = std::collections::HashSet::new();
-    for offer in &discovery.declined {
-        if let Ok(id) = pms.identity(&offer.id).await {
-            declined.insert(id);
-        }
+    // `use` entries whose bare name could mean more than one plugin, which
+    // enable nothing until they name a package manager.
+    for (entry, pms) in &used.ambiguous {
+        entries.push(StatusEntry {
+            name: entry.name.clone(),
+            version: None,
+            root: ambiguous_use(entry, pms),
+            state: StatusState::Dormant,
+        });
     }
-    let mut unknown = std::collections::HashSet::new();
-    for name in &sym.config.plugins.disable {
-        if name == "*" {
+
+    // Names declined without ever being discovered (a `disable` entry for a
+    // dependency whose source isn't on disk, or one added by hand), each once:
+    // two entries the same package manager would read as one name are one.
+    let mut listed: std::collections::HashSet<PackageId> = discovery
+        .declined
+        .iter()
+        .map(|d| pms.identity(&d.id))
+        .collect();
+    for entry in &sym.config.plugins.disable {
+        let shown = discovery
+            .declined
+            .iter()
+            .any(|d| spellings.names(entry, &d.id));
+        if entry.name == "*" || shown {
             continue;
         }
-        let first = match pms
-            .identify(&registry.plugins, name, UpdateLevel::None)
-            .await
-        {
-            Ok(id) => declined.insert(id),
-            Err(_) => unknown.insert(name.as_str()),
+        let key = match names.qualify(entry).await {
+            Ok(Some(plugin)) => pms.identity(&PackageId::any_version(
+                plugin.pm.unwrap_or_default(),
+                &plugin.name,
+            )),
+            Ok(None) | Err(_) => PackageId::any_version("", &entry.name),
         };
-        if !first {
+        if !listed.insert(key) {
             continue;
         }
         entries.push(StatusEntry {
-            name: name.clone(),
+            name: entry.name.clone(),
             version: None,
             root: "declined (`[plugins] disable`)".to_string(),
             state: StatusState::Declined,
@@ -292,6 +302,17 @@ pub async fn workspace_status(
     }
 
     Ok(entries)
+}
+
+/// Why a `use` entry with an ambiguous bare name enables nothing.
+pub fn ambiguous_use(entry: &crate::config::PluginRef, pms: &[String]) -> String {
+    format!(
+        "`[plugins] use` entry `{entry}` could be from {}; add `pm` to say which",
+        pms.iter()
+            .map(|pm| format!("`{pm}`"))
+            .collect::<Vec<_>>()
+            .join(" or ")
+    )
 }
 
 /// Render one discovered dependency plugin as a status line, with the verdict
