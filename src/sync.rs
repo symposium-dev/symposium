@@ -648,6 +648,8 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
     // and remove subdirs containing the marker that we didn't just install.
     // Compared by resolved path, since one agent's skills dir can be a symlink
     // to another's. A symlink entry is user content and is never followed.
+    let failed_pms = ws.failed();
+    let skip_cleanup = !registry.unreadable_registries.is_empty() || !failed_pms.is_empty();
     let installed: BTreeSet<PathBuf> = installed_dirs
         .iter()
         .filter_map(|dir| dir.canonicalize().ok())
@@ -691,6 +693,15 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
             report = %crate::report::ReportEvent::Warning {
                 message: format!(
                     "registry `{name}` could not be fully read; skipped cleanup of installed skills"
+                ),
+            },
+        );
+    }
+    for name in &failed_pms {
+        tracing::info!(
+            report = %crate::report::ReportEvent::Warning {
+                message: format!(
+                    "package manager `{name}` failed; skipped cleanup of installed skills"
                 ),
             },
         );

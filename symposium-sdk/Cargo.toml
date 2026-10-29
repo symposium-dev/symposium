@@ -11,6 +11,7 @@ clap = ["dep:clap"]
 
 [dependencies]
 anyhow = "1"
+async-trait = "0.1"
 clap = { version = "4", features = ["derive"], optional = true }
 regex = "1"
 sacp = "11"

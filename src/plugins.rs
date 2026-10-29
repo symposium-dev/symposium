@@ -882,13 +882,11 @@ pub async fn list_plugins(sym: &Symposium) -> Vec<ProviderInfo> {
         }
     }
 
-    // Each registry instance describes its own source (git vs path), so the
-    // listing metadata comes off the PM rather than a parallel config walk.
     pms.instances()
         .filter(|i| i.trusted)
         .map(|inst| {
-            let (source_type, git_url, path) = match inst.pm.registry_source() {
-                Some(crate::pm::RegistrySource::Git { url }) => ("git", Some(url), None),
+            let (source_type, git_url, path) = match &inst.source {
+                Some(crate::pm::RegistrySource::Git { url }) => ("git", Some(url.clone()), None),
                 Some(crate::pm::RegistrySource::Path { dir }) => {
                     ("path", None, Some(dir.display().to_string()))
                 }

@@ -412,6 +412,11 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, response: &
 /// where the workspace is or what it depends on. If sync runs, `deps` gets populated, and later hook stages reuse
 /// the result.
 ///
+/// A sync is recorded even when a package manager failed. Its cleanup was
+/// skipped, so nothing it installed was removed, and it is asked again at the
+/// next `SessionStart` or once another input changes, rather than on every
+/// event: a hung one would otherwise cost its timeout each time.
+///
 /// `SessionStart` runs once per session, so there we do the real work: refresh
 /// every source cache (`UpdateLevel::Check`) and sync unconditionally, ignoring
 /// the freshness gate, so upstream skill changes land even when the

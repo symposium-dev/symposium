@@ -500,12 +500,12 @@ impl Symposium {
         workspace: &Arc<crate::pm::WorkspaceDeps>,
     ) -> crate::pm::PmRegistry {
         // The cargo transport first — over dependencies, so not a trust root.
-        let mut instances = vec![crate::pm::PmInstance {
-            name: crate::pm::CARGO_PM.to_string(),
-            kind: crate::pm::PluginKind::Package,
-            trusted: false,
-            pm: Box::new(crate::pm::CargoPm::new(Arc::clone(workspace))),
-        }];
+        let mut instances = vec![crate::pm::PmInstance::new(
+            crate::pm::CARGO_PM,
+            false,
+            crate::pm::PluginKind::Package,
+            Box::new(crate::pm::CargoPm::new(Arc::clone(workspace))),
+        )];
         // One registry instance per configured registry — trust roots.
         instances.extend(self.registry_instances());
         crate::pm::PmRegistry::new(instances)
@@ -657,14 +657,17 @@ impl Symposium {
     /// resolve against the config dir.
     fn registry_instance(&self, cfg: RegistryConfig) -> Option<crate::pm::PmInstance> {
         let name = cfg.name.clone();
-        let pm: Box<dyn crate::pm::PackageManager + Send + Sync> = if let Some(url) = &cfg.git {
+        let (pm, source): (Box<dyn crate::pm::PackageManager>, _) = if let Some(url) = &cfg.git {
             match crate::pm::GitPm::new(
                 name.clone(),
                 url.clone(),
                 cfg.auto_update,
                 self.install_context(),
             ) {
-                Some(git) => Box::new(git),
+                Some(git) => {
+                    let source = git.source();
+                    (Box::new(git), source)
+                }
                 None => {
                     tracing::warn!(registry = %name, url = %url, "bad registry URL");
                     return None;
@@ -677,17 +680,17 @@ impl Symposium {
             } else {
                 self.dirs.config_dir.join(p)
             };
-            Box::new(crate::pm::PathPm::new(name.clone(), dir))
+            let path = crate::pm::PathPm::new(name.clone(), dir);
+            let source = path.source();
+            (Box::new(path), source)
         } else {
             tracing::warn!(registry = %name, "registry names neither git nor path");
             return None;
         };
-        Some(crate::pm::PmInstance {
-            name,
-            trusted: true,
-            kind: crate::pm::PluginKind::Registry,
-            pm,
-        })
+        Some(
+            crate::pm::PmInstance::new(name, true, crate::pm::PluginKind::Registry, pm)
+                .with_source(source),
+        )
     }
 
     pub fn config_error(&self) -> Option<&str> {

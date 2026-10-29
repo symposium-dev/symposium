@@ -66,12 +66,7 @@ impl FakeCargo {
             published,
             network: Arc::clone(&network),
         };
-        let instance = PmInstance {
-            name: CARGO_PM.into(),
-            trusted: false,
-            kind: PluginKind::Package,
-            pm: Box::new(pm),
-        };
+        let instance = PmInstance::new(CARGO_PM, false, PluginKind::Package, Box::new(pm));
         (instance, network)
     }
 
@@ -93,37 +88,45 @@ impl PackageManager for FakeCargo {
         crate::crate_sources::normalize_crate_name(name)
     }
 
-    async fn find(&self, name: &str, update: UpdateLevel) -> Option<PackageId> {
-        if let Some(id) = self.has(self.cached, name) {
-            return Some(id);
-        }
-        if matches!(update, UpdateLevel::None) {
-            return None;
-        }
-        self.network.fetch_add(1, Ordering::SeqCst);
-        self.has(self.published, name)
-    }
-
-    async fn active_plugins(&self, _deps: &[PackageId]) -> Vec<UnvalidatedPlugin> {
-        Vec::new()
-    }
-
-    async fn load_plugin(&self, _id: &PackageId, update: UpdateLevel) -> Vec<UnvalidatedPlugin> {
+    async fn load_plugin(
+        &self,
+        _id: &PackageId,
+        update: UpdateLevel,
+    ) -> anyhow::Result<Vec<UnvalidatedPlugin>> {
         if !matches!(update, UpdateLevel::None) {
             self.network.fetch_add(1, Ordering::SeqCst);
         }
-        Vec::new()
-    }
-
-    async fn list_deps(&self) -> anyhow::Result<Vec<PackageId>> {
         Ok(Vec::new())
     }
 
-    async fn search(&self, _query: &str) -> anyhow::Result<Vec<PluginInfo>> {
-        Ok(Vec::new())
+    async fn search(&self, query: &str) -> anyhow::Result<Vec<PluginInfo>> {
+        self.network.fetch_add(1, Ordering::SeqCst);
+        Ok(self
+            .has(self.published, query)
+            .into_iter()
+            .map(|id| PluginInfo {
+                id,
+                description: None,
+            })
+            .collect())
     }
 
-    async fn fetch(&self, id: &PackageId, _update: UpdateLevel) -> anyhow::Result<FetchedPackage> {
-        anyhow::bail!("cannot fetch {id}")
+    /// Cache-only at [`UpdateLevel::None`], as the cargo transport is.
+    async fn fetch(&self, id: &PackageId, update: UpdateLevel) -> anyhow::Result<FetchedPackage> {
+        let found = match update {
+            UpdateLevel::None => self.has(self.cached, &id.name),
+            _ => {
+                self.network.fetch_add(1, Ordering::SeqCst);
+                self.has(self.cached, &id.name)
+                    .or_else(|| self.has(self.published, &id.name))
+            }
+        };
+        match found {
+            Some(id) => Ok(FetchedPackage {
+                id,
+                root: std::env::temp_dir(),
+            }),
+            None => anyhow::bail!("cannot fetch {id}"),
+        }
     }
 }
