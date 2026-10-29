@@ -2441,7 +2441,6 @@ dependencies = [
  "flate2",
  "getrandom 0.4.2",
  "hmac",
- "home",
  "indoc",
  "regex",
  "reqwest 0.12.28",
@@ -2452,6 +2451,7 @@ dependencies = [
  "serde_yaml_ng",
  "sha2",
  "symposium-install",
+ "symposium-pm-cargo",
  "symposium-sdk",
  "symposium-testlib",
  "tar",
@@ -2484,6 +2484,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "symposium-pm-cargo"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "cargo_metadata",
+ "crates_io_api",
+ "home",
+ "indoc",
+ "semver",
+ "serde",
+ "serde_json",
+ "sha2",
+ "symposium-sdk",
+ "tempfile",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
 name = "symposium-sdk"
 version = "0.1.1"
 dependencies = [
@@ -2496,6 +2517,7 @@ dependencies = [
  "serde",
  "serde_json",
  "symposium-install",
+ "tempfile",
  "tokio",
  "toml",
 ]
