@@ -190,9 +190,13 @@ impl PluginsConfig {
         })
     }
 
-    /// Does `disable` name the package `id`? A bare name is not resolved: it
-    /// turns off every plugin of that name, since turning off too much is the
-    /// safe way to be wrong.
+    /// Is this plugin named in `disable`?
+    ///
+    /// Applies to every plugin, whatever its source. A trusted source is what
+    /// lets a plugin activate without being asked about; it is not a claim the
+    /// user cannot change their mind, so naming one here turns it off. A bare
+    /// name is not resolved: it turns off every plugin of that name, since
+    /// turning off too much is the safe way to be wrong.
     pub fn is_disabled(&self, id: &PackageId, spellings: &Spellings) -> bool {
         self.disable.iter().any(|entry| spellings.names(entry, id))
     }

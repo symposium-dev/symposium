@@ -1168,3 +1168,42 @@ async fn use_with_an_unknown_pm_errors() {
     .await
     .unwrap();
 }
+
+/// `disable` turns off a registry plugin too: a trusted source is what lets a
+/// plugin activate without being asked about, not a claim the user cannot
+/// change their mind.
+#[tokio::test]
+async fn disable_turns_off_a_registry_plugin() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.sym.config.defaults.user_plugins = true;
+            let advice = ctx.sym.config_dir().join("plugins/advice");
+            std::fs::create_dir_all(advice.join("skills/advice"))?;
+            std::fs::write(
+                advice.join("Symposium.toml"),
+                "name = \"advice\"\ndepends-on = [\"*\"]\n\n[[skills]]\nsource.path = \"skills\"\n",
+            )?;
+            std::fs::write(
+                advice.join("skills/advice/SKILL.md"),
+                "---\nname: advice\ndescription: Advice\n---\nAdvice.\n",
+            )?;
+            let skills_dir = ctx.workspace_root.clone().unwrap().join(".claude/skills");
+            ctx.symposium(&["sync"]).await?;
+            find_installed_skill(&skills_dir, "advice");
+
+            ctx.sym
+                .config
+                .plugins
+                .disable
+                .push(symposium::config::PluginRef::new("user-plugins", "advice"));
+            ctx.symposium(&["sync"]).await?;
+            assert!(find_installed_skills(&skills_dir, "advice").is_empty());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}

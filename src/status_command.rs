@@ -88,7 +88,23 @@ pub async fn workspace_status(
     let used = crate::discovery::used(sym, &ws.root, &names).await;
     let spellings = names.spellings(&sym.config.plugins).await;
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used.plugins);
+    // Everything shown as declined, so a `disable` entry is listed once.
+    let mut declined: Vec<PackageId> = Vec::new();
     for parsed in &registry.plugins {
+        if sym
+            .config
+            .plugins
+            .is_disabled(&parsed.canonical, &spellings)
+        {
+            declined.push(parsed.canonical.clone());
+            entries.push(StatusEntry {
+                name: parsed.manifest.name.clone(),
+                version: None,
+                root: "declined (`[plugins] disable`)".to_string(),
+                state: StatusState::Declined,
+            });
+            continue;
+        }
         let root = if parsed.workspace_member {
             "workspace member".to_string()
         } else if parsed.manifest.requires_use && ctx.is_used(&parsed.canonical) {
@@ -123,6 +139,9 @@ pub async fn workspace_status(
         .chain(&discovery.candidates)
         .chain(&discovery.declined)
     {
+        if found.enablement == Enablement::Declined {
+            declined.push(found.id.clone());
+        }
         entries.push(entry_for(found));
     }
 
@@ -218,16 +237,10 @@ pub async fn workspace_status(
     // Names declined without ever being discovered (a `disable` entry for a
     // dependency whose source isn't on disk, or one added by hand), each once:
     // two entries the same package manager would read as one name are one.
-    let mut listed: std::collections::HashSet<PackageId> = discovery
-        .declined
-        .iter()
-        .map(|d| pms.identity(&d.id))
-        .collect();
+    let mut listed: std::collections::HashSet<PackageId> =
+        declined.iter().map(|id| pms.identity(id)).collect();
     for entry in &sym.config.plugins.disable {
-        let shown = discovery
-            .declined
-            .iter()
-            .any(|d| spellings.names(entry, &d.id));
+        let shown = declined.iter().any(|id| spellings.names(entry, id));
         if entry.name == "*" || shown {
             continue;
         }
