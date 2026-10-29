@@ -217,3 +217,67 @@ pub fn resolve_runnable(installation: AcquiredInstallation, label: &str) -> Resu
     };
     Ok(runnable)
 }
+
+#[cfg(all(test, unix))]
+mod cancellation_tests {
+    #[test]
+    fn timed_out_acquisition_stops_cargo_installer() {
+        use std::time::{Duration, Instant};
+
+        use super::acquire_installation;
+        use crate::plugins::Installation;
+        use std::os::unix::fs::PermissionsExt;
+        use symposium_install::{CargoSource, Source, UpdateLevel};
+
+        // Keep these files alive until runtime shutdown has joined blocking workers.
+        let signals = tempfile::tempdir().unwrap();
+        let started = signals.path().join("started");
+        let release = signals.path().join("release");
+        let completed = signals.path().join("completed");
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let mut sym = crate::config::Symposium::from_dir(signals.path());
+        runtime.block_on(async {
+        // Gate completion on the test, instead of sleeping past a production
+        // timeout. No real Cargo invocation or network access occurs.
+        let mock = signals.path().join("mock-cargo");
+        std::fs::write(&mock, format!(
+            "#!/bin/sh\necho started > '{0}/started'\nwhile [ ! -f '{0}/release' ]; do sleep 0.01; done\necho completed > '{0}/completed'\n",
+            signals.path().display(),
+        )).unwrap();
+        std::fs::set_permissions(&mock, std::fs::Permissions::from_mode(0o755)).unwrap();
+        sym.set_cargo_override(mock);
+        let mut cargo = CargoSource::new("test-installer");
+        cargo.global = true;
+        let installation = Installation {
+            name: "test-installer".into(),
+            requirements: vec![],
+            install_commands: vec![],
+            source: Some(Source::Cargo(cargo)),
+            executable: Some("test-installer".into()),
+            script: None,
+            args: vec![],
+        };
+        let result = acquire_installation(
+            &sym,
+            &installation,
+            None,
+            None,
+            UpdateLevel::None,
+            Some(Instant::now() + Duration::from_secs(1)),
+        ).await;
+
+        // Always release before asserting, so even a failing test lets a leaked
+        // worker finish and cannot strand runtime shutdown waiting for our gate.
+        std::fs::write(&release, "release").unwrap();
+        assert!(started.exists(), "the fake installer must actually start");
+        let error = result.expect_err("acquisition must hit its deadline");
+        assert!(error.to_string().contains("time budget"), "{error:#}");
+    });
+        drop(runtime);
+
+        assert!(
+            !completed.exists(),
+            "Cargo installer continued after acquisition timed out"
+        );
+    }
+}
