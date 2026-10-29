@@ -1,4 +1,4 @@
-//! Package managers: the identity types and the operation set.
+//! Package managers: the identity types and the wire protocol.
 //!
 //! A [`PackageId`] names a package as a `(pm, name, version)` tuple and a
 //! [`UnvalidatedPlugin`] is what a PM answers with: the canonical shapes from the
@@ -7,7 +7,10 @@
 //! They live in the SDK because they cross the PM boundary: both Symposium and
 //! a package-manager binary speak in them.
 //!
-//! [`PackageManager`] is the operation set every package manager implements.
+//! [`PackageManager`] is the operation set every package manager implements,
+//! whether Symposium calls it in its own process or over the wire.
+//! [`protocol`] is the JSON-RPC wire format, and [`server`] is the harness that
+//! turns an implementation into a PM binary.
 
 use std::path::PathBuf;
 
@@ -19,6 +22,9 @@ use anyhow::Result;
 pub use symposium_install::UpdateLevel;
 
 use crate::manifest::RawPluginManifest;
+
+pub mod protocol;
+pub mod server;
 
 /// The `pm` component of cargo package ids.
 pub const CARGO_PM: &str = "cargo";
@@ -134,14 +140,15 @@ impl UnvalidatedPlugin {
     }
 }
 
-/// What a package manager offers: its plugins, and whether that is all of
-/// them. A listing that is not complete left out an entry it could not read,
-/// so sync keeps what that entry installed rather than reading its absence as
-/// its removal.
-#[derive(Debug)]
+/// What a package manager offers: its plugins, and each entry it could not
+/// read, saying which and why. A listing with errors is not every plugin
+/// there is, so sync keeps what a failed entry installed rather than reading
+/// its absence as its removal.
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PluginListing<P = UnvalidatedPlugin> {
     pub plugins: Vec<P>,
-    pub complete: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
 }
 
 impl<P> PluginListing<P> {
@@ -149,8 +156,13 @@ impl<P> PluginListing<P> {
     pub fn complete(plugins: Vec<P>) -> Self {
         Self {
             plugins,
-            complete: true,
+            errors: Vec::new(),
         }
+    }
+
+    /// Whether every entry was read.
+    pub fn is_complete(&self) -> bool {
+        self.errors.is_empty()
     }
 }
 
@@ -192,7 +204,9 @@ pub struct FetchedPackage {
 }
 
 /// The operations every package manager implements: a registry Symposium
-/// reads, the cargo PM, and any other ecosystem's.
+/// reads in its own process, the cargo PM, and a binary speaking the
+/// [`protocol`]. One implementation serves both ways of running a PM:
+/// Symposium can call it directly, or [`server::run`] can put it on the wire.
 ///
 /// A PM is self-contained: it holds whatever it needs to resolve its own
 /// ecosystem, so operations take no ambient context. A PM for a workspace is
@@ -253,10 +267,8 @@ pub trait PackageManager: Send + Sync {
     }
 
     /// Pull this PM's backing source onto disk: for a git registry, the
-    /// repository. `force` ignores the source's auto-update opt-out (an
-    /// explicit `plugin sync <name>`). Returns whether a remote source was
-    /// refreshed.
-    async fn refresh(&self, _update: UpdateLevel, _force: bool) -> Result<bool> {
+    /// repository. Returns whether a remote source was refreshed.
+    async fn refresh(&self, _update: UpdateLevel) -> Result<bool> {
         Ok(false)
     }
 }

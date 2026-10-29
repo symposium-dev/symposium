@@ -814,12 +814,14 @@ enum ManifestOrigin<'a> {
 /// Only refreshes registries with `auto-update = true` (unless `update` is
 /// `Fetch`). Path-based registries are skipped (no fetching needed).
 pub async fn ensure_registries(sym: &Symposium, update: UpdateLevel) {
-    // `Fetch` forces even auto-update-disabled registries; otherwise each
-    // registry's `refresh` honors its own auto-update flag (and a path registry
-    // is a no-op).
+    // `Fetch` forces even auto-update-disabled registries. A path registry's
+    // `refresh` is a no-op.
     let force = matches!(update, UpdateLevel::Fetch);
     for inst in sym.registry_instances() {
-        if let Err(e) = inst.pm.refresh(update, force).await {
+        if !force && !inst.auto_update {
+            continue;
+        }
+        if let Err(e) = inst.pm.refresh(update).await {
             tracing::warn!(registry = %inst.name, error = %e, "failed to refresh registry");
         }
     }
@@ -842,7 +844,10 @@ pub async fn sync_registries(sym: &Symposium, provider: Option<&str>) -> Result<
             Some(_) => continue,
             None => false,
         };
-        match inst.pm.refresh(UpdateLevel::Fetch, force).await {
+        if !force && !inst.auto_update {
+            continue;
+        }
+        match inst.pm.refresh(UpdateLevel::Fetch).await {
             Ok(true) => {
                 tracing::info!(registry = %inst.name, "synced");
                 synced.push(inst.name.clone());
@@ -1101,7 +1106,7 @@ async fn load_registry_impl(
     for inst in pms.instances().filter(|i| i.trusted) {
         match inst.registry_plugins().await {
             Some(read) => {
-                if !read.complete {
+                if !read.is_complete() {
                     unreadable_registries.push(inst.name.clone());
                 }
                 plugins.extend(read.plugins);

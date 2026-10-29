@@ -1,10 +1,10 @@
-//! Package managers: the in-process seam from the [registry-centric plugin
+//! Package managers: the seam from the [registry-centric plugin
 //! distribution RFD](../../md/rfds/registry-centric-plugins/README.md).
 //!
 //! A [`PackageId`] names a package as a `(pm, name, version)` tuple, and a
 //! [`PackageManager`] resolves ids of its ecosystem to content on disk. The
-//! trait is the SDK's, since the operation set is what any package manager
-//! implements.
+//! trait is the SDK's, so a package manager written against it runs either
+//! way: called directly in this process, or as a binary behind [`RemotePm`].
 //!
 //! A `PackageManager` value is an *instance*, not just an ecosystem. A
 //! **transport** ([`CargoPm`]) can `fetch` any id of its ecosystem, because the
@@ -19,9 +19,6 @@
 //! `pm` component of every id it mints and the name its plugins are attributed
 //! to. Registry instances resolve their own ids, so those ids are never routed
 //! through the ecosystem transports.
-//!
-//! In-process for now — when PMs move out of process, [`PmRegistry`] becomes
-//! the seam that spawns and talks to them.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -35,11 +32,13 @@ mod cargo;
 mod git;
 pub mod layout;
 mod path;
+pub mod remote;
 pub use cargo::{
     CargoPm, LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
 };
 pub use git::GitPm;
 pub use path::PathPm;
+pub use remote::{RemotePm, RemotePmCommand};
 
 /// The identity types and the operation set are the SDK's, since they cross
 /// the PM boundary: a package-manager binary speaks in them too.
@@ -88,6 +87,9 @@ pub struct PmInstance {
     pub kind: PluginKind,
     /// How a registry's content is sourced; `None` for a transport.
     pub source: Option<RegistrySource>,
+    /// Whether Symposium refreshes this registry on its own, rather than only
+    /// when the user names it (`plugin sync <name>`).
+    pub auto_update: bool,
     pub pm: Box<dyn PackageManager>,
     /// Whether an operation on this instance has failed. Its silence is not
     /// an empty answer, so nothing it would have offered is removed on its
@@ -107,6 +109,7 @@ impl PmInstance {
             trusted,
             kind,
             source: None,
+            auto_update: true,
             pm,
             failed: AtomicBool::new(false),
         }
@@ -129,18 +132,26 @@ impl PmInstance {
         Err(e)
     }
 
-    /// This instance's active plugins, validated. A plugin that fails
-    /// validation is logged and dropped, and leaves the listing incomplete:
-    /// best-effort, like the PM layer above.
+    /// This instance's active plugins, validated. Each entry the PM could not
+    /// read is reported, and a plugin that fails validation is reported and
+    /// dropped; either leaves the listing with errors.
     pub async fn try_active_plugins(&self, deps: &[PackageId]) -> Result<PluginListing<Plugin>> {
         match self.pm.active_plugins(deps).await {
             Ok(listing) => {
                 let total = listing.plugins.len();
+                let mut errors = listing.errors;
+                for e in &errors {
+                    self.skipped(e);
+                }
                 let plugins = self.validate_all(listing.plugins);
-                Ok(PluginListing {
-                    complete: listing.complete && plugins.len() == total,
-                    plugins,
-                })
+                if plugins.len() < total {
+                    errors.push(format!(
+                        "{} of `{}`'s plugins were dropped",
+                        total - plugins.len(),
+                        self.name
+                    ));
+                }
+                Ok(PluginListing { plugins, errors })
             }
             Err(e) => self.failure("active_plugins", e),
         }
@@ -233,21 +244,27 @@ impl PmInstance {
                 match crate::plugins::validate_plugin(plugin, self.kind) {
                     Ok(p) => Some(p),
                     Err(e) => {
-                        match self.kind {
-                            PluginKind::Registry => tracing::warn!(
-                                report = %crate::report::ReportEvent::Warning {
-                                    message: format!("skipping {e:#}"),
-                                },
-                            ),
-                            PluginKind::Package => {
-                                tracing::warn!(id = %id, error = %e, "failed to validate plugin")
-                            }
-                        }
+                        self.skipped(&format!("`{id}`: {e:#}"));
                         None
                     }
                 }
             })
             .collect()
+    }
+
+    /// Report or log one entry this instance skipped, as for a plugin that
+    /// fails validation.
+    fn skipped(&self, error: &str) {
+        match self.kind {
+            PluginKind::Registry => tracing::warn!(
+                report = %crate::report::ReportEvent::Warning {
+                    message: format!("skipping {error}"),
+                },
+            ),
+            PluginKind::Package => {
+                tracing::warn!(instance = %self.name, error, "skipping a plugin")
+            }
+        }
     }
 
     async fn project_info(&self) -> Result<ProjectInfo> {
@@ -825,7 +842,7 @@ mod tests {
     async fn git_registry_without_its_copy_is_unreadable() {
         let tmp = tempfile::tempdir().unwrap();
         let ctx = symposium_install::InstallContext::new(tmp.path().to_path_buf());
-        let pm = GitPm::new("reg", "https://github.com/example/reg", false, ctx).unwrap();
+        let pm = GitPm::new("reg", "https://github.com/example/reg", ctx).unwrap();
         let err = pm.active_plugins(&[]).await.unwrap_err();
         assert!(
             err.to_string().contains("cargo agents plugin sync reg"),
