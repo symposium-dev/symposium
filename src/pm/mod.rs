@@ -233,12 +233,32 @@ impl PmInstance {
         found.into_iter().map(|info| info.id).find(|id| same(id))
     }
 
+    /// Whether `id` belongs to this instance. Every id a PM answers with must:
+    /// ids route by their `pm` component, and consent and `disable` are keyed
+    /// on them, so a PM answering for another could take the consent given to
+    /// that PM's packages, or escape a `disable` entry naming its own.
+    fn owns(&self, id: &PackageId) -> bool {
+        if id.pm != self.name {
+            tracing::warn!(instance = %self.name, id = %id, "package manager answered with another package manager's id");
+            return false;
+        }
+        true
+    }
+
     /// A registry entry that fails validation is the user's to fix, so it is
     /// reported. A package's is its author's, and the hook path must not print
     /// it next to the agent's JSON, so it is only logged.
     fn validate_all(&self, unvalidated: Vec<UnvalidatedPlugin>) -> Vec<Plugin> {
         unvalidated
             .into_iter()
+            .filter(|plugin| self.owns(&plugin.id))
+            .filter(|plugin| {
+                absolute(&self.name, &plugin.id, &plugin.root)
+                    && plugin
+                        .label_root
+                        .as_ref()
+                        .is_none_or(|dir| absolute(&self.name, &plugin.id, dir))
+            })
             .filter_map(|plugin| {
                 let id = plugin.id.clone();
                 match crate::plugins::validate_plugin(plugin, self.kind) {
@@ -267,12 +287,37 @@ impl PmInstance {
         }
     }
 
+    /// This instance's project, checked: every path must be absolute, since a
+    /// relative one would resolve against wherever Symposium happens to run.
     async fn project_info(&self) -> Result<ProjectInfo> {
-        match self.pm.project_info().await {
-            Ok(project) => Ok(project),
-            Err(e) => self.failure("project_info", e),
+        let project = match self.pm.project_info().await {
+            Ok(project) => project,
+            Err(e) => return self.failure("project_info", e),
+        };
+        let relative = project
+            .root
+            .iter()
+            .chain(&project.local_packages)
+            .chain(&project.inputs)
+            .find(|path| !path.is_absolute());
+        match relative {
+            Some(path) => self.failure(
+                "project_info",
+                anyhow::anyhow!("reported a relative path, {}", path.display()),
+            ),
+            None => Ok(project),
         }
     }
+}
+
+/// Whether a directory a package manager gave for `id` is absolute. A relative
+/// one would resolve against wherever Symposium happens to run, which differs
+/// from one agent's hook to another's, so the plugin is dropped.
+fn absolute(instance: &str, id: &PackageId, dir: &std::path::Path) -> bool {
+    if !dir.is_absolute() {
+        tracing::warn!(instance, id = %id, dir = %dir.display(), "package manager answered with a relative path");
+    }
+    dir.is_absolute()
 }
 
 /// The active set of package-manager instances — one flat collection, the cargo
@@ -345,7 +390,20 @@ impl PmRegistry {
         let inst = self.owner(id).ok_or_else(|| {
             anyhow::anyhow!("unknown package manager `{}` in package id `{id}`", id.pm)
         })?;
-        inst.pm.fetch(id, update).await
+        let fetched = inst.pm.fetch(id, update).await?;
+        anyhow::ensure!(
+            inst.owns(&fetched.id),
+            "`{}` answered a fetch of `{id}` with `{}`",
+            inst.name,
+            fetched.id
+        );
+        anyhow::ensure!(
+            fetched.root.is_absolute(),
+            "`{}` answered a fetch of `{id}` with a relative path, {}",
+            inst.name,
+            fetched.root.display()
+        );
+        Ok(fetched)
     }
 
     /// Union of `list_deps` across the instances — the workspace's full
@@ -359,7 +417,20 @@ impl PmRegistry {
         let mut deps = Vec::new();
         for inst in &self.instances {
             match inst.pm.list_deps().await {
-                Ok(found) => deps.extend(found),
+                Ok(found) => {
+                    let total = found.len();
+                    let owned: Vec<_> = found.into_iter().filter(|id| inst.owns(id)).collect();
+                    if owned.len() != total {
+                        inst.failure::<()>(
+                            "list_deps",
+                            anyhow::anyhow!(
+                                "dependency listing contains another package manager's ids"
+                            ),
+                        )
+                        .unwrap_or_default();
+                    }
+                    deps.extend(owned);
+                }
                 Err(e) => inst.failure::<()>("list_deps", e).unwrap_or_default(),
             }
         }
@@ -402,7 +473,12 @@ impl PmRegistry {
         let mut out = Vec::new();
         for inst in self.instances() {
             match inst.pm.search(query).await {
-                Ok(infos) => out.extend(infos.into_iter().map(|info| (inst.name.clone(), info))),
+                Ok(infos) => out.extend(
+                    infos
+                        .into_iter()
+                        .filter(|info| inst.owns(&info.id))
+                        .map(|info| (inst.name.clone(), info)),
+                ),
                 Err(e) => {
                     tracing::debug!(instance = %inst.name, error = %e, "search failed, skipping");
                 }
@@ -773,6 +849,24 @@ mod tests {
         assert!(ws.failed().is_empty());
     }
 
+    /// A relative path would resolve against wherever Symposium runs, so a
+    /// package manager reporting one has failed, rather than been believed.
+    #[tokio::test]
+    async fn a_relative_path_in_a_project_is_a_failure() {
+        let ws = workspace_of(
+            std::path::Path::new("/"),
+            vec![(
+                "npm",
+                ProjectInfo {
+                    root: Some(PathBuf::from("web")),
+                    ..Default::default()
+                },
+            )],
+        );
+        assert!(ws.info().await.is_none());
+        assert_eq!(ws.failed(), vec!["npm"]);
+    }
+
     /// One package failing to load says nothing about the rest of its
     /// ecosystem, so it is not recorded against the package manager.
     #[tokio::test]
@@ -801,6 +895,25 @@ mod tests {
         )
     }
 
+    /// A plugin root must be absolute: a relative one would resolve against
+    /// wherever Symposium happens to run.
+    #[tokio::test]
+    async fn a_plugin_with_a_relative_root_is_dropped() {
+        let pms = PmRegistry::new(vec![package_manager(
+            "npm",
+            EchoPm {
+                name: "npm",
+                answers_as: "npm",
+                root: "relative/dir",
+            },
+        )]);
+        assert!(
+            pms.load_plugin(&PackageId::any_version("npm", "widget"), UpdateLevel::None)
+                .await
+                .is_empty()
+        );
+    }
+
     #[tokio::test]
     async fn load_plugin_asks_only_the_pm_its_id_names() {
         let pms = PmRegistry::new(vec![echo("cargo", "cargo"), echo("npm", "npm")]);
@@ -811,9 +924,36 @@ mod tests {
         assert_eq!(ids, vec!["cargo:foo:*"]);
     }
 
+    /// Consent and `disable` are keyed on the id, so a PM must not be able to
+    /// answer as another: not with a plugin, and not with a dependency, which
+    /// would satisfy another ecosystem's `depends-on` and enablement.
+    #[tokio::test]
+    async fn an_answer_under_another_pms_id_is_dropped() {
+        let pms = PmRegistry::new(vec![echo("npm", "cargo")]);
+        assert!(
+            pms.load_plugin(&PackageId::any_version("npm", "foo"), UpdateLevel::None)
+                .await
+                .is_empty()
+        );
+        assert!(pms.list_deps().await.is_empty());
+        assert_eq!(
+            pms.failed(),
+            vec!["npm"],
+            "an incomplete listing must prevent cleanup"
+        );
+
+        let pms = PmRegistry::new(vec![echo("npm", "cargo"), echo("cargo", "cargo")]);
+        assert_eq!(
+            pms.list_deps().await,
+            vec![PackageId::any_version("cargo", "dep")]
+        );
+        assert_eq!(pms.failed(), vec!["npm"]);
+    }
+
     /// The report events emitted while validating the stub's plugin under `kind`.
     async fn reports_for_invalid_plugin(kind: PluginKind) -> Vec<serde_json::Value> {
         use tracing_subscriber::layer::SubscriberExt;
+        symposium_testlib::install_tracing_baseline();
         let (layer, handle) =
             crate::report::ReportLayer::new(crate::report::ReportMode::Json, tracing::Level::DEBUG);
         let _guard = tracing::subscriber::set_default(tracing_subscriber::registry().with(layer));
