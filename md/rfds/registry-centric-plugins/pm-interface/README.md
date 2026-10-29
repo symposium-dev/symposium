@@ -253,6 +253,11 @@ PM uses the crate name. A registry PM uses the entry's path within the registry.
 The pair is qualified by PM so that two ecosystems using the same word do not
 collide, and so that a name always identifies exactly one thing.
 
+The `pm` half may be left out. A name on its own usually identifies one plugin,
+and when it does it should just work: `use = ["rtk"]` wakes the one plugin
+called `rtk`. Only a name that could mean plugins from more than one PM needs
+qualifying, and Symposium says so rather than guessing which was meant.
+
 This is what makes a trusted source overridable. Recommendations are enabled
 without asking, which is the point of them, but a user who does not want a
 particular one names it and turns it off. `disable` beats every other entry,

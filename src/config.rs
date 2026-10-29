@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::Level;
 
-use crate::pm::{PackageId, PmRegistry};
+use crate::pm::PackageId;
 
 // ---------------------------------------------------------------------------
 // User configuration (~/.symposium/config.toml)
@@ -139,7 +139,7 @@ pub struct PluginsConfig {
     /// Dependency names whose embedded plugins load without being asked
     /// about; `"*"` pre-consents to every dependency.
     #[serde(default, rename = "auto-enable", skip_serializing_if = "Vec::is_empty")]
-    pub auto_enable: Vec<String>,
+    pub auto_enable: Vec<PluginRef>,
 
     /// Plugins enabled deliberately, the durable record `cargo agents use`
     /// writes. Unlike `auto-enable` (consent for what a dependency already
@@ -151,7 +151,7 @@ pub struct PluginsConfig {
     /// Plugin names pruned from enablement, and the record of declined
     /// discoveries (so they are not offered again).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub disable: Vec<String>,
+    pub disable: Vec<PluginRef>,
 }
 
 impl PluginsConfig {
@@ -159,36 +159,42 @@ impl PluginsConfig {
         *self == Self::default()
     }
 
-    /// Names enabled by `use` entries that apply while working in
-    /// `workspace_root`.
-    pub fn used_names_in(&self, workspace_root: &Path) -> Vec<&str> {
+    /// The plugins `use` entries enable while working in `workspace_root`.
+    pub fn used_in(&self, workspace_root: &Path) -> Vec<&PluginRef> {
         self.used
             .iter()
             .filter(|entry| entry.applies_in(workspace_root))
-            .map(UseEntry::name)
+            .map(UseEntry::plugin)
             .collect()
     }
 
-    /// Does `auto-enable` name the package `id` (directly or via `"*"`)?
-    pub fn is_auto_enabled(&self, pms: &PmRegistry, id: &PackageId) -> bool {
-        self.auto_enable
-            .iter()
-            .any(|entry| name_matches(pms, entry, id))
+    /// Is this plugin pre-consented to by `auto-enable`? `deps` is what a
+    /// bare name is resolved against: consent is for what a dependency
+    /// carries, so a bare name covers the dependency of that name, and covers
+    /// nothing while dependencies from two package managers share it.
+    pub fn is_auto_enabled(
+        &self,
+        id: &PackageId,
+        deps: &[PackageId],
+        spellings: &Spellings,
+    ) -> bool {
+        self.auto_enable.iter().any(|entry| match &entry.pm {
+            Some(_) => spellings.names(entry, id),
+            None if entry.name == "*" => true,
+            None => {
+                spellings.names(entry, id)
+                    && deps
+                        .iter()
+                        .all(|dep| dep.pm == id.pm || !spellings.names(entry, dep))
+            }
+        })
     }
 
-    /// Does `disable` name the package `id`?
-    pub fn is_disabled(&self, pms: &PmRegistry, id: &PackageId) -> bool {
-        self.disable
-            .iter()
-            .any(|entry| name_matches(pms, entry, id))
-    }
-
-    /// Is the package `id` enabled by a `use` entry applicable in
-    /// `workspace_root`?
-    pub fn is_used_in(&self, pms: &PmRegistry, id: &PackageId, workspace_root: &Path) -> bool {
-        self.used_names_in(workspace_root)
-            .iter()
-            .any(|entry| name_matches(pms, entry, id))
+    /// Does `disable` name the package `id`? A bare name is not resolved: it
+    /// turns off every plugin of that name, since turning off too much is the
+    /// safe way to be wrong.
+    pub fn is_disabled(&self, id: &PackageId, spellings: &Spellings) -> bool {
+        self.disable.iter().any(|entry| spellings.names(entry, id))
     }
 
     /// Whether any enablement entry could pull in a crate plugin. With neither
@@ -201,38 +207,235 @@ impl PluginsConfig {
     }
 }
 
-/// Does a configured entry name the package `id`? `"*"` matches everything.
-/// An entry carries no package manager of its own, so the one owning `id`
-/// decides whether the two names are the same package.
-fn name_matches(pms: &PmRegistry, entry: &str, id: &PackageId) -> bool {
-    entry == "*" || pms.identity(&PackageId::any_version(&id.pm, entry)) == pms.identity(id)
+/// The packages `[plugins]` entries name in one workspace under another
+/// spelling than their own: cargo's `widget-lib` for an entry `widget_lib`.
+/// Whether two names are one package is its package manager's to say
+/// ([`canonical_name`](crate::pm::PackageManager::canonical_name)), which can
+/// mean asking it, so this is resolved once for each package, by
+/// [`Names::spellings`](crate::discovery::Names::spellings) and
+/// [`Names::spell`](crate::discovery::Names::spell), and compared against from
+/// then on.
+#[derive(Debug, Default, Clone)]
+pub struct Spellings(Vec<(PluginRef, PackageId)>);
+
+impl Spellings {
+    /// Record that `entry` names `id`.
+    pub fn add(&mut self, entry: PluginRef, id: PackageId) {
+        self.0.push((entry, id));
+    }
+
+    /// Does `entry` name `id`, as spelled or under another spelling?
+    pub fn names(&self, entry: &PluginRef, id: &PackageId) -> bool {
+        entry.matches(id)
+            || self
+                .0
+                .iter()
+                .any(|(e, spelled)| e == entry && spelled.pm == id.pm && spelled.name == id.name)
+    }
 }
 
-/// One `[plugins] use` entry: a plugin name enabled deliberately, scoped
-/// either to a single workspace or to every workspace.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A plugin named in configuration: the canonical name a package manager knows
+/// it by, and optionally which package manager that is.
+///
+/// A name alone is not an identity: two ecosystems may use the same word, and
+/// what a name *means* is the offering PM's business (a crate name for cargo,
+/// the plugin's own `name` for a registry). But it usually is unambiguous, so
+/// `pm` may be left out, and a bare name names whichever plugin of that name
+/// there is. Where it could mean more than one, it is resolved by the code
+/// reading it: see [`crate::discovery::Names`] for `use`, and
+/// [`PluginsConfig::is_auto_enabled`] and [`PluginsConfig::is_disabled`].
+/// Whether it names a package spelled another way is resolved per workspace,
+/// in [`Spellings`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "RawPluginRef", into = "RawPluginRef")]
+pub struct PluginRef {
+    /// The package manager, or `None` for a bare name.
+    pub pm: Option<String>,
+    pub name: String,
+}
+
+impl PluginRef {
+    pub fn new(pm: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            pm: Some(pm.into()),
+            name: name.into(),
+        }
+    }
+
+    /// A name that leaves its package manager unstated.
+    pub fn bare(name: impl Into<String>) -> Self {
+        Self {
+            pm: None,
+            name: name.into(),
+        }
+    }
+
+    /// Does this entry name `id`, spelled as `id` is? A bare entry names a
+    /// plugin of its name in any package manager. `"*"` names every package
+    /// of the entry's package manager, or of every package manager when the
+    /// entry names none.
+    ///
+    /// A package manager may spell a package more than one way (cargo's
+    /// `widget-lib` is also `widget_lib`), which only it can say, so an entry
+    /// spelled another way names a package through the [`Spellings`] resolved
+    /// for the workspace.
+    pub fn matches(&self, id: &PackageId) -> bool {
+        self.pm.as_ref().is_none_or(|pm| *pm == id.pm) && (self.name == "*" || self.name == id.name)
+    }
+}
+
+impl std::fmt::Display for PluginRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.pm {
+            Some(pm) => write!(f, "{pm}:{}", self.name),
+            None => f.write_str(&self.name),
+        }
+    }
+}
+
+/// The accepted spellings of a plugin reference: a bare string, or a table
+/// whose `pm` may be left out. A bare reference is written as a bare string,
+/// the spelling earlier releases read.
+#[derive(Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum UseEntry {
-    /// `use = ["name"]` — enabled in every workspace.
-    Global(String),
-    /// `use = [{ name = "...", workspace = "/path" }]` — enabled while
-    /// working in the named workspace root.
-    Workspace { name: String, workspace: PathBuf },
+enum RawPluginRef {
+    Bare(String),
+    Qualified(RawPluginTable),
+}
+
+/// The table spelling of a plugin reference. An unknown key is an error, so a
+/// mistyped one is not silently dropped.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPluginTable {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pm: Option<String>,
+    name: String,
+}
+
+impl From<RawPluginRef> for PluginRef {
+    fn from(raw: RawPluginRef) -> Self {
+        match raw {
+            RawPluginRef::Bare(name) => PluginRef::bare(name),
+            RawPluginRef::Qualified(RawPluginTable { pm, name }) => PluginRef { pm, name },
+        }
+    }
+}
+
+impl From<&str> for PluginRef {
+    fn from(name: &str) -> Self {
+        PluginRef::bare(name)
+    }
+}
+
+impl From<PluginRef> for RawPluginRef {
+    fn from(r: PluginRef) -> Self {
+        match r.pm {
+            None => RawPluginRef::Bare(r.name),
+            pm => RawPluginRef::Qualified(RawPluginTable { pm, name: r.name }),
+        }
+    }
+}
+
+/// One `[plugins] use` entry: a plugin enabled deliberately, scoped either to
+/// a single workspace or to every workspace.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(from = "RawUseEntry", into = "RawUseEntry")]
+pub struct UseEntry {
+    pub plugin: PluginRef,
+    /// The workspace this applies in, or `None` for every workspace.
+    pub workspace: Option<PathBuf>,
+}
+
+/// The accepted spellings of a `use` entry. A bare string is a bare name
+/// enabled everywhere.
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum RawUseEntry {
+    Bare(String),
+    Table(RawUseTable),
+}
+
+/// The table spelling of a `use` entry. An unknown key is an error: a
+/// mistyped `workspace` would otherwise make a scoped entry global.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawUseTable {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pm: Option<String>,
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace: Option<PathBuf>,
+}
+
+impl From<RawUseEntry> for UseEntry {
+    fn from(raw: RawUseEntry) -> Self {
+        match raw {
+            RawUseEntry::Bare(name) => UseEntry {
+                plugin: PluginRef::from(name.as_str()),
+                workspace: None,
+            },
+            RawUseEntry::Table(RawUseTable {
+                pm,
+                name,
+                workspace,
+            }) => UseEntry {
+                plugin: PluginRef { pm, name },
+                workspace,
+            },
+        }
+    }
+}
+
+/// A bare entry is written as earlier releases wrote it: a bare name, or a
+/// table of `name` and `workspace` when scoped. See [`RawPluginRef`].
+impl From<UseEntry> for RawUseEntry {
+    fn from(e: UseEntry) -> Self {
+        match (e.plugin.pm, e.workspace) {
+            (None, None) => RawUseEntry::Bare(e.plugin.name),
+            (pm, workspace) => RawUseEntry::Table(RawUseTable {
+                pm,
+                name: e.plugin.name,
+                workspace,
+            }),
+        }
+    }
 }
 
 impl UseEntry {
-    pub fn name(&self) -> &str {
-        match self {
-            UseEntry::Global(name) => name,
-            UseEntry::Workspace { name, .. } => name,
+    /// Enabled in every workspace.
+    pub fn global(plugin: PluginRef) -> Self {
+        Self {
+            plugin,
+            workspace: None,
         }
+    }
+
+    /// Enabled while working in `workspace`.
+    pub fn scoped(plugin: PluginRef, workspace: PathBuf) -> Self {
+        Self {
+            plugin,
+            workspace: Some(workspace),
+        }
+    }
+
+    pub fn plugin(&self) -> &PluginRef {
+        &self.plugin
+    }
+
+    pub fn name(&self) -> &str {
+        &self.plugin.name
+    }
+
+    pub fn is_global(&self) -> bool {
+        self.workspace.is_none()
     }
 
     /// Does this entry apply while working in `workspace_root`?
     pub fn applies_in(&self, workspace_root: &Path) -> bool {
-        match self {
-            UseEntry::Global(_) => true,
-            UseEntry::Workspace { workspace, .. } => {
+        match &self.workspace {
+            None => true,
+            Some(workspace) => {
                 let canon = |p: &Path| fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
                 canon(workspace) == canon(workspace_root)
             }
@@ -1212,40 +1415,39 @@ mod tests {
             use = ["everywhere", { name = "scoped", workspace = "/ws/a" }]
         "#});
 
-        let tmp = tempfile::tempdir().unwrap();
-        let pms = Symposium::from_dir(tmp.path()).detached_managers();
-        let krate = |name| PackageId::new(crate::pm::CARGO_PM, name, "1.0.0");
-        assert!(config.plugins.is_auto_enabled(&pms, &krate("widget_lib")));
-        assert!(!config.plugins.is_auto_enabled(&pms, &krate("other")));
-        assert!(config.plugins.is_disabled(&pms, &krate("noisy-crate")));
-
-        assert_eq!(
-            config.plugins.used,
-            vec![
-                UseEntry::Global("everywhere".into()),
-                UseEntry::Workspace {
-                    name: "scoped".into(),
-                    workspace: PathBuf::from("/ws/a"),
-                },
-            ]
-        );
-        assert_eq!(
-            config.plugins.used_names_in(Path::new("/ws/a")),
-            vec!["everywhere", "scoped"]
-        );
-        assert_eq!(
-            config.plugins.used_names_in(Path::new("/ws/other")),
-            vec!["everywhere"]
-        );
+        let cargo = |n: &str| crate::pm::PackageId::any_version(crate::pm::CARGO_PM, n);
+        let names =
+            |refs: Vec<&PluginRef>| refs.into_iter().map(|r| r.name.clone()).collect::<Vec<_>>();
         assert!(
             config
                 .plugins
-                .is_used_in(&pms, &krate("scoped"), Path::new("/ws/a"))
+                .is_auto_enabled(&cargo("widget-lib"), &[], &Spellings::default())
         );
         assert!(
             !config
                 .plugins
-                .is_used_in(&pms, &krate("scoped"), Path::new("/ws/other"))
+                .is_auto_enabled(&cargo("other"), &[], &Spellings::default())
+        );
+        assert!(
+            config
+                .plugins
+                .is_disabled(&cargo("noisy-crate"), &Spellings::default())
+        );
+
+        assert_eq!(
+            config.plugins.used,
+            vec![
+                UseEntry::global(PluginRef::bare("everywhere")),
+                UseEntry::scoped(PluginRef::bare("scoped"), PathBuf::from("/ws/a")),
+            ]
+        );
+        assert_eq!(
+            names(config.plugins.used_in(Path::new("/ws/a"))),
+            vec!["everywhere", "scoped"]
+        );
+        assert_eq!(
+            names(config.plugins.used_in(Path::new("/ws/other"))),
+            vec!["everywhere"]
         );
 
         // Entries survive a round trip through the config file.
@@ -1253,54 +1455,189 @@ mod tests {
         assert_eq!(reparsed.plugins, config.plugins);
     }
 
+    /// A bare `disable` entry turns off every plugin of its name, whichever
+    /// package manager offers it: turning off too much is the safe way to be
+    /// wrong. A qualified one turns off only its own.
     #[test]
-    fn auto_enable_wildcard_matches_every_name() {
+    fn a_bare_disable_names_every_plugin_of_its_name() {
         let config = parse_config(indoc! {r#"
             [plugins]
-            auto-enable = ["*"]
+            disable = ["noisy", { pm = "npm", name = "quiet" }]
         "#});
-        let tmp = tempfile::tempdir().unwrap();
-        let pms = Symposium::from_dir(tmp.path()).detached_managers();
+        let id = crate::pm::PackageId::any_version;
         assert!(
             config
                 .plugins
-                .is_auto_enabled(&pms, &PackageId::any_version("anything", "anything"))
+                .is_disabled(&id(crate::pm::CARGO_PM, "noisy"), &Spellings::default())
+        );
+        assert!(config.plugins.is_disabled(
+            &id("symposium-recommendations", "noisy"),
+            &Spellings::default()
+        ));
+        assert!(
+            config
+                .plugins
+                .is_disabled(&id("npm", "quiet"), &Spellings::default())
+        );
+        assert!(
+            !config
+                .plugins
+                .is_disabled(&id(crate::pm::CARGO_PM, "quiet"), &Spellings::default())
         );
     }
 
-    /// An entry names a package the way that package's manager compares
-    /// names: cargo folds `-` and `_`, a registry compares exactly.
+    /// A bare `auto-enable` entry consents to the dependency of its name, and
+    /// to nothing while dependencies from two package managers share it, so
+    /// consent to one ecosystem's package never silently covers another's.
     #[test]
-    fn plugins_entries_match_under_the_owning_package_manager() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(
-            tmp.path().join("config.toml"),
-            indoc! {r#"
-                [plugins]
-                auto-enable = ["widget_lib"]
-                disable = ["noisy_crate", "my_plugin"]
-                use = ["serde_json", "my_plugin"]
+    fn a_bare_auto_enable_is_resolved_against_the_dependencies() {
+        let config = parse_config(indoc! {r#"
+            [plugins]
+            auto-enable = ["widget", { pm = "npm", name = "left-pad" }]
+        "#});
+        let id = crate::pm::PackageId::any_version;
+        let cargo_widget = id(crate::pm::CARGO_PM, "widget");
+        let npm_widget = id("npm", "widget");
 
-                [[registry]]
-                name = "reg"
-                path = "reg"
-            "#},
-        )
-        .unwrap();
-        let sym = Symposium::from_dir(tmp.path());
-        let pms = sym.detached_managers();
-        let plugins = &sym.config.plugins;
-        let krate = |name| PackageId::new(crate::pm::CARGO_PM, name, "1.0.0");
-        let plugin = |name| PackageId::any_version("reg", name);
+        let deps = [cargo_widget.clone()];
+        assert!(
+            config
+                .plugins
+                .is_auto_enabled(&cargo_widget, &deps, &Spellings::default())
+        );
 
-        assert!(plugins.is_auto_enabled(&pms, &krate("widget-lib")));
-        assert!(plugins.is_disabled(&pms, &krate("noisy-crate")));
-        assert!(plugins.is_used_in(&pms, &krate("serde-json"), tmp.path()));
+        let deps = [cargo_widget.clone(), npm_widget.clone()];
+        assert!(
+            !config
+                .plugins
+                .is_auto_enabled(&cargo_widget, &deps, &Spellings::default())
+        );
+        assert!(
+            !config
+                .plugins
+                .is_auto_enabled(&npm_widget, &deps, &Spellings::default())
+        );
 
-        assert!(plugins.is_disabled(&pms, &plugin("my_plugin")));
-        assert!(plugins.is_used_in(&pms, &plugin("my_plugin"), tmp.path()));
-        assert!(!plugins.is_disabled(&pms, &plugin("my-plugin")));
-        assert!(!plugins.is_used_in(&pms, &plugin("my-plugin"), tmp.path()));
+        let deps = [id("npm", "left-pad"), id(crate::pm::CARGO_PM, "left-pad")];
+        assert!(
+            config
+                .plugins
+                .is_auto_enabled(&deps[0], &deps, &Spellings::default())
+        );
+        assert!(
+            !config
+                .plugins
+                .is_auto_enabled(&deps[1], &deps, &Spellings::default())
+        );
+    }
+
+    /// Each entry is written as it was read: a bare name stays bare, in the
+    /// shapes earlier releases read (a string, or `{ name, workspace }` when
+    /// scoped), and a qualified one keeps its `pm`.
+    #[test]
+    fn entries_are_written_as_they_were_read() {
+        let config = parse_config(indoc! {r#"
+            [plugins]
+            auto-enable = ["widget-lib", { pm = "npm", name = "left-pad" }]
+            disable = ["noisy-crate", { pm = "cargo", name = "quiet-crate" }]
+            use = [
+                "everywhere",
+                { name = "scoped", workspace = "/ws/a" },
+                { pm = "npm", name = "is-even" },
+            ]
+        "#});
+        let written: toml::Table =
+            toml::from_str(&toml::to_string_pretty(&config).unwrap()).unwrap();
+        let plugins = &written["plugins"];
+        let table =
+            |s: &str| toml::from_str::<toml::Value>(&format!("x = {s}")).unwrap()["x"].clone();
+        assert_eq!(
+            plugins["auto-enable"],
+            toml::Value::Array(vec![
+                "widget-lib".into(),
+                table(r#"{ pm = "npm", name = "left-pad" }"#),
+            ])
+        );
+        assert_eq!(
+            plugins["disable"],
+            toml::Value::Array(vec![
+                "noisy-crate".into(),
+                table(r#"{ pm = "cargo", name = "quiet-crate" }"#),
+            ])
+        );
+        let used = plugins["use"].as_array().unwrap();
+        assert_eq!(used[0], "everywhere".into());
+        assert_eq!(
+            used[1],
+            table(r#"{ name = "scoped", workspace = "/ws/a" }"#)
+        );
+        assert_eq!(used[2]["pm"], "npm".into());
+
+        assert_eq!(
+            parse_config(&toml::to_string_pretty(&config).unwrap()).plugins,
+            config.plugins
+        );
+    }
+
+    /// A mistyped key in a `[plugins]` table is an error, not dropped: a
+    /// misspelled `workspace` would otherwise make a scoped entry global.
+    #[test]
+    fn an_unknown_key_in_a_plugins_table_is_an_error() {
+        for toml in [
+            "[plugins]\nuse = [{ name = \"x\", workspce = \"/a\" }]",
+            "[plugins]\ndisable = [{ name = \"x\", workspace = \"/a\" }]",
+        ] {
+            assert!(toml::from_str::<RawConfig>(toml).is_err(), "{toml}");
+        }
+    }
+
+    /// Leaving out `pm` in a table is the same as a bare string.
+    #[test]
+    fn a_table_without_pm_is_a_bare_name() {
+        let config = parse_config(indoc! {r#"
+            [plugins]
+            disable = [{ name = "noisy-crate" }]
+            use = [{ name = "everywhere" }]
+        "#});
+        assert_eq!(config.plugins.disable[0], PluginRef::bare("noisy-crate"));
+        assert_eq!(
+            config.plugins.used[0],
+            UseEntry::global(PluginRef::bare("everywhere"))
+        );
+    }
+
+    #[test]
+    fn auto_enable_wildcard_matches_every_name() {
+        let id = crate::pm::PackageId::any_version;
+        let deps = [id(crate::pm::CARGO_PM, "widget"), id("npm", "widget")];
+        // A wildcard is the same entry in either spelling, and survives a
+        // round trip as itself.
+        for spelling in [r#""*""#, r#"{ name = "*" }"#] {
+            let config = parse_config(&format!("[plugins]\nauto-enable = [{spelling}]\n"));
+            assert!(
+                config
+                    .plugins
+                    .is_auto_enabled(&deps[0], &deps, &Spellings::default())
+            );
+            assert!(
+                config
+                    .plugins
+                    .is_auto_enabled(&deps[1], &deps, &Spellings::default())
+            );
+            let reparsed = parse_config(&toml::to_string_pretty(&config).unwrap());
+            assert_eq!(reparsed.plugins, config.plugins);
+        }
+        let config = parse_config("[plugins]\nauto-enable = [{ pm = \"npm\", name = \"*\" }]\n");
+        assert!(
+            config
+                .plugins
+                .is_auto_enabled(&deps[1], &deps, &Spellings::default())
+        );
+        assert!(
+            !config
+                .plugins
+                .is_auto_enabled(&deps[0], &deps, &Spellings::default())
+        );
     }
 
     #[test]

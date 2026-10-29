@@ -48,11 +48,12 @@ pub async fn use_plugin(
     // recording an entry here would report success and then install nothing.
     // Re-enabling is dropping the `disable` entry, which is a deliberate edit
     // rather than something `use` undoes on the user's behalf.
-    if sym
-        .config
-        .plugins
-        .is_disabled(pms, &PackageId::any_version(&id.pm, name))
-    {
+    let resolve = crate::discovery::Names::new(&registry.plugins, deps.dep_ids().await, pms);
+    let mut spellings = resolve.spellings(&sym.config.plugins).await;
+    resolve
+        .spell(&sym.config.plugins, &id, &mut spellings)
+        .await;
+    if sym.config.plugins.is_disabled(&id, &spellings) {
         bail!("`{name}` is disabled in `[plugins] disable`; remove that entry to enable it again");
     }
 
@@ -81,12 +82,10 @@ pub async fn use_plugin(
         bail!("{e}; pass --global to enable `{name}` everywhere");
     }
 
+    let plugin = crate::config::PluginRef::new(&id.pm, &id.name);
     let entry = match &workspace_root {
-        _ if global => UseEntry::Global(name.to_string()),
-        Some(root) => UseEntry::Workspace {
-            name: name.to_string(),
-            workspace: root.clone(),
-        },
+        _ if global => UseEntry::global(plugin),
+        Some(root) => UseEntry::scoped(plugin, root.clone()),
         None => unreachable!("checked above"),
     };
 
@@ -173,11 +172,10 @@ pub async fn remove_plugin(
 }
 
 fn in_scope(entry: &UseEntry, global: bool, workspace_root: Option<&Path>) -> bool {
-    match entry {
-        UseEntry::Global(_) => global,
-        UseEntry::Workspace { .. } => {
-            !global && workspace_root.is_some_and(|root| entry.applies_in(root))
-        }
+    if entry.is_global() {
+        global
+    } else {
+        !global && workspace_root.is_some_and(|root| entry.applies_in(root))
     }
 }
 

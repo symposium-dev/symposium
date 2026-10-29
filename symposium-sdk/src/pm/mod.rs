@@ -225,8 +225,12 @@ pub trait PackageManager: Send + Sync {
     /// `name` in the form in which two of this PM's names for the same package
     /// compare equal. Exact unless the ecosystem says otherwise: cargo treats
     /// `widget-lib` and `widget_lib` as one crate.
-    fn canonical_name(&self, name: &str) -> String {
-        name.to_string()
+    ///
+    /// Symposium asks only about a name someone typed: every id this PM
+    /// answers with must spell its package the same way, so ids compare as
+    /// they are.
+    async fn canonical_name(&self, name: &str) -> Result<String> {
+        Ok(name.to_string())
     }
 
     /// The plugins this PM activates for the workspace's dependency set. A

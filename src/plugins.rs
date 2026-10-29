@@ -1172,16 +1172,12 @@ pub async fn active_plugins(
     // Enabled packages: consented dependencies and what `use` entries name,
     // each resolved by the package managers.
     if let Some(root) = workspace_root {
+        let names = crate::discovery::Names::new(&registry.plugins, ctx.deps, pms);
+        let used = crate::discovery::used(sym, root, &names).await;
+        let spellings = names.spellings(&sym.config.plugins).await;
         worklist.extend(
-            crate::discovery::enabled_dependencies(
-                sym,
-                pms,
-                &registry.plugins,
-                ctx.deps,
-                root,
-                update,
-            )
-            .await,
+            crate::discovery::enabled_dependencies(sym, pms, ctx.deps, &used, &spellings, update)
+                .await,
         );
     }
 
@@ -3099,10 +3095,16 @@ mod tests {
         assert!(plugin.manifest.requires_use);
 
         let deps: Vec<PackageId> = Vec::new();
-        let other = PackageId::any_version("reg", "something-else");
+        let used = |pm: &str, name: &str| crate::config::PluginRef::new(pm, name);
+        let applies_with =
+            |entry: crate::config::PluginRef| plugin.applies(&mut ctx(&deps).with_used(&[entry]));
         assert!(!plugin.applies(&mut ctx(&deps)));
-        assert!(!plugin.applies(&mut ctx(&deps).with_used(&[other])));
-        assert!(plugin.applies(&mut ctx(&deps).with_used(std::slice::from_ref(&plugin.canonical))));
+        assert!(!applies_with(used("reg", "something-else")));
+        assert!(applies_with(used("reg", "gate-less")));
+        // A registry compares its plugins' names exactly.
+        assert!(!applies_with(used("reg", "gate_less")));
+        // Another package manager's package of the same name does not.
+        assert!(!applies_with(used("cargo", "gate-less")));
     }
 
     #[test]

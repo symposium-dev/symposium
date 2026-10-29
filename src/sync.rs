@@ -401,12 +401,24 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
     // custom predicate results survive across sync runs; results are persisted
     // at the end of this evaluation pass.
     let pms = ws.pms();
-    let used = crate::discovery::used_plugins(sym, pms, &registry.plugins, &project_root);
+    let used = crate::discovery::used(
+        sym,
+        &project_root,
+        &crate::discovery::Names::new(&registry.plugins, &dep_ids, pms),
+    )
+    .await;
+    for (entry, pms) in &used.ambiguous {
+        tracing::info!(
+            report = %crate::report::ReportEvent::Warning {
+                message: crate::status_command::ambiguous_use(entry, pms),
+            },
+        );
+    }
     let predicate_cache_path =
         crate::predicate_cache::PredicateCache::path_for_workspace(sym.cache_dir(), &project_root);
     let mut ctx =
         crate::predicate::PredicateContext::with_custom_predicates(&dep_ids, custom_entries)
-            .with_used(&used)
+            .with_used(&used.plugins)
             .with_disk_cache(&predicate_cache_path);
 
     // The active plugin set: registry plugins plus the crate-sourced plugins

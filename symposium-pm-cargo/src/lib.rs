@@ -190,8 +190,8 @@ impl PackageManager for CargoPm {
         CARGO_PM
     }
 
-    fn canonical_name(&self, name: &str) -> String {
-        sources::normalize_crate_name(name)
+    async fn canonical_name(&self, name: &str) -> Result<String> {
+        Ok(sources::normalize_crate_name(name))
     }
 
     /// The plugins embedded in the workspace's dependencies: every dep in
