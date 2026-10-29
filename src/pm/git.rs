@@ -22,7 +22,6 @@ pub struct GitPm {
     name: String,
     git_url: String,
     /// Whether this registry participates in unforced auto-refresh.
-    auto_update: bool,
     /// Install context, used to build a [`GitCacheManager`] for refreshing.
     ctx: symposium_install::InstallContext,
     /// Reads delegate here — the cache directory the repository unpacks into.
@@ -36,7 +35,6 @@ impl GitPm {
     pub fn new(
         name: impl Into<String>,
         git_url: impl Into<String>,
-        auto_update: bool,
         ctx: symposium_install::InstallContext,
     ) -> Option<Self> {
         let name = name.into();
@@ -47,7 +45,6 @@ impl GitPm {
         Some(Self {
             name,
             git_url,
-            auto_update,
             ctx,
             inner,
         })
@@ -95,14 +92,8 @@ impl PackageManager for GitPm {
         self.inner.fetch(id, update).await
     }
 
-    /// Pull the repository. Skipped (returns `false`) when auto-update is off
-    /// and the caller did not `force`; otherwise fetches at `update` and
-    /// returns `true`.
-    async fn refresh(&self, update: UpdateLevel, force: bool) -> Result<bool> {
-        if !force && !self.auto_update {
-            tracing::debug!(registry = %self.name, "skipping refresh (auto-update disabled)");
-            return Ok(false);
-        }
+    /// Pull the repository at `update`.
+    async fn refresh(&self, update: UpdateLevel) -> Result<bool> {
         GitCacheManager::new(&self.ctx, REGISTRY_CACHE_SUBDIR)
             .fetch_url(&self.git_url, update)
             .await?;
@@ -121,7 +112,6 @@ mod tests {
         let pm = GitPm::new(
             "symposium-recommendations",
             "https://github.com/symposium-dev/recommendations",
-            true,
             ctx,
         )
         .expect("a well-formed URL resolves to a cache path");
