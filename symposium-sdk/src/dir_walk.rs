@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 /// What a directory entry is once symlinks are resolved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EntryKind {
+pub enum EntryKind {
     Dir,
     File,
 }
@@ -43,10 +43,7 @@ pub(crate) enum EntryKind {
 /// `Ok(None)` is anything that is neither a directory nor a regular file — a
 /// socket or a fifo. `Err` can only come from the follow, so it means a broken
 /// link.
-pub(crate) fn resolved_kind(
-    path: &Path,
-    file_type: fs::FileType,
-) -> std::io::Result<Option<EntryKind>> {
+pub fn resolved_kind(path: &Path, file_type: fs::FileType) -> std::io::Result<Option<EntryKind>> {
     let file_type = if file_type.is_symlink() {
         fs::metadata(path)?.file_type()
     } else {
@@ -69,11 +66,11 @@ pub(crate) fn resolved_kind(
 /// down has to be recorded, since the link that closes the loop may sit several
 /// real directories below the one it names.
 #[derive(Debug, Default)]
-pub(crate) struct Ancestors(Vec<PathBuf>);
+pub struct Ancestors(Vec<PathBuf>);
 
 impl Ancestors {
     /// Start a walk rooted at `root`.
-    pub(crate) fn rooted_at(root: &Path) -> Self {
+    pub fn rooted_at(root: &Path) -> Self {
         let mut ancestors = Self::default();
         ancestors.enter(root);
         ancestors
@@ -82,7 +79,7 @@ impl Ancestors {
     /// Record `dir` as entered, or return `false` when the walk is already
     /// inside it — the cycle a followed directory link creates. A `false`
     /// return means the caller must neither descend nor call [`Self::leave`].
-    pub(crate) fn enter(&mut self, dir: &Path) -> bool {
+    pub fn enter(&mut self, dir: &Path) -> bool {
         let key = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
         if self.0.contains(&key) {
             return false;
@@ -92,7 +89,7 @@ impl Ancestors {
     }
 
     /// Leave the directory most recently entered.
-    pub(crate) fn leave(&mut self) {
+    pub fn leave(&mut self) {
         self.0.pop();
     }
 }

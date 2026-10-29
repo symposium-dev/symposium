@@ -85,7 +85,7 @@ impl PackageManager for FakeCargo {
     }
 
     fn canonical_name(&self, name: &str) -> String {
-        crate::crate_sources::normalize_crate_name(name)
+        symposium_pm_cargo::sources::normalize_crate_name(name)
     }
 
     async fn load_plugin(

@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 /// Plugin manifest filename that marks a directory as a plugin entry.
-pub const MANIFEST_FILE: &str = "Symposium.toml";
+pub use symposium_sdk::manifest::MANIFEST_FILE;
 
 /// Skill file that marks a directory as a standalone-skill entry.
 pub const SKILL_FILE: &str = "SKILL.md";
