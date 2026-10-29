@@ -658,12 +658,7 @@ impl Symposium {
     fn registry_instance(&self, cfg: RegistryConfig) -> Option<crate::pm::PmInstance> {
         let name = cfg.name.clone();
         let (pm, source): (Box<dyn crate::pm::PackageManager>, _) = if let Some(url) = &cfg.git {
-            match crate::pm::GitPm::new(
-                name.clone(),
-                url.clone(),
-                cfg.auto_update,
-                self.install_context(),
-            ) {
+            match crate::pm::GitPm::new(name.clone(), url.clone(), self.install_context()) {
                 Some(git) => {
                     let source = git.source();
                     (Box::new(git), source)
@@ -687,10 +682,11 @@ impl Symposium {
             tracing::warn!(registry = %name, "registry names neither git nor path");
             return None;
         };
-        Some(
+        let mut instance =
             crate::pm::PmInstance::new(name, true, crate::pm::PluginKind::Registry, pm)
-                .with_source(source),
-        )
+                .with_source(source);
+        instance.auto_update = cfg.auto_update;
+        Some(instance)
     }
 
     pub fn config_error(&self) -> Option<&str> {
