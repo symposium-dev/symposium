@@ -1,0 +1,5 @@
+hook-scope = "project"
+sync-debounce-secs = 0
+
+[defaults]
+symposium-recommendations = false

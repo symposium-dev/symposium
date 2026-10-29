@@ -21,9 +21,11 @@ pub use workspace::{
     LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
 };
 
+use super::layout::AGENT_PLUGIN_FILE;
 use super::{
     ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, UnvalidatedPlugin,
 };
+use symposium_sdk::manifest::RawDefaults;
 
 /// How many crates.io hits a search returns — enough to surface the crate a
 /// user is looking for without flooding the report.
@@ -49,15 +51,7 @@ impl CargoPm {
         PackageId::new(CARGO_PM, name, version.unwrap_or(ANY_VERSION))
     }
 
-    /// Build the [`UnvalidatedPlugin`] for an already-fetched crate, layering its
-    /// manifest sources: `[package.metadata.symposium]` in `Cargo.toml` and a
-    /// `Symposium.toml` at the root: via
-    /// [`merge_crate_manifest`](crate::plugins::merge_crate_manifest).
-    ///
-    /// A crate with no manifest sources still yields a plugin: an empty
-    /// manifest, which validation turns into a plugin whose only content is the
-    /// default `skills/` group.
-    fn plugin_from_fetched(&self, fetched: FetchedPackage) -> UnvalidatedPlugin {
+    pub(crate) fn plugin_from_fetched(fetched: FetchedPackage) -> Option<UnvalidatedPlugin> {
         let name = &fetched.id.name;
         let metadata = crate::crate_metadata::symposium_metadata(&fetched.root.join("Cargo.toml"))
             .unwrap_or_else(|e| {
@@ -86,16 +80,33 @@ impl CargoPm {
             None
         };
 
-        let manifest = crate::plugins::merge_crate_manifest(metadata, file.as_deref(), name);
-        UnvalidatedPlugin::new(fetched.id, fetched.root, manifest)
+        if metadata.is_none() && file.is_none() && fetched.root.join(AGENT_PLUGIN_FILE).is_file() {
+            return match crate::plugins::agent_plugin_manifest(&fetched.root) {
+                Ok(mut manifest) => {
+                    manifest.defaults = Some(RawDefaults { skills: false });
+                    Some(UnvalidatedPlugin {
+                        agent_plugin: true,
+                        ..UnvalidatedPlugin::new(fetched.id, fetched.root, manifest)
+                    })
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        report = %crate::report::ReportEvent::Warning {
+                            message: format!("ignoring crate `{name}`: invalid `{AGENT_PLUGIN_FILE}`: {e:#}"),
+                        },
+                    );
+                    None
+                }
+            };
+        }
+
+        let mut manifest = crate::plugins::merge_crate_manifest(metadata, file.as_deref(), name);
+        crate::plugins::fill_from_agent_plugin(&mut manifest, &fetched.root);
+        Some(UnvalidatedPlugin::new(fetched.id, fetched.root, manifest))
     }
 }
 
-/// What plugin content a crate source tree at `dir` embeds, as a short
-/// human-readable phrase — or `None` when it embeds none. Mirrors what
-/// [`CargoPm::load_plugin`] would build a plugin from: a `Symposium.toml`,
-/// `[package.metadata.symposium]`, or the default `skills/` directory.
-fn embedded_plugin_kind(dir: &std::path::Path) -> Option<&'static str> {
+pub(crate) fn embedded_plugin_kind(dir: &std::path::Path) -> Option<&'static str> {
     if dir.join(crate::pm::layout::MANIFEST_FILE).is_file() {
         return Some("plugin manifest (Symposium.toml)");
     }
@@ -167,11 +178,6 @@ impl PackageManager for CargoPm {
         found.into_iter().map(|info| info.id).find(same)
     }
 
-    /// The plugins embedded in the workspace's dependencies: every dep in
-    /// `deps` whose source tree embeds plugin content, built into a full
-    /// `Plugin`. Whether each is *trusted* (may activate without consent)
-    /// is the caller's decision — the cargo transport is marked untrusted.
-    ///
     /// Each dependency is fetched cache-only ([`UpdateLevel::None`]) to locate
     /// its source, then inspected. A workspace dependency resolves into the
     /// source `cargo metadata` already extracted — no probe, no network — so
@@ -195,16 +201,12 @@ impl PackageManager for CargoPm {
             };
             // Only surface dependencies that actually embed plugin content.
             if embedded_plugin_kind(&fetched.root).is_some() {
-                out.push(self.plugin_from_fetched(fetched));
+                out.extend(Self::plugin_from_fetched(fetched));
             }
         }
         out
     }
 
-    /// Resolve a specific crate id to its plugin (a chained reference or an
-    /// enabled crate). Unlike `active_plugins`, this loads the named crate
-    /// whatever it embeds — any fetchable crate yields at least the default
-    /// `skills/` plugin.
     async fn load_plugin(&self, id: &PackageId, update: UpdateLevel) -> Vec<UnvalidatedPlugin> {
         let fetched = match self.fetch(id, update).await {
             Ok(f) => f,
@@ -213,16 +215,10 @@ impl PackageManager for CargoPm {
                 return Vec::new();
             }
         };
-        vec![self.plugin_from_fetched(fetched)]
+        Self::plugin_from_fetched(fetched).into_iter().collect()
     }
 
     /// Search crates.io for crates matching `query`.
-    ///
-    /// Name-based, like `cargo search`: the results are *candidate* crates —
-    /// whether one actually carries plugin content is only known once it is
-    /// fetched (any fetchable crate yields at least a default `skills/` plugin).
-    /// So this lets `cargo agents use <crate>` name a crate the workspace
-    /// doesn't depend on; the fetch/load step decides what it contributes.
     async fn search(&self, query: &str) -> Result<Vec<PluginInfo>> {
         let client = crates_io_api::AsyncClient::new(
             "symposium (https://github.com/symposium-dev/symposium)",

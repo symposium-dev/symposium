@@ -21,6 +21,7 @@ use crate::self_update;
 use crate::status_command;
 use crate::subcommand_dispatch::dispatch_external;
 use crate::sync;
+use crate::try_command;
 use crate::use_command;
 
 /// Parsed CLI arguments.
@@ -203,6 +204,26 @@ pub enum PluginCommand {
         #[arg(long)]
         no_check_crates: bool,
     },
+
+    /// Turn a Claude Code plugin into an Agent Plugins package
+    Import {
+        /// Path to the Claude Code plugin directory
+        path: std::path::PathBuf,
+
+        /// Directory to write the package into, as `<out>/<name>/`
+        #[arg(long, default_value = ".")]
+        out: std::path::PathBuf,
+    },
+
+    /// Install a local plugin in your agents, or discard the trial with --remove
+    Try {
+        /// Path to the plugin or skill directory (with --remove, its path or name)
+        path: std::path::PathBuf,
+
+        /// Undo the trial: unlink the plugin, drop its enablement, and re-sync
+        #[arg(long)]
+        remove: bool,
+    },
 }
 
 /// Run a parsed CLI command.
@@ -332,6 +353,16 @@ pub async fn run(
                 code => bail!("subcommand exited with status: {code}"),
             }
         }
+        Commands::Plugin {
+            command: PluginCommand::Try { path, remove },
+        } => {
+            if remove {
+                try_command::remove_trial(sym, cwd, &path, update).await
+            } else {
+                try_command::try_plugin(sym, cwd, &path, update).await
+            }
+        }
+
         // These commands can't easily be extracted since they do I/O
         // (stdin/stdout for hooks). The binary handles them directly.
         Commands::Hook { .. } | Commands::Plugin { .. } => {

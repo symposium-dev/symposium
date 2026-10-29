@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "docs": { "type": "http", "url": "https://mcp.example.com/docs", "headers": { "X-Key": "k" } },
+    "local": { "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/server.js"] },
+    "tool": { "command": "npx", "args": ["-y", "demo-mcp"], "env": { "DEMO_MODE": "1" } }
+  }
+}

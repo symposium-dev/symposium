@@ -2437,6 +2437,7 @@ dependencies = [
  "crates_io_api",
  "dialoguer",
  "dirs",
+ "dunce",
  "expect-test",
  "flate2",
  "getrandom 0.4.2",

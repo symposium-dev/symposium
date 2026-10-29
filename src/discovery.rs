@@ -142,7 +142,14 @@ pub async fn discover(
     for inst in pms.instances().filter(|i| !i.trusted) {
         for plugin in inst.active_plugins(&dep_ids).await {
             let name = plugin.canonical.name.clone();
-            let description = Some(describe_plugin(&plugin.manifest));
+            let description = Some(match plugin.format() {
+                Some(_) => format!(
+                    "the Agent Plugins package `{}` ({})",
+                    plugin.manifest.name,
+                    describe_plugin(&plugin.manifest)
+                ),
+                None => describe_plugin(&plugin.manifest),
+            });
             let enablement = decide(sym, &pms, &used, &plugin.canonical);
             let discovered = DiscoveredPlugin {
                 registry: inst.name.clone(),

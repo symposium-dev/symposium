@@ -1,0 +1,5 @@
+name = "gated-kit"
+depends-on = ["serde"]
+
+[[skills]]
+source.path = "skills"

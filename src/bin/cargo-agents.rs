@@ -1,5 +1,6 @@
 use clap::Parser;
 use std::env;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use symposium::cli::{Cli, Commands, PluginCommand};
@@ -8,6 +9,7 @@ use symposium::help_render;
 use symposium::hook;
 use symposium::output::Output;
 use symposium::plugins;
+use symposium::pm::layout::AGENT_PLUGIN_FILE;
 use symposium::report;
 use symposium::self_update;
 use symposium::state;
@@ -148,7 +150,7 @@ async fn main() -> ExitCode {
         // Commands that need direct I/O (stdin/stdout) stay in the binary
         Some(Commands::Hook { agent, event }) => hook::run(&sym, agent, event).await,
 
-        Some(Commands::Plugin { command }) => {
+        Some(Commands::Plugin { command }) if !matches!(command, PluginCommand::Try { .. }) => {
             let code = handle_plugin_command(&sym, command).await;
             let events = report_handle.drain();
             if !events.is_empty() {
@@ -233,6 +235,20 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
             path,
             no_check_crates,
         } => {
+            let manifest_file = matches!(
+                path.file_name().and_then(|name| name.to_str()),
+                Some(symposium::pm::layout::MANIFEST_FILE | AGENT_PLUGIN_FILE | "Cargo.toml")
+            );
+            let path = match path.parent() {
+                Some(parent) if manifest_file && path.is_file() => {
+                    if parent.as_os_str().is_empty() {
+                        PathBuf::from(".")
+                    } else {
+                        parent.to_path_buf()
+                    }
+                }
+                _ => path,
+            };
             if path.is_dir() {
                 let mut errors = 0;
 
@@ -306,6 +322,26 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                 }
             }
         }
+        PluginCommand::Import { path, out } => {
+            let dest = match symposium::plugin_import::import_claude_plugin(&path, &out) {
+                Ok(dest) => dest,
+                Err(e) => {
+                    eprintln!("{}: {e:#}", path.display());
+                    return ExitCode::FAILURE;
+                }
+            };
+            println!("Imported {} into {}", path.display(), dest.display());
+            match plugins::validate_source_dir(&dest) {
+                Ok(results) if results.iter().map(emit_validation_results).sum::<usize>() == 0 => {
+                    ExitCode::SUCCESS
+                }
+                Ok(_) => ExitCode::FAILURE,
+                Err(e) => {
+                    eprintln!("{}: {e:#}", dest.display());
+                    ExitCode::FAILURE
+                }
+            }
+        }
         PluginCommand::Show { plugin } => match plugins::find_plugin(sym, &plugin).await {
             // A plugin is identified by its id; render its effective (resolved)
             // configuration rather than re-reading a manifest file.
@@ -328,22 +364,36 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                 ExitCode::FAILURE
             }
         },
+        PluginCommand::Try { .. } => unreachable!("plugin try runs through the library"),
     }
 }
 
 fn emit_validation_results(r: &plugins::ValidationResult) -> usize {
     let mut errors = 0;
     match &r.result {
-        Ok(()) => {
+        Ok(()) if r.warnings.is_empty() => {
             tracing::info!(
                 report = %report::ReportEvent::Validated {
                     path: r.id.clone(),
                     item_kind: r.kind.to_string(),
                     valid: true,
                     error: None,
-                    warning: r.warning.clone(),
+                    warning: None,
                 },
             );
+        }
+        Ok(()) => {
+            for warning in &r.warnings {
+                tracing::info!(
+                    report = %report::ReportEvent::Validated {
+                        path: r.id.clone(),
+                        item_kind: r.kind.to_string(),
+                        valid: true,
+                        error: None,
+                        warning: Some(warning.clone()),
+                    },
+                );
+            }
         }
         Err(e) => {
             tracing::info!(

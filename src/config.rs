@@ -396,6 +396,7 @@ pub struct Symposium {
     dirs: crate::dirs::SymposiumDirs,
     home_dir: PathBuf,
     env: EnvLookup,
+    agent_path: Option<PathBuf>,
 }
 
 type EnvLookup = Arc<dyn Fn(&str) -> Option<std::ffi::OsString> + Send + Sync>;
@@ -424,6 +425,7 @@ impl Symposium {
             dirs,
             home_dir,
             env: Arc::new(|name| env::var_os(name)),
+            agent_path: None,
         }
     }
 
@@ -451,6 +453,7 @@ impl Symposium {
             dirs,
             home_dir,
             env: Arc::new(|_| None),
+            agent_path: Some(root.join("bin")),
         }
     }
 
@@ -478,6 +481,14 @@ impl Symposium {
             Some(path) => std::process::Command::new(path),
             None => std::process::Command::new("cargo"),
         }
+    }
+
+    pub fn agent_command(&self, program: &str) -> tokio::process::Command {
+        let mut cmd = tokio::process::Command::new(program);
+        if let Some(path) = &self.agent_path {
+            cmd.env("PATH", path);
+        }
+        cmd
     }
 
     /// Create an [`InstallContext`] for use with `symposium-install` functions.

@@ -31,6 +31,7 @@ cargo_metadata = "0.18"
 chrono = "0.4"
 crates_io_api = { version = "0.12", default-features = false, features = ["rustls"] }
 dirs = "6"
+dunce = "1.0"
 flate2 = "1.0"
 indoc = "2.0"
 home = "0.5"
@@ -45,7 +46,7 @@ sha2 = "0.10"
 tar = "0.4"
 tempfile = "3.10"
 symposium-sdk = { version = "0.1", path = "symposium-sdk", features = ["clap"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "time"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter", "registry"] }

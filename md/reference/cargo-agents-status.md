@@ -30,8 +30,11 @@ Discovery is cache-only, so a dependency whose source has not been fetched yet
 is simply not listed as a candidate. Enabling it by name still works.
 
 With `--json`, each line is emitted as a `plugin_status` event carrying
-`name`, `state`, `root`, and — for a discovered dependency plugin — the
-resolved `version`.
+`name`, `state`, `root`, a `version` when one is known (the resolved version
+for a discovered dependency plugin, the manifest's for the others), and
+`"format": "agent plugin"` for a registry or workspace plugin that is an
+[Agent Plugins package](./agent-plugins.md), which the human output shows
+after its name and version.
 
 ## Example
 
