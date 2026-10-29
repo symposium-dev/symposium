@@ -117,6 +117,8 @@ pub struct RemotePm {
     /// in flight, so a request abandoned midway leaves the PM marked unusable
     /// rather than a connection whose next read is the abandoned answer.
     state: Mutex<Option<Result<Connection, String>>>,
+    /// The PM's answers to `canonical_name`, so each name costs one request.
+    canonical: std::sync::Mutex<BTreeMap<String, String>>,
 }
 
 impl RemotePm {
@@ -125,6 +127,7 @@ impl RemotePm {
             name: name.into(),
             command,
             state: Mutex::new(None),
+            canonical: std::sync::Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -339,6 +342,24 @@ async fn request(
 impl PackageManager for RemotePm {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    async fn canonical_name(&self, name: &str) -> Result<String> {
+        if let Some(known) = self.canonical.lock().unwrap().get(name) {
+            return Ok(known.clone());
+        }
+        let params = serde_json::to_value(CanonicalName {
+            name: name.to_string(),
+        })?;
+        let canonical = self
+            .call::<CanonicalName>(protocol::CANONICAL_NAME, Some(params))
+            .await?
+            .name;
+        self.canonical
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), canonical.clone());
+        Ok(canonical)
     }
 
     async fn active_plugins(&self, deps: &[PackageId]) -> Result<PluginListing> {

@@ -32,6 +32,7 @@ pub const PROJECT_INFO: &str = "project_info";
 pub const SEARCH: &str = "search";
 pub const FETCH: &str = "fetch";
 pub const REFRESH: &str = "refresh";
+pub const CANONICAL_NAME: &str = "canonical_name";
 
 /// Sent once, before any other method.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,6 +100,12 @@ pub struct RefreshParams {
 pub struct RefreshResult {
     /// Whether a remote source was pulled.
     pub refreshed: bool,
+}
+
+/// The params and the result of `canonical_name`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalName {
+    pub name: String,
 }
 
 /// Unvalidated plugins, the result shape of `load_plugin`. `active_plugins`

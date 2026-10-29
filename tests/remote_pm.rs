@@ -78,6 +78,43 @@ fn remote(name: &str, script: &Path) -> RemotePm {
     )
 }
 
+/// A PM is asked to canonicalize each name once; its answer is kept for the
+/// connection.
+#[tokio::test]
+async fn a_pm_canonicalizes_each_name_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let asked = tmp.path().join("asked");
+    let folding = script(
+        tmp.path(),
+        "pm-folding.sh",
+        &format!(
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":1,"name":"demo"}}}}\n' "$id" ;;
+    *'"canonical_name"'*)
+      name=$(printf '%s' "$line" | sed 's/.*"name":"\([^"]*\)".*/\1/')
+      echo "$name" >> "{asked}"
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"name":"%s"}}}}\n' "$id" "$(printf '%s' "$name" | tr - _)" ;;
+  esac
+done
+"#,
+            asked = asked.display()
+        ),
+    );
+    let pm = remote("demo", &folding);
+    for name in ["widget-lib", "widget-lib", "serde"] {
+        let expected = name.replace('-', "_");
+        assert_eq!(pm.canonical_name(name).await.unwrap(), expected);
+    }
+    assert_eq!(
+        std::fs::read_to_string(&asked).unwrap(),
+        "widget-lib\nserde\n"
+    );
+}
+
 #[tokio::test]
 async fn a_subprocess_pm_offers_a_synthesized_manifest() {
     let tmp = tempfile::tempdir().unwrap();
@@ -360,6 +397,8 @@ async fn the_cargo_pm_answers_from_its_own_process() {
     // What the workspace depends on: resolved by the PM, in its own process,
     // from nothing but the path handed over at `initialize`.
     let deps = pm.list_deps().await.unwrap();
+    // Cargo's names, read across the boundary.
+    assert_eq!(pm.canonical_name("widget-lib").await.unwrap(), "widget_lib");
     assert!(
         deps.iter().any(|d| d.name == "widget" && d.pm == "cargo"),
         "got deps {deps:?}"
