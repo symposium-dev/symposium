@@ -279,35 +279,9 @@ async fn install_cargo_crate(
     git: Option<String>,
     force: bool,
 ) -> Result<()> {
-    let ctx = ctx.clone();
-    let crate_name = crate_name.to_string();
-    let version = version.to_string();
-
-    tokio::task::spawn_blocking(move || {
-        install_cargo_crate_sync(
-            &ctx,
-            &crate_name,
-            &version,
-            binary_name,
-            cache_dir.as_deref(),
-            git,
-            force,
-        )
-    })
-    .await
-    .context("Cargo install task panicked")?
-}
-
-fn install_cargo_crate_sync(
-    ctx: &InstallContext,
-    crate_name: &str,
-    version: &str,
-    binary_name: Option<String>,
-    cache_dir: Option<&Path>,
-    git: Option<String>,
-    force: bool,
-) -> Result<()> {
     use std::fs;
+
+    let cache_dir = cache_dir.as_deref();
 
     if let Some(cache_dir) = cache_dir {
         if let Some(parent) = cache_dir.parent()
@@ -348,7 +322,7 @@ fn install_cargo_crate_sync(
         binstall_args.push(git);
     }
     binstall_args.push(&crate_spec);
-    let binstall_result = ctx.cargo_command().args(binstall_args).output();
+    let binstall_result = cargo_output(ctx, &binstall_args).await;
 
     let binary_path = match (cache_dir, binary_name.as_ref()) {
         (Some(dir), Some(bin)) => Some(dir.join("bin").join(platform_binary_exe(bin))),
@@ -392,10 +366,8 @@ fn install_cargo_crate_sync(
         args.push(git);
     }
     args.push(&crate_spec);
-    let install_result = ctx
-        .cargo_command()
-        .args(&args)
-        .output()
+    let install_result = cargo_output(ctx, &args)
+        .await
         .context("Failed to run cargo install")?;
 
     if !install_result.status.success() {
@@ -408,6 +380,17 @@ fn install_cargo_crate_sync(
 
     tracing::info!("Successfully installed {} via cargo install", crate_spec);
     Ok(())
+}
+
+async fn cargo_output(
+    ctx: &InstallContext,
+    args: &[&str],
+) -> std::io::Result<std::process::Output> {
+    tokio::process::Command::from(ctx.cargo_command())
+        .args(args)
+        .kill_on_drop(true)
+        .output()
+        .await
 }
 
 fn get_binary_cache_dir(ctx: &InstallContext, krate: &str, version: &str) -> Result<PathBuf> {
