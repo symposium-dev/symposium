@@ -122,7 +122,7 @@ pub struct SkillWithGroupContext {
 pub async fn skills_applicable_to(
     sym: &Symposium,
     registry: &crate::plugins::PluginRegistry,
-    deps: &std::sync::Arc<crate::pm::WorkspaceDeps>,
+    ws: &std::sync::Arc<crate::pm::Workspace>,
     workspace_root: Option<&Path>,
     custom_predicate_entries: std::collections::HashMap<
         String,
@@ -130,16 +130,16 @@ pub async fn skills_applicable_to(
     >,
     update: UpdateLevel,
 ) -> Vec<SkillWithGroupContext> {
-    let for_crates = crate::pm::workspace_dep_ids(sym, deps).await;
-    let pms = sym.package_managers(deps);
+    let for_crates = ws.dep_ids().await.to_vec();
+    let pms = ws.pms();
     let used = workspace_root
-        .map(|root| crate::discovery::used_plugins(sym, &pms, &registry.plugins, root))
+        .map(|root| crate::discovery::used_plugins(sym, pms, &registry.plugins, root))
         .unwrap_or_default();
     let mut ctx = PredicateContext::with_custom_predicates(&for_crates, custom_predicate_entries)
         .with_used(&used);
 
     let active =
-        crate::plugins::active_plugins(sym, registry, &pms, workspace_root, &mut ctx, update).await;
+        crate::plugins::active_plugins(sym, registry, pms, workspace_root, &mut ctx, update).await;
     collect_skills(sym, &active, &mut ctx, update).await
 }
 
@@ -1210,7 +1210,7 @@ mod tests {
         let skills = skills_applicable_to(
             &sym,
             &registry,
-            &crate::pm::WorkspaceDeps::fixture(std::path::PathBuf::new(), workspace_crates),
+            &crate::pm::Workspace::fixture(std::path::PathBuf::new(), workspace_crates),
             None,
             std::collections::HashMap::new(),
             UpdateLevel::None,
@@ -1270,7 +1270,7 @@ mod tests {
         let skills = skills_applicable_to(
             &sym,
             &registry,
-            &crate::pm::WorkspaceDeps::fixture(std::path::PathBuf::new(), workspace_crates),
+            &crate::pm::Workspace::fixture(std::path::PathBuf::new(), workspace_crates),
             None,
             std::collections::HashMap::new(),
             UpdateLevel::None,
@@ -1347,7 +1347,7 @@ mod tests {
         let skills = skills_applicable_to(
             &sym,
             &registry,
-            &crate::pm::WorkspaceDeps::fixture(std::path::PathBuf::new(), workspace_crates),
+            &crate::pm::Workspace::fixture(std::path::PathBuf::new(), workspace_crates),
             None,
             std::collections::HashMap::new(),
             UpdateLevel::None,
@@ -1430,7 +1430,7 @@ mod tests {
         let skills = skills_applicable_to(
             &sym,
             &registry,
-            &crate::pm::WorkspaceDeps::fixture(std::path::PathBuf::new(), workspace),
+            &crate::pm::Workspace::fixture(std::path::PathBuf::new(), workspace),
             None,
             std::collections::HashMap::new(),
             UpdateLevel::None,
@@ -1514,7 +1514,7 @@ mod tests {
         let skills = skills_applicable_to(
             &sym,
             &registry,
-            &crate::pm::WorkspaceDeps::fixture(std::path::PathBuf::new(), workspace),
+            &crate::pm::Workspace::fixture(std::path::PathBuf::new(), workspace),
             None,
             std::collections::HashMap::new(),
             UpdateLevel::None,
@@ -1644,7 +1644,7 @@ mod tests {
         let results = skills_applicable_to(
             &sym,
             &registry,
-            &crate::pm::WorkspaceDeps::fixture(std::path::PathBuf::new(), workspace),
+            &crate::pm::Workspace::fixture(std::path::PathBuf::new(), workspace),
             None,
             std::collections::HashMap::new(),
             UpdateLevel::None,

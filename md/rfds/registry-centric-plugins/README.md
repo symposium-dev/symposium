@@ -237,8 +237,10 @@ Every PM implements these operations:
 | `search` | partial query string | set of package-ids + metadata | `symposium use`, `symposium search` |
 | `fetch` | package-id | directory with plugin content | sync/install |
 | `list_deps` | (none) | set of package-ids | auto-discovery |
-| `workspace_info` | (none) | workspace root and members | workspace plugins, scoping |
+| `project_info` | (none) | local packages, input files | workspace plugins, auto-sync |
 | `refresh` | update level | whether content was pulled | registry sync |
+
+The workspace is the project the PMs report (`project_info`): its root, its members, and the files whose change means a PM's answers may have changed. Where a project is rooted is each ecosystem's own rule (cargo's is the workspace root above any member), so only a PM can say; Symposium decides what the workspace is trusted with, and PMs that disagree about the root are an error rather than a choice between them.
 
 What a PM returns is an *unvalidated plugin*: a resolved id, a content directory, and an unvalidated manifest. Returning a manifest rather than only a directory is what lets a PM synthesize a plugin for a package that ships no manifest, or translate one from its own ecosystem's format, without Symposium learning that ecosystem's conventions. Validation and defaults are applied by Symposium once the manifest arrives. Which plugins actually run is a separate decision, made from the user's `[plugins]` configuration and from the source the plugin came from.
 

@@ -126,6 +126,33 @@ impl UnvalidatedPlugin {
     }
 }
 
+/// The project a package manager finds from the directory it was given at
+/// `initialize`: where its ecosystem says the project is rooted, and what it
+/// holds.
+///
+/// Symposium's workspace is the project its package managers report. Where a
+/// project is rooted is each ecosystem's own rule (cargo's is the workspace
+/// root above any member), so only a package manager can say.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectInfo {
+    /// The project's root directory, or `None` when this PM finds no project
+    /// there. Every package manager that finds one must agree on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<PathBuf>,
+    /// Directories of the packages that are part of the project rather than
+    /// dependencies of it: cargo workspace members, npm workspace packages.
+    /// Each may define a workspace plugin. Symposium uses only the ones inside
+    /// the root.
+    #[serde(default)]
+    pub local_packages: Vec<PathBuf>,
+    /// Files whose change means this PM's answers may have changed: a
+    /// lockfile, say. Symposium records their modification times when it
+    /// syncs, and syncs again once one changes, appears, or disappears, so
+    /// deciding whether to sync never needs the PM itself.
+    #[serde(default)]
+    pub inputs: Vec<PathBuf>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

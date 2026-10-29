@@ -1,40 +1,50 @@
-//! Per-workspace persistent state.
+//! Per-directory persistent state: what the last sync from a directory found.
+//!
+//! Keyed on the directory a session starts in, not on the workspace root:
+//! the root is what the package managers report, so knowing it would mean
+//! asking them, which is what the recorded state lets a hook event skip.
 //!
 //! Stored under `~/.symposium/cache/workspaces/<name>-<hash>/state.json`.
-//! The directory name uses the workspace root's final component for
-//! readability and an 8-hex-char SHA-256 prefix of the full path for
-//! uniqueness.
+//! The directory name uses the directory's final component for readability
+//! and an 8-hex-char SHA-256 prefix of the full path for uniqueness.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::config::Symposium;
+use crate::pm::{PackageId, WorkspaceInfo};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkspaceState {
-    #[serde(default, rename = "last-sync-lock-mtime")]
-    pub last_sync_lock_mtime: Option<u64>,
+    /// `None` until the first successful sync.
+    #[serde(default, rename = "last-sync")]
+    pub last_sync: Option<LastSync>,
+}
 
-    #[serde(default, rename = "last-sync-battery-pack-mtime")]
-    pub last_sync_battery_pack_mtime: Option<u64>,
-
-    #[serde(default, rename = "workspace-root")]
-    pub workspace_root: Option<PathBuf>,
+/// What a sync found: the workspace and its dependencies, with each input's
+/// modification time then (`None` for a file that did not exist).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LastSync {
+    pub root: PathBuf,
+    pub members: Vec<PathBuf>,
+    pub deps: Vec<PackageId>,
+    pub inputs: BTreeMap<PathBuf, Option<u64>>,
 }
 
 impl WorkspaceState {
-    pub fn load(sym: &Symposium, workspace_root: &Path) -> Self {
-        let path = state_file_path(sym, workspace_root);
+    pub fn load(sym: &Symposium, dir: &Path) -> Self {
+        let path = state_file_path(sym, dir);
         let Ok(contents) = fs::read_to_string(path) else {
             return Self::default();
         };
         serde_json::from_str(&contents).unwrap_or_default()
     }
 
-    pub fn save(&self, sym: &Symposium, workspace_root: &Path) {
-        let path = state_file_path(sym, workspace_root);
+    pub fn save(&self, sym: &Symposium, dir: &Path) {
+        let path = state_file_path(sym, dir);
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
@@ -43,60 +53,40 @@ impl WorkspaceState {
         }
     }
 
-    pub fn sync_is_fresh(&self, workspace_root: &Path) -> bool {
-        // Cargo.lock must have been seen at least once — if we've never
-        // synced, the cache is unconditionally stale.
-        if self.last_sync_lock_mtime.is_none() {
-            return false;
-        }
-        if !mtime_matches(
-            self.last_sync_lock_mtime,
-            &workspace_root.join("Cargo.lock"),
-        ) {
-            return false;
-        }
-        if !mtime_matches(
-            self.last_sync_battery_pack_mtime,
-            &workspace_root.join("battery-pack.toml"),
-        ) {
-            return false;
-        }
-        true
+    /// The workspace and dependencies the last sync found, if every input is
+    /// as it was then. A file that appeared or disappeared counts as changed.
+    /// A workspace with no inputs is never fresh, since nothing would tell
+    /// that its dependencies had changed.
+    pub fn fresh(&self) -> Option<(WorkspaceInfo, Vec<PackageId>)> {
+        let last = self.last_sync.as_ref()?;
+        let unchanged = !last.inputs.is_empty()
+            && last
+                .inputs
+                .iter()
+                .all(|(path, mtime)| crate::pm::file_mtime(path) == *mtime);
+        unchanged.then(|| {
+            let info = WorkspaceInfo {
+                root: last.root.clone(),
+                members: last.members.clone(),
+                inputs: last.inputs.keys().cloned().collect(),
+            };
+            (info, last.deps.clone())
+        })
     }
 
-    pub fn record_sync(&mut self, workspace_root: &Path) {
-        self.last_sync_lock_mtime = crate::pm::file_mtime(&workspace_root.join("Cargo.lock"));
-        self.last_sync_battery_pack_mtime =
-            crate::pm::file_mtime(&workspace_root.join("battery-pack.toml"));
+    /// Record a sync over `info` and `deps`.
+    pub fn record_sync(&mut self, info: &WorkspaceInfo, deps: &[PackageId]) {
+        self.last_sync = Some(LastSync {
+            root: info.root.clone(),
+            members: info.members.clone(),
+            deps: deps.to_vec(),
+            inputs: info
+                .inputs
+                .iter()
+                .map(|path| (path.clone(), crate::pm::file_mtime(path)))
+                .collect(),
+        });
     }
-}
-
-/// Find the workspace root via `cargo locate-project --workspace`.
-/// Fast (~10-50ms) and follows cargo's actual workspace discovery logic.
-pub fn find_workspace_root(sym: &Symposium, cwd: &Path) -> Option<PathBuf> {
-    let output = sym
-        .cargo_command()
-        .args(["locate-project", "--workspace", "--message-format=plain"])
-        .current_dir(cwd)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let manifest = String::from_utf8(output.stdout).ok()?;
-    Path::new(manifest.trim()).parent().map(|p| p.to_path_buf())
-}
-
-/// Check whether the cached mtime matches the current file state.
-/// A missing file matches a `None` cached mtime (both absent = fresh).
-/// A missing file with a `Some` cached mtime means the file was deleted = stale.
-fn mtime_matches(cached: Option<u64>, path: &Path) -> bool {
-    let current = crate::pm::file_mtime(path);
-    cached == current
 }
 
 fn state_file_path(sym: &Symposium, workspace_root: &Path) -> PathBuf {
@@ -131,164 +121,84 @@ mod tests {
         assert!(b.starts_with("myproject-"));
     }
 
+    /// A workspace whose one input is `lock` in `dir`.
+    fn workspace_with_input(dir: &Path) -> WorkspaceInfo {
+        WorkspaceInfo {
+            root: dir.to_path_buf(),
+            members: vec![dir.join("member")],
+            inputs: vec![dir.join("lock")],
+        }
+    }
+
     #[test]
     fn roundtrip_save_load() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
         let workspace = tmp.path().join("project");
         fs::create_dir_all(&workspace).unwrap();
+        fs::write(workspace.join("lock"), "").unwrap();
 
-        let state = WorkspaceState {
-            last_sync_lock_mtime: Some(1234567890),
-            last_sync_battery_pack_mtime: Some(9876543210),
-            workspace_root: Some(workspace.clone()),
-        };
+        let mut state = WorkspaceState::default();
+        state.record_sync(&workspace_with_input(&workspace), &[]);
         state.save(&sym, &workspace);
 
         let loaded = WorkspaceState::load(&sym, &workspace);
-        assert_eq!(loaded.last_sync_lock_mtime, Some(1234567890));
-        assert_eq!(loaded.last_sync_battery_pack_mtime, Some(9876543210));
-        assert_eq!(loaded.workspace_root, Some(workspace));
+        assert_eq!(loaded.last_sync, state.last_sync);
+        assert_eq!(
+            loaded.fresh(),
+            Some((workspace_with_input(&workspace), vec![]))
+        );
     }
 
     #[test]
-    fn sync_is_fresh_when_mtime_matches() {
-        let tmp = tempfile::tempdir().unwrap();
-        let workspace = tmp.path().join("project");
-        fs::create_dir_all(&workspace).unwrap();
-        fs::write(workspace.join("Cargo.lock"), "# lock").unwrap();
+    fn never_synced_is_stale() {
+        assert_eq!(WorkspaceState::default().fresh(), None);
+    }
 
-        let lock_mtime = file_mtime(&workspace.join("Cargo.lock")).unwrap();
-        let state = WorkspaceState {
-            last_sync_lock_mtime: Some(lock_mtime),
-            last_sync_battery_pack_mtime: None,
-            workspace_root: None,
+    /// With no inputs, nothing would show that the dependencies changed.
+    #[test]
+    fn a_workspace_without_inputs_is_never_fresh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut state = WorkspaceState::default();
+        let workspace = WorkspaceInfo {
+            inputs: vec![],
+            ..workspace_with_input(tmp.path())
         };
-        assert!(state.sync_is_fresh(&workspace));
+        state.record_sync(&workspace, &[]);
+        assert_eq!(state.fresh(), None);
     }
 
     #[test]
-    fn sync_is_fresh_with_both_files() {
+    fn fresh_until_an_input_changes() {
         let tmp = tempfile::tempdir().unwrap();
-        let workspace = tmp.path().join("project");
-        fs::create_dir_all(&workspace).unwrap();
-        fs::write(workspace.join("Cargo.lock"), "# lock").unwrap();
-        fs::write(workspace.join("battery-pack.toml"), "# bp").unwrap();
+        fs::write(tmp.path().join("lock"), "").unwrap();
 
-        let lock_mtime = file_mtime(&workspace.join("Cargo.lock")).unwrap();
-        let bp_mtime = file_mtime(&workspace.join("battery-pack.toml")).unwrap();
-        let state = WorkspaceState {
-            last_sync_lock_mtime: Some(lock_mtime),
-            last_sync_battery_pack_mtime: Some(bp_mtime),
-            workspace_root: None,
-        };
-        assert!(state.sync_is_fresh(&workspace));
+        let mut state = WorkspaceState::default();
+        state.record_sync(&workspace_with_input(tmp.path()), &[]);
+        assert!(state.fresh().is_some());
+
+        let last = state.last_sync.as_mut().unwrap();
+        last.inputs.insert(tmp.path().join("lock"), Some(0));
+        assert_eq!(state.fresh(), None);
     }
 
     #[test]
-    fn sync_is_stale_when_lock_mtime_differs() {
+    fn an_input_that_appears_or_disappears_is_a_change() {
         let tmp = tempfile::tempdir().unwrap();
-        let workspace = tmp.path().join("project");
-        fs::create_dir_all(&workspace).unwrap();
-        fs::write(workspace.join("Cargo.lock"), "# lock").unwrap();
+        let lock = tmp.path().join("lock");
 
-        let state = WorkspaceState {
-            last_sync_lock_mtime: Some(0),
-            last_sync_battery_pack_mtime: None,
-            workspace_root: None,
-        };
-        assert!(!state.sync_is_fresh(&workspace));
-    }
+        let mut state = WorkspaceState::default();
+        state.record_sync(&workspace_with_input(tmp.path()), &[]);
+        assert!(state.fresh().is_some());
+        fs::write(&lock, "").unwrap();
+        assert_eq!(state.fresh(), None);
 
-    #[test]
-    fn sync_is_stale_when_battery_pack_added() {
-        let tmp = tempfile::tempdir().unwrap();
-        let workspace = tmp.path().join("project");
-        fs::create_dir_all(&workspace).unwrap();
-        fs::write(workspace.join("Cargo.lock"), "# lock").unwrap();
-        fs::write(workspace.join("battery-pack.toml"), "# bp").unwrap();
-
-        let lock_mtime = file_mtime(&workspace.join("Cargo.lock")).unwrap();
-        // Cached state doesn't know about battery-pack.toml yet
-        let state = WorkspaceState {
-            last_sync_lock_mtime: Some(lock_mtime),
-            last_sync_battery_pack_mtime: None,
-            workspace_root: None,
-        };
-        assert!(!state.sync_is_fresh(&workspace));
-    }
-
-    #[test]
-    fn sync_is_stale_when_battery_pack_mtime_differs() {
-        let tmp = tempfile::tempdir().unwrap();
-        let workspace = tmp.path().join("project");
-        fs::create_dir_all(&workspace).unwrap();
-        fs::write(workspace.join("Cargo.lock"), "# lock").unwrap();
-        fs::write(workspace.join("battery-pack.toml"), "# bp").unwrap();
-
-        let lock_mtime = file_mtime(&workspace.join("Cargo.lock")).unwrap();
-        let state = WorkspaceState {
-            last_sync_lock_mtime: Some(lock_mtime),
-            last_sync_battery_pack_mtime: Some(0),
-            workspace_root: None,
-        };
-        assert!(!state.sync_is_fresh(&workspace));
-    }
-
-    #[test]
-    fn sync_is_stale_when_no_lock_file() {
-        let tmp = tempfile::tempdir().unwrap();
-        let workspace = tmp.path().join("project");
-        fs::create_dir_all(&workspace).unwrap();
-
-        let state = WorkspaceState {
-            last_sync_lock_mtime: Some(1234567890),
-            last_sync_battery_pack_mtime: None,
-            workspace_root: None,
-        };
-        assert!(!state.sync_is_fresh(&workspace));
-    }
-
-    #[test]
-    fn sync_is_stale_when_no_cached_mtime() {
-        let tmp = tempfile::tempdir().unwrap();
-        let workspace = tmp.path().join("project");
-        fs::create_dir_all(&workspace).unwrap();
-        fs::write(workspace.join("Cargo.lock"), "# lock").unwrap();
-
-        let state = WorkspaceState::default();
-        assert!(!state.sync_is_fresh(&workspace));
-    }
-
-    #[test]
-    fn find_workspace_root_finds_workspace_from_subdir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("project");
-        let src = root.join("src");
-        fs::create_dir_all(&src).unwrap();
-        fs::write(
-            root.join("Cargo.toml"),
-            "[package]\nname = \"test\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        )
-        .unwrap();
-        fs::write(src.join("lib.rs"), "").unwrap();
-
-        let sym = Symposium::from_dir(tmp.path());
-        // Canonicalize both sides: macOS resolves /var -> /private/var, and on Windows
-        // canonicalization adds a `\\?\` prefix cargo's output lacks.
-        let found = find_workspace_root(&sym, &src).map(|pth| fs::canonicalize(pth).unwrap());
-        let expected = fs::canonicalize(&root).unwrap();
-        assert_eq!(found, Some(expected));
-    }
-
-    #[test]
-    fn find_workspace_root_returns_none_without_manifest() {
-        let tmp = tempfile::tempdir().unwrap();
-        let subdir = tmp.path().join("no-rust-here");
-        fs::create_dir_all(&subdir).unwrap();
-
-        let sym = Symposium::from_dir(tmp.path());
-        let found = find_workspace_root(&sym, &subdir);
-        assert!(found.is_none());
+        state.record_sync(&workspace_with_input(tmp.path()), &[]);
+        assert_eq!(
+            state.last_sync.as_ref().unwrap().inputs[&lock],
+            file_mtime(&lock)
+        );
+        fs::remove_file(&lock).unwrap();
+        assert_eq!(state.fresh(), None);
     }
 }
