@@ -1449,7 +1449,7 @@ mod tests {
             description: None,
             predicates: PredicateSet {
                 predicates: vec![
-                    Predicate::DependsOn("serde".into(), None),
+                    Predicate::DependsOn(crate::predicate::Dependency::named("serde")),
                     Predicate::Shell("false".into()),
                 ],
             },
@@ -1532,7 +1532,7 @@ mod tests {
             description: None,
             predicates: PredicateSet {
                 predicates: vec![
-                    Predicate::DependsOn("serde".into(), None),
+                    Predicate::DependsOn(crate::predicate::Dependency::named("serde")),
                     Predicate::Shell("true".into()),
                 ],
             },
@@ -1540,7 +1540,7 @@ mod tests {
             skills: vec![SkillGroup {
                 predicates: PredicateSet {
                     predicates: vec![
-                        Predicate::DependsOn("serde".into(), None),
+                        Predicate::DependsOn(crate::predicate::Dependency::named("serde")),
                         Predicate::Shell("true".into()),
                     ],
                 },
@@ -1611,7 +1611,7 @@ mod tests {
         assert_eq!(
             skill.predicates.predicates,
             vec![
-                Predicate::DependsOn("serde".into(), None),
+                Predicate::DependsOn(crate::predicate::Dependency::named("serde")),
                 Predicate::Shell("command -v rg".into()),
                 Predicate::PathExists("Cargo.toml".into()),
             ]

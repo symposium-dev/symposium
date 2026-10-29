@@ -17,7 +17,7 @@ The available predicate functions are:
 
 | Predicate | Holds when |
 |-----------|------------|
-| `depends-on(<name>)` / `depends-on(<name><req>)` | A workspace dependency named `<name>` is present (and its version satisfies `<req>`, e.g. `depends-on(serde>=1.0)`). |
+| `depends-on(<name>)` / `depends-on(<name><req>)` | A workspace dependency named `<name>` is present (and its version satisfies `<req>`, e.g. `depends-on(serde>=1.0)`). `depends-on(<pm>:<name>)` matches only that package manager's dependency. |
 | `depends-on(*)` | Any workspace matches (even one with zero dependencies). The lowered form of `*`. |
 | `shell(<command>)` | `<command>` run via `sh -c` exits `0`. Any other exit (including spawn failure) fails. |
 | `path_exists(<arg>)` | `<arg>` resolves to an existing path. An argument with a path separator is checked on the filesystem (cwd-relative or absolute). A bare name with no separator is checked against the cwd and then searched on `$PATH`, so it matches either a local entry (`path_exists(.git)`) or an installed binary (`path_exists(rg)`). |

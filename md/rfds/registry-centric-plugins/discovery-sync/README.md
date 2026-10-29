@@ -112,6 +112,8 @@ Fetching happens in parallel across PMs and packages.
 For each cached plugin, evaluate its predicates against the workspace:
 - `workspace-member()` → is this plugin defined by a member of the workspace?
 - `depends-on(axum>=0.7)` → did some PM's `list-deps` include a matching axum?
+- `depends-on(npm:react)` → did the `npm` PM's `list-deps` include react? An atom
+  names its PM only when the name alone could mean another ecosystem's package.
 - etc.
 
 Plugins that pass are *active*. Plugins that don't pass are installed but dormant.
