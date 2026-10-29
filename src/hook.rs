@@ -790,9 +790,12 @@ async fn consent_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String> 
     }
     let named: Vec<String> = pending
         .iter()
-        .map(|c| match &c.audit {
-            Some(audit) => format!("{} ({audit})", c.name()),
-            None => c.name().to_string(),
+        .map(|c| {
+            let name = crate::config::PluginRef::new(&c.id.pm, &c.id.name);
+            match &c.audit {
+                Some(audit) => format!("{name} ({audit})"),
+                None => name.to_string(),
+            }
         })
         .collect();
     // Only when a list was read do the names carry an answer to qualify.
@@ -801,12 +804,17 @@ async fn consent_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String> 
     } else {
         ""
     };
+    let commands: Vec<String> = pending.iter().map(|c| {
+        let plugin = crate::config::PluginRef::new(&c.id.pm, &c.id.name);
+        format!("`{}`", crate::discovery::use_command(&plugin))
+    }).collect();
     Some(format!(
         "These dependencies ship agent plugins that are not enabled yet: {}. \
          They stay off until the user consents{audited_or_not} — tell the user \
          to run `cargo agents sync` (which asks about each one) or \
-         `cargo agents use <name>`. Do not enable them yourself.",
-        named.join(", ")
+         {} to enable one. Do not enable them yourself.",
+        named.join(", "),
+        commands.join(", ")
     ))
 }
 

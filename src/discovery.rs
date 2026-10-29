@@ -432,7 +432,7 @@ pub async fn enabled_dependencies(
 
 /// The packages the ecosystem package managers have under each of `unknown`'s
 /// bare names, for those exactly one has.
-async fn find_unknown(
+pub(crate) async fn find_unknown(
     pms: &PmRegistry,
     unknown: &[PluginRef],
     update: UpdateLevel,
@@ -542,6 +542,16 @@ fn shown(ids: &[PackageId]) -> String {
         .map(|id| PluginRef::new(&id.pm, &id.name).to_string())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// The `cargo agents use` command that enables `plugin`, which names its
+/// package manager: by name and `--pm`, since `use` takes the name a package
+/// manager knows a package by, not the `pm:name` it is shown as.
+pub fn use_command(plugin: &PluginRef) -> String {
+    match &plugin.pm {
+        Some(pm) => format!("cargo agents use {} --pm {pm}", plugin.name),
+        None => format!("cargo agents use {}", plugin.name),
+    }
 }
 
 /// Ask the user about each undecided offer, then record the answers.
