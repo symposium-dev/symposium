@@ -2488,6 +2488,7 @@ name = "symposium-sdk"
 version = "0.1.1"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "regex",
  "sacp",

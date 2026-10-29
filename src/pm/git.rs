@@ -12,7 +12,7 @@ use symposium_install::UpdateLevel;
 use symposium_install::git::GitCacheManager;
 
 use super::{
-    FetchedPackage, PackageId, PackageManager, PathPm, PluginInfo, RegistryListing, RegistrySource,
+    FetchedPackage, PackageId, PackageManager, PathPm, PluginInfo, PluginListing, RegistrySource,
     UnvalidatedPlugin,
 };
 use crate::config::REGISTRY_CACHE_SUBDIR;
@@ -52,6 +52,13 @@ impl GitPm {
             inner,
         })
     }
+
+    /// Where this registry's content comes from, for `plugin list`.
+    pub fn source(&self) -> RegistrySource {
+        RegistrySource::Git {
+            url: self.git_url.clone(),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -60,30 +67,24 @@ impl PackageManager for GitPm {
         &self.name
     }
 
-    fn canonical_name(&self, name: &str) -> String {
-        self.inner.canonical_name(name)
-    }
-
-    async fn active_plugins(&self, deps: &[PackageId]) -> Vec<UnvalidatedPlugin> {
-        self.inner.active_plugins(deps).await
-    }
-
-    async fn registry_plugins(&self) -> Result<RegistryListing<UnvalidatedPlugin>> {
+    /// The registry's entries, once it has been fetched; until then it cannot
+    /// say what it offers, which is not the same as offering nothing.
+    async fn active_plugins(&self, deps: &[PackageId]) -> Result<PluginListing> {
         let name = &self.name;
         if !self.inner.dir.exists() {
             anyhow::bail!(
                 "registry `{name}` has not been fetched yet; run `cargo agents plugin sync {name}`"
             );
         }
-        self.inner.registry_plugins().await
+        self.inner.active_plugins(deps).await
     }
 
-    async fn load_plugin(&self, id: &PackageId, update: UpdateLevel) -> Vec<UnvalidatedPlugin> {
+    async fn load_plugin(
+        &self,
+        id: &PackageId,
+        update: UpdateLevel,
+    ) -> Result<Vec<UnvalidatedPlugin>> {
         self.inner.load_plugin(id, update).await
-    }
-
-    async fn list_deps(&self) -> Result<Vec<PackageId>> {
-        self.inner.list_deps().await
     }
 
     async fn search(&self, query: &str) -> Result<Vec<PluginInfo>> {
@@ -107,12 +108,6 @@ impl PackageManager for GitPm {
             .await?;
         Ok(true)
     }
-
-    fn registry_source(&self) -> Option<RegistrySource> {
-        Some(RegistrySource::Git {
-            url: self.git_url.clone(),
-        })
-    }
 }
 
 #[cfg(test)]
@@ -131,11 +126,11 @@ mod tests {
         )
         .expect("a well-formed URL resolves to a cache path");
         assert_eq!(pm.name(), "symposium-recommendations");
-        match pm.registry_source() {
-            Some(RegistrySource::Git { url }) => {
+        match pm.source() {
+            RegistrySource::Git { url } => {
                 assert_eq!(url, "https://github.com/symposium-dev/recommendations");
             }
-            _ => panic!("expected a git registry source"),
+            RegistrySource::Path { .. } => panic!("expected a git registry source"),
         }
     }
 }

@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use symposium_install::UpdateLevel;
 
 use super::{
-    ANY_VERSION, FetchedPackage, PackageId, PackageManager, PluginInfo, RegistryListing,
+    ANY_VERSION, FetchedPackage, PackageId, PackageManager, PluginInfo, PluginListing,
     RegistrySource, UnvalidatedPlugin, layout,
 };
 use crate::report::ReportEvent;
@@ -38,6 +38,13 @@ impl PathPm {
             dir: dir.into(),
         }
     }
+
+    /// Where this registry's content comes from, for `plugin list`.
+    pub fn source(&self) -> RegistrySource {
+        RegistrySource::Path {
+            dir: self.dir.clone(),
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -46,25 +53,15 @@ impl PackageManager for PathPm {
         &self.name
     }
 
-    fn canonical_name(&self, name: &str) -> String {
-        name.to_string()
-    }
-
     /// Every entry in the registry, loaded as a plugin. `deps` is ignored — a
     /// local registry's contents don't vary with the workspace; whether each
     /// plugin applies is decided later by its own predicates. A registry is a
     /// trust root, so these activate without consent.
-    async fn active_plugins(&self, _deps: &[PackageId]) -> Vec<UnvalidatedPlugin> {
-        self.registry_plugins()
-            .await
-            .map(|listing| listing.plugins)
-            .unwrap_or_else(|e| {
-                tracing::warn!(error = %format!("{e:#}"), "cannot list registry");
-                Vec::new()
-            })
-    }
-
-    async fn registry_plugins(&self) -> Result<RegistryListing<UnvalidatedPlugin>> {
+    ///
+    /// Fails when the directory cannot be read, since sync removes what a
+    /// registry stops offering. One entry that fails to load is reported and
+    /// skipped, and leaves the listing incomplete.
+    async fn active_plugins(&self, _deps: &[PackageId]) -> Result<PluginListing> {
         std::fs::read_dir(&self.dir).with_context(|| {
             format!(
                 "cannot read registry `{}` at {}",
@@ -74,10 +71,7 @@ impl PackageManager for PathPm {
         })?;
         let entries = layout::enumerate(&self.dir)
             .with_context(|| format!("cannot list registry `{}`", self.name))?;
-        let mut listing = RegistryListing {
-            plugins: Vec::new(),
-            complete: true,
-        };
+        let mut listing = PluginListing::complete(Vec::new());
         for entry in entries {
             match crate::plugins::entry_plugin(&self.dir, &entry.subpath, &self.name) {
                 Some(Ok(p)) => listing.plugins.push(p),
@@ -99,23 +93,18 @@ impl PackageManager for PathPm {
     }
 
     /// The entry an id names (`id.name` is the entry's subpath key).
-    async fn load_plugin(&self, id: &PackageId, _update: UpdateLevel) -> Vec<UnvalidatedPlugin> {
+    async fn load_plugin(
+        &self,
+        id: &PackageId,
+        _update: UpdateLevel,
+    ) -> Result<Vec<UnvalidatedPlugin>> {
         if id.pm != self.name {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         match crate::plugins::entry_plugin(&self.dir, Path::new(&id.name), &self.name) {
-            Some(Ok(p)) => vec![p],
-            Some(Err(e)) => {
-                tracing::warn!(registry = %self.name, id = %id, error = %e, "failed to load plugin");
-                Vec::new()
-            }
-            None => Vec::new(),
+            Some(p) => Ok(vec![p?]),
+            None => Ok(Vec::new()),
         }
-    }
-
-    /// A local directory contributes no workspace dependencies.
-    async fn list_deps(&self) -> Result<Vec<PackageId>> {
-        Ok(Vec::new())
     }
 
     /// Case-insensitive substring match over the entries' subpath keys.
@@ -139,12 +128,6 @@ impl PackageManager for PathPm {
             root: self.dir.join(&id.name),
         })
     }
-
-    fn registry_source(&self) -> Option<RegistrySource> {
-        Some(RegistrySource::Path {
-            dir: self.dir.clone(),
-        })
-    }
 }
 
 #[cfg(test)]
@@ -165,17 +148,19 @@ mod tests {
         .unwrap();
 
         let pm = PathPm::new("user-plugins", &source);
-        let active = pm.active_plugins(&[]).await;
+        let active = pm.active_plugins(&[]).await.unwrap();
         let mut names: Vec<&str> = active
+            .plugins
             .iter()
             .map(|o| o.manifest.name.as_deref().unwrap_or_default())
             .collect();
         names.sort();
         assert_eq!(names, vec!["style", "tools"]);
-        assert!(active.iter().all(|o| o.id.pm == "user-plugins"));
+        assert!(active.plugins.iter().all(|o| o.id.pm == "user-plugins"));
 
         // A bare SKILL.md is synthesized into a manifest with one group.
         let style = active
+            .plugins
             .iter()
             .find(|o| o.manifest.name.as_deref() == Some("style"))
             .expect("the bare skill was offered");
@@ -187,7 +172,8 @@ mod tests {
                 &PackageId::new("user-plugins", "tools", ANY_VERSION),
                 UpdateLevel::None,
             )
-            .await;
+            .await
+            .unwrap();
         assert_eq!(one.len(), 1);
         assert_eq!(one[0].manifest.name.as_deref(), Some("tools"));
 

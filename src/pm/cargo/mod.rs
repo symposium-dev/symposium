@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use symposium_install::UpdateLevel;
 
 use crate::crate_sources::RustCrateFetch;
@@ -22,8 +22,8 @@ pub use workspace::{
 };
 
 use super::{
-    ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, ProjectInfo,
-    UnvalidatedPlugin,
+    ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, PluginListing,
+    ProjectInfo, UnvalidatedPlugin,
 };
 
 /// How many crates.io hits a search returns — enough to surface the crate a
@@ -147,27 +147,6 @@ impl PackageManager for CargoPm {
         crate::crate_sources::normalize_crate_name(name)
     }
 
-    /// A workspace dependency of that name, or a crate in cargo's extracted
-    /// sources; above [`UpdateLevel::None`], otherwise a crate crates.io has.
-    async fn find(&self, name: &str, update: UpdateLevel) -> Option<PackageId> {
-        let wanted = self.canonical_name(name);
-        let same = |id: &PackageId| self.canonical_name(&id.name) == wanted;
-        if let Some(dep) = self.list_deps().await.ok()?.into_iter().find(same) {
-            return Some(dep);
-        }
-        if let Ok(cached) = self
-            .fetch(&Self::id_for(name, None), UpdateLevel::None)
-            .await
-        {
-            return Some(cached.id);
-        }
-        if matches!(update, UpdateLevel::None) {
-            return None;
-        }
-        let found = self.search(name).await.ok()?;
-        found.into_iter().map(|info| info.id).find(same)
-    }
-
     /// The plugins embedded in the workspace's dependencies: every dep in
     /// `deps` whose source tree embeds plugin content, built into a full
     /// `Plugin`. Whether each is *trusted* (may activate without consent)
@@ -178,7 +157,7 @@ impl PackageManager for CargoPm {
     /// source `cargo metadata` already extracted — no probe, no network — so
     /// registry dependencies are surfaced exactly like path ones. A dependency
     /// whose source can't be served from cache is skipped.
-    async fn active_plugins(&self, deps: &[PackageId]) -> Vec<UnvalidatedPlugin> {
+    async fn active_plugins(&self, deps: &[PackageId]) -> Result<PluginListing> {
         let mut out = Vec::new();
         for id in deps.iter().filter(|id| id.pm == CARGO_PM) {
             // Fetch by name only: the concrete version in `id` would make
@@ -199,22 +178,24 @@ impl PackageManager for CargoPm {
                 out.push(self.plugin_from_fetched(fetched));
             }
         }
-        out
+        Ok(PluginListing::complete(out))
     }
 
     /// Resolve a specific crate id to its plugin (a chained reference or an
     /// enabled crate). Unlike `active_plugins`, this loads the named crate
     /// whatever it embeds — any fetchable crate yields at least the default
-    /// `skills/` plugin.
-    async fn load_plugin(&self, id: &PackageId, update: UpdateLevel) -> Vec<UnvalidatedPlugin> {
-        let fetched = match self.fetch(id, update).await {
-            Ok(f) => f,
-            Err(e) => {
-                tracing::warn!(id = %id, error = %e, "failed to fetch crate for plugin");
-                return Vec::new();
-            }
-        };
-        vec![self.plugin_from_fetched(fetched)]
+    /// `skills/` plugin. Under [`UpdateLevel::None`] it is served from
+    /// cargo's cache only.
+    async fn load_plugin(
+        &self,
+        id: &PackageId,
+        update: UpdateLevel,
+    ) -> Result<Vec<UnvalidatedPlugin>> {
+        let fetched = self
+            .fetch(id, update)
+            .await
+            .with_context(|| format!("fetching `{id}` for its plugin"))?;
+        Ok(vec![self.plugin_from_fetched(fetched)])
     }
 
     /// Search crates.io for crates matching `query`.
@@ -260,10 +241,14 @@ impl PackageManager for CargoPm {
         })
     }
 
+    /// Fails when `cargo metadata` failed, rather than answering that there
+    /// are no dependencies.
     async fn list_deps(&self) -> Result<Vec<PackageId>> {
-        Ok(self
-            .workspace
-            .crates()
+        let Some(ws) = self.workspace.try_load().map_err(anyhow::Error::msg)? else {
+            return Ok(Vec::new());
+        };
+        Ok(ws
+            .crates
             .iter()
             .map(|c| PackageId::new(CARGO_PM, c.name.clone(), c.version.to_string()))
             .collect())
@@ -339,14 +324,14 @@ mod tests {
             crates,
         ));
 
-        let active = pm.active_plugins(&deps).await;
-        let got: Vec<&str> = active.iter().map(|o| o.id.name.as_str()).collect();
+        let active = pm.active_plugins(&deps).await.unwrap();
+        let got: Vec<&str> = active.plugins.iter().map(|o| o.id.name.as_str()).collect();
         // `plain` embeds nothing, so it is not surfaced.
         assert_eq!(got, vec!["with-skills", "registry-embedded"]);
-        assert!(active.iter().all(|o| o.id.pm == CARGO_PM));
+        assert!(active.plugins.iter().all(|o| o.id.pm == CARGO_PM));
         // The plugin points at the crate source; the default `skills/` group is
         // added by validation, not by the PM.
-        assert!(active[0].root.join("skills").is_dir());
+        assert!(active.plugins[0].root.join("skills").is_dir());
     }
 
     #[tokio::test]
@@ -363,6 +348,6 @@ mod tests {
                 UpdateLevel::None,
             )
             .await;
-        assert!(loaded.is_empty());
+        assert!(loaded.is_err());
     }
 }
