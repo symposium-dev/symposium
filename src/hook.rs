@@ -1386,7 +1386,9 @@ mod tests {
         // Replace the wildcard plugin gate with a concrete `depends-on(serde)`.
         let mut plugin = plugin_with_hook(vec![], vec![]);
         plugin.manifest.predicates = crate::predicate::PredicateSet {
-            predicates: vec![crate::predicate::Predicate::DependsOn("serde".into(), None)],
+            predicates: vec![crate::predicate::Predicate::DependsOn(
+                crate::predicate::Dependency::named("serde"),
+            )],
         };
 
         // No serde in the workspace → the hook is skipped.

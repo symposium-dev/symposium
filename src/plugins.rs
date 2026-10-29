@@ -201,8 +201,14 @@ fn validate_chained_plugin(raw: RawChainedPlugin) -> Result<ChainedPlugin> {
         };
         let (name, version) = match cargo {
             RawChainedCargo::Atom(atom) => match crate::predicate::parse_dep_atom(&atom)? {
-                crate::predicate::Predicate::DependsOn(name, req) => {
-                    (name, req.map(|r| r.to_string()))
+                crate::predicate::Predicate::DependsOn(dep) => {
+                    if let Some(pm) = dep.pm {
+                        bail!(
+                            "[[plugins]] source.cargo names a crate; drop the `{pm}:` before `{}`",
+                            dep.name
+                        );
+                    }
+                    (dep.name, dep.version.map(|r| r.to_string()))
                 }
                 _ => bail!("[[plugins]] source.cargo needs a crate name, not `*`"),
             },
@@ -1476,7 +1482,8 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
 /// Collect all crate names referenced in predicates across a plugin source directory.
 ///
 /// Scans TOML plugin manifests (skill group `depends-on`) and
-/// standalone SKILL.md files, returning deduplicated crate names.
+/// standalone SKILL.md files, returning deduplicated crate names: atoms naming
+/// cargo or no package manager, since another's package is no crate.
 /// Items that fail to load are silently skipped.
 pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
     let contents = scan_source_dir(dir, "")?;
@@ -1486,12 +1493,15 @@ pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
         plugin_result
             .manifest
             .predicates
-            .collect_dep_names(&mut names);
+            .collect_dep_names(crate::pm::CARGO_PM, &mut names);
         for group in &plugin_result.manifest.skills {
-            group.predicates.collect_dep_names(&mut names);
+            group
+                .predicates
+                .collect_dep_names(crate::pm::CARGO_PM, &mut names);
         }
         for mcp in &plugin_result.manifest.mcp_servers {
-            mcp.predicates.collect_dep_names(&mut names);
+            mcp.predicates
+                .collect_dep_names(crate::pm::CARGO_PM, &mut names);
         }
     }
 
@@ -2273,7 +2283,7 @@ mod tests {
         assert_eq!(
             plugin.skills[0].predicates.predicates,
             vec![
-                Predicate::DependsOn("serde".into(), None),
+                Predicate::DependsOn(crate::predicate::Dependency::named("serde")),
                 Predicate::Shell("command -v jq".into()),
             ]
         );
@@ -2744,7 +2754,7 @@ mod tests {
                 depends-on = ["*"]
 
                 [[skills]]
-                depends-on = ["serde", "serde_json>=1.0"]
+                depends-on = ["serde", "cargo:serde_json>=1.0", "npm:react"]
                 source.path = "skills"
             "#},
             ),
@@ -2763,7 +2773,8 @@ mod tests {
         ]);
 
         let names = collect_crate_names_in_source_dir(tmp.path()).unwrap();
-        // BTreeSet means sorted output
+        // BTreeSet means sorted output. Another package manager's package is
+        // not looked up on crates.io.
         assert_eq!(names, vec!["anyhow", "serde", "serde_json"]);
     }
 
