@@ -51,3 +51,7 @@ When the user runs `cargo agents <name>` for a name not built into the binary, c
 4. The child is spawned with stdio inherited. Its exit code is collapsed to a `u8` — the binary wraps it in `ExitCode::from`; the library treats non-zero as an error so the test harness can assert on success/failure.
 
 The key code paths are in `subcommand_dispatch.rs`, `cli.rs` (the `External` arm), and `bin/cargo-agents.rs` (binary-side wrapping that surfaces the numeric exit code to the OS).
+
+## Explicit plugin enablement
+
+`cargo agents use` resolves registry plugins first, then workspace dependencies. For a name neither offers, it calls `PmInstance::find` on the ecosystem transports selected by `--pm`: a cached package is checked before search. As before, explicit `use` permits a search after a cache miss (`UpdateLevel::Check`), independently of the update level passed to the subsequent sync. Unselected transports are not queried in this fallback. The resolved canonical identity is recorded in `[plugins] use`.

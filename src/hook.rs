@@ -642,16 +642,22 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String
 /// context, with a pointer at the interactive command that can actually ask.
 /// `None` when nothing is pending.
 async fn consent_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String> {
-    let names = crate::discovery::pending_candidates(sym, deps).await;
-    if names.is_empty() {
+    let pending = crate::discovery::pending_candidates(sym, deps).await;
+    if pending.is_empty() {
         return None;
     }
+    let names: Vec<String> = pending.iter().map(ToString::to_string).collect();
+    let commands: Vec<String> = pending
+        .iter()
+        .map(|plugin| format!("`{}`", crate::discovery::use_command(plugin)))
+        .collect();
     Some(format!(
         "These dependencies ship agent plugins that are not enabled yet: {}. \
-         They stay off until the user consents — tell the user to run \
-         `cargo agents sync` (which asks about each one) or \
-         `cargo agents use <name>`. Do not enable them yourself.",
-        names.join(", ")
+         They stay off until the user consents: tell the user to run \
+         `cargo agents sync` (which asks about each one), or {} to enable one. \
+         Do not enable them yourself.",
+        names.join(", "),
+        commands.join(", ")
     ))
 }
 

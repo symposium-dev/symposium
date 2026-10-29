@@ -319,6 +319,103 @@ async fn use_wakes_and_remove_sleeps_a_dormant_plugin() {
     .unwrap();
 }
 
+/// The recorded `use` entries, as `pm:name` or a bare name.
+fn used_names(ctx: &TestContext) -> Vec<String> {
+    ctx.sym
+        .config
+        .plugins
+        .used
+        .iter()
+        .map(|e| e.plugin().to_string())
+        .collect()
+}
+
+/// Configure a package manager named `other` whose search finds every name it
+/// is asked about, as crates.io does for many a recommendation's name.
+fn add_pm_that_finds_everything(ctx: &mut TestContext) {
+    let script = ctx.sym.config_dir().join("pm-other.sh");
+    std::fs::write(
+        &script,
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":1,"name":"other"}}\n' "$id" ;;
+    *'"search"'*)
+      q=$(printf '%s' "$line" | sed 's/.*"query":"\([^"]*\)".*/\1/')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"plugins":[{"id":{"pm":"other","name":"%s","version":"*"}}]}}\n' "$id" "$q" ;;
+    *)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"plugins":[],"deps":[]}}\n' "$id" ;;
+  esac
+done
+"#,
+    )
+    .unwrap();
+    ctx.sym
+        .config
+        .package_managers
+        .push(symposium::config::PackageManagerConfig {
+            name: "other".to_string(),
+            command: "/bin/sh".to_string(),
+            args: vec![script.display().to_string()],
+        });
+}
+
+/// A registry plugin answers its name before any package manager is searched,
+/// so a package elsewhere that shares a dormant recommendation's name does not
+/// make `use` ambiguous.
+#[tokio::test]
+async fn use_prefers_a_registry_plugin_over_a_search_hit() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["dormant-plugin0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            add_pm_that_finds_everything(&mut ctx);
+            let skills_dir = ctx.workspace_root.clone().unwrap().join(".claude/skills");
+
+            ctx.symposium(&["use", "gateless-plugin"]).await?;
+            find_installed_skill(&skills_dir, "gateless-guidance");
+            assert_eq!(used_names(&ctx), vec!["user-plugins:gateless-plugin"]);
+
+            // Naming the package manager still reaches the search hit.
+            ctx.symposium(&["use", "gateless-plugin", "--pm", "other"])
+                .await?;
+            assert_eq!(
+                used_names(&ctx),
+                vec!["user-plugins:gateless-plugin", "other:gateless-plugin"]
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// `--remove --pm` drops only that package manager's entry for a name.
+#[tokio::test]
+async fn use_remove_with_pm_leaves_other_pms_entries() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            add_pm_that_finds_everything(&mut ctx);
+            ctx.symposium(&["use", "crate-a", "--global"]).await?;
+            ctx.symposium(&["use", "crate-a", "--global", "--pm", "other"])
+                .await?;
+
+            ctx.symposium(&["use", "--remove", "crate-a", "--global", "--pm", "other"])
+                .await?;
+            assert_eq!(used_names(&ctx), vec!["cargo:crate-a"]);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// A bare `use` name that two registries' dormant plugins share enables
 /// neither, and `status` says to name the registry. Naming it wakes that one.
 #[tokio::test]
@@ -737,7 +834,7 @@ async fn consent_prompt_never_fires_non_interactively() {
             let deps = ctx.sym.workspace(&workspace_root);
             assert_eq!(
                 symposium::discovery::pending_candidates(&ctx.sym, &deps).await,
-                vec!["cargo:crate-a".to_string()]
+                vec![symposium::config::PluginRef::new("cargo", "crate-a")]
             );
 
             // The prompt returns without reading stdin, recording nothing.
@@ -757,7 +854,7 @@ async fn consent_prompt_never_fires_non_interactively() {
             let deps = ctx.sym.workspace(&workspace_root);
             assert_eq!(
                 symposium::discovery::pending_candidates(&ctx.sym, &deps).await,
-                vec!["cargo:crate-a".to_string()]
+                vec![symposium::config::PluginRef::new("cargo", "crate-a")]
             );
             assert!(
                 find_installed_skills(&workspace_root.join(".claude/skills"), "a-guidance")
@@ -1040,6 +1137,31 @@ async fn a_consented_crate_loads_beside_a_recommendation_of_the_same_name() {
             ctx.symposium(&["sync"]).await?;
             find_installed_skill(&skills_dir, "crate-a-advice");
             find_installed_skill(&skills_dir, "a-guidance");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// A name that no package manager offers is rejected before anything is
+/// recorded, and `--pm` narrows to one that does not offer it either.
+#[tokio::test]
+async fn use_with_an_unknown_pm_errors() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let err = ctx
+                .symposium(&["use", "crate-a", "--pm", "npm"])
+                .await
+                .expect_err("no npm package manager is configured");
+            assert!(
+                err.to_string().contains("no package manager `npm`"),
+                "{err}"
+            );
+            assert!(!read_config(&ctx).contains("crate-a"), "nothing recorded");
             Ok(())
         },
     )

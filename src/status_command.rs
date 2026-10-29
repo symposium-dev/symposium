@@ -275,9 +275,12 @@ fn entry_for(found: &DiscoveredPlugin) -> StatusEntry {
         Enablement::Candidate => (
             StatusState::Candidate,
             format!(
-                "found via dependency `{}`, awaiting consent (`cargo agents use {}`)",
+                "found via dependency `{}`, awaiting consent (`{}`)",
                 found.recommends,
-                found.name()
+                crate::discovery::use_command(&crate::config::PluginRef::new(
+                    &found.id.pm,
+                    &found.id.name
+                ))
             ),
         ),
     };

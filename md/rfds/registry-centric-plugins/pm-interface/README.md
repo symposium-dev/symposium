@@ -249,7 +249,8 @@ auto-enable = [{ pm = "cargo", name = "my-internal-crate" }]
 ```
 
 Each PM picks names that are stable and meaningful for its ecosystem. The cargo
-PM uses the crate name. A registry PM uses the entry's path within the registry.
+PM uses the crate name. A registry PM uses the plugin's own `name`, which its
+manifest is required to declare.
 The pair is qualified by PM so that two ecosystems using the same word do not
 collide, and so that a name always identifies exactly one thing.
 

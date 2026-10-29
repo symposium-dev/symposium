@@ -398,7 +398,7 @@ pub async fn enabled_dependencies(
 
 /// The packages the ecosystem package managers have under each of `unknown`'s
 /// bare names, for those exactly one has.
-async fn find_unknown(
+pub(crate) async fn find_unknown(
     pms: &PmRegistry,
     unknown: &[PluginRef],
     update: UpdateLevel,
@@ -438,19 +438,19 @@ pub async fn discover_for(sym: &Symposium, ws: &Arc<Workspace>) -> Discovery {
     discover(sym, ws, &used, &spellings).await
 }
 
-/// The names of the discovered offers still awaiting consent, deduplicated
-/// and sorted — what a consent prompt would ask about, and what the
-/// non-interactive hint names.
-pub async fn pending_candidates(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<String> {
-    let mut names: Vec<String> = discover_for(sym, deps)
+/// The discovered offers still awaiting consent, deduplicated and sorted —
+/// what a consent prompt would ask about, and what the non-interactive hint
+/// names.
+pub async fn pending_candidates(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<PluginRef> {
+    let mut pending: Vec<PluginRef> = discover_for(sym, deps)
         .await
         .candidates
         .into_iter()
-        .map(|c| PluginRef::new(&c.id.pm, &c.id.name).to_string())
+        .map(|c| PluginRef::new(&c.id.pm, &c.id.name))
         .collect();
-    names.sort();
-    names.dedup();
-    names
+    pending.sort_by_key(ToString::to_string);
+    pending.dedup();
+    pending
 }
 
 /// Record consent decisions: approvals into `[plugins] auto-enable`,
@@ -512,6 +512,16 @@ fn shown(ids: &[PackageId]) -> String {
         .map(|id| PluginRef::new(&id.pm, &id.name).to_string())
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// The `cargo agents use` command that enables `plugin`, which names its
+/// package manager: by name and `--pm`, since `use` takes the name a package
+/// manager knows a package by, not the `pm:name` it is shown as.
+pub fn use_command(plugin: &PluginRef) -> String {
+    match &plugin.pm {
+        Some(pm) => format!("cargo agents use {} --pm {pm}", plugin.name),
+        None => format!("cargo agents use {}", plugin.name),
+    }
 }
 
 /// Ask the user about each undecided offer, then record the answers.
