@@ -201,8 +201,14 @@ fn validate_chained_plugin(raw: RawChainedPlugin) -> Result<ChainedPlugin> {
         };
         let (name, version) = match cargo {
             RawChainedCargo::Atom(atom) => match crate::predicate::parse_dep_atom(&atom)? {
-                crate::predicate::Predicate::DependsOn(name, req) => {
-                    (name, req.map(|r| r.to_string()))
+                crate::predicate::Predicate::DependsOn(dep) => {
+                    if let Some(pm) = dep.pm {
+                        bail!(
+                            "[[plugins]] source.cargo names a crate; drop the `{pm}:` before `{}`",
+                            dep.name
+                        );
+                    }
+                    (dep.name, dep.version.map(|r| r.to_string()))
                 }
                 _ => bail!("[[plugins]] source.cargo needs a crate name, not `*`"),
             },
@@ -301,9 +307,9 @@ pub struct Plugin {
     pub manifest: PluginManifest,
 
     /// Whether this plugin is defined by a member of the active workspace.
-    /// Provenance, stamped by the loader: registry sources stamp `false`;
-    /// the workspace-plugin loader (workspace-local extensions) will stamp
-    /// `true`. Backs the `workspace-member()` predicate.
+    /// Provenance, stamped by the loader: registry sources and packages stamp
+    /// `false`, workspace plugins `true`. Backs the `workspace-member()`
+    /// predicate.
     pub workspace_member: bool,
 
     /// The plugin's canonical package identity. Set to the resolved crate id for
@@ -1124,7 +1130,14 @@ async fn load_registry_impl(
 
     tracing::debug!(plugins = plugins.len(), "plugin registry loaded");
 
-    let custom_predicates = build_custom_predicate_registry(&plugins, &mut warnings);
+    // A disabled plugin's predicates are neither installed, nor callable by
+    // other plugins, nor in the way of another plugin's of the same name.
+    let spellings = crate::discovery::Names::new(&plugins, &[], &pms)
+        .spellings(&sym.config.plugins)
+        .await;
+    let custom_predicates = build_custom_predicate_registry(&plugins, &mut warnings, |p| {
+        sym.config.plugins.is_disabled(&p.canonical, &spellings)
+    });
 
     PluginRegistry {
         plugins,
@@ -1163,25 +1176,28 @@ pub async fn active_plugins(
     let mut visited = std::collections::HashSet::new();
     // Package ids still to resolve through the set.
     let mut worklist: Vec<crate::pm::PackageId> = Vec::new();
+    let names = crate::discovery::Names::new(&registry.plugins, ctx.deps, pms);
+    let mut spellings = names.spellings(&sym.config.plugins).await;
 
     // Seed with the trust-root plugins (registry + workspace), gated.
     for parsed in &registry.plugins {
-        record_active(parsed.clone(), ctx, &mut active, &mut worklist);
+        record_active(
+            parsed.clone(),
+            &sym.config.plugins,
+            &spellings,
+            ctx,
+            &mut active,
+            &mut worklist,
+        );
     }
 
     // Enabled packages: consented dependencies and what `use` entries name,
     // each resolved by the package managers.
     if let Some(root) = workspace_root {
+        let used = crate::discovery::used(sym, root, &names).await;
         worklist.extend(
-            crate::discovery::enabled_dependencies(
-                sym,
-                pms,
-                &registry.plugins,
-                ctx.deps,
-                root,
-                update,
-            )
-            .await,
+            crate::discovery::enabled_dependencies(sym, pms, ctx.deps, &used, &spellings, update)
+                .await,
         );
     }
 
@@ -1190,7 +1206,17 @@ pub async fn active_plugins(
     while let Some(id) = worklist.pop() {
         for plugin in pms.load_plugin(&id, update).await {
             if visited.insert(pms.identity(&plugin.canonical)) {
-                record_active(plugin, ctx, &mut active, &mut worklist);
+                names
+                    .spell(&sym.config.plugins, &plugin.canonical, &mut spellings)
+                    .await;
+                record_active(
+                    plugin,
+                    &sym.config.plugins,
+                    &spellings,
+                    ctx,
+                    &mut active,
+                    &mut worklist,
+                );
             }
         }
     }
@@ -1203,10 +1229,25 @@ pub async fn active_plugins(
 /// onto `worklist`.
 fn record_active(
     plugin: Plugin,
+    disabled: &crate::config::PluginsConfig,
+    spellings: &crate::config::Spellings,
     ctx: &mut crate::predicate::PredicateContext<'_>,
     active: &mut Vec<Plugin>,
     worklist: &mut Vec<crate::pm::PackageId>,
 ) {
+    // `disable` names a plugin whatever offers it. A trusted source is what
+    // lets a plugin activate without being asked about, not a claim the user
+    // cannot change their mind.
+    if disabled.is_disabled(&plugin.canonical, spellings) {
+        tracing::debug!(
+            report = %crate::report::ReportEvent::PluginConsidered {
+                plugin: plugin.manifest.name.clone(),
+                matched: false,
+                reason: Some("disabled in `[plugins] disable`".into()),
+            },
+        );
+        return;
+    }
     if !plugin.applies(ctx) {
         tracing::debug!(
             report = %crate::report::ReportEvent::PluginConsidered {
@@ -1480,7 +1521,8 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
 /// Collect all crate names referenced in predicates across a plugin source directory.
 ///
 /// Scans TOML plugin manifests (skill group `depends-on`) and
-/// standalone SKILL.md files, returning deduplicated crate names.
+/// standalone SKILL.md files, returning deduplicated crate names: atoms naming
+/// cargo or no package manager, since another's package is no crate.
 /// Items that fail to load are silently skipped.
 pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
     let contents = scan_source_dir(dir, "")?;
@@ -1490,12 +1532,15 @@ pub fn collect_crate_names_in_source_dir(dir: &Path) -> Result<Vec<String>> {
         plugin_result
             .manifest
             .predicates
-            .collect_dep_names(&mut names);
+            .collect_dep_names(crate::pm::CARGO_PM, &mut names);
         for group in &plugin_result.manifest.skills {
-            group.predicates.collect_dep_names(&mut names);
+            group
+                .predicates
+                .collect_dep_names(crate::pm::CARGO_PM, &mut names);
         }
         for mcp in &plugin_result.manifest.mcp_servers {
-            mcp.predicates.collect_dep_names(&mut names);
+            mcp.predicates
+                .collect_dep_names(crate::pm::CARGO_PM, &mut names);
         }
     }
 
@@ -1831,15 +1876,20 @@ fn validate_custom_predicate(
     })
 }
 
-/// Collect custom predicates from all plugins, detecting collisions.
+/// Collect custom predicates from all plugins except the `skip`ped ones,
+/// detecting collisions.
 fn build_custom_predicate_registry(
     plugins: &[Plugin],
     warnings: &mut Vec<LoadWarning>,
+    skip: impl Fn(&Plugin) -> bool,
 ) -> CustomPredicateRegistry {
     let mut entries = std::collections::HashMap::new();
     let mut collisions: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for (plugin_idx, parsed) in plugins.iter().enumerate() {
+        if skip(parsed) {
+            continue;
+        }
         for cp in &parsed.manifest.custom_predicates {
             if collisions.contains(&cp.name) {
                 continue;
@@ -2277,7 +2327,7 @@ mod tests {
         assert_eq!(
             plugin.skills[0].predicates.predicates,
             vec![
-                Predicate::DependsOn("serde".into(), None),
+                Predicate::DependsOn(crate::predicate::Dependency::named("serde")),
                 Predicate::Shell("command -v jq".into()),
             ]
         );
@@ -2748,7 +2798,7 @@ mod tests {
                 depends-on = ["*"]
 
                 [[skills]]
-                depends-on = ["serde", "serde_json>=1.0"]
+                depends-on = ["serde", "cargo:serde_json>=1.0", "npm:react"]
                 source.path = "skills"
             "#},
             ),
@@ -2767,7 +2817,8 @@ mod tests {
         ]);
 
         let names = collect_crate_names_in_source_dir(tmp.path()).unwrap();
-        // BTreeSet means sorted output
+        // BTreeSet means sorted output. Another package manager's package is
+        // not looked up on crates.io.
         assert_eq!(names, vec!["anyhow", "serde", "serde_json"]);
     }
 
@@ -3099,10 +3150,16 @@ mod tests {
         assert!(plugin.manifest.requires_use);
 
         let deps: Vec<PackageId> = Vec::new();
-        let other = PackageId::any_version("reg", "something-else");
+        let used = |pm: &str, name: &str| crate::config::PluginRef::new(pm, name);
+        let applies_with =
+            |entry: crate::config::PluginRef| plugin.applies(&mut ctx(&deps).with_used(&[entry]));
         assert!(!plugin.applies(&mut ctx(&deps)));
-        assert!(!plugin.applies(&mut ctx(&deps).with_used(&[other])));
-        assert!(plugin.applies(&mut ctx(&deps).with_used(std::slice::from_ref(&plugin.canonical))));
+        assert!(!applies_with(used("reg", "something-else")));
+        assert!(applies_with(used("reg", "gate-less")));
+        // A registry compares its plugins' names exactly.
+        assert!(!applies_with(used("reg", "gate_less")));
+        // Another package manager's package of the same name does not.
+        assert!(!applies_with(used("cargo", "gate-less")));
     }
 
     #[test]
@@ -4650,7 +4707,7 @@ mod tests {
             make_plugin_with_predicate("beta", "bar"),
         ];
         let mut warnings = vec![];
-        let registry = build_custom_predicate_registry(&plugins, &mut warnings);
+        let registry = build_custom_predicate_registry(&plugins, &mut warnings, |_| false);
         assert!(warnings.is_empty());
         assert_eq!(registry.len(), 2);
         assert!(registry.contains_key("foo"));
@@ -4664,7 +4721,7 @@ mod tests {
             make_plugin_with_predicate("beta", "shared"),
         ];
         let mut warnings = vec![];
-        let registry = build_custom_predicate_registry(&plugins, &mut warnings);
+        let registry = build_custom_predicate_registry(&plugins, &mut warnings, |_| false);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].message.contains("shared"));
         assert!(warnings[0].message.contains("alpha"));
@@ -4683,7 +4740,7 @@ mod tests {
             make_plugin_with_predicate("gamma", "shared"),
         ];
         let mut warnings = vec![];
-        let registry = build_custom_predicate_registry(&plugins, &mut warnings);
+        let registry = build_custom_predicate_registry(&plugins, &mut warnings, |_| false);
         // Warning is emitted only on the second occurrence (alpha vs beta);
         // the third (gamma) sees the name in the collision set and skips.
         assert_eq!(warnings.len(), 1);

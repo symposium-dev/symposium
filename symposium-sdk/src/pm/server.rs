@@ -192,6 +192,12 @@ async fn dispatch<P: PackageManager>(pm: &P, request: Request) -> Response {
                 RefreshResult { refreshed }
             })
         }
+        protocol::CANONICAL_NAME => {
+            let p: CanonicalName = parse!(CanonicalName);
+            answer!(pm.canonical_name(&p.name).await, |name| CanonicalName {
+                name
+            })
+        }
         other => Response::err(
             id,
             error_code::METHOD_NOT_FOUND,

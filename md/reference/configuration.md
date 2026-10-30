@@ -160,11 +160,27 @@ Trust follows whoever supplies the *content*, not the package the content is abo
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `auto-enable` | array of strings | `[]` | Dependency names whose embedded plugins load without being asked about. `"*"` pre-consents to every dependency. |
-| `use` | array | `[]` | Plugins enabled deliberately. Each entry is either a plain name (enabled in every workspace) or `{ name = "...", workspace = "/path" }` (enabled only while working in that workspace root). |
-| `disable` | array of strings | `[]` | Names that must never be enabled. Takes precedence over `auto-enable`, including over `"*"`. |
+| `auto-enable` | array of plugins | `[]` | Dependencies whose embedded plugins load without being asked about. `"*"` pre-consents to every dependency. |
+| `use` | array of plugins | `[]` | Plugins enabled deliberately. An entry may add `workspace = "/path"` to apply only while working in that workspace root; without it, the entry applies everywhere. |
+| `disable` | array of plugins | `[]` | Plugins that must never be enabled. Takes precedence over `auto-enable`, including over `"*"`, and over `use`. |
 
-Each name is matched by the package manager its package comes from: a crate name the way cargo matches it, hyphen/underscore-insensitively (`widget-lib` and `widget_lib` are the same entry), and a registry plugin's name exactly. A `use` name that names both a registry plugin and a crate (a dependency or one on crates.io) means the registry plugin only, so it does not also consent to that crate's embedded plugin, and a `use` name no package manager has enables nothing.
+Each entry names a plugin by the canonical name its package manager knows it by (a crate name for cargo, the plugin's own `name` for a registry), and may name that package manager too: `{ pm = "cargo", name = "serde" }`. Usually a name is enough, so `pm` can be left out: a bare string, or a table without `pm`, names whichever plugin of that name there is.
+
+A bare name that could mean more than one plugin is resolved by what the list is for:
+
+- In `use`, the nearest match answers: a registry plugin of that name, then a dependency of that name, then a package one of your [package managers](#package-manager) has: cargo's cache, and, when `cargo agents sync` runs, crates.io. Two matches at the nearest of these, say a crate and an npm package of the same name that the workspace both depends on, leave the entry ambiguous: it enables nothing, and `cargo agents sync` and `cargo agents status` say which package managers it could mean. A name no package manager has enables nothing, and `status` lists it.
+- In `auto-enable`, a bare name is consent for the dependency of that name, and for nothing while dependencies from two package managers share it, so consent to one ecosystem's package never silently covers another's.
+- In `disable`, a bare name turns off every plugin of that name, since turning off too much is the safe way to be wrong.
+
+Naming the package manager is how to say which one, and how to turn off one plugin from a registry while leaving a crate of the same name alone:
+
+```toml
+[plugins]
+use = [{ name = "crate-a", workspace = "/home/me/my-project" }]
+disable = [{ pm = "symposium-recommendations", name = "rtk" }]
+```
+
+A name is matched the way its package manager matches it: cargo treats `widget-lib` and `widget_lib` as the same crate, while a registry plugin's name is matched exactly.
 
 ```toml
 [plugins]
@@ -173,9 +189,9 @@ disable = ["noisy-crate"]
 use = ["standalone-plugin", { name = "team-tools", workspace = "/home/me/work/service" }]
 ```
 
-`use` is what wakes a dormant plugin, and it also enables a plugin whether or not any dependency references it. `auto-enable` is narrower: it is consent for what a dependency you already have carries with it.
+`use` is what wakes a dormant plugin, and it also enables a plugin whether or not any dependency references it. `"*"` names every package of its package manager, or every plugin at all when bare. `auto-enable` is narrower: it is consent for what a dependency you already have carries with it.
 
-You rarely edit this section by hand. [`cargo agents use`](./cargo-agents-use.md) writes and removes `use` entries; the [consent prompt](./cargo-agents-sync.md#consent-prompt) in an interactive `cargo agents sync` writes `auto-enable` and `disable`; and [`cargo agents status`](./cargo-agents-status.md) reports what the section currently decides.
+You rarely edit this section by hand. [`cargo agents use`](./cargo-agents-use.md) writes and removes `use` entries; the [consent prompt](./cargo-agents-sync.md#consent-prompt) in an interactive `cargo agents sync` writes `auto-enable` and `disable`; and [`cargo agents status`](./cargo-agents-status.md) reports what the section currently decides. Both write entries precisely, naming the package manager as well as the plugin; a bare name is for entries you write yourself.
 
 ## Directory resolution
 

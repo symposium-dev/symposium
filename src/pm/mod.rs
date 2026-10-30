@@ -203,10 +203,10 @@ impl PmInstance {
         }
     }
 
-    /// The package this instance has under `name`, compared under its name
-    /// rule: a dependency of that name; otherwise one already on disk (a
-    /// cache-only fetch); otherwise, above [`UpdateLevel::None`], one its
-    /// search turns up. A registry's packages are the plugins it lists, which
+    /// The package this instance has under `name`, compared under its
+    /// [`canonical_name`](Self::canonical_name): a dependency of that name;
+    /// otherwise one already on disk (a cache-only fetch); otherwise, above
+    /// [`UpdateLevel::None`], one its search turns up. A registry's packages are the plugins it lists, which
     /// callers hold already, so a trusted instance has none to find.
     ///
     /// Built from the operations every package manager has, so no package
@@ -215,25 +215,47 @@ impl PmInstance {
         if self.trusted {
             return None;
         }
-        let wanted = self.pm.canonical_name(name);
-        let same =
-            |id: &PackageId| id.pm == self.name && self.pm.canonical_name(&id.name) == wanted;
-        if let Ok(deps) = self.pm.list_deps().await
-            && let Some(dep) = deps.into_iter().find(|dep| same(dep))
-        {
-            return Some(dep);
+        let wanted = self.canonical_name(name).await;
+        if let Ok(deps) = self.pm.list_deps().await {
+            for dep in deps {
+                if self.names(&dep, &wanted).await {
+                    return Some(dep);
+                }
+            }
         }
         let named = PackageId::any_version(&self.name, name);
         if let Ok(cached) = self.pm.fetch(&named, UpdateLevel::None).await
-            && same(&cached.id)
+            && self.names(&cached.id, &wanted).await
         {
             return Some(cached.id);
         }
         if matches!(update, UpdateLevel::None) {
             return None;
         }
-        let found = self.pm.search(name).await.ok()?;
-        found.into_iter().map(|info| info.id).find(|id| same(id))
+        for info in self.pm.search(name).await.ok()? {
+            if self.names(&info.id, &wanted).await {
+                return Some(info.id);
+            }
+        }
+        None
+    }
+
+    /// Whether `id` is this instance's package whose canonical name is
+    /// `canonical`.
+    async fn names(&self, id: &PackageId, canonical: &str) -> bool {
+        id.pm == self.name && self.canonical_name(&id.name).await == canonical
+    }
+
+    /// `name` under this package manager's
+    /// [`canonical_name`](PackageManager::canonical_name), or as it is when
+    /// the package manager cannot say.
+    pub async fn canonical_name(&self, name: &str) -> String {
+        match self.pm.canonical_name(name).await {
+            Ok(canonical) => canonical,
+            Err(e) => self
+                .failure::<String>("canonical_name", e)
+                .unwrap_or_else(|_| name.to_string()),
+        }
     }
 
     /// Whether `id` belongs to this instance. Every id a PM answers with must:
@@ -353,39 +375,20 @@ impl PmRegistry {
             .collect()
     }
 
-    /// `id` in the form two ids of the same package compare equal in, under
-    /// its package manager's [`canonical_name`](PackageManager::canonical_name),
-    /// with the version dropped.
+    /// `id` with its version dropped: the form two ids of the same package
+    /// compare equal in, since a package manager spells each of its packages
+    /// one way.
     pub fn identity(&self, id: &PackageId) -> PackageId {
-        let name = match self.owner(id) {
-            Some(inst) => inst.pm.canonical_name(&id.name),
-            None => id.name.clone(),
-        };
-        PackageId::any_version(&id.pm, name)
+        PackageId::any_version(&id.pm, &id.name)
     }
 
-    /// The identity of the package a user-typed `name` refers to. A plugin in
-    /// `plugins` with that name under its registry's rule wins; otherwise the
-    /// first package manager whose [`find`](PmInstance::find) has the name at
-    /// `update` answers. A name no package manager has is an error.
-    pub async fn identify(
-        &self,
-        plugins: &[Plugin],
-        name: &str,
-        update: UpdateLevel,
-    ) -> Result<PackageId> {
-        if let Some(plugin) = plugins.iter().find(|p| {
-            self.identity(&PackageId::any_version(&p.canonical.pm, &p.manifest.name))
-                == self.identity(&PackageId::any_version(&p.canonical.pm, name))
-        }) {
-            return Ok(self.identity(&plugin.canonical));
+    /// `name` under the [`canonical_name`](PackageManager::canonical_name) of
+    /// the package manager called `pm`, or as it is for one not configured.
+    pub async fn canonical_name(&self, pm: &str, name: &str) -> String {
+        match self.instances.iter().find(|inst| inst.name == pm) {
+            Some(inst) => inst.canonical_name(name).await,
+            None => name.to_string(),
         }
-        for inst in &self.instances {
-            if let Some(id) = inst.find(name, update).await {
-                return Ok(self.identity(&id));
-            }
-        }
-        anyhow::bail!("no package named `{name}`")
     }
 
     /// Fetch a package via the instance named in its id.
@@ -993,8 +996,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn each_package_manager_decides_which_names_match() {
+    #[tokio::test]
+    async fn each_package_manager_decides_which_names_match() {
         let tmp = tempfile::tempdir().unwrap();
         let pms = PmRegistry::new(vec![
             PmInstance::new(
@@ -1011,103 +1014,13 @@ mod tests {
             ),
         ]);
         assert_eq!(
-            pms.identity(&PackageId::new(CARGO_PM, "widget_lib", "1.0.0")),
-            pms.identity(&PackageId::any_version(CARGO_PM, "widget-lib"))
+            pms.canonical_name(CARGO_PM, "widget_lib").await,
+            pms.canonical_name(CARGO_PM, "widget-lib").await
         );
         assert_ne!(
-            pms.identity(&PackageId::any_version("reg", "my_plugin")),
-            pms.identity(&PackageId::any_version("reg", "my-plugin"))
+            pms.canonical_name("reg", "my_plugin").await,
+            pms.canonical_name("reg", "my-plugin").await
         );
-    }
-
-    /// A registry `reg` listing the plugins `widget-lib` and `my-plugin`,
-    /// beside `cargo`, and those registry plugins, validated.
-    async fn registry_beside(
-        cargo: PmInstance,
-        reg: &std::path::Path,
-    ) -> (PmRegistry, Vec<Plugin>) {
-        for name in ["widget-lib", "my-plugin"] {
-            std::fs::create_dir_all(reg.join(name)).unwrap();
-            std::fs::write(
-                reg.join(name).join("Symposium.toml"),
-                format!("name = \"{name}\"\ndepends-on = [\"*\"]\n"),
-            )
-            .unwrap();
-        }
-        let registry = PmInstance::new(
-            "reg",
-            true,
-            PluginKind::Registry,
-            Box::new(PathPm::new("reg", reg)),
-        );
-        let plugins = registry.active_plugins(&[]).await;
-        assert_eq!(plugins.len(), 2);
-        (PmRegistry::new(vec![cargo, registry]), plugins)
-    }
-
-    #[tokio::test]
-    async fn identify_asks_each_package_manager_and_the_registry_wins() {
-        let tmp = tempfile::tempdir().unwrap();
-        let deps = WorkspaceDeps::fixture(
-            tmp.path(),
-            vec![
-                WorkspaceCrate::new("widget-lib".into(), semver::Version::new(1, 0, 0), None),
-                WorkspaceCrate::new("serde".into(), semver::Version::new(1, 0, 0), None),
-            ],
-        );
-        let cargo = PmInstance::new(
-            CARGO_PM,
-            false,
-            PluginKind::Package,
-            Box::new(CargoPm::new(deps)),
-        );
-        let (pms, plugins) = registry_beside(cargo, &tmp.path().join("reg")).await;
-        let registry_id = |name: &str| {
-            let plugin = plugins.iter().find(|p| p.manifest.name == name).unwrap();
-            pms.identity(&plugin.canonical)
-        };
-
-        assert_eq!(
-            pms.identify(&plugins, "serde", UpdateLevel::None)
-                .await
-                .unwrap(),
-            PackageId::any_version(CARGO_PM, "serde")
-        );
-        assert_eq!(
-            pms.identify(&plugins, "my-plugin", UpdateLevel::None)
-                .await
-                .unwrap(),
-            registry_id("my-plugin")
-        );
-        assert_eq!(
-            pms.identify(&plugins, "widget-lib", UpdateLevel::None)
-                .await
-                .unwrap(),
-            registry_id("widget-lib")
-        );
-        assert_eq!(
-            pms.identify(&plugins, "widget_lib", UpdateLevel::None)
-                .await
-                .unwrap(),
-            PackageId::any_version(CARGO_PM, "widget_lib")
-        );
-    }
-
-    /// A name no package manager has is an error rather than a crate assumed
-    /// to exist, including a registry plugin's name spelled the way only
-    /// cargo would accept it.
-    #[tokio::test]
-    async fn identify_rejects_a_name_nobody_has() {
-        let tmp = tempfile::tempdir().unwrap();
-        let (cargo, _) = crate::test_utils::FakeCargo::instance(&[], &[]);
-        let (pms, plugins) = registry_beside(cargo, tmp.path()).await;
-        for name in ["ghost", "my_plugin"] {
-            let err = pms
-                .identify(&plugins, name, UpdateLevel::Check)
-                .await
-                .unwrap_err();
-            assert_eq!(err.to_string(), format!("no package named `{name}`"));
-        }
     }
 
     #[tokio::test]

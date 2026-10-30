@@ -116,8 +116,9 @@ use = [
 An entry names a plugin, not a version requirement: the pair `(pm,
 canonical-name)` is the identity ([naming a plugin in
 configuration](../pm-interface/README.md#naming-a-plugin-in-configuration)), and
-the version is whatever the PM resolves at load time. A bare string is read as a
-cargo package, since that is what an unqualified name has always meant.
+the version is whatever the PM resolves at load time. The PM may be left out:
+a bare string names whichever plugin of that name there is, and enables nothing
+while it could name plugins from more than one PM.
 
 ### Scoping: global vs. local
 

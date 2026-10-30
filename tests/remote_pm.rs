@@ -78,6 +78,43 @@ fn remote(name: &str, script: &Path) -> RemotePm {
     )
 }
 
+/// A PM is asked to canonicalize each name once; its answer is kept for the
+/// connection.
+#[tokio::test]
+async fn a_pm_canonicalizes_each_name_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let asked = tmp.path().join("asked");
+    let folding = script(
+        tmp.path(),
+        "pm-folding.sh",
+        &format!(
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":1,"name":"demo"}}}}\n' "$id" ;;
+    *'"canonical_name"'*)
+      name=$(printf '%s' "$line" | sed 's/.*"name":"\([^"]*\)".*/\1/')
+      echo "$name" >> "{asked}"
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"name":"%s"}}}}\n' "$id" "$(printf '%s' "$name" | tr - _)" ;;
+  esac
+done
+"#,
+            asked = asked.display()
+        ),
+    );
+    let pm = remote("demo", &folding);
+    for name in ["widget-lib", "widget-lib", "serde"] {
+        let expected = name.replace('-', "_");
+        assert_eq!(pm.canonical_name(name).await.unwrap(), expected);
+    }
+    assert_eq!(
+        std::fs::read_to_string(&asked).unwrap(),
+        "widget-lib\nserde\n"
+    );
+}
+
 #[tokio::test]
 async fn a_subprocess_pm_offers_a_synthesized_manifest() {
     let tmp = tempfile::tempdir().unwrap();
@@ -360,6 +397,8 @@ async fn the_cargo_pm_answers_from_its_own_process() {
     // What the workspace depends on: resolved by the PM, in its own process,
     // from nothing but the path handed over at `initialize`.
     let deps = pm.list_deps().await.unwrap();
+    // Cargo's names, read across the boundary.
+    assert_eq!(pm.canonical_name("widget-lib").await.unwrap(), "widget_lib");
     assert!(
         deps.iter().any(|d| d.name == "widget" && d.pm == "cargo"),
         "got deps {deps:?}"
@@ -531,6 +570,102 @@ done
     // The same PM, bound to a directory, is told about it.
     let bound = sym.workspace(tmp.path());
     assert!(!bound.dep_ids().await.iter().any(|d| d.pm == "demo"));
+}
+
+/// An `npm` package manager whose project at `ws` depends on `widget`, whose
+/// content (at `content`) carries a `skills/` directory and no manifest.
+fn npm_workspace_pm(dir: &Path, ws: &Path, content: &Path) -> std::path::PathBuf {
+    let plugin = format!(
+        r#"{{"id":{{"pm":"npm","name":"widget","version":"1.0.0"}},"root":"{}","manifest":{{}}}}"#,
+        content.display()
+    );
+    script(
+        dir,
+        "pm-npm.sh",
+        &format!(
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":1,"name":"npm"}}}}\n' "$id" ;;
+    *'"project_info"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"project":{{"root":"{ws}"}}}}}}\n' "$id" ;;
+    *'"list_deps"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"deps":[{{"pm":"npm","name":"widget","version":"1.0.0"}}]}}}}\n' "$id" ;;
+    *'"active_plugins"'*|*'"load_plugin"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"plugins":[{plugin}]}}}}\n' "$id" ;;
+    *)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"plugins":[]}}}}\n' "$id" ;;
+  esac
+done
+"#,
+            ws = ws.display(),
+        ),
+    )
+}
+
+/// The consent path holds for a configured package manager exactly as it does
+/// for cargo: the plugin a dependency embeds is a candidate until consented
+/// to, under its own package manager's name, and then activates.
+#[tokio::test]
+async fn a_configured_pms_dependency_plugin_activates_once_consented() {
+    let tmp = tempfile::tempdir().unwrap();
+    let ws_root = tmp.path().join("ws");
+    let content = tmp.path().join("widget");
+    std::fs::create_dir_all(&ws_root).unwrap();
+    std::fs::create_dir_all(content.join("skills/usage")).unwrap();
+    std::fs::write(
+        content.join("skills/usage/SKILL.md"),
+        "---\nname: usage\ndescription: d\n---\nBody.\n",
+    )
+    .unwrap();
+    let pm = npm_workspace_pm(tmp.path(), &ws_root, &content);
+
+    let config_dir = tmp.path().join("config");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    let write_config = |plugins: &str| {
+        std::fs::write(
+            config_dir.join("config.toml"),
+            format!(
+                "[[agent]]\nname = \"claude\"\n\n\
+                 [defaults]\nsymposium-recommendations = false\nuser-plugins = false\n\n\
+                 [[package-manager]]\nname = \"npm\"\ncommand = \"/bin/sh\"\nargs = [{:?}]\n\n{plugins}",
+                pm.display().to_string()
+            ),
+        )
+        .unwrap();
+    };
+
+    // Whether a sync installs the package's skill.
+    async fn syncs_npm_skill(config_dir: &Path, ws_root: &Path) -> bool {
+        let sym = symposium::config::Symposium::from_dir(config_dir);
+        let ws = sym.workspace(ws_root);
+        symposium::sync::sync(&sym, &ws, symposium::UpdateLevel::None)
+            .await
+            .unwrap();
+        ws_root.join(".claude/skills/usage/SKILL.md").is_file()
+    }
+
+    // Undecided: offered as a candidate, not active.
+    write_config("");
+    let sym = symposium::config::Symposium::from_dir(&config_dir);
+    let ws = sym.workspace(&ws_root);
+    let found = symposium::discovery::discover_for(&sym, &ws).await;
+    assert_eq!(found.candidates.len(), 1, "{found:?}");
+    assert_eq!(found.candidates[0].id.pm, "npm");
+    assert!(!syncs_npm_skill(&config_dir, &ws_root).await);
+
+    // Consent to the crate of that name is not consent to the npm package.
+    write_config("[plugins]\nauto-enable = [{ pm = \"cargo\", name = \"widget\" }]\n");
+    assert!(!syncs_npm_skill(&config_dir, &ws_root).await);
+
+    write_config("[plugins]\nauto-enable = [{ pm = \"npm\", name = \"widget\" }]\n");
+    assert!(syncs_npm_skill(&config_dir, &ws_root).await);
+
+    // Nothing else here is called `widget`, so the bare name means it.
+    write_config("[plugins]\nauto-enable = [\"widget\"]\n");
+    assert!(syncs_npm_skill(&config_dir, &ws_root).await);
 }
 
 /// A package manager that appends a line to `log` each time it starts, finds

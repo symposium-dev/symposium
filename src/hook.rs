@@ -499,10 +499,14 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<Workspace>) {
         Vec::new()
     };
     let pms = deps.pms();
-    let used = workspace
-        .as_ref()
-        .map(|ws| crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root))
-        .unwrap_or_default();
+    let used = crate::discovery::used_plugins(
+        sym,
+        workspace.as_ref().map(|ws| ws.root.as_path()),
+        &registry.plugins,
+        &dep_ids,
+        pms,
+    )
+    .await;
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
     let plugins = crate::plugins::active_plugins(
         sym,
@@ -603,10 +607,14 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String
     let dep_ids = deps.dep_ids().await.to_vec();
 
     let pms = deps.pms();
-    let used = workspace
-        .as_ref()
-        .map(|ws| crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root))
-        .unwrap_or_default();
+    let used = crate::discovery::used_plugins(
+        sym,
+        workspace.as_ref().map(|ws| ws.root.as_path()),
+        &registry.plugins,
+        &dep_ids,
+        pms,
+    )
+    .await;
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
     let active = crate::plugins::active_plugins(
         sym,
@@ -634,16 +642,22 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String
 /// context, with a pointer at the interactive command that can actually ask.
 /// `None` when nothing is pending.
 async fn consent_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String> {
-    let names = crate::discovery::pending_candidates(sym, deps).await;
-    if names.is_empty() {
+    let pending = crate::discovery::pending_candidates(sym, deps).await;
+    if pending.is_empty() {
         return None;
     }
+    let names: Vec<String> = pending.iter().map(ToString::to_string).collect();
+    let commands: Vec<String> = pending
+        .iter()
+        .map(|plugin| format!("`{}`", crate::discovery::use_command(plugin)))
+        .collect();
     Some(format!(
         "These dependencies ship agent plugins that are not enabled yet: {}. \
-         They stay off until the user consents — tell the user to run \
-         `cargo agents sync` (which asks about each one) or \
-         `cargo agents use <name>`. Do not enable them yourself.",
-        names.join(", ")
+         They stay off until the user consents: tell the user to run \
+         `cargo agents sync` (which asks about each one), or {} to enable one. \
+         Do not enable them yourself.",
+        names.join(", "),
+        commands.join(", ")
     ))
 }
 
@@ -741,10 +755,14 @@ pub async fn dispatch_plugin_hooks(
         Vec::new()
     };
     let pms = deps.pms();
-    let used = workspace
-        .as_ref()
-        .map(|ws| crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root))
-        .unwrap_or_default();
+    let used = crate::discovery::used_plugins(
+        sym,
+        workspace.as_ref().map(|ws| ws.root.as_path()),
+        &registry.plugins,
+        &dep_ids,
+        pms,
+    )
+    .await;
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
     // Dispatch over the active set — registry plugins plus crate-sourced ones —
     // so a crate plugin's hooks fire exactly like a registry plugin's.
@@ -1368,7 +1386,9 @@ mod tests {
         // Replace the wildcard plugin gate with a concrete `depends-on(serde)`.
         let mut plugin = plugin_with_hook(vec![], vec![]);
         plugin.manifest.predicates = crate::predicate::PredicateSet {
-            predicates: vec![crate::predicate::Predicate::DependsOn("serde".into(), None)],
+            predicates: vec![crate::predicate::Predicate::DependsOn(
+                crate::predicate::Dependency::named("serde"),
+            )],
         };
 
         // No serde in the workspace → the hook is skipped.

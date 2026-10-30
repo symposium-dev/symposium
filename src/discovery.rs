@@ -4,8 +4,9 @@
 //! Discovery is the read side of the enablement axis. It runs in two phases:
 //!
 //! 1. list the workspace's dependencies ([`Workspace::dep_ids`]);
-//! 2. ask each *untrusted* instance — the cargo transport — for the plugins
-//!    its dependencies embed ([`PackageManager::active_plugins`]).
+//! 2. ask each *untrusted* instance (the ecosystem transports: cargo, and any
+//!    `[[package-manager]]`) for the plugins its dependencies embed
+//!    ([`PackageManager::active_plugins`]).
 //!
 //! Each such offer is then classified against the `[plugins]` config:
 //! already enabled, auto-enabled, declined, or a candidate still awaiting
@@ -28,12 +29,11 @@
 //! plugins an ecosystem transport surfaces, which run only with consent.
 //!
 //! [`plugins::load_registry`]: crate::plugins::load_registry
-//! [`Plugin::applies`]: crate::plugins::Plugin::applies
+//! [`Plugin::applies`]: Plugin::applies
 //!
 //! [`Workspace::dep_ids`]: crate::pm::Workspace::dep_ids
 //! [`PackageManager::active_plugins`]: crate::pm::PackageManager::active_plugins
 
-use std::collections::HashSet;
 use std::path::Path;
 
 use crate::pm::Workspace;
@@ -41,10 +41,10 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 use symposium_install::UpdateLevel;
 
-use crate::config::Symposium;
+use crate::config::{PluginRef, Spellings, Symposium};
 use crate::output::Output;
 use crate::plugins::Plugin;
-use crate::pm::{CARGO_PM, CargoPm, PackageId, PmRegistry};
+use crate::pm::{PackageId, PmRegistry};
 use crate::report::ReportEvent;
 
 /// Why a discovered offer is (or is not) enabled.
@@ -70,8 +70,8 @@ impl Enablement {
 /// One plugin offer whose recommended dependency the workspace has.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DiscoveredPlugin {
-    /// The offering package-manager instance: an ecosystem transport
-    /// (`cargo`) for a dependency-embedded plugin, or a registry's name.
+    /// The offering package-manager instance: the ecosystem transport whose
+    /// dependency embeds the plugin.
     pub registry: String,
     /// The offered package.
     pub id: PackageId,
@@ -94,7 +94,7 @@ impl DiscoveredPlugin {
 /// Every dependency-matched offer, grouped by what the config decided.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Discovery {
-    /// Already enabled: named by a `use` entry, or offered by a registry.
+    /// Already enabled: named by a `use` entry.
     pub active: Vec<DiscoveredPlugin>,
     /// Enabled by `[plugins] auto-enable`.
     pub auto_enabled: Vec<DiscoveredPlugin>,
@@ -111,35 +111,209 @@ impl Discovery {
     }
 }
 
+/// What a bare `[plugins] use` name means in one workspace.
+///
+/// A bare name names the one package manager it can mean, looking nearest
+/// first:
+///
+/// 1. a registry plugin of that name;
+/// 2. a dependency of that name;
+/// 3. an ecosystem transport, which can load a package that is no dependency.
+///
+/// The first of these with a match answers, so a recommendation and a crate
+/// on crates.io sharing a name is not an ambiguity. Matches from more than one
+/// package manager there are, and the entry enables nothing until it names its
+/// `pm`, rather than enabling a plugin the user may not have meant. A registry
+/// plugin answers whether or not it is dormant: a bare name that once woke it
+/// must not start loading a crate of that name when the plugin gains a gate.
+///
+/// Names compare under the
+/// [`canonical_name`](crate::pm::PackageManager::canonical_name) of the
+/// package manager each candidate belongs to.
+pub struct Names<'a> {
+    registry: Vec<PackageId>,
+    deps: Vec<PackageId>,
+    pms: &'a PmRegistry,
+}
+
+impl<'a> Names<'a> {
+    pub fn new(registry: &[Plugin], deps: &[PackageId], pms: &'a PmRegistry) -> Self {
+        Self {
+            registry: registry.iter().map(|p| p.canonical.clone()).collect(),
+            deps: deps.to_vec(),
+            pms,
+        }
+    }
+
+    /// Whether `name` names `id`, as spelled or under `id`'s package
+    /// manager's canonical form. Only a name spelled another way asks it.
+    async fn same(&self, id: &PackageId, name: &str) -> bool {
+        id.name == name
+            || self.pms.canonical_name(&id.pm, &id.name).await
+                == self.pms.canonical_name(&id.pm, name).await
+    }
+
+    /// The packages `name` could mean from the nearest of the registry
+    /// plugins and the dependencies that has one, one per package. `pm`
+    /// narrows both. Empty when neither has it.
+    pub async fn nearest(&self, name: &str, pm: Option<&str>) -> Vec<PackageId> {
+        let found = self.named(&self.registry, name, pm).await;
+        if found.is_empty() {
+            self.named(&self.deps, name, pm).await
+        } else {
+            found
+        }
+    }
+
+    async fn named(&self, ids: &[PackageId], name: &str, pm: Option<&str>) -> Vec<PackageId> {
+        let mut found: Vec<PackageId> = Vec::new();
+        for id in ids {
+            let seen = found.iter().any(|f| f.pm == id.pm);
+            if !seen && pm.is_none_or(|pm| id.pm == pm) && self.same(id, name).await {
+                found.push(id.clone());
+            }
+        }
+        found
+    }
+
+    /// The registry plugins and dependencies each `auto-enable` and `disable`
+    /// entry names here under another spelling than its own.
+    pub async fn spellings(&self, plugins: &crate::config::PluginsConfig) -> Spellings {
+        let mut spellings = Spellings::default();
+        for id in self.registry.iter().chain(&self.deps) {
+            self.spell(plugins, id, &mut spellings).await;
+        }
+        spellings
+    }
+
+    /// Add to `spellings` the `auto-enable` and `disable` entries that name
+    /// `id` under another spelling than its own: for a package loaded after
+    /// [`spellings`](Self::spellings), which only knows the registry plugins
+    /// and dependencies.
+    pub async fn spell(
+        &self,
+        plugins: &crate::config::PluginsConfig,
+        id: &PackageId,
+        spellings: &mut Spellings,
+    ) {
+        for entry in plugins.auto_enable.iter().chain(&plugins.disable) {
+            if entry.name != "*"
+                && entry.name != id.name
+                && entry.pm.as_ref().is_none_or(|pm| *pm == id.pm)
+                && self.same(id, &entry.name).await
+            {
+                spellings.add(entry.clone(), id.clone());
+            }
+        }
+    }
+
+    /// `entry` naming its package manager, spelled the way that package
+    /// manager reports the package when it is known here; `None` for a bare
+    /// name that no registry plugin or dependency has, which only an
+    /// ecosystem package manager can answer for ([`enabled_dependencies`]).
+    /// A bare name that could mean more than one is an error listing the
+    /// package managers it could mean. A wildcard is left bare: it names every
+    /// package manager's packages.
+    pub async fn qualify(&self, entry: &PluginRef) -> Result<Option<PluginRef>, Vec<String>> {
+        if entry.name == "*" {
+            return Ok(Some(entry.clone()));
+        }
+        let found = self.nearest(&entry.name, entry.pm.as_deref()).await;
+        if let Some(pm) = &entry.pm {
+            return Ok(Some(match found.first() {
+                Some(id) => PluginRef::new(pm, &id.name),
+                None => entry.clone(),
+            }));
+        }
+        let mut pms: Vec<String> = found.iter().map(|id| id.pm.clone()).collect();
+        pms.sort();
+        pms.dedup();
+        match (pms.as_slice(), found.first()) {
+            ([pm], Some(id)) => Ok(Some(PluginRef::new(pm, &id.name))),
+            ([], _) => Ok(None),
+            _ => Err(pms),
+        }
+    }
+}
+
+/// The `use` entries that apply in one workspace, resolved by [`Names`].
+#[derive(Debug, Default)]
+pub struct Used {
+    /// What they enable, each naming its package manager.
+    pub plugins: Vec<PluginRef>,
+    /// Bare names no registry plugin or dependency has, left for the ecosystem
+    /// package managers to say whether they have one
+    /// ([`enabled_dependencies`]).
+    pub unknown: Vec<PluginRef>,
+    /// Bare names that enable nothing, with the package managers each could
+    /// mean, so the user can be told to pick one.
+    pub ambiguous: Vec<(PluginRef, Vec<String>)>,
+}
+
+/// Resolve the `use` entries that apply in `workspace_root`.
+pub async fn used(sym: &Symposium, workspace_root: &Path, names: &Names<'_>) -> Used {
+    let mut used = Used::default();
+    for entry in sym.config.plugins.used_in(workspace_root) {
+        match names.qualify(entry).await {
+            Ok(Some(plugin)) => used.plugins.push(plugin),
+            Ok(None) => used.unknown.push(entry.clone()),
+            Err(pms) => {
+                tracing::debug!(entry = %entry, ?pms, "ambiguous `use` entry enables nothing");
+                used.ambiguous.push((entry.clone(), pms));
+            }
+        }
+    }
+    used
+}
+
+/// What the `use` entries enable in the workspace at `workspace_root`, or
+/// nothing outside one: [`used`], for the callers building a predicate
+/// context.
+pub async fn used_plugins(
+    sym: &Symposium,
+    workspace_root: Option<&Path>,
+    registry: &[Plugin],
+    deps: &[PackageId],
+    pms: &PmRegistry,
+) -> Vec<PluginRef> {
+    match workspace_root {
+        Some(root) => {
+            used(sym, root, &Names::new(registry, deps, pms))
+                .await
+                .plugins
+        }
+        None => Vec::new(),
+    }
+}
+
 /// Discover the plugins offered for this workspace's dependencies.
 ///
-/// `workspace_root` scopes the `use` entries that count (an entry can be
-/// recorded for one workspace only). `active_plugins` fetches each dependency
-/// cache-only — for a workspace dependency, into the source `cargo metadata`
-/// already extracted (no probe, no network) — so every dependency-embedded
-/// plugin is discoverable, registry crates included.
-pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin]) -> Discovery {
-    let Some(workspace_root) = ws.root().await.map(Path::to_path_buf) else {
+/// `used` is what the applicable `use` entries enable ([`used`]), and
+/// `spellings` what the other entries name here ([`Names::spellings`]). Each
+/// untrusted package manager answers from its own dependencies' sources (the
+/// cargo PM reads the sources `cargo metadata` already extracted), so every
+/// dependency-embedded plugin is discoverable, registry packages included.
+pub async fn discover(
+    sym: &Symposium,
+    ws: &Arc<Workspace>,
+    used: &[PluginRef],
+    spellings: &Spellings,
+) -> Discovery {
+    if ws.root().await.is_none() {
         return Discovery::default();
-    };
+    }
     let pms = ws.pms();
     let dep_ids = ws.dep_ids().await;
-    let used: HashSet<PackageId> =
-        resolve_used(sym, pms, registry, &workspace_root, UpdateLevel::None)
-            .await
-            .into_iter()
-            .map(|(_, id)| id)
-            .collect();
 
     let mut discovery = Discovery::default();
-    // Untrusted instances = the cargo transport: its `active_plugins` are the
-    // plugins embedded in dependencies, which run only with consent. Classify
-    // each against the `[plugins]` config.
+    // Untrusted instances are the ecosystem transports: their `active_plugins`
+    // are the plugins embedded in dependencies, which run only with consent.
+    // Classify each against the `[plugins]` config, under its own id.
     for inst in pms.instances().filter(|i| !i.trusted) {
         for plugin in inst.active_plugins(dep_ids).await {
             let name = plugin.canonical.name.clone();
             let description = Some(describe_plugin(&plugin.manifest));
-            let enablement = decide(sym, pms, &used, &plugin.canonical);
+            let enablement = decide(sym, &plugin.canonical, used, dep_ids, spellings);
             let discovered = DiscoveredPlugin {
                 registry: inst.name.clone(),
                 id: plugin.canonical,
@@ -158,113 +332,125 @@ pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin])
     discovery
 }
 
-/// The packages whose plugins the user has enabled, to load at sync time.
-/// Two sources:
+/// The packages whose embedded plugins the user has enabled, to load at sync
+/// time, from any package manager. Two sources:
 ///
 /// 1. workspace **dependencies** covered by `[plugins] auto-enable` or an
 ///    applicable `use` entry, and
 /// 2. packages named by a `use` entry that are **not** dependencies:
-///    `cargo agents use <crate>` pulls a plugin in from crates.io whether or
-///    not the workspace depends on it.
+///    `cargo agents use <crate>` pulls a plugin in from its registry
+///    (crates.io) whether or not the workspace depends on it.
 ///
 /// `auto-enable` intentionally contributes only (1): it is consent for what a
-/// dependency you already have carries, not a way to add crates. Declined
-/// packages are pruned. A `use` name is resolved through the package managers
-/// ([`PmRegistry::identify`]) at `update`: one that names a plugin in
-/// `registry` is left out, since that plugin is loaded already and
-/// [`used_plugins`] wakes it, and one that no package manager has is skipped.
+/// dependency you already have carries, not a way to add packages. Declined
+/// ones are pruned. This reads the config rather than the offer list, so a
+/// `use`d package that isn't a dependency at all (source not resolved yet)
+/// still works.
+///
+/// `used` is what the applicable `use` entries enable ([`used`]), and
+/// `spellings` what the other entries name here ([`Names::spellings`]). An
+/// entry counts here only when it names one of the package managers in `pms`
+/// that is not a trust root. One naming a registry wakes a dormant registry plugin
+/// where it already is, so there is nothing to load. A bare name no registry
+/// plugin or dependency has is looked for in each ecosystem package manager
+/// ([`PmInstance::find`](crate::pm::PmInstance::find)) at `update`: under
+/// [`UpdateLevel::None`] only on disk, so a hook never searches; found by
+/// exactly one, it is that package; by several, it is ambiguous and enables
+/// nothing; by none, it is skipped.
 pub async fn enabled_dependencies(
     sym: &Symposium,
     pms: &PmRegistry,
-    registry: &[Plugin],
     dep_ids: &[PackageId],
-    workspace_root: &Path,
+    used: &Used,
+    spellings: &Spellings,
     update: UpdateLevel,
 ) -> Vec<PackageId> {
     let plugins = &sym.config.plugins;
-    let used = resolve_used(sym, pms, registry, workspace_root, update).await;
-    let mut enabled = Vec::new();
-    let mut known = HashSet::new();
-    for id in dep_ids.iter().filter(|id| id.pm == CARGO_PM) {
-        let identity = pms.identity(id);
-        let is_used = used.iter().any(|(_, used)| *used == identity);
-        known.insert(identity);
-        if !plugins.is_disabled(pms, id) && (plugins.is_auto_enabled(pms, id) || is_used) {
-            enabled.push(PackageId::any_version(&id.pm, &id.name));
-        }
-    }
-
-    for (name, id) in used {
-        let named = PackageId::any_version(&id.pm, name);
-        if !registry.iter().any(|p| pms.identity(&p.canonical) == id)
-            && !plugins.is_disabled(pms, &named)
-            && known.insert(id)
-        {
-            enabled.push(named);
-        }
-    }
-
-    enabled
-}
-
-pub(crate) async fn resolve_used<'a>(
-    sym: &'a Symposium,
-    pms: &PmRegistry,
-    registry: &[Plugin],
-    workspace_root: &Path,
-    update: UpdateLevel,
-) -> Vec<(&'a str, PackageId)> {
-    let mut used = Vec::new();
-    for name in sym.config.plugins.used_names_in(workspace_root) {
-        match pms.identify(registry, name, update).await {
-            Ok(id) => used.push((name, id)),
-            Err(e) => tracing::warn!(error = %e, "skipping `[plugins] use` entry"),
-        }
-    }
-    used
-}
-
-/// The canonical ids of the `plugins` an applicable `use` entry names, which
-/// is what wakes a dormant one. A plugin is named by its manifest name, under
-/// the rule of the package manager it came from.
-pub fn used_plugins(
-    sym: &Symposium,
-    pms: &PmRegistry,
-    plugins: &[Plugin],
-    workspace_root: &Path,
-) -> Vec<PackageId> {
-    plugins
+    let found = find_unknown(pms, &used.unknown, update).await;
+    let used: Vec<&PluginRef> = used.plugins.iter().chain(&found).collect();
+    let mut ids: Vec<PackageId> = dep_ids
         .iter()
-        .filter(|p| {
-            let named = PackageId::any_version(&p.canonical.pm, &p.manifest.name);
-            sym.config.plugins.is_used_in(pms, &named, workspace_root)
+        .filter(|id| !plugins.is_disabled(id, spellings))
+        .filter(|id| {
+            plugins.is_auto_enabled(id, dep_ids, spellings) || used.iter().any(|u| u.matches(id))
         })
-        .map(|p| p.canonical.clone())
-        .collect()
+        .map(|id| PackageId::any_version(&id.pm, &id.name))
+        .collect();
+
+    for used in used {
+        // A wildcard names dependencies, which the first pass covered.
+        let Some(pm) = used.pm.as_deref().filter(|_| used.name != "*") else {
+            continue;
+        };
+        if !pms.instances().any(|i| !i.trusted && i.name == pm) {
+            continue;
+        }
+        let id = PackageId::any_version(pm, &used.name);
+        let known =
+            plugins.is_disabled(&id, spellings) || ids.iter().any(|known| used.matches(known));
+        if !known {
+            ids.push(id);
+        }
+    }
+
+    ids
+}
+
+/// The packages the ecosystem package managers have under each of `unknown`'s
+/// bare names, for those exactly one has.
+pub(crate) async fn find_unknown(
+    pms: &PmRegistry,
+    unknown: &[PluginRef],
+    update: UpdateLevel,
+) -> Vec<PluginRef> {
+    let mut found = Vec::new();
+    for entry in unknown {
+        let mut have = Vec::new();
+        for inst in pms.instances() {
+            if let Some(id) = inst.find(&entry.name, update).await {
+                have.push(id);
+            }
+        }
+        match have.as_slice() {
+            [id] => found.push(PluginRef::new(&id.pm, &id.name)),
+            [] => tracing::debug!(entry = %entry, "no package manager has this `use` entry"),
+            _ => tracing::warn!(
+                entry = %entry,
+                pms = ?have.iter().map(|id| &id.pm).collect::<Vec<_>>(),
+                "ambiguous `use` entry enables nothing; name its package manager"
+            ),
+        }
+    }
+    found
 }
 
 /// Run [`discover`] for the workspace `deps` points at, against the plugins
 /// its registries and members define, or an empty [`Discovery`] when there is
 /// no workspace.
 pub async fn discover_for(sym: &Symposium, ws: &Arc<Workspace>) -> Discovery {
-    let workspace = ws.info().await.cloned();
-    let registry = crate::plugins::load_registry_with_workspace(sym, workspace.as_ref()).await;
-    discover(sym, ws, &registry.plugins).await
+    let Some(workspace) = ws.info().await.cloned() else {
+        return Discovery::default();
+    };
+    let registry = crate::plugins::load_registry_with_workspace(sym, Some(&workspace)).await;
+    let names = Names::new(&registry.plugins, ws.dep_ids().await, ws.pms());
+    let used = used(sym, &workspace.root, &names).await.plugins;
+    let spellings = names.spellings(&sym.config.plugins).await;
+    discover(sym, ws, &used, &spellings).await
 }
 
-/// The names of the discovered offers still awaiting consent, deduplicated
-/// and sorted — what a consent prompt would ask about, and what the
-/// non-interactive hint names.
-pub async fn pending_candidates(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<String> {
-    let mut names: Vec<String> = discover_for(sym, deps)
+/// The discovered offers still awaiting consent, deduplicated and sorted —
+/// what a consent prompt would ask about, and what the non-interactive hint
+/// names.
+pub async fn pending_candidates(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<PluginRef> {
+    let mut pending: Vec<PluginRef> = discover_for(sym, deps)
         .await
         .candidates
         .into_iter()
-        .map(|c| c.id.name)
+        .map(|c| PluginRef::new(&c.id.pm, &c.id.name))
         .collect();
-    names.sort();
-    names.dedup();
-    names
+    pending.sort_by_key(ToString::to_string);
+    pending.dedup();
+    pending
 }
 
 /// Record consent decisions: approvals into `[plugins] auto-enable`,
@@ -273,20 +459,29 @@ pub async fn pending_candidates(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<S
 ///
 /// Split out from the prompt so the decision recording is testable without a
 /// terminal, and so other entry points can record the same way.
-pub fn apply_consent(sym: &mut Symposium, approved: &[String], declined: &[String]) -> Result<()> {
+///
+/// Each decision names the package manager that offered the plugin as well as
+/// its name, so consent to one ecosystem's package never covers another's of
+/// the same name.
+pub fn apply_consent(
+    sym: &mut Symposium,
+    approved: &[PackageId],
+    declined: &[PackageId],
+) -> Result<()> {
     if approved.is_empty() && declined.is_empty() {
         return Ok(());
     }
-    let pms = sym.detached_managers();
     let plugins = &mut sym.config.plugins;
-    for name in approved {
-        if !plugins.is_auto_enabled(&pms, &CargoPm::id_for(name, None)) {
-            plugins.auto_enable.push(name.clone());
+    for id in approved {
+        let entry = PluginRef::new(&id.pm, &id.name);
+        if !plugins.auto_enable.contains(&entry) {
+            plugins.auto_enable.push(entry);
         }
     }
-    for name in declined {
-        if !plugins.is_disabled(&pms, &CargoPm::id_for(name, None)) {
-            plugins.disable.push(name.clone());
+    for id in declined {
+        let entry = PluginRef::new(&id.pm, &id.name);
+        if !plugins.disable.contains(&entry) {
+            plugins.disable.push(entry);
         }
     }
     sym.save_config().context("failed to write user config")?;
@@ -294,7 +489,7 @@ pub fn apply_consent(sym: &mut Symposium, approved: &[String], declined: &[Strin
     if !approved.is_empty() {
         tracing::info!(
             report = %ReportEvent::Info {
-                message: format!("enabled dependency plugins: {}", approved.join(", ")),
+                message: format!("enabled dependency plugins: {}", shown(approved)),
             },
         );
     }
@@ -303,12 +498,30 @@ pub fn apply_consent(sym: &mut Symposium, approved: &[String], declined: &[Strin
             report = %ReportEvent::Info {
                 message: format!(
                     "declined dependency plugins (recorded in `[plugins] disable`): {}",
-                    declined.join(", ")
+                    shown(declined)
                 ),
             },
         );
     }
     Ok(())
+}
+
+/// `ids` as the user is shown them: `pm:name`.
+fn shown(ids: &[PackageId]) -> String {
+    ids.iter()
+        .map(|id| PluginRef::new(&id.pm, &id.name).to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// The `cargo agents use` command that enables `plugin`, which names its
+/// package manager: by name and `--pm`, since `use` takes the name a package
+/// manager knows a package by, not the `pm:name` it is shown as.
+pub fn use_command(plugin: &PluginRef) -> String {
+    match &plugin.pm {
+        Some(pm) => format!("cargo agents use {} --pm {pm}", plugin.name),
+        None => format!("cargo agents use {}", plugin.name),
+    }
 }
 
 /// Ask the user about each undecided offer, then record the answers.
@@ -339,10 +552,11 @@ pub async fn prompt_for_consent(
     let mut declined = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for candidate in candidates {
-        let name = candidate.id.name;
-        if !seen.insert(name.clone()) {
+        let id = PackageId::any_version(&candidate.id.pm, &candidate.id.name);
+        if !seen.insert(id.clone()) {
             continue;
         }
+        let name = PluginRef::new(&id.pm, &id.name);
         let what = candidate
             .description
             .as_deref()
@@ -354,8 +568,8 @@ pub async fn prompt_for_consent(
             .interact_opt()
             .context("consent prompt failed")?;
         match answer {
-            Some(1) => approved.push(name),
-            Some(2) => declined.push(name),
+            Some(1) => approved.push(id),
+            Some(2) => declined.push(id),
             Some(_) => {}  // ask me later — record nothing
             None => break, // Esc — leave the rest undecided
         }
@@ -389,14 +603,15 @@ fn count_phrase(n: usize, singular: &str, plural: &str) -> Option<String> {
     (n > 0).then(|| format!("{n} {}", if n == 1 { singular } else { plural }))
 }
 
-/// Classify one offer against the `[plugins]` config. An explicit decision —
-/// `use`, then `disable` — outranks the standing `auto-enable`, so a name the
-/// user declined stays declined.
+/// Classify one offer against the `[plugins]` config: `disable`, then `use`,
+/// then the standing `auto-enable`, so a name the user declined stays
+/// declined.
 fn decide(
     sym: &Symposium,
-    pms: &PmRegistry,
-    used: &HashSet<PackageId>,
     id: &PackageId,
+    used: &[PluginRef],
+    deps: &[PackageId],
+    spellings: &Spellings,
 ) -> Enablement {
     let plugins = &sym.config.plugins;
     // `disable` is tested first because it is the last word: every other
@@ -404,11 +619,11 @@ fn decide(
     // may not. Activation agrees (see `record_active`), so classifying a
     // disabled plugin as `Used` here would report it active while it stays
     // off.
-    if plugins.is_disabled(pms, id) {
+    if plugins.is_disabled(id, spellings) {
         Enablement::Declined
-    } else if used.contains(&pms.identity(id)) {
+    } else if used.iter().any(|entry| entry.matches(id)) {
         Enablement::Used
-    } else if plugins.is_auto_enabled(pms, id) {
+    } else if plugins.is_auto_enabled(id, deps, spellings) {
         Enablement::AutoEnabled
     } else {
         Enablement::Candidate
@@ -418,8 +633,8 @@ fn decide(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pm::ANY_VERSION;
     use crate::pm::WorkspaceCrate;
+    use crate::pm::{ANY_VERSION, CARGO_PM, PmRegistry};
     use indoc::indoc;
 
     /// A workspace with `widget-lib` as a path dependency carrying skills,
@@ -467,7 +682,7 @@ mod tests {
         let ws = workspace(tmp.path());
         let sym = sym_with(tmp.path(), "");
 
-        let found = discover(&sym, &ws, &[]).await;
+        let found = discover_for(&sym, &ws).await;
         assert!(found.active.is_empty());
         assert!(found.auto_enabled.is_empty());
         let names: Vec<&str> = found.candidates.iter().map(|c| c.name()).collect();
@@ -487,7 +702,7 @@ mod tests {
             "#},
         );
 
-        let found = discover(&sym, &ws, &[]).await;
+        let found = discover_for(&sym, &ws).await;
         assert!(found.candidates.is_empty());
         let names: Vec<&str> = found.auto_enabled.iter().map(|c| c.name()).collect();
         assert_eq!(names, vec!["widget-lib"]);
@@ -506,7 +721,7 @@ mod tests {
                 use = ["widget-lib"]
             "#},
         );
-        let found = discover(&sym, &ws, &[]).await;
+        let found = discover_for(&sym, &ws).await;
         assert_eq!(found.active.len(), 1);
         assert_eq!(found.active[0].enablement, Enablement::Used);
 
@@ -518,7 +733,7 @@ mod tests {
                 disable = ["widget-lib"]
             "#},
         );
-        let found = discover(&sym, &ws, &[]).await;
+        let found = discover_for(&sym, &ws).await;
         assert!(found.auto_enabled.is_empty());
         assert_eq!(found.declined.len(), 1);
     }
@@ -542,8 +757,11 @@ mod tests {
         std::fs::create_dir_all(&entry).unwrap();
         std::fs::write(entry.join("Symposium.toml"), "name = \"widget-lib\"\n").unwrap();
         let registry = crate::plugins::load_registry(&sym).await;
+        let names = Names::new(&registry.plugins, ws.dep_ids().await, ws.pms());
+        let used = used(&sym, tmp.path(), &names).await.plugins;
+        let spellings = names.spellings(&sym.config.plugins).await;
 
-        let found = discover(&sym, &ws, &registry.plugins).await;
+        let found = discover(&sym, &ws, &used, &spellings).await;
         assert!(found.active.is_empty());
         assert_eq!(found.candidates.len(), 1);
     }
@@ -562,7 +780,7 @@ mod tests {
             "#},
         );
 
-        let found = discover(&sym, &ws, &[]).await;
+        let found = discover_for(&sym, &ws).await;
         assert!(found.active.is_empty());
         assert_eq!(found.candidates.len(), 1);
     }
@@ -577,12 +795,23 @@ mod tests {
         PmRegistry::new(vec![cargo])
     }
 
-    async fn enabled_names(sym: &Symposium, deps: &[PackageId], root: &Path) -> Vec<String> {
-        enabled_dependencies(sym, &cached_crates(), &[], deps, root, UpdateLevel::None)
-            .await
-            .into_iter()
-            .map(|id| id.name)
-            .collect()
+    /// [`enabled_dependencies`] with the `use` entries resolved the way the
+    /// active set resolves them, with no registry plugins, against `pms`.
+    async fn enabled_with(
+        sym: &Symposium,
+        pms: &PmRegistry,
+        deps: &[PackageId],
+        root: &Path,
+    ) -> Vec<PackageId> {
+        let names = Names::new(&[], deps, pms);
+        let used = used(sym, root, &names).await;
+        let spellings = names.spellings(&sym.config.plugins).await;
+        enabled_dependencies(sym, pms, deps, &used, &spellings, UpdateLevel::None).await
+    }
+
+    /// [`enabled_with`] against [`cached_crates`].
+    async fn enabled(sym: &Symposium, deps: &[PackageId], root: &Path) -> Vec<PackageId> {
+        enabled_with(sym, &cached_crates(), deps, root).await
     }
 
     /// Hook dispatch, `--help` and subcommand dispatch build the active set at
@@ -641,14 +870,226 @@ mod tests {
             PackageId::new(CARGO_PM, "tokio", "1.0.0"),
             PackageId::new(CARGO_PM, "clap", "4.0.0"),
             PackageId::new(CARGO_PM, "anyhow", "1.0.0"),
-            // Not a cargo package: not a crate to load.
-            PackageId::new("npm", "serde", ANY_VERSION),
+        ];
+        assert_eq!(
+            enabled(&sym, &deps, tmp.path()).await,
+            cargo(&["serde", "tokio"])
+        );
+
+        // A bare name two package managers' dependencies share consents to
+        // neither.
+        let deps = [
+            deps.as_slice(),
+            &[PackageId::new("npm", "serde", ANY_VERSION)],
+        ]
+        .concat();
+        assert_eq!(enabled(&sym, &deps, tmp.path()).await, cargo(&["tokio"]));
+    }
+
+    fn registry_plugin(pm: &str, name: &str, dormant: bool) -> crate::plugins::Plugin {
+        crate::plugins::Plugin {
+            canonical: PackageId::any_version(pm, name),
+            manifest: crate::plugins::PluginManifest {
+                name: name.to_string(),
+                requires_use: dormant,
+                predicates: Default::default(),
+                hooks: vec![],
+                skills: vec![],
+                mcp_servers: vec![],
+                installations: vec![],
+                subcommands: Default::default(),
+                custom_predicates: vec![],
+                chained: vec![],
+            },
+            workspace_member: false,
+        }
+    }
+
+    /// An `auto-enable` or `disable` entry names a package spelled another way
+    /// when its package manager reads the two as one: cargo's `widget-lib` for
+    /// `widget_lib`, whether a dependency or a package loaded later. A package
+    /// manager that compares names exactly does not.
+    #[tokio::test]
+    async fn an_entry_names_a_package_its_package_manager_spells_another_way() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sym = sym_with(
+            tmp.path(),
+            indoc! {r#"
+                [plugins]
+                auto-enable = ["widget_lib"]
+                disable = ["noisy_crate", "my_plugin", "chained_crate"]
+            "#},
+        );
+        let registry = [registry_plugin("recs", "my-plugin", false)];
+        let deps = [
+            PackageId::new(CARGO_PM, "widget-lib", "1.0.0"),
+            PackageId::new(CARGO_PM, "noisy-crate", "1.0.0"),
+        ];
+        let pms = sym.detached_managers();
+        let names = Names::new(&registry, &deps, &pms);
+        let plugins = &sym.config.plugins;
+        let mut spellings = names.spellings(plugins).await;
+
+        assert!(plugins.is_auto_enabled(&deps[0], &deps, &spellings));
+        assert!(plugins.is_disabled(&deps[1], &spellings));
+        assert!(!plugins.is_disabled(&registry[0].canonical, &spellings));
+
+        let chained = PackageId::new(CARGO_PM, "chained-crate", "1.0.0");
+        assert!(!plugins.is_disabled(&chained, &spellings));
+        names.spell(plugins, &chained, &mut spellings).await;
+        assert!(plugins.is_disabled(&chained, &spellings));
+        // Without asking, only the spelling written matches.
+        let exact = crate::config::Spellings::default();
+        assert!(!plugins.is_auto_enabled(&deps[0], &deps, &exact));
+        assert!(!plugins.is_disabled(&deps[1], &exact));
+    }
+
+    /// A bare name means the one package manager it can, nearest first: a
+    /// registry plugin, then a dependency. One neither has is for the
+    /// ecosystem package managers to find.
+    #[tokio::test]
+    async fn a_bare_name_resolves_nearest_first() {
+        let tmp = tempfile::tempdir().unwrap();
+        let npm = "\n[[package-manager]]\nname = \"npm\"\ncommand = \"/nonexistent/pm\"\n";
+        let cargo_only = sym_with(tmp.path(), "");
+        let with_npm = sym_with(tmp.path(), npm);
+        let registry = [
+            registry_plugin("recs", "rtk", true),
+            registry_plugin("recs", "serde", false),
+            registry_plugin("recs", "twice", true),
+            registry_plugin("more-recs", "twice", true),
+        ];
+        let deps = [
+            PackageId::new(CARGO_PM, "serde", "1.0.0"),
+            PackageId::new(CARGO_PM, "rtk", "1.0.0"),
+            PackageId::new(CARGO_PM, "tokio", "1.0.0"),
+            PackageId::new(CARGO_PM, "shared", "1.0.0"),
+            PackageId::new("npm", "shared", "1.0.0"),
+        ];
+        let qualify = async |sym: &Symposium, name: &str| {
+            let pms = sym.detached_managers();
+            Names::new(&registry, &deps, &pms)
+                .qualify(&PluginRef::bare(name))
+                .await
+        };
+
+        // A recommendation outranks the crate of its name, dormant or not, so
+        // a bare name that woke one never starts loading the crate instead.
+        assert_eq!(
+            qualify(&cargo_only, "rtk").await,
+            Ok(Some(PluginRef::new("recs", "rtk")))
+        );
+        assert_eq!(
+            qualify(&cargo_only, "serde").await,
+            Ok(Some(PluginRef::new("recs", "serde")))
+        );
+        assert_eq!(
+            qualify(&cargo_only, "tokio").await,
+            Ok(Some(PluginRef::new(CARGO_PM, "tokio")))
+        );
+        // A name no registry plugin or dependency has is left for the
+        // ecosystem package managers to say whether they have it.
+        assert_eq!(qualify(&cargo_only, "anyhow").await, Ok(None));
+        // Two matches in the nearest tier are ambiguous.
+        assert_eq!(
+            qualify(&cargo_only, "twice").await,
+            Err(vec!["more-recs".to_string(), "recs".to_string()])
+        );
+        assert_eq!(
+            qualify(&cargo_only, "shared").await,
+            Err(vec![CARGO_PM.to_string(), "npm".to_string()])
+        );
+        assert_eq!(qualify(&with_npm, "anyhow").await, Ok(None));
+        // A qualified entry and a wildcard are left as they are.
+        let pms = cargo_only.detached_managers();
+        let names = Names::new(&registry, &deps, &pms);
+        assert_eq!(
+            names.qualify(&PluginRef::new("npm", "shared")).await,
+            Ok(Some(PluginRef::new("npm", "shared")))
+        );
+        assert_eq!(
+            names.qualify(&PluginRef::bare("*")).await,
+            Ok(Some(PluginRef::bare("*")))
+        );
+    }
+
+    fn cargo(names: &[&str]) -> Vec<PackageId> {
+        names
+            .iter()
+            .map(|n| PackageId::any_version(CARGO_PM, *n))
+            .collect()
+    }
+
+    /// Enablement is per package manager: an entry naming `npm` enables that
+    /// ecosystem's package, provided an `npm` package manager is configured to
+    /// load it.
+    #[tokio::test]
+    async fn enablement_reaches_every_package_manager() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = indoc! {r#"
+            [plugins]
+            auto-enable = [{ pm = "npm", name = "left-pad" }]
+            use = [{ pm = "npm", name = "is-even" }, { pm = "nowhere", name = "x" }]
+        "#};
+        let deps = [
+            PackageId::new("npm", "left-pad", "1.3.0"),
+            PackageId::new("npm", "is-odd", "3.0.1"),
         ];
 
-        assert_eq!(
-            enabled_names(&sym, &deps, tmp.path()).await,
-            vec!["serde".to_string(), "tokio".to_string()]
+        let sym = sym_with(
+            tmp.path(),
+            &format!(
+                "{config}\n[[package-manager]]\nname = \"npm\"\ncommand = \"/nonexistent/symposium-pm-npm\"\n"
+            ),
         );
+        assert_eq!(
+            enabled_with(&sym, &sym.detached_managers(), &deps, tmp.path()).await,
+            vec![
+                PackageId::any_version("npm", "left-pad"),
+                PackageId::any_version("npm", "is-even"),
+            ]
+        );
+
+        // With no `npm` package manager, nothing could load `is-even`.
+        let sym = sym_with(tmp.path(), config);
+        assert_eq!(
+            enabled_with(&sym, &sym.detached_managers(), &deps, tmp.path()).await,
+            vec![PackageId::any_version("npm", "left-pad")]
+        );
+    }
+
+    /// Consent is recorded precisely, under the package manager that offered
+    /// the plugin, so it never covers another ecosystem's package of the same
+    /// name, here or in a workspace that depends on that one.
+    #[test]
+    fn consent_is_recorded_under_the_offering_package_manager() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut sym = sym_with(tmp.path(), "");
+        apply_consent(
+            &mut sym,
+            &[
+                PackageId::any_version("npm", "left-pad"),
+                PackageId::any_version(CARGO_PM, "widget"),
+            ],
+            &[PackageId::any_version("npm", "is-odd")],
+        )
+        .unwrap();
+
+        let plugins = &sym.config.plugins;
+        assert_eq!(
+            plugins.auto_enable,
+            vec![
+                PluginRef::new("npm", "left-pad"),
+                PluginRef::new(CARGO_PM, "widget")
+            ]
+        );
+        assert_eq!(plugins.disable, vec![PluginRef::new("npm", "is-odd")]);
+        let cargo_left_pad = PackageId::any_version(CARGO_PM, "left-pad");
+        assert!(!plugins.is_auto_enabled(
+            &cargo_left_pad,
+            std::slice::from_ref(&cargo_left_pad),
+            &crate::config::Spellings::default()
+        ));
     }
 
     /// `use`-ing a crate that isn't a workspace dependency still enables it, so
@@ -669,13 +1110,10 @@ mod tests {
         // Only `anyhow` is an actual dependency; the rest are not.
         let deps = [PackageId::new(CARGO_PM, "anyhow", "1.0.0")];
 
+        let enabled = enabled(&sym, &deps, tmp.path()).await;
         // The `use`d non-dependency crate is enabled; the workspace-scoped one
-        // (for /elsewhere), the unknown one and the auto-enabled
-        // non-dependency are not.
-        assert_eq!(
-            enabled_names(&sym, &deps, tmp.path()).await,
-            vec!["my-skills-crate".to_string()]
-        );
+        // (for /elsewhere) and the auto-enabled non-dependency are not.
+        assert_eq!(enabled, cargo(&["my-skills-crate"]));
     }
 
     /// A `use`d crate that *is* a dependency appears once, not twice.
@@ -690,10 +1128,7 @@ mod tests {
             "#},
         );
         let deps = [PackageId::new(CARGO_PM, "serde", "1.0.210")];
-        assert_eq!(
-            enabled_names(&sym, &deps, tmp.path()).await,
-            vec!["serde".to_string()]
-        );
+        assert_eq!(enabled(&sym, &deps, tmp.path()).await, cargo(&["serde"]));
     }
 
     /// A registry compares plugin names exactly, so only the exact spelling
@@ -712,8 +1147,17 @@ mod tests {
             let plugins = crate::plugins::load_registry(&sym).await.plugins;
             assert_eq!(plugins.len(), 1);
             assert!(plugins[0].manifest.requires_use);
-            used_plugins(&sym, &sym.detached_managers(), &plugins, tmp.path())
-                == [plugins[0].canonical.clone()]
+            let used = used_plugins(
+                &sym,
+                Some(tmp.path()),
+                &plugins,
+                &[],
+                &sym.detached_managers(),
+            )
+            .await;
+            crate::predicate::PredicateContext::new(&[])
+                .with_used(&used)
+                .is_used(&plugins[0].canonical)
         };
 
         assert!(used("my-plugin").await);

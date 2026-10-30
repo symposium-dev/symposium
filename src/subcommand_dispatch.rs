@@ -33,7 +33,7 @@ use tokio::process::Command;
 pub fn applicable_subcommands<'a>(
     plugins: &'a [Plugin],
     deps: &[PackageId],
-    used: &[PackageId],
+    used: &[crate::config::PluginRef],
 ) -> Vec<(&'a PluginManifest, &'a str, &'a Subcommand)> {
     let mut ctx = crate::predicate::PredicateContext::new(deps).with_used(used);
     let mut results = Vec::new();
@@ -61,7 +61,7 @@ pub fn find_subcommand<'a>(
     plugins: &'a [Plugin],
     name: &str,
     deps: &[PackageId],
-    used: &[PackageId],
+    used: &[crate::config::PluginRef],
 ) -> Result<Option<(&'a PluginManifest, &'a Subcommand)>> {
     let matches: Vec<_> = applicable_subcommands(plugins, deps, used)
         .into_iter()
@@ -110,10 +110,14 @@ pub async fn dispatch_external(
 
     let dep_ids = ws.dep_ids().await.to_vec();
     let pms = ws.pms();
-    let used = workspace
-        .as_ref()
-        .map(|ws| crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root))
-        .unwrap_or_default();
+    let used = crate::discovery::used_plugins(
+        sym,
+        workspace.as_ref().map(|ws| ws.root.as_path()),
+        &registry.plugins,
+        &dep_ids,
+        pms,
+    )
+    .await;
 
     // Resolve the active plugin set so crate-sourced subcommands are dispatchable.
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);

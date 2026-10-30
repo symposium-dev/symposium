@@ -132,9 +132,9 @@ pub async fn skills_applicable_to(
 ) -> Vec<SkillWithGroupContext> {
     let for_crates = ws.dep_ids().await.to_vec();
     let pms = ws.pms();
-    let used = workspace_root
-        .map(|root| crate::discovery::used_plugins(sym, pms, &registry.plugins, root))
-        .unwrap_or_default();
+    let used =
+        crate::discovery::used_plugins(sym, workspace_root, &registry.plugins, &for_crates, pms)
+            .await;
     let mut ctx = PredicateContext::with_custom_predicates(&for_crates, custom_predicate_entries)
         .with_used(&used);
 
@@ -238,7 +238,7 @@ async fn load_skills_for_group(
 /// skills discovered inside it. Both `source` variants reduce to this: `Path` is
 /// already on disk; `Git` is fetched via the git cache. (A crate is not a group
 /// source — it becomes a plugin through a `[[plugins]]` chained reference; see
-/// [`expand_chained_plugins`].)
+/// [`crate::plugins::active_plugins`].)
 struct ResolvedSkillDir {
     dir: PathBuf,
     /// `SkillSourceSearched` report `plugin` label.
@@ -1392,7 +1392,7 @@ mod tests {
             name: "p".into(),
             predicates: PredicateSet {
                 predicates: vec![
-                    Predicate::DependsOn("serde".into(), None),
+                    Predicate::DependsOn(crate::predicate::Dependency::named("serde")),
                     Predicate::Shell("false".into()),
                 ],
             },
@@ -1471,7 +1471,7 @@ mod tests {
             name: "p".into(),
             predicates: PredicateSet {
                 predicates: vec![
-                    Predicate::DependsOn("serde".into(), None),
+                    Predicate::DependsOn(crate::predicate::Dependency::named("serde")),
                     Predicate::Shell("true".into()),
                 ],
             },
@@ -1479,7 +1479,7 @@ mod tests {
             skills: vec![SkillGroup {
                 predicates: PredicateSet {
                     predicates: vec![
-                        Predicate::DependsOn("serde".into(), None),
+                        Predicate::DependsOn(crate::predicate::Dependency::named("serde")),
                         Predicate::Shell("true".into()),
                     ],
                 },
@@ -1548,7 +1548,7 @@ mod tests {
         assert_eq!(
             skill.predicates.predicates,
             vec![
-                Predicate::DependsOn("serde".into(), None),
+                Predicate::DependsOn(crate::predicate::Dependency::named("serde")),
                 Predicate::Shell("command -v rg".into()),
                 Predicate::PathExists("Cargo.toml".into()),
             ]

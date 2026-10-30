@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-- Define an operation set (`initialize`, `active_plugins`, `load_plugin`, `list_deps`, `project_info`, `search`, `fetch`, `refresh`) that all package managers implement. `initialize` is the handshake that constructs the PM; the rest are what Symposium asks of it.
+- Define an operation set (`initialize`, `active_plugins`, `load_plugin`, `list_deps`, `project_info`, `search`, `fetch`, `refresh`, `canonical_name`) that all package managers implement. `initialize` is the handshake that constructs the PM; the rest are what Symposium asks of it.
 - A PM is a binary speaking newline-delimited JSON-RPC over stdio, one long-lived process per PM per Symposium invocation. A PM written against the SDK can also run in Symposium's own process, which is how the cargo PM runs by default.
 - A PM returns plugin *manifests*, not just directories, so it can synthesize a plugin for a package with no `Symposium.toml`, or one whose manifest is in another ecosystem's format.
 - Trust is assigned by Symposium, never claimed by the PM.
@@ -188,6 +188,20 @@ Contract:
 
 Pull the PM's backing source onto disk, for a git registry the repository, and say whether a remote source was pulled. Symposium sends it to each configured registry when it starts and on `cargo agents plugin sync`, skipping a registry whose `auto-update` is off unless the user names it. A PM with nothing to pull answers `false`, which is what the SDK's server harness does by default.
 
+#### `canonical_name`
+
+```json
+// Request
+{ "method": "canonical_name", "params": { "name": "widget_lib" } }
+
+// Response
+{ "result": { "name": "widget_lib" } }
+```
+
+The form in which two of this PM's names for the same package compare equal. Cargo treats `widget-lib` and `widget_lib` as one crate, so the cargo PM answers `widget_lib` for either; a PM whose names are exact answers with the name it was given, which is what the SDK's server harness does by default.
+
+Symposium asks only about a name a person typed (a `[plugins]` entry, a `cargo agents use` argument), and asks about each name once per connection. Every id a PM answers with must spell its package the same way, so ids compare as they are, never through this method.
+
 ### What crosses the wire
 
 A PM returns a **plugin manifest**, not merely a directory:
@@ -249,9 +263,15 @@ auto-enable = [{ pm = "cargo", name = "my-internal-crate" }]
 ```
 
 Each PM picks names that are stable and meaningful for its ecosystem. The cargo
-PM uses the crate name. A registry PM uses the entry's path within the registry.
+PM uses the crate name. A registry PM uses the plugin's own `name`, which its
+manifest is required to declare.
 The pair is qualified by PM so that two ecosystems using the same word do not
 collide, and so that a name always identifies exactly one thing.
+
+The `pm` half may be left out. A name on its own usually identifies one plugin,
+and when it does it should just work: `use = ["rtk"]` wakes the one plugin
+called `rtk`. Only a name that could mean plugins from more than one PM needs
+qualifying, and Symposium says so rather than guessing which was meant.
 
 This is what makes a trusted source overridable. Recommendations are enabled
 without asking, which is the point of them, but a user who does not want a

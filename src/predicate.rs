@@ -20,7 +20,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use symposium_sdk::predicate::CustomPredicateEvent;
 pub use symposium_sdk::predicate::syntax::{
-    DependsOnList, Predicate, PredicateSet, parse_dep_atom, validate_custom_predicate_name,
+    Dependency, DependsOnList, Predicate, PredicateSet, parse_dep_atom,
+    validate_custom_predicate_name,
 };
 
 use crate::pm::PackageId;
@@ -42,10 +43,7 @@ impl PredicateEval for Predicate {
     /// false.
     fn evaluate(&self, ctx: &mut PredicateContext) -> bool {
         match self {
-            Predicate::DependsOn(name, version_req) => ctx
-                .deps
-                .iter()
-                .any(|dep| dep_matches(dep, name, version_req.as_ref())),
+            Predicate::DependsOn(wanted) => ctx.deps.iter().any(|dep| dep_matches(dep, wanted)),
             Predicate::DependsOnWildcard => true,
             Predicate::Shell(cmd) => run_shell(cmd),
             Predicate::PathExists(arg) => path_exists(arg),
@@ -80,12 +78,11 @@ pub struct PredicateContext<'a> {
     /// the loader stamps it per plugin (via `Plugin::applies`) before
     /// that plugin's predicate sets are evaluated.
     workspace_member: bool,
-    /// Canonical ids of the plugins the applicable `[plugins] use` entries
-    /// name ([`used_plugins`](crate::discovery::used_plugins)). A plugin with
-    /// no gate of its own
+    /// The plugins the applicable `[plugins] use` entries enable. A plugin
+    /// with no gate of its own
     /// ([`PluginManifest::requires_use`](crate::plugins::PluginManifest::requires_use)) is
-    /// dormant unless it is listed here.
-    used: std::collections::HashSet<PackageId>,
+    /// dormant unless one of them names it.
+    used: Vec<crate::config::PluginRef>,
     custom_entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
     custom_cache: std::collections::HashMap<(String, String), CustomPredicateResult>,
     /// The current (possibly mutated) view of the on-disk cache.
@@ -101,7 +98,7 @@ impl<'a> PredicateContext<'a> {
         Self {
             deps,
             workspace_member: false,
-            used: std::collections::HashSet::new(),
+            used: Vec::new(),
             custom_entries: std::collections::HashMap::new(),
             custom_cache: std::collections::HashMap::new(),
             disk_cache: None,
@@ -119,17 +116,18 @@ impl<'a> PredicateContext<'a> {
         }
     }
 
-    /// Record the plugins the applicable `[plugins] use` entries name, by
-    /// canonical id.
-    pub fn with_used(mut self, plugins: &[PackageId]) -> Self {
-        self.used.extend(plugins.iter().cloned());
+    /// Record the plugins the applicable `[plugins] use` entries enable,
+    /// resolved by [`crate::discovery::used`].
+    pub fn with_used(mut self, used: &[crate::config::PluginRef]) -> Self {
+        self.used.extend_from_slice(used);
         self
     }
 
-    /// Is the plugin with this canonical id enabled by a `use` entry in this
-    /// context?
-    pub fn is_used(&self, canonical: &PackageId) -> bool {
-        self.used.contains(canonical)
+    /// Is the plugin `id` enabled by a `use` entry in this context? The
+    /// entries are already resolved ([`crate::discovery::Names::qualify`]) to
+    /// the spelling their package manager reports, so they compare exactly.
+    pub fn is_used(&self, id: &PackageId) -> bool {
+        self.used.iter().any(|entry| entry.matches(id))
     }
 
     /// Load a persistent cache from disk and attach it to this context.
@@ -225,10 +223,15 @@ fn watch_set_from_entry(entry: &CacheEntry) -> WatchSet {
 
 /// A dependency id satisfies a `depends-on` atom when the name matches
 /// exactly and, when the atom carries a version requirement, the id's
-/// version component parses as semver and satisfies it.
-fn dep_matches(dep: &PackageId, name: &str, req: Option<&semver::VersionReq>) -> bool {
-    dep.name == name
-        && req.is_none_or(|req| semver::Version::parse(&dep.version).is_ok_and(|v| req.matches(&v)))
+/// version component parses as semver and satisfies it. An atom that names no
+/// package manager matches a dependency from any.
+fn dep_matches(dep: &PackageId, wanted: &Dependency) -> bool {
+    wanted.pm.as_ref().is_none_or(|pm| *pm == dep.pm)
+        && dep.name == wanted.name
+        && wanted
+            .version
+            .as_ref()
+            .is_none_or(|req| semver::Version::parse(&dep.version).is_ok_and(|v| req.matches(&v)))
 }
 
 // --- environment evaluation ---
@@ -452,16 +455,38 @@ mod tests {
     fn parse_crate_atom_bare_and_versioned() {
         assert_eq!(
             parse_dep_atom("serde").unwrap(),
-            Predicate::DependsOn("serde".into(), None)
+            Predicate::DependsOn(Dependency::named("serde"))
         );
         assert_eq!(
             parse_dep_atom("serde>=1.0").unwrap(),
-            Predicate::DependsOn(
-                "serde".into(),
-                Some(semver::VersionReq::parse(">=1.0").unwrap())
-            )
+            Predicate::DependsOn(Dependency {
+                pm: None,
+                name: "serde".into(),
+                version: Some(semver::VersionReq::parse(">=1.0").unwrap()),
+            })
         );
         assert_eq!(parse_dep_atom("*").unwrap(), Predicate::DependsOnWildcard);
+    }
+
+    /// An atom naming a package manager matches only that package manager's
+    /// dependency; one naming none matches any.
+    #[test]
+    fn depends_on_may_name_a_package_manager() {
+        let deps = [
+            PackageId::new(CARGO_PM, "widget", "1.2.0"),
+            PackageId::new("npm", "react", "18.2.0"),
+        ];
+        let holds = |input: &str| {
+            symposium_sdk::predicate::parse_predicate(input)
+                .unwrap()
+                .evaluate(&mut PredicateContext::new(&deps))
+        };
+        assert!(holds("depends-on(widget)"));
+        assert!(holds("depends-on(cargo:widget)"));
+        assert!(!holds("depends-on(npm:widget)"));
+        assert!(holds("depends-on(npm:react>=18)"));
+        assert!(!holds("depends-on(npm:react<18)"));
+        assert!(holds("depends-on(react)"));
     }
 
     #[test]
@@ -469,15 +494,15 @@ mod tests {
         assert_eq!(DependsOnList::parse("").unwrap().into_predicate(), None);
         assert_eq!(
             DependsOnList::parse("serde").unwrap().into_predicate(),
-            Some(Predicate::DependsOn("serde".into(), None))
+            Some(Predicate::DependsOn(Dependency::named("serde")))
         );
         assert_eq!(
             DependsOnList::parse("serde, tokio")
                 .unwrap()
                 .into_predicate(),
             Some(Predicate::Any(vec![
-                Predicate::DependsOn("serde".into(), None),
-                Predicate::DependsOn("tokio".into(), None),
+                Predicate::DependsOn(Dependency::named("serde")),
+                Predicate::DependsOn(Dependency::named("tokio")),
             ]))
         );
         // Function-call syntax is rejected in the `depends-on` field.
@@ -512,7 +537,7 @@ mod tests {
     fn parse_function_calls() {
         assert_eq!(
             parse("depends-on(serde)").unwrap(),
-            Predicate::DependsOn("serde".into(), None)
+            Predicate::DependsOn(Dependency::named("serde"))
         );
         assert_eq!(
             parse("depends-on(*)").unwrap(),
@@ -525,12 +550,12 @@ mod tests {
         assert_eq!(parse("env(CI)").unwrap(), Predicate::Env("CI".into(), None));
         assert_eq!(
             parse("not(depends-on(serde))").unwrap(),
-            Predicate::Not(Box::new(Predicate::DependsOn("serde".into(), None)))
+            Predicate::Not(Box::new(Predicate::DependsOn(Dependency::named("serde"))))
         );
         assert_eq!(
             parse("any(depends-on(a), path_exists(rg))").unwrap(),
             Predicate::Any(vec![
-                Predicate::DependsOn("a".into(), None),
+                Predicate::DependsOn(Dependency::named("a")),
                 Predicate::PathExists("rg".into()),
             ])
         );
@@ -587,7 +612,7 @@ mod tests {
     fn collect_and_references_walk_the_tree() {
         let p = parse("any(depends-on(serde), not(depends-on(tokio)))").unwrap();
         let mut names = std::collections::BTreeSet::new();
-        p.collect_dep_names(&mut names);
+        p.collect_dep_names(crate::pm::CARGO_PM, &mut names);
         assert_eq!(
             names.into_iter().collect::<Vec<_>>(),
             vec!["serde", "tokio"]
@@ -661,7 +686,7 @@ mod tests {
         let c2: Container = toml::from_str(r#"depends-on = "serde""#).unwrap();
         assert_eq!(
             c2.depends_on.0,
-            vec![Predicate::DependsOn("serde".into(), None)]
+            vec![Predicate::DependsOn(Dependency::named("serde"))]
         );
     }
 
@@ -733,7 +758,7 @@ mod tests {
     #[test]
     fn custom_not_confused_with_builtin() {
         let p = parse("depends-on(serde)").unwrap();
-        assert_eq!(p, Predicate::DependsOn("serde".into(), None));
+        assert_eq!(p, Predicate::DependsOn(Dependency::named("serde")));
     }
 
     #[test]
@@ -771,7 +796,7 @@ mod tests {
             arg: "x".into(),
         };
         let mut names = std::collections::BTreeSet::new();
-        p.collect_dep_names(&mut names);
+        p.collect_dep_names(crate::pm::CARGO_PM, &mut names);
         assert!(names.is_empty());
     }
 
