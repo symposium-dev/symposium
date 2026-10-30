@@ -1,3 +1,4 @@
+mod claude;
 mod codex;
 mod copilot;
 
@@ -12,6 +13,7 @@ pub(crate) const SCOPES: &[&str] = &["agent-plugin-scopes0"];
 struct DeliveringAgent {
     name: &'static str,
     project_skills: &'static str,
+    workspace_skill: &'static str,
     relocation_var: Option<&'static str>,
     config_root: fn(&Path) -> PathBuf,
     plugin_dir: fn(&Path, &str) -> PathBuf,
@@ -21,6 +23,7 @@ const AGENTS: &[DeliveringAgent] = &[
     DeliveringAgent {
         name: "claude",
         project_skills: ".claude/skills",
+        workspace_skill: ".claude/skills/global-guide/skills/global-guide/SKILL.md",
         relocation_var: Some("CLAUDE_CONFIG_DIR"),
         config_root: |home| home.join(".claude"),
         plugin_dir: |root, plugin| root.join("skills").join(plugin),
@@ -28,6 +31,7 @@ const AGENTS: &[DeliveringAgent] = &[
     DeliveringAgent {
         name: "codex",
         project_skills: ".agents/skills",
+        workspace_skill: ".agents/skills/global-guide/SKILL.md",
         relocation_var: Some("CODEX_HOME"),
         config_root: |home| home.join(".codex"),
         plugin_dir: |root, plugin| root.join(format!("plugins/cache/symposium/{plugin}/0.0.0")),
@@ -35,6 +39,7 @@ const AGENTS: &[DeliveringAgent] = &[
     DeliveringAgent {
         name: "copilot",
         project_skills: ".agents/skills",
+        workspace_skill: ".agents/skills/global-guide/SKILL.md",
         relocation_var: Some("COPILOT_HOME"),
         config_root: |home| home.join(".copilot"),
         plugin_dir: copilot::plugin_dir,
@@ -42,6 +47,7 @@ const AGENTS: &[DeliveringAgent] = &[
     DeliveringAgent {
         name: "antigravity",
         project_skills: ".agents/skills",
+        workspace_skill: ".agents/skills/global-guide/SKILL.md",
         relocation_var: None,
         config_root: |home| home.join(".gemini/config"),
         plugin_dir: |root, plugin| root.join("plugins").join(plugin),
@@ -49,6 +55,7 @@ const AGENTS: &[DeliveringAgent] = &[
     DeliveringAgent {
         name: "goose",
         project_skills: ".agents/skills",
+        workspace_skill: ".agents/skills/global-guide/SKILL.md",
         relocation_var: Some("GOOSE_PATH_ROOT"),
         config_root: |home| home.to_path_buf(),
         plugin_dir: |root, plugin| root.join(".agents/plugins").join(plugin),
@@ -116,8 +123,8 @@ async fn every_delivering_agent_keeps_the_delivery_contracts() {
 
             ctx.symposium(&["use", "global-guide"]).await?;
             assert!(
-                project_copy.is_file(),
-                "{name}: a workspace entry brings per-skill copies back"
+                workspace.join(agent.workspace_skill).is_file(),
+                "{name}: a workspace entry brings the skill to the workspace"
             );
 
             ctx.symposium(&["use", "--remove", "global-guide"]).await?;
@@ -272,7 +279,13 @@ async fn a_skill_an_agent_takes_as_a_plugin_does_not_rename_its_namesake() {
             names.sort();
             names
         };
-        assert_eq!(guides(".claude/skills"), ["guide"]);
+        assert!(guides(".claude/skills").is_empty());
+        assert!(
+            workspace
+                .join(".claude/skills/pp/skills/guide/SKILL.md")
+                .is_file(),
+            "claude takes the project plugin as a plugin too"
+        );
         let kiro = guides(".kiro/skills");
         assert!(
             kiro.len() == 2 && kiro.iter().all(|name| name.starts_with("guide-")),
