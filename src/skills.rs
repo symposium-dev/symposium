@@ -96,6 +96,7 @@ pub(crate) fn skill_origin_hash(skill_md: &Path) -> String {
 ///
 /// The plugin-, group-, and skill-level predicate sets are all evaluated during
 /// collection; only skills whose every level holds end up here.
+#[derive(Clone)]
 pub struct SkillWithGroupContext {
     pub skill: Skill,
     /// The hash of where the skill was discovered. Drives install-path disambiguation
@@ -391,7 +392,7 @@ fn find_skill_files_in(
     ancestors: &mut crate::dir_walk::Ancestors,
     out: &mut Vec<PathBuf>,
 ) {
-    if dir.join(crate::sync::MARKER_FILE).exists() {
+    if crate::sync::has_symposium_marker(dir) {
         return;
     }
     let entries = match std::fs::read_dir(dir) {
