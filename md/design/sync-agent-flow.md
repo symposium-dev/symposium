@@ -15,7 +15,7 @@ Scans workspace dependencies, installs applicable skills into agent directories,
 4. **Match skills to dependencies**: for each plugin, parse `SKILL.md` YAML frontmatter, reject malformed YAML or a non-string value in a field Symposium reads, warn about skipped invalid skills, then evaluate skill group dependency predicates and individual skill `depends-on` frontmatter against the workspace dependencies.
 
 5. **Install skills per agent** — for each configured agent:
-   - Copy applicable `SKILL.md` files into the agent's expected skill directory.
+   - Copy applicable `SKILL.md` files into the agent's expected skill directory, except the skills the agent received inside a compiled plugin (see below).
    - Drop a `.symposium` marker file into each installed skill directory so future syncs (and other tools) can recognize it as symposium-managed.
    - Build each install in a fresh, uniquely named `.symposium-tmp-*` directory beside its slot and rename it into place only once the copy is complete, so a failed copy leaves the slot as it was instead of an unmarked partial directory that later syncs would take for the user's. A unique name never collides with anything already there. The marker goes into that directory before the copy, so what a killed sync leaves behind is reaped by the next one.
    - A skill whose refresh fails still counts as wanted, so step 7 keeps its previous copy.
@@ -33,7 +33,7 @@ Scans workspace dependencies, installs applicable skills into agent directories,
 
 ## Concurrency
 
-Every agent session runs auto-sync on `SessionStart`, so two sessions opened together run two syncs at once. Steps 5 to 8 (skill installs, the reap, and agent config writes) run under an exclusive lock on `<cache>/sync.lock`, which a second sync waits for; it then finds everything up to date. Without it, one sync's reap would remove the skills another had just installed. The lock is per user rather than per workspace because at the global hook scope those steps also write user-level agent config files shared by every workspace. Resolution (steps 1 to 4) runs before the lock, since it may fetch git skill sources and a hook waiting behind that could time out. Of the [plugins enabled for every workspace](#plugins-enabled-for-every-workspace), selection is resolution and runs before the lock, while compiling, delivering and unregistering run under it.
+Every agent session runs auto-sync on `SessionStart`, so two sessions opened together run two syncs at once. Steps 5 to 8 (skill installs, the reap, and agent config writes) run under an exclusive lock on `<cache>/sync.lock`, which a second sync waits for; it then finds everything up to date. Without it, one sync's reap would remove the skills another had just installed. The lock is per user rather than per workspace because at the global hook scope those steps also write user-level agent config files shared by every workspace. Resolution (steps 1 to 4) runs before the lock, since it may fetch git skill sources and a hook waiting behind that could time out. Of the [plugins enabled for every workspace](#plugins-enabled-for-every-workspace) and the [plugins for this project](#plugins-for-this-project), selection is resolution and runs before the lock, while compiling, delivering and unregistering run under it.
 
 ## Plugins enabled for every workspace
 
@@ -44,13 +44,26 @@ Between matching skills (step 4) and installing them (step 5), the plugins a `us
 3. **Deliver**: before any per-skill copy, each configured agent's `Agent::deliver_user_plugins` reconciles its user-level installation with the compiled set. An agent that takes delivery gets no per-skill copies of those plugins' skills, so the stale-skill cleanup removes copies an earlier sync left; the others keep their per-skill copies. Whether a per-skill copy needs a hash suffix is then decided per destination directory, from the skills every agent writing there copies, so agents that share `.agents/skills/` agree on each name.
 4. **Unregister**: every agent no longer configured is called with an empty set, by `sync` and by `init`, so it loses the plugins symposium installed for it.
 
+## Plugins for this project
+
+Every other applicable plugin (registry plugins active by their own gate, workspace members, dependencies, workspace-scoped `use` entries) is compiled for the project in the same pass, by the same code, when Claude Code is configured.
+
+1. **Select**: `compile::project_plugins` groups the applicable skills by plugin, leaving out every skill a plugin of the user set already carries.
+2. **Compile**: `compile::compile_project` writes that set into the staging root `<project>/.symposium/plugins/`, with the same layout, names and reaping as the user set. It first makes sure `<project>/.symposium/.gitignore` exists (containing `*`, written only when absent); when that fails, nothing is compiled for the project and every agent gets per-skill copies.
+3. **Deliver**: next to the user-level delivery, each configured agent's `Agent::deliver_project_plugins` reconciles its project installation with that set. Claude Code copies each directory into `<project>/.claude/skills/<plugin>/`, adds a `.gitignore` containing `*` inside, and removes the marked plugin directories there that are not in the set. It reports that it took delivery, so the per-skill loop skips those skills for Claude Code and the stale-skill cleanup removes the per-skill copies an earlier sync left. Every other agent reports no delivery and keeps its per-skill copies.
+4. **Unregister**: every agent no longer configured is called with an empty set, so a removed agent loses its project plugins on the project's next sync.
+
+The workspace root is the only place they go. Claude Code does not look for plugins in parent directories, so a session started in a member crate or another subdirectory gets none of them; see [Claude Code](./agent-details/claude-code.md#project-scope).
+
 ## Marker file
 
 Each skill directory symposium installs contains an empty `.symposium` file. Cleanup walks every agent's skills parent directory (`.claude/skills/`, `.agents/skills/`, `.kiro/skills/`, `.opencode/skills/`) and reaps any subdirectory whose marker is present but which wasn't installed this sync. This lets symposium reclaim stale skills (including those left behind by agents removed from the config) without touching user-managed skills, which are identified by the absence of the marker. Symposium never creates a symlink, so a link found in a skills directory is user content and is never followed or removed.
 
+Only a `.symposium` file is a marker. The project staging root makes `<project>/.symposium/` a directory, which must not mark the project itself as symposium's.
+
 ## Gitignore
 
-Each skill directory symposium installs receives a `.gitignore` containing just `*`; parent directories such as `.claude/skills/` get none. The wildcard also hides the marker file and the gitignore itself, so `git status` stays clean.
+Each skill directory symposium installs receives a `.gitignore` containing just `*`; parent directories such as `.claude/skills/` get none. A project plugin directory in `.claude/skills/` gets the same file, and one `.gitignore` at `<project>/.symposium/` covers the whole staging root. The wildcard also hides the marker file and the gitignore itself, so `git status` stays clean.
 
 ## Auto-sync
 

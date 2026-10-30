@@ -20,9 +20,9 @@ Must be run from within a workspace: a project some package manager finds from t
 
 3. **Discover applicable skills**: loads plugin sources (from user config) and matches skill predicates against workspace dependencies. A `SKILL.md` that fails to load, such as one whose frontmatter is invalid or whose `name` is not a plain directory name, is skipped with a warning naming the file.
 
-4. **Install skills**: for each configured agent, copies applicable `SKILL.md` files into the agent's expected skill directory (e.g., `.claude/skills/` for Claude Code, `.agents/skills/` for Antigravity/Copilot/Codex). A `.gitignore` containing `*` is written into every new skill directory, and an empty `.symposium` marker file is dropped into each installed skill directory.
+4. **Install skills**: for each configured agent, copies applicable `SKILL.md` files into the agent's expected skill directory (e.g., `.agents/skills/` for Antigravity/Copilot/Codex, `.kiro/skills/` for Kiro), except the skills the agent receives inside a plugin directory (see below). A `.gitignore` containing `*` is written into every new skill directory, and an empty `.symposium` marker file is dropped into each installed skill directory.
 
-5. **Mirror workspace skills**: if `agents-syncing` is enabled (default), user-authored skills in `<workspace>/.agents/skills/` are propagated into the skill directories of any configured agent that doesn't natively use `.agents/skills/` (e.g., `.claude/skills/`, `.kiro/skills/`). See [Workspace skills](../workspace-skills.md).
+5. **Mirror workspace skills**: if `agents-syncing` is enabled (default), user-authored skills in `<workspace>/.agents/skills/` are propagated into the skill directories of any configured agent that doesn't natively use `.agents/skills/` (e.g., `.kiro/skills/`; Claude Code receives them in the workspace plugin, see below). See [Workspace skills](../workspace-skills.md).
 
 6. **Clean up stale skills**: scans every agent's skills parent directory and removes any subdirectory containing the `.symposium` marker that wasn't installed (or propagated) this sync. Directories without the marker (user-managed) are left untouched. This step runs even when no agent is configured, so it also removes what was installed for agents since removed. If a registry cannot be read (a `path` that is missing, unreadable or itself a plugin, or a `git` registry that has not been fetched yet), sync warns, naming the registry, and skips this step, keeping the plugins installed for you as well: nothing is removed until it can be read again.
 
@@ -41,6 +41,17 @@ A plugin you enabled with [`cargo agents use --global`](./cargo-agents-use.md) i
 | Goose | `~/.agents/plugins/<plugin>/` (or `$GOOSE_PATH_ROOT/.agents/plugins/<plugin>/`) |
 
 Such an agent gets no per-project copy of the plugin's skills, and copies an earlier sync left are cleaned up; every other agent keeps per-project copies. Agents load plugins when a session starts, so a plugin installed or updated by the automatic sync at session start appears in the next session; that sync also tells the agent which plugins changed and how to load them now (in Claude Code, `/reload-plugins`; in Antigravity CLI, `/skills reload`; in Codex CLI, a new session; in GitHub Copilot, `/restart`). Goose picks such a plugin up with the next message. Dropping the `--global` entry, or removing the agent with `cargo agents init --remove-agent`, removes what symposium installed.
+
+## Plugins for this project
+
+Everything else that applies to the project, whether a registry plugin active by its own `depends-on`, a workspace member, an enabled dependency, or a plugin you enabled with `cargo agents use` for this workspace, is compiled into `.symposium/plugins/<plugin>/` at the workspace root. A `.symposium/.gitignore` containing `*` keeps that directory out of git.
+
+| Agent | Where the plugin goes |
+|-------|-----------------------|
+| Claude Code | `.claude/skills/<plugin>/` at the workspace root, loaded as the plugin `<plugin>` in that project only |
+| Every other agent | its skills, in the project, as above |
+
+Claude Code then gets no per-skill copies of those skills, and the copies an earlier sync left are cleaned up. It loads project plugins only in a folder you trust, and only when started at the workspace root; see [Claude Code](./agents/claude.md#plugins). Dropping the `use` entry, or the dependency or gate that made the plugin apply, removes it from the project on the next sync, and so does removing the agent.
 
 ## Consent prompt
 
