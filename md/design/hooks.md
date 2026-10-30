@@ -40,6 +40,14 @@ Symposium converts the hook's output back to the current agent's wire format bef
 - Native format matching the host agent → pass through directly.
 - Symposium format → convert to host agent's wire format.
 
+## Time limits and cancellation
+
+A hook runs inside the single `cargo agents hook` call the agent is waiting for, so every plugin hook of one event shares an 8-second budget, and each one gets at most 5 seconds of it (see [the hook flow](./hook-flow.md)). The budget covers preparing the hook's command too: acquiring its source and running its `install_commands`. A `cargo binstall` or `cargo install` that acquisition started is killed when it stops at the deadline, so no installer keeps running, or keeps symposium from exiting, after the hook is skipped.
+
+Stopping a hook has to stop everything it started, or a timed-out hook keeps changing the workspace after the agent has moved on, and a child holding symposium's stderr keeps the agent waiting. So on Unix each hook, and each `install_commands` entry run during dispatch, gets its own process group, and a timeout kills the whole group; on Windows, `taskkill /T` kills the process tree. `process_tree.rs` holds both. Commands run outside hook dispatch (subcommands, `sync`) stay in symposium's group, so Ctrl-C still reaches them.
+
+A hook that exits on its own is done: background jobs it leaves running are not killed or waited for.
+
 ## Alternatives considered
 
 ### Registering agent-specific hooks directly

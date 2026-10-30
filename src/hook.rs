@@ -1,8 +1,10 @@
 use crate::predicate::PredicateEval;
 use std::{
-    io::{Read, Write},
+    fs::File,
+    io::{Read, Seek, Write},
     path::PathBuf,
-    process::{Command, ExitCode, Stdio},
+    process::{Command, ExitCode, Output, Stdio},
+    time::{Duration, Instant},
 };
 
 use symposium_install::Runnable;
@@ -148,7 +150,11 @@ enum SpawnSpec {
     },
 }
 
-async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Result<SpawnSpec> {
+async fn build_spawn_spec(
+    sym: &Symposium,
+    hook: &ResolvedHook,
+    deadline: Instant,
+) -> anyhow::Result<SpawnSpec> {
     // Dispatch-time acquisition serves the cache (git checks debounced); the
     // `SessionStart` prewarm is what forces a freshness check once per session.
     let update = symposium_install::UpdateLevel::None;
@@ -156,7 +162,7 @@ async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Resul
     // Acquire requirements first so the command's PATH sees them.
     let mut acquired: Vec<AcquiredInstallation> = Vec::new();
     for requirement in &hook.requirements {
-        match acquire_installation(sym, requirement, None, None, update).await {
+        match acquire_installation(sym, requirement, None, None, update, Some(deadline)).await {
             Ok(a) => acquired.push(a),
             Err(e) => {
                 tracing::error!(
@@ -174,6 +180,7 @@ async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Resul
         hook.hook_executable.as_deref(),
         hook.hook_script.as_deref(),
         update,
+        Some(deadline),
     )
     .await?;
 
@@ -197,7 +204,11 @@ async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Resul
     })
 }
 
-fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
+fn spawn_from_spec(
+    spec: SpawnSpec,
+    stdout: &File,
+    stderr: &File,
+) -> std::io::Result<std::process::Child> {
     match spec {
         SpawnSpec::Script { path, args, env } => {
             let mut cmd = Command::new("sh");
@@ -205,9 +216,10 @@ fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
             for (k, v) in env {
                 cmd.env(k, v);
             }
+            crate::process_tree::own_group(&mut cmd);
             cmd.stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
+                .stdout(stdout.try_clone()?)
+                .stderr(stderr.try_clone()?)
                 .spawn()
         }
         SpawnSpec::Exec { path, args, env } => {
@@ -216,12 +228,57 @@ fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
             for (k, v) in env {
                 cmd.env(k, v);
             }
+            crate::process_tree::own_group(&mut cmd);
             cmd.stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
+                .stdout(stdout.try_clone()?)
+                .stderr(stderr.try_clone()?)
                 .spawn()
         }
     }
+}
+
+const PLUGIN_HOOK_TIMEOUT: Duration = Duration::from_secs(5);
+const PLUGIN_HOOKS_BUDGET: Duration = Duration::from_secs(8);
+
+/// Returns `None` when the hook was killed at `deadline`. Output goes to files,
+/// not pipes, so neither a full pipe nor a background job can hold dispatch.
+fn run_with_deadline(
+    spec: SpawnSpec,
+    input: Vec<u8>,
+    deadline: Instant,
+) -> std::io::Result<Option<Output>> {
+    let stdout = tempfile::tempfile()?;
+    let stderr = tempfile::tempfile()?;
+    let mut child = spawn_from_spec(spec, &stdout, &stderr)?;
+    if let Some(mut stdin) = child.stdin.take() {
+        std::thread::spawn(move || {
+            let _ = stdin.write_all(&input);
+        });
+    }
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            crate::process_tree::kill(child.id());
+            let _ = child.kill();
+            child.wait()?;
+            return Ok(None);
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    Ok(Some(Output {
+        status,
+        stdout: read_from_start(stdout)?,
+        stderr: read_from_start(stderr)?,
+    }))
+}
+
+fn read_from_start(mut file: File) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    file.rewind()?;
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 // Re-export hook schema types for convenience.
@@ -429,14 +486,15 @@ async fn run_auto_sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, session_start
 
     // SessionStart always syncs (and refreshes sources); other events skip
     // when the workspace hasn't changed since the last sync.
+    let mut dependencies_changed = false;
     if !session_start && let Some(ref root) = workspace_root {
         let state = crate::workspace_state::WorkspaceState::load(sym, root);
         if state.sync_is_fresh(root) {
             tracing::debug!("auto-sync skipped: Cargo.lock unchanged since last sync");
             return false;
         }
+        dependencies_changed = state.last_sync_lock_mtime.is_some();
     }
-    let dependencies_changed = !session_start && workspace_root.is_some();
 
     let update = if session_start {
         symposium_install::UpdateLevel::Check
@@ -559,10 +617,10 @@ pub async fn dispatch_builtin(
             symposium::OutputEvent::empty_for(HookEvent::PreToolUse)
         }
         symposium::InputEvent::PostToolUse(post) => {
-            handle_post_tool_use(sym, post, notify_about_possible_new_plugins).await
+            handle_post_tool_use(sym, post, deps, notify_about_possible_new_plugins).await
         }
         symposium::InputEvent::UserPromptSubmit(prompt) => {
-            handle_user_prompt_submit(sym, prompt, notify_about_possible_new_plugins).await
+            handle_user_prompt_submit(sym, prompt, deps, notify_about_possible_new_plugins).await
         }
         symposium::InputEvent::SessionStart(session) => {
             handle_session_start(sym, session, deps).await
@@ -669,35 +727,48 @@ fn update_nudge(sym: &Symposium) -> Option<String> {
 }
 
 async fn handle_post_tool_use(
-    _sym: &Symposium,
+    sym: &Symposium,
     _post: &symposium::PostToolUseInput,
-    notify_about_possible_new_plugins: bool,
-) -> symposium::OutputEvent {
-    possible_new_plugins_notice(HookEvent::PostToolUse, notify_about_possible_new_plugins)
-}
-
-async fn handle_user_prompt_submit(
-    _sym: &Symposium,
-    _prompt_payload: &symposium::UserPromptSubmitInput,
+    deps: &Arc<WorkspaceDeps>,
     notify_about_possible_new_plugins: bool,
 ) -> symposium::OutputEvent {
     possible_new_plugins_notice(
+        sym,
+        deps,
+        HookEvent::PostToolUse,
+        notify_about_possible_new_plugins,
+    )
+    .await
+}
+
+async fn handle_user_prompt_submit(
+    sym: &Symposium,
+    _prompt_payload: &symposium::UserPromptSubmitInput,
+    deps: &Arc<WorkspaceDeps>,
+    notify_about_possible_new_plugins: bool,
+) -> symposium::OutputEvent {
+    possible_new_plugins_notice(
+        sym,
+        deps,
         HookEvent::UserPromptSubmit,
         notify_about_possible_new_plugins,
     )
+    .await
 }
 
-fn possible_new_plugins_notice(event: HookEvent, notify: bool) -> symposium::OutputEvent {
+async fn possible_new_plugins_notice(
+    sym: &Symposium,
+    deps: &Arc<WorkspaceDeps>,
+    event: HookEvent,
+    notify: bool,
+) -> symposium::OutputEvent {
     if !notify {
         return symposium::OutputEvent::empty_for(event);
     }
-    symposium::OutputEvent::with_context(
-        event,
-        "The workspace's dependencies just changed, so there may be new agent plugins \
-         available from them. They stay off until the user consents: tell the user to run \
-         `cargo agents sync` in their terminal to review them. Do not enable them yourself."
-            .to_string(),
-    )
+    match consent_hint(sym, deps).await {
+        Some(hint) => symposium::OutputEvent::with_context(event, hint),
+        None => symposium::OutputEvent::empty_for(event),
+    }
 }
 
 pub enum PluginHookOutput {
@@ -761,8 +832,17 @@ pub async fn dispatch_plugin_hooks(
 
     let mut output = prior_output;
     let mut context = JoinedContext::new(event, prior_context);
+    let dispatch_deadline = Instant::now() + PLUGIN_HOOKS_BUDGET;
 
     for hook in hooks {
+        if Instant::now() >= dispatch_deadline {
+            tracing::warn!(
+                plugin = %hook.plugin_name,
+                hook = %hook.hook_name,
+                "plugin hooks used up their time budget; skipping hook"
+            );
+            continue;
+        }
         tracing::info!(
             plugin = %hook.plugin_name,
             hook = %hook.hook_name,
@@ -788,28 +868,19 @@ pub async fn dispatch_plugin_hooks(
             }
         };
 
-        let spawn_res = match build_spawn_spec(sym, &hook).await {
-            Ok(spec) => spawn_from_spec(spec),
+        let run_res = match build_spawn_spec(sym, &hook, dispatch_deadline).await {
+            Ok(spec) => {
+                let deadline = dispatch_deadline.min(Instant::now() + PLUGIN_HOOK_TIMEOUT);
+                run_with_deadline(spec, stdin_str.into_bytes(), deadline)
+            }
             Err(e) => {
                 tracing::warn!(error = %e, "failed to prepare hook command");
                 continue;
             }
         };
 
-        match spawn_res {
-            Ok(mut child) => {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(stdin_str.as_bytes());
-                }
-
-                let child_out = match child.wait_with_output() {
-                    Ok(o) => o,
-                    Err(e) => {
-                        tracing::warn!(error = %e, "failed waiting for hook process");
-                        continue;
-                    }
-                };
-
+        match run_res {
+            Ok(Some(child_out)) => {
                 tracing::trace!(?child_out, "hook finished");
 
                 let exit_code = child_out.status.code();
@@ -823,8 +894,16 @@ pub async fn dispatch_plugin_hooks(
                 );
                 match exit_code {
                     None | Some(2) => return Err(child_out.stderr),
-                    Some(0) if child_out.stdout.is_empty() => continue,
-                    Some(0) => {
+                    Some(code) => {
+                        if code != 0 {
+                            tracing::warn!(
+                                exit_code = code,
+                                "plugin hook exited with non-zero (continuing)"
+                            );
+                        }
+                        if child_out.stdout.is_empty() {
+                            continue;
+                        }
                         // Parse output and convert to host agent format.
                         // Two cases: native (same as host) or symposium.
                         let host_handler = crate::hook_schema::agent_event(host_agent, event);
@@ -870,13 +949,22 @@ pub async fn dispatch_plugin_hooks(
                         }
                         context.add(hook_output.as_ref(), &mut output, host_h.as_ref());
                     }
-                    Some(code) => {
-                        tracing::warn!(
-                            exit_code = code,
-                            "plugin hook exited with non-zero (continuing)"
-                        );
-                    }
                 }
+            }
+            Ok(None) => {
+                tracing::debug!(
+                    report = %crate::report::ReportEvent::HookDispatched {
+                        plugin: hook.plugin_name.clone(),
+                        hook: hook.hook_name.clone(),
+                        exit_code: None,
+                        error: Some("timed out".to_string()),
+                    },
+                );
+                tracing::warn!(
+                    plugin = %hook.plugin_name,
+                    hook = %hook.hook_name,
+                    "plugin hook timed out and was killed; its output is ignored"
+                );
             }
             Err(e) => {
                 tracing::debug!(
@@ -887,7 +975,7 @@ pub async fn dispatch_plugin_hooks(
                         error: Some(e.to_string()),
                     },
                 );
-                tracing::warn!(error = %e, "failed to spawn hook command");
+                tracing::warn!(error = %e, "failed to run hook command");
             }
         }
     }
@@ -1236,6 +1324,71 @@ mod tests {
         ));
         let output = dispatch_builtin(&sym, &input, &deps, false).await;
         assert!(output.additional_context().is_none());
+    }
+
+    fn run_script(body: &str, input: Vec<u8>, timeout: Duration) -> Option<Output> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hook.sh");
+        std::fs::write(&path, body).unwrap();
+        let spec = SpawnSpec::Script {
+            path,
+            args: vec![],
+            env: vec![],
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(run_with_deadline(spec, input, Instant::now() + timeout).unwrap());
+        });
+        rx.recv_timeout(timeout + Duration::from_secs(5))
+            .expect("the hook returns by its deadline")
+    }
+
+    #[test]
+    fn hook_that_ignores_a_large_input_and_writes_a_lot_completes() {
+        let body = "i=0\nwhile [ $i -lt 4000 ]; do echo \"warning: unused variable at src/lib.rs:$i\" >&2; i=$((i+1)); done\necho done\n";
+        let output = run_script(body, vec![b'x'; 300_000], Duration::from_secs(10))
+            .expect("the hook finishes before its deadline");
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"done\n");
+        assert!(output.stderr.len() > 150_000, "{}", output.stderr.len());
+    }
+
+    #[test]
+    fn background_job_does_not_hold_the_hook() {
+        let started = Instant::now();
+        let output = run_script(
+            "cat >/dev/null\nsleep 5 &\necho started\n",
+            b"{}".to_vec(),
+            Duration::from_secs(10),
+        )
+        .expect("the hook finishes before its deadline");
+        assert_eq!(output.stdout, b"started\n");
+        assert!(started.elapsed() < Duration::from_secs(4));
+    }
+
+    #[test]
+    fn hook_past_its_deadline_is_killed() {
+        let started = Instant::now();
+        let output = run_script("sleep 30\n", b"{}".to_vec(), Duration::from_millis(200));
+        assert!(output.is_none());
+        assert!(started.elapsed() < Duration::from_secs(4));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timed_out_hook_stops_its_child_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("child-ran");
+        let script = format!(
+            "sh -c 'sleep 0.5; echo survived > \"{}\"'\necho finished\n",
+            marker.display()
+        );
+        assert!(run_script(&script, b"{}".to_vec(), Duration::from_millis(100)).is_none());
+        std::thread::sleep(Duration::from_millis(700));
+        assert!(
+            !marker.exists(),
+            "child mutated files after the hook timed out"
+        );
     }
 
     #[test]

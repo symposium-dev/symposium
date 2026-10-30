@@ -86,3 +86,20 @@ async fn post_tool_use_keeps_every_plugin_context() {
     .await
     .unwrap();
 }
+
+/// `first` prints its prompt context and then exits 1, which is a warning,
+/// not a reason to drop what it printed.
+#[tokio::test(flavor = "multi_thread")]
+async fn prompt_context_survives_a_non_zero_exit() {
+    with_fixture(TestMode::SimulationOnly, &["context-merge0"], async |ctx| {
+        let stdout = respond(&ctx, HookAgent::Claude, HookStep::user_prompt("hello")).await;
+        let output: Value = serde_json::from_str(&stdout).unwrap();
+        assert_eq!(
+            output["hookSpecificOutput"]["additionalContext"],
+            "first prompt context"
+        );
+        Ok(())
+    })
+    .await
+    .unwrap();
+}

@@ -12,3 +12,9 @@ name = "post"
 event = "PostToolUse"
 format = "symposium"
 command = { script = "$TEST_DIR/dot-symposium/plugins/first/scripts/post.sh" }
+
+[[hooks]]
+name = "prompt"
+event = "UserPromptSubmit"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/first/scripts/prompt-exit-1.sh" }

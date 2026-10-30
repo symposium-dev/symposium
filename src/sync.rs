@@ -322,7 +322,8 @@ async fn resolve_custom_predicate_entries(
         };
 
         let acquired =
-            match crate::installation::acquire_installation(sym, install, None, None, update).await
+            match crate::installation::acquire_installation(sym, install, None, None, update, None)
+                .await
             {
                 Ok(a) => a,
                 Err(e) => {
