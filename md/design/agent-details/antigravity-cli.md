@@ -224,6 +224,41 @@ ignored concerns the IDE and `~/.gemini/antigravity/skills/`.
 
 `plugins.json` follows the same schema for plugin directories.
 
+## Plugin Delivery
+
+A plugin enabled with `use --global` reaches Antigravity as a copy of the
+compiled plugin directory in `~/.gemini/config/plugins/<plugin>/`, the global
+folder every Antigravity surface discovers and the one `agy plugin install`
+copies into. Antigravity loads it in every project as the plugin `<plugin>` and
+offers its skills as `/<plugin>:<skill>`; the directory name is the plugin's
+identity. The `$schema` and `version` fields, `.claude-plugin/` and the
+`.symposium` marker are ignored.
+
+Symposium writes no other file. Antigravity keeps its own state about the
+plugins it finds, which symposium leaves alone: `plugins.<dir>.enabled` in
+`~/.gemini/config/config.json` (a `false` hides the plugin) and
+`~/.gemini/antigravity-cli/plugin_data/<dir>/`. `agy plugin list` prints only
+Antigravity's record of its own installs, so it never shows these plugins;
+`/skills` does.
+
+Verified against agy 1.2.14 through `cargo agents sync`, by asking the agent
+(`/skills` in the TUI and the model request of `agy -p`):
+
+- The plugin is listed in the first session after the sync, with no bare
+  duplicate.
+- An edit at the same version reaches the next session: the copy is read in
+  place.
+- Removing the directory removes the plugin, with no error.
+- A plugin written during the `SessionStart` hook is not offered in that
+  session until `/skills reload` or a new session.
+- A per-skill copy of the same skill in the project's `.agents/skills/` is
+  listed as well, so the skill appears twice.
+
+Registering the directory by path in `~/.gemini/config/plugins.json` also loads
+it, but without the `<plugin>:` prefix and below the built-in customizations.
+A `<repo>/.agents/plugins/<plugin>/` folder loads as a project plugin, and Goose
+reads the same folder; symposium does not write project-scoped plugins.
+
 ## MCP server configuration
 
 | Scope | Path |

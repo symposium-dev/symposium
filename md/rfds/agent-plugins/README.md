@@ -4,8 +4,8 @@
 
 - Compile each applicable Symposium plugin into an agent plugin directory and install that directory, rather than writing skill files into a different path for each agent that has a plugin unit.
 - Read externally authored agent plugins as ordinary Symposium plugins, so a crate can publish a `plugin.json` at its root instead of a `Symposium.toml`.
-- Prefer the Agent Plugins format where an agent reads it, but do not treat it as the only way to register extensions: one compiled directory carries the Agent Plugins, Claude Code and Gemini CLI manifests at once, and the per-skill install path stays for the agents with no plugin unit, and for any project-scoped plugin on an agent that cannot express one.
-- Write each directory once and register its path with an agent where the agent accepts one, copying where it does not. Only Claude Code accepts one today, so most agents get a copy.
+- Prefer the Agent Plugins format where an agent reads it, but do not treat it as the only way to register extensions: one compiled directory carries the Agent Plugins and Claude Code manifests at once, and the per-skill install path stays for the agents with no plugin unit, and for project-scoped plugins in version one.
+- Write each directory once and register its path with an agent where the agent then reads it in place, copying where it does not. Only the Copilot CLI reads it in place, so most agents get a copy.
 - Install through `cargo agents sync`, at the same scope as the enablement that selected the plugin. No new command.
 - Cover the format's skills component in version one. MCP servers are a follow-up that belongs to the meta-server design.
 
@@ -13,7 +13,7 @@
 
 Symposium installs skills with one mechanism per agent. A skill directory goes to `.claude/skills/` for one agent, `.agents/skills/` for five, and `.kiro/skills/` for another, each with a separate global path. Symposium carries that knowledge itself, and supporting a new agent means learning another placement rule.
 
-The agents that grew a plugin system converged on the same unit, not on one format: a directory holding a manifest and a `skills/` folder. Codex CLI and the Copilot CLI read the [Agent Plugins](https://agent-plugins.org/) format itself. Claude Code and Gemini CLI read formats of their own that differ mainly in the manifest filename. OpenCode and Goose have no plugin unit at all. Agent Plugins is therefore the format Symposium prefers to emit where an agent reads it rather than the single mechanism everything routes through, and the per-skill install path stays for the agents that do not read it. Either way, producing a directory lets the agent's own loader perform the placement Symposium performs by hand.
+The agents that grew a plugin system converged on the same unit, not on one format: a directory holding a manifest and a `skills/` folder. Codex CLI and the Copilot CLI read the [Agent Plugins](https://agent-plugins.org/) format itself, and Goose reads a root `plugin.json` of the same shape, which it calls Open Plugins. Claude Code and Antigravity CLI read formats of their own: Claude Code a manifest under `.claude-plugin/`, Antigravity CLI its own dialect of a root `plugin.json`. OpenCode has no plugin unit at all, and Kiro's has not been verified. Agent Plugins is therefore the format Symposium prefers to emit where an agent reads it rather than the single mechanism everything routes through, and the per-skill install path stays for the agents that cannot be given a directory. Either way, producing a directory lets the agent's own loader perform the placement Symposium performs by hand.
 
 A directory is also a better unit to own. Symposium writes a `.gitignore` containing `*` into each installed skill directory and marks each with a `.symposium` file so that it can later remove what it no longer owns. Applied per plugin rather than per skill, this becomes one hidden directory to write and one directory to remove when a plugin stops applying.
 
@@ -40,8 +40,9 @@ What Symposium does not delegate is equally definite. Predicates and `depends-on
 Version one delivers:
 
 - a compiled plugin directory produced from an already-gated Symposium plugin, carrying its manifest and its resolved skills;
-- installation of that directory for the agents that have a plugin unit, carrying every manifest dialect at once: globally for all of them, and project-scoped for Claude Code, the one agent that can express it;
+- installation of that directory at user scope for the agents that have a plugin unit (Claude Code, Codex CLI, the Copilot CLI, Antigravity CLI and Goose), carrying every manifest dialect at once;
 - recognition of an externally authored `plugin.json` package wherever a plugin is already found, and resolution of its skills;
+- optional `version` and `description` fields in every plugin manifest, which the compiled manifests carry;
 - the `dev.symposium` extensions namespace, through which a portable package can carry Symposium gating; and
 - coverage of these packages by `plugin validate`, `search`, `status`, and `use`.
 
@@ -59,10 +60,8 @@ Installing one plugin that carries one skill currently produces a separate write
 
 ```text
 pdf-tools/
-  plugin.json                     Codex CLI, Copilot CLI, VS Code
+  plugin.json                     Codex CLI, Copilot CLI, Antigravity CLI, Goose
   .claude-plugin/plugin.json      Claude Code
-  gemini-extension.json           Gemini CLI
-  .gitignore                      contains *
   skills/
     extract-tables/
       SKILL.md
@@ -81,53 +80,57 @@ $ cargo agents search pdf
 user-plugins
   pdf-tools    Table extraction guidance    agent plugin
 
-$ cargo agents use pdf-tools
-enabled pdf-tools for /home/alex/work/reporter
+$ cargo agents use pdf-tools --global
+enabled pdf-tools for every workspace
 installed pdf-tools
-  claude    registered   .symposium/plugins/pdf-tools
-  codex     skills only  .agents/skills/extract-tables
-  gemini    skills only  .agents/skills/extract-tables
+  claude        plugin   ~/.claude/skills/pdf-tools
+  codex         plugin   ~/.codex/plugins/cache/symposium/pdf-tools
+  antigravity   plugin   ~/.gemini/config/plugins/pdf-tools
 ```
 
-`use` records the enablement, workspace-scoped unless `--global` is given, and then syncs. The compiled directory is written once under `.symposium/plugins/` for a workspace-scoped plugin, or under `~/.symposium/installed/` for a global one. Each agent is then given it by whichever mechanism it supports, which is why the lines differ: this enablement is workspace-scoped, and Claude Code is the only agent that can express that, so it is pointed at the directory while Codex CLI and Gemini CLI fall back to per-project skill directories. Had the same plugin been enabled with `--global`, all three would have received the compiled directory.
+`use` records the enablement, workspace-scoped unless `--global` is given, and then syncs. A global plugin is compiled once under `~/.symposium/installed/`, and each agent is then given it by whichever mechanism it supports, which is why the paths differ. Without `--global` the enablement would be workspace-scoped, and in version one every agent would receive the skill as an individual skill directory in the project, as it does today.
 
 ```console
 $ cargo agents status
 active
-  pdf-tools    agent plugin    used in this workspace
+  pdf-tools    agent plugin    used in every workspace
 ```
 
 The agent is then started as usual and the skill is available. Whether it truly arrived is confirmed by asking the agent what it can see, since a file in a plausible location can still be ignored.
 
 ```console
-$ cargo agents remove pdf-tools
-disabled pdf-tools for /home/alex/work/reporter
-removed pdf-tools from claude, codex, gemini
+$ cargo agents use pdf-tools --remove --global
+disabled pdf-tools for every workspace
+removed pdf-tools from claude, codex, antigravity
 ```
 
-Two other routes reach the same place without naming a plugin. Adding a dependency whose source carries plugin content produces a consent question on the next sync, and answering yes installs it exactly as above. Placing a `plugin.json` beside a `skills/` directory in a workspace member requires no command at all, because workspace membership is itself the gate.
+Two other routes enable a plugin without naming it. Adding a dependency whose source carries plugin content produces a consent question on the next sync, and answering yes installs it for that project. Placing a `plugin.json` beside a `skills/` directory in a workspace member requires no command at all, because workspace membership is itself the gate.
 
 ### Compiled plugin model
 
-The compiled model is a mapping rather than a rename, because a Symposium plugin holds more than the shared format can express. Skill groups from any source, including `source.git` groups that must be fetched first, are resolved into a self-contained `skills/` directory. The plugin name and version become the manifest. Everything else either stays with Symposium or has already been consumed.
+The compiled model is a mapping rather than a rename, because a Symposium plugin holds more than the shared format can express. Skill groups from any source, including `source.git` groups that must be fetched first, are resolved into a self-contained `skills/` directory. The plugin name, normalized so that every agent accepts it, its version, `0.0.0` unless the plugin declares one, and its description become the manifest; since every agent reads either the directory in place or a copy Symposium rewrites, none needs the version to change to pick up an edit. Everything else either stays with Symposium or has already been consumed.
 
-Gating is the significant part. Because predicates are evaluated before compilation, the emitted directory contains only what applies to the current workspace. Nothing is lost by the format's lack of an activation vocabulary, because the format never needs one.
+Gating is the significant part. Because predicates are evaluated before compilation, the emitted directory contains only what applies. Nothing is lost by the format's lack of an activation vocabulary, because the format never needs one.
 
 ### Installation
 
-Symposium writes each compiled directory once, into a location it owns, and prefers to tell an agent where that directory is rather than copy it into the agent's own plugin folder. Registering a path keeps one copy per plugin instead of one copy per plugin per agent, and it is also what makes a project-scoped installation possible on an agent whose plugin folder is user-level.
+Symposium writes each compiled directory once, into a location it owns, and prefers to tell an agent where that directory is rather than copy it into the agent's own plugin folder. Registering a path keeps one copy per plugin instead of one copy per plugin per agent, so it is used wherever the agent then reads the directory in place.
 
-Two mechanisms therefore exist, and which one applies is a property of the agent. Claude Code accepts a local directory marketplace, so for it the directory stays where Symposium wrote it and the agent is pointed at it. Codex CLI and the Copilot CLI take a marketplace plus a per-package enablement entry and then copy the package into a cache of their own, and Gemini CLI discovers a package purely by its presence in a known folder, so those receive a copy. [Agent backends](#agent-backends) records which agent falls where, and what that was verified against.
+Two mechanisms therefore exist, and which one applies is a property of the agent. The Copilot CLI is the one agent registered by path: its settings name the staging root as a directory marketplace and enable the plugin from it, and it reads the plugin where Symposium wrote it. Every other agent with a plugin unit gets a copy: Claude Code in its user skills directory, where it loads as a skills-directory plugin; Antigravity CLI and Goose in the folder each discovers plugins in; and Codex CLI in its own plugin cache, plus an enablement entry in its `config.toml`, because a Codex session loads a plugin only from that cache and Codex refreshes the cache itself only when the version changes. Claude Code could read the staging root as a directory marketplace instead, but it then keeps installation records of its own that a clean removal would have to edit. [Agent backends](#agent-backends) records which agent falls where, and what that was verified against.
 
 In both cases Symposium writes the agent's configuration itself rather than driving the agent's own plugin install command. This is what it already does for hook registration and MCP entries, and it is the only option on a path that runs during a hook, where there is no terminal and no user to answer a prompt. Because a well-formed file in a plausible location can still be ignored, the check that an installation worked is to ask the agent what it can see, not to inspect the file that was written.
 
-Nothing about how a plugin is chosen changes. `cargo agents sync` compiles and installs whatever currently applies, `use` and `remove` record an enablement decision and then sync, and auto-sync performs the same work at session start. Installation remains a consequence of what applies to the workspace rather than a separate action, so this introduces no new command and no per-plugin install step.
+Nothing about how a plugin is chosen changes. `cargo agents sync` compiles and installs whatever currently applies, `use` and `use --remove` record an enablement decision and then sync, and auto-sync performs the same work at session start. Installation remains a consequence of what applies to the workspace rather than a separate action, so this introduces no new command and no per-plugin install step.
+
+A plugin installed by the auto-sync in the session-start hook appears in the next session, since every agent that receives plugins and runs that hook has read its plugins by then; Claude Code (`/reload-plugins`), the Copilot CLI (`/restart`) and Antigravity CLI (`/skills reload`) can pick it up sooner. Goose runs no hook, but looks for plugins on every message.
 
 ### Scope of an installation
 
-An installation is scoped to the enablement that produced it. A workspace-scoped `use` entry, a workspace member, and a workspace dependency all install for that project; a global entry installs for the user. This is the scoping `use` already has, applied to a different artifact.
+An installation is scoped to the enablement that produced it. A plugin named by a `use --global` entry installs for the user, whatever `hook-scope` says, and an agent that takes it stops receiving per-project copies of its skills. A workspace-scoped `use` entry, a registry plugin active by its own gate, a workspace member, and a workspace dependency all install for that project. This is the scoping `use` already has, applied to a different artifact.
 
-Agents differ in whether they can honor it, and most cannot. An agent that offers only a user-level plugin folder and no way to register a path cannot express a project-scoped installation, and a workspace-scoped plugin must not become visible in unrelated projects. For such an agent, a workspace-scoped plugin continues to arrive through the existing per-project skills path, and only a global enablement is installed as a plugin. Of the agents probed, Claude Code is the only one that can scope a plugin to a project; see [Only Claude Code can scope a plugin to a project](#only-claude-code-can-scope-a-plugin-to-a-project) for what each of the others does instead. That is what makes global delivery part of the first increment rather than follow-up work.
+A global plugin installs with all its skills, its dependency gates counted as satisfied: a user-level directory is visible from every workspace, so evaluating those gates in the workspace being synced would make what it carries depend on whichever workspace synced last.
+
+Claude Code receives project-scoped plugins as plugins, in `<project>/.claude/skills/<name>/` at the workspace root, and loads them only in a session started there, which is Claude Code's own rule for plugins ([#353](https://github.com/symposium-dev/symposium/issues/353)). Every other agent keeps receiving them through the per-skill path in version one; [Which agents can scope a plugin to a project](#which-agents-can-scope-a-plugin-to-a-project) records what each agent offers and why the others are not used yet.
 
 ### Directory collisions
 
@@ -139,15 +142,17 @@ On the install side, two plugins from different origins can resolve to the same 
 
 ### Agent backends
 
-There is one backend, not one per agent. It renders the compiled model into the manifests described in [Change in a nutshell](#change-in-a-nutshell) and installs the result by whichever mechanism the agent supports: pointing the agent at the directory where it was written, or copying it into a folder the agent discovers. Claude Code and Gemini CLI are manifest renderers over that one model rather than a separate design, and a package that Claude Code records as installed but not enabled also gets its enablement entry written.
+There is one backend, not one per agent. It renders the compiled model into the manifests described in [Change in a nutshell](#change-in-a-nutshell) and installs the result by whichever mechanism the agent supports: pointing the agent at the directory where it was written, or copying it into a folder the agent reads. Claude Code's manifest is a renderer over that one model rather than a separate design.
 
-Which agent gets which mechanism, at which path, and what each of those was verified against belongs with the user-facing documentation; see [How extensions are installed](./proposed-install.md#how-each-agent-is-given-the-directory), and [Only Claude Code can scope a plugin to a project](#only-claude-code-can-scope-a-plugin-to-a-project) for the scoping each agent can express.
+Which agent gets which mechanism, at which path, and what each of those was verified against is recorded per agent in [Agent details](../../design/agent-details/README.md), and [Which agents can scope a plugin to a project](#which-agents-can-scope-a-plugin-to-a-project) covers the scoping each agent can express.
 
-OpenCode extends through TypeScript modules and Goose through MCP servers. Neither offers a directory-shaped plugin unit, so both retain the current per-skill install path. That path is not narrowed much by this change: because only Claude Code can scope a plugin to a project, it remains how a workspace-scoped plugin reaches the other six agents.
+OpenCode extends through TypeScript modules and offers no directory-shaped plugin unit, so it retains the per-skill install path, as Kiro does until its powers are verified. Goose does offer one since 1.40: a root `plugin.json` beside a `skills/` folder, found by its presence in a folder Goose reads.
+
+The per-skill path and plugin delivery meet in `.agents/skills/`, which Antigravity CLI, Codex CLI, the Copilot CLI, Goose and OpenCode all read. A global plugin's skills stay copied there while any configured agent reading it does not take the plugin, as with OpenCode, and the agents that took it then see each skill twice: Codex CLI and Antigravity CLI list both, while the Copilot CLI and Goose use the copy. This is a known limitation.
 
 ### External packages
 
-Symposium recognizes two kinds of plugin directory today, one holding a `Symposium.toml` and one holding a bare `SKILL.md`. A directory holding a `plugin.json` becomes a third. Precedence runs `Symposium.toml`, then `plugin.json`, then `SKILL.md`. A directory carrying both a TOML and a JSON manifest loads as a Symposium plugin and takes its name and version from `plugin.json` where the TOML omits them.
+Symposium recognizes two kinds of plugin directory today, one holding a `Symposium.toml` and one holding a bare `SKILL.md`. A directory holding a `plugin.json` becomes a third. Precedence runs `Symposium.toml`, then `plugin.json`, then `SKILL.md`. A directory carrying both a TOML and a JSON manifest loads as a Symposium plugin and takes its name, version and description from `plugin.json` where the TOML omits them, `version` and `description` being new optional fields of the Symposium manifest. A directory holding the `.symposium` marker file is Symposium's own output and is never read back as a source.
 
 Such a package is recognized in the three positions a plugin already occupies, and each position retains its existing meaning. A registry entry is curated and trusted. A workspace member is gated by membership. A dependency is an untrusted offer subject to consent.
 
@@ -161,17 +166,17 @@ An author who wants a portable package to be dependency-scoped under Symposium d
 
 ### Failure containment
 
-The format requires failures to be contained to the smallest affected unit and reported rather than suppressed, which matches how the report layer behaves. A manifest that violates its schema rejects that package alone and leaves the rest of the registry loading. An unrecognized top-level manifest field is reported and ignored. An invalid skill is skipped. A path that resolves outside the package directory is denied at the narrowest applicable boundary.
+The format requires failures to be contained to the smallest affected unit and reported rather than suppressed, which matches how the report layer behaves. A manifest that violates its schema rejects that package alone and leaves the rest of the registry loading. An unrecognized top-level manifest field is reported and ignored. An invalid skill is skipped. A path that resolves outside the package directory is denied at the narrowest applicable boundary, as a security point: a package supplies only what is inside its own folder. That covers the manifest, the `skills` folder and each `SKILL.md`, and also links inside a skill's content, which are skipped and reported, while the links of other skill sources are followed wherever they point ([Symlinks in skill content](../../reference/skill-definition.md#symlinks-in-skill-content)).
 
 ### Ordering
 
-Compilation comes first because it changes how everything installs and is therefore the baseline the rest builds on. Global delivery goes with it rather than after it: since only Claude Code can scope a plugin to a project, a compile step that handled workspace scope alone would leave the per-skill path carrying almost everything. Accepting external packages adds a source of plugins, and that addition is considerably less valuable while those plugins would still be installed by the older per-skill mechanism.
+Compilation comes first because it changes how everything installs and is therefore the baseline the rest builds on. Global delivery goes with it rather than after it: user scope is the one scope every agent with a plugin unit takes as a plugin, so a compile step that handled workspace scope alone would leave the per-skill path carrying almost everything. Accepting external packages adds a source of plugins, and that addition is considerably less valuable while those plugins would still be installed by the older per-skill mechanism.
 
 ## Frequently asked questions
 
 ### Which command installs a plugin?
 
-None that is new. `cargo agents sync` compiles and installs whatever applies, `use` and `remove` record an enablement decision and then sync, and auto-sync does the same work at session start. A plugin is installed because it applies, not because it was installed by name.
+None that is new. `cargo agents sync` compiles and installs whatever applies, `use` and `use --remove` record an enablement decision and then sync, and auto-sync does the same work at session start. A plugin is installed because it applies, not because it was installed by name.
 
 ### Why not drive each agent's own plugin install command?
 
@@ -179,7 +184,7 @@ Symposium already writes agent configuration directly for hooks and MCP entries,
 
 ### Why register a path instead of copying into each agent's folder?
 
-Copying reproduces the problem this change is meant to remove, one copy per agent, one level higher. Registration also decides scope: an agent whose plugin folder is user-level can still be given a project-scoped package if it accepts a path. In practice registration is the exception. Claude Code is the only agent probed that accepts one, so copying is what most agents get.
+Copying reproduces the problem this change is meant to remove, one copy per agent, one level higher. In practice registration is the exception: only the Copilot CLI then reads the directory in place. Codex CLI loads a plugin only from its own cache, Antigravity CLI and Goose discover plugins by their presence in a folder, and Claude Code's directory marketplace leaves records of its own behind, so copying is what most agents get.
 
 ### Why compile a directory rather than continue writing skill files directly?
 
@@ -191,11 +196,11 @@ No. Predicates are evaluated before compilation, so an agent receives only what 
 
 ### Does Claude Code need a separate emitter?
 
-No. Its plugin format predates the standard and differs mainly in the manifest path and in supporting components the standard omits, and Gemini CLI's extensions are the same case. Because each agent ignores the manifests that are not its own, one compiled directory can carry all three at once, so these are manifest renderers over one model rather than emitters of their own. See [One directory, several manifests](#one-directory-several-manifests).
+No. Its plugin format predates the standard and differs mainly in the manifest path and in supporting components the standard omits, and Antigravity CLI's dialect of the root `plugin.json` is a similar case. Because each agent ignores the manifests that are not its own, one compiled directory can carry both at once, so these are manifest renderers over one model rather than emitters of their own. See [One directory, several manifests](#one-directory-several-manifests).
 
 ### What happens to OpenCode and Goose?
 
-Neither has a plugin unit to target, so both continue to receive skills as individual directories. That path is not narrowed much in any case: only Claude Code can scope a plugin to a project, so it stays how a workspace-scoped plugin reaches the other six agents.
+OpenCode has no plugin unit to target, so it continues to receive skills as individual directories, as Kiro does until its powers are verified. Goose has one, and receives a global plugin as a plugin directory, as Antigravity CLI does.
 
 ### Why `dev.symposium` for the extensions namespace?
 
@@ -207,23 +212,24 @@ Version 1.0.0 was published in August 2026 by a committee spanning Amazon, Curso
 
 ## Implementation plan
 
-1. Confirm each agent's plugin location, manifest dialect, enablement mechanism, and the scoping it can express, by observing what a running agent reports rather than by inspecting the files written to it. Done for Claude Code, Codex CLI, the Copilot CLI, Gemini CLI, and VS Code; the results are in [Implementation details](#implementation-details) below. Kiro remains to be probed.
-2. Produce the compiled plugin directory from an already-gated plugin, carrying all three manifests and validated against the published manifest schema, including the ownership marker, the hidden-directory rule, and name disambiguation on collision.
-3. Install global plugins for every agent with a plugin unit, copying into the folder each discovers and writing the marketplace and enablement entries the agent requires, restricted to the plugins whose gate cannot vary by workspace.
-4. Install workspace-scoped plugins for Claude Code, the one agent that can express them, and retire its per-skill writes and the directories they left behind.
-5. Recognize a `plugin.json` directory as a plugin entry in every position a plugin is already found, including the nesting and source-root rules.
-6. Resolve an external package's skills, reporting an `mcp.json` as unsupported, and contain malformed packages, skills, and escaping paths at their proper boundaries.
-7. Honor the `dev.symposium` extensions namespace, and extend `plugin validate`, `search`, `status`, and `use` to cover these packages.
+1. Confirm each agent's plugin location, manifest dialect, enablement mechanism, and the scoping it can express, by observing what a running agent reports rather than by inspecting the files written to it. Done for Claude Code, Codex CLI, the Copilot CLI, Antigravity CLI, and Goose; the results are in [Implementation details](#implementation-details) below. Kiro remains to be probed.
+2. Compile each plugin named by a `use --global` entry, with all its skills, into a directory under `~/.symposium/installed/` that carries both manifests and the ownership marker and is renamed on collision, and install it for every agent that can take a plugin: Claude Code, Codex CLI, the Copilot CLI, Antigravity CLI and Goose ([#332](https://github.com/symposium-dev/symposium/pull/332), on top of [#333](https://github.com/symposium-dev/symposium/pull/333), which resolves each agent's relocated configuration directory).
+3. Install workspace-scoped plugins for Claude Code at the workspace root and retire its per-skill copies ([#352](https://github.com/symposium-dev/symposium/pull/352), on top of [#332](https://github.com/symposium-dev/symposium/pull/332)). A session started in a subdirectory gets none of them, as [#353](https://github.com/symposium-dev/symposium/issues/353) records.
+4. Recognize a `plugin.json` directory as a plugin entry in every position a plugin is already found, including the nesting and source-root rules ([#348](https://github.com/symposium-dev/symposium/pull/348)).
+5. Resolve an external package's skills, reporting an `mcp.json` as unsupported, and contain malformed packages, skills, and escaping paths at their proper boundaries ([#348](https://github.com/symposium-dev/symposium/pull/348), and [#354](https://github.com/symposium-dev/symposium/pull/354) for links inside skill content).
+6. Honor the `dev.symposium` extensions namespace, and extend `plugin validate`, `search`, `status`, and `use` to cover these packages ([#348](https://github.com/symposium-dev/symposium/pull/348)).
 
 ### Future work
 
 Emitting and reading `mcp.json` removes the last per-agent configuration format Symposium maintains, and follows the meta-server decision described above. It also introduces the format's subprocess contract, a `PLUGIN_ROOT` and a `PLUGIN_DATA` directory that survives updates, and requires a rule separating Symposium's own `${VAR}` expansion from the format's two placeholders.
 
-Beyond that, Claude Code and Gemini CLI can both carry hooks inside a plugin directory, which would trade the vendor-neutral hook format and per-dispatch predicates for native dispatch. Publishing a compiled Symposium plugin as a portable package for other clients is a short step once compilation exists. A package's `version` can drive update checks and cache freshness, which the format explicitly permits.
+Project scope as a plugin for Codex CLI, the Copilot CLI, Antigravity CLI and Goose waits until the costs [Which agents can scope a plugin to a project](#which-agents-can-scope-a-plugin-to-a-project) records are settled, and Kiro until a running Kiro shows where installed powers live and whether it discovers one placed there.
+
+Beyond that, Claude Code and Goose can both carry hooks inside a plugin directory, which would trade the vendor-neutral hook format and per-dispatch predicates for native dispatch. Publishing a compiled Symposium plugin as a portable package for other clients is a short step once compilation exists. A package's `version` can drive update checks and cache freshness, which the format explicitly permits.
 
 ## Implementation details
 
-What probing the installed agents and mapping this proposal onto the current code turned up. The first two points constrain the implementation; the rest corrected claims in the sections above, which now read as amended.
+What probing the installed agents and mapping this proposal onto the current code turned up, last verified in October 2026 against Claude Code 2.1.284, Codex CLI 0.159.3, the Copilot CLI 1.0.89, Antigravity CLI 1.2.14 and Goose 1.53.0. The first point constrains the implementation; the others are the evidence for the sections above.
 
 ### Where a global compiled directory goes
 
@@ -238,66 +244,41 @@ Global compiled directories go in a sibling instead:
 ~/.symposium/installed/   compiled directories symposium writes
 ```
 
-Workspace scope is unaffected (`<project root>/.symposium/plugins/`, as described above), and the whole `.symposium/` directory is symposium's own, so one `.gitignore` containing `*` sits at its root rather than one per compiled directory.
-
-### A global installation needs a workspace-independent gate
-
-[Scope of an installation](#scope-of-an-installation) matches an installation to the enablement that produced it, so a `use --global` entry installs for the user. Predicates, though, are evaluated against the workspace being synced, while a user-level directory is visible from every workspace. The two do not compose:
-
-```console
-$ cargo agents use --global pdf-tools   # gated depends-on = ["lopdf"]
-```
-
-Run where `lopdf` is a dependency, the gate holds and the directory is written under the user configuration directory. Every other project on the machine now sees the plugin, without the dependency that gates it.
-
-Removal has the mirror problem. Cleanup removes marked directories it did not install on this run, so a global set that varies by workspace makes two projects undo each other: syncing the project without `lopdf` removes the directory, syncing the one with it writes it back, on every session start.
-
-Both follow from evaluating a workspace-dependent gate once and keeping the result somewhere workspace-independent. A plugin therefore installs globally only when its gate cannot vary by workspace: an empty gate (a dormant plugin woken by a global `use` entry, which is the case [the walkthrough](#walkthrough) shows) or `depends-on = ["*"]`. A global entry on any other plugin installs per project, and the install report names the scope it got.
-
-The test is conservative. `depends-on(<name>)` and `workspace-member()` are workspace-dependent by definition, `shell(...)` and a relative `path_exists(...)` resolve against the workspace as their working directory, and a custom predicate is opaque. Only the empty set and `depends-on(*)` qualify; widening the test per predicate kind later is additive.
+Workspace scope is unaffected (`<project root>/.symposium/plugins/`, for the project-scoped installation of step 4 of the [implementation plan](#implementation-plan)), and the whole `.symposium/` directory is symposium's own, so one `.gitignore` containing `*` sits at its root rather than one per compiled directory.
 
 ### One directory, several manifests
 
-This is the evidence for the single directory [Change in a nutshell](#change-in-a-nutshell) shows. An earlier draft treated Claude Code and Gemini CLI as separate emitters; probing the installed agents shows they do not need to be. Claude Code ignores a `plugin.json` at a package root and falls back to the directory name for identity, Agent Plugins clients ignore `.claude-plugin/`, and Gemini CLI reads only its own file. So one compiled directory carrying all three manifests, with the same content in each, satisfies every one of them:
+This is the evidence for the single directory [Change in a nutshell](#change-in-a-nutshell) shows. Claude Code ignores a `plugin.json` at a package root and falls back to the directory name for identity, Agent Plugins clients ignore `.claude-plugin/`, and Antigravity CLI and Goose read the same root `plugin.json`, Antigravity CLI as its own dialect. So one compiled directory carrying both manifests, with the same content in each, satisfies every one of them:
 
 ```text
 pdf-tools/
-  plugin.json                    Codex CLI, Copilot CLI, VS Code
+  plugin.json                    Codex CLI, Copilot CLI, Antigravity CLI, Goose
   .claude-plugin/plugin.json     Claude Code
-  gemini-extension.json          Gemini CLI
   skills/extract-tables/SKILL.md every one of them
 ```
 
-Verified against Claude Code 2.1.237, Codex CLI 0.147.0, Copilot CLI 1.0.79 and Gemini CLI 0.55.1: both validators accept that directory, and Claude Code resolves the declared name from it rather than the directory name.
+Each agent loaded that directory; Codex CLI loads its skills only with the 1.0.0 `$schema`, which is the one emitted.
 
-The staging root needs one manifest of its own, because Claude Code, Codex CLI and Copilot CLI all take a *marketplace* (a directory of packages) plus a per-package enablement entry, rather than a path to one package. `.claude-plugin/marketplace.json` is the one file all three read. Codex CLI also accepts `.agents/plugins/marketplace.json` and prefers it when both are present; Claude Code rejects it.
+The staging root carries one manifest of its own, `.claude-plugin/marketplace.json`, for the Copilot CLI, which takes a *marketplace* (a directory of packages) plus a per-package enablement entry rather than a path to one package.
 
 So there is one emitter with several manifest renderers, not one emitter per agent.
 
-### Only Claude Code can scope a plugin to a project
+### Which agents can scope a plugin to a project
 
-This is the evidence for [Scope of an installation](#scope-of-an-installation). An earlier draft expected Codex CLI, Kiro and Claude Code to offer a project-scoped location, and VS Code to accept a workspace-scoped path registration. Of the agents installed here, only Claude Code does:
+This is the evidence for [Scope of an installation](#scope-of-an-installation). Every agent with a plugin unit can scope a plugin to a project. Claude Code's cost is accepted; each other agent's keeps it out of version one:
 
 | Agent | Result |
 |---|---|
-| Claude Code | `plugin install -s project` |
-| Codex CLI | a project `.codex/config.toml` marketplace entry is ignored, and there is no folder discovery at `.codex/plugins/` or `$CODEX_HOME/plugins/` |
-| Copilot CLI | a project `.copilot/settings.json` is ignored, a working-directory marketplace manifest is not discovered, and `plugin install` has no scope flag |
-| Gemini CLI | a project `.gemini/extensions/` is ignored |
-| VS Code | `chat.pluginLocations` is machine-scoped and workspace-trust restricted, so it cannot be set per workspace |
+| Claude Code | a copy in `<project>/.claude/skills/<name>/`, loaded in a trusted folder but only by a session started in that directory ([#353](https://github.com/symposium-dev/symposium/issues/353)); used, at the workspace root |
+| Codex CLI | a marketplace and an enablement entry in the project's `.codex/config.toml`, honored only in a trusted project; the plugin cache stays user-level and keyed by marketplace name, so each project needs a name of its own; the entry needs an absolute path, in a file teams may commit |
+| Copilot CLI | the user-scope entries in the repository's `.github/copilot/settings.local.json`, read only at the git root and under a marketplace name other than the user-level one, which wins a clash; the file has to stay out of version control |
+| Antigravity CLI | a copy in `<project>/.agents/plugins/<name>/`, a folder Goose reads too, so one writer has to serve both; interactive sessions load it only in a trusted folder |
+| Goose | a copy in `<project>/.agents/plugins/<name>/`, read only from the working directory |
 
 Kiro is not installed here and remains unconfirmed.
 
-The consequence is that a workspace-scoped plugin can be delivered as a compiled directory to Claude Code alone. On the others it arrives as individual skill directories, as it does today. So the per-skill path is not reduced in scope: it stays the mechanism for workspace-scoped plugins on six of the seven agents, and compilation pays off for global installations plus Claude Code project installations. That is why [Ordering](#ordering) puts global delivery in the first increment rather than in follow-up work.
-
-### Two mechanics worth recording
-
-Codex CLI's install step copies a package into a version-keyed cache under `$CODEX_HOME/plugins/cache/`. Writing its `config.toml` entries alone registers enablement against an empty cache, so the copy has to happen too. Re-running the install after editing the source at the same version does re-copy, so there is no stale-content trap. Its removal step clears both config tables but leaves the cache directory behind, which symposium has to delete itself.
-
-Gemini CLI needs no configuration write at all: a package present at `~/.gemini/extensions/<name>/` is listed and enabled. Its own `extensions link` command blocks waiting on input, which is another reason the file is written directly rather than shelling out.
-
 ## Implementation status
 
-This RFD describes proposed work. Implementation has not begun.
+Implementation is in progress; the [implementation plan](#implementation-plan) names the pull requests behind each step.
 
 See [Proposed: Agent Plugins packages](./proposed-reference.md) for the intended authoring reference and [Proposed: How extensions are installed](./proposed-install.md) for the resulting install locations.

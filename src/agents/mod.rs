@@ -5,6 +5,9 @@
 //! that knowledge.
 
 mod mcp_server_registration;
+mod plugin_registration;
+
+pub(crate) use plugin_registration::sync_marketplace_index;
 
 use std::fs;
 use std::io::Write as _;
@@ -15,6 +18,12 @@ use serde_json::json;
 
 use crate::config::Symposium;
 use crate::output::{Output, display_path};
+
+#[derive(Debug, PartialEq)]
+pub(crate) struct CompiledPlugin {
+    pub name: String,
+    pub dir: PathBuf,
+}
 
 /// Which of an agent's two MCP configuration levels to write.
 ///
@@ -118,7 +127,10 @@ impl Agent {
             }
             Agent::Goose => project_root.join(".agents").join("skills").join(skill_name),
             Agent::Kiro => project_root.join(".kiro").join("skills").join(skill_name),
-            Agent::OpenCode => project_root.join(".agents").join("skills").join(skill_name),
+            Agent::OpenCode => project_root
+                .join(".opencode")
+                .join("skills")
+                .join(skill_name),
         }
     }
 
@@ -143,6 +155,15 @@ impl Agent {
             Agent::Goose => Some(home.join(".agents").join("skills").join(skill_name)),
             Agent::Kiro => Some(home.join(".kiro").join("skills").join(skill_name)),
             Agent::OpenCode => Some(home.join(".agents").join("skills").join(skill_name)),
+        }
+    }
+
+    pub(crate) fn reads_vendor_neutral_skills(&self) -> bool {
+        match self {
+            Agent::Antigravity | Agent::Codex | Agent::Copilot | Agent::Goose | Agent::OpenCode => {
+                true
+            }
+            Agent::Claude | Agent::Kiro => false,
         }
     }
 
@@ -346,6 +367,61 @@ impl Agent {
                 mcp_server_registration::unregister_opencode_mcp_servers(path, names, out)
             }
         }
+    }
+
+    pub(crate) fn deliver_user_plugins(
+        &self,
+        sym: &Symposium,
+        plugins: &[CompiledPlugin],
+    ) -> Option<Vec<String>> {
+        let plugins_dir = match self {
+            Agent::Antigravity => sym
+                .home_dir()
+                .join(".gemini")
+                .join("config")
+                .join("plugins"),
+            Agent::Claude => claude_config_dir(sym).join("skills"),
+            Agent::Codex => return plugin_registration::codex::deliver_user_plugins(sym, plugins),
+            Agent::Copilot => {
+                return plugin_registration::copilot::deliver_user_plugins(sym, plugins);
+            }
+            Agent::Goose => goose_path_root(sym)
+                .unwrap_or_else(|| sym.home_dir().to_path_buf())
+                .join(".agents")
+                .join("plugins"),
+            Agent::Kiro | Agent::OpenCode => return None,
+        };
+        Some(plugin_registration::deliver_copies(
+            sym,
+            *self,
+            &plugins_dir,
+            plugins,
+        ))
+    }
+
+    pub(crate) fn deliver_project_plugins(
+        &self,
+        sym: &Symposium,
+        project_root: &Path,
+        plugins: &[CompiledPlugin],
+    ) -> Option<Vec<String>> {
+        let Agent::Claude = self else {
+            return None;
+        };
+        let skills_dir = project_root.join(".claude").join("skills");
+        let updated = plugin_registration::deliver_copies(sym, *self, &skills_dir, plugins);
+        for plugin in plugins {
+            let dir = skills_dir.join(&plugin.name);
+            if !crate::sync::has_symposium_marker(&dir) {
+                continue;
+            }
+            if let Err(e) = crate::sync::ignore_in_git(&dir) {
+                tracing::info!(
+                    report = %crate::report::ReportEvent::Warning { message: format!("{e:#}") },
+                );
+            }
+        }
+        Some(updated)
     }
 
     /// Remove hooks from the project-level agent config.
@@ -1652,11 +1728,11 @@ mod tests {
     }
 
     #[test]
-    fn opencode_project_skill_dir_uses_vendor_neutral() {
+    fn opencode_project_skill_dir() {
         let root = Path::new("/project");
         assert_eq!(
             Agent::OpenCode.project_skill_dir(root, "tokio"),
-            PathBuf::from("/project/.agents/skills/tokio")
+            PathBuf::from("/project/.opencode/skills/tokio")
         );
     }
 

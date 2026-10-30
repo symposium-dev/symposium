@@ -75,8 +75,8 @@ async fn use_records_workspace_entry_and_installs() {
         TestMode::SimulationOnly,
         &["auto-enable0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
-            let skills_dir = ctx.workspace_root.clone().unwrap().join(".claude/skills");
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
+            let skills_dir = ctx.workspace_root.clone().unwrap().join(".agents/skills");
 
             // Unconsented, the dependency's skills stay out.
             ctx.symposium(&["sync"]).await?;
@@ -215,8 +215,12 @@ async fn plugins_entries_match_crate_names_like_cargo() {
         &["auto-enable0"],
         async |mut ctx| {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
-            let skills_dir = ctx.workspace_root.clone().unwrap().join(".claude/skills");
-            let installed = || !find_installed_skills(&skills_dir, "a-guidance").is_empty();
+            let project_plugin = ctx
+                .workspace_root
+                .clone()
+                .unwrap()
+                .join(".claude/skills/crate-a/skills/a-guidance/SKILL.md");
+            let installed = || project_plugin.is_file();
 
             ctx.sym.config.plugins.auto_enable = vec!["crate_a".into()];
             ctx.symposium(&["sync"]).await?;
@@ -225,7 +229,11 @@ async fn plugins_entries_match_crate_names_like_cargo() {
             ctx.sym.config.plugins.auto_enable.clear();
             ctx.sym.config.plugins.used = vec![UseEntry::Global("crate_a".into())];
             ctx.symposium(&["sync"]).await?;
-            assert!(installed(), "use");
+            let user_plugin = ctx.sym.home_dir().join(".claude/skills/crate-a");
+            assert!(
+                user_plugin.join("skills/a-guidance/SKILL.md").is_file(),
+                "use"
+            );
 
             ctx.sym.config.plugins.used.clear();
             ctx.sym.config.plugins.auto_enable = vec!["*".into()];
@@ -249,8 +257,8 @@ async fn plugins_entries_match_registry_plugin_names_exactly() {
         TestMode::SimulationOnly,
         &["dormant-plugin0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
-            let skills_dir = ctx.workspace_root.clone().unwrap().join(".claude/skills");
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
+            let skills_dir = ctx.workspace_root.clone().unwrap().join(".agents/skills");
             let woken = || !find_installed_skills(&skills_dir, "gateless-guidance").is_empty();
 
             ctx.sym.config.plugins.auto_enable = vec!["gateless-plugin".into()];
@@ -280,6 +288,29 @@ async fn plugins_entries_match_registry_plugin_names_exactly() {
     .unwrap();
 }
 
+#[tokio::test]
+async fn use_global_installs_registry_content_for_the_user() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["use", "--global", "serde-guidance"])
+                .await?;
+            assert!(
+                read_config(&ctx).contains("serde-guidance"),
+                "{}",
+                read_config(&ctx)
+            );
+            let plugin = ctx.sym.home_dir().join(".claude/skills/serde-guidance");
+            assert!(plugin.join("skills/serde-guidance/SKILL.md").is_file());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// `use` wakes a dormant registry plugin (one no dependency gates), and
 /// `--remove` puts it back to sleep, reaping its skills.
 #[tokio::test]
@@ -288,8 +319,8 @@ async fn use_wakes_and_remove_sleeps_a_dormant_plugin() {
         TestMode::SimulationOnly,
         &["dormant-plugin0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
-            let skills_dir = ctx.workspace_root.clone().unwrap().join(".claude/skills");
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
+            let skills_dir = ctx.workspace_root.clone().unwrap().join(".agents/skills");
 
             ctx.symposium(&["sync"]).await?;
             assert!(find_installed_skills(&skills_dir, "gateless-guidance").is_empty());
@@ -316,8 +347,8 @@ async fn use_remove_reaps_and_then_errors() {
         TestMode::SimulationOnly,
         &["auto-enable0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
-            let skills_dir = ctx.workspace_root.clone().unwrap().join(".claude/skills");
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
+            let skills_dir = ctx.workspace_root.clone().unwrap().join(".agents/skills");
 
             ctx.symposium(&["use", "crate-a"]).await?;
             find_installed_skill(&skills_dir, "a-guidance");
@@ -688,14 +719,14 @@ async fn apply_consent_records_both_answers() {
         TestMode::SimulationOnly,
         &["auto-enable0"],
         async |mut ctx| {
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             let workspace_root = ctx.workspace_root.clone().unwrap();
 
             symposium::discovery::apply_consent(&mut ctx.sym, &["crate-a".to_string()], &[])?;
             assert!(read_config(&ctx).contains("auto-enable"));
 
             ctx.symposium(&["sync"]).await?;
-            find_installed_skill(&workspace_root.join(".claude/skills"), "a-guidance");
+            find_installed_skill(&workspace_root.join(".agents/skills"), "a-guidance");
 
             let deps = ctx.sym.workspace_deps(&workspace_root);
             assert!(

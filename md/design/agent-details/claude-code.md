@@ -232,3 +232,84 @@ user's behalf); approve once via `/mcp`, or add the name to
 Registration is idempotent — if the entry already exists with the
 correct values, no changes are made. If the entry exists but has stale
 values (e.g. the binary moved), it is updated in place.
+
+## Plugin Delivery
+
+A plugin enabled with `use --global` reaches Claude Code as a
+**skills-directory plugin**: symposium copies the compiled plugin directory
+into the user skills directory, `~/.claude/skills/<plugin>/`
+(`$CLAUDE_CONFIG_DIR/skills/<plugin>/` when that variable is set, in which case
+Claude Code ignores `~/.claude/skills/`). Claude Code loads every folder there
+that holds `.claude-plugin/plugin.json` as the plugin `<plugin>@skills-dir`, in
+place, in every project. Its skills are invoked as `/<plugin>:<skill>`.
+
+Nothing is written to `settings.json`, `known_marketplaces.json` or
+`installed_plugins.json`. A user who runs `claude plugin disable
+<plugin>@skills-dir` gets an `enabledPlugins` entry that symposium never
+touches.
+
+Verified against Claude Code 2.1.284 by asking the agent (`claude plugin list
+--json`, `claude plugin details`, and the `system/init` event of `claude -p`):
+
+- The plugin is listed in the first session after `cargo agents sync`, and
+  `claude plugin list` shows it without a prior session.
+- An edit at the same version is picked up by the next session: the copy is
+  read in place, and nothing is cached under `~/.claude/plugins/cache/`.
+- Removing the directory removes the plugin, with no residue and no error.
+- A plugin written during the `SessionStart` hook (symposium's auto-sync) loads
+  in the next session, or after `/reload-plugins` in the current one.
+- A plain `SKILL.md` folder of the user's own next to it is unaffected.
+
+The alternative, registering the staging root as a directory marketplace
+(`extraKnownMarketplaces` plus `enabledPlugins`), also loads in place, but
+Claude Code then writes `~/.claude/plugins/known_marketplaces.json` and
+`installed_plugins.json` entries of its own that outlive the registration.
+
+### Project scope
+
+Every other plugin that applies to the project reaches Claude Code the same
+way, one level down: symposium copies the compiled directory from the project
+staging root (`<project>/.symposium/plugins/<plugin>/`) into
+`<project>/.claude/skills/<plugin>/` and adds a `.gitignore` containing `*`
+inside it. Claude Code loads it as a project-scoped `<plugin>@skills-dir`, in
+that project only. Nothing is written to any settings file.
+
+Claude Code looks for these plugins only in the directory it starts in. Its
+documentation says so: unlike plain skills, it does not search parent
+directories for plugins, and the fix it gives is to launch from the repository
+root or `/cd` there. Symposium installs them at the workspace root and leaves
+that rule as it is. The alternatives were weighed in
+[#353](https://github.com/symposium-dev/symposium/issues/353): a local
+marketplace enabled from `settings.local.json`, which Claude Code reads at the
+git root, means writing the user's settings and managing Claude Code's plugin
+cache; linking the plugins into each session's directory from the `SessionStart`
+hook comes too late for that session, since plugins load before the hook runs.
+
+Verified against Claude Code 2.1.284, logged out and offline (the `system/init`
+event of `claude -p`, `claude plugin list --json`, and the TUI's `/` completion):
+
+- Started at the workspace root, a trusted folder, it loads each one as a
+  project-scope `<plugin>@skills-dir` and offers its skills as
+  `/<plugin>:<skill>`, with no bare duplicate.
+- Started in a member crate, it loads none of them, and `claude plugin list`
+  is empty there. The per-skill copies symposium wrote before were found from
+  there, since plain skills are searched in parent directories.
+- Only in a folder the user has trusted. Untrusted, `claude -p` loads none of
+  them and `claude plugin list` shows `(suppressed)@skills-dir`, while plain
+  project skills still load. In the TUI session that accepts the trust prompt
+  they load only after `/reload-plugins`; later sessions load them at start.
+- Repository B, with the same profile, does not see repository A's plugins.
+  Two repositories carrying a plugin of the same name with different content,
+  open at the same time, each load their own.
+- The `.gitignore` inside the directory does not affect loading.
+- An edit at the same version is picked up by the next session, and removing
+  the directory leaves nothing listed and no error.
+- A plugin written during the `SessionStart` hook loads in the next session,
+  or after `/reload-plugins` in the current one.
+- A user-level plugin of the same name shadows the project one, and
+  `claude plugin list` reports it.
+
+The Copilot CLI (1.0.89) and Goose (1.54.0) read `<project>/.claude/skills/`
+too, and take the skills inside `<plugin>/skills/` as plain project skills,
+as they took the per-skill copies before. Configured in the same project, each
+lists every skill once, from its own copy in `.agents/skills/`.
