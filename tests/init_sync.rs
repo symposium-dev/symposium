@@ -355,6 +355,39 @@ async fn sync_installs_antigravity_at_project_scope() {
     .unwrap();
 }
 
+#[tokio::test]
+async fn sync_gives_opencode_a_skills_folder_of_its_own() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0", "user-skills0"],
+        async |mut ctx| {
+            let root = ctx.workspace_root.clone().unwrap();
+            let old_copy = root.join(".agents/skills/serde-guidance");
+            std::fs::create_dir_all(&old_copy)?;
+            std::fs::write(old_copy.join("SKILL.md"), "old")?;
+            std::fs::write(old_copy.join(".symposium"), "")?;
+
+            ctx.symposium(&["init", "--add-agent", "opencode"]).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            let skills = root.join(".opencode/skills");
+            let skill_dir = find_installed_skill(&skills, "serde-guidance");
+            assert!(skill_dir.join(".symposium").exists());
+            assert!(
+                !old_copy.exists(),
+                "the copy an earlier sync left in .agents/skills is removed"
+            );
+            assert!(
+                find_installed_skills(&skills, "user-authored-skill").is_empty(),
+                "a skill authored in .agents/skills is read where it is"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// `sync` installs skill files into the agent's expected location.
 #[tokio::test]
 async fn sync_installs_skills() {
@@ -1308,8 +1341,8 @@ async fn dormant_plugin_activates_only_once_used() {
             ctx.sym.save_config()?;
             ctx.symposium(&["sync"]).await?;
 
-            let dir = find_installed_skill(&skills_dir, "gateless-guidance");
-            assert!(dir.join(".symposium").exists());
+            let plugin = ctx.sym.home_dir().join(".claude/skills/gateless-plugin");
+            assert!(plugin.join("skills/gateless-guidance/SKILL.md").is_file());
             Ok(())
         },
     )

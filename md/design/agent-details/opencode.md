@@ -152,6 +152,15 @@ Priority: local `AGENTS.md` > local `CLAUDE.md` > global `~/.config/opencode/AGE
 
 OpenCode walks up from CWD to the git worktree root, loading matching skill definitions. Skills use `SKILL.md` with YAML frontmatter (`name`, `description`) and are loaded on-demand via the native `skill` tool.
 
+Its search of `~/.claude/skills/` also finds the skills inside a plugin symposium installs for Claude Code (`~/.claude/skills/<plugin>/skills/<skill>/`), in every folder, even when OpenCode is not configured in symposium; `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` stops OpenCode reading Claude Code's skill directories.
+
+Symposium installs OpenCode's skills in `.opencode/skills/`. OpenCode reads `.agents/skills/` as well, but so do Antigravity CLI, Codex CLI, the Copilot CLI and Goose, and one of them that takes a plugin enabled with `use --global` as a plugin would also find OpenCode's per-skill copy of each of its skills: Antigravity CLI and Codex CLI list the skill twice, the Copilot CLI and Goose load the copy instead of the plugin's. A skill authored in `.agents/skills/` gets no copy in `.opencode/skills/`, since OpenCode reads it there.
+
+Verified against OpenCode 1.17.12 with `opencode debug skill`:
+
+- It reads `.opencode/skills/` (and `.opencode/skill/`), `.agents/skills/` and `.claude/skills/`, and lists a skill name once even when several of them hold it; which copy it reads varies from run to run.
+- It treats a project's `.opencode/` as a config folder, as it does `~/.config/opencode/`: it writes `.opencode/.gitignore`, which ignores itself and the `node_modules`, `package.json` and lock files, and a session starts installing `@opencode-ai/plugin` there (seen with `opencode run`). `git status` stays clean.
+
 ## Additional Events (Plugin System)
 
 The full event list includes: `session.created`, `session.idle`, `session.compacted`, `message.updated`, `file.edited`, `file.watcher.updated`, `permission.asked`, `permission.replied`, `tool.execute.before`, `tool.execute.after`, `shell.env`, `tui.prompt.append`, `tui.command.execute`, and others (~30 total). The `message.updated` event (filtered by `role === "user"`) is the closest equivalent to a user-prompt-submit hook. The `session.created` event is the session-start equivalent.

@@ -268,7 +268,8 @@ pub async fn execute_hook(
         // Auto-sync: install applicable skills into agent dirs (non-fatal).
         // SessionStart refreshes source caches and syncs unconditionally.
         let session_start = event == HookEvent::SessionStart;
-        let notify_about_possible_new_plugins = run_auto_sync(sym, &deps, session_start).await;
+        let (notify_about_possible_new_plugins, plugin_changes) =
+            run_auto_sync(sym, &deps, session_start).await;
 
         // SessionStart (once per session) also refreshes every hook's already-
         // cached source, so later events dispatch fresh binaries without per-
@@ -278,8 +279,14 @@ pub async fn execute_hook(
         }
 
         // Builtin dispatch → symposium output → host agent output as Value
-        let builtin_sym_output =
-            dispatch_builtin(sym, &sym_input, &deps, notify_about_possible_new_plugins).await;
+        let builtin_sym_output = dispatch_builtin(
+            sym,
+            &sym_input,
+            &deps,
+            notify_about_possible_new_plugins,
+            plugin_reload_notice(agent, plugin_changes),
+        )
+        .await;
         let builtin_agent_output = handler.translate_output(&builtin_sym_output);
         let prior_output = builtin_agent_output.to_hook_output();
 
@@ -413,11 +420,16 @@ fn write_hook_trace(agent: HookAgent, event: HookEvent, input: &str, response: &
 /// the `Cargo.lock` freshness gate — upstream skill changes land even when the
 /// workspace's dependencies are unchanged.
 ///
-/// Returns whether it re-synced because `Cargo.lock` changed mid-session.
-async fn run_auto_sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, session_start: bool) -> bool {
+/// Returns whether it re-synced because `Cargo.lock` changed mid-session, and
+/// the plugins the sync installed or updated for each agent that takes them.
+async fn run_auto_sync(
+    sym: &Symposium,
+    deps: &Arc<WorkspaceDeps>,
+    session_start: bool,
+) -> (bool, Vec<(crate::agents::Agent, Vec<String>)>) {
     if !sym.config.auto_sync {
         tracing::debug!("auto-sync disabled, skipping");
-        return false;
+        return (false, Vec::new());
     }
 
     let cwd = deps.cwd().to_path_buf();
@@ -433,7 +445,7 @@ async fn run_auto_sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, session_start
         let state = crate::workspace_state::WorkspaceState::load(sym, root);
         if state.sync_is_fresh(root) {
             tracing::debug!("auto-sync skipped: Cargo.lock unchanged since last sync");
-            return false;
+            return (false, Vec::new());
         }
     }
     let dependencies_changed = !session_start && workspace_root.is_some();
@@ -445,10 +457,13 @@ async fn run_auto_sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, session_start
     };
 
     tracing::debug!("auto-sync running");
-    if let Err(e) = crate::sync::sync(sym, deps, update).await {
-        tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
-        return false;
-    }
+    let plugin_changes = match crate::sync::sync(sym, deps, update).await {
+        Ok(plugin_changes) => plugin_changes,
+        Err(e) => {
+            tracing::warn!(error = %e, "auto-sync during hook failed (continuing)");
+            return (false, Vec::new());
+        }
+    };
 
     // Record successful sync. If we didn't find the root earlier,
     // try again now (sync may have created Cargo.lock).
@@ -459,7 +474,30 @@ async fn run_auto_sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, session_start
         state.workspace_root = Some(root.clone());
         state.save(sym, root);
     }
-    dependencies_changed
+    (dependencies_changed, plugin_changes)
+}
+
+fn plugin_reload_notice(
+    agent: HookAgent,
+    plugin_changes: Vec<(crate::agents::Agent, Vec<String>)>,
+) -> Option<String> {
+    let load_now = match agent {
+        HookAgent::Claude => "Tell the user to run `/reload-plugins` to load them now.",
+        HookAgent::Antigravity => "Tell the user to run `/skills reload` to load them now.",
+        HookAgent::Codex => "Tell the user to start a new session to load them.",
+        HookAgent::Copilot => "Tell the user to run `/restart` to load them now.",
+        HookAgent::Goose | HookAgent::Kiro | HookAgent::OpenCode => return None,
+    };
+    let (_, updated) = plugin_changes
+        .into_iter()
+        .find(|(changed_for, _)| changed_for.config_name() == agent.as_str())?;
+    (!updated.is_empty()).then(|| {
+        format!(
+            "Symposium installed or updated these plugins after this session started, \
+             so they are not loaded yet: {}. {load_now}",
+            updated.join(", ")
+        )
+    })
 }
 
 /// Whether the hook pipeline must resolve the workspace crate graph before
@@ -553,6 +591,7 @@ pub async fn dispatch_builtin(
     input: &symposium::InputEvent,
     deps: &Arc<WorkspaceDeps>,
     notify_about_possible_new_plugins: bool,
+    plugin_reload_notice: Option<String>,
 ) -> symposium::OutputEvent {
     match input {
         symposium::InputEvent::PreToolUse(_) => {
@@ -565,7 +604,7 @@ pub async fn dispatch_builtin(
             handle_user_prompt_submit(sym, prompt, notify_about_possible_new_plugins).await
         }
         symposium::InputEvent::SessionStart(session) => {
-            handle_session_start(sym, session, deps).await
+            handle_session_start(sym, session, deps, plugin_reload_notice).await
         }
         _ => symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
     }
@@ -578,11 +617,13 @@ async fn handle_session_start(
     sym: &Symposium,
     _payload: &SessionStartInput,
     deps: &Arc<WorkspaceDeps>,
+    plugin_reload_notice: Option<String>,
 ) -> OutputEvent {
     let fragments = [
         discovery_hint(sym, deps).await,
         consent_hint(sym, deps).await,
         update_nudge(sym),
+        plugin_reload_notice,
     ]
     .into_iter()
     .flatten()
@@ -1204,7 +1245,7 @@ mod tests {
             None,
             None,
         ));
-        let output = dispatch_builtin(&sym, &input, &deps, false).await;
+        let output = dispatch_builtin(&sym, &input, &deps, false, None).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -1220,7 +1261,7 @@ mod tests {
             Some("test-session".to_string()),
             Some("/tmp".to_string()),
         ));
-        let output = dispatch_builtin(&sym, &input, &deps, false).await;
+        let output = dispatch_builtin(&sym, &input, &deps, false, None).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -1234,7 +1275,7 @@ mod tests {
             Some("test-session".to_string()),
             Some("/tmp".to_string()),
         ));
-        let output = dispatch_builtin(&sym, &input, &deps, false).await;
+        let output = dispatch_builtin(&sym, &input, &deps, false, None).await;
         assert!(output.additional_context().is_none());
     }
 
