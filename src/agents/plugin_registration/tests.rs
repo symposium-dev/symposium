@@ -59,6 +59,52 @@ fn only_plugin_directories_symposium_installed_are_reaped() {
 }
 
 #[test]
+fn project_delivery_lands_in_the_project_and_stays_out_of_git() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut sym = Symposium::from_dir(&tmp.path().join("home"));
+    sym.config.sync_debounce_secs = 0;
+    let project = tmp.path().join("project");
+    let staging = project.join(".symposium/plugins");
+    let delivered = project.join(".claude/skills/fresh");
+    let plugin = compiled(&staging, "fresh");
+
+    Agent::Claude.deliver_project_plugins(&sym, &project, std::slice::from_ref(&plugin));
+    assert!(delivered.join(".claude-plugin/plugin.json").is_file());
+    assert_eq!(
+        fs::read_to_string(delivered.join(".gitignore")).unwrap(),
+        "*\n"
+    );
+    assert!(!sym.home_dir().join(".claude").exists());
+
+    write(&plugin.dir.join(".claude-plugin/plugin.json"), "v2");
+    Agent::Claude.deliver_project_plugins(&sym, &project, std::slice::from_ref(&plugin));
+    assert_eq!(
+        fs::read_to_string(delivered.join(".claude-plugin/plugin.json")).unwrap(),
+        "v2"
+    );
+    assert_eq!(
+        fs::read_to_string(delivered.join(".gitignore")).unwrap(),
+        "*\n",
+        "replacing the content keeps the directory out of git"
+    );
+
+    Agent::Claude.deliver_project_plugins(&sym, &project, &[]);
+    assert!(!delivered.exists());
+}
+
+#[test]
+fn only_claude_takes_project_plugins() {
+    let tmp = tempfile::tempdir().unwrap();
+    let sym = Symposium::from_dir(tmp.path());
+    for &agent in Agent::all() {
+        let takes = agent
+            .deliver_project_plugins(&sym, tmp.path(), &[])
+            .is_some();
+        assert_eq!(takes, agent == Agent::Claude, "{}", agent.config_name());
+    }
+}
+
+#[test]
 fn delivery_never_writes_claude_settings() {
     let tmp = tempfile::tempdir().unwrap();
     let sym = Symposium::from_dir(tmp.path());

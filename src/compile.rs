@@ -22,6 +22,8 @@ const MANIFEST_FILE: &str = "plugin.json";
 const CLAUDE_MANIFEST_DIR: &str = ".claude-plugin";
 const SKILLS_DIR: &str = "skills";
 const MAX_NAME_LEN: usize = 64;
+const PROJECT_DIR: &str = ".symposium";
+const PROJECT_PLUGINS_SUBDIR: &str = "plugins";
 
 async fn globally_used(
     config: &PluginsConfig,
@@ -52,7 +54,11 @@ pub(crate) fn is_plugin_dir(dir: &Path) -> bool {
         && !dir.join(crate::pm::layout::SKILL_FILE).exists()
 }
 
-pub(crate) struct GlobalPlugin {
+pub(crate) fn project_plugins_root(project_root: &Path) -> PathBuf {
+    project_root.join(PROJECT_DIR).join(PROJECT_PLUGINS_SUBDIR)
+}
+
+pub(crate) struct PluginSkills {
     name: String,
     skills: Vec<SkillWithGroupContext>,
 }
@@ -64,7 +70,7 @@ pub(crate) async fn global_plugins(
     active: &[Plugin],
     ctx: &mut PredicateContext<'_>,
     update: UpdateLevel,
-) -> Vec<GlobalPlugin> {
+) -> Vec<PluginSkills> {
     let used = globally_used(&sym.config.plugins, pms, &registry.plugins).await;
     let inactive = registry
         .plugins
@@ -83,10 +89,28 @@ pub(crate) async fn global_plugins(
     group_skills(plugins, skills)
 }
 
-fn group_skills(plugins: Vec<Plugin>, skills: Vec<SkillWithGroupContext>) -> Vec<GlobalPlugin> {
-    let mut grouped: Vec<GlobalPlugin> = plugins
+pub(crate) fn project_plugins(
+    active: &[Plugin],
+    applicable: &[SkillWithGroupContext],
+    global: &[PluginSkills],
+) -> Vec<PluginSkills> {
+    let global_origins: BTreeSet<&str> = global
+        .iter()
+        .flat_map(|plugin| &plugin.skills)
+        .map(|skill| skill.origin_hash.as_str())
+        .collect();
+    let skills = applicable
+        .iter()
+        .filter(|skill| !global_origins.contains(skill.origin_hash.as_str()))
+        .cloned()
+        .collect();
+    group_skills(active.to_vec(), skills)
+}
+
+fn group_skills(plugins: Vec<Plugin>, skills: Vec<SkillWithGroupContext>) -> Vec<PluginSkills> {
+    let mut grouped: Vec<PluginSkills> = plugins
         .into_iter()
-        .map(|plugin| GlobalPlugin {
+        .map(|plugin| PluginSkills {
             name: plugin.manifest.name,
             skills: Vec::new(),
         })
@@ -109,7 +133,7 @@ pub(crate) struct Compiled {
 
 pub(crate) fn compile(
     root: &Path,
-    plugins: &[GlobalPlugin],
+    plugins: &[PluginSkills],
     debounce: Duration,
     warned: &mut BTreeSet<String>,
     skip_cleanup: bool,
@@ -144,6 +168,28 @@ pub(crate) fn compile(
     compiled
 }
 
+pub(crate) fn compile_project(
+    project_root: &Path,
+    plugins: &[PluginSkills],
+    debounce: Duration,
+    warned: &mut BTreeSet<String>,
+    skip_cleanup: bool,
+) -> Compiled {
+    if !plugins.is_empty()
+        && let Err(e) = sync::ignore_in_git(&project_root.join(PROJECT_DIR))
+    {
+        warn(format!("skipping project plugins: {e:#}"));
+        return Compiled::default();
+    }
+    compile(
+        &project_plugins_root(project_root),
+        plugins,
+        debounce,
+        warned,
+        skip_cleanup,
+    )
+}
+
 fn staged_plugins(root: &Path, compiled: &[CompiledPlugin]) -> Vec<CompiledPlugin> {
     let Ok(entries) = fs::read_dir(root) else {
         return Vec::new();
@@ -151,7 +197,7 @@ fn staged_plugins(root: &Path, compiled: &[CompiledPlugin]) -> Vec<CompiledPlugi
     entries
         .flatten()
         .map(|entry| entry.path())
-        .filter(|dir| is_plugin_dir(dir) && dir.join(sync::MARKER_FILE).exists())
+        .filter(|dir| is_plugin_dir(dir) && sync::has_symposium_marker(dir))
         .filter(|dir| compiled.iter().all(|plugin| &plugin.dir != dir))
         .filter_map(|dir| {
             let name = dir.file_name()?.to_str()?.to_string();
@@ -179,7 +225,7 @@ fn normalize_name(name: &str) -> Option<String> {
     (!out.is_empty()).then(|| out.to_string())
 }
 
-fn plugin_dir_names(plugins: &[GlobalPlugin]) -> Vec<Option<String>> {
+fn plugin_dir_names(plugins: &[PluginSkills]) -> Vec<Option<String>> {
     let names: Vec<Option<String>> = plugins.iter().map(|p| normalize_name(&p.name)).collect();
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for name in names.iter().flatten() {
@@ -209,7 +255,7 @@ fn suffixed(name: &str, hash: &str) -> String {
     format!("{}-{hash}", base.trim_end_matches('-'))
 }
 
-fn skill_dirs(plugin: &GlobalPlugin) -> Vec<(String, &SkillWithGroupContext)> {
+fn skill_dirs(plugin: &PluginSkills) -> Vec<(String, &SkillWithGroupContext)> {
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
     for skill in &plugin.skills {
         *counts.entry(skill.skill.name()).or_default() += 1;

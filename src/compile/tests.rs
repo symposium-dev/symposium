@@ -49,8 +49,8 @@ fn skill(name: &str, origin: &str, skill_md: &Path, plugin_index: usize) -> Skil
     }
 }
 
-fn plugin(name: &str, skills: Vec<SkillWithGroupContext>) -> GlobalPlugin {
-    GlobalPlugin {
+fn plugin(name: &str, skills: Vec<SkillWithGroupContext>) -> PluginSkills {
+    PluginSkills {
         name: name.into(),
         skills,
     }
@@ -220,7 +220,7 @@ fn colliding_names_are_all_suffixed_and_unsluggable_ones_skipped() {
         long_lower.as_str(),
         long_upper.as_str(),
     ];
-    let plugins: Vec<GlobalPlugin> = names
+    let plugins: Vec<PluginSkills> = names
         .iter()
         .enumerate()
         .map(|(i, name)| plugin(name, vec![skill("s", &format!("{i:08}"), md, i)]))
@@ -406,6 +406,86 @@ fn a_skill_reached_by_two_global_plugins_compiles_into_the_first() {
 
     assert_eq!(grouped.len(), 1, "the plugin dedup emptied is dropped");
     assert_eq!(grouped[0].name, "first");
+}
+
+#[test]
+fn project_plugins_take_the_skills_no_global_plugin_carries() {
+    let shared = Path::new("/nonexistent/shared/SKILL.md");
+    let own = Path::new("/nonexistent/own/SKILL.md");
+    let active = vec![registry("global-guide", ""), registry("house-style", "")];
+    let applicable = vec![
+        skill("shared", "11111111", shared, 0),
+        skill("own", "22222222", own, 1),
+        skill("shared", "11111111", shared, 1),
+    ];
+    let global = vec![plugin(
+        "global-guide",
+        vec![skill("shared", "11111111", shared, 0)],
+    )];
+
+    let project = project_plugins(&active, &applicable, &global);
+
+    let names: Vec<(&str, Vec<&str>)> = project
+        .iter()
+        .map(|p| {
+            let skills = p.skills.iter().map(|s| s.skill.name()).collect();
+            (p.name.as_str(), skills)
+        })
+        .collect();
+    assert_eq!(names, [("house-style", vec!["own"])]);
+}
+
+#[test]
+fn project_plugins_compile_under_the_projects_gitignored_symposium_directory() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("project");
+    let skill_md = write_skill(&tmp.path().join("src/guide"), "guide");
+    let plugins = || {
+        [plugin(
+            "guide",
+            vec![skill("guide", "11111111", &skill_md, 0)],
+        )]
+    };
+    let compile = |root: &Path, plugins: &[PluginSkills]| {
+        compile_project(root, plugins, Duration::ZERO, &mut BTreeSet::new(), false)
+    };
+
+    compile(&project, &[]);
+    assert!(
+        !project.join(".symposium").exists(),
+        "nothing to compile writes nothing"
+    );
+
+    let compiled = compile(&project, &plugins());
+    assert_eq!(
+        compiled.plugins[0].dir,
+        project_plugins_root(&project).join("guide")
+    );
+    assert!(
+        project
+            .join(".symposium/plugins/guide/plugin.json")
+            .is_file()
+    );
+    assert_eq!(
+        fs::read_to_string(project.join(".symposium/.gitignore")).unwrap(),
+        "*\n"
+    );
+
+    fs::write(project.join(".symposium/.gitignore"), "edited\n").unwrap();
+    compile(&project, &plugins());
+    assert_eq!(
+        fs::read_to_string(project.join(".symposium/.gitignore")).unwrap(),
+        "edited\n",
+        "an existing .gitignore is left alone"
+    );
+
+    let blocked = tmp.path().join("blocked");
+    fs::create_dir_all(&blocked).unwrap();
+    fs::write(blocked.join(".symposium"), "").unwrap();
+    assert!(
+        compile(&blocked, &plugins()).plugins.is_empty(),
+        "no project plugins when they cannot be kept out of git"
+    );
 }
 
 #[test]

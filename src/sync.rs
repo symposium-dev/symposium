@@ -80,7 +80,20 @@ fn slot_taken(path: &Path) -> bool {
 /// symposium-managed skill directory? Returns `false` for user-authored skills,
 /// for any directory symposium did not create, and for any symlink.
 fn is_managed_skill_dir(path: &Path) -> bool {
-    fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir()) && path.join(MARKER_FILE).exists()
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.is_dir()) && has_symposium_marker(path)
+}
+
+pub(crate) fn has_symposium_marker(dir: &Path) -> bool {
+    dir.join(MARKER_FILE).is_file()
+}
+
+pub(crate) fn ignore_in_git(dir: &Path) -> Result<()> {
+    let path = dir.join(".gitignore");
+    if path.is_file() {
+        return Ok(());
+    }
+    fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
+    fs::write(&path, "*\n").with_context(|| format!("write {}", path.display()))
 }
 
 /// One entry of a source tree as the installer sees it: a path relative to the
@@ -534,6 +547,11 @@ pub async fn sync(
         }
     }
     let global = compile::global_plugins(sym, pms, &registry, &active, &mut ctx, update).await;
+    let project = if Agent::Claude.is_configured(sym) {
+        compile::project_plugins(&active, &applicable, &global)
+    } else {
+        Vec::new()
+    };
     if let Err(e) = ctx.persist_disk_cache(&predicate_cache_path) {
         tracing::warn!(
             path = %predicate_cache_path.display(),
@@ -576,27 +594,39 @@ pub async fn sync(
     let plugins_root = sym.config_dir().join(INSTALLED_PLUGINS_SUBDIR);
     let compiled = compile::compile(&plugins_root, &global, debounce, &mut warned, skip_cleanup);
     crate::agents::sync_marketplace_index(sym, &compiled.plugins);
+    let project_compiled =
+        compile::compile_project(&project_root, &project, debounce, &mut warned, skip_cleanup);
 
     let mut delivered = BTreeSet::new();
+    let mut project_delivered = BTreeSet::new();
     let mut plugin_changes = Vec::new();
     let mut copied: std::collections::BTreeMap<_, BTreeSet<_>> = std::collections::BTreeMap::new();
     for agent_name in &agent_names {
         let Ok(agent) = Agent::from_config_name(agent_name) else {
             continue;
         };
-        let takes_plugins = match agent.deliver_user_plugins(sym, &compiled.plugins) {
-            Some(changed) => {
-                delivered.insert(agent_name);
-                plugin_changes.push((agent, changed));
-                true
-            }
-            None => false,
-        };
+        let user_changes = agent.deliver_user_plugins(sym, &compiled.plugins);
+        let project_changes =
+            agent.deliver_project_plugins(sym, &project_root, &project_compiled.plugins);
+        let takes_plugins = user_changes.is_some();
+        let takes_project_plugins = project_changes.is_some();
+        if takes_plugins {
+            delivered.insert(agent_name);
+        }
+        if takes_project_plugins {
+            project_delivered.insert(agent_name);
+        }
+        if takes_plugins || takes_project_plugins {
+            let changed = user_changes.into_iter().chain(project_changes).flatten();
+            plugin_changes.push((agent, changed.collect()));
+        }
         let dir = copied
             .entry(skills_parent_dir(agent, &project_root))
             .or_default();
         for (skill_name, origin_hash, _) in &to_install {
-            if !(takes_plugins && compiled.skill_origins.contains(origin_hash)) {
+            if !(takes_plugins && compiled.skill_origins.contains(origin_hash)
+                || takes_project_plugins && project_compiled.skill_origins.contains(origin_hash))
+            {
                 dir.insert((skill_name, origin_hash));
             }
         }
@@ -686,7 +716,10 @@ pub async fn sync(
         }
 
         for (skill_name, origin_hash, skill_source) in &to_install {
-            if delivered.contains(agent_name) && compiled.skill_origins.contains(origin_hash) {
+            if delivered.contains(agent_name) && compiled.skill_origins.contains(origin_hash)
+                || project_delivered.contains(agent_name)
+                    && project_compiled.skill_origins.contains(origin_hash)
+            {
                 continue;
             }
             // `skill_source` is the path to the SKILL.md file; the skill
@@ -831,6 +864,7 @@ pub async fn sync(
     );
     if !skip_cleanup {
         unregister_user_plugins(sym);
+        unregister_project_plugins(sym, &project_root);
     }
 
     if to_install.is_empty() {
@@ -863,6 +897,14 @@ pub(crate) fn unregister_user_plugins(sym: &Symposium) {
     for &agent in Agent::all() {
         if !agent.is_configured(sym) {
             agent.deliver_user_plugins(sym, &[]);
+        }
+    }
+}
+
+fn unregister_project_plugins(sym: &Symposium, project_root: &Path) {
+    for &agent in Agent::all() {
+        if !agent.is_configured(sym) {
+            agent.deliver_project_plugins(sym, project_root, &[]);
         }
     }
 }
@@ -1110,6 +1152,27 @@ mod tests {
         fs::write(tmp.path().join("outside/lib.txt"), "edited").unwrap();
 
         assert!(dir_contents_differ(&src, &dst).unwrap());
+    }
+
+    #[test]
+    fn only_a_marker_file_marks_a_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let marked = tmp.path().join("marked");
+        let project = tmp.path().join("project");
+        let plain = tmp.path().join("plain");
+        for dir in [&marked, &project, &plain] {
+            fs::create_dir_all(dir.join("guide")).unwrap();
+            fs::write(dir.join("guide/SKILL.md"), "").unwrap();
+        }
+        fs::write(marked.join(MARKER_FILE), "").unwrap();
+        fs::create_dir(project.join(MARKER_FILE)).unwrap();
+
+        for (dir, is_marked) in [(&marked, true), (&project, false), (&plain, false)] {
+            assert_eq!(has_symposium_marker(dir), is_marked, "{}", dir.display());
+            let mut found = Vec::new();
+            skills::find_skill_files_recursive(dir, &mut found);
+            assert_eq!(found.is_empty(), is_marked, "{}", dir.display());
+        }
     }
 
     #[test]
