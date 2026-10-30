@@ -34,7 +34,7 @@ When installing skills, `cargo agents` prefers vendor-neutral paths where possib
 | Scope | Path | Supported by |
 |-------|------|-------------|
 | Project skills | `.agents/skills/<skill-name>/SKILL.md` | Antigravity, Copilot, Codex, Goose |
-| Project skills | `.claude/skills/<skill-name>/SKILL.md` | Claude Code (does not support `.agents/skills/`) |
+| Project skills | `.claude/skills/<skill-name>/SKILL.md` | Claude Code (does not support `.agents/skills/`), only for a skill no compiled plugin carries |
 | Project skills | `.kiro/skills/<skill-name>/SKILL.md` | Kiro (uses its own path) |
 | Project skills | `.opencode/skills/<skill-name>/SKILL.md` | OpenCode (also reads `.agents/skills/`) |
 
@@ -53,6 +53,8 @@ At the global level, each agent has its own path:
 | Goose | `~/.agents/skills/<skill-name>/SKILL.md` |
 
 A plugin enabled with `use --global` reaches an agent as one compiled plugin directory instead, through `Agent::deliver_user_plugins`: Claude Code receives it in `~/.claude/skills/<plugin>/`, Antigravity CLI in `~/.gemini/config/plugins/<plugin>/`, Goose in `~/.agents/plugins/<plugin>/`, Codex CLI installs it into its plugin cache through two entries in `~/.codex/config.toml`, the Copilot CLI loads it in place through two entries in `~/.copilot/settings.json`, and the other agents keep per-skill copies in the project. See [`sync`](./sync-agent-flow.md#plugins-enabled-for-every-workspace).
+
+Every other plugin that applies to the workspace is compiled the same way into the project staging root, `<project>/.symposium/plugins/<plugin>/`, and reaches an agent that can scope a plugin to a project through `Agent::deliver_project_plugins`. Only Claude Code does: it receives each directory in `<project>/.claude/skills/<plugin>/` and then gets no per-skill copies of that plugin's skills. Every other agent keeps per-skill copies in the project. See [`sync`](./sync-agent-flow.md#plugins-for-this-project).
 
 ---
 

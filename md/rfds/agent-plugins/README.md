@@ -130,7 +130,7 @@ An installation is scoped to the enablement that produced it. A plugin named by 
 
 A global plugin installs with all its skills, every gate counted as satisfied: a user-level directory is visible from every workspace, so evaluating its gates in the workspace being synced would make what it carries depend on whichever workspace synced last.
 
-Project-scoped plugins keep arriving through the per-skill path on every agent in version one; [Which agents can scope a plugin to a project](#which-agents-can-scope-a-plugin-to-a-project) records what each agent offers and why none is used yet.
+Claude Code receives project-scoped plugins as plugins, in `<project>/.claude/skills/<name>/` at the workspace root, and loads them only in a session started there, which is Claude Code's own rule for plugins ([#353](https://github.com/symposium-dev/symposium/issues/353)). Every other agent keeps receiving them through the per-skill path in version one; [Which agents can scope a plugin to a project](#which-agents-can-scope-a-plugin-to-a-project) records what each agent offers and why the others are not used yet.
 
 ### Directory collisions
 
@@ -214,7 +214,7 @@ Version 1.0.0 was published in August 2026 by a committee spanning Amazon, Curso
 
 1. Confirm each agent's plugin location, manifest dialect, enablement mechanism, and the scoping it can express, by observing what a running agent reports rather than by inspecting the files written to it. Done for Claude Code, Codex CLI, the Copilot CLI, Antigravity CLI, and Goose; the results are in [Implementation details](#implementation-details) below. Kiro remains to be probed.
 2. Compile each plugin named by a `use --global` entry, with all its skills, into a directory under `~/.symposium/installed/` that carries both manifests and the ownership marker and is renamed on collision, and install it for every agent that can take a plugin: Claude Code, Codex CLI, the Copilot CLI, Antigravity CLI and Goose ([#332](https://github.com/symposium-dev/symposium/pull/332), on top of [#333](https://github.com/symposium-dev/symposium/pull/333), which resolves each agent's relocated configuration directory).
-3. Install workspace-scoped plugins for Claude Code and retire its per-skill copies ([#352](https://github.com/symposium-dev/symposium/pull/352), parked until [#353](https://github.com/symposium-dev/symposium/issues/353) is settled).
+3. Install workspace-scoped plugins for Claude Code at the workspace root and retire its per-skill copies ([#352](https://github.com/symposium-dev/symposium/pull/352), on top of [#332](https://github.com/symposium-dev/symposium/pull/332)). A session started in a subdirectory gets none of them, as [#353](https://github.com/symposium-dev/symposium/issues/353) records.
 4. Recognize a `plugin.json` directory as a plugin entry in every position a plugin is already found, including the nesting and source-root rules ([#348](https://github.com/symposium-dev/symposium/pull/348)).
 5. Resolve an external package's skills, reporting an `mcp.json` as unsupported, and contain malformed packages, skills, and escaping paths at their proper boundaries ([#348](https://github.com/symposium-dev/symposium/pull/348), and [#354](https://github.com/symposium-dev/symposium/pull/354) for links inside skill content).
 6. Honor the `dev.symposium` extensions namespace, and extend `plugin validate`, `search`, `status`, and `use` to cover these packages ([#348](https://github.com/symposium-dev/symposium/pull/348)).
@@ -265,11 +265,11 @@ So there is one emitter with several manifest renderers, not one emitter per age
 
 ### Which agents can scope a plugin to a project
 
-This is the evidence for [Scope of an installation](#scope-of-an-installation). Every agent with a plugin unit can scope a plugin to a project, each at a cost that keeps it out of version one:
+This is the evidence for [Scope of an installation](#scope-of-an-installation). Every agent with a plugin unit can scope a plugin to a project. Claude Code's cost is accepted; each other agent's keeps it out of version one:
 
 | Agent | Result |
 |---|---|
-| Claude Code | a copy in `<project>/.claude/skills/<name>/`, loaded in a trusted folder but only by a session started in that directory ([#353](https://github.com/symposium-dev/symposium/issues/353)) |
+| Claude Code | a copy in `<project>/.claude/skills/<name>/`, loaded in a trusted folder but only by a session started in that directory ([#353](https://github.com/symposium-dev/symposium/issues/353)); used, at the workspace root |
 | Codex CLI | a marketplace and an enablement entry in the project's `.codex/config.toml`, honored only in a trusted project; the plugin cache stays user-level and keyed by marketplace name, so each project needs a name of its own; the entry needs an absolute path, in a file teams may commit |
 | Copilot CLI | the user-scope entries in the repository's `.github/copilot/settings.local.json`, read only at the git root and under a marketplace name other than the user-level one, which wins a clash; the file has to stay out of version control |
 | Antigravity CLI | a copy in `<project>/.agents/plugins/<name>/`, a folder Goose reads too, so one writer has to serve both; interactive sessions load it only in a trusted folder |
