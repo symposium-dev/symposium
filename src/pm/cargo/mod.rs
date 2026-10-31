@@ -9,6 +9,7 @@
 //! [`Arc`], so several instances share one lazily-run, cached `cargo metadata`)
 //! and drives it (`self.workspace.crates()`).
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
@@ -260,6 +261,11 @@ impl PackageManager for CargoPm {
         let Some(ws) = self.workspace.try_load().map_err(anyhow::Error::msg)? else {
             return Ok(ProjectInfo::default());
         };
+        let mut inputs = vec![
+            ws.root.join("Cargo.lock"),
+            ws.root.join("battery-pack.toml"),
+        ];
+        inputs.extend(root_candidate_manifests(self.workspace.cwd(), &ws.root));
         Ok(ProjectInfo {
             root: Some(ws.root.clone()),
             local_packages: ws
@@ -267,12 +273,39 @@ impl PackageManager for CargoPm {
                 .iter()
                 .filter_map(|member| member.path.clone())
                 .collect(),
-            inputs: vec![
-                ws.root.join("Cargo.lock"),
-                ws.root.join("battery-pack.toml"),
-            ],
+            inputs,
         })
     }
+}
+
+/// The manifests that decide where this workspace is rooted: one per directory
+/// from the starting directory up to the root.
+///
+/// A manifest appearing nearer the starting directory than the root puts a new
+/// workspace there, and one gaining a `[workspace]` table makes its own
+/// directory the root. Neither shows up in a lockfile, so each path is reported
+/// whether or not it exists: an input recorded absent and later found present
+/// is a change, which is what makes a caller that cached the old root ask
+/// again.
+fn root_candidate_manifests(cwd: &Path, root: &Path) -> Vec<PathBuf> {
+    let canonical = |dir: &Path| std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let root = canonical(root);
+    let mut dir = canonical(cwd);
+    let mut manifests = Vec::new();
+    loop {
+        manifests.push(dir.join("Cargo.toml"));
+        if dir == root {
+            break;
+        }
+        // Stop rather than walk past the root, so a starting directory the root
+        // does not contain (an unresolvable symlink, say) yields one candidate
+        // instead of every manifest up to the filesystem root.
+        match dir.parent() {
+            Some(parent) if parent.starts_with(&root) => dir = parent.to_path_buf(),
+            _ => break,
+        }
+    }
+    manifests
 }
 
 #[cfg(test)]
@@ -280,6 +313,53 @@ mod tests {
     use super::*;
     use crate::pm::WorkspaceCrate;
     use std::path::PathBuf;
+
+    /// The walk resolves both ends, so an expectation has to be canonical too:
+    /// a temp dir sits behind a symlink on macOS (`/var` -> `/private/var`) and
+    /// canonicalizing adds the `\\?\` prefix on Windows.
+    fn canonical(dir: &Path) -> PathBuf {
+        std::fs::canonicalize(dir).unwrap()
+    }
+
+    #[test]
+    fn root_candidates_cover_every_directory_down_to_the_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let nested = tmp.path().join("a").join("b");
+        std::fs::create_dir_all(&nested).unwrap();
+        let root = canonical(tmp.path());
+        assert_eq!(
+            root_candidate_manifests(&nested, tmp.path()),
+            vec![
+                root.join("a").join("b").join("Cargo.toml"),
+                root.join("a").join("Cargo.toml"),
+                root.join("Cargo.toml"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_root_itself_is_one_candidate() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            root_candidate_manifests(tmp.path(), tmp.path()),
+            vec![canonical(tmp.path()).join("Cargo.toml")]
+        );
+    }
+
+    /// A start the root does not contain stops at once instead of walking to
+    /// the filesystem root.
+    #[test]
+    fn a_start_outside_the_root_yields_one_candidate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let outside = tmp.path().join("outside");
+        let root = tmp.path().join("root");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        assert_eq!(
+            root_candidate_manifests(&outside, &root),
+            vec![canonical(&outside).join("Cargo.toml")]
+        );
+    }
 
     /// A path dependency: `source_dir` defaults to its local path.
     fn path_dep(name: &str, dir: PathBuf) -> WorkspaceCrate {
