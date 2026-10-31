@@ -18,6 +18,7 @@ syn = { version = "2", features = ["full"] }
 tempfile = "3"
 thiserror = "2"
 toml = "0.8"
+uuid = { version = "1.26.0", features = ["v4"] }
 
 [target."cfg(unix)".dependencies]
 libc = "0.2"

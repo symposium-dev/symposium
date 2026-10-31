@@ -11,6 +11,7 @@
 //! none is [`Ended::Failed`]. The exit status counts only once the transcript was read:
 //! a client whose event format changed would otherwise read as a failed session.
 
+mod claude;
 mod error;
 
 use std::ffi::OsString;
