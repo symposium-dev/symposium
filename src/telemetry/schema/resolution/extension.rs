@@ -144,6 +144,141 @@ impl ResolutionPath {
     }
 }
 
+/// Sanitized evidence collected while one extension is resolved.
+///
+/// A witness remains composable until the complete package-to-extension path
+/// is known. Finishing it applies the whole-path leaf and encoded-size limits;
+/// nested constructors apply the depth limit bottom-up as each subtree is
+/// formed rather than preserving the deepest eight levels.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::telemetry) struct ResolutionWitness(Vec<ResolutionPathNode>);
+
+impl ResolutionWitness {
+    /// Begin an empty path fragment.
+    #[must_use]
+    pub(in crate::telemetry) const fn empty() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Retain one reviewed public package coordinate.
+    #[must_use]
+    pub(in crate::telemetry) fn package(coordinate: PublicPackageCoordinate) -> Self {
+        Self(vec![ResolutionPathNode::Package(coordinate)])
+    }
+
+    /// Retain one reviewed public extension coordinate.
+    #[must_use]
+    pub(in crate::telemetry) fn extension(coordinate: PublicExtensionCoordinate) -> Self {
+        Self(vec![ResolutionPathNode::Extension(coordinate.into())])
+    }
+
+    /// Mark evidence whose source or coordinate is unsafe to name.
+    #[must_use]
+    pub(in crate::telemetry) fn private_source() -> Self {
+        Self::opaque(OpaqueResolutionReason::PrivateSource)
+    }
+
+    /// Mark a successful predicate that carries no package evidence.
+    #[must_use]
+    pub(in crate::telemetry) fn non_package_predicate() -> Self {
+        Self::opaque(OpaqueResolutionReason::NonPackagePredicate)
+    }
+
+    /// Mark a successful negation without retaining its child.
+    #[must_use]
+    pub(in crate::telemetry) fn not() -> Self {
+        Self(vec![ResolutionPathNode::Not(NotNode {})])
+    }
+
+    /// Retain the branch that made an `any` predicate succeed.
+    #[must_use]
+    pub(in crate::telemetry) fn any(child: Self) -> Self {
+        let node = ResolutionPathNode::Any(AnyNode {
+            child: Box::new(child.into_single_node()),
+        });
+
+        Self(vec![Self::bounded_subtree(node)])
+    }
+
+    /// Retain every contributor to an explicit `all` predicate.
+    #[must_use]
+    pub(in crate::telemetry) fn all(children: Vec<Self>) -> Self {
+        let children = children
+            .into_iter()
+            .map(Self::into_single_node)
+            .collect::<Vec<_>>();
+        if children.is_empty() {
+            // `all()` is true but has no evidence-bearing contributor.
+            return Self::non_package_predicate();
+        }
+
+        let node = ResolutionPathNode::All(AllNode { children });
+        Self(vec![Self::bounded_subtree(node)])
+    }
+
+    /// Append another successful fragment in resolution order.
+    pub(in crate::telemetry) fn append(&mut self, other: Self) {
+        self.0.extend(other.0);
+    }
+
+    /// Finish a non-empty witness as a validated serialized path.
+    ///
+    /// An empty predicate set contributes no nodes, so emptiness remains
+    /// distinct until package and extension selections have been appended.
+    #[must_use]
+    pub(in crate::telemetry) fn into_path(self) -> Option<ResolutionPath> {
+        match ResolutionPath::try_from(self.0) {
+            Ok(path) => Some(path),
+            Err(ResolutionPathError::Empty) => None,
+            Err(
+                ResolutionPathError::DepthExceeded { .. }
+                | ResolutionPathError::LeafCountExceeded { .. }
+                | ResolutionPathError::EncodedSizeExceeded { .. },
+            ) => Some(Self::limit_path()),
+        }
+    }
+
+    fn opaque(reason: OpaqueResolutionReason) -> Self {
+        Self(vec![ResolutionPathNode::Opaque(OpaqueNode { reason })])
+    }
+
+    fn limit_node() -> ResolutionPathNode {
+        ResolutionPathNode::Opaque(OpaqueNode {
+            reason: OpaqueResolutionReason::Limit,
+        })
+    }
+
+    fn limit_path() -> ResolutionPath {
+        ResolutionPath(vec![Self::limit_node()])
+    }
+
+    fn bounded_subtree(node: ResolutionPathNode) -> ResolutionPathNode {
+        match node.validate_depth(1) {
+            Ok(()) => node,
+            Err(ResolutionPathError::DepthExceeded { .. }) => Self::limit_node(),
+            Err(
+                ResolutionPathError::Empty
+                | ResolutionPathError::LeafCountExceeded { .. }
+                | ResolutionPathError::EncodedSizeExceeded { .. },
+            ) => unreachable!("only depth validation runs for a resolution subtree"),
+        }
+    }
+
+    fn into_single_node(mut self) -> ResolutionPathNode {
+        match self.0.len() {
+            0 => Self::non_package_predicate()
+                .0
+                .pop()
+                .expect("BUG: an opaque witness contains one node"),
+            1 => self
+                .0
+                .pop()
+                .expect("BUG: a single-node witness contains one node"),
+            _ => Self::bounded_subtree(ResolutionPathNode::All(AllNode { children: self.0 })),
+        }
+    }
+}
+
 /// Public skill coordinate safe to persist in the installation index.
 ///
 /// The full public extension coordinate remains on the wire, including its

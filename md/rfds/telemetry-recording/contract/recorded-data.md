@@ -262,7 +262,7 @@ additional fields, unknown node types, and unknown opaque reasons are invalid.
 
 Shell commands, paths, environment variables, custom predicate names or arguments, and private package or extension names never enter a path. An opaque marker can represent their position.
 
-The path array is non-empty, and each top-level node begins at depth 1. Depth counts nested evidence nodes through a terminal package, extension, `not`, or opaque node. A subtree that would exceed depth 8 becomes `opaque: limit`. The complete path is limited to 16 evidence leaves. Its 4 KiB bound is the byte length of the compact UTF-8 JSON encoding of the complete path array, excluding the surrounding event row. Evidence depth does not count filesystem components; filesystem paths are never recorded.
+The path array is non-empty, and each top-level node begins at depth 1. Depth counts nested evidence nodes through a terminal package, extension, `not`, or opaque node. A subtree that would exceed depth 8 becomes `opaque: limit`; this degradation is applied bottom-up rather than preserving the deepest eight levels. The complete path is limited to 16 evidence leaves. A leaf-count or encoded-size overflow replaces the entire path, including package and extension nodes, with one `opaque: limit` node. Its 4 KiB bound is the byte length of the compact UTF-8 JSON encoding of the complete path array, excluding the surrounding event row. Evidence depth does not count filesystem components; filesystem paths are never recorded.
 
 This event says an extension resolved. It does not say that an agent read or used the extension; a matching `extension_invocation_metrics` aggregate separately reports observed agent activation. Version 1 can produce that aggregate only for Claude.
 

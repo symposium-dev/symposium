@@ -35,7 +35,7 @@ pub(in crate::telemetry) use plugin_hook::{
     PluginHookMetricsUpdateError, PluginHookMetricsV1, PluginHookOutcome, PluginScope,
     PublicPluginCoordinate,
 };
-pub(in crate::telemetry) use resolution::extension::SafeSkillAttribution;
+pub(in crate::telemetry) use resolution::extension::{ResolutionWitness, SafeSkillAttribution};
 pub(in crate::telemetry) use resolution::{
     UnnamedPackageReason,
     package::{PackageEcosystem, PublicPackageCoordinate},

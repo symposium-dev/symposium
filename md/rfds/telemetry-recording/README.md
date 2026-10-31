@@ -231,7 +231,7 @@ Shell commands, paths, environment values, custom predicate details, workspace m
 
 The path array is non-empty, and each top-level node begins at depth 1. Depth counts nested evidence nodes through a terminal package, extension, `not`, or opaque node. A subtree that would exceed depth 8 becomes `opaque: limit`. The complete path is limited to 16 evidence leaves. Its 4 KiB bound is the byte length of the compact UTF-8 JSON encoding of the complete path array, excluding the surrounding event row. These limits do not count filesystem path components; filesystem paths are never recorded.
 
-Full sync builds safe evidence for successful installations because the generated attribution index needs it even when telemetry is disabled. Only an enabled recorder serializes that evidence as telemetry.
+An enabled full sync builds safe evidence for successful installations in the original predicate pass. A disabled sync stays on the existing boolean path, builds no evidence, and removes any generated attribution index best-effort; turning telemetry back on rebuilds it on the next full sync. Only an enabled recorder serializes the evidence as telemetry.
 
 Cached booleans for non-package predicates may synthesize `opaque: non_package_predicate`. Caching an entire `PredicateSet` would discard the successful branches and witnesses. Supporting such a cache would require a different witness design.
 
@@ -271,11 +271,13 @@ Configured reach covers all seven agents; observed-session measures cover only r
 
 Agent-specific parsing ends at a normalized extension-use observation. The Claude adapter accepts only a fixture-tested `Skill` tool shape and produces a skill identifier plus one phase: `attempted`, `completed`, or `failed`. Raw Claude input and ephemeral invocation ids do not enter the recorder.
 
-Full sync writes a versioned installation index under the agent skills parent at `.symposium/index-v1.json`. This generated, gitignored file is installation state, not configuration or telemetry.
+When telemetry is enabled, full sync writes one versioned installation index per distinct skills parent at `.symposium-index/index-v1.json`. The generated file contains local slot names and installation bindings and can churn when managed content changes; whether to ignore or commit it is project policy. A disabled full sync removes the reserved directory best-effort and never lets a permission failure downgrade otherwise successful skill installation.
 
-The index maps the actual agent-facing identifier to the installed directory, marker fingerprint, eligibility, and safe public coordinate or path when one exists. Private identifiers may remain in the local index because they already exist in installed skill content. They are never serialized as telemetry.
+The distinct `.symposium-index/` name is correctness-critical. `skills::find_skill_files_in` skips any directory for which `dir.join(".symposium").exists()`: putting the index at `<skills-parent>/.symposium/index-v1.json` would therefore make discovery abandon the complete `.agents/skills/` source tree after the first index write. The existing `.symposium` early return skips managed skill slots; discovery separately skips `.symposium-index/`, which deliberately carries no ownership marker.
 
-The index is atomically replaced after sync determines which installations succeeded. Before naming a public invocation, lookup verifies the Symposium marker and fingerprint. A hook sees an old or new complete index; a missing, corrupt, or stale mapping never falls back to a path or content guess.
+Each per-parent index is an array keyed by the exact installed directory slot Symposium selected, including any origin-hash suffix. The slot is already the identity used by the marker, `.gitignore`, and stale-cleanup walk; an agent adapter maps its native invocation identifier onto that slot. An entry carries the slot, eligibility or safe public attribution, and a random 128-bit installation binding shared with the managed directory's `.symposium` marker. The binding is a local join key, not a content fingerprint, and never reaches a row, subject, log, or report. Multiple valid parent matches are ambiguous; duplicate slots inside one index are invalid.
+
+The index is atomically replaced immediately after each parent's installs and stale reap. Before naming a public invocation, lookup verifies the structured marker and installation binding. Marker presence continues to establish Symposium ownership even when its contents are malformed; malformed or unknown marker versions degrade attribution and are repaired only by an enabled sync. Every content replacement mints a new binding, so preserving an old complete index after a failed replacement cannot misattribute the new content. A hook sees an old or new complete index; a missing, corrupt, stale, or non-exact mapping never falls back to a normalized name, path, or content guess.
 
 Public matches reuse the `extension_subject` derived for the selected safe resolution path. Other observations merge into `unnamed` rows with one fixed reason: `ineligible`, `not_indexed`, `attribution_unavailable`, `ambiguous`, or `invalid_signal`.
 
@@ -301,7 +303,7 @@ The same all-or-nothing 256-id rule applies to attempted and completed distinct-
 | `JsonlSink`               | Lock, cap, retain, append/replace, inspect, and clear files.                      |
 | `ArchiveReader`           | Preserve raw inspection and return validated records from immutable closed days. |
 
-Only an enabled `Recorder` owns the telemetry sink and identity components. Call sites cannot write directly. The generated installation index is functional sync state and exists independently of telemetry consent.
+Only an enabled `Recorder` owns the telemetry sink and identity components. Call sites cannot write directly. The generated installation index supports local attribution only while telemetry is enabled; disabling telemetry removes it on the next full sync.
 
 Keep the schema, recorder, identity, storage writer/reader, retention, limits, and controls in focused submodules beneath `telemetry`. Only narrow recording and control entry points are crate-visible. A future upload module depends on `ArchiveReader`; recording and storage never depend on upload.
 
@@ -535,17 +537,22 @@ Verify every package manager and source class, malformed and wildcard coordinate
 
 Return safe evidence from the original predicate evaluation while preserving short-circuit and accepted cache behavior. Whole-`PredicateSet` caching remains disallowed.
 
-Carry evidence through plugin and skill selection, return one structured full-sync report, and construct coherent `resolution_summary`, `package_resolution`, and `extension_resolution` batches. After installation, atomically replace the generated agent-facing attribution index with successful managed skills and their marker fingerprints. Ordinary read-only plugin lookup remains silent.
+Carry evidence through plugin and skill selection, return one structured full-sync report, and construct coherent `resolution_summary`, `package_resolution`, and `extension_resolution` batches. After installation, atomically replace each generated per-parent attribution index with successful managed skills and their installation bindings. Ordinary read-only plugin lookup remains silent.
+
+The first production recording caller is an enabled manual `cargo agents sync`. It records the successful or fatal structured report best-effort without changing the sync result; session-start, `use`, and `remove` activation remain later wiring work.
 
 Verify:
 
 - `all`, `any`, `not`, and opaque/limit paths, plus cache hits without reevaluation.
 - Every `extension_match` case and complete package-to-plugin-to-skill paths.
 - Whole-batch failure, successful and failed installation indexing, and atomic old-or-new index reads.
-- Stale, corrupt, fingerprint-mismatch, and collision handling.
+- Stale, corrupt, binding-mismatch, duplicate-slot, and cross-parent collision handling.
 - Raw paths, private names, and dependency snapshots stay out of telemetry.
 
-- [ ] PR: resolution witnesses, installed attribution, and recording
+- [ ] PR: typed predicate and safe resolution witnesses
+- [ ] PR: structured sync report
+- [ ] PR: installed attribution bindings and indexes
+- [ ] PR: resolution recording and manual-sync activation
 
 ### Step 5: Hook and extension-invocation telemetry
 

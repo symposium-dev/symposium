@@ -1153,8 +1153,8 @@ async fn load_registry_impl(
 /// Crate loading goes through `pms` ([`crate::pm::PmRegistry::load_plugin`]).
 /// Known workspace packages reuse their resolved source. An unknown chained
 /// crate follows `update`: per-invocation callers stay cache-only, while sync
-/// may ask Cargo to resolve it. `ctx.deps` supplies the dependency list
-/// expansion evaluates against.
+/// may ask Cargo to resolve it. `ctx.package_ids()` supplies the dependency
+/// list expansion evaluates against.
 pub async fn active_plugins(
     sym: &Symposium,
     registry: &PluginRegistry,
@@ -1190,12 +1190,12 @@ pub async fn active_plugins(
             sym,
             pms,
             &registry.plugins,
-            ctx.deps,
+            ctx.package_ids(),
             root,
             update,
         )
         .await;
-        // `ctx.deps` deliberately contains only package ids. Re-read the
+        // The context deliberately exposes only package ids. Re-read the
         // memoized resolver here to recover each dependency's typed source.
         let dependencies = match pms.list_deps().await {
             Ok(dependencies) => dependencies,

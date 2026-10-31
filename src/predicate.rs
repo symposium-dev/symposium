@@ -9,8 +9,9 @@
 //! without linking evaluation: a PM never asks whether a predicate holds.
 //!
 //! Evaluation is [`PredicateEval`], an extension trait rather than an inherent
-//! method, since the types are now foreign. A predicate is purely a boolean
-//! gate.
+//! method, since the types are now foreign. Ordinary callers retain only the
+//! boolean gate; the enabled sync path can run the same traversal with sourced
+//! dependencies and retain safe evidence from successful branches.
 
 use std::path::Path;
 use std::process::Command;
@@ -23,7 +24,7 @@ pub use symposium_sdk::predicate::syntax::{
     DependsOnList, Predicate, PredicateSet, parse_dep_atom, validate_custom_predicate_name,
 };
 
-use crate::pm::PackageId;
+use crate::pm::{PackageId, SourcedPackage};
 use crate::predicate_cache::{
     CacheEntry, CacheTtl, Fingerprints, PredicateCache, WatchSet, cache_key, now_ms,
 };
@@ -34,36 +35,247 @@ use crate::predicate_cache::{
 /// the SDK, which knows nothing about workspaces or the environment.
 pub trait PredicateEval {
     /// True if this holds in `ctx`.
-    fn evaluate(&self, ctx: &mut PredicateContext) -> bool;
+    fn evaluate(&self, ctx: &mut PredicateContext<'_>) -> bool;
 }
 
 impl PredicateEval for Predicate {
     /// Short-circuits: `any` stops at the first true child, `all` at the first
     /// false.
-    fn evaluate(&self, ctx: &mut PredicateContext) -> bool {
-        match self {
-            Predicate::DependsOn(name, version_req) => ctx
-                .deps
-                .iter()
-                .any(|dep| dep_matches(dep, name, version_req.as_ref())),
-            Predicate::DependsOnWildcard => true,
-            Predicate::Shell(cmd) => run_shell(cmd),
-            Predicate::PathExists(arg) => path_exists(arg),
-            Predicate::Env(name, expected) => env_matches(name, expected.as_deref()),
-            Predicate::WorkspaceMember => ctx.workspace_member,
-            Predicate::Not(inner) => !inner.evaluate(ctx),
-            Predicate::Any(children) => children.iter().any(|p| p.evaluate(ctx)),
-            Predicate::All(children) => children.iter().all(|p| p.evaluate(ctx)),
-            Predicate::Custom { name, arg } => ctx.evaluate_custom(name, arg),
-        }
+    fn evaluate(&self, ctx: &mut PredicateContext<'_>) -> bool {
+        evaluate_predicate(self, ctx, &mut BooleanMode).is_some()
     }
 }
 
 impl PredicateEval for PredicateSet {
     /// True if every predicate holds (or the set is empty).
-    fn evaluate(&self, ctx: &mut PredicateContext) -> bool {
-        self.predicates.iter().all(|p| p.evaluate(ctx))
+    fn evaluate(&self, ctx: &mut PredicateContext<'_>) -> bool {
+        evaluate_predicate_set(self, ctx, &mut BooleanMode).is_some()
     }
+}
+
+/// Dependency storage understood by the shared predicate traversal.
+///
+/// Boolean callers borrow package ids. Witnessed callers retain each id's
+/// coupled source provenance, so a mode cannot accidentally combine aligned
+/// but unrelated collections.
+pub(crate) trait PredicateDependencies {
+    type Dependency;
+
+    fn dependencies(&self) -> &[Self::Dependency];
+    fn package_id(dependency: &Self::Dependency) -> &PackageId;
+    fn package_ids(&self) -> &[PackageId];
+}
+
+/// Borrowed package ids used by ordinary boolean predicate evaluation.
+///
+/// This is an implementation detail of the [`PredicateContext`] alias;
+/// callers construct that alias through its context constructors.
+#[derive(Debug, Clone, Copy)]
+pub struct BorrowedPackageIds<'a>(&'a [PackageId]);
+
+impl PredicateDependencies for BorrowedPackageIds<'_> {
+    type Dependency = PackageId;
+
+    fn dependencies(&self) -> &[Self::Dependency] {
+        self.0
+    }
+
+    fn package_id(dependency: &Self::Dependency) -> &PackageId {
+        dependency
+    }
+
+    fn package_ids(&self) -> &[PackageId] {
+        self.0
+    }
+}
+
+/// Sourced packages plus their derived package-id view.
+///
+/// The ids are derived here rather than accepted as a second collection, so
+/// predicate matching and witness production cannot disagree about which
+/// source supplied a coordinate.
+#[derive(Debug)]
+pub(crate) struct SourcedDependencies<'a> {
+    packages: &'a [SourcedPackage],
+    package_ids: Vec<PackageId>,
+}
+
+impl<'a> SourcedDependencies<'a> {
+    fn new(packages: &'a [SourcedPackage]) -> Self {
+        Self {
+            packages,
+            package_ids: packages.iter().map(|package| package.id.clone()).collect(),
+        }
+    }
+}
+
+impl PredicateDependencies for SourcedDependencies<'_> {
+    type Dependency = SourcedPackage;
+
+    fn dependencies(&self) -> &[Self::Dependency] {
+        self.packages
+    }
+
+    fn package_id(dependency: &Self::Dependency) -> &PackageId {
+        &dependency.id
+    }
+
+    fn package_ids(&self) -> &[PackageId] {
+        &self.package_ids
+    }
+}
+
+/// Output hooks for the one predicate traversal.
+///
+/// Boolean evaluation uses `Evidence = ()`. Resolution telemetry implements
+/// this trait for [`SourcedDependencies`] so a successful dependency leaf
+/// receives the coupled [`SourcedPackage`] that actually matched.
+pub(crate) trait PredicateEvaluationMode<D>
+where
+    D: PredicateDependencies,
+{
+    type Evidence;
+
+    fn dependency(&mut self, dependency: &D::Dependency) -> Self::Evidence;
+    fn non_package(&mut self) -> Self::Evidence;
+    fn not(&mut self) -> Self::Evidence;
+    fn any(&mut self, child: Self::Evidence) -> Self::Evidence;
+    fn all(&mut self, children: Vec<Self::Evidence>) -> Self::Evidence;
+    fn set(&mut self, children: Vec<Self::Evidence>) -> Self::Evidence;
+}
+
+struct BooleanMode;
+
+impl<D> PredicateEvaluationMode<D> for BooleanMode
+where
+    D: PredicateDependencies,
+{
+    type Evidence = ();
+
+    fn dependency(&mut self, _dependency: &D::Dependency) -> Self::Evidence {}
+
+    fn non_package(&mut self) -> Self::Evidence {}
+
+    fn not(&mut self) -> Self::Evidence {}
+
+    fn any(&mut self, _child: Self::Evidence) -> Self::Evidence {}
+
+    fn all(&mut self, _children: Vec<Self::Evidence>) -> Self::Evidence {}
+
+    fn set(&mut self, _children: Vec<Self::Evidence>) -> Self::Evidence {}
+}
+
+/// Evaluate while retaining evidence from the original short-circuited pass.
+///
+/// This trait deliberately accepts only [`SourcedPredicateContext`]. An
+/// id-only context has no method that can request witnessed evaluation.
+pub(crate) trait PredicateWitnessEval {
+    fn evaluate_witness<'a, M>(
+        &self,
+        ctx: &mut SourcedPredicateContext<'a>,
+        mode: &mut M,
+    ) -> Option<M::Evidence>
+    where
+        M: PredicateEvaluationMode<SourcedDependencies<'a>>;
+}
+
+impl PredicateWitnessEval for Predicate {
+    fn evaluate_witness<'a, M>(
+        &self,
+        ctx: &mut SourcedPredicateContext<'a>,
+        mode: &mut M,
+    ) -> Option<M::Evidence>
+    where
+        M: PredicateEvaluationMode<SourcedDependencies<'a>>,
+    {
+        evaluate_predicate(self, ctx, mode)
+    }
+}
+
+impl PredicateWitnessEval for PredicateSet {
+    fn evaluate_witness<'a, M>(
+        &self,
+        ctx: &mut SourcedPredicateContext<'a>,
+        mode: &mut M,
+    ) -> Option<M::Evidence>
+    where
+        M: PredicateEvaluationMode<SourcedDependencies<'a>>,
+    {
+        evaluate_predicate_set(self, ctx, mode)
+    }
+}
+
+fn evaluate_predicate<D, M>(
+    predicate: &Predicate,
+    ctx: &mut PredicateContextImpl<D>,
+    mode: &mut M,
+) -> Option<M::Evidence>
+where
+    D: PredicateDependencies,
+    M: PredicateEvaluationMode<D>,
+{
+    match predicate {
+        Predicate::DependsOn(name, version_req) => ctx
+            .dependencies
+            .dependencies()
+            .iter()
+            .find(|dependency| dep_matches(D::package_id(dependency), name, version_req.as_ref()))
+            .map(|dependency| mode.dependency(dependency)),
+        Predicate::DependsOnWildcard => Some(mode.non_package()),
+        Predicate::Shell(command) => run_shell(command).then(|| mode.non_package()),
+        Predicate::PathExists(argument) => path_exists(argument).then(|| mode.non_package()),
+        Predicate::Env(name, expected) => {
+            env_matches(name, expected.as_deref()).then(|| mode.non_package())
+        }
+        Predicate::WorkspaceMember => ctx.workspace_member.then(|| mode.non_package()),
+        Predicate::Not(inner) => evaluate_predicate(inner, ctx, &mut BooleanMode)
+            .is_none()
+            .then(|| mode.not()),
+        Predicate::Any(children) => {
+            for child in children {
+                if let Some(evidence) = evaluate_predicate(child, ctx, mode) {
+                    return Some(mode.any(evidence));
+                }
+            }
+            None
+        }
+        Predicate::All(children) => {
+            evaluate_all(children, ctx, mode).map(|evidence| mode.all(evidence))
+        }
+        Predicate::Custom { name, arg } => {
+            ctx.evaluate_custom(name, arg).then(|| mode.non_package())
+        }
+    }
+}
+
+fn evaluate_predicate_set<D, M>(
+    predicates: &PredicateSet,
+    ctx: &mut PredicateContextImpl<D>,
+    mode: &mut M,
+) -> Option<M::Evidence>
+where
+    D: PredicateDependencies,
+    M: PredicateEvaluationMode<D>,
+{
+    evaluate_all(&predicates.predicates, ctx, mode).map(|evidence| mode.set(evidence))
+}
+
+fn evaluate_all<D, M>(
+    predicates: &[Predicate],
+    ctx: &mut PredicateContextImpl<D>,
+    mode: &mut M,
+) -> Option<Vec<M::Evidence>>
+where
+    D: PredicateDependencies,
+    M: PredicateEvaluationMode<D>,
+{
+    // For BooleanMode this is Vec<()>, whose zero-sized elements require no
+    // allocation; ordinary boolean evaluation keeps its current cost model.
+    let mut evidence = Vec::with_capacity(predicates.len());
+    for predicate in predicates {
+        evidence.push(evaluate_predicate(predicate, ctx, mode)?);
+    }
+    Some(evidence)
 }
 
 /// The evaluation environment a predicate is checked against.
@@ -73,8 +285,8 @@ impl PredicateEval for PredicateSet {
 /// (plugin-defined) predicates are resolved entries whose results are cached
 /// for the lifetime of the context.
 #[derive(Debug)]
-pub struct PredicateContext<'a> {
-    pub deps: &'a [PackageId],
+pub struct PredicateContextImpl<D> {
+    dependencies: D,
     /// Whether the plugin currently being evaluated is defined by a member
     /// of the active workspace. This is *provenance*, not a workspace fact:
     /// `Plugin::applies` derives it from the plugin's sourced package before
@@ -96,17 +308,15 @@ pub struct PredicateContext<'a> {
     disk_cache_original: Option<Arc<PredicateCache>>,
 }
 
-impl<'a> PredicateContext<'a> {
+/// Existing ID-only predicate context used throughout dispatch and rendering.
+pub type PredicateContext<'a> = PredicateContextImpl<BorrowedPackageIds<'a>>;
+
+/// Sourced context required by witnessed resolution.
+pub(crate) type SourcedPredicateContext<'a> = PredicateContextImpl<SourcedDependencies<'a>>;
+
+impl<'a> PredicateContextImpl<BorrowedPackageIds<'a>> {
     pub fn new(deps: &'a [PackageId]) -> Self {
-        Self {
-            deps,
-            workspace_member: false,
-            used: std::collections::HashSet::new(),
-            custom_entries: std::collections::HashMap::new(),
-            custom_cache: std::collections::HashMap::new(),
-            disk_cache: None,
-            disk_cache_original: None,
-        }
+        Self::from_dependencies(BorrowedPackageIds(deps))
     }
 
     pub fn with_custom_predicates(
@@ -117,6 +327,41 @@ impl<'a> PredicateContext<'a> {
             custom_entries: entries,
             ..Self::new(deps)
         }
+    }
+}
+
+impl<'a> PredicateContextImpl<SourcedDependencies<'a>> {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the structured sync report constructs this context in the next commit"
+        )
+    )]
+    pub(crate) fn new(packages: &'a [SourcedPackage]) -> Self {
+        Self::from_dependencies(SourcedDependencies::new(packages))
+    }
+}
+
+impl<D> PredicateContextImpl<D> {
+    fn from_dependencies(dependencies: D) -> Self {
+        Self {
+            dependencies,
+            workspace_member: false,
+            used: std::collections::HashSet::new(),
+            custom_entries: std::collections::HashMap::new(),
+            custom_cache: std::collections::HashMap::new(),
+            disk_cache: None,
+            disk_cache_original: None,
+        }
+    }
+
+    /// Package ids used by name/version predicates and ID-only consumers.
+    pub(crate) fn package_ids(&self) -> &[PackageId]
+    where
+        D: PredicateDependencies,
+    {
+        self.dependencies.package_ids()
     }
 
     /// Record the plugins the applicable `[plugins] use` entries name, by
@@ -417,6 +662,54 @@ mod tests {
             .collect()
     }
 
+    fn sourced_package(name: &str, provenance: crate::pm::PackageProvenance) -> SourcedPackage {
+        SourcedPackage::new(PackageId::new(CARGO_PM, name, "1.0.0"), provenance)
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    enum TestEvidence {
+        Package(SourcedPackage),
+        NonPackage,
+        Not,
+        Any(Box<TestEvidence>),
+        All(Vec<TestEvidence>),
+        Set(Vec<TestEvidence>),
+    }
+
+    #[derive(Default)]
+    struct TestMode {
+        dependency_visits: usize,
+    }
+
+    impl<'a> PredicateEvaluationMode<SourcedDependencies<'a>> for TestMode {
+        type Evidence = TestEvidence;
+
+        fn dependency(&mut self, dependency: &SourcedPackage) -> Self::Evidence {
+            self.dependency_visits += 1;
+            TestEvidence::Package(dependency.clone())
+        }
+
+        fn non_package(&mut self) -> Self::Evidence {
+            TestEvidence::NonPackage
+        }
+
+        fn not(&mut self) -> Self::Evidence {
+            TestEvidence::Not
+        }
+
+        fn any(&mut self, child: Self::Evidence) -> Self::Evidence {
+            TestEvidence::Any(Box::new(child))
+        }
+
+        fn all(&mut self, children: Vec<Self::Evidence>) -> Self::Evidence {
+            TestEvidence::All(children)
+        }
+
+        fn set(&mut self, children: Vec<Self::Evidence>) -> Self::Evidence {
+            TestEvidence::Set(children)
+        }
+    }
+
     // --- workspace-member ---
 
     #[test]
@@ -572,6 +865,141 @@ mod tests {
             !parse("all(depends-on(serde), depends-on(tokio))")
                 .unwrap()
                 .evaluate(&mut ctx(&w))
+        );
+    }
+
+    #[test]
+    fn sourced_context_derives_its_package_ids() {
+        let packages = vec![
+            sourced_package(
+                "serde",
+                crate::pm::PackageProvenance::Registry {
+                    url: crate::pm::CRATES_IO_REGISTRY_URL.to_owned(),
+                },
+            ),
+            sourced_package("local-tool", crate::pm::PackageProvenance::Path),
+        ];
+        let expected = packages
+            .iter()
+            .map(|package| package.id.clone())
+            .collect::<Vec<_>>();
+
+        let context = SourcedPredicateContext::new(&packages);
+
+        assert_eq!(context.package_ids(), expected);
+    }
+
+    #[test]
+    fn dependency_witness_keeps_the_matching_source() {
+        let package = sourced_package(
+            "tool",
+            crate::pm::PackageProvenance::Git {
+                url: "https://example.invalid/tool".to_owned(),
+            },
+        );
+        let packages = vec![package.clone()];
+        let mut context = SourcedPredicateContext::new(&packages);
+        let mut mode = TestMode::default();
+        let predicate = Predicate::DependsOn("tool".to_owned(), None);
+
+        let evidence = predicate.evaluate_witness(&mut context, &mut mode);
+
+        assert_eq!(evidence, Some(TestEvidence::Package(package)));
+    }
+
+    #[test]
+    fn workspace_member_witness_is_non_package_evidence() {
+        let packages = vec![sourced_package(
+            "workspace-crate",
+            crate::pm::PackageProvenance::Workspace,
+        )];
+        let mut context = SourcedPredicateContext::new(&packages);
+        context.set_workspace_member(true);
+        let mut mode = TestMode::default();
+
+        let evidence = Predicate::WorkspaceMember.evaluate_witness(&mut context, &mut mode);
+
+        assert_eq!(evidence, Some(TestEvidence::NonPackage));
+        assert_eq!(mode.dependency_visits, 0);
+    }
+
+    #[test]
+    fn witnessed_any_keeps_only_the_first_successful_branch() {
+        let first = sourced_package("first", crate::pm::PackageProvenance::Path);
+        let second = sourced_package("second", crate::pm::PackageProvenance::Workspace);
+        let packages = vec![first.clone(), second];
+        let mut context = SourcedPredicateContext::new(&packages);
+        let mut mode = TestMode::default();
+        let predicate = Predicate::Any(vec![
+            Predicate::DependsOn("first".to_owned(), None),
+            Predicate::DependsOn("second".to_owned(), None),
+        ]);
+
+        let evidence = predicate.evaluate_witness(&mut context, &mut mode);
+
+        assert_eq!(
+            evidence,
+            Some(TestEvidence::Any(Box::new(TestEvidence::Package(first))))
+        );
+        assert_eq!(mode.dependency_visits, 1);
+    }
+
+    #[test]
+    fn witnessed_all_stops_at_the_first_failed_branch() {
+        let packages = vec![sourced_package("later", crate::pm::PackageProvenance::Path)];
+        let mut context = SourcedPredicateContext::new(&packages);
+        let mut mode = TestMode::default();
+        let predicate = Predicate::All(vec![
+            Predicate::DependsOn("missing".to_owned(), None),
+            Predicate::DependsOn("later".to_owned(), None),
+        ]);
+
+        let evidence = predicate.evaluate_witness(&mut context, &mut mode);
+
+        assert_eq!(evidence, None);
+        assert_eq!(mode.dependency_visits, 0);
+    }
+
+    #[test]
+    fn witnessed_not_never_retains_its_child() {
+        let packages = vec![sourced_package(
+            "present",
+            crate::pm::PackageProvenance::Path,
+        )];
+        let mut context = SourcedPredicateContext::new(&packages);
+        let mut mode = TestMode::default();
+        let predicate = Predicate::Not(Box::new(Predicate::Not(Box::new(Predicate::DependsOn(
+            "present".to_owned(),
+            None,
+        )))));
+
+        let evidence = predicate.evaluate_witness(&mut context, &mut mode);
+
+        assert_eq!(evidence, Some(TestEvidence::Not));
+        assert_eq!(mode.dependency_visits, 0);
+    }
+
+    #[test]
+    fn witnessed_predicate_set_keeps_all_contributors_in_order() {
+        let package = sourced_package("serde", crate::pm::PackageProvenance::Workspace);
+        let packages = vec![package.clone()];
+        let mut context = SourcedPredicateContext::new(&packages);
+        let mut mode = TestMode::default();
+        let predicates = PredicateSet {
+            predicates: vec![
+                Predicate::DependsOn("serde".to_owned(), None),
+                Predicate::DependsOnWildcard,
+            ],
+        };
+
+        let evidence = predicates.evaluate_witness(&mut context, &mut mode);
+
+        assert_eq!(
+            evidence,
+            Some(TestEvidence::Set(vec![
+                TestEvidence::Package(package),
+                TestEvidence::NonPackage,
+            ]))
         );
     }
 
@@ -905,6 +1333,26 @@ mod tests {
         // Script should have been called only once
         let content = std::fs::read_to_string(&counter_path).unwrap();
         assert_eq!(content.lines().count(), 1);
+    }
+
+    #[test]
+    fn witnessed_custom_cache_hit_returns_non_package_evidence() {
+        let mut context = SourcedPredicateContext::new(&[]);
+        context.custom_cache.insert(
+            ("cached".to_owned(), "a".to_owned()),
+            CustomPredicateResult {
+                passed: true,
+                events: Vec::new(),
+            },
+        );
+        let predicate = Predicate::Custom {
+            name: "cached".to_owned(),
+            arg: "a".to_owned(),
+        };
+
+        let evidence = predicate.evaluate_witness(&mut context, &mut TestMode::default());
+
+        assert_eq!(evidence, Some(TestEvidence::NonPackage));
     }
 
     #[test]
