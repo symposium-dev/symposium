@@ -15,6 +15,7 @@ use crate::telemetry::{
     storage::{
         Storage, TestWriteOperation, TestWrites,
         limits::{DAILY_STORAGE_ALLOWANCE_BYTES, reserved_storage_limit_line_bytes},
+        maintenance::MaintenanceOutcome,
         metrics::MetricSnapshot,
         writes::{FsWrites, RecordingWriteAccess, RecordingWrites},
     },
@@ -81,6 +82,13 @@ fn staged_recording() -> StagedRecording {
     ))
 }
 
+fn staged_recording_with_maintenance() -> (StagedRecording, MaintenanceDue) {
+    let mut state = TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
+    let accepted = state.observe_recording(completed_at()).unwrap();
+    let due = state.schedule_maintenance(&accepted).unwrap();
+    (stage(state), due)
+}
+
 fn stopped_staged_recording() -> StagedRecording {
     let source = IDENTIFIER_WINDOW_TEST_STATE.replacen(
         "version = 1\n",
@@ -122,14 +130,14 @@ fn private_state_persists_before_events_and_metrics_publish() {
     let observed = writes.clone();
     let mut storage = storage_with_writer(&temporary, writes);
     let prepared = storage
-        .prepare_recording(staged_recording(), Some(event_request()))
+        .prepare_recording(staged_recording(), Some(event_request()), None)
         .unwrap();
 
     assert!(observed.calls().is_empty());
     let persisted = storage.persist_recording(prepared).unwrap();
     assert_eq!(observed.calls(), [TestWriteOperation::PrivateState]);
 
-    let outcome = persisted.publish();
+    let outcome = persisted.publish().0;
 
     assert_eq!(outcome.event, EventPublication::Published);
     assert_eq!(outcome.metric, MetricPublication::Published);
@@ -144,6 +152,58 @@ fn private_state_persists_before_events_and_metrics_publish() {
 }
 
 #[test]
+fn maintenance_is_released_only_after_persistence_and_publication() {
+    let temporary = tempfile::tempdir().unwrap();
+    let mut storage = Storage::try_acquire(temporary.path()).unwrap();
+    let state_path = storage.paths.state_file().to_path_buf();
+    let (staged, due) = staged_recording_with_maintenance();
+    let prepared = storage.prepare_recording(staged, None, Some(due)).unwrap();
+
+    let persisted = storage.persist_recording(prepared).unwrap();
+    let mut persisted_state = TelemetryStateV1::decode_for_test(
+        std::str::from_utf8(&fs::read(state_path).unwrap()).unwrap(),
+    );
+    let accepted = persisted_state.observe_recording(completed_at()).unwrap();
+    assert!(persisted_state.schedule_maintenance(&accepted).is_none());
+
+    let (outcome, released) = persisted.publish();
+    let maintenance = storage.maintain(released.unwrap());
+
+    assert_eq!(outcome.metric, MetricPublication::Published);
+    assert_eq!(
+        maintenance,
+        MaintenanceOutcome::Completed {
+            removed_daily_files: 0,
+            removed_temporary_files: 0,
+            inspection_failures: 0,
+            removal_failures: 0,
+        }
+    );
+    assert!(storage.paths.lock_file().is_file());
+}
+
+#[test]
+fn publication_failure_still_releases_scheduled_maintenance() {
+    let temporary = tempfile::tempdir().unwrap();
+    let writes = TestWrites::failing_on([
+        TestWriteOperation::EventBatch,
+        TestWriteOperation::MetricSnapshot,
+    ]);
+    let mut storage = storage_with_writer(&temporary, writes);
+    let (staged, due) = staged_recording_with_maintenance();
+    let due_day = due.day();
+    let prepared = storage
+        .prepare_recording(staged, Some(event_request()), Some(due))
+        .unwrap();
+
+    let (outcome, released) = storage.persist_recording(prepared).unwrap().publish();
+
+    assert!(matches!(outcome.event, EventPublication::Failed(_)));
+    assert!(matches!(outcome.metric, MetricPublication::Failed(_)));
+    assert_eq!(released.unwrap().day(), due_day);
+}
+
+#[test]
 fn private_state_failure_mints_no_receipt_and_touches_no_public_file() {
     let temporary = tempfile::tempdir().unwrap();
     let writes = TestWrites::failing(TestWriteOperation::PrivateState);
@@ -152,7 +212,7 @@ fn private_state_failure_mints_no_receipt_and_touches_no_public_file() {
     let event_path = storage.paths.event_file(day(3));
     let metric_path = storage.paths.metrics_file(day(3));
     let prepared = storage
-        .prepare_recording(staged_recording(), Some(event_request()))
+        .prepare_recording(staged_recording(), Some(event_request()), None)
         .unwrap();
 
     let Err(error) = storage.persist_recording(prepared) else {
@@ -172,10 +232,10 @@ fn event_failure_does_not_suppress_metric_publication() {
     let observed = writes.clone();
     let mut storage = storage_with_writer(&temporary, writes);
     let prepared = storage
-        .prepare_recording(staged_recording(), Some(event_request()))
+        .prepare_recording(staged_recording(), Some(event_request()), None)
         .unwrap();
 
-    let outcome = storage.persist_recording(prepared).unwrap().publish();
+    let outcome = storage.persist_recording(prepared).unwrap().publish().0;
 
     assert_eq!(
         outcome.event,
@@ -198,10 +258,10 @@ fn metric_failure_does_not_erase_successful_event_publication() {
     let writes = TestWrites::failing(TestWriteOperation::MetricSnapshot);
     let mut storage = storage_with_writer(&temporary, writes);
     let prepared = storage
-        .prepare_recording(staged_recording(), Some(event_request()))
+        .prepare_recording(staged_recording(), Some(event_request()), None)
         .unwrap();
 
-    let outcome = storage.persist_recording(prepared).unwrap().publish();
+    let outcome = storage.persist_recording(prepared).unwrap().publish().0;
 
     assert_eq!(outcome.event, EventPublication::Published);
     assert_eq!(
@@ -219,10 +279,10 @@ fn both_publication_failures_are_reported_independently() {
     ]);
     let mut storage = storage_with_writer(&temporary, writes);
     let prepared = storage
-        .prepare_recording(staged_recording(), Some(event_request()))
+        .prepare_recording(staged_recording(), Some(event_request()), None)
         .unwrap();
 
-    let outcome = storage.persist_recording(prepared).unwrap().publish();
+    let outcome = storage.persist_recording(prepared).unwrap().publish().0;
 
     assert_eq!(
         outcome,
@@ -241,9 +301,11 @@ fn an_aggregate_only_recording_has_no_event_write() {
     let writes = TestWrites::default();
     let observed = writes.clone();
     let mut storage = storage_with_writer(&temporary, writes);
-    let prepared = storage.prepare_recording(staged_recording(), None).unwrap();
+    let prepared = storage
+        .prepare_recording(staged_recording(), None, None)
+        .unwrap();
 
-    let outcome = storage.persist_recording(prepared).unwrap().publish();
+    let outcome = storage.persist_recording(prepared).unwrap().publish().0;
 
     assert_eq!(outcome.event, EventPublication::NotRequested);
     assert_eq!(outcome.metric, MetricPublication::Published);
@@ -263,10 +325,10 @@ fn an_already_stopped_event_day_still_publishes_metrics() {
     let observed = writes.clone();
     let mut storage = storage_with_writer(&temporary, writes);
     let prepared = storage
-        .prepare_recording(stopped_staged_recording(), Some(event_request()))
+        .prepare_recording(stopped_staged_recording(), Some(event_request()), None)
         .unwrap();
 
-    let outcome = storage.persist_recording(prepared).unwrap().publish();
+    let outcome = storage.persist_recording(prepared).unwrap().publish().0;
 
     assert_eq!(
         outcome.event,
@@ -292,9 +354,11 @@ fn over_ceiling_metric_is_suppressed_after_private_state_persists() {
     let mut full_event_file = vec![b'x'; usize::try_from(DAILY_STORAGE_ALLOWANCE_BYTES).unwrap()];
     *full_event_file.last_mut().unwrap() = b'\n';
     fs::write(event_path, full_event_file).unwrap();
-    let prepared = storage.prepare_recording(staged_recording(), None).unwrap();
+    let prepared = storage
+        .prepare_recording(staged_recording(), None, None)
+        .unwrap();
 
-    let outcome = storage.persist_recording(prepared).unwrap().publish();
+    let outcome = storage.persist_recording(prepared).unwrap().publish().0;
 
     assert_eq!(outcome.event, EventPublication::NotRequested);
     assert_eq!(
@@ -317,11 +381,11 @@ fn failed_marker_append_leaves_the_persisted_day_stopped() {
     let request = event_request();
     assert!(u64::try_from(request.batch.byte_len()).unwrap() > marker_bytes);
     let prepared = storage
-        .prepare_recording(staged_recording(), Some(request))
+        .prepare_recording(staged_recording(), Some(request), None)
         .unwrap();
     assert!(matches!(prepared.event, Some(EventWrite::Marker(_))));
 
-    let outcome = storage.persist_recording(prepared).unwrap().publish();
+    let outcome = storage.persist_recording(prepared).unwrap().publish().0;
     let state = storage.load_state().unwrap().unwrap();
 
     assert!(matches!(outcome.event, EventPublication::Failed(_)));
@@ -339,14 +403,14 @@ fn marker_that_does_not_fit_stops_the_day_without_touching_the_event_file() {
     *existing.last_mut().unwrap() = b'\n';
     fs::write(&event_path, &existing).unwrap();
     let prepared = storage
-        .prepare_recording(staged_recording(), Some(event_request()))
+        .prepare_recording(staged_recording(), Some(event_request()), None)
         .unwrap();
     assert_eq!(
         prepared.event,
         Some(EventWrite::Suppressed(EventSuppression::MarkerDoesNotFit))
     );
 
-    let outcome = storage.persist_recording(prepared).unwrap().publish();
+    let outcome = storage.persist_recording(prepared).unwrap().publish().0;
     let state = storage.load_state().unwrap().unwrap();
 
     assert_eq!(
@@ -374,7 +438,9 @@ fn a_successful_marker_releases_its_reservation_for_metric_publication() {
     let state = TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
     let staged = StagedRecording::from_parts_for_test(state, MetricSnapshot::empty(day(3)));
     let request = EventPublicationRequest::new(command_batch(), operation);
-    let prepared = storage.prepare_recording(staged, Some(request)).unwrap();
+    let prepared = storage
+        .prepare_recording(staged, Some(request), None)
+        .unwrap();
     assert!(matches!(prepared.event, Some(EventWrite::Marker(_))));
     assert_eq!(prepared.metric.byte_len(), 0);
     assert!(
@@ -384,7 +450,7 @@ fn a_successful_marker_releases_its_reservation_for_metric_publication() {
             > DAILY_STORAGE_ALLOWANCE_BYTES
     );
 
-    let outcome = storage.persist_recording(prepared).unwrap().publish();
+    let outcome = storage.persist_recording(prepared).unwrap().publish().0;
 
     assert_eq!(outcome.event, EventPublication::Published);
     assert_eq!(outcome.metric, MetricPublication::Published);
@@ -415,7 +481,7 @@ fn mismatched_event_day_is_rejected_before_persistence() {
     );
 
     let error = storage
-        .prepare_recording(staged_recording(), Some(request))
+        .prepare_recording(staged_recording(), Some(request), None)
         .unwrap_err();
 
     assert!(matches!(
@@ -437,7 +503,7 @@ fn mismatched_metric_day_is_rejected_before_persistence() {
     let state = TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
     let staged = StagedRecording::from_parts_for_test(state, MetricSnapshot::empty(day(4)));
 
-    let error = storage.prepare_recording(staged, None).unwrap_err();
+    let error = storage.prepare_recording(staged, None, None).unwrap_err();
 
     assert!(matches!(
         error,
@@ -454,7 +520,9 @@ fn mismatched_metric_day_is_rejected_before_persistence() {
 fn dropping_a_persisted_receipt_without_publication_is_loud() {
     let temporary = tempfile::tempdir().unwrap();
     let mut storage = Storage::try_acquire(temporary.path()).unwrap();
-    let prepared = storage.prepare_recording(staged_recording(), None).unwrap();
+    let prepared = storage
+        .prepare_recording(staged_recording(), None, None)
+        .unwrap();
 
     drop(storage.persist_recording(prepared).unwrap());
 }
@@ -466,7 +534,7 @@ fn publication_panic_is_not_misreported_as_a_dropped_receipt() {
     let mut storage =
         LockedStorage::try_acquire_with_writer(temporary.path(), PanickingEventWrites).unwrap();
     let prepared = storage
-        .prepare_recording(staged_recording(), Some(event_request()))
+        .prepare_recording(staged_recording(), Some(event_request()), None)
         .unwrap();
 
     let _ = storage.persist_recording(prepared).unwrap().publish();
@@ -477,7 +545,9 @@ fn publication_panic_is_not_misreported_as_a_dropped_receipt() {
 fn unwind_before_publication_does_not_double_panic_in_drop() {
     let temporary = tempfile::tempdir().unwrap();
     let mut storage = Storage::try_acquire(temporary.path()).unwrap();
-    let prepared = storage.prepare_recording(staged_recording(), None).unwrap();
+    let prepared = storage
+        .prepare_recording(staged_recording(), None, None)
+        .unwrap();
     let _persisted = storage.persist_recording(prepared).unwrap();
 
     panic!("injected pre-publication panic");
