@@ -92,6 +92,15 @@ A `Batch` is one run of the runner: `<eval-root>/<batch>/`, holding the staged t
 
 `run::adversarial` adds real-sandbox tests. Concurrent trials write the same `/tmp/claude` filename, then finish separately, checking both file isolation and independent process cleanup. A local HTTPS fixture verifies that the proxy substitutes a fake API key only for the allowed host, blocks a different hostname for the same server, and leaves the real value out of sandbox output. Symlinks created inside the project must not expose hidden solutions or another trial, or permit fixture writes. Failed and timed-out setup must release a detached child's file lock, retain evidence, and reject reuse of the trial number; these cases need `setsid` and `flock`. The HTTPS test also needs `openssl` and `curl`; it generates a temporary certificate and never contacts a model provider. Run these with `cargo test -p symposium-eval run::adversarial -- --ignored`.
 
+## Client sessions
+
+`client::execute(runner, backend, trial, env, prompt, deadline)` runs one session and never returns an error: whatever goes wrong is how the session `Ended`. A `ClientRunner` only builds the client's `Invocation` and reads its transcript's `Completion`; the `Backend` sandboxes, logs, and stops the process, so a stand-in backend tests every ending without a client.
+
+- **Transcript.** The client's standard output, which the backend writes to the trial's `session/client.stdout.log`. The runner writes it from outside the sandbox, and the policy gives the trial no access to `session/`, so the agent cannot alter it.
+- **Client failures.** Only `Failed` is the client's: a reported error, which wins over the exit status since its message says more, then a failed exit (`Exited`), then a successful exit without a completion event (`NoCompletion`), so exiting 0 is never enough.
+- **Not the client's.** `NotLaunched` (the program could not start: a setup failure, never a trial), `Unsupervised` (the runner lost hold of a started client), and `Unreadable`, carrying a `TranscriptError`: `Read` when the runner could not read the transcript, `Malformed` with a line number when an event the adapter needs is not in a shape it knows. An unreadable transcript decides the ending before the exit status does, so a changed event format is never counted as a failed session. `Completion::Missing` is only for a transcript the adapter fully read.
+- **Deadlines.** `TimedOut` stands once the runner killed the tree. `Local::run` returns a timeout even when collecting the output then fails, keeping that problem in `Finished::after_deadline`. A session keeps it in `Ended::TimedOut`, and a grading step in `Outcome::TimedOut` with its causes, so the report says why the output may be incomplete while still counting the submission's timeout. A preflight timeout keeps it as the source of `GradeError::TimedOut`.
+
 ## Code comments
 
 Comments answer why, an invariant, or a surprising behavior of a client or tool. They never restate what the code says.

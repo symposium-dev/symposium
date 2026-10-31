@@ -34,7 +34,7 @@ mod smoke;
 mod srt;
 pub(crate) mod stage;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 use std::fmt;
 use std::fs;
@@ -177,6 +177,7 @@ impl Batch {
             trial.cargo_home(),
             trial.tmp(),
             trial.evidence(),
+            trial.session(),
         ])?;
         self.link_tools(&trial)?;
         copy_tree(&evals.starter_dir(task.name()), &trial.project(), "starter")
@@ -248,6 +249,12 @@ impl Trial {
     /// Hook records and other evidence, kept outside the project.
     pub(crate) fn evidence(&self) -> PathBuf {
         self.root.join("evidence")
+    }
+
+    /// The client's transcript and logs. The runner writes them from outside the
+    /// sandbox, and the policy gives the trial no access, so the agent cannot alter them.
+    pub(crate) fn session(&self) -> PathBuf {
+        self.root.join("session")
     }
 
     /// The task's plugins, offered to Symposium as its only registry.

@@ -6,6 +6,8 @@
 //! is `md/rfds/skill-evaluation/`; `md/design/agent-eval.md` maps it onto this
 //! crate's modules.
 
+#[expect(dead_code, reason = "the runner starts sessions later in RFD step 4")]
+mod client;
 mod evals;
 mod grade;
 #[expect(dead_code, reason = "the runner launches trials later in RFD step 2")]
