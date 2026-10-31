@@ -10,6 +10,11 @@
 //! lost hold of, and a transcript that cannot be read are not the client's failures, so
 //! none is [`Ended::Failed`]. The exit status counts only once the transcript was read:
 //! a client whose event format changed would otherwise read as a failed session.
+//!
+//! A transcript from another session, or from a client other than the one checked
+//! before launch, is [`Ended::Mismatched`]: an isolation exclusion, also decided before
+//! the exit status. What identifies a session is the adapter's: not every client lets
+//! the runner choose a session ID or reports its version in the stream.
 
 pub(crate) mod claude;
 mod error;
@@ -19,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::time::Duration;
 
-pub(crate) use error::{ClientError, TranscriptError};
+pub(crate) use error::{ClientError, ProvenanceError, TranscriptError, Unusable};
 
 use crate::grade::ProcessError;
 use crate::grade::process::{Backend, Invocation};
@@ -36,8 +41,9 @@ pub(crate) trait ClientRunner {
     ///
     /// # Errors
     ///
-    /// When the transcript cannot be read, or an event the adapter needs is malformed.
-    fn completion(&self, transcript: &Path) -> Result<Completion, TranscriptError>;
+    /// When the transcript cannot be read, an event the adapter needs is malformed, or
+    /// the transcript is not this session's, from the client checked before launch.
+    fn completion(&self, transcript: &Path) -> Result<Completion, Unusable>;
 }
 
 /// What a transcript the adapter fully read says about how its session ended.
@@ -75,6 +81,9 @@ pub(crate) enum Ended {
     /// The client exited, but its transcript cannot say how the session ended, whatever
     /// the exit status.
     Unreadable(TranscriptError),
+    /// The client exited, but its transcript is not this session's, from the client
+    /// checked before launch: an isolation exclusion, whatever the exit status.
+    Mismatched(ProvenanceError),
 }
 
 /// Runs `prompt` as a new session of `runner`'s client in `trial`, through `backend`,
@@ -100,7 +109,8 @@ pub(crate) fn execute(
                 after_deadline: finished.after_deadline,
             },
             Some(status) => match runner.completion(&transcript) {
-                Err(error) => Ended::Unreadable(error),
+                Err(Unusable::Transcript(error)) => Ended::Unreadable(error),
+                Err(Unusable::Provenance(error)) => Ended::Mismatched(error),
                 Ok(completion) => ending(status, completion, || {
                     finished.stderr.tail().trim().to_owned()
                 }),
@@ -134,7 +144,8 @@ mod tests {
     use crate::run::{Configuration, Reach};
 
     /// A client whose transcript is one line: `finished`, an error message, `garbled` for
-    /// one it cannot read, or anything else for a missing completion.
+    /// one it cannot read, `foreign` for another session's, or anything else for a
+    /// missing completion.
     struct OneLine;
 
     impl ClientRunner for OneLine {
@@ -153,7 +164,7 @@ mod tests {
             }
         }
 
-        fn completion(&self, transcript: &Path) -> Result<Completion, TranscriptError> {
+        fn completion(&self, transcript: &Path) -> Result<Completion, Unusable> {
             let text = fs::read_to_string(transcript).map_err(|source| TranscriptError::Read {
                 path: transcript.to_owned(),
                 source,
@@ -167,8 +178,10 @@ mod tests {
                     return Err(TranscriptError::Malformed {
                         line: 1,
                         reason: "not an event".to_owned(),
-                    });
+                    }
+                    .into());
                 }
+                "foreign" => return Err(ProvenanceError::Unstated.into()),
                 _ => Completion::Missing,
             })
         }
@@ -396,6 +409,22 @@ mod tests {
                     Ended::Unreadable(TranscriptError::Read { .. })
                 ),
                 "{execution:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn another_sessions_transcript_is_mismatched_whatever_the_exit() {
+        for status in [0, 1] {
+            let ended = replay(
+                "foreign
+",
+                Some(status),
+            );
+
+            assert!(
+                matches!(ended, Ended::Mismatched(ProvenanceError::Unstated)),
+                "{ended:?}"
             );
         }
     }

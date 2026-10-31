@@ -32,3 +32,24 @@ pub(crate) enum TranscriptError {
     #[error("line {line} of the transcript: {reason}")]
     Malformed { line: usize, reason: String },
 }
+
+/// Why a transcript is not this trial's session, from the client checked before launch.
+/// The client launched, so this is an isolation exclusion, not a setup failure.
+#[derive(Debug, Error)]
+pub(crate) enum ProvenanceError {
+    #[error("the transcript is session `{found}`, not `{requested}`, which the runner started")]
+    Session { requested: String, found: String },
+    #[error("the transcript's client is version `{found}`, not `{checked}`, checked before launch")]
+    Version { checked: String, found: String },
+    #[error("the transcript ends without saying which session or client it is")]
+    Unstated,
+}
+
+/// Why the runner cannot take a transcript as how its session ended.
+#[derive(Debug, Error)]
+pub(crate) enum Unusable {
+    #[error(transparent)]
+    Transcript(#[from] TranscriptError),
+    #[error(transparent)]
+    Provenance(#[from] ProvenanceError),
+}

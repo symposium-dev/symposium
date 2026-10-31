@@ -35,7 +35,7 @@ pub(crate) struct Version {
 impl Version {
     /// Reads `claude --version` output, such as `2.1.316 (Claude Code)`. A prerelease,
     /// such as `2.1.316-beta`, is none: it comes before the release of that number.
-    fn from_output(output: &str) -> Option<Self> {
+    pub(super) fn from_output(output: &str) -> Option<Self> {
         let release = output.split_whitespace().next()?;
         let mut parts = release.split('.').map(|part| part.parse::<u32>().ok());
         let version = Self {
