@@ -329,15 +329,26 @@ mod tests {
         }
     }
 
+    /// An absolute path to `name`, which [`Srt::new`] demands, so `PATH` lookup is
+    /// not available. macOS keeps these in `/usr/bin` and has no `/bin/false`.
+    #[cfg(unix)]
+    fn system_tool(name: &str) -> PathBuf {
+        ["/usr/bin", "/bin"]
+            .into_iter()
+            .map(|dir| Path::new(dir).join(name))
+            .find(|path| path.is_file())
+            .unwrap_or_else(|| panic!("no `{name}` in /usr/bin or /bin"))
+    }
+
     /// A tool that cannot start is reported by name, not as a version mismatch.
     #[cfg(unix)]
     #[test]
     fn a_tool_that_fails_is_named() {
         let host = Host::new();
         let srt = Srt::new(
-            Path::new("/bin/false"),
+            &system_tool("false"),
             &host.join("missing-cli.js"),
-            Path::new("/bin/true"),
+            &system_tool("true"),
         )
         .unwrap();
 
