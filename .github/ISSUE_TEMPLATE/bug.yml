@@ -1,0 +1,52 @@
+name: Bug
+description: Something Symposium does wrong
+type: Bug
+labels: ["bug"]
+projects: ["symposium-dev/6"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happens
+      description: One or two sentences on what goes wrong and who notices.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: |
+        Numbered steps from a clean state. Include the `config.toml`, `Symposium.toml` or `SKILL.md` involved, trimmed to what matters.
+      value: |
+        1.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: What happened, with exact output or error text. The log for the invocation is in `~/.symposium/logs/`.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: The Symposium version (`cargo agents --version`) or commit, the agent and its version, and the OS.
+      value: |
+        - Symposium:
+        - Agent:
+        - OS:
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Suspected cause, possible fixes, and related issues or PRs. Leave empty if unknown.
