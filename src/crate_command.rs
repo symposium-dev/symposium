@@ -39,7 +39,11 @@ pub async fn dispatch_crate(
         .fetch(&id, symposium_install::UpdateLevel::Check)
         .await
     {
-        Ok(result) => crate_info(&result.id.name, &result.id.version, &result.root),
+        Ok(result) => crate_info(
+            &result.package.id.name,
+            &result.package.id.version,
+            &result.root,
+        ),
         Err(e) => DispatchResult::Err(format!("{e}")),
     }
 }

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::UpdateLevel;
 use crate::pm::{
     CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, PluginKind, PmInstance,
-    UnvalidatedPlugin,
+    SourcedPackage, UnvalidatedPlugin,
 };
 
 /// A file entry for [`instantiate_fixture`].
@@ -104,7 +104,7 @@ impl PackageManager for FakeCargo {
         self.has(self.published, name)
     }
 
-    async fn active_plugins(&self, _deps: &[PackageId]) -> Vec<UnvalidatedPlugin> {
+    async fn active_plugins(&self, _deps: &[SourcedPackage]) -> Vec<UnvalidatedPlugin> {
         Vec::new()
     }
 
@@ -115,7 +115,7 @@ impl PackageManager for FakeCargo {
         Vec::new()
     }
 
-    async fn list_deps(&self) -> anyhow::Result<Vec<PackageId>> {
+    async fn list_deps(&self) -> anyhow::Result<Vec<SourcedPackage>> {
         Ok(Vec::new())
     }
 

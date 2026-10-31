@@ -62,7 +62,7 @@ pub async fn use_plugin(
     let registry_plugin = registry
         .plugins
         .iter()
-        .find(|p| pms.identity(&p.canonical) == id);
+        .find(|p| pms.identity(&p.package.id) == id);
     let dormant = registry_plugin.is_some_and(|p| p.manifest.requires_use);
     let already_trusted = registry_plugin.is_some() && !dormant;
     if already_trusted {
