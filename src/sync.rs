@@ -485,7 +485,11 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
     // failed. Anything we find later that has the marker file but isn't in
     // this set is stale.
     let mut installed_dirs: BTreeSet<PathBuf> = BTreeSet::new();
-    let skip_cleanup = !registry.unreadable_registries.is_empty();
+    // A package manager that failed answered nothing, not nothing-is-offered,
+    // so its silence must not retire what it installed before: neither a skill
+    // nor an MCP entry. Both cleanups read this one decision.
+    let failed_pms = ws.failed();
+    let skip_cleanup = !registry.unreadable_registries.is_empty() || !failed_pms.is_empty();
 
     for agent_name in &agent_names {
         let Ok(agent) = Agent::from_config_name(agent_name) else {
@@ -648,8 +652,6 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
     // and remove subdirs containing the marker that we didn't just install.
     // Compared by resolved path, since one agent's skills dir can be a symlink
     // to another's. A symlink entry is user content and is never followed.
-    let failed_pms = ws.failed();
-    let skip_cleanup = !registry.unreadable_registries.is_empty() || !failed_pms.is_empty();
     let installed: BTreeSet<PathBuf> = installed_dirs
         .iter()
         .filter_map(|dir| dir.canonicalize().ok())
