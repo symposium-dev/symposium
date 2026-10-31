@@ -2,17 +2,17 @@
 //! distribution RFD](../../md/rfds/registry-centric-plugins/README.md).
 //!
 //! A [`PackageId`] names a package as a `(pm, name, version)` tuple, and a
-//! [`PackageManager`] resolves ids of its ecosystem to content on disk.
+//! [`PackageManager`] resolves ids of its ecosystem to content on disk. The
+//! trait is the SDK's, since the operation set is what any package manager
+//! implements.
 //!
 //! A `PackageManager` value is an *instance*, not just an ecosystem. A
 //! **transport** ([`CargoPm`]) can `fetch` any id of its ecosystem, because the
 //! id carries the source; a **registry instance** ([`PathPm`]) fronts one
 //! configured source and enumerates the packages it contains. [`PmRegistry`]
 //! holds them as one flat set: an id is dispatched to the instance whose
-//! [`PackageManager::name`] matches its [`PackageId::pm`], and plugin loading
-//! ([`active_plugins`](PackageManager::active_plugins) /
-//! [`load_plugin`](PackageManager::load_plugin) / `search`) iterates every
-//! instance.
+//! [`PackageManager::name`] matches its [`PackageId::pm`] (`fetch`,
+//! `load_plugin`), while `list_deps` and `search` union every instance.
 //!
 //! A registry instance's [`PackageManager::name`] is the *configured registry
 //! name* (`user-plugins`, `symposium-recommendations`, …), which is also the
@@ -24,7 +24,7 @@
 //! the seam that spawns and talks to them.
 
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use symposium_install::UpdateLevel;
@@ -41,105 +41,12 @@ pub use cargo::{
 pub use git::GitPm;
 pub use path::PathPm;
 
-/// The identity types are the SDK's, since they cross the PM boundary: a
-/// package-manager binary speaks in them too.
-pub use symposium_sdk::pm::{ANY_VERSION, CARGO_PM, PackageId, PluginInfo, UnvalidatedPlugin};
-
-/// A fetched package: the exact id it resolved to, plus the directory
-/// holding its content.
-#[derive(Debug, Clone)]
-pub struct FetchedPackage {
-    pub id: PackageId,
-    pub root: PathBuf,
-}
-
-/// The operations every package manager implements (per the registry-centric
-/// plugin distribution RFD).
-///
-/// A PM is self-contained: it holds whatever it needs to resolve its own
-/// ecosystem ([`CargoPm`] owns an [`Arc<WorkspaceDeps>`], [`PathPm`] owns its
-/// directory), so operations take no ambient context. This mirrors the
-/// out-of-process shape — a PM spawned for a workspace answers RPC calls from
-/// its own state, with nothing workspace-shaped threaded per call.
-///
-/// Loading has two forms. [`active_plugins`](Self::active_plugins) is what the
-/// PM activates for the workspace's dependency set (a registry lists its
-/// entries; the cargo transport surfaces dependency-embedded plugins);
-/// [`load_plugin`](Self::load_plugin) resolves a *specific* id named elsewhere
-/// (a `[[plugins]]` chained reference, an explicitly enabled crate). Both
-/// answer with [`UnvalidatedPlugin`]s: an id, a content directory, and an
-/// *unvalidated* manifest, and are best-effort: failures are logged and
-/// dropped, not surfaced, so one bad plugin never aborts a sync or hook.
-///
-/// Validating an [`UnvalidatedPlugin`] into a [`Plugin`] is [`PmInstance`]'s
-/// job, not the PM's, because the policy depends on where the plugin came from rather than
-/// on what it says. That is the whole trust boundary: see [`PluginKind`].
-#[async_trait::async_trait]
-pub trait PackageManager {
-    /// The PM's registry name — the `pm` component of every id it owns. For
-    /// an ecosystem transport this is the ecosystem (`cargo`); for a registry
-    /// instance it is the configured registry's name.
-    fn name(&self) -> &str;
-
-    fn canonical_name(&self, name: &str) -> String;
-
-    /// The package this PM has under `name`, compared by
-    /// [`canonical_name`](Self::canonical_name). Under [`UpdateLevel::None`]
-    /// only what is already on disk counts. A registry's packages are the
-    /// plugins it lists, which [`PmRegistry::identify`] matches directly, so
-    /// only a transport answers here.
-    async fn find(&self, _name: &str, _update: UpdateLevel) -> Option<PackageId> {
-        None
-    }
-
-    /// The plugins this PM activates for the workspace's dependency set. A
-    /// registry lists its own entries (deps ignored); the cargo transport
-    /// surfaces the plugins its dependencies embed. Whether a dependency-embedded
-    /// plugin is *trusted* is the caller's decision — see [`PmInstance::trusted`].
-    async fn active_plugins(&self, deps: &[PackageId]) -> Vec<UnvalidatedPlugin>;
-
-    /// Fails instead of returning an empty list when the source cannot be
-    /// read, since sync removes what a registry stops offering.
-    async fn registry_plugins(&self) -> Result<RegistryListing<UnvalidatedPlugin>> {
-        Ok(RegistryListing {
-            plugins: self.active_plugins(&[]).await,
-            complete: true,
-        })
-    }
-
-    /// The plugin(s) a specific id maps to — zero, one, or many. Used for
-    /// `[[plugins]]` chained references and explicitly enabled crates.
-    async fn load_plugin(&self, id: &PackageId, update: UpdateLevel) -> Vec<UnvalidatedPlugin>;
-
-    /// The package ids the current workspace depends on. Empty for PMs with no
-    /// workspace notion.
-    async fn list_deps(&self) -> Result<Vec<PackageId>>;
-
-    /// Find packages matching a partial query (backs `use` / `search`). PMs
-    /// without a searchable registry return an empty list.
-    async fn search(&self, query: &str) -> Result<Vec<PluginInfo>>;
-
-    /// Acquire a package's source content, canonicalizing the id's version.
-    /// `update` controls how aggressively an already-cached package is refreshed.
-    async fn fetch(&self, id: &PackageId, update: UpdateLevel) -> Result<FetchedPackage>;
-
-    /// Refresh this PM's backing source — for a registry, pull the latest
-    /// content onto disk. `force` ignores the source's auto-update opt-out
-    /// (used by an explicit `plugin sync <name>`). Returns whether a remote
-    /// source was actually refreshed, so callers can report what synced. The
-    /// default is a no-op: a PM whose content is already local (the cargo
-    /// transport, a path registry) has nothing to pull.
-    async fn refresh(&self, _update: UpdateLevel, _force: bool) -> Result<bool> {
-        Ok(false)
-    }
-
-    /// How a registry instance's content is sourced, for `plugin list`
-    /// display. `None` for the cargo transport, which is not a configured
-    /// registry.
-    fn registry_source(&self) -> Option<RegistrySource> {
-        None
-    }
-}
+/// The identity types and the operation set are the SDK's, since they cross
+/// the PM boundary: a package-manager binary speaks in them too.
+pub use symposium_sdk::pm::{
+    ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, PluginListing,
+    ProjectInfo, UnvalidatedPlugin,
+};
 
 /// Where a registry instance's content comes from — the git-vs-path
 /// distinction, made visible on the PM itself rather than inferred elsewhere.
@@ -179,26 +86,81 @@ pub struct PmInstance {
     pub trusted: bool,
     /// Validation policy for this instance's plugins.
     pub kind: PluginKind,
-    pub pm: Box<dyn PackageManager + Send + Sync>,
+    /// How a registry's content is sourced; `None` for a transport.
+    pub source: Option<RegistrySource>,
+    pub pm: Box<dyn PackageManager>,
+    /// Whether an operation on this instance has failed. Its silence is not
+    /// an empty answer, so nothing it would have offered is removed on its
+    /// strength.
+    failed: AtomicBool,
 }
 
 impl PmInstance {
-    /// This instance's active plugins, validated. A plugin that fails
-    /// validation is logged and dropped: best-effort, like the PM layer above.
-    pub async fn active_plugins(&self, deps: &[PackageId]) -> Vec<Plugin> {
-        self.validate_all(self.pm.active_plugins(deps).await)
+    pub fn new(
+        name: impl Into<String>,
+        trusted: bool,
+        kind: PluginKind,
+        pm: Box<dyn PackageManager>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            trusted,
+            kind,
+            source: None,
+            pm,
+            failed: AtomicBool::new(false),
+        }
     }
 
-    pub async fn registry_plugins(&self) -> Option<RegistryListing<Plugin>> {
-        match self.pm.registry_plugins().await {
+    pub fn with_source(mut self, source: RegistrySource) -> Self {
+        self.source = Some(source);
+        self
+    }
+
+    /// Whether an operation on this instance has failed.
+    pub fn has_failed(&self) -> bool {
+        self.failed.load(Ordering::Relaxed)
+    }
+
+    /// Record a failed operation and log it.
+    fn failure<T>(&self, operation: &str, e: anyhow::Error) -> Result<T> {
+        self.failed.store(true, Ordering::Relaxed);
+        tracing::warn!(instance = %self.name, operation, error = %format!("{e:#}"), "package manager failed");
+        Err(e)
+    }
+
+    /// This instance's active plugins, validated. A plugin that fails
+    /// validation is logged and dropped, and leaves the listing incomplete:
+    /// best-effort, like the PM layer above.
+    pub async fn try_active_plugins(&self, deps: &[PackageId]) -> Result<PluginListing<Plugin>> {
+        match self.pm.active_plugins(deps).await {
             Ok(listing) => {
                 let total = listing.plugins.len();
                 let plugins = self.validate_all(listing.plugins);
-                Some(RegistryListing {
+                Ok(PluginListing {
                     complete: listing.complete && plugins.len() == total,
                     plugins,
                 })
             }
+            Err(e) => self.failure("active_plugins", e),
+        }
+    }
+
+    /// [`try_active_plugins`](Self::try_active_plugins), with a failure
+    /// contributing nothing.
+    pub async fn active_plugins(&self, deps: &[PackageId]) -> Vec<Plugin> {
+        self.try_active_plugins(deps)
+            .await
+            .map(|listing| listing.plugins)
+            .unwrap_or_default()
+    }
+
+    /// A registry's plugins, or `None` with a report when it cannot be read:
+    /// sync removes what a registry stops offering, so an unreadable one must
+    /// not read as an empty one, nor an incomplete one as all it offers.
+    pub async fn registry_plugins(&self) -> Option<PluginListing<Plugin>> {
+        match self.try_active_plugins(&[]).await {
+            Ok(listing) => Some(listing),
             Err(e) => {
                 tracing::warn!(
                     report = %crate::report::ReportEvent::Warning {
@@ -211,8 +173,53 @@ impl PmInstance {
     }
 
     /// The plugin(s) an id maps to, validated.
+    ///
+    /// A failure is logged, not recorded against the instance: it says that
+    /// one package could not be loaded (yanked, misspelled in a `use` entry,
+    /// unreachable offline), not that the package manager's answers about the
+    /// workspace are missing. Recording it would stop sync from removing any
+    /// stale skill of the whole ecosystem for as long as that package fails.
     pub async fn load_plugin(&self, id: &PackageId, update: UpdateLevel) -> Vec<Plugin> {
-        self.validate_all(self.pm.load_plugin(id, update).await)
+        match self.pm.load_plugin(id, update).await {
+            Ok(plugins) => self.validate_all(plugins),
+            Err(e) => {
+                tracing::warn!(instance = %self.name, id = %id, error = %format!("{e:#}"), "failed to load package");
+                Vec::new()
+            }
+        }
+    }
+
+    /// The package this instance has under `name`, compared under its name
+    /// rule: a dependency of that name; otherwise one already on disk (a
+    /// cache-only fetch); otherwise, above [`UpdateLevel::None`], one its
+    /// search turns up. A registry's packages are the plugins it lists, which
+    /// callers hold already, so a trusted instance has none to find.
+    ///
+    /// Built from the operations every package manager has, so no package
+    /// manager implements it and the protocol has no request for it.
+    pub async fn find(&self, name: &str, update: UpdateLevel) -> Option<PackageId> {
+        if self.trusted {
+            return None;
+        }
+        let wanted = self.pm.canonical_name(name);
+        let same =
+            |id: &PackageId| id.pm == self.name && self.pm.canonical_name(&id.name) == wanted;
+        if let Ok(deps) = self.pm.list_deps().await
+            && let Some(dep) = deps.into_iter().find(|dep| same(dep))
+        {
+            return Some(dep);
+        }
+        let named = PackageId::any_version(&self.name, name);
+        if let Ok(cached) = self.pm.fetch(&named, UpdateLevel::None).await
+            && same(&cached.id)
+        {
+            return Some(cached.id);
+        }
+        if matches!(update, UpdateLevel::None) {
+            return None;
+        }
+        let found = self.pm.search(name).await.ok()?;
+        found.into_iter().map(|info| info.id).find(|id| same(id))
     }
 
     /// A registry entry that fails validation is the user's to fix, so it is
@@ -242,12 +249,13 @@ impl PmInstance {
             })
             .collect()
     }
-}
 
-#[derive(Debug)]
-pub struct RegistryListing<P> {
-    pub plugins: Vec<P>,
-    pub complete: bool,
+    async fn project_info(&self) -> Result<ProjectInfo> {
+        match self.pm.project_info().await {
+            Ok(project) => Ok(project),
+            Err(e) => self.failure("project_info", e),
+        }
+    }
 }
 
 /// The active set of package-manager instances — one flat collection, the cargo
@@ -267,27 +275,34 @@ impl PmRegistry {
         self.instances.iter()
     }
 
-    /// The instance owning the named ecosystem/registry.
-    fn owner(&self, pm: &str, id: &PackageId) -> Result<&(dyn PackageManager + Send + Sync)> {
-        self.instances
-            .iter()
-            .find(|inst| inst.pm.name() == pm)
-            .map(|inst| inst.pm.as_ref())
-            .ok_or_else(|| anyhow::anyhow!("unknown package manager `{pm}` in package id `{id}`"))
+    fn owner(&self, id: &PackageId) -> Option<&PmInstance> {
+        self.instances.iter().find(|inst| inst.name == id.pm)
     }
 
+    /// The instances an operation has failed on so far.
+    pub fn failed(&self) -> Vec<String> {
+        self.instances
+            .iter()
+            .filter(|inst| inst.has_failed())
+            .map(|inst| inst.name.clone())
+            .collect()
+    }
+
+    /// `id` in the form two ids of the same package compare equal in, under
+    /// its package manager's [`canonical_name`](PackageManager::canonical_name),
+    /// with the version dropped.
     pub fn identity(&self, id: &PackageId) -> PackageId {
-        let name = match self.owner(&id.pm, id) {
-            Ok(pm) => pm.canonical_name(&id.name),
-            Err(_) => id.name.clone(),
+        let name = match self.owner(id) {
+            Some(inst) => inst.pm.canonical_name(&id.name),
+            None => id.name.clone(),
         };
         PackageId::any_version(&id.pm, name)
     }
 
     /// The identity of the package a user-typed `name` refers to. A plugin in
     /// `plugins` with that name under its registry's rule wins; otherwise the
-    /// first package manager whose [`find`](PackageManager::find) has the name
-    /// at `update` answers. A name no package manager has is an error.
+    /// first package manager whose [`find`](PmInstance::find) has the name at
+    /// `update` answers. A name no package manager has is an error.
     pub async fn identify(
         &self,
         plugins: &[Plugin],
@@ -301,7 +316,7 @@ impl PmRegistry {
             return Ok(self.identity(&plugin.canonical));
         }
         for inst in &self.instances {
-            if let Some(id) = inst.pm.find(name, update).await {
+            if let Some(id) = inst.find(name, update).await {
                 return Ok(self.identity(&id));
             }
         }
@@ -310,28 +325,57 @@ impl PmRegistry {
 
     /// Fetch a package via the instance named in its id.
     pub async fn fetch(&self, id: &PackageId, update: UpdateLevel) -> Result<FetchedPackage> {
-        self.owner(&id.pm, id)?.fetch(id, update).await
+        let inst = self.owner(id).ok_or_else(|| {
+            anyhow::anyhow!("unknown package manager `{}` in package id `{id}`", id.pm)
+        })?;
+        inst.pm.fetch(id, update).await
     }
 
     /// Union of `list_deps` across the instances — the workspace's full
     /// dependency set for discovery and `depends-on` predicate evaluation.
-    pub async fn list_deps(&self) -> Result<Vec<PackageId>> {
+    ///
+    /// An instance that fails contributes nothing, and the failure is
+    /// recorded. Failing the union instead would leave every `depends-on`
+    /// false, so one missing PM binary would turn off every plugin the other
+    /// ecosystems activate.
+    pub async fn list_deps(&self) -> Vec<PackageId> {
         let mut deps = Vec::new();
         for inst in &self.instances {
-            deps.extend(inst.pm.list_deps().await?);
+            match inst.pm.list_deps().await {
+                Ok(found) => deps.extend(found),
+                Err(e) => inst.failure::<()>("list_deps", e).unwrap_or_default(),
+            }
         }
-        Ok(deps)
+        deps
     }
 
-    /// Load the plugin(s) an id maps to, asking every instance. Any instance may
-    /// contribute a plugin relevant to the id, so this can return several. Each
-    /// instance's plugins are validated under its own [`PluginKind`].
-    pub async fn load_plugin(&self, id: &PackageId, update: UpdateLevel) -> Vec<Plugin> {
-        let mut out = Vec::new();
+    /// Each instance's [`ProjectInfo`], by instance name, and why each one
+    /// that failed did, by instance name. A failure is also recorded.
+    pub async fn project_info(&self) -> (Vec<(String, ProjectInfo)>, Vec<(String, String)>) {
+        let mut found = Vec::new();
+        let mut failed = Vec::new();
         for inst in &self.instances {
-            out.extend(inst.load_plugin(id, update).await);
+            match inst.project_info().await {
+                Ok(project) => found.push((inst.name.clone(), project)),
+                Err(e) => failed.push((inst.name.clone(), format!("{e:#}"))),
+            }
         }
-        out
+        (found, failed)
+    }
+
+    /// Load the plugin(s) an id maps to, from the instance its `pm` names.
+    ///
+    /// Only that instance is asked. Asking every one would spawn every
+    /// out-of-process PM to answer about an id none of them owns, and would let
+    /// a PM answer for a package of another ecosystem.
+    pub async fn load_plugin(&self, id: &PackageId, update: UpdateLevel) -> Vec<Plugin> {
+        match self.owner(id) {
+            Some(inst) => inst.load_plugin(id, update).await,
+            None => {
+                tracing::debug!(id = %id, "no package manager owns this id");
+                Vec::new()
+            }
+        }
     }
 
     /// Search every instance for packages matching `query`, tagged with the
@@ -341,7 +385,7 @@ impl PmRegistry {
         let mut out = Vec::new();
         for inst in self.instances() {
             match inst.pm.search(query).await {
-                Ok(infos) => out.extend(infos.into_iter().map(|i| (inst.name.clone(), i))),
+                Ok(infos) => out.extend(infos.into_iter().map(|info| (inst.name.clone(), info))),
                 Err(e) => {
                     tracing::debug!(instance = %inst.name, error = %e, "search failed, skipping");
                 }
@@ -351,21 +395,195 @@ impl PmRegistry {
     }
 }
 
-/// The workspace's dependency set as package ids — every PM's `list_deps`
-/// unioned. This is what `depends-on` predicates evaluate against
-/// ([`crate::predicate::PredicateContext`]). Failures are logged and yield an
-/// empty list so predicate evaluation degrades to "no deps" rather than
-/// aborting the caller.
-pub async fn workspace_dep_ids(
-    sym: &crate::config::Symposium,
-    deps: &Arc<WorkspaceDeps>,
-) -> Vec<PackageId> {
-    match sym.package_managers(deps).list_deps().await {
-        Ok(deps) => deps,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to list workspace dependencies");
-            Vec::new()
+/// The workspace: the project the package managers report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceInfo {
+    /// The project's root, where project configuration is installed.
+    pub root: PathBuf,
+    /// Local packages the package managers reported, those inside `root` only.
+    /// Each may define a workspace plugin.
+    pub members: Vec<PathBuf>,
+    /// Files whose change means the package managers' answers may have changed.
+    pub inputs: Vec<PathBuf>,
+}
+
+impl WorkspaceInfo {
+    /// Combine each package manager's [`ProjectInfo`]. `None` when none found a
+    /// project; an error when two found different roots, since picking one
+    /// would install where the other ecosystem's tools do not look.
+    fn combine(found: Vec<(String, ProjectInfo)>) -> Result<Option<Self>, String> {
+        let mut root: Option<(String, PathBuf)> = None;
+        let mut members = Vec::new();
+        let mut inputs = Vec::new();
+        for (pm, project) in found {
+            inputs.extend(project.inputs);
+            let Some(found_root) = project.root else {
+                continue;
+            };
+            match &root {
+                None => root = Some((pm, found_root)),
+                Some((first, existing)) if canonical(existing) != canonical(&found_root) => {
+                    return Err(format!(
+                        "package managers disagree about the workspace root: `{first}` finds {}, `{pm}` finds {}",
+                        existing.display(),
+                        found_root.display()
+                    ));
+                }
+                Some(_) => {}
+            }
+            members.extend(project.local_packages);
         }
+        let Some((_, root)) = root else {
+            return Ok(None);
+        };
+        let canonical_root = canonical(&root);
+        members.retain(|member| canonical(member).starts_with(&canonical_root));
+        Ok(Some(Self {
+            root,
+            members,
+            inputs,
+        }))
+    }
+}
+
+fn canonical(path: &std::path::Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// The per-invocation workspace context: the package managers, plus the two
+/// facts about the workspace that everything above `pm/` needs: where it is
+/// and what it depends on.
+///
+/// Both are the package managers' answers. Where the workspace is, is the
+/// project they find from the starting directory, since where a project is
+/// rooted is each ecosystem's own rule. Both are resolved on first use and
+/// cached for the handle's lifetime, so one invocation shares one PM set: with
+/// a PM in another process, building the set per call would spawn a process
+/// per call. So it is threaded as an [`Arc`](std::sync::Arc).
+pub struct Workspace {
+    /// Where the package managers start looking. `None` for a
+    /// workspace-independent operation.
+    start: Option<PathBuf>,
+    pms: PmRegistry,
+    dep_ids: tokio::sync::OnceCell<Vec<PackageId>>,
+    info: tokio::sync::OnceCell<Result<Option<WorkspaceInfo>, String>>,
+}
+
+impl Workspace {
+    pub fn new(start: Option<PathBuf>, pms: PmRegistry) -> Self {
+        Self {
+            start,
+            pms,
+            dep_ids: tokio::sync::OnceCell::new(),
+            info: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// A context over a pre-resolved cargo workspace, for tests: no
+    /// `cargo metadata`, no registries, exactly `crates` rooted at `root`.
+    #[cfg(test)]
+    pub(crate) fn fixture(
+        root: impl Into<PathBuf>,
+        crates: Vec<WorkspaceCrate>,
+    ) -> std::sync::Arc<Self> {
+        let root = root.into();
+        let deps = WorkspaceDeps::fixture(root.clone(), crates);
+        std::sync::Arc::new(Self::new(
+            Some(root),
+            PmRegistry::new(vec![PmInstance::new(
+                CARGO_PM,
+                false,
+                PluginKind::Package,
+                Box::new(CargoPm::new(deps)),
+            )]),
+        ))
+    }
+
+    /// The package managers active for this workspace.
+    pub fn pms(&self) -> &PmRegistry {
+        &self.pms
+    }
+
+    /// Where the package managers start looking, or `None` for a
+    /// workspace-independent operation.
+    pub fn start(&self) -> Option<&std::path::Path> {
+        self.start.as_deref()
+    }
+
+    async fn lookup(&self) -> &Result<Option<WorkspaceInfo>, String> {
+        self.info
+            .get_or_init(|| async {
+                if self.start.is_none() {
+                    return Ok(None);
+                }
+                // A package manager that fails is left out and the others
+                // decide, rather than failing the workspace: one broken PM must
+                // not stop syncing for every ecosystem. The design chapter on
+                // modules records the cost: the root it might have disagreed
+                // about.
+                let (found, failed) = self.pms.project_info().await;
+                match WorkspaceInfo::combine(found) {
+                    // With no project found, a failure is why: say so, rather
+                    // than that there is no project here.
+                    Ok(None) if !failed.is_empty() => Err(failed
+                        .iter()
+                        .map(|(name, e)| format!("`{name}` could not describe the project: {e}"))
+                        .collect::<Vec<_>>()
+                        .join("; ")),
+                    combined => combined,
+                }
+            })
+            .await
+    }
+
+    /// The workspace, or `None` when no package manager finds a project, or
+    /// when they disagree about where it is (logged).
+    pub async fn info(&self) -> Option<&WorkspaceInfo> {
+        match self.lookup().await {
+            Ok(info) => info.as_ref(),
+            Err(e) => {
+                tracing::warn!(error = %e, "no workspace");
+                None
+            }
+        }
+    }
+
+    /// The workspace, or an error saying why there is none.
+    pub async fn require_info(&self) -> Result<&WorkspaceInfo> {
+        match self.lookup().await {
+            Ok(Some(info)) => Ok(info),
+            Ok(None) => {
+                anyhow::bail!("not in a workspace: no package manager found a project here")
+            }
+            Err(e) => anyhow::bail!("{e}"),
+        }
+    }
+
+    /// The workspace root, or `None` outside a workspace.
+    pub async fn root(&self) -> Option<&std::path::Path> {
+        self.info().await.map(|info| info.root.as_path())
+    }
+
+    /// Use `info` and `dep_ids` instead of asking the package managers: what
+    /// they reported at a sync whose inputs have not changed since. Both, so
+    /// that an event with nothing changed asks no package manager either
+    /// question.
+    pub fn reuse(&self, info: WorkspaceInfo, dep_ids: Vec<PackageId>) {
+        let _ = self.info.set(Ok(Some(info)));
+        let _ = self.dep_ids.set(dep_ids);
+    }
+
+    /// The instances an operation has failed on so far.
+    pub fn failed(&self) -> Vec<String> {
+        self.pms.failed()
+    }
+
+    /// The workspace's dependency set as package ids: every PM's `list_deps`
+    /// unioned. This is what `depends-on` predicates evaluate against
+    /// ([`crate::predicate::PredicateContext`]). A PM that fails contributes
+    /// nothing ([`PmRegistry::list_deps`]).
+    pub async fn dep_ids(&self) -> &[PackageId] {
+        self.dep_ids.get_or_init(|| self.pms.list_deps()).await
     }
 }
 
@@ -387,36 +605,193 @@ mod tests {
         fn name(&self) -> &str {
             "stub"
         }
-        fn canonical_name(&self, name: &str) -> String {
-            name.to_string()
-        }
-        async fn active_plugins(&self, _deps: &[PackageId]) -> Vec<UnvalidatedPlugin> {
+        async fn active_plugins(&self, _deps: &[PackageId]) -> Result<PluginListing> {
             let manifest = symposium_sdk::manifest::RawPluginManifest::parse(
                 "name = \"broken\"\n[[skills]]\n",
             )
             .unwrap();
-            vec![UnvalidatedPlugin::new(
+            Ok(PluginListing::complete(vec![UnvalidatedPlugin::new(
                 PackageId::any_version("stub", "broken"),
                 PathBuf::from("/nonexistent/broken"),
                 manifest,
-            )]
+            )]))
         }
         async fn load_plugin(
             &self,
             _id: &PackageId,
             _update: UpdateLevel,
-        ) -> Vec<UnvalidatedPlugin> {
-            Vec::new()
+        ) -> Result<Vec<UnvalidatedPlugin>> {
+            Ok(Vec::new())
+        }
+    }
+
+    /// A PM that answers every `load_plugin` with a plugin under `answers_as`,
+    /// and lists one dependency under it too.
+    struct EchoPm {
+        name: &'static str,
+        answers_as: &'static str,
+        root: &'static str,
+    }
+
+    #[async_trait::async_trait]
+    impl PackageManager for EchoPm {
+        fn name(&self) -> &str {
+            self.name
+        }
+        async fn load_plugin(
+            &self,
+            id: &PackageId,
+            _update: UpdateLevel,
+        ) -> Result<Vec<UnvalidatedPlugin>> {
+            Ok(vec![UnvalidatedPlugin::new(
+                PackageId::any_version(self.answers_as, &id.name),
+                PathBuf::from(self.root),
+                symposium_sdk::manifest::RawPluginManifest::parse("").unwrap(),
+            )])
         }
         async fn list_deps(&self) -> Result<Vec<PackageId>> {
-            Ok(Vec::new())
+            Ok(vec![PackageId::any_version(self.answers_as, "dep")])
         }
-        async fn search(&self, _query: &str) -> Result<Vec<PluginInfo>> {
-            Ok(Vec::new())
+    }
+
+    /// A PM that reports a fixed project, and fails to load any plugin.
+    struct ProjectPm {
+        name: &'static str,
+        project: ProjectInfo,
+    }
+
+    #[async_trait::async_trait]
+    impl PackageManager for ProjectPm {
+        fn name(&self) -> &str {
+            self.name
         }
-        async fn fetch(&self, id: &PackageId, _update: UpdateLevel) -> Result<FetchedPackage> {
-            anyhow::bail!("cannot fetch {id}")
+        async fn load_plugin(
+            &self,
+            id: &PackageId,
+            _update: UpdateLevel,
+        ) -> Result<Vec<UnvalidatedPlugin>> {
+            anyhow::bail!("cannot load {id}")
         }
+        async fn project_info(&self) -> Result<ProjectInfo> {
+            Ok(self.project.clone())
+        }
+    }
+
+    fn package_manager(name: &'static str, pm: impl PackageManager + 'static) -> PmInstance {
+        PmInstance::new(name, false, PluginKind::Package, Box::new(pm))
+    }
+
+    fn workspace_of(start: &std::path::Path, pms: Vec<(&'static str, ProjectInfo)>) -> Workspace {
+        Workspace::new(
+            Some(start.to_path_buf()),
+            PmRegistry::new(
+                pms.into_iter()
+                    .map(|(name, project)| package_manager(name, ProjectPm { name, project }))
+                    .collect(),
+            ),
+        )
+    }
+
+    /// The workspace is the project its package managers report, which may be
+    /// rooted above the starting directory. A PM that finds no project
+    /// there leaves the root to the others; a local package outside the root
+    /// is dropped, since its plugin would be trusted.
+    #[tokio::test]
+    async fn the_workspace_is_the_project_the_package_managers_report() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("repo");
+        let member = root.join("crates/app");
+        let outside = tmp.path().join("elsewhere");
+        std::fs::create_dir_all(&member).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let ws = workspace_of(
+            &member,
+            vec![
+                ("npm", ProjectInfo::default()),
+                (
+                    "cargo",
+                    ProjectInfo {
+                        root: Some(root.clone()),
+                        local_packages: vec![member.clone(), outside],
+                        inputs: vec![root.join("Cargo.lock")],
+                    },
+                ),
+            ],
+        );
+        let info = ws.require_info().await.unwrap();
+        assert_eq!(info.root, root);
+        assert_eq!(info.members, vec![member]);
+        assert_eq!(info.inputs, vec![root.join("Cargo.lock")]);
+    }
+
+    /// Two package managers rooting the project in different places is an
+    /// error naming both, not a choice between them.
+    #[tokio::test]
+    async fn package_managers_that_disagree_about_the_root_are_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let web = tmp.path().join("web");
+        std::fs::create_dir_all(&web).unwrap();
+        let rooted_at = |dir: &std::path::Path| ProjectInfo {
+            root: Some(dir.to_path_buf()),
+            ..Default::default()
+        };
+
+        let ws = workspace_of(
+            &web,
+            vec![("cargo", rooted_at(tmp.path())), ("npm", rooted_at(&web))],
+        );
+        assert!(ws.info().await.is_none());
+        let err = format!("{:#}", ws.require_info().await.unwrap_err());
+        assert!(err.contains("`cargo`") && err.contains("`npm`"), "{err}");
+    }
+
+    /// Outside any project there is no workspace, and saying so is not an
+    /// error from any package manager.
+    #[tokio::test]
+    async fn no_project_means_no_workspace() {
+        let tmp = tempfile::tempdir().unwrap();
+        let ws = workspace_of(tmp.path(), vec![("cargo", ProjectInfo::default())]);
+        assert!(ws.info().await.is_none());
+        assert!(ws.failed().is_empty());
+    }
+
+    /// One package failing to load says nothing about the rest of its
+    /// ecosystem, so it is not recorded against the package manager.
+    #[tokio::test]
+    async fn a_failed_load_is_not_a_failed_package_manager() {
+        let ws = workspace_of(
+            std::path::Path::new("/"),
+            vec![("npm", ProjectInfo::default())],
+        );
+        assert!(
+            ws.pms()
+                .load_plugin(&PackageId::any_version("npm", "widget"), UpdateLevel::None)
+                .await
+                .is_empty()
+        );
+        assert!(ws.failed().is_empty());
+    }
+
+    fn echo(name: &'static str, answers_as: &'static str) -> PmInstance {
+        package_manager(
+            name,
+            EchoPm {
+                name,
+                answers_as,
+                root: "/nonexistent",
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn load_plugin_asks_only_the_pm_its_id_names() {
+        let pms = PmRegistry::new(vec![echo("cargo", "cargo"), echo("npm", "npm")]);
+        let loaded = pms
+            .load_plugin(&PackageId::any_version("cargo", "foo"), UpdateLevel::None)
+            .await;
+        let ids: Vec<_> = loaded.iter().map(|p| p.canonical.to_string()).collect();
+        assert_eq!(ids, vec!["cargo:foo:*"]);
     }
 
     /// The report events emitted while validating the stub's plugin under `kind`.
@@ -425,12 +800,7 @@ mod tests {
         let (layer, handle) =
             crate::report::ReportLayer::new(crate::report::ReportMode::Json, tracing::Level::DEBUG);
         let _guard = tracing::subscriber::set_default(tracing_subscriber::registry().with(layer));
-        let instance = PmInstance {
-            name: "stub".into(),
-            trusted: false,
-            kind,
-            pm: Box::new(InvalidPluginPm),
-        };
+        let instance = PmInstance::new("stub", false, kind, Box::new(InvalidPluginPm));
         assert!(instance.active_plugins(&[]).await.is_empty());
         handle.drain()
     }
@@ -456,7 +826,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let ctx = symposium_install::InstallContext::new(tmp.path().to_path_buf());
         let pm = GitPm::new("reg", "https://github.com/example/reg", false, ctx).unwrap();
-        let err = pm.registry_plugins().await.unwrap_err();
+        let err = pm.active_plugins(&[]).await.unwrap_err();
         assert!(
             err.to_string().contains("cargo agents plugin sync reg"),
             "{err}"
@@ -467,18 +837,18 @@ mod tests {
     fn each_package_manager_decides_which_names_match() {
         let tmp = tempfile::tempdir().unwrap();
         let pms = PmRegistry::new(vec![
-            PmInstance {
-                name: CARGO_PM.into(),
-                trusted: false,
-                kind: PluginKind::Package,
-                pm: Box::new(CargoPm::new(Arc::new(WorkspaceDeps::detached()))),
-            },
-            PmInstance {
-                name: "reg".into(),
-                trusted: true,
-                kind: PluginKind::Registry,
-                pm: Box::new(PathPm::new("reg", tmp.path())),
-            },
+            PmInstance::new(
+                CARGO_PM,
+                false,
+                PluginKind::Package,
+                Box::new(CargoPm::new(std::sync::Arc::new(WorkspaceDeps::detached()))),
+            ),
+            PmInstance::new(
+                "reg",
+                true,
+                PluginKind::Registry,
+                Box::new(PathPm::new("reg", tmp.path())),
+            ),
         ]);
         assert_eq!(
             pms.identity(&PackageId::new(CARGO_PM, "widget_lib", "1.0.0")),
@@ -504,12 +874,12 @@ mod tests {
             )
             .unwrap();
         }
-        let registry = PmInstance {
-            name: "reg".into(),
-            trusted: true,
-            kind: PluginKind::Registry,
-            pm: Box::new(PathPm::new("reg", reg)),
-        };
+        let registry = PmInstance::new(
+            "reg",
+            true,
+            PluginKind::Registry,
+            Box::new(PathPm::new("reg", reg)),
+        );
         let plugins = registry.active_plugins(&[]).await;
         assert_eq!(plugins.len(), 2);
         (PmRegistry::new(vec![cargo, registry]), plugins)
@@ -525,12 +895,12 @@ mod tests {
                 WorkspaceCrate::new("serde".into(), semver::Version::new(1, 0, 0), None),
             ],
         );
-        let cargo = PmInstance {
-            name: CARGO_PM.into(),
-            trusted: false,
-            kind: PluginKind::Package,
-            pm: Box::new(CargoPm::new(deps)),
-        };
+        let cargo = PmInstance::new(
+            CARGO_PM,
+            false,
+            PluginKind::Package,
+            Box::new(CargoPm::new(deps)),
+        );
         let (pms, plugins) = registry_beside(cargo, &tmp.path().join("reg")).await;
         let registry_id = |name: &str| {
             let plugin = plugins.iter().find(|p| p.manifest.name == name).unwrap();

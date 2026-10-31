@@ -12,11 +12,11 @@ With the global `-v` flag, sync additionally shows each plugin, skill group, and
 
 ## Behavior
 
-Must be run from within a Rust workspace. While the [configuration file](./configuration.md) cannot be read, sync stops with an error and changes nothing. Performs the following steps:
+Must be run from within a workspace: a project some package manager finds from the current directory, such as a Cargo workspace. While the [configuration file](./configuration.md) cannot be read, sync stops with an error and changes nothing. Performs the following steps:
 
-1. **Find workspace root**: runs `cargo metadata` to locate the workspace. If `cargo metadata` fails, sync stops and shows cargo's error.
+1. **Find the workspace**: asks each package manager for the project it finds: its root, its members, and the files whose change means a re-sync. For cargo, that is the Cargo workspace (via `cargo metadata`), its members, and `Cargo.lock`. If a package manager cannot describe the project and no other finds one, sync stops and shows its error (for cargo, cargo's own).
 
-2. **Scan dependencies**: reads the full dependency graph from the workspace.
+2. **Scan dependencies**: asks each package manager for the workspace's dependencies.
 
 3. **Discover applicable skills**: loads plugin sources (from user config) and matches skill predicates against workspace dependencies. A `SKILL.md` that fails to load, such as one whose frontmatter is invalid or whose `name` is not a plain directory name, is skipped with a warning naming the file.
 

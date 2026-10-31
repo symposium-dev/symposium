@@ -1502,12 +1502,12 @@ async fn sync_reports_why_the_workspace_could_not_be_loaded() {
             for command in ["sync", "status"] {
                 let err = format!("{:#}", ctx.symposium(&[command]).await.unwrap_err());
                 assert!(err.contains("Cargo.toml"), "{command}: {err}");
-                assert!(!err.contains("not in a Rust workspace"), "{command}: {err}");
+                assert!(!err.contains("found a project here"), "{command}: {err}");
             }
 
             std::fs::remove_file(&manifest)?;
             let err = format!("{:#}", ctx.symposium(&["sync"]).await.unwrap_err());
-            assert!(err.contains("not in a Rust workspace"), "{err}");
+            assert!(err.contains("not in a workspace"), "{err}");
             Ok(())
         },
     )
@@ -2892,12 +2892,20 @@ async fn auto_sync_skips_when_cargo_lock_unchanged() {
             ctx.prompt_or_hook("test", &steps, symposium::hook_schema::HookAgent::Claude)
                 .await?;
 
-            // Verify workspace state was recorded (Cargo.lock should exist
-            // after cargo metadata runs during sync).
+            // The cargo PM named `Cargo.lock` as an input, and the sync recorded
+            // its mtime (it exists once `cargo metadata` has run).
             let state = symposium::workspace_state::WorkspaceState::load(&ctx.sym, &workspace_root);
+            let last = state
+                .last_sync
+                .as_ref()
+                .expect("the first sync is recorded");
+            // The root as cargo spells it, which need not be the fixture's
+            // path (macOS resolves `/var` to `/private/var`, Windows keeps
+            // short names).
+            let lock = last.root.join("Cargo.lock");
             assert!(
-                state.last_sync_lock_mtime.is_some(),
-                "workspace state should have recorded lock mtime after first sync"
+                last.inputs.get(&lock).is_some_and(Option::is_some),
+                "workspace state should have recorded the lock's mtime after first sync: {state:?}"
             );
 
             // Record the skill directory's mtime to detect if sync runs again.
@@ -2948,12 +2956,23 @@ async fn auto_sync_reruns_when_cargo_lock_changes() {
                 .await?;
 
             let state = symposium::workspace_state::WorkspaceState::load(&ctx.sym, &workspace_root);
-            assert!(state.last_sync_lock_mtime.is_some());
+            let last = state
+                .last_sync
+                .as_ref()
+                .expect("the first sync is recorded");
+            // The root as cargo spells it (see above).
+            let lock = last.root.join("Cargo.lock");
+            assert!(last.inputs.contains_key(&lock));
 
             // Simulate a dependency change by faking a stale mtime in the
             // workspace state (avoids needing filesystem mtime granularity).
             let mut stale_state = state.clone();
-            stale_state.last_sync_lock_mtime = Some(0);
+            stale_state
+                .last_sync
+                .as_mut()
+                .unwrap()
+                .inputs
+                .insert(lock.clone(), Some(0));
             stale_state.save(&ctx.sym, &workspace_root);
 
             // Second hook call: should re-sync because Cargo.lock changed.
@@ -2964,7 +2983,7 @@ async fn auto_sync_reruns_when_cargo_lock_changes() {
             let state2 =
                 symposium::workspace_state::WorkspaceState::load(&ctx.sym, &workspace_root);
             assert_ne!(
-                state2.last_sync_lock_mtime,
+                state2.last_sync.as_ref().unwrap().inputs[&lock],
                 Some(0),
                 "workspace state mtime should be refreshed after stale cache triggers re-sync"
             );

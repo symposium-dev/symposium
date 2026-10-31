@@ -266,10 +266,13 @@ fn project_path(
     let relative = match source.canonicalize() {
         Ok(resolved) => resolved.strip_prefix(canonical_project).map(Path::to_owned),
         // A target the manifest declares before its file exists is still reported, at the
-        // path Cargo joined onto the project.
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {
-            source.strip_prefix(project).map(Path::to_owned)
-        }
+        // path Cargo joined onto the project. Nothing resolves that path, so it is matched
+        // against the project both as the caller holds it and as Cargo reports it: the two
+        // differ wherever the project is reached through a symlink.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => source
+            .strip_prefix(project)
+            .or_else(|_| source.strip_prefix(canonical_project))
+            .map(Path::to_owned),
         Err(error) => {
             return Err(GradeError::Read {
                 path: source.to_owned(),
@@ -388,6 +391,40 @@ mod tests {
             targets.build_scripts,
             BTreeSet::from(["tools/generate.rs".to_owned()])
         );
+        assert_eq!(
+            targets.tests,
+            BTreeMap::from([("works".to_owned(), vec!["tests/works.rs".to_owned()])])
+        );
+    }
+
+    /// Cargo reports `src_path` resolved, so a project reached through a symlink
+    /// is named by its canonical path. A target whose file is not there yet
+    /// cannot be resolved to compare against it, which is how a declared hidden
+    /// check used to go unseen wherever the temporary directory is a link
+    /// (macOS puts `/var` behind `/private/var`).
+    #[cfg(unix)]
+    #[test]
+    fn a_declared_target_is_found_through_a_symlinked_project() {
+        let dir = TempDir::new().unwrap();
+        let real = dir.path().join("real");
+        fs::create_dir_all(real.join("project/tests")).unwrap();
+        std::os::unix::fs::symlink(&real, dir.path().join("link")).unwrap();
+        // The project as the caller holds it, and as Cargo reports it.
+        let project = dir.path().join("link/project");
+        let canonical = real.canonicalize().unwrap().join("project");
+        let metadata = serde_json::json!({
+            "packages": [
+                { "targets": [
+                    // Declared with `path`, but grading has not placed the file.
+                    { "name": "works", "kind": ["test"], "src_path": canonical.join("tests/works.rs") },
+                ] },
+            ],
+        });
+        let log = dir.path().join("metadata.stdout.log");
+        fs::write(&log, metadata.to_string()).unwrap();
+
+        let targets = starter_targets(&log, &project).unwrap();
+
         assert_eq!(
             targets.tests,
             BTreeMap::from([("works".to_owned(), vec!["tests/works.rs".to_owned()])])

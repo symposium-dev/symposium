@@ -1,14 +1,22 @@
-//! Package-manager identity types.
+//! Package managers: the identity types and the operation set.
 //!
-//! A [`PackageId`] names a package as a `(pm, name, version)` tuple — the
-//! canonical identity from the [registry-centric plugin distribution
+//! A [`PackageId`] names a package as a `(pm, name, version)` tuple and a
+//! [`UnvalidatedPlugin`] is what a PM answers with: the canonical shapes from the
+//! [registry-centric plugin distribution
 //! RFD](https://github.com/symposium-dev/symposium/blob/main/md/rfds/registry-centric-plugins/README.md).
-//! These live in the SDK because they cross the PM boundary: both Symposium
-//! and a package-manager binary speak in them.
+//! They live in the SDK because they cross the PM boundary: both Symposium and
+//! a package-manager binary speak in them.
+//!
+//! [`PackageManager`] is the operation set every package manager implements.
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+use anyhow::Result;
+/// How aggressively a cached package is refreshed: part of [`PackageManager::fetch`],
+/// so re-exported for a PM author.
+pub use symposium_install::UpdateLevel;
 
 use crate::manifest::RawPluginManifest;
 
@@ -123,6 +131,133 @@ impl UnvalidatedPlugin {
     /// The directory paths are displayed relative to.
     pub fn label_root(&self) -> &std::path::Path {
         self.label_root.as_deref().unwrap_or(&self.root)
+    }
+}
+
+/// What a package manager offers: its plugins, and whether that is all of
+/// them. A listing that is not complete left out an entry it could not read,
+/// so sync keeps what that entry installed rather than reading its absence as
+/// its removal.
+#[derive(Debug)]
+pub struct PluginListing<P = UnvalidatedPlugin> {
+    pub plugins: Vec<P>,
+    pub complete: bool,
+}
+
+impl<P> PluginListing<P> {
+    /// Every plugin there is.
+    pub fn complete(plugins: Vec<P>) -> Self {
+        Self {
+            plugins,
+            complete: true,
+        }
+    }
+}
+
+/// The project a package manager finds from the directory it was given at
+/// `initialize`: where its ecosystem says the project is rooted, and what it
+/// holds.
+///
+/// Symposium's workspace is the project its package managers report. Where a
+/// project is rooted is each ecosystem's own rule (cargo's is the workspace
+/// root above any member), so only a package manager can say.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectInfo {
+    /// The project's root directory, or `None` when this PM finds no project
+    /// there. Every package manager that finds one must agree on it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<PathBuf>,
+    /// Directories of the packages that are part of the project rather than
+    /// dependencies of it: cargo workspace members, npm workspace packages.
+    /// Each may define a workspace plugin. Symposium uses only the ones inside
+    /// the root.
+    #[serde(default)]
+    pub local_packages: Vec<PathBuf>,
+    /// Files whose change means this PM's answers may have changed: a
+    /// lockfile, say. Symposium records their modification times when it
+    /// syncs, and syncs again once one changes, appears, or disappears, so
+    /// deciding whether to sync never needs the PM itself.
+    #[serde(default)]
+    pub inputs: Vec<PathBuf>,
+}
+
+/// A fetched package: the exact id it resolved to, and the directory holding
+/// its content. The PM owns that directory and keeps it valid for as long as
+/// the PM runs.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FetchedPackage {
+    /// The exact resolved id: never a requirement.
+    pub id: PackageId,
+    pub root: PathBuf,
+}
+
+/// The operations every package manager implements: a registry Symposium
+/// reads, the cargo PM, and any other ecosystem's.
+///
+/// A PM is self-contained: it holds whatever it needs to resolve its own
+/// ecosystem, so operations take no ambient context. A PM for a workspace is
+/// built for that workspace.
+///
+/// Every operation can fail, and a failure is not an empty answer: a PM that
+/// could not say what it offers must not be read as offering nothing, since
+/// sync removes what stops being offered.
+#[async_trait::async_trait]
+pub trait PackageManager: Send + Sync {
+    /// The name this PM owns: the `pm` component of every id it mints. For an
+    /// ecosystem this is the ecosystem (`cargo`); for a registry, the
+    /// configured registry's name.
+    fn name(&self) -> &str;
+
+    /// `name` in the form in which two of this PM's names for the same package
+    /// compare equal. Exact unless the ecosystem says otherwise: cargo treats
+    /// `widget-lib` and `widget_lib` as one crate.
+    fn canonical_name(&self, name: &str) -> String {
+        name.to_string()
+    }
+
+    /// The plugins this PM activates for the workspace's dependency set. A
+    /// registry lists its own entries and ignores `deps`; an ecosystem
+    /// surfaces the plugins its dependencies embed. Whether any of them may
+    /// run is the caller's decision.
+    async fn active_plugins(&self, _deps: &[PackageId]) -> Result<PluginListing> {
+        Ok(PluginListing::complete(Vec::new()))
+    }
+
+    /// The plugin(s) a specific id maps to: zero, one, or many. Under
+    /// [`UpdateLevel::None`] only what is already on disk is served.
+    async fn load_plugin(
+        &self,
+        id: &PackageId,
+        update: UpdateLevel,
+    ) -> Result<Vec<UnvalidatedPlugin>>;
+
+    /// The workspace's dependencies in this PM's ecosystem.
+    async fn list_deps(&self) -> Result<Vec<PackageId>> {
+        Ok(Vec::new())
+    }
+
+    /// The project this PM finds from the directory it was built for.
+    async fn project_info(&self) -> Result<ProjectInfo> {
+        Ok(ProjectInfo::default())
+    }
+
+    /// Packages matching a partial query.
+    async fn search(&self, _query: &str) -> Result<Vec<PluginInfo>> {
+        Ok(Vec::new())
+    }
+
+    /// Acquire a package's content, canonicalizing the id's version. `update`
+    /// controls how aggressively an already-cached package is refreshed.
+    async fn fetch(&self, id: &PackageId, _update: UpdateLevel) -> Result<FetchedPackage> {
+        anyhow::bail!("{} cannot fetch `{id}`", self.name())
+    }
+
+    /// Pull this PM's backing source onto disk: for a git registry, the
+    /// repository. `force` ignores the source's auto-update opt-out (an
+    /// explicit `plugin sync <name>`). Returns whether a remote source was
+    /// refreshed.
+    async fn refresh(&self, _update: UpdateLevel, _force: bool) -> Result<bool> {
+        Ok(false)
     }
 }
 

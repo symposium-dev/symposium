@@ -88,11 +88,11 @@ If no plugin matches the typed name, dispatch fails with a clear error pointing 
 
 Plugin filtering is workspace-aware in two places: help rendering and dispatch.
 
-**Inside a Cargo workspace.** Symposium reads the workspace's resolved dependencies. A subcommand appears in `cargo agents --help` and is dispatchable only if both the plugin-level and subcommand-level `depends-on` predicates match. Built-in subcommands always appear.
+**With dependencies.** Symposium reads the dependencies every package manager reports for the workspace. A subcommand appears in `cargo agents --help` and is dispatchable only if both the plugin-level and subcommand-level `depends-on` predicates match. Built-in subcommands always appear.
 
-**Outside a Cargo workspace** (no discoverable `Cargo.toml` upward). Only built-ins and plugins with `depends-on = ["*"]` appear. Invoking a crate-specific subcommand from outside a workspace produces an error explaining which crate it needs.
+**Without dependencies** (no package manager finds a project there). Only built-ins and plugins with `depends-on = ["*"]` appear. Invoking a crate-specific subcommand there produces an error explaining which crate it needs.
 
-This rule keeps `cargo agents --help` outside a workspace limited to globally-applicable commands, rather than listing every installed plugin.
+This rule keeps `cargo agents --help` outside any project limited to globally-applicable commands, rather than listing every installed plugin.
 
 ## Help text grouping
 

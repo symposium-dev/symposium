@@ -92,9 +92,13 @@ Reads the workspace to report direct Rust dependencies.
 
 ### Workspace information
 
-Symposium itself needs the workspace root and the member directories: for workspace-local plugins, for scoping `use` entries, and for locating agent skill directories. It reads them off the cargo resolver today.
+Symposium itself needs the workspace root and the member directories: for workspace-local plugins, for scoping `use` entries, and for locating agent skill directories. The cargo PM resolves its cargo workspace from the directory given at `initialize`, as cargo does, and answers `project_info` with:
 
-Moving the cargo PM out of process means these cross the boundary, either as an extra method or as part of the `initialize` response. Loading plugins *from* those directories should stay in Symposium: they are local directory reads, and the workspace is a trust root whose policy core owns. The cargo PM's job is to report where the workspace is, not what it contains.
+- `root`: the cargo workspace root, even when started from a member.
+- `local_packages`: the workspace members' manifest directories.
+- `inputs`: `Cargo.lock` and `battery-pack.toml` at the workspace root, the files whose change means the dependency set may have changed.
+
+Outside a cargo workspace it reports no root. Loading plugins *from* those directories stays in Symposium: they are local directory reads, and the workspace is a trust root whose policy core owns.
 
 ### Chained plugins for independent release
 
@@ -140,11 +144,11 @@ Separate workspace resolution, crate fetching, and crate-manifest merging from S
 
 - [ ] PR: cargo PM library split
 
-### Step 2: Carry workspace information over the protocol
+### Step 2: Describe the workspace over the protocol
 
-Add the workspace root, member directories, and crate list to the protocol, and move Symposium's readers onto it.
+Answer `project_info` with the root, the members and the lockfile, so Symposium reads nothing of the cargo workspace itself.
 
-- [ ] PR: workspace info over the wire
+- [x] PR: `project_info`
 
 ### Step 3: `symposium-pm-cargo` binary
 

@@ -17,7 +17,7 @@ use crate::config::Symposium;
 use crate::dir_walk::{self, EntryKind};
 use crate::output::{Output, display_path};
 use crate::plugins;
-use crate::pm::WorkspaceDeps;
+use crate::pm::Workspace;
 use crate::skills;
 use std::sync::Arc;
 
@@ -362,7 +362,7 @@ async fn resolve_custom_predicate_entries(
 
 /// Run the full sync: discover applicable skills, install into agent dirs,
 /// clean up stale installations.
-pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLevel) -> Result<()> {
+pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> Result<()> {
     if let Some(error) = sym.config_error() {
         anyhow::bail!(
             "not syncing: {} could not be read; fix or remove it, then run the command again\n{error}",
@@ -370,10 +370,9 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
         );
     }
     let out = &Output::quiet();
-    let loaded = deps.require()?;
+    let loaded = ws.require_info().await?.clone();
     let project_root = loaded.root.clone();
-    let workspace: Vec<_> = loaded.crates.clone();
-    let loaded = loaded.clone();
+    let dep_ids = ws.dep_ids().await.to_vec();
     let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
 
@@ -390,7 +389,7 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
 
     tracing::info!(
         report = %crate::report::ReportEvent::Info {
-            message: format!("scanning {} workspace dependencies", workspace.len()),
+            message: format!("scanning {} workspace dependencies", dep_ids.len()),
         },
     );
 
@@ -401,9 +400,8 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     // skill resolution and MCP-server filtering. Attach the on-disk cache so
     // custom predicate results survive across sync runs; results are persisted
     // at the end of this evaluation pass.
-    let dep_ids = crate::pm::workspace_dep_ids(sym, deps).await;
-    let pms = sym.package_managers(deps);
-    let used = crate::discovery::used_plugins(sym, &pms, &registry.plugins, &project_root);
+    let pms = ws.pms();
+    let used = crate::discovery::used_plugins(sym, pms, &registry.plugins, &project_root);
     let predicate_cache_path =
         crate::predicate_cache::PredicateCache::path_for_workspace(sym.cache_dir(), &project_root);
     let mut ctx =
@@ -418,7 +416,7 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     let active = plugins::active_plugins(
         sym,
         &registry,
-        &pms,
+        pms,
         Some(&project_root),
         &mut ctx,
         UpdateLevel::Check,
@@ -467,7 +465,7 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     let agent_names: Vec<String> = sym.config.agents.iter().map(|a| a.name.clone()).collect();
 
     tracing::info!(
-        workspace_deps = workspace.len(),
+        workspace_deps = dep_ids.len(),
         agents = agent_names.len(),
         skills = to_install.len(),
         "sync started"
@@ -487,7 +485,11 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
     // failed. Anything we find later that has the marker file but isn't in
     // this set is stale.
     let mut installed_dirs: BTreeSet<PathBuf> = BTreeSet::new();
-    let skip_cleanup = !registry.unreadable_registries.is_empty();
+    // A package manager that failed answered nothing, not nothing-is-offered,
+    // so its silence must not retire what it installed before: neither a skill
+    // nor an MCP entry. Both cleanups read this one decision.
+    let failed_pms = ws.failed();
+    let skip_cleanup = !registry.unreadable_registries.is_empty() || !failed_pms.is_empty();
 
     for agent_name in &agent_names {
         let Ok(agent) = Agent::from_config_name(agent_name) else {
@@ -693,6 +695,15 @@ pub async fn sync(sym: &Symposium, deps: &Arc<WorkspaceDeps>, update: UpdateLeve
             report = %crate::report::ReportEvent::Warning {
                 message: format!(
                     "registry `{name}` could not be fully read; skipped cleanup of installed skills"
+                ),
+            },
+        );
+    }
+    for name in &failed_pms {
+        tracing::info!(
+            report = %crate::report::ReportEvent::Warning {
+                message: format!(
+                    "package manager `{name}` failed; skipped cleanup of installed skills"
                 ),
             },
         );
