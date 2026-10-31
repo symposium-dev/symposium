@@ -3,7 +3,7 @@
 ## TL;DR
 
 - The `cargo` PM bridges crates.io (and alternative Rust registries) to Symposium's plugin system.
-- It is a separate binary (`symposium-pm-cargo`) communicating with Symposium via JSON-RPC over stdio.
+- It is its own crate, run in Symposium's process by default, and as the `symposium-pm-cargo` binary speaking JSON-RPC over stdio when configured to.
 - `load_plugin` takes a crate name and version requirement in cargo's format.
 - `fetch` leverages the existing cargo toolchain to obtain crate sources.
 - `list_deps` reports direct workspace dependencies.
@@ -142,7 +142,7 @@ Steps here follow the [PM interface plan](../pm-interface/README.md#implementati
 
 Separate workspace resolution, crate fetching, and crate-manifest merging from Symposium's core, so the binary is a thin wrapper. Keeping it a library is also what lets unit tests keep driving it in-process.
 
-- [ ] PR: cargo PM library split
+- [x] PR: cargo PM library split
 
 ### Step 2: Describe the workspace over the protocol
 
@@ -154,10 +154,10 @@ Answer `project_info` with the root, the members and the lockfile, so Symposium 
 
 Wrap the library in the SDK's server harness. Forward the cargo binary override so the test harness's fake cargo still applies.
 
-- [ ] PR: cargo PM binary
+- [x] PR: cargo PM binary
 
-### Step 4: Switch Symposium to the subprocess
+### Step 4: Run in-process by default
 
-Replace the in-process instance with the spawned one. Measure the hook path before and after; confirm `Cargo.lock`-unchanged still means no resolution.
+Call the library in Symposium's own process, through the same `PackageManager` trait the binary serves, so the default cargo PM is the same implementation as the binary without a spawn on the hook path. A `[[package-manager]]` entry named `cargo` replaces it with the binary.
 
-- [ ] PR: cargo PM cutover + benchmark
+- [x] PR: in-process adapter, binary by configuration

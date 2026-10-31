@@ -814,12 +814,14 @@ enum ManifestOrigin<'a> {
 /// Only refreshes registries with `auto-update = true` (unless `update` is
 /// `Fetch`). Path-based registries are skipped (no fetching needed).
 pub async fn ensure_registries(sym: &Symposium, update: UpdateLevel) {
-    // `Fetch` forces even auto-update-disabled registries; otherwise each
-    // registry's `refresh` honors its own auto-update flag (and a path registry
-    // is a no-op).
+    // `Fetch` forces even auto-update-disabled registries. A path registry's
+    // `refresh` is a no-op.
     let force = matches!(update, UpdateLevel::Fetch);
     for inst in sym.registry_instances() {
-        if let Err(e) = inst.pm.refresh(update, force).await {
+        if !force && !inst.auto_update {
+            continue;
+        }
+        if let Err(e) = inst.pm.refresh(update).await {
             tracing::warn!(registry = %inst.name, error = %e, "failed to refresh registry");
         }
     }
@@ -842,7 +844,10 @@ pub async fn sync_registries(sym: &Symposium, provider: Option<&str>) -> Result<
             Some(_) => continue,
             None => false,
         };
-        match inst.pm.refresh(UpdateLevel::Fetch, force).await {
+        if !force && !inst.auto_update {
+            continue;
+        }
+        match inst.pm.refresh(UpdateLevel::Fetch).await {
             Ok(true) => {
                 tracing::info!(registry = %inst.name, "synced");
                 synced.push(inst.name.clone());
@@ -1101,7 +1106,7 @@ async fn load_registry_impl(
     for inst in pms.instances().filter(|i| i.trusted) {
         match inst.registry_plugins().await {
             Some(read) => {
-                if !read.complete {
+                if !read.is_complete() {
                     unreadable_registries.push(inst.name.clone());
                 }
                 plugins.extend(read.plugins);
@@ -1549,62 +1554,6 @@ fn load_plugin_as(
     })
 }
 
-fn raw_crate_manifest(content: &str) -> Result<RawPluginManifest> {
-    Ok(toml::from_str(content)?)
-}
-
-/// Merge a crate's two manifest sources into one, for the cargo PM to offer.
-///
-/// A crate can describe its plugin two ways, and this combines them (later
-/// layers win / append):
-/// 1. `[package.metadata.symposium]` from `Cargo.toml` (`metadata`);
-/// 2. a `Symposium.toml` file at the crate root (`file`).
-///
-/// Both use the same schema as any plugin manifest. Each is parsed
-/// independently and **leniently**: a malformed layer is logged and dropped so
-/// the crate still resolves through the remaining layers. A crate with neither
-/// yields an empty manifest, which validation still turns into a plugin
-/// carrying the default `skills/` group, so any fetchable crate is offerable.
-///
-/// The default group itself is appended by [`validate_manifest`] under
-/// [`ManifestOrigin::Crate`], not here: defaults are policy, and policy is
-/// Symposium's.
-pub(crate) fn merge_crate_manifest(
-    metadata: Option<toml::Table>,
-    file: Option<&str>,
-    crate_name: &str,
-) -> RawPluginManifest {
-    let meta = metadata.and_then(
-        |t| match toml::Value::Table(t).try_into::<RawPluginManifest>() {
-            Ok(m) => Some(m),
-            Err(e) => {
-                tracing::warn!(
-                    crate_name = %crate_name,
-                    error = %e,
-                    "ignoring malformed [package.metadata.symposium]"
-                );
-                None
-            }
-        },
-    );
-    let file = file.and_then(|c| match raw_crate_manifest(c) {
-        Ok(m) => Some(m),
-        Err(e) => {
-            tracing::warn!(
-                crate_name = %crate_name,
-                error = %e,
-                "ignoring malformed crate Symposium.toml"
-            );
-            None
-        }
-    });
-    match (meta, file) {
-        (Some(a), Some(b)) => a.merge(b),
-        (Some(m), None) | (None, Some(m)) => m,
-        (None, None) => RawPluginManifest::default(),
-    }
-}
-
 /// Convert a raw manifest into a validated `PluginManifest`.
 ///
 /// User-declared `[[installations]]` come first in the resulting list, in
@@ -2042,7 +1991,7 @@ mod tests {
         assert!(!msg.contains(r#""widget1""#), "{msg}");
     }
 
-    // --- Crate-embedded manifests (`merge_crate_manifest` + validation) ---
+    // --- Crate-embedded manifests (the PM's merge + validation) ---
 
     /// What the cargo PM returns, put through the validation a package plugin
     /// gets: the pair the PM boundary splits between the two sides.
@@ -2052,7 +2001,7 @@ mod tests {
         crate_name: &str,
     ) -> Result<PluginManifest> {
         validate_manifest(
-            merge_crate_manifest(metadata, file, crate_name),
+            symposium_pm_cargo::manifest::merge(metadata, file, crate_name),
             ManifestOrigin::Crate { crate_name },
         )
     }

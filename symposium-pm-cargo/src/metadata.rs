@@ -3,10 +3,10 @@
 //! The table uses the *same schema* as a `Symposium.toml` plugin manifest — a
 //! crate can define its plugin inline in `Cargo.toml` instead of (or in
 //! addition to) shipping a separate file.
-//! [`CargoPm::load_plugin`](crate::pm::CargoPm::load_plugin) deserializes
+//! [`CargoPm::load_plugin`](crate::CargoPm) deserializes
 //! whatever this returns into a plugin manifest and merges it with any
 //! `Symposium.toml` the crate ships (see
-//! [`merge_crate_manifest`](crate::plugins::merge_crate_manifest)).
+//! [`manifest::merge`](crate::manifest::merge)).
 
 use std::path::Path;
 

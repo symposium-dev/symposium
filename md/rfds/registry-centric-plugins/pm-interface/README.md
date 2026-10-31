@@ -2,8 +2,8 @@
 
 ## TL;DR
 
-- Define an operation set (`initialize`, `active_plugins`, `load_plugin`, `list_deps`, `search`, `fetch`, `refresh`) that all package managers implement.
-- PMs are separate binaries speaking newline-delimited JSON-RPC over stdio. One long-lived process per PM per Symposium invocation.
+- Define an operation set (`initialize`, `active_plugins`, `load_plugin`, `list_deps`, `project_info`, `search`, `fetch`, `refresh`) that all package managers implement. `initialize` is the handshake that constructs the PM; the rest are what Symposium asks of it.
+- A PM is a binary speaking newline-delimited JSON-RPC over stdio, one long-lived process per PM per Symposium invocation. A PM written against the SDK can also run in Symposium's own process, which is how the cargo PM runs by default.
 - A PM returns plugin *manifests*, not just directories, so it can synthesize a plugin for a package with no `Symposium.toml`, or one whose manifest is in another ecosystem's format.
 - Trust is assigned by Symposium, never claimed by the PM.
 
@@ -24,11 +24,11 @@ source.cargo = "serde-skills>=1"
 Symposium sends `load_plugin` with the id `(cargo, serde-skills, >=1)`. The cargo PM resolves the requirement, obtains the crate source, and returns the exact id, the content directory, and the plugin manifest it read (or synthesized) from that directory:
 
 ```json
-{ "result": [{
+{ "result": { "plugins": [{
     "id": { "pm": "cargo", "name": "serde-skills", "version": "1.2.3" },
     "root": "/home/user/.cargo/registry/src/index.crates.io-.../serde-skills-1.2.3",
     "manifest": { "skills": [{ "source": { "path": "skills" } }] }
-}] }
+}] } }
 ```
 
 Symposium validates that manifest, applies its own defaults and trust rules, and resolves the skill group against `root`.
@@ -52,7 +52,7 @@ In the JSON-RPC protocol, a package-id is represented as:
 
 ### The protocol
 
-PMs are separate binaries invoked by Symposium. Communication uses JSON-RPC 2.0 over stdio, **newline-delimited**: one JSON object per line, no `Content-Length` framing. Nothing in the payloads needs an embedded newline, so the simpler framing is enough. Each PM binary is long-lived: Symposium spawns it once per invocation and sends multiple requests, multiplexed by request id.
+A PM speaking the protocol is a binary invoked by Symposium. Communication uses JSON-RPC 2.0 over stdio, **newline-delimited**: one JSON object per line, no `Content-Length` framing. Nothing in the payloads needs an embedded newline, so the simpler framing is enough. Each PM binary is long-lived: Symposium spawns it once per invocation and sends it requests one at a time.
 
 #### `initialize`
 
@@ -61,15 +61,16 @@ PMs are separate binaries invoked by Symposium. Communication uses JSON-RPC 2.0 
 { "method": "initialize", "params": {
     "protocol_version": 1,
     "workspace": "/home/user/projects/my-app",
-    "cache_dir": "/home/user/.symposium/cache",
-    "env": { "SYMPOSIUM_CARGO": "/usr/bin/cargo" }
+    "cache_dir": "/home/user/.symposium/cache"
 } }
 
 // Response
-{ "result": { "protocol_version": 1, "name": "cargo", "capabilities": ["search", "list_deps"] } }
+{ "result": { "protocol_version": 1, "name": "cargo" } }
 ```
 
-Sent once, before any other method. Carries the per-invocation context the PM needs; the PM answers with the name it owns (the `pm` component of every id it mints) and which optional operations it implements.
+Sent once, before any other method. Carries the per-invocation context the PM needs; environment variables travel the ordinary way, in the process environment the PM is spawned with. The PM answers with the name it owns (the `pm` component of every id it mints).
+
+There is no capability list. A method a PM has no use for answers with nothing (an empty list, no workspace), which is what the SDK's server harness does by default, so Symposium has nothing to skip.
 
 A PM is otherwise **self-contained**: it holds whatever it needs to resolve its own ecosystem, so no later method takes ambient context. This is why `workspace` lives here rather than on `list_deps` as originally proposed: with a long-lived process the workspace is fixed for the connection's lifetime.
 
@@ -82,7 +83,7 @@ Version negotiation is strict for now: a PM reporting a `protocol_version` Sympo
 { "method": "active_plugins", "params": { "deps": [{ "pm": "cargo", "name": "serde", "version": "1.0.210" }] } }
 
 // Response
-{ "result": [{ "id": {...}, "root": "...", "manifest": {...} }] }
+{ "result": { "plugins": [{ "id": {...}, "root": "...", "manifest": {...} }], "errors": [] } }
 ```
 
 The plugins this PM activates for the workspace's dependency set. The two shapes it covers:
@@ -92,25 +93,27 @@ The plugins this PM activates for the workspace's dependency set. The two shapes
 
 Whether the result may run without the user's consent is Symposium's decision, not the PM's: see [Enablement](#enablement).
 
+`errors` (empty when left out) names each entry the PM could not read, and why. Such an entry is left out of `plugins`, and Symposium reports the error and keeps what that entry installed rather than reading its absence as its removal.
+
 #### `load_plugin`
 
 ```json
 // Request
-{ "method": "load_plugin", "params": { "id": { "pm": "cargo", "name": "serde-skills", "version": ">=1" } } }
+{ "method": "load_plugin", "params": { "id": { "pm": "cargo", "name": "serde-skills", "version": ">=1" }, "update": "none" } }
 
 // Response
-{ "result": [{ "id": {...}, "root": "...", "manifest": {...} }] }
+{ "result": { "plugins": [{ "id": {...}, "root": "...", "manifest": {...} }] } }
 ```
 
 The plugin(s) a *specific* id maps to: a `[[plugins]]` chained reference, or a crate the user enabled by name. Resolves the version requirement, obtains the content, and returns the plugin(s) found there. Returning zero plugins is not an error.
 
-This is the method the original `resolve` folded into. The version component of the request id may be a requirement (`">=1"`, or `"*"` for none); the response id always names the exact resolved version.
+Under `"update": "none"` (the default) the PM serves only what is already on disk, so a hook event never reaches the network; Symposium asks with `"check"` when it syncs. This is the method the original `resolve` folded into. The version component of the request id may be a requirement (`">=1"`, or `"*"` for none); the response id always names the exact resolved version.
 
 #### `list_deps`
 
 ```json
 // Response
-{ "result": [{ "pm": "cargo", "name": "serde", "version": "1.0.210" }, { "pm": "cargo", "name": "tokio", "version": "1.38.0" }] }
+{ "result": { "deps": [{ "pm": "cargo", "name": "serde", "version": "1.0.210" }, { "pm": "cargo", "name": "tokio", "version": "1.38.0" }] } }
 ```
 
 The dependencies of the workspace given at `initialize`, in this PM's ecosystem. PMs with no workspace notion return empty.
@@ -145,7 +148,7 @@ A PM with no notion of a project answers with no root and both lists empty.
 { "method": "search", "params": { "query": "serde" } }
 
 // Response
-{ "result": [{ "id": { "pm": "cargo", "name": "serde-skills", "version": "1.2.3" }, "description": "..." }] }
+{ "result": { "plugins": [{ "id": { "pm": "cargo", "name": "serde-skills", "version": "1.2.3" }, "description": "..." }] } }
 ```
 
 Find packages matching a partial query string; backs `cargo agents use` and `cargo agents search`. PMs without a searchable registry return empty.
@@ -177,13 +180,13 @@ Contract:
 
 ```json
 // Request
-{ "method": "refresh", "params": { "update": "check", "force": false } }
+{ "method": "refresh", "params": { "update": "check" } }
 
 // Response
 { "result": { "refreshed": true } }
 ```
 
-Pull the PM's backing source: for a git-backed registry, fetch the repository. A no-op returning `false` for PMs whose content is already local. `force` overrides a source's auto-update opt-out, for an explicit `cargo agents plugin sync`.
+Pull the PM's backing source onto disk, for a git registry the repository, and say whether a remote source was pulled. Symposium sends it to each configured registry when it starts and on `cargo agents plugin sync`, skipping a registry whose `auto-update` is off unless the user names it. A PM with nothing to pull answers `false`, which is what the SDK's server harness does by default.
 
 ### What crosses the wire
 
@@ -195,7 +198,7 @@ A PM returns a **plugin manifest**, not merely a directory:
 
 Returning a manifest rather than only a path is what lets a PM **synthesize** a plugin: for a package with no manifest at all, or one whose configuration lives in a different ecosystem's format (an npm PM reading `package.json`, say). A PM that does nothing special just parses the `Symposium.toml` it found and hands it back.
 
-The manifest on the wire is the **raw, unvalidated** schema: the same shape a `Symposium.toml` deserializes into. Validation stays in Symposium:
+The manifest on the wire is the **raw, unvalidated** schema: the same shape a `Symposium.toml` deserializes into. Validation is Symposium's. Its steps live in the SDK, so a PM can check its own output with the same code, but only what Symposium runs counts:
 
 | Concern | Owner |
 |---------|-------|
@@ -266,6 +269,7 @@ Errors use JSON-RPC error codes:
 | -32002 | Network error | Retry with backoff, fall back to cache |
 | -32003 | Invalid input | Hard error at parse time |
 | -32004 | Auth required | Report to user with setup instructions |
+| -32603 | Internal error: anything the PM did not classify | Contributes nothing, logged |
 
 Beyond named codes, plugin loading is **best-effort** and must stay that way across the process boundary. A PM that errors, hangs past its timeout, crashes, or fails its `initialize` handshake degrades to "contributes no plugins," logged as a warning. One broken PM never aborts a sync or a hook: the same contract the in-process layer already holds, where a plugin that fails to load is dropped rather than surfaced.
 
@@ -323,11 +327,16 @@ constraint ever went away, either could become an ordinary PM binary without a
 protocol change.
 
 Every other PM needs ecosystem tooling that Symposium has no reason to carry, and
-is a separate binary.
+is a separate binary, with one exception: `cargo`.
 
 #### `cargo`
 
-Separate binary (`symposium-pm-cargo`). See the [cargo PM sub-RFD](../cargo-pm/README.md) for details.
+Its own crate, run in Symposium's process by default and as the
+`symposium-pm-cargo` binary when a `[[package-manager]]` entry named `cargo` asks
+for it. Both run the same implementation. Symposium is a cargo tool, so this is
+the one PM it cannot work without: it should not depend on finding a second
+binary, and the hook path should not pay a spawn for it. See the
+[cargo PM sub-RFD](../cargo-pm/README.md) for details.
 
 #### `git` as a chained source
 
@@ -342,6 +351,8 @@ It's the same pattern used by MCP servers and LSP: well-understood, language-agn
 ### Why not compile PMs into the binary?
 
 Language-agnosticism. We want npm/pypi PMs eventually, and those may be best written in JS/Python. Even for Rust-based PMs, the binary boundary keeps the core small and lets PMs be updated independently.
+
+The cargo PM is the exception, compiled in behind the same trait: every workspace Symposium runs in needs it, so it should not be one more thing to install or spawn.
 
 ### Why is the manifest on the wire instead of a directory?
 
@@ -360,9 +371,9 @@ The PM. Symposium sends `load_plugin` with the requirement in the id's version c
 
 ### What does this cost on the hook path?
 
-On most hook events, nothing: whether to sync is decided from the modification times of the files each PM named as `project_info` inputs at the last sync, so no PM is asked. When one is, a process spawn per PM per invocation. The property worth protecting is not "no subprocess" but "no `cargo metadata`": that's the expensive part, since it reads and resolves the whole graph. The `update: "none"` contract keeps `fetch` offline, `list_deps` caches on the lockfile mtime, and lazy spawning means a workspace whose predicates never reference a dependency starts no PM at all.
+On most hook events, nothing: whether to sync is decided from the modification times of the files each PM named as `project_info` inputs at the last sync, so no PM is asked. When one is, cargo costs nothing beyond the in-process work, since it runs in Symposium's process by default, and any other PM costs a process spawn per invocation. The property worth protecting is not "no subprocess" but "no `cargo metadata`": that's the expensive part, since it reads and resolves the whole graph. The `update: "none"` contract keeps `fetch` offline, `list_deps` caches on the lockfile mtime, and lazy spawning means an invocation that asks a PM nothing never starts it.
 
-If spawn cost does turn out to matter, the answer is a daemon mode for PMs (and for Symposium) rather than folding PMs back into the binary. That's a larger change and not proposed here.
+If spawn cost does turn out to matter for the configured PMs, the answer is a daemon mode for PMs (and for Symposium). That's a larger change and not proposed here.
 
 ## Implementation plan and status
 
@@ -390,7 +401,8 @@ Newline-delimited JSON-RPC client, the `initialize` handshake, lazy spawn, lifec
 
 Tests: a fixture PM binary that returns canned manifests, driven end to end; plus failure cases: a PM that exits immediately, one that returns malformed JSON, one that never answers.
 
-- [ ] PR: PM process manager + SDK harness
+- [x] PR: PM process manager + SDK harness
+- [ ] PR: act on error codes (retry with backoff, `status` report, setup instructions)
 
 
 ### Step 4: Implement `symposium-pm-cargo`
@@ -401,18 +413,19 @@ Concretely:
 
 1. Split the cargo PM into a library the binary wraps, so unit tests can keep driving it in-process through the trait.
 2. Describe the workspace over the protocol. Core reads the workspace root and member directories in a dozen places; the cargo PM reports them, and its lockfile, through `project_info`, and its dependencies through `list_deps`. Loading plugins *from* those directories stays in Symposium: they are local directory reads, and the workspace is a trust root whose policy core owns.
-3. Forward `SYMPOSIUM_CARGO` into the child, since the test harness installs a fake cargo and a child inherits no environment.
+3. Set `SYMPOSIUM_CARGO` in the child's environment, since the test harness's fake cargo is configured on Symposium's directories rather than in its process environment.
 
-Tests: the existing integration suite, driven through the real subprocess.
+Tests: the cargo PM driven end to end through the real binary.
 
-- [ ] PR: cargo PM binary + tests
+- [x] PR: cargo PM binary + tests
 
 
 ### Step 5: Configuration surface
 
 The `[[package-manager]]` section and acquisition through the existing installation machinery, replacing the hard-coded lookup from step 3.
 
-- [ ] PR: PM configuration
+- [x] PR: `[[package-manager]]` configuration, `command` found on `PATH`
+- [ ] PR: acquisition through the installation machinery
 
 ### Step 6: A non-Rust-ecosystem reference PM
 

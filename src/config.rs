@@ -113,6 +113,15 @@ pub struct Config {
     /// User-defined registries (git repos or local paths).
     #[serde(default, rename = "registry", skip_serializing_if = "Vec::is_empty")]
     pub registries: Vec<RegistryConfig>,
+
+    /// Package managers for ecosystems beyond cargo, each a binary speaking
+    /// the PM protocol.
+    #[serde(
+        default,
+        rename = "package-manager",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub package_managers: Vec<PackageManagerConfig>,
 }
 
 /// The `[plugins]` section: enablement, the consent axis.
@@ -285,6 +294,7 @@ impl Default for Config {
             logging: LoggingConfig::default(),
             defaults: DefaultsConfig::default(),
             registries: Vec::new(),
+            package_managers: Vec::new(),
         }
     }
 }
@@ -314,11 +324,14 @@ struct RawConfig {
     defaults: DefaultsConfig,
     #[serde(default, rename = "registry")]
     registries: Vec<RegistryConfig>,
+    #[serde(default, rename = "package-manager")]
+    package_managers: Vec<PackageManagerConfig>,
 }
 
 impl RawConfig {
-    fn validate(self) -> Config {
-        Config {
+    fn validate(self) -> Result<Config, String> {
+        self.check_package_manager_names()?;
+        Ok(Config {
             auto_sync: self.auto_sync,
             agents_syncing: self.agents_syncing,
             sync_debounce_secs: self.sync_debounce_secs,
@@ -330,7 +343,48 @@ impl RawConfig {
             logging: self.logging,
             defaults: self.defaults,
             registries: self.registries,
+            package_managers: self.package_managers,
+        })
+    }
+
+    /// A `[[package-manager]]` name is what ids route by, what `[plugins]`
+    /// entries and `depends-on` atoms name, and a directory under the cache.
+    /// So it must be a plain identifier, and no other package manager or
+    /// registry may have it: the first would shadow the second silently.
+    /// `cargo` is allowed, since it replaces the built-in cargo instance.
+    fn check_package_manager_names(&self) -> Result<(), String> {
+        let mut builtin_registries = Vec::new();
+        if self.defaults.symposium_recommendations {
+            builtin_registries.push("symposium-recommendations");
         }
+        if self.defaults.user_plugins {
+            builtin_registries.push("user-plugins");
+        }
+        let mut seen: Vec<&str> = Vec::new();
+        for pm in &self.package_managers {
+            let name = pm.name.as_str();
+            if name.is_empty()
+                || !name
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+            {
+                return Err(format!(
+                    "`[[package-manager]]` name {name:?} must be letters, digits, `_` and `-`"
+                ));
+            }
+            let registry = builtin_registries
+                .iter()
+                .copied()
+                .chain(self.registries.iter().map(|r| r.name.as_str()))
+                .any(|r| r == name);
+            if registry || seen.contains(&name) {
+                return Err(format!(
+                    "`[[package-manager]]` name `{name}` is already taken by another package manager or registry"
+                ));
+            }
+            seen.push(name);
+        }
+        Ok(())
     }
 }
 
@@ -375,6 +429,34 @@ pub struct RegistryConfig {
     /// Whether to auto-update on startup (git sources only, default: true).
     #[serde(default = "default_true", rename = "auto-update")]
     pub auto_update: bool,
+}
+
+/// A `[[package-manager]]` entry: an ecosystem Symposium does not know natively,
+/// reached by running a binary that speaks the PM protocol.
+///
+/// This is the bootstrap channel for the PM layer. The cargo PM is built in;
+/// anything else (npm, pypi, a private ecosystem) arrives here. An entry
+/// named `cargo` *replaces* the built-in in-process instance, which is how you
+/// run even the cargo PM out of process.
+///
+/// A configured PM is an ecosystem transport, so its `active_plugins` are the
+/// plugins embedded in the workspace's dependencies. Those are **not** trusted,
+/// for the same reason cargo's aren't: depending on a package should not let
+/// its author inject agent context. Consent still applies.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct PackageManagerConfig {
+    /// The ecosystem this PM owns: the `pm` component of every id it mints.
+    /// The PM must report the same name at `initialize`, or it is refused:
+    /// ids route by this name, so a mismatch would misroute silently.
+    pub name: String,
+
+    /// The binary to run. A bare name is resolved on `PATH`.
+    pub command: String,
+
+    /// Extra arguments, before the protocol takes over stdio.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -489,33 +571,78 @@ impl Symposium {
         }
     }
 
-    /// The active package-manager set: the fixed ecosystem transports plus one
-    /// [`PathPm`](crate::pm::PathPm) per configured registry
-    /// ([`registries`](Self::registries)) over its content directory —
-    /// including git registries, whose repository is unpacked into the cache
-    /// before it is read. Each instance is named for its registry, since that
-    /// name is what its plugins are attributed to.
+    /// The active package-manager set: the ecosystem transports (cargo, and
+    /// each `[[package-manager]]`), then one instance per configured registry
+    /// ([`registry_instances`](Self::registry_instances)), named for its
+    /// registry, since that name is what its plugins are attributed to.
+    ///
+    /// `cwd` is the directory a spawned PM is told it answers for: `None` for
+    /// a workspace-independent operation, so it does not go looking for one.
     pub fn package_managers(
         &self,
         workspace: &Arc<crate::pm::WorkspaceDeps>,
+        cwd: Option<&Path>,
     ) -> crate::pm::PmRegistry {
-        // The cargo transport first — over dependencies, so not a trust root.
-        let mut instances = vec![crate::pm::PmInstance::new(
-            crate::pm::CARGO_PM,
+        // The ecosystem transports, over dependencies, so not trust roots; then
+        // one registry instance per configured registry, trust roots. A
+        // `[[package-manager]]` named `cargo` replaces the built-in in-process
+        // instance, which is how the cargo PM is run out of process.
+        let configured = &self.config.package_managers;
+        let builtin_cargo =
+            (!configured.iter().any(|pm| pm.name == crate::pm::CARGO_PM)).then(|| {
+                crate::pm::PmInstance::new(
+                    crate::pm::CARGO_PM,
+                    false,
+                    crate::pm::PluginKind::Package,
+                    Box::new(crate::pm::CargoPm::new(Arc::clone(workspace))),
+                )
+            });
+        let instances = builtin_cargo
+            .into_iter()
+            .chain(
+                configured
+                    .iter()
+                    .map(|pm| self.configured_pm_instance(pm, cwd)),
+            )
+            .chain(self.registry_instances());
+        crate::pm::PmRegistry::new(instances.collect())
+    }
+
+    /// A `[[package-manager]]` entry as a spawned instance.
+    ///
+    /// The process is not started here: [`RemotePm`](crate::pm::RemotePm)
+    /// spawns lazily, so a configured PM that nothing asks about costs nothing.
+    fn configured_pm_instance(
+        &self,
+        pm: &PackageManagerConfig,
+        cwd: Option<&Path>,
+    ) -> crate::pm::PmInstance {
+        let mut command = crate::pm::RemotePmCommand::new(&pm.command)
+            .workspace(cwd.map(Path::to_path_buf))
+            .cache_dir(self.dirs.cache_dir.join("pm").join(&pm.name));
+        for arg in &pm.args {
+            command = command.arg(arg);
+        }
+        // The cargo binary override is the test harness's channel to a fake
+        // cargo. It comes from Symposium's directories rather than its process
+        // environment, so inheriting the environment would not carry it.
+        if let Some(cargo) = &self.dirs.cargo_override {
+            command = command.env("SYMPOSIUM_CARGO", cargo.display().to_string());
+        }
+
+        crate::pm::PmInstance::new(
+            &pm.name,
             false,
             crate::pm::PluginKind::Package,
-            Box::new(crate::pm::CargoPm::new(Arc::clone(workspace))),
-        )];
-        // One registry instance per configured registry — trust roots.
-        instances.extend(self.registry_instances());
-        crate::pm::PmRegistry::new(instances)
+            Box::new(crate::pm::RemotePm::new(&pm.name, command)),
+        )
     }
 
     /// The package managers for a workspace-independent operation (registry
     /// listing, crates.io search): the cargo transport is built over a detached
     /// resolver that never runs `cargo metadata`.
     pub fn detached_managers(&self) -> crate::pm::PmRegistry {
-        self.package_managers(&Arc::new(crate::pm::WorkspaceDeps::detached()))
+        self.package_managers(&Arc::new(crate::pm::WorkspaceDeps::detached()), None)
     }
 
     /// The workspace context for `cwd`: the package managers plus where the
@@ -527,7 +654,7 @@ impl Symposium {
     pub fn workspace(&self, dir: &Path) -> Arc<crate::pm::Workspace> {
         Arc::new(crate::pm::Workspace::new(
             Some(dir.to_path_buf()),
-            self.package_managers(&self.workspace_deps(dir)),
+            self.package_managers(&self.workspace_deps(dir), Some(dir)),
         ))
     }
 
@@ -658,12 +785,7 @@ impl Symposium {
     fn registry_instance(&self, cfg: RegistryConfig) -> Option<crate::pm::PmInstance> {
         let name = cfg.name.clone();
         let (pm, source): (Box<dyn crate::pm::PackageManager>, _) = if let Some(url) = &cfg.git {
-            match crate::pm::GitPm::new(
-                name.clone(),
-                url.clone(),
-                cfg.auto_update,
-                self.install_context(),
-            ) {
+            match crate::pm::GitPm::new(name.clone(), url.clone(), self.install_context()) {
                 Some(git) => {
                     let source = git.source();
                     (Box::new(git), source)
@@ -687,10 +809,11 @@ impl Symposium {
             tracing::warn!(registry = %name, "registry names neither git nor path");
             return None;
         };
-        Some(
+        let mut instance =
             crate::pm::PmInstance::new(name, true, crate::pm::PluginKind::Registry, pm)
-                .with_source(source),
-        )
+                .with_source(source);
+        instance.auto_update = cfg.auto_update;
+        Some(instance)
     }
 
     pub fn config_error(&self) -> Option<&str> {
@@ -759,7 +882,10 @@ fn load_config_from(config_dir: &Path) -> (Config, Option<String>) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (Config::default(), None),
         Err(e) => e.to_string(),
         Ok(contents) => match toml::from_str::<RawConfig>(&contents) {
-            Ok(raw) => return (raw.validate(), None),
+            Ok(raw) => match raw.validate() {
+                Ok(config) => return (config, None),
+                Err(e) => e,
+            },
             Err(e) => e.to_string(),
         },
     };
@@ -792,7 +918,10 @@ mod tests {
     use indoc::indoc;
 
     fn parse_config(toml: &str) -> Config {
-        toml::from_str::<RawConfig>(toml).unwrap().validate()
+        toml::from_str::<RawConfig>(toml)
+            .unwrap()
+            .validate()
+            .unwrap()
     }
 
     #[test]
@@ -1203,5 +1332,47 @@ mod tests {
         }
 
         assert_eq!(result, xdg_state.join("symposium").join("logs"));
+    }
+
+    /// Ids route by name, so a configured package manager cannot take a name
+    /// another package manager or a registry has, and the name must be a plain
+    /// identifier. Such a config is an error, as an unparseable one is, rather
+    /// than one entry silently shadowing another.
+    #[test]
+    fn a_package_manager_name_must_be_free_and_plain() {
+        let check = |toml: &str| {
+            toml::from_str::<RawConfig>(toml)
+                .unwrap()
+                .validate()
+                .map(|_| ())
+        };
+        let pm = |name: &str| format!("[[package-manager]]\nname = {name:?}\ncommand = \"x\"\n");
+
+        assert!(check(&format!("{}{}", pm("npm"), pm("pypi"))).is_ok());
+        assert!(check(&pm("cargo")).is_ok(), "replaces the built-in cargo");
+        assert!(check(&format!("{}{}", pm("npm"), pm("npm"))).is_err());
+        assert!(check(&pm("user-plugins")).is_err());
+        assert!(
+            check(&format!(
+                "[[registry]]\nname = \"mine\"\npath = \"mine\"\n{}",
+                pm("mine")
+            ))
+            .is_err()
+        );
+        assert!(
+            check(&format!(
+                "[defaults]\nuser-plugins = false\n{}",
+                pm("user-plugins")
+            ))
+            .is_ok()
+        );
+        for bad in ["", "../x", "/abs", "a:b"] {
+            assert!(check(&pm(bad)).is_err(), "{bad:?}");
+        }
+        assert!(
+            toml::from_str::<RawConfig>("[[package-manager]]\nname = \"npm\"\ncomand = \"x\"\n")
+                .is_err(),
+            "a misspelled key is an error, not ignored"
+        );
     }
 }

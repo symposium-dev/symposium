@@ -66,8 +66,12 @@ impl InstallContext {
 }
 
 /// Controls how aggressively cached sources are updated.
+///
+/// Also the `update` a package manager is sent over the wire, spelled
+/// `"none"`, `"check"` or `"fetch"`.
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum UpdateLevel {
     /// Debounced: skip the API check if fetched recently.
