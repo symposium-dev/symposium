@@ -12,6 +12,7 @@
 //! must never break a hook, so errors are logged and swallowed.
 
 mod identity;
+mod policy;
 mod schema;
 mod state;
 mod storage;
