@@ -288,7 +288,7 @@ fn absolute(path: &Path) -> Result<&Path, RunError> {
 }
 
 /// `finished` when the command `tool` names ran to a successful exit.
-fn succeeded(
+pub(crate) fn succeeded(
     tool: &'static str,
     finished: Result<Finished, ProcessError>,
 ) -> Result<Finished, RunError> {

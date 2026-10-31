@@ -66,6 +66,11 @@ pub(crate) enum RunError {
     SrtVersion { found: String },
     #[error("`srt` needs Node 22.12 or later, but `node --version` reports `{found}`")]
     NodeTooOld { found: String },
+    #[error(
+        "the runner needs Claude Code {} or later, but `claude --version` reports `{found}`",
+        crate::client::claude::version::MINIMUM
+    )]
+    ClaudeVersion { found: String },
     #[error("`{tool}` exited with {status}: {stderr}")]
     ToolFailed {
         tool: &'static str,

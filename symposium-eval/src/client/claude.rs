@@ -10,6 +10,8 @@
 //! `--no-session-persistence`, would skip hooks and skills or drop the session's own
 //! file, and so invalidate a trial.
 
+pub(crate) mod version;
+
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader};

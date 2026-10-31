@@ -10,7 +10,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::PathBuf;
 
-use super::{Machine, RunError, Trial};
+use super::{Batch, Machine, RunError, Trial};
 
 /// Where the linker, `sh`, and the tools the clients need live.
 const SYSTEM_PATH: [&str; 2] = ["/usr/bin", "/bin"];
@@ -40,6 +40,20 @@ impl fmt::Debug for ApiKey {
         f.debug_struct("ApiKey")
             .field("name", &self.name)
             .finish_non_exhaustive()
+    }
+}
+
+impl Batch {
+    /// `PATH` for running the batch's clients outside a trial, as preflight does: the
+    /// staged clients first, so an npm entry's `env node` finds the staged Node, as it
+    /// does in a trial.
+    ///
+    /// # Errors
+    ///
+    /// When the tools directory cannot be joined, such as one containing `:`.
+    pub(crate) fn tools_path(&self) -> Result<OsString, RunError> {
+        let path = std::iter::once(self.common_tools()).chain(SYSTEM_PATH.map(PathBuf::from));
+        env::join_paths(path).map_err(RunError::PathList)
     }
 }
 

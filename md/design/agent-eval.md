@@ -107,6 +107,8 @@ A `Batch` is one run of the runner: `<eval-root>/<batch>/`, holding the staged t
 
 The transcript has one JSON event per line, read a line at a time. The last `result` event decides the `Completion`: `is_error` means `Reported`, with its `result` text or, when that is absent, its `subtype`. Only `is_error` is read, because an API error arrives with `subtype: "success"`. Other event types are skipped, so a new kind of event leaves the transcript readable; a line that is not JSON, or a `result` without `is_error`, is `Malformed`. The tests replay transcripts recorded from Claude Code 2.1.316 in `src/client/claude/transcripts/`, with personal details removed.
 
+`client::claude::version::preflight` runs the staged `claude --version` before any trial, with a scratch directory as its home and the batch's staged tools first on `PATH` (`Batch::tools_path`), so an npm entry's `env node` finds the staged Node as it does in a trial. It refuses a release older than `MINIMUM` (2.1.316, the oldest the command line and recorded transcripts were checked against), a prerelease, which comes before its release, or output it cannot read. That is a setup failure (`RunError::ClaudeVersion`), never a trial's. Exploratory trials need 2.1.285, which the floor already covers.
+
 ## Code comments
 
 Comments answer why, an invariant, or a surprising behavior of a client or tool. They never restate what the code says.

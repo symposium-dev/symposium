@@ -14,7 +14,9 @@
 //! roots are set as `sandbox_workspace_write.writable_roots`, not with `--add-dir`, which
 //! does not make them writable on some versions (openai/codex issue 18448).
 //!
-//! FIXME: refuse Claude Code before 2.1.285, once clients are launched.
+//! Claude Code's preflight (`client::claude::version`) refuses older releases.
+//!
+//! FIXME: run that preflight before launch, once clients are launched.
 //!
 //! Setup and pre-launch checks are as in enforced mode, with `cargo agents init` run
 //! through the local backend.
