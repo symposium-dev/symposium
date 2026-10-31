@@ -11,6 +11,7 @@
 //! Every entry point here is best-effort: a failure to read or write the log
 //! must never break a hook, so errors are logged and swallowed.
 
+pub(crate) mod attribution_index;
 mod identity;
 mod policy;
 mod resolution_witness;

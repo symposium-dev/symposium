@@ -483,6 +483,8 @@ pub(crate) fn discover_skills(
 /// symposium itself installed the directory, and installed copies are never
 /// sources. This matters for `.agents/skills/`, which is both a workspace
 /// skill-group source and the install destination for vendor-neutral agents.
+/// The marker-free `.symposium-index/` metadata directory is skipped
+/// explicitly for the same dual-role reason.
 pub(crate) fn find_skill_files_recursive(dir: &Path, out: &mut Vec<PathBuf>) {
     let mut ancestors = crate::dir_walk::Ancestors::rooted_at(dir);
     find_skill_files_in(dir, &mut ancestors, out);
@@ -501,6 +503,13 @@ fn find_skill_files_in(
         Err(_) => return,
     };
     for entry in entries.flatten() {
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(crate::telemetry::attribution_index::is_reserved_skill_slot)
+        {
+            continue;
+        }
         let path = entry.path();
         // `is_dir` follows symlinks, so a symlinked directory of skills is
         // discovered — and can name a directory this walk is already inside.
@@ -623,6 +632,9 @@ fn load_skill(
         .context("SKILL.md frontmatter missing required `name` field")?;
     if !is_safe_dir_name(name) {
         bail!("SKILL.md `name` must be a plain directory name, got {name:?}");
+    }
+    if crate::telemetry::attribution_index::is_reserved_skill_slot(name) {
+        bail!("SKILL.md `name` {name:?} is reserved for Symposium metadata");
     }
 
     // Validate description per agentskills.io spec
@@ -1177,6 +1189,25 @@ mod tests {
                 "{name:?}: {err}"
             );
         }
+    }
+
+    #[test]
+    fn load_skill_rejects_the_reserved_attribution_index_slot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let skill_md = tmp.path().join("SKILL.md");
+        fs::write(
+            &skill_md,
+            "---\nname: .symposium-index\ndescription: d\ndepends-on: serde\n---\n",
+        )
+        .unwrap();
+
+        let error = load_skill(&skill_md, false, &PredicateSet::default()).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("reserved for Symposium metadata")
+        );
     }
 
     // --- Bare SKILL.md loading (see plugins::standalone_skill_manifest
@@ -1786,6 +1817,23 @@ mod tests {
         assert_eq!(skills.len(), 1);
         let skill = skills.into_iter().next().unwrap().unwrap();
         assert_eq!(skill.frontmatter.get("name").unwrap(), "my-skill");
+    }
+
+    #[test]
+    fn discovery_skips_the_marker_free_attribution_index_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let skill = root.join("regular");
+        let index = root.join(".SYMPOSIUM-INDEX");
+        fs::create_dir_all(&skill).unwrap();
+        fs::create_dir_all(&index).unwrap();
+        fs::write(skill.join("SKILL.md"), "# regular").unwrap();
+        fs::write(index.join("SKILL.md"), "# metadata, not a skill").unwrap();
+
+        let mut found = Vec::new();
+        find_skill_files_recursive(root, &mut found);
+
+        assert_eq!(found, vec![skill.join("SKILL.md")]);
     }
 
     #[test]

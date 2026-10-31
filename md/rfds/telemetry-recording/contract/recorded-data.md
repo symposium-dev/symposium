@@ -369,11 +369,11 @@ This cumulative row combines skill-invocation observations for one UTC day, supp
 
 #### Attribution
 
-Public attribution comes only from the generated installation index and a matching Symposium marker fingerprint. Unnamed reasons have these meanings:
+Public attribution comes only from the generated installation index and a matching random installation binding in the Symposium marker. The binding is a local join key rather than a content fingerprint. Unnamed reasons have these meanings:
 
 - `ineligible`: the installed skill was private, local, invalid, or otherwise unsafe to name.
-- `not_indexed`: the index was valid and readable but contained no matching agent-facing identifier.
-- `attribution_unavailable`: the index was missing, corrupt, or stale.
+- `not_indexed`: no index entry matched the slot's current managed content; absent metadata, a missing marker, and a valid binding mismatch are definite non-matches.
+- `attribution_unavailable`: a present index or matched marker could not be read or validated, so another match could not be ruled out.
 - `ambiguous`: more than one entry matched.
 - `invalid_signal`: the Claude payload did not match the validated schema.
 
@@ -490,7 +490,7 @@ When selecting a public aggregate with no private entry, Symposium adopts a surv
 
 ### Installation index
 
-The generated `<agent-skills-parent>/.symposium/index-v1.json` file is installation state, not telemetry. It may contain local agent-facing identifiers, installed-directory fingerprints, eligibility, and safe public attribution needed to identify the skill Symposium installed. It is gitignored, atomically replaced after sync, excluded from `telemetry show` and `telemetry clear`, and not uploaded by this RFD.
+The generated `<agent-skills-parent>/.symposium-index/index.json` file is installation state, not telemetry. It may contain local agent-facing identifiers, random installation bindings, eligibility, and safe public attribution needed to identify the skill Symposium installed. It is gitignored, atomically replaced after sync, excluded from `telemetry show` and `telemetry clear`, and not uploaded by this RFD. Disabling telemetry causes the next full sync to remove only the index files Symposium owns, without recursively deleting the directory or unknown user content.
 
 ### Limits of interpretation
 

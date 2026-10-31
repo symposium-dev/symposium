@@ -410,6 +410,59 @@ async fn sync_installs_skills() {
     .unwrap();
 }
 
+/// Enabled sync publishes the actual selected slot and its marker binding;
+/// disabling telemetry removes only the parent index.
+#[tokio::test]
+async fn sync_maintains_installed_skill_attribution_indexes() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugins0", "workspace0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
+            ctx.sym.config.telemetry.enabled = true;
+            ctx.sym.save_config()?;
+
+            let workspace_root = ctx.workspace_root.clone().unwrap();
+            let skills_parent = workspace_root.join(".agents/skills");
+            let plain_slot = skills_parent.join("serde-guidance");
+            std::fs::create_dir_all(&plain_slot)?;
+            std::fs::write(plain_slot.join("user-content"), "owned by the user")?;
+
+            ctx.symposium(&["sync"]).await?;
+
+            let installed = find_installed_skill(&skills_parent, "serde-guidance");
+            let slot = installed.file_name().unwrap().to_str().unwrap();
+            assert!(
+                slot.starts_with("serde-guidance-") && slot != "serde-guidance",
+                "a user-managed collision should select the suffixed slot, got {slot}"
+            );
+            let marker_path = installed.join(".symposium");
+            let marker_bytes = std::fs::read(&marker_path)?;
+            let marker: Value = serde_json::from_slice(&marker_bytes)?;
+            let index_directory = skills_parent.join(".symposium-index");
+            let index: Value =
+                serde_json::from_slice(&std::fs::read(index_directory.join("index.json"))?)?;
+            let entry = index["entries"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["slot"] == slot)
+                .unwrap_or_else(|| panic!("index did not contain installed slot {slot}"));
+            assert_eq!(entry["binding"], marker["binding"]);
+
+            ctx.sym.config.telemetry.enabled = false;
+            ctx.sym.save_config()?;
+            ctx.symposium(&["sync"]).await?;
+
+            assert!(!index_directory.exists());
+            assert_eq!(std::fs::read(marker_path)?, marker_bytes);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// `sync` rejects malformed skill frontmatter before installing skills.
 #[tokio::test]
 async fn sync_skips_invalid_skill_frontmatter() {
@@ -612,13 +665,18 @@ async fn sync_keeps_skills_of_a_registry_it_cannot_read() {
             &["unreadable-registry0", "workspace-empty0"],
             async |mut ctx| {
                 ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+                ctx.sym.config.telemetry.enabled = true;
+                ctx.sym.save_config()?;
                 ctx.symposium(&["sync"]).await?;
                 let skills = ctx.workspace_root.as_ref().unwrap().join(".claude/skills");
                 assert!(!find_installed_skills(&skills, "house-style").is_empty());
+                let index_path = skills.join(".symposium-index/index.json");
+                let index_before = std::fs::read(&index_path)?;
 
                 breakage(&ctx.tempdir.join("ext"));
                 let events = ctx.sync_with_report(tracing::Level::INFO).await?;
                 assert!(!find_installed_skills(&skills, "house-style").is_empty());
+                assert_eq!(std::fs::read(index_path)?, index_before);
                 assert!(
                     events.iter().any(|e| e["kind"] == "warning"
                         && e["message"]

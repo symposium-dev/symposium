@@ -88,14 +88,18 @@ Each `[[agent]]` entry identifies an agent you use. You can configure multiple a
 
 Opt-in, per-user usage telemetry. Off by default. When enabled, Symposium
 appends anonymous events as JSON lines to a local, per-day log under
-`~/.symposium/telemetry/`. **Nothing is uploaded automatically** — you inspect
-and share the data yourself with `cargo agents telemetry show`. The preference
-is also collected during `cargo agents init`. See the
+`~/.symposium/telemetry/`. Full sync also creates gitignored
+`.symposium-index/` directories beside managed project skills so later hook
+invocations can be joined to the installation Symposium selected. Disabling
+telemetry removes the exact index files Symposium owns on the next full sync,
+while leaving installed skills and their ownership markers intact. **Nothing
+is uploaded automatically** — you inspect and share the data yourself with
+`cargo agents telemetry show`. The preference is also collected during `cargo agents init`. See the
 [telemetry design chapter](../design/telemetry.md) for the event format.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `enabled` | bool | `false` | Record anonymous usage events (session starts, prompts, tool usage — counts and metadata only, no prompt or command content). Toggle with `cargo agents telemetry enable` / `disable`. |
+| `enabled` | bool | `false` | Record anonymous usage events (session starts, prompts, tool usage — counts and metadata only, no prompt or command content) and maintain local project attribution indexes during full sync. Toggle with `cargo agents telemetry enable` / `disable`. |
 
 ```toml
 [telemetry]
