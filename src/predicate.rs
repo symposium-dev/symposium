@@ -35,20 +35,28 @@ use crate::predicate_cache::{
 /// the SDK, which knows nothing about workspaces or the environment.
 pub trait PredicateEval {
     /// True if this holds in `ctx`.
-    fn evaluate(&self, ctx: &mut PredicateContext<'_>) -> bool;
+    fn evaluate<D>(&self, ctx: &mut PredicateContextImpl<D>) -> bool
+    where
+        D: PredicateDependencies;
 }
 
 impl PredicateEval for Predicate {
     /// Short-circuits: `any` stops at the first true child, `all` at the first
     /// false.
-    fn evaluate(&self, ctx: &mut PredicateContext<'_>) -> bool {
+    fn evaluate<D>(&self, ctx: &mut PredicateContextImpl<D>) -> bool
+    where
+        D: PredicateDependencies,
+    {
         evaluate_predicate(self, ctx, &mut BooleanMode).is_some()
     }
 }
 
 impl PredicateEval for PredicateSet {
     /// True if every predicate holds (or the set is empty).
-    fn evaluate(&self, ctx: &mut PredicateContext<'_>) -> bool {
+    fn evaluate<D>(&self, ctx: &mut PredicateContextImpl<D>) -> bool
+    where
+        D: PredicateDependencies,
+    {
         evaluate_predicate_set(self, ctx, &mut BooleanMode).is_some()
     }
 }
@@ -58,7 +66,7 @@ impl PredicateEval for PredicateSet {
 /// Boolean callers borrow package ids. Witnessed callers retain each id's
 /// coupled source provenance, so a mode cannot accidentally combine aligned
 /// but unrelated collections.
-pub(crate) trait PredicateDependencies {
+pub trait PredicateDependencies {
     type Dependency;
 
     fn dependencies(&self) -> &[Self::Dependency];
@@ -136,6 +144,7 @@ where
 {
     type Evidence;
 
+    fn retains_evidence(&self) -> bool;
     fn dependency(&mut self, dependency: &D::Dependency) -> Self::Evidence;
     fn non_package(&mut self) -> Self::Evidence;
     fn not(&mut self) -> Self::Evidence;
@@ -151,6 +160,10 @@ where
     D: PredicateDependencies,
 {
     type Evidence = ();
+
+    fn retains_evidence(&self) -> bool {
+        false
+    }
 
     fn dependency(&mut self, _dependency: &D::Dependency) -> Self::Evidence {}
 
@@ -269,11 +282,15 @@ where
     D: PredicateDependencies,
     M: PredicateEvaluationMode<D>,
 {
-    // For BooleanMode this is Vec<()>, whose zero-sized elements require no
-    // allocation; ordinary boolean evaluation keeps its current cost model.
-    let mut evidence = Vec::with_capacity(predicates.len());
+    // Boolean and disabled optional-witness modes do not retain children, so
+    // their successful `all` traversal allocates no evidence vector.
+    let retain = mode.retains_evidence();
+    let mut evidence = Vec::with_capacity(if retain { predicates.len() } else { 0 });
     for predicate in predicates {
-        evidence.push(evaluate_predicate(predicate, ctx, mode)?);
+        let child = evaluate_predicate(predicate, ctx, mode)?;
+        if retain {
+            evidence.push(child);
+        }
     }
     Some(evidence)
 }
@@ -314,6 +331,13 @@ pub type PredicateContext<'a> = PredicateContextImpl<BorrowedPackageIds<'a>>;
 /// Sourced context required by witnessed resolution.
 pub(crate) type SourcedPredicateContext<'a> = PredicateContextImpl<SourcedDependencies<'a>>;
 
+impl<'a> PredicateContextImpl<SourcedDependencies<'a>> {
+    /// The sourced packages from which this context derived its ID view.
+    pub(crate) fn sourced_packages(&self) -> &'a [SourcedPackage] {
+        self.dependencies.packages
+    }
+}
+
 impl<'a> PredicateContextImpl<BorrowedPackageIds<'a>> {
     pub fn new(deps: &'a [PackageId]) -> Self {
         Self::from_dependencies(BorrowedPackageIds(deps))
@@ -331,15 +355,18 @@ impl<'a> PredicateContextImpl<BorrowedPackageIds<'a>> {
 }
 
 impl<'a> PredicateContextImpl<SourcedDependencies<'a>> {
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the structured sync report constructs this context in the next commit"
-        )
-    )]
     pub(crate) fn new(packages: &'a [SourcedPackage]) -> Self {
         Self::from_dependencies(SourcedDependencies::new(packages))
+    }
+
+    pub(crate) fn with_custom_predicates(
+        packages: &'a [SourcedPackage],
+        entries: std::collections::HashMap<String, ResolvedPredicateEntry>,
+    ) -> Self {
+        Self {
+            custom_entries: entries,
+            ..Self::new(packages)
+        }
     }
 }
 
@@ -684,6 +711,10 @@ mod tests {
     impl<'a> PredicateEvaluationMode<SourcedDependencies<'a>> for TestMode {
         type Evidence = TestEvidence;
 
+        fn retains_evidence(&self) -> bool {
+            true
+        }
+
         fn dependency(&mut self, dependency: &SourcedPackage) -> Self::Evidence {
             self.dependency_visits += 1;
             TestEvidence::Package(dependency.clone())
@@ -887,6 +918,18 @@ mod tests {
         let context = SourcedPredicateContext::new(&packages);
 
         assert_eq!(context.package_ids(), expected);
+    }
+
+    #[test]
+    fn boolean_evaluation_accepts_sourced_dependencies() {
+        let packages = vec![sourced_package(
+            "present",
+            crate::pm::PackageProvenance::Workspace,
+        )];
+        let mut context = SourcedPredicateContext::new(&packages);
+
+        assert!(Predicate::DependsOn("present".to_owned(), None).evaluate(&mut context));
+        assert!(!Predicate::DependsOn("missing".to_owned(), None).evaluate(&mut context));
     }
 
     #[test]

@@ -231,7 +231,7 @@ Shell commands, paths, environment values, custom predicate details, workspace m
 
 The path array is non-empty, and each top-level node begins at depth 1. Depth counts nested evidence nodes through a terminal package, extension, `not`, or opaque node. A subtree that would exceed depth 8 becomes `opaque: limit`. The complete path is limited to 16 evidence leaves. Its 4 KiB bound is the byte length of the compact UTF-8 JSON encoding of the complete path array, excluding the surrounding event row. These limits do not count filesystem path components; filesystem paths are never recorded.
 
-An enabled full sync builds safe evidence for successful installations in the original predicate pass. A disabled sync stays on the existing boolean path, builds no evidence, and removes any generated attribution index best-effort; turning telemetry back on rebuilds it on the next full sync. Only an enabled recorder serializes the evidence as telemetry.
+Full sync always uses one sourced predicate traversal. When telemetry is enabled, that traversal retains safe evidence for successful installations; when it is disabled, the same mode returns only the boolean result and performs no naming-policy calls or evidence allocation. A disabled sync also removes any generated attribution index best-effort; turning telemetry back on rebuilds it on the next full sync. Only an enabled recorder serializes the evidence as telemetry.
 
 Cached booleans for non-package predicates may synthesize `opaque: non_package_predicate`. Caching an entire `PredicateSet` would discard the successful branches and witnesses. Supporting such a cache would require a different witness design.
 

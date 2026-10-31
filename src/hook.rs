@@ -1,4 +1,4 @@
-use crate::predicate::PredicateEval;
+use crate::predicate::{PredicateContextImpl, PredicateDependencies, PredicateEval};
 use std::{
     io::{Read, Write},
     path::PathBuf,
@@ -979,12 +979,15 @@ pub fn merge(a: &mut serde_json::Value, b: serde_json::Value) {
 ///
 /// The resulting `ResolvedHook`s are ready to dispatch without further plugin
 /// lookups.
-fn dispatched_hooks_for_payload(
+fn dispatched_hooks_for_payload<D>(
     plugins: &[Plugin],
     input: &symposium::InputEvent,
     host_agent: HookAgent,
-    ctx: &mut crate::predicate::PredicateContext,
-) -> Vec<ResolvedHook> {
+    ctx: &mut PredicateContextImpl<D>,
+) -> Vec<ResolvedHook>
+where
+    D: PredicateDependencies,
+{
     tracing::trace!(?input, "matching hooks for payload");
 
     let mut out = Vec::new();

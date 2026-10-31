@@ -12,14 +12,6 @@
 //! source policy cannot observe, so this layer reports only public or unnamed.
 //! The recommendations Git source is consequently public for extensions but
 //! remains `git` for package-resolution accounting.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "resolution and extension producers consume this policy in later slices"
-    )
-)]
-
 use crate::{
     config::BUILTIN_RECOMMENDATIONS_URL,
     pm::{CARGO_PM, CRATES_IO_REGISTRY_URL, PackageProvenance, SourcedPackage},

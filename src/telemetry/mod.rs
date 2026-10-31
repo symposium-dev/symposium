@@ -17,6 +17,24 @@ mod resolution_witness;
 mod schema;
 mod state;
 mod storage;
+mod sync_report;
+
+pub(crate) use resolution_witness::{
+    OptionalWitnessMode, ResolutionEvidence, chained as chained_resolution_evidence,
+    evaluate_predicates as evaluate_resolution_predicates, plugin as plugin_resolution_evidence,
+    skill as skill_resolution_evidence,
+};
+pub(crate) use schema::ResolutionOutcome as SyncOutcome;
+pub(crate) use sync_report::{SyncReport, SyncReportInput};
+
+/// Whether the user has opted into telemetry-derived work.
+///
+/// Evidence retention, attribution indexing, and recording use this one gate
+/// so a future consent change cannot leave their enablement rules out of step.
+#[must_use]
+pub(crate) fn is_enabled(sym: &crate::config::Symposium) -> bool {
+    sym.config.telemetry.enabled
+}
 
 /// Namespace reserved for temporary files owned by telemetry storage.
 ///

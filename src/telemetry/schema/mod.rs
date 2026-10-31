@@ -35,10 +35,13 @@ pub(in crate::telemetry) use plugin_hook::{
     PluginHookMetricsUpdateError, PluginHookMetricsV1, PluginHookOutcome, PluginScope,
     PublicPluginCoordinate,
 };
-pub(in crate::telemetry) use resolution::extension::{ResolutionWitness, SafeSkillAttribution};
+pub(crate) use resolution::ResolutionOutcome;
+pub(in crate::telemetry) use resolution::extension::{
+    ResolutionPath, ResolutionWitness, SafeSkillAttribution,
+};
 pub(in crate::telemetry) use resolution::{
-    UnnamedPackageReason,
-    package::{PackageEcosystem, PublicPackageCoordinate},
+    UnnamedPackageReason, UnnamedPackageReasons,
+    package::{ExtensionMatch, PackageEcosystem, PublicPackageCoordinate},
 };
 
 use std::{fmt, num::NonZeroU64, str::FromStr, sync::LazyLock};

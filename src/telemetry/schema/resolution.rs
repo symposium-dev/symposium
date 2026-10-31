@@ -37,7 +37,7 @@ impl From<ResolutionTrigger> for DroppedOperation {
 /// Result of a completed full resolution and sync.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(in crate::telemetry) enum ResolutionOutcome {
+pub(crate) enum ResolutionOutcome {
     Ok,
     Partial,
     Error,
