@@ -231,9 +231,11 @@ plugin totals, and returns an unpublished staged snapshot. Its `stages.rs`
 child opens all three private stages, checks the snapshot day, applies one
 staged unit, and performs the shared poison preflight; `rows.rs` selects and
 mutates each family's row against the owned snapshot; and `error.rs` keeps the
-content-free failure vocabulary. `state/recording.rs` applies the root
-recording transition and keeps its resulting private state paired with that
-unpublished snapshot until locked storage consumes both together.
+content-free failure vocabulary. `state/recording.rs` owns the opaque change
+for one accepted operation. It schedules maintenance, binds the operation once
+when rows need identity, and keeps private state, an optional event request,
+the staged or deliberately absent metric half, and the maintenance token together
+until locked storage consumes them through its persistence access value.
 
 `state/aggregate/persistence.rs` wraps the three family wire shapes and owns
 cross-family row-identifier uniqueness plus agreement between every store day
@@ -301,11 +303,21 @@ complete private-state replacements, event-batch appends, and metric-snapshot
 replacements. Only `LockedStorage` can split its writer from an access value
 that borrows the same storage's canonical paths and held lock, so the access
 cannot name another destination or outlive the lock. The recording transaction
-owns the write ordering. Its `recording.rs` child prepares one complete
-state-and-snapshot unit, persists private state first, and mints a receipt tied
-to that held lock. The receipt attempts event publication before remeasuring
-and publishing metrics, reports both outcomes independently, and makes an
-unattempted publication loud on drop.
+owns the write ordering. Its `recorder.rs` child is the operation facade:
+it makes the non-waiting lock attempt, loads and observes private state, loads
+the accepted day's snapshot without turning unsafe content into an empty one,
+and sends the opaque state-produced change through the locked transaction. A
+change with no public half is dropped before persistence, including its
+unpersisted maintenance token. The returned outcome says whether nothing was
+recorded or private state persisted, then carries publication and maintenance
+results without retaining serializer errors that could contain private data.
+There is not yet a production caller for this facade. Its `recording.rs` child
+prepares one complete state-produced change, persists private state first, and
+mints a receipt tied to that held lock. A change with no aggregate rows carries
+a typed `NotRequested` reason instead of inventing an empty snapshot. The
+receipt attempts event publication before remeasuring and publishing staged
+metrics, reports both outcomes independently, and makes an unattempted
+publication loud on drop.
 Its `private_state.rs` child performs a bounded byte read, distinguishes TOML
 syntax errors, invalid state content, and unsupported versions without
 retaining parser source text, serializes the complete state before replacement,
@@ -323,8 +335,11 @@ stopping aggregates. Its `metrics.rs` sibling loads the 512 KiB aggregate
 snapshot as one fail-closed unit, retains each validated row's original
 physical bytes, exposes event-id-only insert and replace operations, sorts
 prepared rows by canonical wire labels, and atomically replaces only a fully
-prepared snapshot that fits both storage ceilings. Unsafe snapshot content
-stops aggregate updates for that day without stopping event appends. When
+prepared snapshot that fits both storage ceilings. Its empty-snapshot
+constructor is loader-private, so unsafe content cannot be rebuilt as an empty
+snapshot, and load failures project into a bounded, content-free
+`MetricSnapshotUnavailable` reason. Unsafe snapshot content therefore stops
+aggregate updates for that day without stopping event appends. When
 private state is absent, storage initializes the high-water mark and
 identifier-window anchor from the later of the current UTC
 day and the newest surviving daily filename; malformed and unsupported state

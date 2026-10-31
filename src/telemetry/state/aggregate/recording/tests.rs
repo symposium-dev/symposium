@@ -237,7 +237,7 @@ fn non_terminal_plugin_contributes_only_to_top_level_attempts() {
     let staged = aggregates
         .stage_hook_invocation(
             &recording,
-            MetricSnapshot::empty(recording.day()),
+            MetricSnapshot::empty_for_test(recording.day()),
             invocation(
                 vec![
                     terminal_plugin("plugin-a"),
@@ -272,7 +272,7 @@ fn a_mid_loop_plugin_failure_discards_every_private_stage() {
     let initial = aggregates
         .stage_hook_invocation(
             &recording,
-            MetricSnapshot::empty(recording.day()),
+            MetricSnapshot::empty_for_test(recording.day()),
             invocation(vec![terminal_plugin("plugin-b")], None),
         )
         .unwrap();
@@ -306,7 +306,7 @@ fn cross_family_event_id_mismatch_discards_every_private_stage() {
     let initial = aggregates
         .stage_hook_invocation(
             &recording,
-            MetricSnapshot::empty(recording.day()),
+            MetricSnapshot::empty_for_test(recording.day()),
             invocation(vec![terminal_plugin("plugin-a")], None),
         )
         .unwrap();
@@ -352,7 +352,7 @@ fn extension_failure_discards_hook_plugin_and_extension_private_state() {
     let initial = aggregates
         .stage_hook_invocation(
             &recording,
-            MetricSnapshot::empty(recording.day()),
+            MetricSnapshot::empty_for_test(recording.day()),
             invocation(
                 Vec::new(),
                 Some(extension(ExtensionInvocationPhase::Attempted)),
@@ -408,7 +408,7 @@ fn snapshot_day_mismatch_discards_every_private_stage() {
 
     let result = aggregates.stage_hook_invocation(
         &recording,
-        MetricSnapshot::empty(tomorrow),
+        MetricSnapshot::empty_for_test(tomorrow),
         invocation(Vec::new(), None),
     );
 
@@ -432,7 +432,7 @@ fn successful_invocation_advances_all_three_families() {
     let staged = aggregates
         .stage_hook_invocation(
             &recording,
-            MetricSnapshot::empty(recording.day()),
+            MetricSnapshot::empty_for_test(recording.day()),
             invocation(
                 vec![terminal_plugin("plugin-a")],
                 Some(extension(ExtensionInvocationPhase::Attempted)),
@@ -461,7 +461,7 @@ fn a_later_invocation_recovers_and_updates_the_existing_hook_row() {
     let first = aggregates
         .stage_hook_invocation(
             &recording,
-            MetricSnapshot::empty(recording.day()),
+            MetricSnapshot::empty_for_test(recording.day()),
             invocation(Vec::new(), None),
         )
         .unwrap();
@@ -493,7 +493,7 @@ fn hook_only_rollover_advances_all_three_store_days() {
     let staged = aggregates
         .stage_hook_invocation(
             &recording,
-            MetricSnapshot::empty(recording.day()),
+            MetricSnapshot::empty_for_test(recording.day()),
             invocation(Vec::new(), None),
         )
         .unwrap();
@@ -513,7 +513,7 @@ fn repeated_plugin_bucket_updates_one_row() {
     let staged = aggregates
         .stage_hook_invocation(
             &recording,
-            MetricSnapshot::empty(recording.day()),
+            MetricSnapshot::empty_for_test(recording.day()),
             invocation(
                 vec![terminal_plugin("plugin-a"), terminal_plugin("plugin-a")],
                 None,
