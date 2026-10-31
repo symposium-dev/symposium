@@ -57,6 +57,13 @@ pub(crate) struct Invocation {
     pub(crate) log_name: String,
 }
 
+impl Invocation {
+    /// Where a backend writes the whole of `stream` (`stdout` or `stderr`) in `logs`.
+    pub(crate) fn log(&self, logs: &Path, stream: &str) -> PathBuf {
+        logs.join(format!("{}.{stream}.log", self.log_name))
+    }
+}
+
 /// Prints the environment's names only: a trial's environment holds the model API key,
 /// which must not reach a log, a panic message, or a result.
 impl fmt::Debug for Invocation {
@@ -79,6 +86,10 @@ pub(crate) struct Finished {
     pub(crate) status: Option<ExitStatus>,
     pub(crate) stdout: Output,
     pub(crate) stderr: Output,
+    /// What went wrong collecting the output of a command the deadline stopped. The
+    /// timeout still stands, since the runner ended the command; this only explains why
+    /// the output may be incomplete.
+    pub(crate) after_deadline: Option<ProcessError>,
 }
 
 /// The end of one output stream, and where all of it was written.
@@ -128,6 +139,7 @@ impl Finished {
             status: None,
             stdout: Output::default(),
             stderr: Output::default(),
+            after_deadline: None,
         }
     }
 
@@ -141,6 +153,14 @@ impl Finished {
 }
 
 impl Output {
+    /// A stream whose tail was lost, though its log may still hold it.
+    fn logged_at(log: PathBuf) -> Self {
+        Self {
+            log,
+            ..Self::default()
+        }
+    }
+
     /// The last bytes of the stream, lossily decoded.
     pub(crate) fn tail(&self) -> String {
         String::from_utf8_lossy(&self.tail).into_owned()
@@ -173,18 +193,29 @@ impl Backend for Local {
         logs: &Path,
     ) -> Result<Finished, ProcessError> {
         let mut command = command(invocation);
-        let log = |stream: &str| logs.join(format!("{}.{stream}.log", invocation.log_name));
-        let (stdout_log, stderr_log) = (log("stdout"), log("stderr"));
+        let (stdout_log, stderr_log) = (
+            invocation.log(logs, "stdout"),
+            invocation.log(logs, "stderr"),
+        );
         let ends = Instant::now() + deadline;
         let mut process =
             Supervised::start(&mut command, &invocation.program, &stdout_log, &stderr_log)?;
         let status = process.wait_until(ends)?;
-        let [stdout, stderr] = process.collect()?;
-        Ok(Finished {
-            status,
-            stdout,
-            stderr,
-        })
+        match (status, process.collect()) {
+            (_, Ok([stdout, stderr])) => Ok(Finished {
+                status,
+                stdout,
+                stderr,
+                after_deadline: None,
+            }),
+            (None, Err(error)) => Ok(Finished {
+                status,
+                stdout: Output::logged_at(stdout_log),
+                stderr: Output::logged_at(stderr_log),
+                after_deadline: Some(error),
+            }),
+            (Some(_), Err(error)) => Err(error),
+        }
     }
 }
 
@@ -605,6 +636,78 @@ mod tests {
         assert!(finished.succeeded());
         assert_eq!(finished.stdout.tail().trim(), "parent done");
         assert!(started.elapsed() < Duration::from_secs(30));
+    }
+
+    /// A descendant that leaves the process group survives the kill and holds stdout
+    /// open until the test releases it, however slow the machine. Windows has no
+    /// equivalent: the job holds every descendant.
+    #[cfg(unix)]
+    #[test]
+    fn a_deadline_stands_when_the_output_then_stays_open() {
+        /// Lets the descendant exit, however the test ends, and waits until it has seen
+        /// the release: it is dropped before the directory holding the release is.
+        struct Release(PathBuf);
+
+        impl Drop for Release {
+            fn drop(&mut self) {
+                let _ = fs::write(&self.0, "");
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while self.0.exists() && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(20));
+                }
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        binary_crate(
+            dir.path(),
+            r#"
+            use std::os::unix::process::CommandExt;
+            use std::path::Path;
+            use std::time::{Duration, Instant};
+            fn main() {
+                let args: Vec<String> = std::env::args().collect();
+                if args[1] == "descendant" {
+                    // Bounded, so a test killed before releasing it leaves nothing behind.
+                    let started = Instant::now();
+                    let release = Path::new(&args[2]);
+                    while !release.exists() && started.elapsed() < Duration::from_secs(300) {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                    // Tells the test it has seen the release.
+                    let _ = std::fs::remove_file(release);
+                    return;
+                }
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args(["descendant", &args[2]])
+                    .process_group(0)
+                    .spawn()
+                    .unwrap();
+                loop {
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            }
+            "#,
+        );
+        let release = Release(dir.path().join("release"));
+        let invocation = Invocation {
+            program: dir.path().join("target/debug/fixture").into(),
+            args: vec!["parent".into(), release.0.clone().into()],
+            dir: dir.path().to_owned(),
+            env: Vec::new(),
+            log_name: "run".to_owned(),
+        };
+
+        let finished = Local
+            .run(&invocation, Duration::from_secs(2), dir.path())
+            .unwrap();
+
+        assert!(finished.timed_out());
+        assert!(
+            matches!(finished.after_deadline, Some(ProcessError::OutputNotClosed)),
+            "{finished:?}"
+        );
+        assert!(finished.stdout.log().ends_with("run.stdout.log"));
     }
 
     #[test]

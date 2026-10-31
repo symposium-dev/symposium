@@ -20,7 +20,7 @@ use std::fmt;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-pub(crate) use error::{GradeError, ImportError, ListingProblem, ProcessError};
+pub(crate) use error::{GradeError, ImportError, ListingProblem, ProcessError, with_causes};
 pub(crate) use import::{OutsideEdit, copy_exact, copy_tree};
 pub(crate) use solution::check_solution;
 
@@ -79,7 +79,11 @@ pub(crate) enum Outcome {
         /// Whether earlier output was left out of either; the logs have it all.
         truncated: bool,
     },
-    TimedOut,
+    TimedOut {
+        /// What went wrong collecting the output once the deadline stopped the command,
+        /// with its causes. The timeout still stands.
+        after_deadline: Option<String>,
+    },
     /// Exited successfully, but its output did not confirm exactly one passing test.
     Unconfirmed {
         stdout: String,
@@ -120,7 +124,13 @@ impl fmt::Display for Step {
         let kind = &self.kind;
         let output = match &self.outcome {
             Outcome::Passed => return write!(f, "passes {kind}"),
-            Outcome::TimedOut => return write!(f, "did not finish {kind} in time"),
+            Outcome::TimedOut { after_deadline } => {
+                write!(f, "did not finish {kind} in time")?;
+                if let Some(problem) = after_deadline {
+                    write!(f, ", then {problem}")?;
+                }
+                return Ok(());
+            }
             Outcome::Skipped => return write!(f, "skips {kind} after the build failed"),
             Outcome::Failed { stdout, stderr, .. } => {
                 write!(f, "fails {kind}:")?;
@@ -326,7 +336,9 @@ fn run_step(
 /// The submission's outcome for a command that ran.
 fn outcome_of(finished: &Finished) -> Outcome {
     if finished.timed_out() {
-        Outcome::TimedOut
+        Outcome::TimedOut {
+            after_deadline: finished.after_deadline.as_ref().map(with_causes),
+        }
     } else if finished.succeeded() {
         Outcome::Passed
     } else {
@@ -398,7 +410,7 @@ fn preflight(
     step: &str,
     cap: Duration,
 ) -> Result<Finished, GradeError> {
-    let finished = commands
+    let mut finished = commands
         .run(invocation, cap)
         .map_err(|source| GradeError::Process {
             step: step.to_owned(),
@@ -407,6 +419,7 @@ fn preflight(
     if finished.timed_out() {
         return Err(GradeError::TimedOut {
             step: step.to_owned(),
+            after_deadline: finished.after_deadline.take(),
         });
     }
     if !finished.succeeded() {
@@ -792,6 +805,71 @@ mod tests {
         assert_eq!(report.steps[2].outcome, Outcome::Passed);
     }
 
+    /// A command the deadline stopped whose output then stayed open.
+    struct StuckOutput;
+
+    impl Backend for StuckOutput {
+        fn run(
+            &self,
+            _invocation: &Invocation,
+            _deadline: Duration,
+            _logs: &Path,
+        ) -> Result<Finished, ProcessError> {
+            let mut finished = Finished::never_started();
+            finished.after_deadline = Some(ProcessError::OutputNotClosed);
+            Ok(finished)
+        }
+    }
+
+    #[test]
+    fn a_preflight_timeout_keeps_the_problem_after_its_deadline() {
+        let logs = TempDir::new().unwrap();
+        let mut commands = Commands {
+            backend: &StuckOutput,
+            budget: Budget::new(Duration::from_secs(10)),
+            logs: logs.path(),
+        };
+        let invocation = Cargo::new(logs.path().to_owned(), logs.path()).metadata("metadata");
+
+        let error = preflight(
+            &mut commands,
+            &invocation,
+            "cargo metadata",
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            GradeError::TimedOut {
+                after_deadline: Some(ProcessError::OutputNotClosed),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn a_problem_after_the_deadline_reaches_the_report() {
+        let mut finished = Finished::never_started();
+        finished.after_deadline = Some(ProcessError::Output(std::io::Error::other("disk full")));
+
+        let step = Step {
+            kind: StepKind::Build,
+            outcome: outcome_of(&finished),
+        };
+
+        assert_eq!(
+            step.outcome,
+            Outcome::TimedOut {
+                after_deadline: Some("cannot collect the command's output: disk full".to_owned())
+            }
+        );
+        assert_eq!(
+            step.to_string(),
+            "did not finish `cargo build` in time, then cannot collect the command's output: disk full"
+        );
+    }
+
     #[test]
     fn a_build_past_its_deadline_times_out() {
         let fixture = TaskFixture::new("");
@@ -802,7 +880,12 @@ mod tests {
 
         let report = grade_with(&fixture, "pub fn works() {}", &limits);
 
-        assert_eq!(report.steps[0].outcome, Outcome::TimedOut);
+        assert_eq!(
+            report.steps[0].outcome,
+            Outcome::TimedOut {
+                after_deadline: None
+            }
+        );
     }
 }
 

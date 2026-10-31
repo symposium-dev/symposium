@@ -92,7 +92,12 @@ pub(crate) enum GradeError {
         source: ProcessError,
     },
     #[error("`{step}` did not finish in time")]
-    TimedOut { step: String },
+    TimedOut {
+        step: String,
+        /// What went wrong collecting its output once the deadline stopped it.
+        #[source]
+        after_deadline: Option<ProcessError>,
+    },
     #[error("`{step}` failed on the trusted starter: {stderr}")]
     Preflight { step: String, stderr: String },
     #[error(
@@ -170,4 +175,16 @@ impl ImportError {
             Self::UnsupportedEntry { .. } | Self::SubmissionRoot(_) | Self::Submission(_)
         )
     }
+}
+
+/// `error` followed by each of its causes, as one line for a report.
+pub(crate) fn with_causes(error: &impl std::error::Error) -> String {
+    let mut line = error.to_string();
+    let mut cause = error.source();
+    while let Some(inner) = cause {
+        line.push_str(": ");
+        line.push_str(&inner.to_string());
+        cause = inner.source();
+    }
+    line
 }
