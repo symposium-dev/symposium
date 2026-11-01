@@ -4,6 +4,7 @@
 
 pub(crate) mod installed;
 pub(crate) mod sync;
+pub(crate) mod trace;
 
 use crate::client::Load;
 use crate::task::{SkillExpectations, SkillName};

@@ -234,6 +234,24 @@ impl RealSrt {
             .run(&invocation, deadline, &trial.evidence())
             .unwrap()
     }
+
+    /// Runs Symposium's `SessionStart` hook for Claude Code in `trial`, as the client
+    /// does when a session starts in the project.
+    pub(crate) fn run_session_start(&self, trial: &Trial) -> crate::grade::process::Finished {
+        let payload = serde_json::json!({
+            "session_id": "00000000-0000-4000-8000-000000000000",
+            "transcript_path": trial.session().join("transcript.jsonl"),
+            "cwd": trial.project(),
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+        });
+        self.run(
+            trial,
+            r#"printf '%s' "$1" | cargo-agents hook claude session-start"#,
+            &[payload.to_string().into()],
+            std::time::Duration::from_secs(60),
+        )
+    }
 }
 
 /// The `srt` installed on this machine, with the `node` and `bwrap` it needs.

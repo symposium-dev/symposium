@@ -414,8 +414,6 @@ mod tests {
     #[test]
     #[ignore = "needs node, srt, and bubblewrap installed, and builds cargo-agents"]
     fn the_session_start_hook_records_a_sync_this_reader_reads() {
-        use std::time::Duration;
-
         use crate::run::Configuration;
         use crate::run::client::Client;
         use crate::run::stage::{Audience, Tool};
@@ -428,20 +426,7 @@ mod tests {
         real.set_up_symposium(&trial, Client::ClaudeCode);
         let records = trial.sync_records();
         assert!(!records.exists(), "a record before the hook ran");
-        let payload = serde_json::json!({
-            "session_id": "00000000-0000-4000-8000-000000000000",
-            "transcript_path": trial.session().join("transcript.jsonl"),
-            "cwd": trial.project(),
-            "hook_event_name": "SessionStart",
-            "source": "startup",
-        });
-
-        let finished = real.run(
-            &trial,
-            r#"printf '%s' "$1" | cargo-agents hook claude session-start"#,
-            &[payload.to_string().into()],
-            Duration::from_secs(60),
-        );
+        let finished = real.run_session_start(&trial);
 
         assert!(finished.succeeded(), "{}", finished.stderr.tail());
         assert_eq!(

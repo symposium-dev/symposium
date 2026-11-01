@@ -258,6 +258,11 @@ impl Trial {
         self.root.join("evidence")
     }
 
+    /// `SYMPOSIUM_HOOK_TRACE`: Symposium appends a line for each hook call here.
+    pub(crate) fn hook_trace(&self) -> PathBuf {
+        self.evidence().join("hook-trace.jsonl")
+    }
+
     /// The client's transcript and logs. The runner writes them from outside the
     /// sandbox, and the policy gives the trial no access, so the agent cannot alter them.
     pub(crate) fn session(&self) -> PathBuf {

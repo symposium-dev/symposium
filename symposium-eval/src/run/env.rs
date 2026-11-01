@@ -72,14 +72,13 @@ impl Trial {
             .into_iter()
             .chain(SYSTEM_PATH.map(PathBuf::from));
         let path = env::join_paths(path).map_err(RunError::PathList)?;
-        let hook_trace = self.evidence().join("hook-trace.jsonl");
         Ok(vec![
             ("HOME".into(), self.home().into()),
             ("PATH".into(), path),
             ("TMPDIR".into(), self.tmp().into()),
             ("CARGO_HOME".into(), self.cargo_home().into()),
             ("EVAL_EVIDENCE_DIR".into(), self.evidence().into()),
-            ("SYMPOSIUM_HOOK_TRACE".into(), hook_trace.into()),
+            ("SYMPOSIUM_HOOK_TRACE".into(), self.hook_trace().into()),
             (api_key.name.into(), api_key.value.clone()),
         ])
     }
