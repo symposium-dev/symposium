@@ -1223,7 +1223,7 @@ mod tests {
     async fn builtin_stop_returns_matching_empty_output() {
         let tmp = tempfile::tempdir().unwrap();
         let sym = Symposium::from_dir(tmp.path());
-        let deps = sym.workspace_deps(tmp.path());
+        let deps = sym.workspace(tmp.path());
         let input = symposium::InputEvent::Stop(symposium::StopInput::new(None, None));
 
         for notify in [false, true] {
