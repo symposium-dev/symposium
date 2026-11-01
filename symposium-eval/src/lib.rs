@@ -12,6 +12,7 @@ mod evals;
 #[expect(dead_code, reason = "the runner decides these later in RFD step 4")]
 mod expect;
 mod grade;
+mod jsonl;
 #[expect(dead_code, reason = "the runner launches trials later in RFD step 2")]
 mod run;
 mod task;

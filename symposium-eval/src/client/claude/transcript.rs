@@ -9,7 +9,7 @@
 //! outranks a malformed line: another session's transcript says nothing about this one.
 
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -22,10 +22,7 @@ use super::version::Version;
 use crate::client::{
     Completion, InstalledSkill, Load, ProvenanceError, Reading, TranscriptError, Unusable,
 };
-
-/// The longest line read, without its newline. Recorded lines reach tens of KiB, from
-/// large tool results; this leaves room for far larger ones.
-const MAX_LINE: usize = 8 * 1024 * 1024;
+use crate::jsonl::{self, Line, MAX_LINE};
 
 /// What every event is first read for.
 #[derive(Debug, Deserialize)]
@@ -141,7 +138,7 @@ impl<'a> Reader<'a> {
     fn lines(&mut self, mut transcript: impl BufRead, path: &Path) {
         let mut line = Vec::new();
         for number in 1.. {
-            match next_line(&mut transcript, &mut line) {
+            match jsonl::next_line(&mut transcript, &mut line) {
                 Ok(Line::End) => break,
                 Ok(Line::Read) => {}
                 Ok(Line::TooLong) => {
@@ -252,30 +249,6 @@ impl<'a> Reader<'a> {
             loads: self.calls.outcomes().into_iter().map(Load::from).collect(),
         }
     }
-}
-
-/// What reading one line of a transcript found.
-enum Line {
-    End,
-    Read,
-    /// Longer than [`MAX_LINE`]; the line was skipped.
-    TooLong,
-}
-
-/// Reads the next line of `transcript` into `line`, holding at most [`MAX_LINE`] bytes
-/// of it.
-fn next_line(transcript: &mut impl BufRead, line: &mut Vec<u8>) -> io::Result<Line> {
-    line.clear();
-    let limit = MAX_LINE as u64 + 1;
-    if transcript.by_ref().take(limit).read_until(b'\n', line)? == 0 {
-        return Ok(Line::End);
-    }
-    if line.len() > MAX_LINE && !line.ends_with(b"\n") {
-        // Drop the rest of the line rather than hold it.
-        transcript.skip_until(b'\n')?;
-        return Ok(Line::TooLong);
-    }
-    Ok(Line::Read)
 }
 
 /// Reads `line`, the transcript's line `number`, as a `T`.
