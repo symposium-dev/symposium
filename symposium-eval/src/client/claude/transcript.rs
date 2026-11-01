@@ -9,7 +9,7 @@
 //! outranks a malformed line: another session's transcript says nothing about this one.
 
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -22,6 +22,10 @@ use super::version::Version;
 use crate::client::{
     Completion, InstalledSkill, Load, ProvenanceError, Reading, TranscriptError, Unusable,
 };
+
+/// The longest line read, without its newline. Recorded lines reach tens of KiB, from
+/// large tool results; this leaves room for far larger ones.
+const MAX_LINE: usize = 8 * 1024 * 1024;
 
 /// What every event is first read for.
 #[derive(Debug, Deserialize)]
@@ -132,14 +136,22 @@ impl<'a> Reader<'a> {
     }
 
     /// Reads `transcript`, found at `path`, a line at a time, since tool results can make
-    /// it large.
+    /// it large. A line longer than [`MAX_LINE`] is malformed and skipped unread, since
+    /// the client chose its size; reading goes on, so a later mismatch still shows.
     fn lines(&mut self, mut transcript: impl BufRead, path: &Path) {
         let mut line = Vec::new();
         for number in 1.. {
-            line.clear();
-            match transcript.read_until(b'\n', &mut line) {
-                Ok(0) => break,
-                Ok(_) => {}
+            match next_line(&mut transcript, &mut line) {
+                Ok(Line::End) => break,
+                Ok(Line::Read) => {}
+                Ok(Line::TooLong) => {
+                    let reason = format!("longer than {MAX_LINE} bytes");
+                    self.unreadable(TranscriptError::Malformed {
+                        line: number,
+                        reason,
+                    });
+                    continue;
+                }
                 Err(source) => {
                     let path = path.to_owned();
                     return self.unreadable(TranscriptError::Read { path, source });
@@ -240,6 +252,30 @@ impl<'a> Reader<'a> {
             loads: self.calls.outcomes().into_iter().map(Load::from).collect(),
         }
     }
+}
+
+/// What reading one line of a transcript found.
+enum Line {
+    End,
+    Read,
+    /// Longer than [`MAX_LINE`]; the line was skipped.
+    TooLong,
+}
+
+/// Reads the next line of `transcript` into `line`, holding at most [`MAX_LINE`] bytes
+/// of it.
+fn next_line(transcript: &mut impl BufRead, line: &mut Vec<u8>) -> io::Result<Line> {
+    line.clear();
+    let limit = MAX_LINE as u64 + 1;
+    if transcript.by_ref().take(limit).read_until(b'\n', line)? == 0 {
+        return Ok(Line::End);
+    }
+    if line.len() > MAX_LINE && !line.ends_with(b"\n") {
+        // Drop the rest of the line rather than hold it.
+        transcript.skip_until(b'\n')?;
+        return Ok(Line::TooLong);
+    }
+    Ok(Line::Read)
 }
 
 /// Reads `line`, the transcript's line `number`, as a `T`.
@@ -453,6 +489,45 @@ mod tests {
         let transcript = format!("{FINISHED}{{\"type\":\"assist");
 
         assert_eq!(malformed_line(completion(&transcript)), next_line(FINISHED));
+    }
+
+    /// An unknown event whose line, without its newline, is `length` bytes.
+    fn padded_event(length: usize) -> String {
+        let empty = r#"{"type":"padding","fill":""}"#;
+        let fill = "x".repeat(length - empty.len());
+        format!(r#"{{"type":"padding","fill":"{fill}"}}"#)
+    }
+
+    #[test]
+    fn a_line_of_the_longest_length_is_read() {
+        let transcript = format!("{}\n{FINISHED}", padded_event(MAX_LINE));
+
+        assert_eq!(completion(&transcript).unwrap(), Completion::Finished);
+    }
+
+    #[test]
+    fn a_longer_line_is_malformed() {
+        let transcript = format!("{}\n{FINISHED}", padded_event(MAX_LINE + 1));
+
+        assert_eq!(malformed_line(completion(&transcript)), 1);
+    }
+
+    #[test]
+    fn a_mismatch_after_a_longer_line_still_shows() {
+        let other = Uuid::new_v4();
+        let transcript = format!(
+            "{}\n{}\n{}\n",
+            recorded_init(),
+            padded_event(MAX_LINE + 1),
+            as_session(recorded_result(), other)
+        );
+
+        let error = completion(&transcript).unwrap_err();
+
+        assert!(
+            matches!(&error, Unusable::Provenance(ProvenanceError::Session { found, .. }) if *found == other.to_string()),
+            "{error:?}"
+        );
     }
 
     #[test]
