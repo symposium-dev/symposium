@@ -80,7 +80,8 @@ pub(crate) enum Completion {
 /// the agent.
 #[derive(Debug)]
 pub(crate) struct Execution {
-    /// The file may be missing, as when the client never started.
+    /// The client's standard output, under the trial's `session/`. Missing when the
+    /// client never started, and not evidence when the backend lost hold of the output.
     pub(crate) transcript: PathBuf,
     pub(crate) ended: Ended,
     pub(crate) loads: Vec<Load>,

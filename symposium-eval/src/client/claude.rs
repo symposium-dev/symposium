@@ -21,7 +21,7 @@ use crate::run::client::Client;
 use crate::run::{Machine, RunError, Trial};
 
 /// One Claude Code session, running one model.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub(crate) struct Claude {
     model: String,
     /// Names the session's own transcript under the trial's home, which survives a
@@ -206,11 +206,180 @@ mod tests {
             let invocation = claude.invocation(&trial, "do the task", Vec::new());
             let options = &invocation.args[..invocation.args.len() - 1];
             for flag in FORBIDDEN {
+                let with_value = format!("{flag}=");
                 assert!(
-                    options.iter().all(|arg| arg != flag),
+                    options.iter().all(|arg| {
+                        let arg = arg.to_string_lossy();
+                        arg != flag && !arg.starts_with(&with_value)
+                    }),
                     "{flag} in {options:?}"
                 );
             }
+        }
+    }
+
+    /// A stand-in `claude` that replays a recorded transcript, run through the real
+    /// backend: no model and no API key, but the adapter's command line, supervision,
+    /// deadline and transcript reading all take part.
+    #[cfg(unix)]
+    mod stand_in {
+        use std::fs;
+        use std::time::Duration;
+
+        use super::*;
+        use crate::client::{ClientError, Ended, Execution, Load, ProvenanceError, execute};
+        use crate::grade::process::Local;
+        use crate::run::test_support::executable;
+        use crate::task::SkillName;
+
+        const SKILL_LOADED: &str = include_str!("claude/transcripts/skill_loaded.jsonl");
+        const MODEL_ERROR: &str = include_str!("claude/transcripts/model_error.jsonl");
+        const RECORDED_SESSION: &str = "00000000-0000-4000-8000-000000000000";
+
+        /// Which session the stand-in writes its events as.
+        enum Speaks {
+            AsRequested,
+            AsRecorded,
+        }
+
+        /// Stages a `claude` that writes `transcript` as `speaks` says, then runs `then`.
+        fn stage(trial: &Trial, transcript: &str, speaks: Speaks, then: &str) {
+            let recorded = trial.session().join("recorded.jsonl");
+            fs::write(&recorded, transcript).unwrap();
+            let session = match speaks {
+                Speaks::AsRequested => r#""$session""#,
+                Speaks::AsRecorded => RECORDED_SESSION,
+            };
+            fs::create_dir_all(trial.bin()).unwrap();
+            executable(
+                &trial.bin().join("claude"),
+                &format!(
+                    r#"#!/bin/sh
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --session-id) session=$2; shift ;;
+        --) break ;;
+    esac
+    shift
+done
+sed "s/{RECORDED_SESSION}/{session}/g" '{}'
+{then}
+"#,
+                    recorded.display()
+                ),
+            );
+        }
+
+        fn run(transcript: &str, speaks: Speaks, then: &str, deadline: Duration) -> Execution {
+            let host = Host::new();
+            let trial = trial(&host.batch(), 1, Configuration::Symposium);
+            stage(&trial, transcript, speaks, then);
+            let skill = InstalledSkill {
+                name: SkillName::new("fixture-greeting").unwrap(),
+                skill_md: trial
+                    .project()
+                    .join(".claude/skills/fixture-greeting/SKILL.md"),
+            };
+            execute(
+                &Claude::enforced(model(), version::MINIMUM),
+                &Local,
+                &trial,
+                vec![("PATH".into(), "/usr/bin:/bin".into())],
+                "do the task",
+                &[skill],
+                deadline,
+            )
+        }
+
+        fn before_result(transcript: &str) -> &str {
+            &transcript[..transcript.find(r#"{"type":"result""#).unwrap()]
+        }
+
+        #[test]
+        fn a_replayed_session_completes_and_loads_its_skill() {
+            let execution = run(
+                SKILL_LOADED,
+                Speaks::AsRequested,
+                "exit 0",
+                Duration::from_secs(60),
+            );
+
+            assert!(matches!(execution.ended, Ended::Completed), "{execution:?}");
+            assert_eq!(execution.loads, [Load::Loaded]);
+        }
+
+        #[test]
+        fn a_client_that_ignores_the_requested_session_is_mismatched() {
+            let execution = run(
+                SKILL_LOADED,
+                Speaks::AsRecorded,
+                "exit 0",
+                Duration::from_secs(60),
+            );
+
+            assert!(
+                matches!(
+                    &execution.ended,
+                    Ended::Mismatched(ProvenanceError::Session { found, .. })
+                        if found == RECORDED_SESSION
+                ),
+                "{execution:?}"
+            );
+            assert_eq!(execution.loads, [Load::Unknown]);
+        }
+
+        #[test]
+        fn a_session_past_its_deadline_times_out_and_keeps_its_load() {
+            let execution = run(
+                before_result(SKILL_LOADED),
+                Speaks::AsRequested,
+                "exec sleep 60",
+                Duration::from_secs(3),
+            );
+
+            assert!(
+                matches!(
+                    execution.ended,
+                    Ended::TimedOut {
+                        after_deadline: None
+                    }
+                ),
+                "{execution:?}"
+            );
+            assert_eq!(execution.loads, [Load::Loaded]);
+        }
+
+        #[test]
+        fn an_api_error_is_reported_in_claudes_words_whatever_the_exit() {
+            for exit in ["exit 0", "exit 1"] {
+                let execution = run(
+                    MODEL_ERROR,
+                    Speaks::AsRequested,
+                    exit,
+                    Duration::from_secs(60),
+                );
+
+                assert!(
+                    matches!(&execution.ended, Ended::Failed(ClientError::Reported(message)) if message.contains("not-a-model")),
+                    "{execution:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn a_client_that_stops_without_a_result_has_no_completion() {
+            let execution = run(
+                before_result(SKILL_LOADED),
+                Speaks::AsRequested,
+                "exit 0",
+                Duration::from_secs(60),
+            );
+
+            assert!(
+                matches!(execution.ended, Ended::Failed(ClientError::NoCompletion)),
+                "{execution:?}"
+            );
+            assert_eq!(execution.loads, [Load::Loaded]);
         }
     }
 }
