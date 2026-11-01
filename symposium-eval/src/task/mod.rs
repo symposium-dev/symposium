@@ -67,9 +67,9 @@ pub(crate) struct Task {
 /// The four skill lists with `used` resolved; no skill is in two lists that contradict
 /// each other.
 #[derive(Debug, Clone)]
-#[expect(
-    dead_code,
-    reason = "expectation checks read these in a later RFD step"
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "the runner reads these later in RFD step 4")
 )]
 pub(crate) struct SkillExpectations {
     installed: Vec<SkillName>,
@@ -88,6 +88,16 @@ pub(crate) enum SkillList {
 }
 
 impl SkillExpectations {
+    /// Skills that must be installed during the session.
+    pub(crate) fn installed(&self) -> &[SkillName] {
+        &self.installed
+    }
+
+    /// Skills that must not be installed.
+    pub(crate) fn not_installed(&self) -> &[SkillName] {
+        &self.not_installed
+    }
+
     /// Skills the agent must successfully load.
     pub(crate) fn used(&self) -> &[SkillName] {
         &self.used
@@ -100,12 +110,23 @@ impl SkillExpectations {
 
     /// Expectations that only assert use.
     #[cfg(test)]
-    pub(crate) fn for_tests(used: Vec<SkillName>, not_used: Vec<SkillName>) -> Self {
+    pub(crate) fn using(used: Vec<SkillName>, not_used: Vec<SkillName>) -> Self {
         Self {
             installed: Vec::new(),
             not_installed: Vec::new(),
             used,
             not_used,
+        }
+    }
+
+    /// Expectations that only assert installation.
+    #[cfg(test)]
+    pub(crate) fn installing(installed: Vec<SkillName>, not_installed: Vec<SkillName>) -> Self {
+        Self {
+            installed,
+            not_installed,
+            used: Vec::new(),
+            not_used: Vec::new(),
         }
     }
 }

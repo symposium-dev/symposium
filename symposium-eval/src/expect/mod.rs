@@ -2,6 +2,8 @@
 //! "Expectations"). Evidence that cannot decide an assertion makes it
 //! [`Verdict::Inconclusive`], never quietly a pass or a fail.
 
+pub(crate) mod installed;
+
 use crate::client::Load;
 use crate::task::{SkillExpectations, SkillName};
 
@@ -120,7 +122,7 @@ mod tests {
     #[test]
     fn each_named_skill_is_decided_with_its_own_load() {
         let expected =
-            SkillExpectations::for_tests(vec![skill("first-skill")], vec![skill("second-skill")]);
+            SkillExpectations::using(vec![skill("first-skill")], vec![skill("second-skill")]);
 
         let decided = skill_use(&expected, |name| {
             if *name == skill("first-skill") {
