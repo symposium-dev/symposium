@@ -10,7 +10,7 @@
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::value::RawValue;
@@ -50,6 +50,8 @@ struct Envelope<'a> {
 struct Init {
     session_id: String,
     claude_code_version: String,
+    /// Where Claude Code ran, which a relative tool path is resolved against.
+    cwd: Option<PathBuf>,
 }
 
 /// A `result` event.
@@ -143,6 +145,9 @@ impl<'a> Reader<'a> {
                     return self.unreadable(TranscriptError::Read { path, source });
                 }
             }
+            if line.trim_ascii().is_empty() {
+                continue;
+            }
             if let Err(error) = self.line(&line, number) {
                 self.unreadable(error);
             }
@@ -171,6 +176,9 @@ impl<'a> Reader<'a> {
     }
 
     fn init(&mut self, init: Init) {
+        if let Some(cwd) = &init.cwd {
+            self.calls.matcher_mut().ran_in(cwd);
+        }
         if let Err(error) = init.check(&self.session, self.version) {
             self.mismatched(error);
         }
@@ -467,6 +475,20 @@ pub(super) mod tests {
         let transcript = format!("{}not json\n", without_result(FINISHED));
 
         assert_eq!(malformed_line(completion(&transcript)), 6);
+    }
+
+    #[test]
+    fn a_last_line_cut_off_mid_write_is_malformed() {
+        let transcript = format!("{FINISHED}{{\"type\":\"assist");
+
+        assert_eq!(malformed_line(completion(&transcript)), 7);
+    }
+
+    #[test]
+    fn a_blank_line_is_skipped() {
+        let transcript = FINISHED.replacen('\n', "\n\n  \n", 1);
+
+        assert_eq!(completion(&transcript).unwrap(), Completion::Finished);
     }
 
     #[test]

@@ -508,11 +508,7 @@ mod tests {
     #[test]
     fn another_sessions_transcript_is_mismatched_whatever_the_exit() {
         for status in [0, 1] {
-            let ended = replay(
-                "foreign
-",
-                Some(status),
-            );
+            let ended = replay("foreign\n", Some(status));
 
             assert!(
                 matches!(ended, Ended::Mismatched(ProvenanceError::Unstated)),
@@ -534,6 +530,13 @@ mod tests {
             "{execution:?}"
         );
         assert_eq!(execution.loads, [Load::Loaded]);
+    }
+
+    #[test]
+    fn a_timeout_outranks_a_malformed_transcript() {
+        let ended = replay("garbled\n", None);
+
+        assert!(matches!(ended, Ended::TimedOut { .. }), "{ended:?}");
     }
 
     #[test]

@@ -26,13 +26,25 @@ struct ReadInput {
 /// Matches tool calls to the skills they would load.
 pub(super) struct Skills<'a> {
     skills: &'a [InstalledSkill],
-    /// Where Claude Code ran, which a relative `Read` path is resolved against.
-    project: &'a Path,
+    /// Each skill's `SKILL.md`, in every form a `Read` could name it by.
+    files: Vec<Vec<PathBuf>>,
+    /// Where a relative `Read` path is resolved: where Claude Code says it ran, once it
+    /// has said so, and the project until then.
+    cwd: PathBuf,
 }
 
 impl<'a> Skills<'a> {
-    pub(super) fn new(skills: &'a [InstalledSkill], project: &'a Path) -> Self {
-        Self { skills, project }
+    pub(super) fn new(skills: &'a [InstalledSkill], project: &Path) -> Self {
+        Self {
+            skills,
+            files: skills.iter().map(|skill| forms(&skill.skill_md)).collect(),
+            cwd: project.to_owned(),
+        }
+    }
+
+    /// Claude Code reported running in `cwd`.
+    pub(super) fn ran_in(&mut self, cwd: &Path) {
+        self.cwd = cwd.to_owned();
     }
 
     fn position(&self, matches: impl Fn(usize) -> bool) -> Option<usize> {
@@ -59,8 +71,8 @@ impl Matcher for Skills<'_> {
                 let Ok(ReadInput { file_path }) = serde_json::from_value(input) else {
                     return Target::Unreadable;
                 };
-                let read = normalize(&self.project.join(file_path));
-                self.position(|index| normalize(&self.skills[index].skill_md) == read)
+                let read = forms(&self.cwd.join(file_path));
+                self.position(|index| self.files[index].iter().any(|file| read.contains(file)))
             }
             _ => None,
         };
@@ -77,6 +89,19 @@ impl From<Outcome> for Load {
             Outcome::Unknown => Load::Unknown,
         }
     }
+}
+
+/// The forms `path` can be named by: with `.` and `..` resolved by name, and, when it
+/// exists, with links resolved too (macOS keeps temporary files under `/var`, a link to
+/// `/private/var`).
+fn forms(path: &Path) -> Vec<PathBuf> {
+    let mut forms = vec![normalize(path)];
+    if let Ok(resolved) = path.canonicalize()
+        && !forms.contains(&resolved)
+    {
+        forms.push(resolved);
+    }
+    forms
 }
 
 /// `path` with `.` and `..` resolved by name alone, since the transcript's paths need
@@ -191,6 +216,55 @@ mod tests {
         );
 
         assert_eq!(load_of(&transcript), Load::Loaded);
+    }
+
+    #[test]
+    fn a_relative_read_is_resolved_where_claude_code_ran() {
+        let transcript = READ_LOADED
+            .replace(r#""cwd":"/trial/project""#, r#""cwd":"/trial/project/src""#)
+            .replace(
+                r#""file_path":".claude/skills"#,
+                r#""file_path":"../.claude/skills"#,
+            );
+
+        assert_eq!(load_of(&transcript), Load::Loaded);
+    }
+
+    #[test]
+    fn a_read_from_elsewhere_does_not_load_the_skill() {
+        let transcript =
+            READ_LOADED.replace(r#""cwd":"/trial/project""#, r#""cwd":"/trial/elsewhere""#);
+
+        assert_eq!(load_of(&transcript), Load::NotObserved);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_read_through_a_linked_directory_reaches_the_same_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let real = dir.path().join("real");
+        let installed = real.join(".claude/skills/fixture-greeting");
+        std::fs::create_dir_all(&installed).unwrap();
+        std::fs::write(installed.join("SKILL.md"), "").unwrap();
+        let linked = dir.path().join("linked");
+        std::os::unix::fs::symlink(&real, &linked).unwrap();
+        let held = InstalledSkill {
+            name: SkillName::new("fixture-greeting").unwrap(),
+            skill_md: linked.join(".claude/skills/fixture-greeting/SKILL.md"),
+        };
+        let transcript = READ_LOADED.replace(
+            r#""file_path":".claude/skills"#,
+            &format!(r#""file_path":"{}/.claude/skills"#, real.display()),
+        );
+
+        assert_eq!(loads_in(&transcript, &[held]), [Load::Loaded]);
+    }
+
+    #[test]
+    fn a_last_line_cut_off_mid_write_makes_an_unloaded_skill_unknown() {
+        let transcript = format!("{FINISHED}{{\"type\":\"assist");
+
+        assert_eq!(load_of(&transcript), Load::Unknown);
     }
 
     #[test]
