@@ -87,6 +87,29 @@ pub(crate) enum SkillList {
     NotUsed,
 }
 
+impl SkillExpectations {
+    /// Skills the agent must successfully load.
+    pub(crate) fn used(&self) -> &[SkillName] {
+        &self.used
+    }
+
+    /// Skills the agent must not load.
+    pub(crate) fn not_used(&self) -> &[SkillName] {
+        &self.not_used
+    }
+
+    /// Expectations that only assert use.
+    #[cfg(test)]
+    pub(crate) fn for_tests(used: Vec<SkillName>, not_used: Vec<SkillName>) -> Self {
+        Self {
+            installed: Vec::new(),
+            not_installed: Vec::new(),
+            used,
+            not_used,
+        }
+    }
+}
+
 impl Task {
     /// Loads and validates `evals/tasks/<name>/`.
     ///
