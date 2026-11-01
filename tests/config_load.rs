@@ -75,13 +75,13 @@ async fn failed_config_load_preserves_installations_and_recovers_after_repair() 
                         assert!(ctx.sym.save_config().is_err());
 
                         // Failed auto-sync must not block hooks or mark sync as fresh.
-                        assert!(!WorkspaceState::load(&ctx.sym, &root).sync_is_fresh(&root));
+                        assert!(WorkspaceState::load(&ctx.sym, &root).fresh().is_none());
                         let payload = json!({
                             "cwd": root, "session_id": "config-recovery", "hook_event_name": "SessionStart",
                         });
                         let response = ctx.invoke_hook(hook_agent, HookEvent::SessionStart, &payload).await?;
                         assert_eq!(response.exit_code, 0);
-                        assert!(!WorkspaceState::load(&ctx.sym, &root).sync_is_fresh(&root));
+                        assert!(WorkspaceState::load(&ctx.sym, &root).fresh().is_none());
                         for (path, before) in paths.iter().zip(&snapshots) {
                             assert_eq!(&fs::read(path)?, before, "{damage}: {}", path.display());
                         }
@@ -97,7 +97,7 @@ async fn failed_config_load_preserves_installations_and_recovers_after_repair() 
                         ctx.sym = Symposium::from_dir(&config_dir);
                         ctx.sym.config.auto_update = AutoUpdate::Off;
                         ctx.invoke_hook(hook_agent, HookEvent::SessionStart, &payload).await?;
-                        assert!(WorkspaceState::load(&ctx.sym, &root).sync_is_fresh(&root));
+                        assert!(WorkspaceState::load(&ctx.sym, &root).fresh().is_some());
                         for (path, before) in paths.iter().zip(&snapshots) {
                             assert_eq!(&fs::read(path)?, before);
                         }
