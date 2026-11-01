@@ -287,19 +287,13 @@ impl Ending {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+mod tests {
     use super::*;
+    use crate::client::claude::fixtures::{
+        FINISHED, MODEL_ERROR, SKILL_LOADED, as_session, before, edited, first, recorded_session,
+        reshaped, without, without_user_sessions,
+    };
     use crate::client::claude::version;
-
-    /// Recorded from Claude Code 2.1.316, with personal details removed.
-    pub(in crate::client::claude) const FINISHED: &str = include_str!("transcripts/finished.jsonl");
-    /// The same version, run with a model that does not exist.
-    const MODEL_ERROR: &str = include_str!("transcripts/model_error.jsonl");
-
-    /// The session the recorded transcripts were rewritten to.
-    pub(in crate::client::claude) fn recorded_session() -> Uuid {
-        Uuid::parse_str("00000000-0000-4000-8000-000000000000").unwrap()
-    }
 
     fn completion_as(
         transcript: &str,
@@ -322,57 +316,27 @@ pub(super) mod tests {
     }
 
     fn recorded_init() -> &'static str {
-        FINISHED
-            .lines()
-            .find(|line| line.contains(r#""subtype":"init""#))
-            .unwrap()
+        first(FINISHED, "system/init")
     }
 
     fn recorded_result() -> &'static str {
-        FINISHED
-            .lines()
-            .find(|line| line.starts_with(r#"{"type":"result""#))
-            .unwrap()
+        first(FINISHED, "result")
     }
 
     /// `event` with its `field` removed.
     fn without_field(event: &str, field: &str) -> String {
-        let mut event: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(event).unwrap();
-        event.remove(field).unwrap();
-        serde_json::to_string(&event).unwrap()
-    }
-
-    /// `event` as if session `other` had written it.
-    fn from_session(event: &str, other: Uuid) -> String {
-        event.replace(&recorded_session().to_string(), &other.to_string())
-    }
-
-    fn without(transcript: &str, prefix: &str) -> String {
-        transcript
-            .lines()
-            .filter(|line| !line.starts_with(prefix))
-            .map(|line| format!("{line}\n"))
-            .collect()
-    }
-
-    /// `transcript` with the session ID left out of its user messages, as the SDK allows.
-    pub(in crate::client::claude) fn without_user_sessions(transcript: &str) -> String {
-        let session = format!(r#","session_id":"{}""#, recorded_session());
-        transcript
-            .lines()
-            .map(|line| {
-                if line.starts_with(r#"{"type":"user""#) {
-                    format!("{}\n", line.replace(&session, ""))
-                } else {
-                    format!("{line}\n")
-                }
-            })
-            .collect()
+        edited(event, |event| {
+            event.remove(field).unwrap();
+        })
     }
 
     fn without_result(transcript: &str) -> String {
-        without(transcript, r#"{"type":"result""#)
+        without(transcript, "result")
+    }
+
+    /// The line number a line added after `transcript` has.
+    fn next_line(transcript: &str) -> usize {
+        transcript.lines().count() + 1
     }
 
     fn malformed_line(completion: Result<Completion, Unusable>) -> usize {
@@ -397,11 +361,11 @@ pub(super) mod tests {
 
     #[test]
     fn an_error_without_a_message_is_reported_by_its_subtype() {
-        let result = recorded_result().replace(
-            r#""subtype":"success","is_error":false"#,
-            r#""subtype":"error_max_turns","is_error":true"#,
-        );
-        let result = without_field(&result, "result");
+        let result = edited(recorded_result(), |event| {
+            event.insert("subtype".to_owned(), "error_max_turns".into());
+            event.insert("is_error".to_owned(), true.into());
+            event.remove("result").unwrap();
+        });
         let transcript = format!("{}\n{result}\n", recorded_init());
 
         assert_eq!(
@@ -412,13 +376,12 @@ pub(super) mod tests {
 
     /// The recorded result, ended with `subtype` and `errors`, without its `result`.
     fn error_result(subtype: &str, errors: &[&str]) -> String {
-        let mut result: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(recorded_result()).unwrap();
-        result.remove("result");
-        result.insert("is_error".to_owned(), true.into());
-        result.insert("subtype".to_owned(), subtype.into());
-        result.insert("errors".to_owned(), errors.into());
-        serde_json::to_string(&result).unwrap()
+        edited(recorded_result(), |result| {
+            result.remove("result");
+            result.insert("is_error".to_owned(), true.into());
+            result.insert("subtype".to_owned(), subtype.into());
+            result.insert("errors".to_owned(), errors.into());
+        })
     }
 
     #[test]
@@ -434,8 +397,12 @@ pub(super) mod tests {
 
     #[test]
     fn an_empty_result_gives_way_to_the_errors() {
-        let result = error_result("error_max_budget_usd", &["over budget"])
-            .replace(r#""errors""#, r#""result":"","errors""#);
+        let result = edited(
+            &error_result("error_max_budget_usd", &["over budget"]),
+            |result| {
+                result.insert("result".to_owned(), "".into());
+            },
+        );
         let transcript = format!("{}\n{result}\n", recorded_init());
 
         assert_eq!(
@@ -472,16 +439,20 @@ pub(super) mod tests {
 
     #[test]
     fn a_line_that_is_not_an_event_is_malformed() {
-        let transcript = format!("{}not json\n", without_result(FINISHED));
+        let complete = without_result(FINISHED);
+        let transcript = format!("{complete}not json\n");
 
-        assert_eq!(malformed_line(completion(&transcript)), 6);
+        assert_eq!(
+            malformed_line(completion(&transcript)),
+            next_line(&complete)
+        );
     }
 
     #[test]
     fn a_last_line_cut_off_mid_write_is_malformed() {
         let transcript = format!("{FINISHED}{{\"type\":\"assist");
 
-        assert_eq!(malformed_line(completion(&transcript)), 7);
+        assert_eq!(malformed_line(completion(&transcript)), next_line(FINISHED));
     }
 
     #[test]
@@ -500,9 +471,13 @@ pub(super) mod tests {
 
     #[test]
     fn the_first_malformed_line_is_the_one_reported() {
-        let transcript = format!("{}not json\nnor this\n", without_result(FINISHED));
+        let complete = without_result(FINISHED);
+        let transcript = format!("{complete}not json\nnor this\n");
 
-        assert_eq!(malformed_line(completion(&transcript)), 6);
+        assert_eq!(
+            malformed_line(completion(&transcript)),
+            next_line(&complete)
+        );
     }
 
     #[test]
@@ -541,7 +516,7 @@ pub(super) mod tests {
 
     #[test]
     fn a_result_without_an_init_is_unstated() {
-        let transcript = without(FINISHED, r#"{"type":"system","subtype":"init""#);
+        let transcript = without(FINISHED, "system/init");
 
         assert!(matches!(
             completion(&transcript),
@@ -565,7 +540,7 @@ pub(super) mod tests {
         let transcript = format!(
             "{}{}\n",
             without_result(FINISHED),
-            from_session(recorded_result(), other)
+            as_session(recorded_result(), other)
         );
 
         let error = completion(&transcript).unwrap_err();
@@ -580,7 +555,7 @@ pub(super) mod tests {
     fn one_foreign_result_among_several_is_mismatched() {
         let transcript = format!(
             "{FINISHED}{}\n{}\n",
-            from_session(recorded_result(), Uuid::new_v4()),
+            as_session(recorded_result(), Uuid::new_v4()),
             recorded_result()
         );
 
@@ -592,14 +567,11 @@ pub(super) mod tests {
 
     #[test]
     fn another_sessions_message_is_mismatched() {
-        let assistant = FINISHED
-            .lines()
-            .find(|line| line.starts_with(r#"{"type":"assistant""#))
-            .unwrap();
+        let assistant = first(FINISHED, "assistant");
         let transcript = format!(
             "{}{}\n{}\n",
             without_result(FINISHED),
-            from_session(assistant, Uuid::new_v4()),
+            as_session(assistant, Uuid::new_v4()),
             recorded_result()
         );
 
@@ -611,18 +583,14 @@ pub(super) mod tests {
 
     #[test]
     fn a_user_message_without_a_session_still_completes() {
-        let transcript = without_user_sessions(FINISHED);
+        let transcript = without_user_sessions(SKILL_LOADED);
 
         assert_eq!(completion(&transcript).unwrap(), Completion::Finished);
     }
 
     #[test]
     fn a_message_claude_code_reshaped_leaves_the_ending_alone() {
-        let transcript = FINISHED.replace(
-            r#""message":{"model":"claude-haiku-5-5","role":"assistant""#,
-            r#""message":"a new shape","old":{"model":"claude-haiku-5-5","role":"assistant""#,
-        );
-        assert_ne!(transcript, FINISHED);
+        let transcript = reshaped(FINISHED, "assistant");
 
         assert_eq!(completion(&transcript).unwrap(), Completion::Finished);
     }
@@ -652,13 +620,10 @@ pub(super) mod tests {
 
     #[test]
     fn a_client_that_stops_before_init_has_no_completion() {
-        let hooks: String = FINISHED
-            .lines()
-            .take(2)
-            .map(|line| format!("{line}\n"))
-            .collect();
+        let hook = r#"{"type":"system","subtype":"hook_started","hook_event":"SessionStart","session_id":"00000000-0000-4000-8000-000000000000"}"#;
+        let transcript = format!("{}{hook}\n", before(FINISHED, "system/init"));
 
-        assert_eq!(completion(&hooks).unwrap(), Completion::Missing);
+        assert_eq!(completion(&transcript).unwrap(), Completion::Missing);
     }
 
     #[test]

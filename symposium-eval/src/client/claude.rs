@@ -5,6 +5,8 @@
 //! file, and so invalidate a trial. How its transcript is read is in [`transcript`].
 
 mod calls;
+#[cfg(test)]
+mod fixtures;
 mod loads;
 mod transcript;
 pub(crate) mod version;
@@ -227,14 +229,11 @@ mod tests {
         use std::time::Duration;
 
         use super::*;
+        use crate::client::claude::fixtures::{self, MODEL_ERROR, SESSION, SKILL_LOADED};
         use crate::client::{ClientError, Ended, Execution, Load, ProvenanceError, execute};
         use crate::grade::process::Local;
         use crate::run::test_support::executable;
         use crate::task::SkillName;
-
-        const SKILL_LOADED: &str = include_str!("claude/transcripts/skill_loaded.jsonl");
-        const MODEL_ERROR: &str = include_str!("claude/transcripts/model_error.jsonl");
-        const RECORDED_SESSION: &str = "00000000-0000-4000-8000-000000000000";
 
         /// Which session the stand-in writes its events as.
         enum Speaks {
@@ -248,7 +247,7 @@ mod tests {
             fs::write(&recorded, transcript).unwrap();
             let session = match speaks {
                 Speaks::AsRequested => r#""$session""#,
-                Speaks::AsRecorded => RECORDED_SESSION,
+                Speaks::AsRecorded => SESSION,
             };
             fs::create_dir_all(trial.bin()).unwrap();
             executable(
@@ -262,7 +261,7 @@ while [ "$#" -gt 0 ]; do
     esac
     shift
 done
-sed "s/{RECORDED_SESSION}/{session}/g" '{}'
+sed "s/{SESSION}/{session}/g" '{}'
 {then}
 "#,
                     recorded.display()
@@ -291,8 +290,8 @@ sed "s/{RECORDED_SESSION}/{session}/g" '{}'
             )
         }
 
-        fn before_result(transcript: &str) -> &str {
-            &transcript[..transcript.find(r#"{"type":"result""#).unwrap()]
+        fn before_result(transcript: &str) -> String {
+            fixtures::before(transcript, "result")
         }
 
         #[test]
@@ -321,7 +320,7 @@ sed "s/{RECORDED_SESSION}/{session}/g" '{}'
                 matches!(
                     &execution.ended,
                     Ended::Mismatched(ProvenanceError::Session { found, .. })
-                        if found == RECORDED_SESSION
+                        if found == SESSION
                 ),
                 "{execution:?}"
             );
@@ -331,7 +330,7 @@ sed "s/{RECORDED_SESSION}/{session}/g" '{}'
         #[test]
         fn a_session_past_its_deadline_times_out_and_keeps_its_load() {
             let execution = run(
-                before_result(SKILL_LOADED),
+                &before_result(SKILL_LOADED),
                 Speaks::AsRequested,
                 "exec sleep 60",
                 Duration::from_secs(3),
@@ -369,7 +368,7 @@ sed "s/{RECORDED_SESSION}/{session}/g" '{}'
         #[test]
         fn a_client_that_stops_without_a_result_has_no_completion() {
             let execution = run(
-                before_result(SKILL_LOADED),
+                &before_result(SKILL_LOADED),
                 Speaks::AsRequested,
                 "exit 0",
                 Duration::from_secs(60),

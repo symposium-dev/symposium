@@ -125,19 +125,14 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::client::claude::transcript::read_text;
-    use crate::client::claude::transcript::tests::{
-        FINISHED, recorded_session, without_user_sessions,
+    use crate::client::claude::fixtures::{
+        FINISHED, READ_LOADED, SKILL_FAILED, SKILL_LOADED, as_session, before, before_line_with,
+        editing, first, from, line_with, recorded_session, replaced, reshaped,
+        without_user_sessions,
     };
+    use crate::client::claude::transcript::read_text;
     use crate::client::claude::version;
     use crate::task::SkillName;
-
-    /// Recorded from Claude Code 2.1.316, with personal details removed: a `Skill`
-    /// call, a `Read` of the installed `SKILL.md`, and a `Skill` call for a skill that
-    /// does not exist.
-    const SKILL_LOADED: &str = include_str!("transcripts/skill_loaded.jsonl");
-    const READ_LOADED: &str = include_str!("transcripts/read_loaded.jsonl");
-    const SKILL_FAILED: &str = include_str!("transcripts/skill_failed.jsonl");
 
     const PROJECT: &str = "/trial/project";
 
@@ -168,22 +163,19 @@ mod tests {
 
     /// The first line of `transcript` that contains `marker`, as another session's.
     fn foreign(transcript: &str, marker: &str) -> String {
-        let line = transcript
-            .lines()
-            .find(|line| line.contains(marker))
-            .unwrap();
-        line.replace(&recorded_session().to_string(), &Uuid::new_v4().to_string())
+        as_session(line_with(transcript, marker), Uuid::new_v4())
+    }
+
+    /// The installed skills, as the recorded `Read` names them.
+    const READ_PATH: &str = r#""file_path":".claude/skills"#;
+
+    /// The recorded `Read`, naming the skills directory as `skills`.
+    fn reading(skills: &str) -> String {
+        replaced(READ_LOADED, READ_PATH, &format!(r#""file_path":"{skills}"#))
     }
 
     fn load_of(transcript: &str) -> Load {
         loads_in(transcript, &[greeting()])[0]
-    }
-
-    /// `transcript` cut just before its first line that contains `marker`.
-    fn cut_before(transcript: &str, marker: &str) -> String {
-        let end = transcript.find(marker).unwrap();
-        let start = transcript[..end].rfind('\n').map_or(0, |at| at + 1);
-        transcript[..start].to_owned()
     }
 
     #[test]
@@ -198,7 +190,8 @@ mod tests {
 
     #[test]
     fn a_read_finds_a_skill_installed_under_a_hashed_directory() {
-        let transcript = READ_LOADED.replace(
+        let transcript = replaced(
+            READ_LOADED,
             "skills/fixture-greeting/SKILL.md",
             "skills/fixture-greeting-0123abcd/SKILL.md",
         );
@@ -209,31 +202,37 @@ mod tests {
     }
 
     #[test]
+    fn a_read_by_absolute_path_loads_the_skill() {
+        let transcript = reading("/trial/project/.claude/skills");
+
+        assert_eq!(load_of(&transcript), Load::Loaded);
+    }
+
+    #[test]
     fn a_read_through_dot_dot_reaches_the_same_file() {
-        let transcript = READ_LOADED.replace(
-            r#""file_path":".claude/skills"#,
-            r#""file_path":"src/../.claude/skills"#,
-        );
+        let transcript = reading("src/../.claude/skills");
 
         assert_eq!(load_of(&transcript), Load::Loaded);
     }
 
     #[test]
     fn a_relative_read_is_resolved_where_claude_code_ran() {
-        let transcript = READ_LOADED
-            .replace(r#""cwd":"/trial/project""#, r#""cwd":"/trial/project/src""#)
-            .replace(
-                r#""file_path":".claude/skills"#,
-                r#""file_path":"../.claude/skills"#,
-            );
+        let transcript = replaced(
+            &reading("../.claude/skills"),
+            r#""cwd":"/trial/project""#,
+            r#""cwd":"/trial/project/src""#,
+        );
 
         assert_eq!(load_of(&transcript), Load::Loaded);
     }
 
     #[test]
     fn a_read_from_elsewhere_does_not_load_the_skill() {
-        let transcript =
-            READ_LOADED.replace(r#""cwd":"/trial/project""#, r#""cwd":"/trial/elsewhere""#);
+        let transcript = replaced(
+            READ_LOADED,
+            r#""cwd":"/trial/project""#,
+            r#""cwd":"/trial/elsewhere""#,
+        );
 
         assert_eq!(load_of(&transcript), Load::NotObserved);
     }
@@ -252,10 +251,7 @@ mod tests {
             name: SkillName::new("fixture-greeting").unwrap(),
             skill_md: linked.join(".claude/skills/fixture-greeting/SKILL.md"),
         };
-        let transcript = READ_LOADED.replace(
-            r#""file_path":".claude/skills"#,
-            &format!(r#""file_path":"{}/.claude/skills"#, real.display()),
-        );
+        let transcript = reading(&format!("{}/.claude/skills", real.display()));
 
         assert_eq!(loads_in(&transcript, &[held]), [Load::Loaded]);
     }
@@ -276,7 +272,8 @@ mod tests {
 
     #[test]
     fn a_plugin_skill_is_matched_by_its_last_name() {
-        let transcript = SKILL_LOADED.replace(
+        let transcript = replaced(
+            SKILL_LOADED,
             r#""skill":"fixture-greeting""#,
             r#""skill":"fixture-plugin:fixture-greeting""#,
         );
@@ -286,7 +283,8 @@ mod tests {
 
     #[test]
     fn a_skill_whose_name_only_ends_the_same_is_not_loaded() {
-        let transcript = SKILL_LOADED.replace(
+        let transcript = replaced(
+            SKILL_LOADED,
             r#""skill":"fixture-greeting""#,
             r#""skill":"other-fixture-greeting""#,
         );
@@ -311,24 +309,21 @@ mod tests {
 
     #[test]
     fn a_call_cut_off_before_its_result_is_unknown() {
-        let transcript = cut_before(SKILL_LOADED, r#""type":"tool_result""#);
+        let transcript = before_line_with(SKILL_LOADED, r#""type":"tool_result""#);
 
         assert_eq!(load_of(&transcript), Load::Unknown);
     }
 
     #[test]
     fn a_stream_without_its_result_event_is_unknown() {
-        let transcript = cut_before(FINISHED, r#""type":"result""#);
+        let transcript = before(FINISHED, "result");
 
         assert_eq!(load_of(&transcript), Load::Unknown);
     }
 
     #[test]
     fn a_load_stands_when_the_stream_is_then_cut_off() {
-        let transcript = format!(
-            "{}{{\"type\":\"assist",
-            cut_before(SKILL_LOADED, r#""type":"result""#)
-        );
+        let transcript = format!("{}{{\"type\":\"assist", before(SKILL_LOADED, "result"));
 
         assert_eq!(load_of(&transcript), Load::Loaded);
     }
@@ -342,7 +337,7 @@ mod tests {
 
     #[test]
     fn a_tool_call_that_does_not_parse_is_unknown() {
-        let transcript = SKILL_LOADED.replace(r#""id":"toolu_"#, r#""call":"toolu_"#);
+        let transcript = replaced(SKILL_LOADED, r#""id":"toolu_"#, r#""call":"toolu_"#);
 
         assert_eq!(load_of(&transcript), Load::Unknown);
     }
@@ -351,10 +346,10 @@ mod tests {
     fn another_sessions_skill_load_is_not_this_sessions() {
         let transcript = format!(
             "{}{}\n{}\n{}",
-            cut_before(FINISHED, r#""type":"result""#),
+            before(FINISHED, "result"),
             foreign(SKILL_LOADED, r#""type":"tool_use""#),
             foreign(SKILL_LOADED, r#""type":"tool_result""#),
-            &FINISHED[FINISHED.find(r#"{"type":"result""#).unwrap()..],
+            from(FINISHED, "result"),
         );
 
         assert_eq!(load_of(&transcript), Load::Unknown);
@@ -364,8 +359,8 @@ mod tests {
     fn another_sessions_result_does_not_complete_this_one() {
         let transcript = format!(
             "{}{}\n",
-            cut_before(FINISHED, r#""type":"result""#),
-            foreign(FINISHED, r#""type":"result""#),
+            before(FINISHED, "result"),
+            as_session(first(FINISHED, "result"), Uuid::new_v4()),
         );
 
         assert_eq!(load_of(&transcript), Load::Unknown);
@@ -387,39 +382,29 @@ mod tests {
 
     #[test]
     fn a_skill_call_without_a_session_is_unknown() {
-        let session = format!(r#","session_id":"{}""#, recorded_session());
-        let transcript: String = SKILL_LOADED
-            .lines()
-            .map(|line| {
-                if line.contains(r#""type":"tool_use""#) {
-                    format!("{}\n", line.replace(&session, ""))
-                } else {
-                    format!("{line}\n")
-                }
-            })
-            .collect();
+        let transcript = editing(
+            SKILL_LOADED,
+            |line| line.contains(r#""type":"tool_use""#),
+            |event| {
+                event.remove("session_id").unwrap();
+            },
+        );
 
         assert_eq!(load_of(&transcript), Load::Unknown);
     }
 
     #[test]
     fn a_message_that_cannot_be_decoded_makes_an_unloaded_skill_unknown() {
-        let reshaped = FINISHED.replace(
-            r#""message":{"model":"claude-haiku-5-5","role":"assistant""#,
-            r#""message":"a new shape","old":{"model":"claude-haiku-5-5","role":"assistant""#,
-        );
-
-        assert_eq!(load_of(&reshaped), Load::Unknown);
+        assert_eq!(load_of(&reshaped(FINISHED, "assistant")), Load::Unknown);
     }
 
     #[test]
     fn a_load_stands_when_a_later_message_cannot_be_decoded() {
-        let result = SKILL_LOADED.find(r#"{"type":"result""#).unwrap();
         let reshaped = r#"{"type":"assistant","message":"a new shape","session_id":"00000000-0000-4000-8000-000000000000"}"#;
         let transcript = format!(
             "{}{reshaped}\n{}",
-            &SKILL_LOADED[..result],
-            &SKILL_LOADED[result..]
+            before(SKILL_LOADED, "result"),
+            from(SKILL_LOADED, "result")
         );
 
         assert_eq!(load_of(&transcript), Load::Loaded);
@@ -435,18 +420,18 @@ mod tests {
 
     #[test]
     fn a_subagents_skill_load_counts() {
-        let transcript = SKILL_LOADED.replace(
+        let transcript = replaced(
+            SKILL_LOADED,
             r#""parent_tool_use_id":null"#,
             r#""parent_tool_use_id":"toolu_parent""#,
         );
-        assert_ne!(transcript, SKILL_LOADED);
 
         assert_eq!(load_of(&transcript), Load::Loaded);
     }
 
     #[test]
     fn a_skill_call_without_its_name_is_unknown() {
-        let transcript = SKILL_LOADED.replace(r#""skill":"fixture-greeting""#, r#""x":1"#);
+        let transcript = replaced(SKILL_LOADED, r#""skill":"fixture-greeting""#, r#""x":1"#);
 
         assert_eq!(load_of(&transcript), Load::Unknown);
     }
