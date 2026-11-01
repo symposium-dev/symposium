@@ -45,6 +45,8 @@ impl Trial {
         for root in [self.project(), self.home()] {
             require_empty(&root.join(client.skill_dir()), Unready::SkillInstalled)?;
         }
+        // A trial must start with no record, so one found afterwards is the session's.
+        require_absent(&self.sync_records(), Unready::SyncRecord)?;
         require_empty(&system.join(client.managed_dir()), Unready::ManagedSettings)?;
         if self.configuration() == Configuration::Baseline {
             self.check_no_symposium(client, env)?;
@@ -202,6 +204,16 @@ mod tests {
 
                 assert_unready(&setup.check(client), Unready::SkillInstalled);
             }
+        }
+    }
+
+    #[test]
+    fn no_sync_is_recorded_before_launch() {
+        for configuration in [Configuration::Symposium, Configuration::Baseline] {
+            let setup = Setup::new(configuration);
+            fs::create_dir_all(setup.trial.sync_records()).unwrap();
+
+            assert_unready(&setup.check(Client::ClaudeCode), Unready::SyncRecord);
         }
     }
 

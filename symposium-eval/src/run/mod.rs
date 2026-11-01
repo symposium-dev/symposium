@@ -221,6 +221,13 @@ impl Trial {
         self.root.join("home")
     }
 
+    /// Where Symposium records each sync, per directory a session started in. The
+    /// trial's environment is built whole, without `SYMPOSIUM_HOME` or `XDG_*`, so
+    /// Symposium keeps its cache under the trial's home.
+    pub(crate) fn sync_records(&self) -> PathBuf {
+        self.home().join(".symposium/cache/workspaces")
+    }
+
     /// The copy of the starter the agent works in.
     pub(crate) fn project(&self) -> PathBuf {
         self.root.join("project")

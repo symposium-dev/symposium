@@ -3,6 +3,7 @@
 //! [`Verdict::Inconclusive`], never quietly a pass or a fail.
 
 pub(crate) mod installed;
+pub(crate) mod sync;
 
 use crate::client::Load;
 use crate::task::{SkillExpectations, SkillName};
