@@ -1,26 +1,12 @@
-//! Reading a Claude Code transcript once, for everything the runner needs from it.
+//! Reading a Claude Code transcript (`stream-json`, one event per line) once, for its
+//! ending, provenance and skill loads.
 //!
-//! The transcript is `--output-format stream-json`: one JSON event per line. Each line is
-//! first read for its `type` alone. Only `system/init` and `result`, the events the
-//! session's ending rests on, must then have the shape the runner expects; every other
-//! event is skipped, so a new kind of event leaves the transcript readable.
+//! Only `system/init` and `result` must have the expected shape; other events are
+//! skipped, so a new event kind leaves the transcript readable. A message's payload is
+//! decoded only for loads, so a reshaped message damages loads, never the ending.
 //!
-//! - **Completion.** The last `result` event says how the session ended. Claude Code
-//!   marks an API error with `is_error` even when the event's `subtype` is `success`, so
-//!   only `is_error` is read.
-//! - **Provenance.** Every `system/init` event must name the session the runner started
-//!   and the version preflight checked (research notes, Step 4, client provenance), and
-//!   every `result` that session. A `result` before any `init` cannot say whose it is.
-//!   A transcript that ends before `init` is only a client that stopped early.
-//! - **Skill loads**, from the session's messages (see [`super::loads`]). A message's
-//!   payload is decoded only for them, so a message Claude Code reshapes damages the load
-//!   evidence alone, never the ending. A message naming another session is a mismatch.
-//!   One naming none, which the SDK allows for user messages, is still read: its tool
-//!   results can only answer calls this session made.
-//!
-//! Reading goes on past a line that does not parse, so a load seen later still counts and
-//! a later mismatch still shows. A mismatch outranks a malformed line: a transcript that
-//! is not this session's says nothing about the session, however well formed.
+//! Reading continues past a bad line, so later evidence still counts. A mismatch
+//! outranks a malformed line: another session's transcript says nothing about this one.
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
@@ -30,10 +16,11 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 use uuid::Uuid;
 
-use super::loads::{Observer, Scope};
+use super::calls::{Calls, Scope};
+use super::loads::Skills;
 use super::version::Version;
 use crate::client::{
-    Completion, InstalledSkill, ProvenanceError, Reading, TranscriptError, Unusable,
+    Completion, InstalledSkill, Load, ProvenanceError, Reading, TranscriptError, Unusable,
 };
 
 /// What every event is first read for.
@@ -88,7 +75,7 @@ struct Reader<'a> {
     introduced: bool,
     /// Why the transcript cannot say how the session ended, if it cannot.
     unusable: Option<Unusable>,
-    observer: Observer<'a>,
+    calls: Calls<Skills<'a>>,
 }
 
 /// Reads the transcript at `path`, of `session` run by Claude Code `version` in
@@ -138,7 +125,7 @@ impl<'a> Reader<'a> {
             completion: Completion::Missing,
             introduced: false,
             unusable: None,
-            observer: Observer::new(skills, project),
+            calls: Calls::new(Skills::new(skills, project)),
         }
     }
 
@@ -176,7 +163,7 @@ impl<'a> Reader<'a> {
             "result" => self.ending(parse(line, number)?),
             "assistant" | "user" => match serde_json::from_slice::<Envelope<'_>>(line) {
                 Ok(envelope) => self.message(&head.kind, envelope),
-                Err(_) => self.observer.damage(),
+                Err(_) => self.calls.damage(),
             },
             _ => {}
         }
@@ -194,21 +181,21 @@ impl<'a> Reader<'a> {
             self.mismatched(ProvenanceError::Unstated);
         } else if self.is_ours(&ending.session_id) {
             self.completion = ending.completion();
-            self.observer.finish();
+            self.calls.finish();
         }
     }
 
-    /// Hands a message of `kind` to the load observer, if it is this session's.
+    /// Hands a message of `kind` to the tool call evidence, if it is this session's.
     fn message(&mut self, kind: &str, envelope: Envelope<'_>) {
         match (envelope.session_id, kind) {
             (Some(session_id), _) => {
                 if self.is_ours(&session_id) {
-                    self.observer.message(envelope.message, Scope::Session);
+                    self.calls.message(envelope.message, Scope::Session);
                 }
             }
-            (None, "user") => self.observer.message(envelope.message, Scope::Unscoped),
+            (None, "user") => self.calls.message(envelope.message, Scope::Unscoped),
             // Nothing says whose calls these are.
-            (None, _) => self.observer.damage(),
+            (None, _) => self.calls.damage(),
         }
     }
 
@@ -230,19 +217,19 @@ impl<'a> Reader<'a> {
         if !matches!(self.unusable, Some(Unusable::Provenance(_))) {
             self.unusable = Some(error.into());
         }
-        self.observer.damage();
+        self.calls.damage();
     }
 
     /// Part of the transcript cannot be read; the first such problem is kept.
     fn unreadable(&mut self, error: TranscriptError) {
         self.unusable.get_or_insert(error.into());
-        self.observer.damage();
+        self.calls.damage();
     }
 
     fn reading(self) -> Reading {
         Reading {
             completion: self.unusable.map_or(Ok(self.completion), Err),
-            loads: self.observer.loads(),
+            loads: self.calls.outcomes().into_iter().map(Load::from).collect(),
         }
     }
 }
@@ -275,6 +262,7 @@ impl Init {
 }
 
 impl Ending {
+    /// Only `is_error` decides: an API error arrives with `subtype` `success`.
     fn completion(self) -> Completion {
         if !self.is_error {
             return Completion::Finished;

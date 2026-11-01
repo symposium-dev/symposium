@@ -1,70 +1,17 @@
 //! Which skills a Claude Code transcript shows reaching the agent (RFD reference,
-//! "Skills used"; research notes, Step 4, load evidence).
+//! "Skills used").
 //!
-//! Two routes count: a `Skill` call naming the skill, or a `Read` of its installed
-//! `SKILL.md`, each paired with its result by tool use ID. A result that is not an error
-//! loads the skill; an error, which is also how a denial arrives, is an attempt. A shell
-//! command such as `cat SKILL.md` is not detected: reading arbitrary commands reliably is
-//! outside the adapter. Calls made inside a subagent count like any other, since the
-//! skill's content still reached an agent working on the task.
-//!
-//! Only this session's events count. Another session's message or `result` gives no
-//! evidence, and like a line that does not parse, it could hide an outcome. A skill not
-//! yet loaded is then unknown, as it is after a call without its result or with no
-//! `result` event at the end. Once a skill is loaded, nothing later undoes that, so a
-//! timeout can still report a load.
+//! A skill is loaded by a `Skill` call or a `Read` of its installed `SKILL.md` whose
+//! result is not an error; an error result is an attempt. `cat SKILL.md` is not
+//! detected. Subagent calls count. Pairing calls with results is [`super::calls`]'.
 
-use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 use serde_json::Value;
-use serde_json::value::RawValue;
 
+use super::calls::{Matcher, Outcome, Target};
 use crate::client::{InstalledSkill, Load};
-
-/// Whose a message is, as far as the transcript says.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Scope {
-    /// It names this session.
-    Session,
-    /// It names no session. Its tool results can still answer this session's calls,
-    /// which only a message of this session registers, but its calls count for nothing.
-    Unscoped,
-}
-
-#[derive(Debug, Deserialize)]
-struct Message {
-    content: Content,
-}
-
-/// A prompt's content can be plain text; only blocks hold tool calls and results. Text
-/// must be a string, so a list of blocks that does not parse is not taken for text.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-enum Content {
-    Blocks(Vec<Block>),
-    Text(String),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-enum Block {
-    ToolUse {
-        id: String,
-        name: String,
-        /// Read only for the tools that can load a skill, so another tool's input, in
-        /// whatever shape, cannot make the stream unreadable.
-        input: Value,
-    },
-    ToolResult {
-        tool_use_id: String,
-        #[serde(default)]
-        is_error: bool,
-    },
-    #[serde(other)]
-    Other,
-}
 
 #[derive(Debug, Deserialize)]
 struct SkillInput {
@@ -76,91 +23,28 @@ struct ReadInput {
     file_path: String,
 }
 
-/// What the transcript showed for one skill.
-#[derive(Debug, Default, Clone, Copy)]
-struct Seen {
-    loaded: bool,
-    attempted: bool,
-}
-
-/// What a transcript has shown so far about `skills`.
-pub(super) struct Observer<'a> {
+/// Matches tool calls to the skills they would load.
+pub(super) struct Skills<'a> {
     skills: &'a [InstalledSkill],
     /// Where Claude Code ran, which a relative `Read` path is resolved against.
     project: &'a Path,
-    seen: Vec<Seen>,
-    /// Calls that may load a skill, by tool use ID, awaiting their result.
-    pending: HashMap<String, usize>,
-    /// Whether some record that could hide an outcome was unreadable or not this
-    /// session's.
-    damaged: bool,
-    finished: bool,
 }
 
-impl<'a> Observer<'a> {
+impl<'a> Skills<'a> {
     pub(super) fn new(skills: &'a [InstalledSkill], project: &'a Path) -> Self {
-        Self {
-            skills,
-            project,
-            seen: vec![Seen::default(); skills.len()],
-            pending: HashMap::new(),
-            damaged: false,
-            finished: false,
-        }
+        Self { skills, project }
     }
 
-    /// Reads a message's `payload`. One this observer cannot decode could hide a load.
-    pub(super) fn message(&mut self, payload: &RawValue, scope: Scope) {
-        match serde_json::from_str::<Message>(payload.get()) {
-            Ok(Message {
-                content: Content::Blocks(blocks),
-            }) => blocks
-                .into_iter()
-                .for_each(|block| self.block(block, scope)),
-            Ok(_) => {}
-            Err(_) => self.damaged = true,
-        }
+    fn position(&self, matches: impl Fn(usize) -> bool) -> Option<usize> {
+        (0..self.skills.len()).find(|&index| matches(index))
+    }
+}
+
+impl Matcher for Skills<'_> {
+    fn targets(&self) -> usize {
+        self.skills.len()
     }
 
-    /// This session's `result` arrived.
-    pub(super) fn finish(&mut self) {
-        self.finished = true;
-    }
-
-    /// Something in the transcript could hide an outcome.
-    pub(super) fn damage(&mut self) {
-        self.damaged = true;
-    }
-
-    fn block(&mut self, block: Block, scope: Scope) {
-        match block {
-            Block::ToolUse { id, name, input } => match self.target(&name, input) {
-                Target::Skill(index) if scope == Scope::Session => {
-                    self.pending.insert(id, index);
-                }
-                // A call no session vouches for could hide a load.
-                Target::Skill(_) => self.damaged = true,
-                Target::Unreadable => self.damaged = true,
-                Target::None => {}
-            },
-            Block::ToolResult {
-                tool_use_id,
-                is_error,
-            } => {
-                if let Some(index) = self.pending.remove(&tool_use_id) {
-                    let seen = &mut self.seen[index];
-                    if is_error {
-                        seen.attempted = true;
-                    } else {
-                        seen.loaded = true;
-                    }
-                }
-            }
-            Block::Other => {}
-        }
-    }
-
-    /// Which skill, if any, a call to the tool `name` with `input` would load.
     fn target(&self, name: &str, input: Value) -> Target {
         let found = match name {
             "Skill" => {
@@ -168,50 +52,31 @@ impl<'a> Observer<'a> {
                     return Target::Unreadable;
                 };
                 // A plugin's skill is named `<plugin>:<skill>`.
-                self.position(|skill| called.rsplit(':').next() == Some(skill.name.as_str()))
+                let called = called.rsplit(':').next();
+                self.position(|index| called == Some(self.skills[index].name.as_str()))
             }
             "Read" => {
                 let Ok(ReadInput { file_path }) = serde_json::from_value(input) else {
                     return Target::Unreadable;
                 };
                 let read = normalize(&self.project.join(file_path));
-                self.position(|skill| normalize(&skill.skill_md) == read)
+                self.position(|index| normalize(&self.skills[index].skill_md) == read)
             }
             _ => None,
         };
-        found.map_or(Target::None, Target::Skill)
-    }
-
-    fn position(&self, matches: impl Fn(&InstalledSkill) -> bool) -> Option<usize> {
-        self.skills.iter().position(matches)
-    }
-
-    pub(super) fn loads(self) -> Vec<Load> {
-        let unresolved: Vec<usize> = self.pending.values().copied().collect();
-        let incomplete = self.damaged || !self.finished;
-        self.seen
-            .iter()
-            .enumerate()
-            .map(|(index, seen)| {
-                if seen.loaded {
-                    Load::Loaded
-                } else if incomplete || unresolved.contains(&index) {
-                    Load::Unknown
-                } else if seen.attempted {
-                    Load::Attempted
-                } else {
-                    Load::NotObserved
-                }
-            })
-            .collect()
+        found.map_or(Target::None, Target::Of)
     }
 }
 
-enum Target {
-    Skill(usize),
-    /// A call to a loading tool without the input that says what it loads.
-    Unreadable,
-    None,
+impl From<Outcome> for Load {
+    fn from(outcome: Outcome) -> Self {
+        match outcome {
+            Outcome::Succeeded => Load::Loaded,
+            Outcome::Failed => Load::Attempted,
+            Outcome::NotObserved => Load::NotObserved,
+            Outcome::Unknown => Load::Unknown,
+        }
+    }
 }
 
 /// `path` with `.` and `..` resolved by name alone, since the transcript's paths need

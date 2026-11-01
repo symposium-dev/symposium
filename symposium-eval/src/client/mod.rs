@@ -1,26 +1,11 @@
 //! Running one client session in a trial (RFD reference, "Running the client").
 //!
-//! An adapter only builds its client's command line and reads its transcript. How the
-//! process is sandboxed, stopped at the deadline, and logged is the [`Backend`]'s, so
-//! adding a client means adding one small [`ClientRunner`].
+//! An adapter builds its client's command line and reads its transcript once; the
+//! [`Backend`] sandboxes, times out and logs the process. So a new client is one small
+//! [`ClientRunner`].
 //!
-//! The transcript is the client's standard output, written by the runner to the trial's
-//! `session/` from outside the sandbox. A client that exits 0 without a completion event,
-//! or reports an error, has still failed. A client that never started, one the runner
-//! lost hold of, and a transcript that cannot be read are not the client's failures, so
-//! none is [`Ended::Failed`]. The exit status counts only once the transcript was read:
-//! a client whose event format changed would otherwise read as a failed session.
-//!
-//! A transcript from another session, or from a client other than the one checked
-//! before launch, is [`Ended::Mismatched`]: an isolation exclusion, which outranks a
-//! timeout and how the client exited. What identifies a session
-//! is the adapter's: not every client lets the runner choose a session ID or reports its
-//! version in the stream.
-//!
-//! The adapter reads the transcript once, in [`ClientRunner::read`], for everything the
-//! runner needs: how the session ended, and which skills reached the agent. A timed-out
-//! transcript is read too, since it can still show a mismatch or a load. One whose output
-//! the runner lost hold of is not: whatever still holds the pipe may still be writing.
+//! Only a client's own failures are [`Ended::Failed`]. A transcript from another session
+//! or client is [`Ended::Mismatched`], which outranks a timeout and the exit status.
 
 pub(crate) mod claude;
 mod error;
@@ -126,6 +111,11 @@ pub(crate) enum Ended {
 /// Runs `prompt` as a new session of `runner`'s client in `trial`, through `backend`,
 /// until it ends or `deadline` passes, looking for `skills` in its transcript. Never an
 /// error: whatever goes wrong is how the session ended.
+///
+/// A timed-out transcript is still read, since it can show a mismatch or a load. One the
+/// backend lost hold of is not: whatever holds the pipe may still be writing. The exit
+/// status counts only once the transcript was read, so a client whose event format
+/// changed is not a failed session.
 pub(crate) fn execute(
     runner: &impl ClientRunner,
     backend: &impl Backend,
