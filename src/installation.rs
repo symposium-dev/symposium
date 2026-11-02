@@ -118,7 +118,10 @@ pub async fn acquire_installation(
 
     let acquired = match &installation.source {
         Some(source) => {
-            let context = sym.install_context();
+            let context = match deadline {
+                Some(_) => sym.install_context(),
+                None => sym.install_context().in_foreground(),
+            };
             let acquiring = acquire_source(&context, source, exec_choice, update);
             let acquired = match deadline {
                 Some(deadline) => tokio::time::timeout_at(deadline.into(), acquiring)
