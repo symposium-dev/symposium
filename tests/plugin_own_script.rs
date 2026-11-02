@@ -4,10 +4,8 @@ use serde_json::json;
 use symposium::hook_schema::HookAgent;
 use symposium_testlib::{HookStep, TestMode, with_fixture};
 
-/// The reference says these paths are relative to the manifest, but each is looked
-/// up from where the hook runs, so neither script runs.
 #[tokio::test(flavor = "multi_thread")]
-async fn scripts_named_relative_to_the_manifest_do_not_run() {
+async fn scripts_named_relative_to_the_manifest_run() {
     with_fixture(
         TestMode::SimulationOnly,
         &["plugin-own-script0"],
@@ -31,8 +29,8 @@ async fn scripts_named_relative_to_the_manifest_do_not_run() {
 
             for marker in ["own-script-fired", "beside-script-fired"] {
                 assert!(
-                    !result.has_context_containing(marker),
-                    "expected the plugin's own script not to run yet, got: {result:#?}",
+                    result.has_context_containing(marker),
+                    "expected the plugin's own script to report {marker}, got: {result:#?}",
                 );
             }
             Ok(())

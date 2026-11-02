@@ -144,8 +144,8 @@ A `[[installations]]` entry has a `name` plus any of:
 | `source` | string | Optional. How to acquire bits onto disk: `cargo` or `github`. Each source takes its own fields, listed under [Installation sources](#installation-sources). When omitted, no acquisition step runs. |
 | `install_commands` | array of strings | Optional. Shell commands run (in order) after the source step. Useful for post-install setup such as aliasing, or when *only* have manual commands. Each command must exit zero. |
 | `requirements` | array | Optional. Other installations to acquire whenever this one is referenced. Strings name `[[installations]]` entries; tables are inline declarations. |
-| `executable` | string | Optional. Path to a binary to run. For `cargo`, the binary name (looked up in the install's `bin/` dir). For `github`, a path inside the acquired tree. With no source, a path on disk, relative to the directory of the manifest that declares it. |
-| `script` | string | Optional. Same resolution rules as `executable`, but invoked as `sh <path> <args>`. |
+| `executable` | string | Optional. Path to a binary to run. For `cargo`, the binary name (looked up in the install's `bin/` dir). For `github`, a path inside the acquired tree. With no source, a path on disk: a relative path such as `./tool` or `bin/tool` is relative to the directory of the manifest that declares it, a bare name such as `rustc` is looked up on `PATH`, and an absolute path is used as written. |
+| `script` | string | Optional. Same resolution rules as `executable`, but invoked as `sh <path> <args>`, and with no source, every relative path is relative to the manifest's directory, a bare `hook.sh` beside it included. |
 | `args` | array of strings | Optional. Default invocation arguments. |
 
 

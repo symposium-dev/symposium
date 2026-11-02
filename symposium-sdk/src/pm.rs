@@ -97,9 +97,12 @@ impl PluginInfo {
 pub struct UnvalidatedPlugin {
     /// The exact resolved identity: never a version requirement.
     pub id: PackageId,
-    /// Directory holding the package's content. Relative `source.path` skill
-    /// groups resolve against this. The PM owns it and guarantees it stays
-    /// valid for the connection's lifetime; Symposium only reads.
+    /// Directory holding the package's content: what a relative path in the
+    /// manifest names a file in. Relative `source.path` skill groups resolve
+    /// against it, and so do the `executable` and `script` paths of
+    /// installations with no `source`, which is where a plugin's own hook
+    /// scripts run from. The PM owns it and guarantees it stays valid for the
+    /// connection's lifetime; Symposium only reads.
     pub root: PathBuf,
     /// The plugin definition, unvalidated.
     pub manifest: RawPluginManifest,
