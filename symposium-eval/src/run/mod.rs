@@ -34,7 +34,7 @@ mod smoke;
 mod srt;
 pub(crate) mod stage;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 use std::fmt;
 use std::fs;
@@ -177,6 +177,7 @@ impl Batch {
             trial.cargo_home(),
             trial.tmp(),
             trial.evidence(),
+            trial.session(),
         ])?;
         self.link_tools(&trial)?;
         copy_tree(&evals.starter_dir(task.name()), &trial.project(), "starter")
@@ -250,6 +251,12 @@ impl Trial {
         self.root.join("evidence")
     }
 
+    /// The client's transcript and logs. The runner writes them from outside the
+    /// sandbox, and the policy gives the trial no access, so the agent cannot alter them.
+    pub(crate) fn session(&self) -> PathBuf {
+        self.root.join("session")
+    }
+
     /// The task's plugins, offered to Symposium as its only registry.
     pub(crate) fn registry(&self) -> PathBuf {
         self.root.join("registry")
@@ -281,7 +288,7 @@ fn absolute(path: &Path) -> Result<&Path, RunError> {
 }
 
 /// `finished` when the command `tool` names ran to a successful exit.
-fn succeeded(
+pub(crate) fn succeeded(
     tool: &'static str,
     finished: Result<Finished, ProcessError>,
 ) -> Result<Finished, RunError> {

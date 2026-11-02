@@ -278,7 +278,7 @@ fn decoy_home() -> TempDir {
 }
 
 /// Writes an executable shell script at `path`.
-#[cfg(target_os = "linux")]
+#[cfg(unix)]
 pub(crate) fn executable(path: &std::path::Path, script: &str) {
     use std::os::unix::fs::PermissionsExt;
 
