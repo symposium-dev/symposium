@@ -205,6 +205,22 @@ fn command(invocation: &Invocation) -> Command {
     command
 }
 
+/// Starts `command`, retrying while its program is busy. A program written just
+/// before can stay open for writing in a child another thread forked meanwhile, until
+/// that child execs, and running it then fails with `ETXTBSY`.
+fn spawn(command: &mut Command) -> io::Result<Child> {
+    let mut retries = 0;
+    loop {
+        match command.spawn() {
+            Err(error) if error.kind() == io::ErrorKind::ExecutableFileBusy && retries < 50 => {
+                retries += 1;
+                thread::sleep(Duration::from_millis(20));
+            }
+            spawned => return spawned,
+        }
+    }
+}
+
 impl Supervised {
     /// Starts the command, contains its tree, and starts one thread per output stream,
     /// each copying its pipe to a log file. The guard owns the command first, so a failure
@@ -215,7 +231,7 @@ impl Supervised {
         stdout_log: &Path,
         stderr_log: &Path,
     ) -> Result<Self, ProcessError> {
-        let child = command.spawn().map_err(|source| ProcessError::Spawn {
+        let child = spawn(command).map_err(|source| ProcessError::Spawn {
             program: program.clone(),
             source,
         })?;
