@@ -1353,7 +1353,8 @@ pub fn workspace_plugins(
     let mut plugins = Vec::new();
     let mut warnings = Vec::new();
     for dir in std::iter::once(&root.to_path_buf()).chain(members.iter()) {
-        let dir = fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
+        // Not `fs::canonicalize`: on Windows its `\\?\` form breaks scripts run by `sh`.
+        let dir = dunce::canonicalize(dir).unwrap_or_else(|_| dir.clone());
         if !seen.insert(dir.clone()) {
             continue;
         }
