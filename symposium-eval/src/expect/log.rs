@@ -3,13 +3,13 @@
 //! The agent can write them too, so a log is read only as a regular file, with no
 //! links followed and its size bounded.
 
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, BufReader, Read};
 use std::path::Path;
 
 use serde::de::DeserializeOwned;
 
-use super::Verdict;
+use super::{Verdict, file};
 use crate::jsonl::{self, Line};
 
 /// Larger than any log a session leaves; a hook trace can reach megabytes.
@@ -64,23 +64,22 @@ pub(crate) fn calls_within<T: DeserializeOwned>(
     counted: Counted,
     exit_of: impl Fn(&T) -> Option<u8>,
 ) -> CallEvidence {
-    match fs::symlink_metadata(log) {
-        Ok(metadata) if metadata.is_file() && metadata.len() <= limit => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return CallEvidence::Missing,
-        _ => return CallEvidence::Unknown,
+    match file::open(log, limit) {
+        Ok(Some(log)) => read(log, limit, counted, exit_of).unwrap_or(CallEvidence::Unknown),
+        Ok(None) => CallEvidence::Missing,
+        Err(_) => CallEvidence::Unknown,
     }
-    read(log, limit, counted, exit_of).unwrap_or(CallEvidence::Unknown)
 }
 
 fn read<T: DeserializeOwned>(
-    log: &Path,
+    log: File,
     limit: u64,
     counted: Counted,
     exit_of: impl Fn(&T) -> Option<u8>,
 ) -> io::Result<CallEvidence> {
     let first = counted == Counted::First;
     // Bounded again, in case the file grew.
-    let mut source = BufReader::new(File::open(log)?.take(limit + 1));
+    let mut source = BufReader::new(log.take(limit + 1));
     let mut line = Vec::new();
     let (mut failed, mut unknown) = (false, false);
     loop {
@@ -112,6 +111,8 @@ fn read<T: DeserializeOwned>(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use serde::Deserialize;
     use tempfile::TempDir;
 
@@ -257,7 +258,7 @@ mod tests {
         // Ends the read on a whole line, so only the bound can make it unknown.
         let limit = (line.len() * 5 - 1) as u64;
         assert_eq!(
-            read(&log, limit, Counted::Any, wanted).unwrap(),
+            read(File::open(&log).unwrap(), limit, Counted::Any, wanted).unwrap(),
             CallEvidence::Unknown
         );
     }
