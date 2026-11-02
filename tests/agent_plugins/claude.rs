@@ -217,6 +217,18 @@ async fn a_users_own_project_plugin_is_left_alone() {
             "{}"
         );
         assert!(!users_own.join(".symposium").exists());
+        let copies: Vec<_> = fs::read_dir(project_plugins(&ctx))?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|dir| dir.join("SKILL.md").is_file())
+            .collect();
+        assert!(
+            copies.iter().any(|dir| {
+                fs::read_to_string(dir.join("SKILL.md"))
+                    .is_ok_and(|skill| skill.contains("name: workspace-guide"))
+            }),
+            "the skill falls back to a per-skill copy: {copies:?}"
+        );
         assert!(
             events.iter().any(|e| e["kind"] == "warning"
                 && e["message"]

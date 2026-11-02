@@ -128,7 +128,17 @@ fn group_skills(plugins: Vec<Plugin>, skills: Vec<SkillWithGroupContext>) -> Vec
 #[derive(Default)]
 pub(crate) struct Compiled {
     pub plugins: Vec<CompiledPlugin>,
-    pub skill_origins: BTreeSet<String>,
+    pub skill_origins: BTreeMap<String, Vec<String>>,
+}
+
+impl Compiled {
+    pub(crate) fn skill_origins_of(&self, delivered: &[String]) -> BTreeSet<&String> {
+        delivered
+            .iter()
+            .filter_map(|name| self.skill_origins.get(name))
+            .flatten()
+            .collect()
+    }
 }
 
 pub(crate) fn compile(
@@ -150,9 +160,10 @@ pub(crate) fn compile(
         let dir = root.join(&name);
         match write_plugin(&dir, &name, &skill_dirs(plugin), debounce, warned) {
             Ok(updated) => {
+                let origins = plugin.skills.iter().map(|s| s.origin_hash.clone());
                 compiled
                     .skill_origins
-                    .extend(plugin.skills.iter().map(|skill| skill.origin_hash.clone()));
+                    .insert(name.clone(), origins.collect());
                 compiled.plugins.push(CompiledPlugin { name, dir, updated });
             }
             Err(e) => warn(format!("failed to compile plugin {name}: {e:#}")),

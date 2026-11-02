@@ -6,7 +6,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use toml_edit::{DocumentMut, Item, Table, TableLike, value};
 
-use crate::agents::{Agent, CompiledPlugin, codex_dir};
+use crate::agents::{Agent, CompiledPlugin, Delivery, codex_dir};
 use crate::config::{INSTALLED_PLUGINS_SUBDIR, Symposium};
 use crate::output::display_path;
 use crate::report::ReportEvent;
@@ -17,11 +17,11 @@ use super::{ENABLED_SUFFIX, MARKETPLACE};
 pub(crate) fn deliver_user_plugins(
     sym: &Symposium,
     plugins: &[CompiledPlugin],
-) -> Option<Vec<String>> {
+) -> Option<Delivery> {
     let root = sym.config_dir().join(INSTALLED_PLUGINS_SUBDIR);
     let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     match deliver(&codex_dir(sym), &root, plugins, debounce) {
-        Ok(updated) => Some(updated),
+        Ok(delivery) => Some(delivery),
         Err(e) => {
             if !plugins.is_empty() {
                 tracing::info!(
@@ -43,7 +43,7 @@ fn deliver(
     root: &Path,
     plugins: &[CompiledPlugin],
     debounce: Duration,
-) -> Result<Vec<String>> {
+) -> Result<Delivery> {
     let config_path = codex_dir.join("config.toml");
     let shown = display_path(&config_path);
     let original = if config_path.exists() {
@@ -101,7 +101,10 @@ fn deliver(
 
     let keep: BTreeSet<PathBuf> = delivered.iter().map(|p| cache.join(&p.name)).collect();
     sync::reap_unlisted(&cache, |dir| keep.contains(dir));
-    Ok(updated)
+    Ok(Delivery {
+        delivered: delivered.iter().map(|p| p.name.clone()).collect(),
+        updated,
+    })
 }
 
 fn is_ours(entry: &Item, source: &str) -> bool {

@@ -3,7 +3,9 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
 
-use crate::agents::{Agent, CompiledPlugin, copilot_config_dir, load_json_or_empty, save_json};
+use crate::agents::{
+    Agent, CompiledPlugin, Delivery, copilot_config_dir, load_json_or_empty, save_json,
+};
 use crate::config::{INSTALLED_PLUGINS_SUBDIR, Symposium};
 use crate::output::display_path;
 use crate::report::ReportEvent;
@@ -15,11 +17,14 @@ const ENABLED_KEY: &str = "enabledPlugins";
 pub(crate) fn deliver_user_plugins(
     sym: &Symposium,
     plugins: &[CompiledPlugin],
-) -> Option<Vec<String>> {
+) -> Option<Delivery> {
     let root = sym.config_dir().join(INSTALLED_PLUGINS_SUBDIR);
     let settings = copilot_config_dir(sym).join("settings.json");
     match deliver(&root, &settings, plugins) {
-        Ok(installed) => Some(installed),
+        Ok(installed) => Some(Delivery {
+            delivered: plugins.iter().map(|p| p.name.clone()).collect(),
+            updated: installed,
+        }),
         Err(e) => {
             if !plugins.is_empty() {
                 tracing::info!(

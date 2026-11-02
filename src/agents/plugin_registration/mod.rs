@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use crate::agents::{Agent, CompiledPlugin, load_json_or_empty, save_json};
+use crate::agents::{Agent, CompiledPlugin, Delivery, load_json_or_empty, save_json};
 use crate::config::{INSTALLED_PLUGINS_SUBDIR, Symposium};
 use crate::output::display_path;
 use crate::report::ReportEvent;
@@ -22,11 +22,11 @@ pub(super) fn deliver_copies(
     agent: Agent,
     plugins_dir: &Path,
     plugins: &[CompiledPlugin],
-) -> Vec<String> {
+) -> Delivery {
     let agent = agent.config_name();
     let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     let mut installed = BTreeSet::new();
-    let mut updated = Vec::new();
+    let mut delivery = Delivery::default();
     for plugin in plugins {
         let dest = plugins_dir.join(&plugin.name);
         match crate::sync::sync_plugin_dir(&plugin.dir, &dest, debounce) {
@@ -39,8 +39,9 @@ pub(super) fn deliver_copies(
                             dest: display_path(&dest),
                         },
                     );
-                    updated.push(plugin.name.clone());
+                    delivery.updated.push(plugin.name.clone());
                 }
+                delivery.delivered.push(plugin.name.clone());
                 installed.insert(dest);
             }
             Err(e) => tracing::info!(
@@ -53,7 +54,7 @@ pub(super) fn deliver_copies(
     crate::sync::reap_unlisted(plugins_dir, |dir| {
         installed.contains(dir) || !crate::compile::is_plugin_dir(dir)
     });
-    updated
+    delivery
 }
 
 pub(crate) fn sync_marketplace_index(sym: &Symposium, plugins: &[CompiledPlugin]) {
