@@ -41,11 +41,12 @@ pub fn kill(pid: u32) {
 }
 
 /// Runs `command` like [`Command::output`] without holding a thread.
-/// Dropping the future kills the command with everything it started.
+/// Dropping the future kills the command, together with everything it started
+/// when [`own_group`] gave it a group of its own.
 pub async fn output(mut command: Command) -> std::io::Result<Output> {
     let stdout = tempfile::tempfile()?;
     let stderr = tempfile::tempfile()?;
-    own_group(&mut command)
+    command
         .stdin(Stdio::null())
         .stdout(stdout.try_clone()?)
         .stderr(stderr.try_clone()?);

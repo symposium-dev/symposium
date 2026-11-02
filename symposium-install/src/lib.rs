@@ -31,6 +31,7 @@ const COMMIT_SHA_FILENAME: &str = ".commit-sha";
 pub struct InstallContext {
     cache_dir: PathBuf,
     cargo_bin: Option<PathBuf>,
+    foreground: bool,
 }
 
 impl InstallContext {
@@ -41,7 +42,16 @@ impl InstallContext {
         Self {
             cache_dir,
             cargo_bin: None,
+            foreground: false,
         }
+    }
+
+    /// Run installers and the git probe in the caller's process group, so
+    /// Ctrl-C and terminal prompts reach them. Dropping an acquisition then
+    /// stops only the command itself, not what it started.
+    pub fn in_foreground(mut self) -> Self {
+        self.foreground = true;
+        self
     }
 
     /// Override the cargo binary used for `cargo install` / `cargo binstall`.
@@ -393,6 +403,16 @@ async fn cargo_output(
 ) -> std::io::Result<std::process::Output> {
     let mut command = ctx.cargo_command();
     command.args(args);
+    run(ctx, command).await
+}
+
+async fn run(
+    ctx: &InstallContext,
+    mut command: std::process::Command,
+) -> std::io::Result<std::process::Output> {
+    if !ctx.foreground {
+        process_tree::own_group(&mut command);
+    }
     process_tree::output(command).await
 }
 
@@ -479,7 +499,7 @@ async fn acquire_cargo(
         // ls-remote` and reinstall only when it differs from the commit we last
         // installed; under `None` we never touch the network.
         let remote_sha = if matches!(update, UpdateLevel::Check | UpdateLevel::Fetch) {
-            remote_git_head_sha(git_url).await
+            remote_git_head_sha(ctx, git_url).await
         } else {
             None
         };
@@ -511,7 +531,7 @@ async fn acquire_cargo(
             // Record the commit we just installed so the next check can compare.
             let installed_sha = match remote_sha {
                 Some(sha) => Some(sha),
-                None => remote_git_head_sha(git_url).await,
+                None => remote_git_head_sha(ctx, git_url).await,
             };
             if let Some(sha) = installed_sha {
                 let _ = std::fs::write(&sha_file, sha);
@@ -647,10 +667,12 @@ fn single_cached_binary(bin_dir: &Path) -> Option<String> {
 /// Resolve the remote default-branch (`HEAD`) commit of a git URL via `git
 /// ls-remote` — cheap, no clone. `None` on any failure, leaving the caller to
 /// fall back to a force reinstall.
-async fn remote_git_head_sha(url: &str) -> Option<String> {
+async fn remote_git_head_sha(ctx: &InstallContext, url: &str) -> Option<String> {
     let mut command = std::process::Command::new("git");
-    command.args(["ls-remote", url, "HEAD"]);
-    let output = process_tree::output(command).await.ok()?;
+    command
+        .args(["ls-remote", url, "HEAD"])
+        .env("GIT_TERMINAL_PROMPT", "0");
+    let output = run(ctx, command).await.ok()?;
     if !output.status.success() {
         return None;
     }
