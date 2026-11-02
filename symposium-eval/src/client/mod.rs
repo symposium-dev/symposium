@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::time::Duration;
 
-pub(crate) use error::{ClientError, ProvenanceError, TranscriptError, Unusable};
+pub(crate) use error::{ClientError, Malformation, ProvenanceError, TranscriptError, Unusable};
 
 use crate::grade::ProcessError;
 use crate::grade::process::{Backend, Finished, Invocation};
@@ -43,6 +43,16 @@ pub(crate) struct Reading {
     pub(crate) completion: Result<Completion, Unusable>,
     /// How each skill looked for reached the agent, in the same order.
     pub(crate) loads: Vec<Load>,
+}
+
+/// How a tool call's result arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolResult {
+    Succeeded,
+    /// An error, which is also how a denial arrives.
+    Failed,
+    /// No result in the transcript.
+    Missing,
 }
 
 /// A skill the runner looks for in a transcript, with the `SKILL.md` sync installed for
@@ -248,7 +258,7 @@ mod tests {
             "garbled" => {
                 return Err(TranscriptError::Malformed {
                     line: 1,
-                    reason: "not an event".to_owned(),
+                    problem: Malformation::Syntax { column: 1 },
                 }
                 .into());
             }
