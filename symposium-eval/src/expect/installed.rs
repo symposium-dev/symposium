@@ -12,13 +12,16 @@ use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
-use super::Verdict;
+use super::{Verdict, file};
 use crate::task::{SkillExpectations, SkillName};
 
 /// The marker sync leaves in every directory it installs.
 const MARKER: &str = ".symposium";
 /// The files sync adds, which are not skill content.
 const MANAGED: [&str; 2] = [MARKER, ".gitignore"];
+
+/// Larger than any `SKILL.md` a hashed copy is identified by.
+const MAX_SKILL_MD: u64 = 8 * 1024 * 1024;
 
 /// Which of the two install assertions a skill is under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,7 +113,7 @@ fn installed(skills: &Path, skill: &SkillName, source: &Path) -> InstallEvidence
     let Ok(candidates) = candidates(skills, skill) else {
         return InstallEvidence::Unreadable;
     };
-    let mut unreadable = false;
+    let mut unreadable = candidates.unreadable;
     for copy in &candidates.copies {
         match same_contents(copy, source) {
             Ok(true) => return InstallEvidence::Matching,
@@ -133,6 +136,7 @@ fn installed(skills: &Path, skill: &SkillName, source: &Path) -> InstallEvidence
 fn presence(skills: &Path, skill: &SkillName) -> InstallEvidence {
     match candidates(skills, skill) {
         Ok(candidates) if !candidates.copies.is_empty() => InstallEvidence::Present,
+        Ok(candidates) if candidates.unreadable => InstallEvidence::Unreadable,
         Ok(candidates) if candidates.unidentified => InstallEvidence::Unidentified,
         Ok(_) => InstallEvidence::Absent,
         Err(_) => InstallEvidence::Unreadable,
@@ -146,9 +150,12 @@ struct Candidates {
     copies: Vec<PathBuf>,
     /// Whether a `<name>-<hash>` directory could not say whose copy it is.
     unidentified: bool,
+    /// Whether an entry that could be a copy could not be inspected.
+    unreadable: bool,
 }
 
-/// What `skills` holds for `skill`. A missing `skills` holds nothing.
+/// What `skills` holds for `skill`. A missing `skills` holds nothing. An entry that
+/// cannot be inspected is noted and passed over, so it cannot hide a copy that settles.
 fn candidates(skills: &Path, skill: &SkillName) -> io::Result<Candidates> {
     let entries = match fs::read_dir(skills) {
         Ok(entries) => entries,
@@ -159,30 +166,40 @@ fn candidates(skills: &Path, skill: &SkillName) -> io::Result<Candidates> {
     };
     let mut candidates = Candidates::default();
     for entry in entries {
-        let entry = entry?;
-        let Some(slot) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| slot(name, skill))
-        else {
-            continue;
-        };
-        // Sync installs a real directory; a link there is not one of its copies.
-        if !entry.file_type()?.is_dir() || !marked(&entry.path())? {
-            continue;
-        }
-        let identity = match slot {
-            Slot::Plain => Identity::Expected,
-            Slot::Hashed => identity(&entry.path(), skill)?,
-        };
-        match identity {
-            Identity::Expected => candidates.copies.push(entry.path()),
-            Identity::Other => {}
-            Identity::Unknown => candidates.unidentified = true,
+        match candidate(entry, skill) {
+            Ok(Some((path, Identity::Expected))) => candidates.copies.push(path),
+            Ok(Some((_, Identity::Unknown))) => candidates.unidentified = true,
+            Ok(Some((_, Identity::Other)) | None) => {}
+            Err(_) => candidates.unreadable = true,
         }
     }
     candidates.copies.sort();
     Ok(candidates)
+}
+
+/// The directory `entry` is and whose copy, if it is one of sync's copies that could be
+/// `skill`'s.
+fn candidate(
+    entry: io::Result<fs::DirEntry>,
+    skill: &SkillName,
+) -> io::Result<Option<(PathBuf, Identity)>> {
+    let entry = entry?;
+    let Some(slot) = entry
+        .file_name()
+        .to_str()
+        .and_then(|name| slot(name, skill))
+    else {
+        return Ok(None);
+    };
+    // Sync installs a real directory; a link there is not one of its copies.
+    if !entry.file_type()?.is_dir() || !marked(&entry.path())? {
+        return Ok(None);
+    }
+    let identity = match slot {
+        Slot::Plain => Identity::Expected,
+        Slot::Hashed => identity(&entry.path(), skill)?,
+    };
+    Ok(Some((entry.path(), identity)))
 }
 
 /// How a directory's name could hold a skill.
@@ -224,16 +241,23 @@ enum Identity {
 }
 
 /// Whose copy `dir` is, by the name in its `SKILL.md`, which sync names a copy after.
+/// The agent can write there, so the file is opened as evidence is, which a pipe cannot
+/// block.
 fn identity(dir: &Path, skill: &SkillName) -> io::Result<Identity> {
-    match fs::read_to_string(dir.join("SKILL.md")) {
-        Ok(text) => Ok(match frontmatter_name(&text) {
-            Some(name) if name == skill.as_str() => Identity::Expected,
-            Some(_) => Identity::Other,
-            None => Identity::Unknown,
-        }),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Identity::Unknown),
-        Err(error) => Err(error),
+    let Some(skill_md) = file::open(&dir.join("SKILL.md"), MAX_SKILL_MD)? else {
+        return Ok(Identity::Unknown);
+    };
+    let mut text = String::new();
+    // Bounded again, in case the file grew.
+    skill_md.take(MAX_SKILL_MD + 1).read_to_string(&mut text)?;
+    if text.len() as u64 > MAX_SKILL_MD {
+        return Err(io::Error::other("larger than any SKILL.md"));
     }
+    Ok(match frontmatter_name(&text) {
+        Some(name) if name == skill.as_str() => Identity::Expected,
+        Some(_) => Identity::Other,
+        None => Identity::Unknown,
+    })
 }
 
 /// The `name` of a `SKILL.md`, read as Symposium reads it: the YAML between the
