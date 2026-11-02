@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -289,7 +290,8 @@ fn write_plugin(
     debounce: Duration,
     warned: &mut BTreeSet<String>,
 ) -> Result<bool> {
-    if sync::recently_synced(dir, debounce) {
+    let names = skills.iter().map(|(dir, _)| OsString::from(dir)).collect();
+    if sync::recently_synced(dir, debounce) && skill_dir_names(dir) == names {
         return Ok(false);
     }
     let (contents, skipped) = plugin_contents(name, skills)?;
@@ -298,6 +300,13 @@ fn write_plugin(
         sync::report_skipped(skipped, warned);
     }
     Ok(updated)
+}
+
+pub(crate) fn skill_dir_names(plugin_dir: &Path) -> BTreeSet<OsString> {
+    let Ok(entries) = fs::read_dir(plugin_dir.join(SKILLS_DIR)) else {
+        return BTreeSet::new();
+    };
+    entries.flatten().map(|entry| entry.file_name()).collect()
 }
 
 fn plugin_contents(

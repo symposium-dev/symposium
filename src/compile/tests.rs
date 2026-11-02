@@ -393,6 +393,34 @@ fn recompiling_writes_only_what_changed_and_leaves_unowned_directories_alone() {
 }
 
 #[test]
+fn a_skill_added_within_the_debounce_is_compiled() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("installed");
+    let first_md = write_skill(&tmp.path().join("src/first"), "first");
+    let second_md = write_skill(&tmp.path().join("src/second"), "second");
+    let first = skill("first", "11111111", &first_md, 0);
+    let second = skill("second", "22222222", &second_md, 0);
+    let debounce = Duration::from_secs(3600);
+
+    compile(
+        &root,
+        &[plugin("guide", vec![first.clone()])],
+        debounce,
+        &mut BTreeSet::new(),
+        false,
+    );
+    compile(
+        &root,
+        &[plugin("guide", vec![first, second])],
+        debounce,
+        &mut BTreeSet::new(),
+        false,
+    );
+
+    assert!(root.join("guide/skills/second/SKILL.md").is_file());
+}
+
+#[test]
 fn a_skill_reached_by_two_global_plugins_compiles_into_the_first() {
     let skill_md = Path::new("/nonexistent/shared/SKILL.md");
     let plugins = vec![registry("first", ""), registry("second", "")];

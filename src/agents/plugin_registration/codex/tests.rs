@@ -96,3 +96,23 @@ fn nothing_is_written_when_there_is_nothing_to_deliver() {
 
     assert!(!tmp.path().join(".codex").exists());
 }
+
+#[test]
+fn a_skill_added_within_the_debounce_is_delivered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut sym = Symposium::from_dir(tmp.path());
+    sym.config.sync_debounce_secs = 3600;
+    let plugin = compiled(&sym.config_dir().join(INSTALLED_PLUGINS_SUBDIR), "fresh");
+
+    deliver_user_plugins(&sym, std::slice::from_ref(&plugin));
+    write(&plugin.dir.join("skills/added/SKILL.md"), "added");
+    deliver_user_plugins(&sym, std::slice::from_ref(&plugin));
+
+    let delivered = codex_dir(&sym).join("plugins/cache/symposium/fresh");
+    assert!(
+        delivered
+            .join(compile::PLUGIN_VERSION)
+            .join("skills/added/SKILL.md")
+            .is_file()
+    );
+}

@@ -59,6 +59,21 @@ fn only_plugin_directories_symposium_installed_are_reaped() {
 }
 
 #[test]
+fn a_skill_added_within_the_debounce_is_delivered() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut sym = Symposium::from_dir(tmp.path());
+    sym.config.sync_debounce_secs = 3600;
+    let plugin = compiled(&tmp.path().join("installed"), "fresh");
+    let delivered = tmp.path().join(".claude/skills/fresh");
+
+    Agent::Claude.deliver_user_plugins(&sym, std::slice::from_ref(&plugin));
+    write(&plugin.dir.join("skills/added/SKILL.md"), "added");
+    Agent::Claude.deliver_user_plugins(&sym, std::slice::from_ref(&plugin));
+
+    assert!(delivered.join("skills/added/SKILL.md").is_file());
+}
+
+#[test]
 fn project_delivery_lands_in_the_project_and_stays_out_of_git() {
     let tmp = tempfile::tempdir().unwrap();
     let mut sym = Symposium::from_dir(&tmp.path().join("home"));

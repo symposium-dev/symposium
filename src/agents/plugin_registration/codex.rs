@@ -10,7 +10,7 @@ use crate::agents::{Agent, CompiledPlugin, Delivery, codex_dir};
 use crate::config::{INSTALLED_PLUGINS_SUBDIR, Symposium};
 use crate::output::display_path;
 use crate::report::ReportEvent;
-use crate::sync;
+use crate::{compile, sync};
 
 use super::{ENABLED_SUFFIX, MARKETPLACE};
 
@@ -113,10 +113,12 @@ fn is_ours(entry: &Item, source: &str) -> bool {
 }
 
 fn copy(source: &Path, dest: &Path, debounce: Duration) -> Result<bool> {
-    if sync::recently_synced(dest, debounce) {
+    let version = Path::new(compile::PLUGIN_VERSION);
+    if sync::recently_synced(dest, debounce)
+        && compile::skill_dir_names(source) == compile::skill_dir_names(&dest.join(version))
+    {
         return Ok(false);
     }
-    let version = Path::new(crate::compile::PLUGIN_VERSION);
     let (contents, _) = sync::collect_dir_contents(source)?;
     let mut tree = vec![(version.to_path_buf(), None)];
     tree.extend(

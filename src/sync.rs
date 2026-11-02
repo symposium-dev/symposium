@@ -262,7 +262,9 @@ pub(crate) fn sync_tree(dest: &Path, sorted: &TreeContents) -> Result<bool> {
 }
 
 pub(crate) fn sync_plugin_dir(source: &Path, dest: &Path, debounce: Duration) -> Result<bool> {
-    if recently_synced(dest, debounce) {
+    if recently_synced(dest, debounce)
+        && crate::compile::skill_dir_names(source) == crate::compile::skill_dir_names(dest)
+    {
         return Ok(false);
     }
     sync_tree(dest, &collect_dir_contents(source)?.0)
