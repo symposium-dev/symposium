@@ -49,6 +49,7 @@ impl Trial {
         // session's.
         require_absent(&self.sync_records(), Unready::SyncRecord)?;
         require_absent(&self.hook_trace(), Unready::HookTrace)?;
+        require_absent(&self.hook_records(), Unready::HookRecord)?;
         require_empty(&system.join(client.managed_dir()), Unready::ManagedSettings)?;
         if self.configuration() == Configuration::Baseline {
             self.check_no_symposium(client, env)?;
@@ -226,6 +227,16 @@ mod tests {
             write(&setup.trial.hook_trace(), "");
 
             assert_unready(&setup.check(Client::ClaudeCode), Unready::HookTrace);
+        }
+    }
+
+    #[test]
+    fn no_plugin_hook_has_recorded_before_launch() {
+        for configuration in [Configuration::Symposium, Configuration::Baseline] {
+            let setup = Setup::new(configuration);
+            write(&setup.trial.hook_records(), "");
+
+            assert_unready(&setup.check(Client::ClaudeCode), Unready::HookRecord);
         }
     }
 

@@ -104,6 +104,8 @@ pub(crate) enum Unready {
     SyncRecord,
     #[error("holds a hook trace before the agent starts")]
     HookTrace,
+    #[error("holds a hook record before the agent starts")]
+    HookRecord,
     #[error("holds managed settings, which override the trial's own")]
     ManagedSettings,
     #[error("puts `cargo-agents` on a baseline trial's `PATH`")]

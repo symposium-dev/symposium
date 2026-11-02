@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use super::log::{self, CallEvidence};
+use super::log::{self, CallEvidence, Counted};
 
 /// The fields this reader needs.
 #[derive(Debug, Deserialize)]
@@ -20,7 +20,7 @@ struct Entry {
 
 /// Whether `trace` shows `agent`'s `SessionStart` hook succeeding.
 pub(crate) fn session_start(trace: &Path, agent: &str) -> CallEvidence {
-    log::calls(trace, |entry: &Entry| {
+    log::calls(trace, Counted::Any, |entry: &Entry| {
         (entry.event == "SessionStart" && entry.agent == agent).then_some(entry.exit_code)
     })
 }

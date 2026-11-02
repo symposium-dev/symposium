@@ -263,6 +263,12 @@ impl Trial {
         self.evidence().join("hook-trace.jsonl")
     }
 
+    /// Where the plugin hooks in `evals/` record each run, as one JSON line naming the
+    /// hook, under `EVAL_EVIDENCE_DIR`.
+    pub(crate) fn hook_records(&self) -> PathBuf {
+        self.evidence().join("hook-records.jsonl")
+    }
+
     /// The client's transcript and logs. The runner writes them from outside the
     /// sandbox, and the policy gives the trial no access, so the agent cannot alter them.
     pub(crate) fn session(&self) -> PathBuf {

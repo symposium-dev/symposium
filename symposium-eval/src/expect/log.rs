@@ -39,18 +39,29 @@ impl CallEvidence {
     }
 }
 
+/// Which calls decide.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Counted {
+    /// Any successful call.
+    Any,
+    /// The first call, as the RFD asks for a `Stop` hook.
+    First,
+}
+
 /// What `log` shows of the calls `exit_of` picks out, by their exit codes.
 pub(crate) fn calls<T: DeserializeOwned>(
     log: &Path,
+    counted: Counted,
     exit_of: impl Fn(&T) -> Option<u8>,
 ) -> CallEvidence {
-    calls_within(log, MAX_LOG, exit_of)
+    calls_within(log, MAX_LOG, counted, exit_of)
 }
 
 /// [`calls`], reading at most `limit` bytes of the log.
 pub(crate) fn calls_within<T: DeserializeOwned>(
     log: &Path,
     limit: u64,
+    counted: Counted,
     exit_of: impl Fn(&T) -> Option<u8>,
 ) -> CallEvidence {
     match fs::symlink_metadata(log) {
@@ -58,14 +69,16 @@ pub(crate) fn calls_within<T: DeserializeOwned>(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return CallEvidence::Missing,
         _ => return CallEvidence::Unknown,
     }
-    read(log, limit, exit_of).unwrap_or(CallEvidence::Unknown)
+    read(log, limit, counted, exit_of).unwrap_or(CallEvidence::Unknown)
 }
 
 fn read<T: DeserializeOwned>(
     log: &Path,
     limit: u64,
+    counted: Counted,
     exit_of: impl Fn(&T) -> Option<u8>,
 ) -> io::Result<CallEvidence> {
+    let first = counted == Counted::First;
     // Bounded again, in case the file grew.
     let mut source = BufReader::new(File::open(log)?.take(limit + 1));
     let mut line = Vec::new();
@@ -74,12 +87,16 @@ fn read<T: DeserializeOwned>(
         match jsonl::next_line(&mut source, &mut line)? {
             Line::End if source.get_ref().limit() == 0 => return Ok(CallEvidence::Unknown),
             Line::End => break,
+            // A line that cannot be read could be the first call.
+            Line::TooLong if first => return Ok(CallEvidence::Unknown),
             Line::TooLong => unknown = true,
             Line::Read if line.trim_ascii().is_empty() => {}
             Line::Read => match serde_json::from_slice::<T>(&line).map(|entry| exit_of(&entry)) {
                 Ok(Some(0)) => return Ok(CallEvidence::Succeeded),
+                Ok(Some(_)) if first => return Ok(CallEvidence::Failed),
                 Ok(Some(_)) => failed = true,
                 Ok(None) => {}
+                Err(_) if first => return Ok(CallEvidence::Unknown),
                 Err(_) => unknown = true,
             },
         }
@@ -116,7 +133,7 @@ mod tests {
         let log = dir.path().join("log.jsonl");
         let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
         fs::write(&log, text).unwrap();
-        calls_within(&log, limit, wanted)
+        calls_within(&log, limit, Counted::Any, wanted)
     }
 
     fn wanted(call: &Call) -> Option<u8> {
@@ -139,7 +156,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
 
         assert_eq!(
-            calls(&dir.path().join("log.jsonl"), wanted),
+            calls(&dir.path().join("log.jsonl"), Counted::Any, wanted),
             CallEvidence::Missing
         );
     }
@@ -161,6 +178,41 @@ mod tests {
         let lines = [call("wanted", 1), "not json".to_owned(), call("wanted", 0)];
 
         assert_eq!(evidence(&lines), CallEvidence::Succeeded);
+    }
+
+    fn first_evidence(lines: &[String]) -> CallEvidence {
+        let dir = TempDir::new().unwrap();
+        let log = dir.path().join("log.jsonl");
+        let text: String = lines.iter().map(|line| format!("{line}\n")).collect();
+        fs::write(&log, text).unwrap();
+        calls(&log, Counted::First, wanted)
+    }
+
+    #[test]
+    fn the_first_call_decides_when_it_is_the_one_counted() {
+        let failed_first = [call("other", 0), call("wanted", 1), call("wanted", 0)];
+        let succeeded_first = [call("other", 1), call("wanted", 0), call("wanted", 1)];
+
+        assert_eq!(first_evidence(&failed_first), CallEvidence::Failed);
+        assert_eq!(first_evidence(&succeeded_first), CallEvidence::Succeeded);
+        assert_eq!(first_evidence(&[call("other", 0)]), CallEvidence::Missing);
+    }
+
+    #[test]
+    fn an_unreadable_line_before_the_first_call_could_be_it() {
+        let long = format!(r#"{{"pad":"{}"}}"#, "x".repeat(jsonl::MAX_LINE));
+        for unreadable in ["not json".to_owned(), long] {
+            let lines = [unreadable, call("wanted", 0)];
+
+            assert_eq!(first_evidence(&lines), CallEvidence::Unknown);
+        }
+    }
+
+    #[test]
+    fn an_unreadable_line_after_the_first_call_does_not_matter() {
+        let lines = [call("wanted", 1), "not json".to_owned()];
+
+        assert_eq!(first_evidence(&lines), CallEvidence::Failed);
     }
 
     #[test]
@@ -204,7 +256,10 @@ mod tests {
 
         // Ends the read on a whole line, so only the bound can make it unknown.
         let limit = (line.len() * 5 - 1) as u64;
-        assert_eq!(read(&log, limit, wanted).unwrap(), CallEvidence::Unknown);
+        assert_eq!(
+            read(&log, limit, Counted::Any, wanted).unwrap(),
+            CallEvidence::Unknown
+        );
     }
 
     #[test]
@@ -213,7 +268,7 @@ mod tests {
         let log = dir.path().join("log.jsonl");
         fs::create_dir(&log).unwrap();
 
-        assert_eq!(calls(&log, wanted), CallEvidence::Unknown);
+        assert_eq!(calls(&log, Counted::Any, wanted), CallEvidence::Unknown);
     }
 
     #[test]
@@ -234,6 +289,6 @@ mod tests {
         let log = dir.path().join("log.jsonl");
         std::os::unix::fs::symlink(&forged, &log).unwrap();
 
-        assert_eq!(calls(&log, wanted), CallEvidence::Unknown);
+        assert_eq!(calls(&log, Counted::Any, wanted), CallEvidence::Unknown);
     }
 }
