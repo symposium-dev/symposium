@@ -1,0 +1,18 @@
+name = "own-script-plugin"
+depends-on = ["*"]
+
+# A script in a subdirectory of the plugin.
+[[hooks]]
+name = "own-script"
+event = "PreToolUse"
+matcher = "Read"
+format = "claude"
+command = { script = "scripts/own-script.sh" }
+
+# A script beside the manifest.
+[[hooks]]
+name = "beside"
+event = "PreToolUse"
+matcher = "Bash"
+format = "claude"
+command = { script = "beside.sh" }

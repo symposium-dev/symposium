@@ -27,7 +27,7 @@ The payload is parsed first, and the agent's parser can declare it not an occurr
      - Ensure any `requirements` for the hook are acquired (on-demand, best-effort).
      - Resolve the hook's `command` (a named installation reference or inline declaration) into a runnable form:
        - If the installation declares a `source`, acquire it (install / cache / clone) and resolve the `executable` / `script` against the cached location. Dispatch acquires with `UpdateLevel::None` — it serves the cache (git checks debounced) rather than hitting the network on every event. Freshness comes from the `SessionStart` prewarm (step 1), which re-acquires every applicable hook's source with `Check` once per session.
-       - If no source, the `executable` / `script` is taken as a path on disk (relative paths resolve against the plugin directory, so a refreshed plugin-source repo updates these for free).
+       - If no source, the `executable` / `script` is taken as a path on disk, resolved when the plugin loads (`plugins::resolve_plugin_paths`) against the directory of its manifest, so a refreshed plugin-source repo updates these for free. A relative `script` always names a file in the plugin, even a bare `hook.sh` beside the manifest; a relative `executable` does too when it has more than one component (`./tool`, `bin/tool`), while a bare `executable` name such as `rustc` stays a `$PATH` lookup. Absolute paths stay as written.
        - Run the installation's `install_commands` (post-source) before invoking the runnable.
        - Spawn `path args…` directly for `Exec`, or `sh path args…` for `Script`.
      - Pass the event JSON (in the selected format) on stdin to the plugin's hook.

@@ -81,9 +81,7 @@ pub enum AcquiredRunnable {
 /// `None` (serve cache, debounced), while the `SessionStart` prewarm uses
 /// `Check` to force a refresh of git/cargo sources once per session.
 ///
-/// `plugin_dir` is the directory containing the plugin's manifest;
-/// relative `executable` / `script` paths on no-source installations
-/// resolve against it.
+/// Source-less paths were resolved when the plugin loaded.
 pub async fn acquire_installation(
     sym: &Symposium,
     installation: &Installation,
@@ -125,7 +123,7 @@ pub async fn acquire_installation(
             Some(AcquiredRunnable::ResolvedExec { path })
         }
         (Some(_), None, None) => None,
-        // For both of these: if there is no source, then the exec/script must *obviously* be global
+        // No source: an absolute path, or a bare name on `$PATH`.
         (None, Some(name), None) => Some(AcquiredRunnable::ResolvedExec {
             path: PathBuf::from(name),
         }),

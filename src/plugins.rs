@@ -2,7 +2,7 @@ use crate::predicate::PredicateEval;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::CommandFactory;
 use serde::Serialize;
 
@@ -989,7 +989,8 @@ pub(crate) fn validate_plugin(plugin: UnvalidatedPlugin, kind: PluginKind) -> Re
     } = plugin;
     let mut plugin = validate_manifest(manifest, origin)
         .with_context(|| format!("invalid plugin at `{}`", crate::output::display_path(&root)))?;
-    resolve_group_sources(&mut plugin, &root, label_root.as_deref().unwrap_or(&root));
+    resolve_plugin_paths(&mut plugin, &root, label_root.as_deref().unwrap_or(&root))
+        .with_context(|| format!("invalid plugin at `{}`", crate::output::display_path(&root)))?;
     Ok(Plugin {
         canonical: id,
         manifest: plugin,
@@ -1006,11 +1007,7 @@ pub(crate) fn validate_plugin(plugin: UnvalidatedPlugin, kind: PluginKind) -> Re
 ///
 /// This is what lets a `Plugin` carry absolute skill dirs and no
 /// manifest-file/base path: the package manager bakes location in before returning.
-pub(crate) fn resolve_group_sources(
-    plugin: &mut PluginManifest,
-    base_dir: &Path,
-    attribution_root: &Path,
-) {
+fn resolve_group_sources(plugin: &mut PluginManifest, base_dir: &Path, attribution_root: &Path) {
     let attribution =
         fs::canonicalize(attribution_root).unwrap_or_else(|_| attribution_root.into());
     for group in &mut plugin.skills {
@@ -1027,6 +1024,93 @@ pub(crate) fn resolve_group_sources(
         group.source_label = Some(format!("path:{label}"));
         group.source = PluginSource::Path(abs);
     }
+}
+
+/// Resolve the paths in `plugin` that are relative to its manifest's directory.
+///
+/// # Errors
+///
+/// When a resolved runnable path is not valid UTF-8.
+pub(crate) fn resolve_plugin_paths(
+    plugin: &mut PluginManifest,
+    base_dir: &Path,
+    attribution_root: &Path,
+) -> Result<()> {
+    resolve_group_sources(plugin, base_dir, attribution_root);
+    resolve_runnable_paths(plugin, base_dir)
+}
+
+/// Which runnable field a path is in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunnableField {
+    /// A bare name is looked up on `$PATH`.
+    Executable,
+    /// Always a file in the plugin.
+    Script,
+}
+
+/// Resolve source-less `executable` / `script` paths, on installations and their
+/// hooks, against `base_dir`.
+fn resolve_runnable_paths(plugin: &mut PluginManifest, base_dir: &Path) -> Result<()> {
+    let PluginManifest {
+        installations,
+        hooks,
+        ..
+    } = plugin;
+    for hook in hooks.iter_mut() {
+        let sourceless = installations
+            .iter()
+            .any(|installation| installation.name == hook.command && installation.source.is_none());
+        if sourceless {
+            resolve_runnables(&mut hook.executable, &mut hook.script, base_dir)?;
+        }
+    }
+    for installation in installations
+        .iter_mut()
+        .filter(|installation| installation.source.is_none())
+    {
+        resolve_runnables(
+            &mut installation.executable,
+            &mut installation.script,
+            base_dir,
+        )?;
+    }
+    Ok(())
+}
+
+fn resolve_runnables(
+    executable: &mut Option<String>,
+    script: &mut Option<String>,
+    base_dir: &Path,
+) -> Result<()> {
+    resolve_runnable_path(executable, RunnableField::Executable, base_dir)?;
+    resolve_runnable_path(script, RunnableField::Script, base_dir)
+}
+
+fn resolve_runnable_path(
+    written: &mut Option<String>,
+    field: RunnableField,
+    base_dir: &Path,
+) -> Result<()> {
+    let Some(written) = written else {
+        return Ok(());
+    };
+    let path = Path::new(written.as_str());
+    let bare_name = path.components().count() == 1;
+    if path.is_absolute() || (field == RunnableField::Executable && bare_name) {
+        return Ok(());
+    }
+    *written = base_dir
+        .join(path)
+        .into_os_string()
+        .into_string()
+        .map_err(|_| {
+            anyhow!(
+                "`{written}` names a file in `{}`, which is not valid UTF-8",
+                base_dir.display()
+            )
+        })?;
+    Ok(())
 }
 
 /// Synthesize a manifest for a bare `SKILL.md` entry: a directory holding a
@@ -1320,7 +1404,8 @@ fn workspace_plugin_for_dir(
         },
     )
     .with_context(|| format!("validating `{}`", manifest_path.display()))?;
-    resolve_group_sources(&mut plugin, dir, workspace_root);
+    resolve_plugin_paths(&mut plugin, dir, workspace_root)
+        .with_context(|| format!("validating `{}`", manifest_path.display()))?;
 
     Ok(Some(Plugin {
         canonical: PackageId::new("local", &plugin.name, ANY_VERSION),
@@ -1539,7 +1624,8 @@ fn load_plugin_as(
     let mut plugin = validate_manifest(manifest, origin)
         .with_context(|| format!("validating `{}`", manifest_path.display()))?;
     let base = manifest_path.parent().unwrap_or(source_dir);
-    resolve_group_sources(&mut plugin, base, source_dir);
+    resolve_plugin_paths(&mut plugin, base, source_dir)
+        .with_context(|| format!("validating `{}`", manifest_path.display()))?;
     Ok(Plugin {
         canonical: PackageId::new(source_name, &plugin.name, ANY_VERSION),
         manifest: plugin,
@@ -3375,6 +3461,121 @@ mod tests {
         assert_eq!(hook.command, "rtk-hooks");
         assert_eq!(hook.script.as_deref(), Some("hooks/claude/rtk-rewrite.sh"));
         assert_eq!(hook.args, vec!["--format".to_string()]);
+    }
+
+    #[test]
+    fn a_plugins_own_runnable_paths_resolve_against_its_directory() {
+        let base = std::env::temp_dir().join("example-plugin");
+        let absolute = base.join("elsewhere").join("tool");
+        let toml = format!(
+            indoc! {r#"
+                name = "p"
+                depends-on = ["*"]
+
+                [[installations]]
+                name = "own"
+                script = "scripts/own.sh"
+
+                [[installations]]
+                name = "beside"
+                script = "hook.sh"
+
+                [[installations]]
+                name = "global"
+                executable = "rustc"
+
+                [[installations]]
+                name = "local-tool"
+                executable = "./tool"
+
+                [[installations]]
+                name = "absolute"
+                executable = {absolute}
+
+                [[installations]]
+                name = "acquired"
+                source = "github"
+                url = "https://github.com/o/r"
+                script = "scripts/inside.sh"
+
+                [[installations]]
+                name = "setup"
+                install_commands = ["true"]
+
+                [[hooks]]
+                name = "inline"
+                event = "Stop"
+                command = {{ script = "./scripts/inline.sh" }}
+
+                [[hooks]]
+                name = "on-setup"
+                event = "Stop"
+                command = "setup"
+                script = "scripts/hook.sh"
+
+                [[hooks]]
+                name = "on-acquired"
+                event = "Stop"
+                command = "acquired"
+            "#},
+            absolute = toml::Value::from(absolute.to_str().unwrap()),
+        );
+        let mut plugin = from_str(&toml).expect("parse");
+
+        resolve_runnable_paths(&mut plugin, &base).unwrap();
+
+        let joined = |relative: &str| base.join(relative).to_str().unwrap().to_owned();
+        let installation = |name: &str| {
+            plugin
+                .installations
+                .iter()
+                .find(|installation| installation.name == name)
+                .unwrap()
+        };
+        assert_eq!(installation("own").script, Some(joined("scripts/own.sh")));
+        assert_eq!(installation("beside").script, Some(joined("hook.sh")));
+        assert_eq!(
+            installation("local-tool").executable,
+            Some(joined("./tool"))
+        );
+        assert_eq!(
+            installation("inline").script,
+            Some(joined("./scripts/inline.sh"))
+        );
+        assert_eq!(installation("global").executable.as_deref(), Some("rustc"));
+        assert_eq!(
+            installation("absolute").executable.as_deref(),
+            absolute.to_str()
+        );
+        assert_eq!(
+            installation("acquired").script.as_deref(),
+            Some("scripts/inside.sh")
+        );
+        let hook = |name: &str| plugin.hooks.iter().find(|hook| hook.name == name).unwrap();
+        assert_eq!(hook("on-setup").script, Some(joined("scripts/hook.sh")));
+        assert_eq!(hook("on-acquired").script, None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_runnable_path_that_cannot_be_written_fails_the_plugin() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let base = std::env::temp_dir().join(std::ffi::OsStr::from_bytes(b"plugin-\xff"));
+        let mut plugin = from_str(indoc! {r#"
+            name = "p"
+            depends-on = ["*"]
+
+            [[hooks]]
+            name = "h"
+            event = "Stop"
+            command = { script = "hook.sh" }
+        "#})
+        .expect("parse");
+
+        let error = resolve_runnable_paths(&mut plugin, &base).unwrap_err();
+
+        assert!(error.to_string().contains("not valid UTF-8"), "{error}");
     }
 
     /// `script` on a github installation pins the file; hooks need not repeat it.
