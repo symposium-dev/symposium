@@ -597,12 +597,16 @@ pub async fn dispatch_builtin(
         symposium::InputEvent::PreToolUse(_) => {
             symposium::OutputEvent::empty_for(HookEvent::PreToolUse)
         }
-        symposium::InputEvent::PostToolUse(post) => {
-            handle_post_tool_use(sym, post, notify_about_possible_new_plugins).await
-        }
-        symposium::InputEvent::UserPromptSubmit(prompt) => {
-            handle_user_prompt_submit(sym, prompt, notify_about_possible_new_plugins).await
-        }
+        symposium::InputEvent::PostToolUse(_) => mid_session_sync_notices(
+            HookEvent::PostToolUse,
+            notify_about_possible_new_plugins,
+            plugin_reload_notice,
+        ),
+        symposium::InputEvent::UserPromptSubmit(_) => mid_session_sync_notices(
+            HookEvent::UserPromptSubmit,
+            notify_about_possible_new_plugins,
+            plugin_reload_notice,
+        ),
         symposium::InputEvent::SessionStart(session) => {
             handle_session_start(sym, session, deps, plugin_reload_notice).await
         }
@@ -709,36 +713,26 @@ fn update_nudge(sym: &Symposium) -> Option<String> {
     ))
 }
 
-async fn handle_post_tool_use(
-    _sym: &Symposium,
-    _post: &symposium::PostToolUseInput,
+fn mid_session_sync_notices(
+    event: HookEvent,
     notify_about_possible_new_plugins: bool,
+    plugin_reload_notice: Option<String>,
 ) -> symposium::OutputEvent {
-    possible_new_plugins_notice(HookEvent::PostToolUse, notify_about_possible_new_plugins)
-}
-
-async fn handle_user_prompt_submit(
-    _sym: &Symposium,
-    _prompt_payload: &symposium::UserPromptSubmitInput,
-    notify_about_possible_new_plugins: bool,
-) -> symposium::OutputEvent {
-    possible_new_plugins_notice(
-        HookEvent::UserPromptSubmit,
-        notify_about_possible_new_plugins,
-    )
-}
-
-fn possible_new_plugins_notice(event: HookEvent, notify: bool) -> symposium::OutputEvent {
-    if !notify {
-        return symposium::OutputEvent::empty_for(event);
-    }
-    symposium::OutputEvent::with_context(
-        event,
+    let possible_new_plugins = notify_about_possible_new_plugins.then(|| {
         "The workspace's dependencies just changed, so there may be new agent plugins \
          available from them. They stay off until the user consents: tell the user to run \
          `cargo agents sync` in their terminal to review them. Do not enable them yourself."
-            .to_string(),
-    )
+            .to_string()
+    });
+    let fragments: Vec<String> = [possible_new_plugins, plugin_reload_notice]
+        .into_iter()
+        .flatten()
+        .collect();
+    if fragments.is_empty() {
+        symposium::OutputEvent::empty_for(event)
+    } else {
+        symposium::OutputEvent::with_context(event, fragments.join("\n\n"))
+    }
 }
 
 pub enum PluginHookOutput {

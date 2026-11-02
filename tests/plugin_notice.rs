@@ -133,6 +133,28 @@ async fn agents_that_read_context_after_a_tool_call_get_the_notice() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_plugin_a_mid_session_sync_installs_comes_with_how_to_load_it() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-reload0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            start_session(&ctx, HookAgent::Claude).await;
+
+            add_crate_b(ctx.workspace_root.as_ref().unwrap());
+            let stdout = respond(&ctx, HookAgent::Claude, tool_call_finished()).await;
+            assert!(
+                stdout.contains("crate-b-guide") && stdout.contains("/reload-plugins"),
+                "{stdout}"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn session_start_tells_the_agent_how_to_load_the_plugins_its_sync_installed() {
     for (agent, load_now) in [
         (HookAgent::Claude, "/reload-plugins"),
