@@ -2,6 +2,7 @@
 //! "Expectations"). Evidence that cannot decide an assertion makes it
 //! [`Verdict::Inconclusive`], never quietly a pass or a fail.
 
+pub(crate) mod config;
 pub(crate) mod file;
 pub(crate) mod hooks;
 pub(crate) mod installed;

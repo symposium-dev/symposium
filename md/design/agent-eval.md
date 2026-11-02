@@ -125,6 +125,8 @@ A `Reading` gives a `Load` for each `InstalledSkill` (its name and the `SKILL.md
 
 `expect::hooks::hook_record` decides each `[expected] hooks` entry. The trace shows Symposium handled an event, not which plugin hooks ran within it, so each hook in `evals/` records its own runs: with `EVAL_EVIDENCE_DIR` set, it appends a JSON line naming itself and its exit code to `hook-records.jsonl` (`Trial::hook_records()`), one file for all hooks, so a hook's name never becomes a path. `format-on-stop` also records whether the code was already formatted. A `Stop` hook is decided by its first record (`Counted::First`), as the RFD asks, and a line before it that cannot be read could have been it, so that is `Unknown`. `check_before_launch` requires no records file (`Unready::HookRecord`). A Linux test runs Symposium's real `Stop` hook, which runs the plugin's, and reads its record.
 
+`expect::config::Snapshot` copies the client's hook config, in the home (`Client::hook_config`) and the project (`Client::project_config`), and Symposium's `config.toml` after `init`, and `changes` compares them after the trial, byte for byte. Claude Code applies a hook edit mid-session, so the project files matter too. A file unreadable either time is a change, since it cannot be shown unchanged. Claude Code's `.claude.json` is not watched: Claude Code rewrites it mid-session.
+
 ## Code comments
 
 Comments answer why, an invariant, or a surprising behavior of a client or tool. They never restate what the code says.

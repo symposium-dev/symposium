@@ -45,6 +45,16 @@ impl Client {
         }
     }
 
+    /// The files in the home that register the client's hooks, and that the client
+    /// itself leaves alone during a session.
+    pub(crate) fn hook_config(self) -> &'static [&'static str] {
+        match self {
+            // Not `.claude.json`, which Claude Code rewrites mid-session.
+            Self::ClaudeCode => &[".claude/settings.json"],
+            Self::Codex => &[".codex/hooks.json"],
+        }
+    }
+
     /// The files in the project that can register hooks or MCP servers.
     pub(crate) fn project_config(self) -> &'static [&'static str] {
         match self {
