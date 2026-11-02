@@ -3,6 +3,7 @@
 //! [`Verdict::Inconclusive`], never quietly a pass or a fail.
 
 pub(crate) mod installed;
+pub(crate) mod log;
 pub(crate) mod sync;
 pub(crate) mod trace;
 
