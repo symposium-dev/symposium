@@ -32,6 +32,10 @@ pub(crate) trait ClientRunner {
     /// What the transcript of this session in `trial` says, looking for `skills`. Each
     /// adapter documents which loads it detects.
     fn read(&self, trial: &Trial, transcript: &Path, skills: &[InstalledSkill]) -> Reading;
+
+    /// What a session's hooks are known to be when its transcript cannot be read: none
+    /// seen, from a client that reports them, or unsupported.
+    fn unread_hooks(&self) -> HookEvidence;
 }
 
 /// What one transcript says.
@@ -43,6 +47,91 @@ pub(crate) struct Reading {
     pub(crate) completion: Result<Completion, Unusable>,
     /// How each skill looked for reached the agent, in the same order.
     pub(crate) loads: Vec<Load>,
+    pub(crate) hooks: HookEvidence,
+}
+
+/// What a transcript says about the hooks its client ran, a record the agent cannot
+/// write (RFD reference, "What the evidence can and cannot show").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HookEvidence {
+    /// The client's output does not report hook runs.
+    Unsupported,
+    Reported(HookRuns),
+}
+
+/// The hook runs a transcript reported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HookRuns {
+    pub(crate) runs: Vec<HookRun>,
+    /// The events the adapter promises to report every run of. Absence of another
+    /// event never decides anything.
+    pub(crate) observed: &'static [HookEvent],
+    /// Every line was read, the session reached its ending, and nothing unreadable
+    /// could have hidden a run of an observed event.
+    pub(crate) complete: bool,
+}
+
+impl HookRuns {
+    /// No runs, from a transcript that could not be read.
+    pub(crate) fn unread(observed: &'static [HookEvent]) -> Self {
+        Self {
+            runs: Vec::new(),
+            observed,
+            complete: false,
+        }
+    }
+
+    /// Whether every run of `event` would be reported.
+    pub(crate) fn observes(&self, event: &HookEvent) -> bool {
+        self.observed.contains(event)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HookRun {
+    pub(crate) event: HookEvent,
+    pub(crate) result: HookResult,
+}
+
+/// A hook event, by Symposium's names, which the clients share.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HookEvent {
+    SessionStart,
+    Stop,
+    /// Kept for diagnosis; no adapter observes these.
+    Other(String),
+}
+
+impl HookEvent {
+    pub(crate) fn named(name: &str) -> Self {
+        match name {
+            "SessionStart" => Self::SessionStart,
+            "Stop" => Self::Stop,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+}
+
+/// How one hook run ended, as its client reported it. Exit codes are detail: the
+/// client's outcome decides, and a missing code is never taken for 0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HookResult {
+    Succeeded {
+        exit_code: Option<i32>,
+    },
+    Failed {
+        exit_code: Option<i32>,
+    },
+    Cancelled {
+        exit_code: Option<i32>,
+    },
+    /// It started, and the transcript ended without its response.
+    NoResponse,
+    /// An outcome the adapter does not know, which decides nothing.
+    Other {
+        outcome: String,
+        exit_code: Option<i32>,
+    },
 }
 
 /// How a tool call's result arrived.
@@ -95,6 +184,7 @@ pub(crate) struct Execution {
     pub(crate) transcript: PathBuf,
     pub(crate) ended: Ended,
     pub(crate) loads: Vec<Load>,
+    pub(crate) hooks: HookEvidence,
 }
 
 #[derive(Debug)]
@@ -143,6 +233,7 @@ pub(crate) fn execute(
         transcript: transcript.clone(),
         ended,
         loads: vec![Load::Unknown; skills.len()],
+        hooks: runner.unread_hooks(),
     };
     let finished = match backend.run(&invocation, deadline, &logs) {
         Ok(finished) => finished,
@@ -182,6 +273,7 @@ pub(crate) fn execute(
         transcript,
         ended,
         loads: reading.loads,
+        hooks: reading.hooks,
     }
 }
 
@@ -228,6 +320,10 @@ mod tests {
             }
         }
 
+        fn unread_hooks(&self) -> HookEvidence {
+            HookEvidence::Unsupported
+        }
+
         fn read(&self, _: &Trial, transcript: &Path, skills: &[InstalledSkill]) -> Reading {
             let text = fs::read_to_string(transcript);
             let load = match &text {
@@ -245,6 +341,7 @@ mod tests {
                     })
                     .and_then(|text| one_line(&text)),
                 loads: vec![load; skills.len()],
+                hooks: HookEvidence::Unsupported,
             }
         }
     }
@@ -471,6 +568,8 @@ mod tests {
             ),
             "{execution:?}"
         );
+        // No transcript was read, but the client still cannot report hooks.
+        assert_eq!(execution.hooks, HookEvidence::Unsupported);
     }
 
     #[test]

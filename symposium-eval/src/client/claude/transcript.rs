@@ -1,5 +1,5 @@
 //! Reading a Claude Code transcript (`stream-json`, one event per line) once, for its
-//! ending, provenance and skill loads.
+//! ending, provenance, skill loads and hook runs.
 //!
 //! Only `system/init` and `result` must have the expected shape; other events are
 //! skipped, so a new event kind leaves the transcript readable. A message's payload is
@@ -18,6 +18,7 @@ use serde_json::value::RawValue;
 use uuid::Uuid;
 
 use super::calls::{Calls, Scope};
+use super::hooks::{HookFields, Hooks};
 use super::loads::Skills;
 use super::version::Version;
 use crate::client::{
@@ -39,6 +40,16 @@ struct Event<'a> {
     session_id: Option<&'a RawValue>,
     #[serde(borrow)]
     message: Option<&'a RawValue>,
+    #[serde(borrow)]
+    hook_id: Option<&'a RawValue>,
+    #[serde(borrow)]
+    hook_name: Option<&'a RawValue>,
+    #[serde(borrow)]
+    hook_event: Option<&'a RawValue>,
+    #[serde(borrow)]
+    outcome: Option<&'a RawValue>,
+    #[serde(borrow)]
+    exit_code: Option<&'a RawValue>,
 }
 
 /// A `system/init` event: who the client says it is.
@@ -74,6 +85,7 @@ struct Reader<'a> {
     /// Why the transcript cannot say how the session ended, if it cannot.
     unusable: Option<Unusable>,
     calls: Calls,
+    hooks: Hooks,
     skills: &'a [InstalledSkill],
 }
 
@@ -125,6 +137,7 @@ impl<'a> Reader<'a> {
             introduced: false,
             unusable: None,
             calls: Calls::new(project),
+            hooks: Hooks::new(),
             skills,
         }
     }
@@ -164,13 +177,28 @@ impl<'a> Reader<'a> {
         let event: Event<'_> = parse(line, number)?;
         match &*event.kind {
             "system" => {
-                let subtype: Option<String> = match event.subtype {
-                    Some(subtype) => parse(subtype.get().as_bytes(), number)?,
-                    None => None,
-                };
-                if subtype.as_deref() == Some("init") {
-                    self.introduced = true;
-                    self.init(parse(line, number)?);
+                // A subtype that is not a string names no event the adapter reads.
+                let subtype = event
+                    .subtype
+                    .map(|raw| serde_json::from_str::<String>(raw.get()));
+                match subtype {
+                    Some(Ok(subtype)) if subtype == "init" => {
+                        self.introduced = true;
+                        self.init(parse(line, number)?);
+                    }
+                    // Other hook events, such as `hook_progress`, say nothing about how
+                    // a run ended.
+                    Some(Ok(subtype)) if matches!(&*subtype, "hook_started" | "hook_response") => {
+                        let fields = HookFields {
+                            hook_id: event.hook_id,
+                            hook_name: event.hook_name,
+                            hook_event: event.hook_event,
+                            outcome: event.outcome,
+                            exit_code: event.exit_code,
+                        };
+                        self.hook(&subtype, event.session_id, &fields);
+                    }
+                    _ => {}
                 }
             }
             "result" => self.ending(parse(line, number)?),
@@ -197,6 +225,7 @@ impl<'a> Reader<'a> {
         } else if self.is_ours(&ending.session_id) {
             self.completion = ending.completion();
             self.calls.finish();
+            self.hooks.finish();
         }
     }
 
@@ -220,6 +249,18 @@ impl<'a> Reader<'a> {
         }
     }
 
+    /// Hands a hook event of `subtype` to the hook evidence, if it is this session's.
+    fn hook(&mut self, subtype: &str, session_id: Option<&RawValue>, fields: &HookFields<'_>) {
+        let session_id = session_id.map(|raw| serde_json::from_str::<String>(raw.get()));
+        let Some(Ok(session_id)) = session_id else {
+            // Nothing says whose run this is.
+            return self.hooks.damage();
+        };
+        if self.is_ours(&session_id) {
+            self.hooks.event(subtype, fields);
+        }
+    }
+
     /// Whether an event of `session_id` is this session's; another session's is a
     /// mismatch.
     fn is_ours(&mut self, session_id: &str) -> bool {
@@ -238,13 +279,19 @@ impl<'a> Reader<'a> {
         if !matches!(self.unusable, Some(Unusable::Provenance(_))) {
             self.unusable = Some(error.into());
         }
-        self.calls.damage();
+        self.damage();
     }
 
     /// Part of the transcript cannot be read; the first such problem is kept.
     fn unreadable(&mut self, error: TranscriptError) {
         self.unusable.get_or_insert(error.into());
+        self.damage();
+    }
+
+    /// Something in the transcript could hide any evidence.
+    fn damage(&mut self) {
         self.calls.damage();
+        self.hooks.damage();
     }
 
     fn reading(self) -> Reading {
@@ -254,6 +301,7 @@ impl<'a> Reader<'a> {
                 .into_iter()
                 .map(Load::from)
                 .collect(),
+            hooks: self.hooks.evidence(),
         }
     }
 }
