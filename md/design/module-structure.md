@@ -99,11 +99,11 @@ Defines `Source` (the `source = "..."`-tagged enum: `cargo`, `github`) and `acqu
 
 Validates skill group source constraints during manifest validation: a group must set exactly one of `source.path` or `source.git` — a missing `source` (or an empty `source = {}`) is rejected, as are both together. A crate is not a skill-group source — `source = "crate"` (and the legacy `source.crate` table) is rejected with a hint to use a `[[plugins]] source.cargo` chained reference instead.
 
-On the hook path `acquire_installation` also takes the dispatch deadline: source acquisition stops at it, killing the `cargo binstall` / `cargo install` it started (`symposium-install` runs them as `kill_on_drop` child processes, not on a blocking worker), and an `install_commands` entry still running then is killed with its process group. Other callers pass `None` and wait as before.
+On the hook path `acquire_installation` also takes the dispatch deadline: source acquisition stops at it, killing the `cargo binstall` / `cargo install` and `git ls-remote` it started (`symposium-install` runs them through `process_tree::output`, not on a blocking worker), and an `install_commands` entry still running then is killed with its process group. Other callers pass `None` and wait as before.
 
-### `process_tree.rs`: stopping a command with everything it started
+### `symposium_install::process_tree`: stopping a command with everything it started
 
-`own_group` puts a command in its own process group on Unix (a no-op elsewhere), and `kill` stops that group, or on Windows the process tree through `taskkill /T`. Hook dispatch uses both for plugin hooks and for `install_commands`, so a timeout cannot leave a child running that changes the workspace or holds symposium's stderr open.
+`own_group` puts a command in its own process group on Unix (a no-op elsewhere), and `kill` stops that group, or on Windows the process tree through `taskkill /T`. Hook dispatch uses both for plugin hooks and for `install_commands`, so a timeout cannot leave a child running that changes the workspace or holds symposium's stderr open. `output` is the async counterpart of `Command::output` for the installers and the git probe: it captures output through temporary files, polls for exit instead of holding a thread, and when its future is dropped it kills the group or tree and reaps the direct child, so a cancelled acquisition leaves nothing running and nothing for runtime shutdown to wait on.
 
 ### `pm/` — package managers
 

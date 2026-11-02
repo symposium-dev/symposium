@@ -11,6 +11,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 pub mod git;
+pub mod process_tree;
 
 /// Records the crates.io version resolved by the last freshness check, so a
 /// `None` acquire can reuse it without re-querying. Lives at
@@ -386,11 +387,9 @@ async fn cargo_output(
     ctx: &InstallContext,
     args: &[&str],
 ) -> std::io::Result<std::process::Output> {
-    tokio::process::Command::from(ctx.cargo_command())
-        .args(args)
-        .kill_on_drop(true)
-        .output()
-        .await
+    let mut command = ctx.cargo_command();
+    command.args(args);
+    process_tree::output(command).await
 }
 
 fn get_binary_cache_dir(ctx: &InstallContext, krate: &str, version: &str) -> Result<PathBuf> {
@@ -645,20 +644,13 @@ fn single_cached_binary(bin_dir: &Path) -> Option<String> {
 /// ls-remote` — cheap, no clone. `None` on any failure, leaving the caller to
 /// fall back to a force reinstall.
 async fn remote_git_head_sha(url: &str) -> Option<String> {
-    let url = url.to_string();
-    tokio::task::spawn_blocking(move || {
-        let output = std::process::Command::new("git")
-            .args(["ls-remote", &url, "HEAD"])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        parse_ls_remote_sha(&String::from_utf8_lossy(&output.stdout))
-    })
-    .await
-    .ok()
-    .flatten()
+    let mut command = std::process::Command::new("git");
+    command.args(["ls-remote", url, "HEAD"]);
+    let output = process_tree::output(command).await.ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_ls_remote_sha(&String::from_utf8_lossy(&output.stdout))
 }
 
 /// Parse the commit SHA from `git ls-remote <url> HEAD` output, whose first

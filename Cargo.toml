@@ -58,7 +58,7 @@ uuid = { version = "1.26.0", features = ["v4", "serde"] }
 hmac = "0.12.1"
 getrandom = "0.4.2"
 
-[target.'cfg(unix)'.dependencies]
+[target.'cfg(unix)'.dev-dependencies]
 libc = "0.2"
 
 [dev-dependencies]
