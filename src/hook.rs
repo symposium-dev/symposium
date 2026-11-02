@@ -216,7 +216,7 @@ fn spawn_from_spec(
             for (k, v) in env {
                 cmd.env(k, v);
             }
-            crate::process_tree::own_group(&mut cmd);
+            symposium_install::process_tree::own_group(&mut cmd);
             cmd.stdin(Stdio::piped())
                 .stdout(stdout.try_clone()?)
                 .stderr(stderr.try_clone()?)
@@ -228,7 +228,7 @@ fn spawn_from_spec(
             for (k, v) in env {
                 cmd.env(k, v);
             }
-            crate::process_tree::own_group(&mut cmd);
+            symposium_install::process_tree::own_group(&mut cmd);
             cmd.stdin(Stdio::piped())
                 .stdout(stdout.try_clone()?)
                 .stderr(stderr.try_clone()?)
@@ -260,7 +260,7 @@ fn run_with_deadline(
             break status;
         }
         if Instant::now() >= deadline {
-            crate::process_tree::kill(child.id());
+            symposium_install::process_tree::kill(child.id());
             let _ = child.kill();
             child.wait()?;
             return Ok(None);
