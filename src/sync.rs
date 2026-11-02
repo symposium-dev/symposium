@@ -597,39 +597,39 @@ pub async fn sync(
     let project_compiled =
         compile::compile_project(&project_root, &project, debounce, &mut warned, skip_cleanup);
 
-    let mut delivered = BTreeSet::new();
-    let mut project_delivered = BTreeSet::new();
     let mut plugin_changes = Vec::new();
     let mut copied: std::collections::BTreeMap<_, BTreeSet<_>> = std::collections::BTreeMap::new();
+    let mut copies: std::collections::BTreeMap<&str, Vec<_>> = std::collections::BTreeMap::new();
     for agent_name in &agent_names {
         let Ok(agent) = Agent::from_config_name(agent_name) else {
             continue;
         };
-        let user_changes = agent.deliver_user_plugins(sym, &compiled.plugins);
-        let project_changes =
-            agent.deliver_project_plugins(sym, &project_root, &project_compiled.plugins);
-        let takes_plugins = user_changes.is_some();
-        let takes_project_plugins = project_changes.is_some();
-        if takes_plugins {
-            delivered.insert(agent_name);
+        let user = agent.deliver_user_plugins(sym, &compiled.plugins);
+        let project = agent.deliver_project_plugins(sym, &project_root, &project_compiled.plugins);
+        let mut as_plugins = BTreeSet::new();
+        if let Some(delivery) = &user {
+            as_plugins.extend(compiled.skill_origins_of(&delivery.delivered));
         }
-        if takes_project_plugins {
-            project_delivered.insert(agent_name);
+        if let Some(delivery) = &project {
+            as_plugins.extend(project_compiled.skill_origins_of(&delivery.delivered));
         }
-        if takes_plugins || takes_project_plugins {
-            let changed = user_changes.into_iter().chain(project_changes).flatten();
-            plugin_changes.push((agent, changed.collect()));
+        if user.is_some() || project.is_some() {
+            let updated = user.into_iter().chain(project).flat_map(|d| d.updated);
+            plugin_changes.push((agent, updated.collect()));
         }
-        let dir = copied
+        let agent_copies: Vec<_> = to_install
+            .iter()
+            .filter(|(_, origin_hash, _)| !as_plugins.contains(origin_hash))
+            .collect();
+        copied
             .entry(skills_parent_dir(agent, &project_root))
-            .or_default();
-        for (skill_name, origin_hash, _) in &to_install {
-            if !(takes_plugins && compiled.skill_origins.contains(origin_hash)
-                || takes_project_plugins && project_compiled.skill_origins.contains(origin_hash))
-            {
-                dir.insert((skill_name, origin_hash));
-            }
-        }
+            .or_default()
+            .extend(
+                agent_copies
+                    .iter()
+                    .map(|(name, origin_hash, _)| (name, origin_hash)),
+            );
+        copies.insert(agent_name, agent_copies);
     }
 
     for agent_name in &agent_names {
@@ -715,13 +715,7 @@ pub async fn sync(
             *name_counts.entry(*skill_name).or_default() += 1;
         }
 
-        for (skill_name, origin_hash, skill_source) in &to_install {
-            if delivered.contains(agent_name) && compiled.skill_origins.contains(origin_hash)
-                || project_delivered.contains(agent_name)
-                    && project_compiled.skill_origins.contains(origin_hash)
-            {
-                continue;
-            }
+        for (skill_name, origin_hash, skill_source) in &copies[agent_name.as_str()] {
             // `skill_source` is the path to the SKILL.md file; the skill
             // directory is its parent.
             let source_dir = match skill_source.parent() {

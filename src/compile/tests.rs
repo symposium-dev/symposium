@@ -287,7 +287,10 @@ fn compile_writes_one_self_contained_directory_per_plugin() {
     );
     assert_eq!(
         compiled.skill_origins,
-        BTreeSet::from(["aaaaaaaa".into(), "11111111".into(), "22222222".into()]),
+        BTreeMap::from([(
+            "guide-tools".into(),
+            vec!["aaaaaaaa".into(), "11111111".into(), "22222222".into()]
+        )]),
     );
     assert_eq!(
         fs::read(root.join("guide-tools/plugin.json")).unwrap(),

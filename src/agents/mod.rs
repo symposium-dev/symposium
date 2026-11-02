@@ -26,6 +26,12 @@ pub(crate) struct CompiledPlugin {
     pub updated: bool,
 }
 
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct Delivery {
+    pub delivered: Vec<String>,
+    pub updated: Vec<String>,
+}
+
 /// Which of an agent's two MCP configuration levels to write.
 ///
 /// Distinct from [`crate::config::HookScope`]: an agent may support one level
@@ -381,7 +387,7 @@ impl Agent {
         &self,
         sym: &Symposium,
         plugins: &[CompiledPlugin],
-    ) -> Option<Vec<String>> {
+    ) -> Option<Delivery> {
         let plugins_dir = match self {
             Agent::Antigravity => sym
                 .home_dir()
@@ -412,24 +418,20 @@ impl Agent {
         sym: &Symposium,
         project_root: &Path,
         plugins: &[CompiledPlugin],
-    ) -> Option<Vec<String>> {
+    ) -> Option<Delivery> {
         let Agent::Claude = self else {
             return None;
         };
         let skills_dir = project_root.join(".claude").join("skills");
-        let updated = plugin_registration::deliver_copies(sym, *self, &skills_dir, plugins);
-        for plugin in plugins {
-            let dir = skills_dir.join(&plugin.name);
-            if !crate::sync::has_symposium_marker(&dir) {
-                continue;
-            }
-            if let Err(e) = crate::sync::ignore_in_git(&dir) {
+        let delivery = plugin_registration::deliver_copies(sym, *self, &skills_dir, plugins);
+        for name in &delivery.delivered {
+            if let Err(e) = crate::sync::ignore_in_git(&skills_dir.join(name)) {
                 tracing::info!(
                     report = %crate::report::ReportEvent::Warning { message: format!("{e:#}") },
                 );
             }
         }
-        Some(updated)
+        Some(delivery)
     }
 
     /// Remove hooks from the project-level agent config.
