@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 use uuid::Uuid;
 
+use super::activity;
 use super::calls::{Calls, Scope};
 use super::hooks::{HookFields, Hooks};
 use super::loads::Skills;
@@ -301,6 +302,7 @@ impl<'a> Reader<'a> {
                 .into_iter()
                 .map(Load::from)
                 .collect(),
+            activity: activity::activity(&self.calls),
             hooks: self.hooks.evidence(),
         }
     }

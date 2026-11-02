@@ -4,6 +4,7 @@
 //! `--no-session-persistence`, would skip hooks and skills or drop the session's own
 //! file, and so invalidate a trial. How its transcript is read is in [`transcript`].
 
+mod activity;
 mod calls;
 #[cfg(test)]
 mod fixtures;

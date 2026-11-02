@@ -302,6 +302,16 @@ impl Calls {
         }
     }
 
+    /// Every call, in transcript order.
+    pub(super) fn iter(&self) -> impl Iterator<Item = &ToolCall> {
+        self.calls.iter()
+    }
+
+    /// Whether nothing could have hidden a call: no damage, and the session ended.
+    pub(super) fn complete(&self) -> bool {
+        self.finished && !self.damaged
+    }
+
     /// What the calls show for each of `matcher`'s targets.
     pub(super) fn outcomes(&self, matcher: &impl Matcher) -> Vec<Outcome> {
         let mut succeeded = vec![false; matcher.targets()];

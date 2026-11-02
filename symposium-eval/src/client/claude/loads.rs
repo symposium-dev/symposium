@@ -5,12 +5,12 @@
 //! result is not an error; an error result is an attempt. `cat SKILL.md` is not
 //! detected. Subagent calls count. Pairing calls with results is [`super::calls`]'.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
 use super::calls::{Matcher, Outcome, Target, ToolCall};
-use crate::client::{InstalledSkill, Load};
+use crate::client::{InstalledSkill, Load, paths};
 
 #[derive(Debug, Deserialize)]
 struct SkillInput {
@@ -81,33 +81,17 @@ impl From<Outcome> for Load {
     }
 }
 
-/// The forms `path` can be named by: with `.` and `..` resolved by name, and, when it
-/// exists, with links resolved too (macOS keeps temporary files under `/var`, a link to
-/// `/private/var`).
+/// The forms `path` can be named by: with `.` and `..` resolved by name when it has
+/// a root, as written otherwise, and, when it exists, with links resolved too (macOS
+/// keeps temporary files under `/var`, a link to `/private/var`).
 fn forms(path: &Path) -> Vec<PathBuf> {
-    let mut forms = vec![normalize(path)];
+    let mut forms = vec![paths::lexical(path).unwrap_or_else(|| path.to_owned())];
     if let Ok(resolved) = path.canonicalize()
         && !forms.contains(&resolved)
     {
         forms.push(resolved);
     }
     forms
-}
-
-/// `path` with `.` and `..` resolved by name alone, since the transcript's paths need
-/// not exist when it is read.
-fn normalize(path: &Path) -> PathBuf {
-    let mut normal = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normal.pop();
-            }
-            other => normal.push(other),
-        }
-    }
-    normal
 }
 
 #[cfg(test)]

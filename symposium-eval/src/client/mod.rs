@@ -9,6 +9,7 @@
 
 pub(crate) mod claude;
 mod error;
+pub(crate) mod paths;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -48,6 +49,7 @@ pub(crate) struct Reading {
     /// How each skill looked for reached the agent, in the same order.
     pub(crate) loads: Vec<Load>,
     pub(crate) hooks: HookEvidence,
+    pub(crate) activity: ToolActivity,
 }
 
 /// What a transcript says about the hooks its client ran, a record the agent cannot
@@ -134,6 +136,73 @@ pub(crate) enum HookResult {
     },
 }
 
+/// The file mutations and shell commands a transcript shows the agent asking for, as
+/// facts to cross-check evidence with, not proof of what reached the disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolActivity {
+    pub(crate) mutations: Vec<FileMutation>,
+    pub(crate) commands: Vec<ShellCommand>,
+    /// Nothing could have hidden a mutation or command: the record was not damaged,
+    /// the session reached its ending, and every such call was read well enough to
+    /// keep. Only then does the absence of one say anything.
+    pub(crate) complete: bool,
+}
+
+impl ToolActivity {
+    /// No activity, from a transcript that could not be read.
+    pub(crate) fn unread() -> Self {
+        Self {
+            mutations: Vec::new(),
+            commands: Vec::new(),
+            complete: false,
+        }
+    }
+}
+
+/// A call to a tool that creates, changes or deletes the file at `path`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileMutation {
+    pub(crate) path: ObservedPath,
+    pub(crate) result: ToolResult,
+}
+
+/// The path a call named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ObservedPath {
+    Readable {
+        reported: String,
+        /// Resolved by name against where the session ran (see [`paths`]); `None` when
+        /// that leaves it without a root.
+        resolved: Option<PathBuf>,
+    },
+    /// The call named no path that could be read, so it could have been any file.
+    Unreadable,
+}
+
+/// A shell command the agent asked to run. Only its text is known, never its effects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ShellCommand {
+    pub(crate) text: CappedText,
+    pub(crate) result: ToolResult,
+}
+
+/// Text the agent chose, kept only up to a limit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CappedText {
+    /// Its first bytes, ending on a character boundary.
+    pub(crate) prefix: String,
+    pub(crate) original_bytes: usize,
+}
+
+impl CappedText {
+    pub(crate) fn new(text: &str, limit: usize) -> Self {
+        Self {
+            prefix: text[..text.floor_char_boundary(limit)].to_owned(),
+            original_bytes: text.len(),
+        }
+    }
+}
+
 /// How a tool call's result arrived.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ToolResult {
@@ -185,6 +254,7 @@ pub(crate) struct Execution {
     pub(crate) ended: Ended,
     pub(crate) loads: Vec<Load>,
     pub(crate) hooks: HookEvidence,
+    pub(crate) activity: ToolActivity,
 }
 
 #[derive(Debug)]
@@ -234,6 +304,7 @@ pub(crate) fn execute(
         ended,
         loads: vec![Load::Unknown; skills.len()],
         hooks: runner.unread_hooks(),
+        activity: ToolActivity::unread(),
     };
     let finished = match backend.run(&invocation, deadline, &logs) {
         Ok(finished) => finished,
@@ -274,6 +345,7 @@ pub(crate) fn execute(
         ended,
         loads: reading.loads,
         hooks: reading.hooks,
+        activity: reading.activity,
     }
 }
 
@@ -342,6 +414,7 @@ mod tests {
                     .and_then(|text| one_line(&text)),
                 loads: vec![load; skills.len()],
                 hooks: HookEvidence::Unsupported,
+                activity: ToolActivity::unread(),
             }
         }
     }
