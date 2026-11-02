@@ -244,15 +244,11 @@ enum Identity {
 /// The agent can write there, so the file is opened as evidence is, which a pipe cannot
 /// block.
 fn identity(dir: &Path, skill: &SkillName) -> io::Result<Identity> {
-    let Some(skill_md) = file::open(&dir.join("SKILL.md"), MAX_SKILL_MD)? else {
+    let Some(bytes) = file::read(&dir.join("SKILL.md"), MAX_SKILL_MD)? else {
         return Ok(Identity::Unknown);
     };
-    let mut text = String::new();
-    // Bounded again, in case the file grew.
-    skill_md.take(MAX_SKILL_MD + 1).read_to_string(&mut text)?;
-    if text.len() as u64 > MAX_SKILL_MD {
-        return Err(io::Error::other("larger than any SKILL.md"));
-    }
+    let text = String::from_utf8(bytes)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     Ok(match frontmatter_name(&text) {
         Some(name) if name == skill.as_str() => Identity::Expected,
         Some(_) => Identity::Other,

@@ -8,8 +8,8 @@
 //! under the home, so nothing here follows a link, and a file is read only up to a size.
 //! A test runs the real hook and reads its record, so a change in the format fails loudly.
 
-use std::fs::{self, File};
-use std::io::{self, Read};
+use std::fs;
+use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Deserializer};
@@ -143,13 +143,10 @@ fn way_down(home: &Path, dir: &Path) -> io::Result<Way> {
 }
 
 fn record(path: &Path, project: &Path) -> Record {
-    let text = match file::open(path, MAX_RECORD) {
-        Ok(Some(file)) => read_bounded(file),
+    let text = match file::read(path, MAX_RECORD) {
+        Ok(Some(text)) => text,
         Ok(None) => return Record::Elsewhere,
-        Err(error) => Err(error),
-    };
-    let Ok(text) = text else {
-        return Record::Unreadable;
+        Err(_) => return Record::Unreadable,
     };
     let Ok(state) = serde_json::from_slice::<State>(&text) else {
         return Record::Unreadable;
@@ -165,18 +162,6 @@ fn record(path: &Path, project: &Path) -> Record {
             Err(_) => Record::Unreadable,
         },
     }
-}
-
-/// `file`'s bytes, refusing more than [`MAX_RECORD`] even if it grew.
-fn read_bounded(file: File) -> io::Result<Vec<u8>> {
-    let mut text = Vec::new();
-    file.take(MAX_RECORD + 1).read_to_end(&mut text)?;
-    if text.len() as u64 > MAX_RECORD {
-        return Err(io::Error::other(
-            "the record is larger than any sync writes",
-        ));
-    }
-    Ok(text)
 }
 
 #[cfg(test)]
