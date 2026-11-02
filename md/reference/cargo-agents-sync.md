@@ -40,7 +40,7 @@ A plugin you enabled with [`cargo agents use --global`](./cargo-agents-use.md) i
 | Antigravity CLI | `~/.gemini/config/plugins/<plugin>/` |
 | Goose | `~/.agents/plugins/<plugin>/` (or `$GOOSE_PATH_ROOT/.agents/plugins/<plugin>/`) |
 
-Such an agent gets no per-project copy of the plugin's skills, and copies an earlier sync left are cleaned up; every other agent keeps per-project copies. Agents load plugins when a session starts, so a plugin installed or updated by the automatic sync at session start appears in the next session; that sync also tells the agent which plugins changed and how to load them now (in Claude Code, `/reload-plugins`; in Antigravity CLI, `/skills reload`; in Codex CLI, a new session; in GitHub Copilot, `/restart`). Goose picks such a plugin up with the next message. Dropping the `--global` entry, or removing the agent with `cargo agents init --remove-agent`, removes what symposium installed.
+Such an agent gets no per-project copy of the plugin's skills, and copies an earlier sync left are cleaned up; every other agent keeps per-project copies. Agents load plugins when a session starts, so a plugin installed or updated by the automatic sync at session start, or by the one that follows a dependency change during a session, appears in the next session; that sync also tells the agent which plugins changed and how to load them now (in Claude Code, `/reload-plugins`; in Antigravity CLI, `/skills reload`; in Codex CLI, a new session; in GitHub Copilot, `/restart`). Goose picks such a plugin up with the next message. Dropping the `--global` entry, or removing the agent with `cargo agents init --remove-agent`, removes what symposium installed.
 
 ## Plugins for this project
 
@@ -51,7 +51,7 @@ Everything else that applies to the project, whether a registry plugin active by
 | Claude Code | `.claude/skills/<plugin>/` at the workspace root, loaded as the plugin `<plugin>` in that project only |
 | Every other agent | its skills, in the project, as above |
 
-Claude Code then gets no per-skill copies of those skills, and the copies an earlier sync left are cleaned up. It loads project plugins only in a folder you trust, and only when started at the workspace root; see [Claude Code](./agents/claude.md#plugins). Dropping the `use` entry, or the dependency or gate that made the plugin apply, removes it from the project on the next sync, and so does removing the agent.
+Claude Code then gets no per-skill copies of those skills, and the copies an earlier sync left are cleaned up. A plugin whose `.claude/skills/<plugin>/` is a directory of yours is left alone, and its skills arrive as per-skill copies instead. It loads project plugins only in a folder you trust, and only when started at the workspace root; see [Claude Code](./agents/claude.md#plugins). Dropping the `use` entry, or the dependency or gate that made the plugin apply, removes it from the project on the next sync, and so does removing the agent.
 
 ## Consent prompt
 
