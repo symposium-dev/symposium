@@ -712,12 +712,98 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_known_copy_settles_what_an_unreadable_one_cannot() {
+        let root = TempDir::new().unwrap();
+        let skills = root.path().join("skills");
+        install(&skills, "first-skill");
+        let unreadable = copy_of(&skills, "first-skill-0123abcd", &[("notes.md", "")]);
+        fs::create_dir(unreadable.join("SKILL.md")).unwrap();
+
+        assert_eq!(
+            decide(
+                &skills,
+                &["first-skill"],
+                &["first-skill"],
+                &source(root.path())
+            ),
+            [
+                (InstallEvidence::Matching, Verdict::Pass),
+                (InstallEvidence::Present, Verdict::Fail)
+            ]
+        );
+    }
+
     /// Links need developer mode or elevation on Windows.
     #[cfg(unix)]
     mod links {
+        use std::os::unix::ffi::OsStrExt;
         use std::os::unix::fs::{PermissionsExt, symlink};
+        use std::process::{Child, Command};
+        use std::time::{Duration, Instant};
 
         use super::*;
+
+        #[test]
+        fn a_named_pipe_in_a_hashed_copy_does_not_block_inspection() {
+            const CHILD_SKILLS: &str = "SYMPOSIUM_EVAL_INSTALLED_FIFO_SKILLS";
+            if let Some(skills) = std::env::var_os(CHILD_SKILLS) {
+                assert_eq!(
+                    presence(Path::new(&skills), &skill("first-skill")),
+                    InstallEvidence::Unreadable
+                );
+                return;
+            }
+
+            let root = TempDir::new().unwrap();
+            let skills = root.path().join("skills");
+            let copy = copy_of(&skills, "first-skill-0123abcd", &[("notes.md", "")]);
+            let pipe = copy.join("SKILL.md");
+            let name = std::ffi::CString::new(pipe.as_os_str().as_bytes()).unwrap();
+            // SAFETY: `name` is a valid, NUL-terminated path.
+            assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0);
+
+            // Isolate a blocking open so the watchdog can always stop and reap it,
+            // including when another assertion in this test fails.
+            struct Reaped {
+                child: Child,
+                reaped: bool,
+            }
+            impl Drop for Reaped {
+                fn drop(&mut self) {
+                    if !self.reaped {
+                        let _ = self.child.kill();
+                        let _ = self.child.wait();
+                    }
+                }
+            }
+            let mut child = Reaped {
+                child: Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "expect::installed::tests::links::a_named_pipe_in_a_hashed_copy_does_not_block_inspection",
+                        "--nocapture",
+                    ])
+                    .env(CHILD_SKILLS, &skills)
+                    .spawn()
+                    .unwrap(),
+                reaped: false,
+            };
+            let deadline = Instant::now() + Duration::from_secs(1);
+            let status = loop {
+                if let Some(status) = child.child.try_wait().unwrap() {
+                    child.reaped = true;
+                    break Some(status);
+                }
+                if Instant::now() >= deadline {
+                    break None;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            };
+            let status =
+                status.expect("inspecting an agent-created FIFO must not hang the checker");
+            assert!(status.success(), "inspection subprocess failed: {status}");
+        }
 
         #[test]
         fn a_linked_file_installs_as_the_file() {
