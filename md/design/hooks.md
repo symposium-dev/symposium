@@ -39,7 +39,7 @@ A plugin with only `format = "claude"`:
 
 Symposium converts the hook's output back to the current agent's wire format before returning it to the agent:
 
-- Native format matching the host agent → pass through directly.
+- Native format matching the host agent: pass through directly. A native Claude `SessionStart` or `UserPromptSubmit` hook may print plain text instead of JSON; Symposium adds it to the context, as Claude Code does.
 - Symposium format → convert to host agent's wire format.
 
 ## Alternatives considered
