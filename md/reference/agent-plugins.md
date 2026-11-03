@@ -124,7 +124,7 @@ The `$schema` names the same version of the format as `plugin.json`. Each server
 
 - A `command` is a bare name, which the agent looks up on its `PATH`, or a path starting with `./`, which must exist inside the package.
 - In `args` and in the values of `env`, `${PLUGIN_ROOT}` becomes the package folder and `${PLUGIN_DATA}` a folder kept across updates of the package: `~/.symposium/plugin-data/<source>/<name>`, where `<source>` is the plugin source, `cargo` for a dependency (named by its crate), or `local` for a workspace member. The server also receives both as environment variables; a server whose `env` sets either one is skipped.
-- A stdio server starts in the agent's working directory, not in the package folder, so one that sets `cwd` is skipped.
+- A stdio server starts in the package folder on Linux and macOS, where Symposium registers it as `sh -c 'cd "$0" && exec "$@"'` followed by the folder, the command and its arguments. On Windows it starts in the agent's working directory. A server that sets `cwd` is skipped.
 - A `url` uses `https`, or `http` on `localhost` or a loopback address, and has no user name, password or fragment. Headers must be valid HTTP header fields, and each name, compared without case, appears once.
 
 ## What happens when something is wrong

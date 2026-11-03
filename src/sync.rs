@@ -999,7 +999,9 @@ fn package_mcp_servers(
     match plugin_data_dir(sym, &plugin.canonical) {
         Ok(data) => servers
             .into_iter()
-            .map(|server| plugins::with_plugin_vars(server, root, &data))
+            .map(|server| {
+                plugins::launched_from(plugins::with_plugin_vars(server, root, &data), root)
+            })
             .collect(),
         Err(e) => {
             tracing::info!(

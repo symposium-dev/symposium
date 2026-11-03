@@ -125,13 +125,26 @@ async fn use_wakes_a_dormant_package_and_remove_reaps_it() {
                     .join("plugin-data/user-plugins/pdf-tools"),
             )?;
             let server = pdf_server().expect("pdf-tables registered");
-            let command = root.join("bin").join("pdf-server");
-            assert_eq!(server["command"], command.display().to_string());
+            let command = root.join("bin").join("pdf-server").display().to_string();
             let (root, data) = (root.display().to_string(), data.display().to_string());
-            assert_eq!(
-                server["args"],
-                serde_json::json!(["--config", format!("{root}/config.json")])
-            );
+            let args = ["--config".to_string(), format!("{root}/config.json")];
+            if cfg!(unix) {
+                assert_eq!(server["command"], "sh");
+                assert_eq!(
+                    server["args"],
+                    serde_json::json!([
+                        "-c",
+                        r#"cd "$0" && exec "$@""#,
+                        root,
+                        command,
+                        args[0],
+                        args[1]
+                    ])
+                );
+            } else {
+                assert_eq!(server["command"], command);
+                assert_eq!(server["args"], serde_json::json!(args));
+            }
             assert_eq!(
                 server["env"],
                 serde_json::json!({
