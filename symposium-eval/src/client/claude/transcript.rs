@@ -1,5 +1,5 @@
 //! Reading a Claude Code transcript (`stream-json`, one event per line) once, for its
-//! ending, provenance, skill loads and hook runs.
+//! ending, provenance, summary, skill loads and hook runs.
 //!
 //! Only `system/init` and `result` must have the expected shape; other events are
 //! skipped, so a new event kind leaves the transcript readable. A message's payload is
@@ -9,6 +9,7 @@
 //! outranks a malformed line: another session's transcript says nothing about this one.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -23,8 +24,8 @@ use super::hooks::{HookFields, Hooks};
 use super::loads::Skills;
 use super::version::Version;
 use crate::client::{
-    Completion, InstalledSkill, Load, Malformation, ProvenanceError, Reading, TranscriptError,
-    Unusable,
+    Completion, InstalledSkill, Load, Malformation, ProvenanceError, Reading, Summary, Tokens,
+    TranscriptError, Unusable, Usage,
 };
 use crate::jsonl::{self, Line, MAX_LINE};
 
@@ -58,13 +59,14 @@ struct Event<'a> {
 struct Init {
     session_id: String,
     claude_code_version: String,
+    model: Option<String>,
     /// Where Claude Code ran, which a relative tool path is resolved against.
     cwd: Option<PathBuf>,
 }
 
 /// A `result` event.
 #[derive(Debug, Deserialize)]
-struct Ending {
+struct Ending<'a> {
     session_id: String,
     subtype: String,
     is_error: bool,
@@ -73,6 +75,20 @@ struct Ending {
     /// What went wrong, on the result an error ends with, which has no `result`.
     #[serde(default)]
     errors: Vec<String>,
+    /// Tokens by model, subagents' included. Read apart, so a reshaped one leaves the
+    /// ending readable.
+    #[serde(rename = "modelUsage", borrow)]
+    model_usage: Option<&'a RawValue>,
+}
+
+/// One model's entry in `modelUsage`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ModelTokens {
+    input_tokens: u64,
+    output_tokens: u64,
+    cache_read_input_tokens: u64,
+    cache_creation_input_tokens: u64,
 }
 
 /// The state of reading one transcript.
@@ -80,6 +96,9 @@ struct Reader<'a> {
     session: String,
     version: Version,
     completion: Completion,
+    model: Option<String>,
+    usage: Usage,
+    response: Option<String>,
     /// Whether an `init` has been seen. One that cannot be read counts: the transcript
     /// is then malformed, not unattributed.
     introduced: bool,
@@ -135,6 +154,9 @@ impl<'a> Reader<'a> {
             session: session.to_string(),
             version,
             completion: Completion::Missing,
+            model: None,
+            usage: Usage::Unknown,
+            response: None,
             introduced: false,
             unusable: None,
             calls: Calls::new(project),
@@ -215,16 +237,18 @@ impl<'a> Reader<'a> {
         if let Some(cwd) = &init.cwd {
             self.calls.ran_in(cwd);
         }
-        if let Err(error) = init.check(&self.session, self.version) {
-            self.mismatched(error);
+        match init.check(&self.session, self.version) {
+            Ok(()) => self.model = init.model,
+            Err(error) => self.mismatched(error),
         }
     }
 
-    fn ending(&mut self, ending: Ending) {
+    fn ending(&mut self, ending: Ending<'_>) {
         if !self.introduced {
             self.mismatched(ProvenanceError::Unstated);
         } else if self.is_ours(&ending.session_id) {
-            self.completion = ending.completion();
+            self.usage = ending.usage();
+            (self.completion, self.response) = ending.completion();
             self.calls.finish();
             self.hooks.finish();
         }
@@ -283,9 +307,13 @@ impl<'a> Reader<'a> {
         self.damage();
     }
 
-    /// Part of the transcript cannot be read; the first such problem is kept.
+    /// Part of the transcript cannot be read; the first such problem is kept. An
+    /// earlier ending's usage and response may no longer be the last, so a later one
+    /// must restate them.
     fn unreadable(&mut self, error: TranscriptError) {
         self.unusable.get_or_insert(error.into());
+        self.usage = Usage::Unknown;
+        self.response = None;
         self.damage();
     }
 
@@ -296,7 +324,17 @@ impl<'a> Reader<'a> {
     }
 
     fn reading(self) -> Reading {
+        // Another session's summary says nothing about this one.
+        let summary = match self.unusable {
+            Some(Unusable::Provenance(_)) => Summary::unread(Usage::Unknown),
+            _ => Summary {
+                model: self.model,
+                usage: self.usage,
+                response: self.response,
+            },
+        };
         Reading {
+            summary,
             completion: self.unusable.map_or(Ok(self.completion), Err),
             loads: (self.calls.outcomes(&Skills::new(self.skills)))
                 .into_iter()
@@ -335,11 +373,13 @@ impl Init {
     }
 }
 
-impl Ending {
-    /// Only `is_error` decides: an API error arrives with `subtype` `success`.
-    fn completion(self) -> Completion {
-        if !self.is_error {
-            return Completion::Finished;
+impl Ending<'_> {
+    /// The completion, and the final message of a session that finished. Either field
+    /// can say error: an API error arrives with `subtype` `success`, and the SDK's types
+    /// allow an error subtype without `is_error`.
+    fn completion(self) -> (Completion, Option<String>) {
+        if !self.is_error && self.subtype == "success" {
+            return (Completion::Finished, self.result);
         }
         // Claude Code's own words say more than the subtype, which some failures give
         // alone.
@@ -348,7 +388,28 @@ impl Ending {
             _ if !self.errors.is_empty() => self.errors.join("; "),
             _ => self.subtype,
         };
-        Completion::Reported(message)
+        (Completion::Reported(message), None)
+    }
+
+    /// The tokens over every model, unknown when `modelUsage` is missing or reshaped.
+    fn usage(&self) -> Usage {
+        let models = self
+            .model_usage
+            .map(|raw| serde_json::from_str::<HashMap<String, ModelTokens>>(raw.get()));
+        let Some(Ok(models)) = models else {
+            return Usage::Unknown;
+        };
+        models
+            .values()
+            .try_fold(Tokens::default(), |sum, model| {
+                sum.checked_add(Tokens {
+                    input: model.input_tokens,
+                    output: model.output_tokens,
+                    cache_read: model.cache_read_input_tokens,
+                    cache_write: model.cache_creation_input_tokens,
+                })
+            })
+            .map_or(Usage::Unknown, Usage::Reported)
     }
 }
 
@@ -509,6 +570,181 @@ mod tests {
         assert_eq!(
             completion(&without_result(FINISHED)).unwrap(),
             Completion::Missing
+        );
+    }
+
+    #[test]
+    fn an_error_subtype_is_an_error_without_is_error() {
+        let result = edited(
+            &error_result("error_max_turns", &["too many turns"]),
+            |result| {
+                result.insert("is_error".to_owned(), false.into());
+            },
+        );
+        let transcript = format!(
+            "{}
+{result}
+",
+            recorded_init()
+        );
+
+        assert_eq!(
+            completion(&transcript).unwrap(),
+            Completion::Reported("too many turns".to_owned())
+        );
+    }
+
+    fn summary_as(transcript: &str, session: Uuid) -> Summary {
+        read_text(
+            transcript,
+            Path::new("/trial/project"),
+            session,
+            version::MINIMUM,
+            &[],
+        )
+        .summary
+    }
+
+    fn summary(transcript: &str) -> Summary {
+        summary_as(transcript, recorded_session())
+    }
+
+    /// The recorded result, with `model_usage` as its `modelUsage`.
+    fn with_model_usage(model_usage: serde_json::Value) -> String {
+        let result = edited(recorded_result(), |result| {
+            result.insert("modelUsage".to_owned(), model_usage);
+        });
+        format!(
+            "{}
+{result}
+",
+            recorded_init()
+        )
+    }
+
+    fn tokens(input: u64, output: u64, cache_read: u64, cache_write: u64) -> serde_json::Value {
+        serde_json::json!({
+            "inputTokens": input,
+            "outputTokens": output,
+            "cacheReadInputTokens": cache_read,
+            "cacheCreationInputTokens": cache_write,
+        })
+    }
+
+    #[test]
+    fn a_recorded_session_is_summarized() {
+        assert_eq!(
+            summary(FINISHED),
+            Summary {
+                model: Some("claude-haiku-5-5".to_owned()),
+                usage: Usage::Reported(Tokens {
+                    input: 2,
+                    output: 4,
+                    cache_read: 16827,
+                    cache_write: 16849,
+                }),
+                response: Some("ok".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_recorded_api_error_used_no_tokens_and_has_no_response() {
+        let summary = summary(MODEL_ERROR);
+
+        assert_eq!(summary.usage, Usage::Reported(Tokens::default()));
+        assert_eq!(summary.response, None);
+    }
+
+    #[test]
+    fn usage_is_summed_over_every_model() {
+        let transcript = with_model_usage(serde_json::json!({
+            "main-model": tokens(1, 2, 3, 4),
+            "subagent-model": tokens(10, 20, 30, 40),
+        }));
+
+        assert_eq!(
+            summary(&transcript).usage,
+            Usage::Reported(Tokens {
+                input: 11,
+                output: 22,
+                cache_read: 33,
+                cache_write: 44,
+            })
+        );
+    }
+
+    #[test]
+    fn usage_that_overflows_is_unknown() {
+        let transcript = with_model_usage(serde_json::json!({
+            "main-model": tokens(u64::MAX, 0, 0, 0),
+            "subagent-model": tokens(1, 0, 0, 0),
+        }));
+
+        assert_eq!(summary(&transcript).usage, Usage::Unknown);
+    }
+
+    #[test]
+    fn a_reshaped_model_entry_leaves_usage_unknown_and_the_ending_readable() {
+        let transcript =
+            with_model_usage(serde_json::json!({ "main-model": { "inputTokens": "two" } }));
+
+        assert_eq!(summary(&transcript).usage, Usage::Unknown);
+        assert_eq!(completion(&transcript).unwrap(), Completion::Finished);
+    }
+
+    #[test]
+    fn a_result_without_model_usage_has_unknown_usage() {
+        let transcript = format!(
+            "{}
+{}
+",
+            recorded_init(),
+            without_field(recorded_result(), "modelUsage")
+        );
+
+        assert_eq!(summary(&transcript).usage, Usage::Unknown);
+        assert_eq!(completion(&transcript).unwrap(), Completion::Finished);
+    }
+
+    #[test]
+    fn a_transcript_without_a_result_has_unknown_usage_and_no_response() {
+        let summary = summary(&without_result(FINISHED));
+
+        assert_eq!(summary.usage, Usage::Unknown);
+        assert_eq!(summary.response, None);
+        assert_eq!(summary.model.as_deref(), Some("claude-haiku-5-5"));
+    }
+
+    #[test]
+    fn a_malformed_line_after_the_result_leaves_no_summary_of_it() {
+        let summary = summary(&format!(
+            "{FINISHED}not json
+"
+        ));
+
+        assert_eq!(summary.usage, Usage::Unknown);
+        assert_eq!(summary.response, None);
+    }
+
+    #[test]
+    fn a_result_after_a_malformed_line_restates_the_summary() {
+        let transcript = format!(
+            "{}not json
+{}
+",
+            without_result(FINISHED),
+            recorded_result()
+        );
+
+        assert_eq!(summary(&transcript), summary(FINISHED));
+    }
+
+    #[test]
+    fn another_sessions_summary_is_not_kept() {
+        assert_eq!(
+            summary_as(FINISHED, Uuid::nil()),
+            Summary::unread(Usage::Unknown)
         );
     }
 
