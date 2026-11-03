@@ -73,6 +73,8 @@ async fn import_writes_a_package_and_reports_what_it_leaves_out() {
                 ⚠️  command `review_code` imported as skill `review-code`
                 ⚠️  command `undescribed` not imported: its frontmatter has no `description`
                 ⚠️  `SessionStart` hook `sh "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"`: `timeout` dropped
+                ⚠️  `SessionStart` hook `echo started`: matcher `startup|resume` dropped, so it runs on every session start
+                ⚠️  `SessionStart` hook `echo compacted` not imported: its matcher `compact` leaves out `startup`, and Symposium runs `SessionStart` hooks on every session start
                 ⚠️  `PreToolUse` hook not imported: only `type: command` hooks are supported
                 ⚠️  `PreToolUse` hook `true` not imported: Symposium does not support `if`
                 ⚠️  `Notification` hooks not imported: Symposium has no such event
@@ -124,7 +126,14 @@ async fn import_writes_a_package_and_reports_what_it_leaves_out() {
                 args = ["-c", 'sh "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"']
 
                 [[hooks]]
-                name = "pre-tool-use-2"
+                name = "session-start-2"
+                event = "SessionStart"
+                format = "claude"
+                command = { executable = "sh" }
+                args = ["-c", "echo started"]
+
+                [[hooks]]
+                name = "pre-tool-use-3"
                 event = "PreToolUse"
                 format = "claude"
                 matcher = "Bash"

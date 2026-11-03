@@ -351,6 +351,21 @@ fn import_hook(event: &str, matcher: Option<&str>, hook: &Value, index: usize) -
         ));
         return None;
     }
+    let mut matcher = matcher.filter(|m| !m.is_empty());
+    if event == "SessionStart"
+        && let Some(m) = matcher.take()
+        && m != "*"
+    {
+        if !regex::Regex::new(m).is_ok_and(|re| re.is_match("startup")) {
+            report(format!(
+                "`SessionStart` hook `{command}` not imported: its matcher `{m}` leaves out `startup`, and Symposium runs `SessionStart` hooks on every session start"
+            ));
+            return None;
+        }
+        report(format!(
+            "`SessionStart` hook `{command}`: matcher `{m}` dropped, so it runs on every session start"
+        ));
+    }
     if hook.get("timeout").is_some() {
         report(format!("`{event}` hook `{command}`: `timeout` dropped"));
     }
@@ -359,7 +374,7 @@ fn import_hook(event: &str, matcher: Option<&str>, hook: &Value, index: usize) -
         quote(&format!("{}-{index}", kebab_case(event))),
         quote(event),
     );
-    if let Some(matcher) = matcher.filter(|m| !m.is_empty()) {
+    if let Some(matcher) = matcher {
         section.push_str(&format!("matcher = {}\n", quote(matcher)));
     }
     section.push_str(&format!(
