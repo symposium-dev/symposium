@@ -6,6 +6,14 @@
         "hooks": [
           { "type": "command", "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\"", "timeout": 10 }
         ]
+      },
+      {
+        "matcher": "startup|resume",
+        "hooks": [ { "type": "command", "command": "echo started" } ]
+      },
+      {
+        "matcher": "compact",
+        "hooks": [ { "type": "command", "command": "echo compacted" } ]
       }
     ],
     "PreToolUse": [

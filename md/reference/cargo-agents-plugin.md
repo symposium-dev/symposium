@@ -91,6 +91,7 @@ Everything that is not imported is reported, one line each:
 
 - `agents/`, `.lsp.json`, and `plugin.json` fields outside the list above, such as `userConfig`. The package format has no place for them.
 - Hooks for an event Symposium does not handle, hooks whose `type` is not `command`, and hooks using a field other than `command` and `timeout`, such as `if` or `async`. `timeout` itself is dropped.
+- `SessionStart` hooks whose `matcher` leaves out `startup`, such as `compact`: Symposium runs `SessionStart` hooks on every session start. The matcher of the others is dropped, with a warning.
 - MCP servers that use `${CLAUDE_PLUGIN_ROOT}`, which agents do not expand outside a Claude Code plugin.
 
 A skill that mentions `${CLAUDE_PLUGIN_ROOT}` is copied, with a warning: Claude Code only fills that in for the skills of its own plugins.
