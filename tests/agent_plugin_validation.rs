@@ -1,8 +1,13 @@
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 /// The JSON identity is sufficient to load this package through a registry;
 /// selecting a different supported validation path must not change that.
 fn validate(relative_path: &str) -> Output {
+    validate_from(relative_path, false)
+}
+
+fn validate_from(relative_path: &str, from_package: bool) -> Output {
     let temp = tempfile::tempdir().unwrap();
     let home = temp.path().join("home");
     let config = home.join(".symposium");
@@ -26,8 +31,12 @@ fn validate(relative_path: &str) -> Output {
 
     Command::new(env!("CARGO_BIN_EXE_cargo-agents"))
         .args(["plugin", "validate", "--no-check-crates"])
-        .arg(temp.path().join(relative_path))
-        .current_dir(temp.path())
+        .arg(if from_package {
+            PathBuf::from(relative_path)
+        } else {
+            temp.path().join(relative_path)
+        })
+        .current_dir(if from_package { &package } else { temp.path() })
         .env("SYMPOSIUM_HOME", config)
         .env("HOME", &home)
         .env("USERPROFILE", &home)
@@ -58,6 +67,14 @@ fn registry_parent_validates_a_toml_plugin_with_json_identity() {
 #[test]
 fn direct_toml_validation_uses_json_identity_fallback() {
     assert_valid(&validate("plugins/portable/Symposium.toml"));
+}
+
+#[test]
+fn bare_toml_filename_validation_uses_json_identity_fallback() {
+    // Both names select the same manifest from the package directory. Keep
+    // the `./` spelling as a passing control for the literal bare filename.
+    assert_valid(&validate_from("./Symposium.toml", true));
+    assert_valid(&validate_from("Symposium.toml", true));
 }
 
 #[test]
