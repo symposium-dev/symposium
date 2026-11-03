@@ -4,6 +4,7 @@
 
 pub(crate) mod config;
 pub(crate) mod crosscheck;
+pub(crate) mod decide;
 pub(crate) mod file;
 pub(crate) mod hooks;
 pub(crate) mod installed;

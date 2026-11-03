@@ -71,6 +71,27 @@ pub(crate) fn calls_within<T: DeserializeOwned>(
     }
 }
 
+/// How many entries of `log` `wanted` picks out, among those that can be read: a lower
+/// bound, and 0 for a log that cannot be read.
+pub(crate) fn count<T: DeserializeOwned>(log: &Path, wanted: impl Fn(&T) -> bool) -> usize {
+    let Ok(Some(log)) = file::open(log, MAX_LOG) else {
+        return 0;
+    };
+    let mut source = BufReader::new(log.take(MAX_LOG));
+    let mut line = Vec::new();
+    let mut count = 0;
+    loop {
+        match jsonl::next_line(&mut source, &mut line) {
+            Ok(Line::Read) => {
+                let entry = serde_json::from_slice::<T>(&line);
+                count += usize::from(entry.is_ok_and(|entry| wanted(&entry)));
+            }
+            Ok(Line::TooLong) => {}
+            Ok(Line::End) | Err(_) => return count,
+        }
+    }
+}
+
 fn read<T: DeserializeOwned>(
     log: File,
     limit: u64,
@@ -143,6 +164,22 @@ mod tests {
 
     fn evidence(lines: &[String]) -> CallEvidence {
         evidence_within(lines, MAX_LOG)
+    }
+
+    #[test]
+    fn only_wanted_entries_that_can_be_read_are_counted() {
+        let dir = TempDir::new().unwrap();
+        let log = dir.path().join("log.jsonl");
+        let lines = [
+            call("wanted", 0),
+            call("other", 0),
+            "not json".to_owned(),
+            call("wanted", 1),
+        ];
+        fs::write(&log, lines.join("\n")).unwrap();
+
+        assert_eq!(count(&log, |call: &Call| call.name == "wanted"), 2);
+        assert_eq!(count(&dir.path().join("absent.jsonl"), |_: &Call| true), 0);
     }
 
     #[test]

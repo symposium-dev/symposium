@@ -172,6 +172,10 @@ impl Task {
         &self.editable
     }
 
+    pub(crate) fn expected_skills(&self) -> &SkillExpectations {
+        &self.expected_skills
+    }
+
     /// The plugin hooks that must leave a successful record, each with its event.
     #[cfg_attr(
         not(test),
