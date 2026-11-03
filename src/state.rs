@@ -176,12 +176,6 @@ pub fn forget_mcp_registrations(config_dir: &Path, removed: &[McpRegistration]) 
     save(config_dir, &state);
 }
 
-pub fn record_detected_agents(config_dir: &Path, agents: Vec<String>) {
-    let mut state = load(config_dir).unwrap_or_default();
-    state.detected_agents = agents;
-    save(config_dir, &state);
-}
-
 /// Persist selection provenance without disturbing update checks or MCP registrations.
 pub fn record_agent_choices(config_dir: &Path, explicit: Vec<String>, detected: Vec<String>) {
     let mut state = load(config_dir).unwrap_or_default();
@@ -196,6 +190,8 @@ fn state_path(config_dir: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn agent_choice_history_preserves_other_state_and_distinguishes_migration() {
         let dir = tempfile::tempdir().unwrap();
@@ -218,8 +214,6 @@ mod tests {
         assert!(state.last_update_check.is_some());
         assert_eq!(state.mcp_servers, vec![registration]);
     }
-
-    use super::*;
 
     #[test]
     fn stamp_creates_file() {
