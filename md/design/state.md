@@ -31,4 +31,4 @@ The ledger is per machine. An entry Symposium did not write on this machine, inc
 trial-use = ["dormant-kit"]
 ```
 
-`--remove` drops the entry only when the name is listed there. The user may have written the same entry before trying the plugin, and it must survive the trial; and the manifest may have gained a gate since, so whether the plugin is dormant now says nothing about who added the entry.
+`--remove` drops the entry only when the name is listed there. `cargo agents use --global --remove` clears the name too when it removes that entry, so an entry the user writes again afterwards is theirs. The user may have written the same entry before trying the plugin, and it must survive the trial; and the manifest may have gained a gate since, so whether the plugin is dormant now says nothing about who added the entry.
