@@ -280,6 +280,7 @@ fn import_commands(source: &Path, dest: &Path) -> Result<()> {
 }
 
 fn command_skill(name: &str, content: &str) -> Option<String> {
+    let content = content.replace("\r\n", "\n");
     let rest = content.strip_prefix("---\n")?;
     let end = rest.find("\n---")?;
     let (frontmatter, body) = rest.split_at(end);
