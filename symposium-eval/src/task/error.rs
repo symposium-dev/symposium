@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 
 use super::{
-    CheckError, CheckName, EditablePattern, FixtureName, PluginName, SkillList, SkillName,
+    CheckError, CheckName, EditablePattern, FixtureName, HookName, PluginName, SkillList, SkillName,
 };
 use crate::evals::EntryError;
 use crate::grade::{GradeError, OutsideEdit, Step};
@@ -77,6 +77,26 @@ pub(crate) enum TaskError {
     SolutionOutsideEditable(OutsideEdit),
     #[error("`solution/` {0}")]
     SolutionStep(Step),
+    #[error("invalid `Symposium.toml` in plugin `{plugin}`")]
+    PluginManifest {
+        plugin: PluginName,
+        #[source]
+        source: toml::de::Error,
+    },
+    #[error("expected hook `{0}` is not declared by any of the task's plugins")]
+    UndeclaredHook(HookName),
+    #[error("expected hook `{hook}` is declared by both `{first}` and `{second}`")]
+    AmbiguousHook {
+        hook: HookName,
+        first: PluginName,
+        second: PluginName,
+    },
+    #[error(
+        "expected hook `{hook}` in plugin `{plugin}` is limited to one agent by `agent` or `format`, but a task runs on every client"
+    )]
+    AgentLimitedHook { hook: HookName, plugin: PluginName },
+    #[error("expected hook `{hook}` runs on `{event}`, which is not a Symposium event")]
+    UnknownHookEvent { hook: HookName, event: String },
     #[error("`{list}` lists `{value}` more than once")]
     Duplicate { list: &'static str, value: String },
     #[error("skill `{skill}` is in both `{first}` and `{second}`")]
