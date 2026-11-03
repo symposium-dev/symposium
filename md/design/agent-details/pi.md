@@ -16,16 +16,33 @@ header identifies files that Symposium may update or remove. An existing file
 without that header is not overwritten or removed. When hook scope changes,
 `sync` calls `Agent::register_scoped_hooks`, which removes the generated extension
 at the other scope for that workspace.
-Run `/reload` after a scope change to replace the active handlers.
+At project scope, Pi's configuration directory is the invoking session directory
+(`Workspace::start`), even when Cargo resolves a parent workspace. Pi does not
+search ancestors for extensions or MCP configuration. Dependency resolution and
+shared `.agents/skills` installations still use the workspace root. Registration,
+scope changes, and extension removal use the same session directory; other
+agents retain their existing workspace-root paths. Sync each session directory
+that needs project integration. Run `/reload` after a scope change to replace the
+active handlers.
 
 The extension starts no work in its factory. Every handler checks
 `ctx.isProjectTrusted()` before dispatch or project resource discovery, including
 when the extension is installed globally. Event handlers run `cargo-agents
-hook pi <event>` with JSON on stdin, using `execFile` without a shell. Prompts and
+hook pi <event>` with JSON on stdin, using `spawn` without a shell. Prompts and
 tool inputs are not shell arguments. Each process has a 10-minute timeout and a
 1 MiB output limit. All events use this timeout because tools install lazily when
 their hook first fires; session-start refresh does not install missing tools.
-Active-turn cancellation stops its hook process.
+On Unix, the bridge starts the CLI in an isolated process group. Cancellation,
+timeout, and stdout/stderr overflow kill that group, including inherited plugin
+and installation children, then wait for the CLI to close. SIGKILL prevents a
+child that ignores SIGTERM from continuing side effects. No delayed cleanup
+signals a saved PID after its leader has exited. Successful hooks are not killed.
+Windows retains host-process cancellation; descendant teardown is not claimed.
+
+This ownership must be reconciled with PR #388 before combining the changes:
+its proposed separate plugin process groups would no longer belong to the
+bridge's group. Processes that deliberately detach are not covered by this
+process-group mechanism.
 
 ## Event mapping and wire format
 
@@ -60,8 +77,23 @@ and error state. A post-hook failure does not discard pre-tool context. Pending
 context is removed after the result and cleared on turn end, session start, or
 session shutdown.
 
-Session-start, prompt, and Stop context use hidden custom messages for the next
-user prompt, without requesting another turn.
+Session-start, idle-prompt, and Stop context use hidden custom messages for the
+next user prompt, without requesting another turn. Steering and follow-up inputs
+instead return an input transform: their context travels in the same user message,
+with the original images, rather than waiting for an unrelated idle prompt or
+creating an additional follow-up turn.
+
+Pi expands skill commands and prompt templates after the input handler. Skill
+commands retain their literal-space argument separator. For queued file-backed
+prompt templates, the bridge reads the registered template and applies Pi 1.0's
+argument syntax before appending context; otherwise templates without `$@` could
+discard context or change default arguments. This compatibility routine uses only
+public extension APIs and is checked against Pi's real expander. It reads the
+current template file; if it changed since Pi loaded it, queued inputs use the
+new file while idle inputs keep Pi's cached copy until `/reload`. Read failures
+warn and leave the original input unchanged. This file-backed compatibility
+trade-off avoids depending on Pi's private runtime. Keep the compatibility tests when upgrading Pi, and replace the routine with a
+post-expansion input API if Pi adds one.
 
 Symposium's normal hook pipeline handles auto-sync and plugin format conversion.
 Native `format = "pi"` plugins receive flat Pi bridge JSON; portable
@@ -119,4 +151,8 @@ skill discovery using Pi's real skill loader, and MCP file discovery using
 
 The integration suite builds the real Symposium CLI and checks discovery from a
 Cargo workspace member, plus cancellation of a gated plugin command on Unix.
-Queued-input tests use Pi's actual session and extension runner without a model.
+Queued-input tests use Pi's actual session and extension runner without a model,
+including skill commands, template argument/default expansion, image preservation,
+and absence of extra queued turns. Discovery tests also check repeated member
+sync, scope transitions, agent removal, and preservation of personal configuration
+and other agents' workspace-root paths.
