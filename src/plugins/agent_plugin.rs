@@ -493,7 +493,7 @@ pub(crate) fn launched_from(server: McpServer, root: &Path) -> McpServer {
                 stdio.command.to_string_lossy().into_owned(),
             ];
             args.append(&mut stdio.args);
-            stdio.command = PathBuf::from("sh");
+            stdio.command = PathBuf::from("/bin/sh");
             stdio.args = args;
             McpServer::Stdio(stdio)
         }
