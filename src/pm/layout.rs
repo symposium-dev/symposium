@@ -19,6 +19,8 @@ pub const SKILL_FILE: &str = "SKILL.md";
 
 pub const AGENT_PLUGIN_FILE: &str = "plugin.json";
 
+const CLAUDE_PLUGIN_FILE: &str = ".claude-plugin/plugin.json";
+
 /// What kind of entry a directory is.
 #[derive(Debug)]
 pub enum EntryKind {
@@ -69,6 +71,10 @@ pub fn enumerate(root: &Path) -> Result<Vec<RegistryEntry>> {
             "plugin source root contains SKILL.md — it should contain subdirectories with skills, not be a skill itself: {}",
             root.display()
         ),
+        None if is_claude_plugin(root) => anyhow::bail!(
+            "plugin source root is a Claude Code plugin, not an Agent Plugins package: {}",
+            root.display()
+        ),
         None => {}
     }
     let mut entries = Vec::new();
@@ -103,11 +109,24 @@ fn walk_in(
         let sub = rel.join(entry.file_name());
         if classify(&path).is_some() {
             entries.push(RegistryEntry { subpath: sub });
+        } else if is_claude_plugin(&path) {
+            tracing::warn!(
+                report = %crate::report::ReportEvent::Warning {
+                    message: format!(
+                        "skipping {}: a Claude Code plugin, not an Agent Plugins package",
+                        crate::output::display_path(&path)
+                    ),
+                },
+            );
         } else if ancestors.enter(&path) {
             walk_in(&path, &sub, ancestors, entries);
             ancestors.leave();
         }
     }
+}
+
+fn is_claude_plugin(dir: &Path) -> bool {
+    dir.join(CLAUDE_PLUGIN_FILE).is_file()
 }
 
 fn is_installed_copy(dir: &Path) -> bool {
@@ -146,12 +165,23 @@ mod tests {
         touch(&project_copy.join("plugin.json"));
         touch(&project_copy.join(crate::sync::MARKER_FILE));
         touch(&tmp.path().join("project/tools/plugin.json"));
+        touch(&tmp.path().join("cc/.claude-plugin/plugin.json"));
+        touch(&tmp.path().join("cc/skills/review/SKILL.md"));
+        touch(&tmp.path().join("both/.claude-plugin/plugin.json"));
+        touch(&tmp.path().join("both/plugin.json"));
 
         let entries = enumerate(tmp.path()).unwrap();
         let subpaths: Vec<_> = entries.iter().map(|e| e.subpath.clone()).collect();
         assert_eq!(
             subpaths,
-            ["group/deep/skill", "pdf-tools", "plug", "project/tools"].map(PathBuf::from)
+            [
+                "both",
+                "group/deep/skill",
+                "pdf-tools",
+                "plug",
+                "project/tools"
+            ]
+            .map(PathBuf::from)
         );
 
         // Missing root: no entries, no error.
@@ -187,6 +217,11 @@ mod tests {
                 .contains(&format!("contains {AGENT_PLUGIN_FILE};")),
             "{err}"
         );
+
+        let cc = tempfile::tempdir().unwrap();
+        touch(&cc.path().join(CLAUDE_PLUGIN_FILE));
+        let err = enumerate(cc.path()).unwrap_err();
+        assert!(err.to_string().contains("is a Claude Code plugin"), "{err}");
     }
 
     #[test]
