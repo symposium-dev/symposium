@@ -1482,12 +1482,13 @@ fn scan_source_dir<P: AsRef<Path>>(dir: P, source_name: &str) -> Result<SourceDi
     let dir = dir.as_ref();
     let mut plugins = Vec::new();
 
-    let subpaths = match crate::pm::layout::classify(dir) {
-        Some(crate::pm::layout::EntryKind::AgentPlugin(_)) => vec![PathBuf::new()],
-        _ => crate::pm::layout::enumerate(dir)?
+    let subpaths = if dir.join(crate::pm::layout::AGENT_PLUGIN_FILE).is_file() {
+        vec![PathBuf::new()]
+    } else {
+        crate::pm::layout::enumerate(dir)?
             .into_iter()
             .map(|entry| entry.subpath)
-            .collect(),
+            .collect()
     };
     for subpath in subpaths {
         let Some(plugin) = entry_plugin(dir, &subpath, source_name) else {
@@ -1678,10 +1679,11 @@ fn load_plugin_as(
     origin: ManifestOrigin<'_>,
 ) -> Result<Plugin> {
     let content = fs::read_to_string(manifest_path)?;
-    let manifest: RawPluginManifest = toml::from_str(&content)?;
+    let mut manifest: RawPluginManifest = toml::from_str(&content)?;
+    let base = manifest_path.parent().unwrap_or(source_dir);
+    fill_from_agent_plugin(&mut manifest, base);
     let mut plugin = validate_manifest(manifest, origin)
         .with_context(|| format!("validating `{}`", manifest_path.display()))?;
-    let base = manifest_path.parent().unwrap_or(source_dir);
     resolve_plugin_paths(&mut plugin, base, source_dir)
         .with_context(|| format!("validating `{}`", manifest_path.display()))?;
     Ok(Plugin {
