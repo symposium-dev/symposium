@@ -342,9 +342,7 @@ fn mcp_server(root: &Path, name: &str, value: &Value) -> Result<McpServer> {
         "stdio" => {
             only_fields(fields, &["type", "command", "args", "env", "cwd"])?;
             if fields.contains_key("cwd") {
-                bail!(
-                    "`cwd` is not supported, since servers start in the agent's working directory"
-                );
+                bail!("`cwd` is not supported");
             }
             let command = required_string(fields, "command")?;
             let command = match command.strip_prefix("./") {
@@ -481,6 +479,30 @@ pub(crate) fn with_plugin_vars(mut server: McpServer, root: &Path, data: &Path) 
         stdio.env.push(EnvVariable::new(PLUGIN_ROOT_VAR, root));
         stdio.env.push(EnvVariable::new(PLUGIN_DATA_VAR, data));
     }
+    server
+}
+
+#[cfg(unix)]
+pub(crate) fn launched_from(server: McpServer, root: &Path) -> McpServer {
+    match server {
+        McpServer::Stdio(mut stdio) => {
+            let mut args = vec![
+                "-c".to_string(),
+                r#"cd "$0" && exec "$@""#.to_string(),
+                root.to_string_lossy().into_owned(),
+                stdio.command.to_string_lossy().into_owned(),
+            ];
+            args.append(&mut stdio.args);
+            stdio.command = PathBuf::from("sh");
+            stdio.args = args;
+            McpServer::Stdio(stdio)
+        }
+        other => other,
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn launched_from(server: McpServer, _root: &Path) -> McpServer {
     server
 }
 
