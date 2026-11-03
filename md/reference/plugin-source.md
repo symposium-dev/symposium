@@ -12,6 +12,8 @@ Symposium scans a registry recursively to find plugins and standalone skills:
 
 **We do not allow these entries to be nested within one another.** When we find a directory that is a plugin, a package or a skill, we do not search its contents any further. The registry root itself must not be an entry: a root that contains a `Symposium.toml`, a `plugin.json` or a `SKILL.md` is an error (a configured registry loads nothing, and `cargo agents plugin validate` fails, except that it reads a `plugin.json` root as that one package). Put each plugin or skill in a subdirectory instead.
 
+A Claude Code plugin (a directory with a `.claude-plugin/plugin.json` and no `Symposium.toml` or `plugin.json` of its own) is not read: it is skipped with a warning, and none of its skills load. Since nothing in it could load, the registry's other plugins are still removed when they go away. A registry root that is a Claude Code plugin is an error.
+
 A directory that Symposium installed itself, marked by a `.symposium` file inside it, is skipped: installed copies are never read back as sources.
 
 ### Example structure
