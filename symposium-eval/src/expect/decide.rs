@@ -516,6 +516,59 @@ mod tests {
         assert_eq!(verdicts(&symposium), [Verdict::Inconclusive; 4]);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_changed_client_hook_cannot_forge_a_passing_skill_install() {
+        use crate::expect::config::Snapshot;
+
+        let host = Host::new();
+        let evals = Evals::in_repository();
+        let task = Task::load(&evals, &TaskName::new("formatting").unwrap()).unwrap();
+        let trial = host
+            .batch()
+            .create_trial(1, Configuration::Symposium, &evals, &task)
+            .unwrap();
+        let snapshot = Snapshot::take(&trial.home(), &trial.project(), Client::ClaudeCode);
+        let settings = trial.project().join(".claude/settings.local.json");
+        fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        let command = concat!(
+            "mkdir -p .claude/skills/rust-formatting && ",
+            "cp ../registry/format-on-stop/skills/rust-formatting/SKILL.md ",
+            ".claude/skills/rust-formatting/SKILL.md && ",
+            "touch .claude/skills/rust-formatting/.symposium"
+        );
+        let config = serde_json::json!({
+            "hooks": {
+                "Stop": [{"hooks": [{"type": "command", "command": command}]}]
+            }
+        });
+        fs::write(&settings, config.to_string()).unwrap();
+
+        // A client hook runs outside the agent's tool calls, so only the settings
+        // edit appears in tool activity. Execute its command without a model.
+        let output = std::process::Command::new("sh")
+            .args(["-c", command])
+            .current_dir(trial.project())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../evals/plugins/format-on-stop/skills/rust-formatting");
+        let facts = gather(symposium(&trial), Client::ClaudeCode, &task, |_| {
+            Some(source.clone())
+        });
+        assert_eq!(facts.installs[0].evidence, InstallEvidence::Matching);
+        let changes = snapshot.changes();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].file, ".claude/settings.local.json");
+
+        let expectations = decided(&trial, facts, &both_ran(), &wrote(&settings), &changes);
+
+        assert_eq!(expectations.installs[0].evidence_verdict(), Verdict::Pass);
+        assert_eq!(expectations.installs[0].verdict(), Verdict::Inconclusive);
+    }
+
     #[test]
     fn a_stop_hook_is_gathered_by_its_first_record() {
         let host = Host::new();

@@ -417,6 +417,33 @@ mod tests {
     }
 
     #[test]
+    fn an_explicit_null_error_flag_does_not_claim_success() {
+        use crate::client::claude::fixtures::{SKILL_FAILED, recorded_session, replaced};
+        use crate::client::claude::{transcript::read_text, version};
+        use crate::client::{InstalledSkill, Load};
+        use crate::task::SkillName;
+
+        let skill = InstalledSkill {
+            name: SkillName::new("fixture-missing").unwrap(),
+            skill_md: "/trial/project/.claude/skills/fixture-missing/SKILL.md".into(),
+        };
+        let load = |text| {
+            read_text(
+                text,
+                Path::new("/trial/project"),
+                recorded_session(),
+                version::MINIMUM,
+                std::slice::from_ref(&skill),
+            )
+            .loads[0]
+        };
+        assert_eq!(load(SKILL_FAILED), Load::Attempted);
+        let malformed = replaced(SKILL_FAILED, r#""is_error":true"#, r#""is_error":null"#);
+
+        assert_eq!(load(&malformed), Load::Unknown);
+    }
+
+    #[test]
     fn a_transcript_without_its_ending_cannot_show_a_target_unobserved() {
         let mut calls = Calls::new(Path::new("/project"));
         message(
