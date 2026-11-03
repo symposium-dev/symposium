@@ -14,6 +14,7 @@ globset = "0.4"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1.0.149", features = ["raw_value"] }
+serde_yaml_ng = "0.10"
 syn = { version = "2", features = ["full"] }
 tempfile = "3"
 thiserror = "2"
@@ -24,4 +25,4 @@ uuid = { version = "1.26.0", features = ["v4"] }
 libc = "0.2"
 
 [target."cfg(windows)".dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_JobObjects", "Win32_System_Threading"] }

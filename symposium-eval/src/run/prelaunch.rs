@@ -45,6 +45,11 @@ impl Trial {
         for root in [self.project(), self.home()] {
             require_empty(&root.join(client.skill_dir()), Unready::SkillInstalled)?;
         }
+        // A trial starts with no record and no trace, so any found afterwards is the
+        // session's.
+        require_absent(&self.sync_records(), Unready::SyncRecord)?;
+        require_absent(&self.hook_trace(), Unready::HookTrace)?;
+        require_absent(&self.hook_records(), Unready::HookRecord)?;
         require_empty(&system.join(client.managed_dir()), Unready::ManagedSettings)?;
         if self.configuration() == Configuration::Baseline {
             self.check_no_symposium(client, env)?;
@@ -202,6 +207,36 @@ mod tests {
 
                 assert_unready(&setup.check(client), Unready::SkillInstalled);
             }
+        }
+    }
+
+    #[test]
+    fn no_sync_is_recorded_before_launch() {
+        for configuration in [Configuration::Symposium, Configuration::Baseline] {
+            let setup = Setup::new(configuration);
+            fs::create_dir_all(setup.trial.sync_records()).unwrap();
+
+            assert_unready(&setup.check(Client::ClaudeCode), Unready::SyncRecord);
+        }
+    }
+
+    #[test]
+    fn no_hook_has_run_before_launch() {
+        for configuration in [Configuration::Symposium, Configuration::Baseline] {
+            let setup = Setup::new(configuration);
+            write(&setup.trial.hook_trace(), "");
+
+            assert_unready(&setup.check(Client::ClaudeCode), Unready::HookTrace);
+        }
+    }
+
+    #[test]
+    fn no_plugin_hook_has_recorded_before_launch() {
+        for configuration in [Configuration::Symposium, Configuration::Baseline] {
+            let setup = Setup::new(configuration);
+            write(&setup.trial.hook_records(), "");
+
+            assert_unready(&setup.check(Client::ClaudeCode), Unready::HookRecord);
         }
     }
 

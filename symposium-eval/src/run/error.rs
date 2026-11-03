@@ -100,6 +100,12 @@ pub(crate) enum RunError {
 pub(crate) enum Unready {
     #[error("holds a skill before the agent starts")]
     SkillInstalled,
+    #[error("holds a sync record before the agent starts")]
+    SyncRecord,
+    #[error("holds a hook trace before the agent starts")]
+    HookTrace,
+    #[error("holds a hook record before the agent starts")]
+    HookRecord,
     #[error("holds managed settings, which override the trial's own")]
     ManagedSettings,
     #[error("puts `cargo-agents` on a baseline trial's `PATH`")]

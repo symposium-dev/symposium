@@ -160,7 +160,26 @@ impl RealSrt {
 
     /// Creates a trial of `store-durability` and writes its policy.
     pub(crate) fn trial(&self, number: usize, configuration: Configuration) -> Trial {
-        let trial = trial(&self.batch, number, configuration);
+        self.trial_of(
+            &TaskName::new("store-durability").unwrap(),
+            number,
+            configuration,
+        )
+    }
+
+    /// A trial of the repository's task `name`, with its policy written.
+    pub(crate) fn trial_of(
+        &self,
+        name: &TaskName,
+        number: usize,
+        configuration: Configuration,
+    ) -> Trial {
+        let evals = Evals::in_repository();
+        let task = Task::load(&evals, name).unwrap();
+        let trial = self
+            .batch
+            .create_trial(number, configuration, &evals, &task)
+            .unwrap();
         let policy =
             super::Policy::for_trial(&trial, &self.machine, "api.example.com", &self.api_key)
                 .unwrap();
@@ -233,6 +252,47 @@ impl RealSrt {
             .unwrap()
             .run(&invocation, deadline, &trial.evidence())
             .unwrap()
+    }
+
+    /// Runs Symposium's `SessionStart` hook for Claude Code in `trial`, as the client
+    /// does when a session starts in the project.
+    pub(crate) fn run_session_start(&self, trial: &Trial) -> crate::grade::process::Finished {
+        let fields = serde_json::json!({ "source": "startup" });
+        self.run_claude_hook(trial, "SessionStart", "session-start", fields)
+    }
+
+    /// Runs Symposium's `Stop` hook for Claude Code in `trial`, as the client does when
+    /// the agent's turn ends.
+    pub(crate) fn run_stop(&self, trial: &Trial) -> crate::grade::process::Finished {
+        let fields = serde_json::json!({ "stop_hook_active": false });
+        self.run_claude_hook(trial, "Stop", "stop", fields)
+    }
+
+    /// Runs `cargo-agents hook claude <command>` in the project with the payload Claude
+    /// Code sends for `event`: what it sends every hook, and `fields`.
+    fn run_claude_hook(
+        &self,
+        trial: &Trial,
+        event: &str,
+        command: &str,
+        fields: serde_json::Value,
+    ) -> crate::grade::process::Finished {
+        let mut payload = serde_json::json!({
+            "session_id": "00000000-0000-4000-8000-000000000000",
+            "transcript_path": trial.session().join("transcript.jsonl"),
+            "cwd": trial.project(),
+            "hook_event_name": event,
+        });
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        self.run(
+            trial,
+            &format!(r#"printf '%s' "$1" | cargo-agents hook claude {command}"#),
+            &[payload.to_string().into()],
+            std::time::Duration::from_secs(60),
+        )
     }
 }
 
