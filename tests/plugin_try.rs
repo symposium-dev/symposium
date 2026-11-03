@@ -316,6 +316,51 @@ async fn try_remove_preserves_preexisting_dormant_enablement() {
 }
 
 #[tokio::test]
+async fn try_remove_preserves_explicitly_recreated_enablement() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-try0"],
+        async |mut ctx| {
+            let kit = plugin_path(&ctx, "dormant-kit");
+            // Keep the commands outside a workspace so removal cannot fetch a
+            // same-named crate after the trial's local source is unlinked.
+            let outside = tempfile::tempdir()?;
+            ctx.workspace_root = Some(outside.path().to_path_buf());
+            let config_dir = ctx.sym.config_dir().to_path_buf();
+            let saved_uses = || {
+                symposium::config::Symposium::from_dir(&config_dir)
+                    .config
+                    .plugins
+                    .used
+            };
+            let explicit = symposium::config::UseEntry::Global("dormant-kit".into());
+            assert!(saved_uses().is_empty());
+
+            ctx.symposium(&["plugin", "try", &kit]).await?;
+            assert_eq!(saved_uses().as_slice(), std::slice::from_ref(&explicit));
+
+            ctx.symposium(&["use", "--global", "--remove", "dormant-kit"])
+                .await?;
+            assert!(saved_uses().is_empty(), "the trial's entry must be removed");
+
+            ctx.symposium(&["use", "--global", "dormant-kit"]).await?;
+            assert_eq!(saved_uses().as_slice(), std::slice::from_ref(&explicit));
+
+            ctx.symposium(&["plugin", "try", "--remove", &kit]).await?;
+            assert!(!user_plugins(&ctx).join("dormant-kit").exists());
+            assert_eq!(
+                saved_uses(),
+                [explicit],
+                "removing the trial must preserve the new entry the user explicitly added"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn try_remove_after_adding_a_gate_drops_its_enablement() {
     with_fixture(
         TestMode::SimulationOnly,
