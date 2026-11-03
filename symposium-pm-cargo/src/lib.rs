@@ -161,6 +161,12 @@ fn embedded_plugin_kind(dir: &std::path::Path) -> Option<&'static str> {
     if dir.join(symposium_sdk::manifest::MANIFEST_FILE).is_file() {
         return Some("plugin manifest (Symposium.toml)");
     }
+    if dir
+        .join(symposium_sdk::manifest::AGENT_PLUGIN_FILE)
+        .is_file()
+    {
+        return Some("Agent Plugins package (plugin.json)");
+    }
     if matches!(
         crate::metadata::symposium_metadata(&dir.join("Cargo.toml")),
         Ok(Some(_))
