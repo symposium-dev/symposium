@@ -329,7 +329,7 @@ Provides user-facing output for all commands via a custom tracing layer. Command
 
 The `ReportEvent` enum is the stable schema — `#[derive(Serialize, Deserialize)]` with `#[serde(tag = "kind")]`. Each variant carries the fields needed to render both human and JSON forms. The `Display` impl serializes to JSON (for passing through tracing's `%` formatter), and `format_human()` renders the pretty-printed form.
 
-The layer is always installed by the binary. Commands that want output simply emit report events at the appropriate tracing level (info for actions, debug for decision trace). The `--json` flag also suppresses the `Output`-based messages and drains the JSON buffer at exit.
+The layer is always installed by the binary. Commands that want output simply emit report events at the appropriate tracing level (info for actions, debug for decision trace). A warning repeated within one command is rendered once. The `--json` flag also suppresses the `Output`-based messages and drains the JSON buffer at exit.
 
 ### `self_update.rs` — self-update
 

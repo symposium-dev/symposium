@@ -26,6 +26,8 @@ tracing::info!(           →   ReportLayer::on_event()      →   stdout/stderr
 
 The layer is **always installed** — commands don't need to check whether reporting is active.
 
+A warning is rendered once per layer, so once per command: `cargo agents use` loads the registries and then syncs, which loads them again, and each load reports the same skipped entries.
+
 ## Adding a report event to a new command
 
 ### Step 1: Add a variant to `ReportEvent`
