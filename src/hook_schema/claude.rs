@@ -251,6 +251,15 @@ mod tests {
             Some(serde_json::json!({"command": "safe-cmd"}))
         );
     }
+
+    #[test]
+    fn plain_text_output_is_context() {
+        let session = ClaudeSessionStartOutput::parse_output(b"use the guide\n").unwrap();
+        let prompt = ClaudeUserPromptSubmitOutput::parse_output(b"use the guide\n").unwrap();
+        for output in [session.to_symposium(), prompt.to_symposium()] {
+            assert_eq!(output.additional_context(), Some("use the guide"));
+        }
+    }
 }
 
 // ── PostToolUse ───────────────────────────────────────────────────────
@@ -451,7 +460,14 @@ impl AgentHookOutput for ClaudeUserPromptSubmitOutput {
         if output.is_empty() {
             return Ok(Self::default());
         }
-        Ok(serde_json::from_slice(output)?)
+        Ok(serde_json::from_slice(output).unwrap_or_else(|_| Self {
+            hook_specific_output: Some(ClaudeUserPromptSubmitHookOutput {
+                hook_event_name: "UserPromptSubmit".into(),
+                additional_context: Some(plain_text(output)),
+                rest: serde_json::Map::new(),
+            }),
+            ..Self::default()
+        }))
     }
     fn from_symposium(event: &symposium::OutputEvent) -> Self {
         match claude_hook_output_from_symposium("UserPromptSubmit", event) {
@@ -554,7 +570,14 @@ impl AgentHookOutput for ClaudeSessionStartOutput {
         if output.is_empty() {
             return Ok(Self::default());
         }
-        Ok(serde_json::from_slice(output)?)
+        Ok(serde_json::from_slice(output).unwrap_or_else(|_| Self {
+            hook_specific_output: Some(ClaudeSessionStartHookOutput {
+                hook_event_name: "SessionStart".into(),
+                additional_context: Some(plain_text(output)),
+                rest: serde_json::Map::new(),
+            }),
+            ..Self::default()
+        }))
     }
     fn from_symposium(event: &symposium::OutputEvent) -> Self {
         match claude_hook_output_from_symposium("SessionStart", event) {
@@ -575,6 +598,10 @@ impl AgentHookOutput for ClaudeSessionStartOutput {
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
     }
+}
+
+fn plain_text(output: &[u8]) -> String {
+    String::from_utf8_lossy(output).trim_end().to_string()
 }
 
 // ── Stop ──────────────────────────────────────────────────────────────
