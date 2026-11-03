@@ -200,9 +200,12 @@ pub async fn refresh_installation_if_present(
         return Ok(());
     };
     let exec_choice = installation.executable.as_deref().or(override_executable);
-    let refreshed =
-        symposium_install::refresh_source_if_present(&sym.install_context(), source, exec_choice)
-            .await?;
+    let refreshed = symposium_install::refresh_source_if_present(
+        &sym.install_context().in_foreground(),
+        source,
+        exec_choice,
+    )
+    .await?;
     if refreshed {
         run_install_commands(&installation.install_commands, None).await?;
     }
