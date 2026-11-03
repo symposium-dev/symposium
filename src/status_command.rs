@@ -261,7 +261,7 @@ fn entry_for(found: &DiscoveredPlugin) -> StatusEntry {
         version: Some(found.id.version.clone()),
         root,
         state,
-        format: None,
+        format: found.format,
     }
 }
 

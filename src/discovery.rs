@@ -82,6 +82,7 @@ pub struct DiscoveredPlugin {
     pub description: Option<String>,
     /// How the `[plugins]` config decided this offer.
     pub enablement: Enablement,
+    pub format: Option<&'static str>,
 }
 
 impl DiscoveredPlugin {
@@ -149,6 +150,7 @@ pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin])
             let enablement = decide(sym, pms, &used, &plugin.canonical);
             let discovered = DiscoveredPlugin {
                 registry: inst.name.clone(),
+                format: plugin.format(),
                 id: plugin.canonical,
                 recommends: name,
                 description,
