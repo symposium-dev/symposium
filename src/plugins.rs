@@ -1466,7 +1466,8 @@ fn workspace_plugin_for_dir(
         canonical: PackageId::new("local", &plugin.name, ANY_VERSION),
         manifest: plugin,
         workspace_member: true,
-        agent_plugin_root: agent_plugin.then(|| dir.to_path_buf()),
+        agent_plugin_root: agent_plugin
+            .then(|| fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf())),
     }))
 }
 
