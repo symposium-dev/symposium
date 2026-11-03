@@ -64,6 +64,7 @@ pub async fn try_plugin(
     if plugin.manifest.requires_use && !sym.config.plugins.used.contains(&entry) {
         sym.config.plugins.used.push(entry);
         sym.save_config().context("failed to write user config")?;
+        crate::state::record_trial_use(sym.config_dir(), &name);
     }
 
     tracing::info!(
@@ -89,21 +90,14 @@ pub async fn remove_trial(
     let name = trial_name(&plugins_dir, target)?;
     let link = plugins_dir.join(&name);
 
-    let dormant = fs::read_link(&link)
-        .ok()
-        .and_then(|dir| load_plugin_dir(&dir).ok())
-        .is_none_or(|plugin| plugin.manifest.requires_use);
     remove_symlink_dir(&link).with_context(|| format!("cannot remove `{}`", link.display()))?;
     let _ = fs::remove_dir(&plugins_dir);
 
-    let pms = sym.detached_managers();
-    let identity = |n: &str| pms.identity(&PackageId::any_version(USER_PLUGINS, n));
-    let trial = identity(&name);
-    let used = &mut sym.config.plugins.used;
-    let before = used.len();
-    used.retain(|entry| !dormant || !matches!(entry, UseEntry::Global(n) if identity(n) == trial));
-    if used.len() != before {
+    if crate::state::trial_uses(sym.config_dir()).contains(&name) {
+        let entry = UseEntry::Global(name.clone());
+        sym.config.plugins.used.retain(|used| *used != entry);
         sym.save_config().context("failed to write user config")?;
+        crate::state::forget_trial_use(sym.config_dir(), &name);
     }
 
     tracing::info!(report = %ReportEvent::PluginTrialRemoved { name });
