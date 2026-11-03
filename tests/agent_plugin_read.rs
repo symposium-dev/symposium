@@ -242,11 +242,14 @@ async fn a_dependency_package_waits_for_consent_and_reports_what_it_skips() {
                 entries
                     .iter()
                     .find(|e| e.name == name)
-                    .map(|e| e.state)
+                    .map(|e| (e.state, e.format))
                     .unwrap_or_else(|| panic!("no status row for {name}"))
             };
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
-            assert_eq!(status("portable-dep", &entries), StatusState::Candidate);
+            assert_eq!(
+                status("portable-dep", &entries),
+                (StatusState::Candidate, Some("agent plugin"))
+            );
             let registry = symposium::plugins::load_registry(&ctx.sym).await;
             let candidates = symposium::discovery::discover(&ctx.sym, &deps, &registry.plugins)
                 .await
@@ -270,7 +273,7 @@ async fn a_dependency_package_waits_for_consent_and_reports_what_it_skips() {
             );
 
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
-            assert_eq!(status("invalid-dep", &entries), StatusState::Dormant);
+            assert_eq!(status("invalid-dep", &entries), (StatusState::Dormant, None));
             Ok(())
         },
     )
