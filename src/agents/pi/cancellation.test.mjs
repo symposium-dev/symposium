@@ -25,7 +25,7 @@ function isRunning(pid) {
   }
 }
 
-async function startGatedHook(t) {
+async function startGatedHook(t, timeout = 10_000) {
   const root = mkdtempSync(join(tmpdir(), "symposium-pi-cancel-"));
   const config = join(root, "symposium");
   const plugin = join(config, "plugins", "cancel-probe");
@@ -76,6 +76,19 @@ cd ${quotedRoot} || exit 1
 trap ': > stopped' EXIT
 echo "$PPID" > cli-pid
 echo "$$" > plugin-pid
+# A nested child that ignores TERM must not outlive the dispatch either.
+(
+  trap '' TERM
+  : > descendant-started
+  j=0
+  while [ ! -f release ]; do
+    [ ! -f cleanup ] || exit 0
+    j=$((j+1)); [ $j -lt 2000 ] || exit 1
+    sleep 0.01
+  done
+  [ ! -f cleanup ] || exit 0
+  : > descendant-completed
+) &
 : > started
 i=0
 while [ ! -f release ]; do
@@ -94,9 +107,10 @@ done
   process.env.SYMPOSIUM_HOME = config;
   pending = runHook("pre-tool-use", {
     cwd: root, session_id: "cancel-probe", tool_name: "bash", tool_input: { command: "true" },
-  }, root, cargoAgentsBinary(), controller.signal, 10_000)
+  }, root, cargoAgentsBinary(), controller.signal, timeout)
     .then(value => ({ value }), error => ({ error }));
   assert.ok(await waitUntil(() => existsSync(join(root, "started"))), "the real CLI must start the plugin");
+  assert.ok(await waitUntil(() => existsSync(join(root, "descendant-started"))), "the nested child must start");
   pluginPid = Number(readFileSync(join(root, "plugin-pid"), "utf8"));
   const cliPid = Number(readFileSync(join(root, "cli-pid"), "utf8"));
   assert.ok(Number.isInteger(pluginPid) && pluginPid > 0);
@@ -109,10 +123,21 @@ test("an uncancelled Pi hook completes when its plugin gate opens", { skip: unix
   const { root, pending } = await startGatedHook(t);
   writeFileSync(join(root, "release"), "");
   assert.ok(await waitUntil(() => existsSync(join(root, "completed"))), "the control must perform its side effect");
+  assert.ok(await waitUntil(() => existsSync(join(root, "descendant-completed"))), "the nested control must run");
   writeFileSync(join(root, "cleanup"), "");
   const result = await pending;
   assert.equal(result.error, undefined);
   assert.deepEqual(result.value, {});
+});
+
+test("timing out a real Pi hook stops its plugin before more side effects", { skip: unixOnly }, async t => {
+  const { root, pending, cliPid } = await startGatedHook(t, 2000);
+  const result = await pending;
+  assert.match(result.error?.message, /timed out after 2000 ms/);
+  assert.ok(await waitUntil(() => !isRunning(cliPid)));
+  writeFileSync(join(root, "release"), "");
+  assert.equal(await waitUntil(() => existsSync(join(root, "completed")), 500), false);
+  assert.equal(existsSync(join(root, "descendant-completed")), false);
 });
 
 test("cancelling a real Pi hook stops its plugin before more side effects", { skip: unixOnly }, async t => {
@@ -127,4 +152,6 @@ test("cancelling a real Pi hook stops its plugin before more side effects", { sk
   writeFileSync(join(root, "release"), "");
   assert.equal(await waitUntil(() => existsSync(join(root, "completed")), 500), false,
     "the plugin must not keep writing after the Pi hook is cancelled");
+  assert.equal(existsSync(join(root, "descendant-completed")), false,
+    "a nested child that ignores SIGTERM must also stop");
 });

@@ -367,6 +367,15 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
     let out = &Output::quiet();
     let loaded = ws.require_info().await?.clone();
     let project_root = loaded.root.clone();
+    // Pi discovers project configuration only in its session directory, not
+    // ancestors. Dependency resolution and shared skills stay workspace-wide.
+    let config_root = |agent| {
+        if agent == Agent::Pi {
+            ws.start().unwrap_or(&project_root)
+        } else {
+            &project_root
+        }
+    };
     let dep_ids = ws.dep_ids().await.to_vec();
     let debounce = Duration::from_secs(sym.config.sync_debounce_secs);
     tracing::debug!(root = %project_root.display(), "resolved workspace root");
@@ -499,7 +508,8 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
         };
 
         // Agent-specific paths and scope cleanup live in the agent module.
-        if let Err(e) = agent.register_scoped_hooks(&project_root, sym, out) {
+        let agent_root = config_root(agent);
+        if let Err(e) = agent.register_scoped_hooks(agent_root, sym, out) {
             tracing::info!(
                 report = %crate::report::ReportEvent::Warning {
                     message: format!("failed to register hooks for {agent_name}: {e:#}"),
@@ -528,11 +538,11 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
                 },
             );
         }
-        match agent.register_mcp_servers(mcp_scope, &project_root, sym, &mcp_servers, out) {
+        match agent.register_mcp_servers(mcp_scope, agent_root, sym, &mcp_servers, out) {
             Ok(names) => {
-                let file = agent.mcp_config_path(mcp_scope, &project_root, sym);
+                let file = agent.mcp_config_path(mcp_scope, agent_root, sym);
                 let project_file =
-                    agent.mcp_config_path(crate::agents::McpScope::Project, &project_root, sym);
+                    agent.mcp_config_path(crate::agents::McpScope::Project, agent_root, sym);
                 let offered: &[String] = if file == project_file { &names } else { &[] };
                 if agent.supports_project_mcp_scope() && !skip_cleanup {
                     unregister_recorded_mcp_servers(
@@ -706,7 +716,7 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
                     agent.unregister_hooks(sym.home_dir(), sym, out)
                 }
                 crate::config::HookScope::Project => {
-                    agent.unregister_project_hooks(&project_root, sym, out)
+                    agent.unregister_project_hooks(config_root(agent), sym, out)
                 }
             }
         }
