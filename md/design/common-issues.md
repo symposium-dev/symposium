@@ -53,6 +53,25 @@ for pre-tool context. Store that context by `toolCallId` and append it in
 `tool_result`, including when the post-hook fails. Clear pending context at turn
 and session boundaries. The Node tests cover both rules.
 
+## Pi session directories and queued prompts
+
+Pi reads project extensions and MCP configuration only from the session directory,
+not Cargo's workspace root. Use `Workspace::start` for Pi configuration and its
+cleanup, while retaining workspace-wide dependencies and shared skills. Changing
+only registration leaves scope transitions and agent removal looking in the wrong
+place. The real-loader discovery tests exercise member-directory sync and cleanup.
+
+`nextTurn` context is not consumed with steering or follow-up input. Keep prompt
+context inside that queued input, with its images, without adding another queued
+message. Pi expands slash inputs after input handlers: appending context directly
+to a template can discard it or change positional/default arguments. The bridge's
+template compatibility tests compare against Pi's real expansion behavior.
+
+On Unix, aborting only `cargo-agents` does not stop its plugin children. The Pi
+bridge owns an isolated process group and tears it down on abort, timeout, or
+output overflow. New child process-group ownership (such as PR #388 proposes)
+must coordinate with this boundary; a nested group escapes the outer group kill.
+
 ## Antigravity footguns
 
 Two Antigravity behaviours fail silently rather than loudly, so they are worth

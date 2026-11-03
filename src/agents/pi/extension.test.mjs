@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -357,6 +358,51 @@ test("cancelling a running hook returns without a warning", async (t) => {
   controller.abort();
   assert.equal(await pending, undefined);
   assert.deepEqual(warnings, []);
+});
+
+test("cancelling one dispatch leaves a concurrent dispatch running", async t => {
+  const first = temp(t);
+  const second = temp(t);
+  for (const root of [first, second]) {
+    writeFileSync(join(root, "hook"), `
+      const fs = require("node:fs");
+      fs.writeFileSync("started", "");
+      const timer = setInterval(() => {
+        if (fs.existsSync("release")) {
+          clearInterval(timer);
+          process.stdout.write('{"additionalContext":"finished"}');
+        }
+      }, 5);
+    `);
+  }
+  const controller = new AbortController();
+  const cancelled = runHook("pre-tool-use", {}, first, process.execPath, controller.signal, 5000)
+    .then(value => ({ value }), error => ({ error }));
+  const survivor = runHook("pre-tool-use", {}, second, process.execPath, undefined, 5000);
+  t.after(async () => { controller.abort(); await cancelled; await survivor.catch(() => {}); });
+  const deadline = Date.now() + 3000;
+  while ((!existsSync(join(first, "started")) || !existsSync(join(second, "started"))) && Date.now() < deadline) {
+    await sleep(5);
+  }
+  assert.ok(existsSync(join(first, "started")) && existsSync(join(second, "started")));
+  controller.abort();
+  assert.match((await cancelled).error.message, /aborted/);
+  writeFileSync(join(second, "release"), "");
+  assert.deepEqual(await survivor, { additionalContext: "finished" });
+});
+
+test("runHook bounds both output streams and permits a subsequent dispatch", async t => {
+  const root = temp(t);
+  for (const stream of ["stdout", "stderr"]) {
+    writeFileSync(join(root, "hook"), `
+      process.${stream}.write("x".repeat(2 * 1024 * 1024));
+      setInterval(() => {}, 1000);
+    `);
+    await assert.rejects(runHook("pre-tool-use", {}, root, process.execPath),
+      new RegExp(`${stream} exceeded 1 MiB`));
+  }
+  writeFileSync(join(root, "hook"), 'process.stdout.write("{}");');
+  assert.deepEqual(await runHook("pre-tool-use", {}, root, process.execPath), {});
 });
 
 test("runHook reports command errors and malformed output", async (t) => {
