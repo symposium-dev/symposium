@@ -36,7 +36,8 @@ evals/
 
 - a skill appears in both `installed` and `not_installed`, or both `used` and `not_used`;
 - a skill in `used` also appears in `not_installed`;
-- a `checks/` file does not hold exactly one test, or a named plugin or fixture does not exist.
+- a `checks/` file does not hold exactly one test, or a named plugin or fixture does not exist;
+- an expected hook is declared by none of the task's plugins or by more than one, runs on an event that is not one of Symposium's, or is limited to one agent by `agent` or `format`, since a task runs on every client.
 
 Fixture crates are not workspace members and have no `skills/` directory, so the only way their rule reaches the agent through Symposium is a registry plugin.
 
@@ -226,9 +227,9 @@ Hook records, hook traces, and installed skills are written by processes inside 
 
 - installed skill contents are compared with the plugin in `evals/`, which the trial cannot read or write;
 - the client's hook and Symposium configuration are snapshotted after `init` and compared after the trial, and any change is recorded;
-- the transcript, captured from the client's output stream rather than from a file, is the primary record of what the agent did, including any write to `evidence/` or `home/`.
+- the transcript, captured from the client's output stream rather than from a file, is the primary record of what the agent did: the file edits and shell commands it asked for through the client's tools. Not every effect of a command shows in its text (a variable, a glob, a script), so the transcript can show a write to `evidence/` or `home/`, but not prove there was none.
 
-A hook record contradicted by the transcript, or a changed configuration, makes the affected expectations inconclusive. Independently verified hook execution would need a recording channel outside the agent's writable paths; that is follow-up work if tampering is ever observed.
+A hook record contradicted by the transcript, including more records than the transcript shows runs of the hook's event, a tool call that wrote to the evidence or a command that names it, or a changed configuration, makes the affected expectations inconclusive. These checks do not catch an agent that, through a script, both writes a record and stops the hook's own record from being written. Independently verified hook execution would need a recording channel outside the agent's writable paths; that is follow-up work if tampering is ever observed.
 
 ## Outcomes and counting
 
