@@ -125,7 +125,7 @@ async fn use_wakes_a_dormant_package_and_remove_reaps_it() {
             let (root, data) = (root.display().to_string(), data.display().to_string());
             let args = ["--config".to_string(), format!("{root}/config.json")];
             if cfg!(unix) {
-                assert_eq!(server["command"], "sh");
+                assert_eq!(server["command"], "/bin/sh");
                 assert_eq!(
                     server["args"],
                     serde_json::json!([
