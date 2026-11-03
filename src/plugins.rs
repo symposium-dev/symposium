@@ -1652,7 +1652,10 @@ fn load_plugin_as(
 ) -> Result<Plugin> {
     let content = fs::read_to_string(manifest_path)?;
     let mut manifest: RawPluginManifest = toml::from_str(&content)?;
-    let base = manifest_path.parent().unwrap_or(source_dir);
+    let base = match manifest_path.parent() {
+        Some(parent) if parent.as_os_str().is_empty() => Path::new("."),
+        parent => parent.unwrap_or(source_dir),
+    };
     fill_from_agent_plugin(&mut manifest, base);
     let mut plugin = validate_manifest(manifest, origin)
         .with_context(|| format!("validating `{}`", manifest_path.display()))?;
