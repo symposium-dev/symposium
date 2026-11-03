@@ -196,3 +196,27 @@ async fn an_imported_package_installs_its_skills_and_runs_its_hooks_in_claude() 
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn import_preserves_a_command_with_windows_line_endings() {
+    with_fixture(TestMode::SimulationOnly, &["plugin-import0"], async |ctx| {
+        let source = source(&ctx);
+        let command = source.join("commands/review_code.md");
+        let content = fs::read_to_string(&command).unwrap().replace("\r\n", "\n");
+        for (case, ending) in [("lf", "\n"), ("crlf", "\r\n")] {
+            fs::write(&command, content.replace('\n', ending)).unwrap();
+            let out = ctx.sym.config_dir().join(case);
+
+            let output = import(&ctx, &source, &out);
+
+            assert!(output.starts_with("exit: 0\n"), "{case}: {output}");
+            assert!(
+                out.join("demo-tools/skills/review-code/SKILL.md").is_file(),
+                "a command with a description must be imported with {case} line endings:\n{output}"
+            );
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
