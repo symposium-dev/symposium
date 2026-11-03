@@ -11,11 +11,13 @@ A plugin hook declares which wire format its handler expects:
 
 ## Dispatch rule
 
-When symposium's global handler receives an event from agent A, it loads all plugins and finds hooks matching the event. For each plugin, it picks at most one hook to deliver:
+When symposium's global handler receives an event from agent A, it loads all plugins and finds hooks matching the event. For each plugin, it picks one format and delivers to every matching hook of that format, in manifest order:
 
-1. If the plugin declares a hook with `format` matching **agent A** → deliver the input unmodified (the handler already expects this agent's native format).
-2. Otherwise, if the plugin declares a **symposium-format** hook → convert to symposium canonical and deliver.
-3. Otherwise → nothing fires for this plugin.
+1. If the plugin declares hooks with `format` matching **agent A**, each receives the input unmodified (the handler already expects this agent's native format).
+2. Otherwise, if the plugin declares **symposium-format** hooks, each receives the input converted to symposium canonical.
+3. Otherwise, nothing fires for this plugin.
+
+A plugin can hold several handlers for one event, such as a blocking check and a logger imported from a Claude Code plugin, so they all run. A native match still replaces the plugin's symposium-format hooks for that event: they are its fallback for other agents, not extra handlers.
 
 Symposium never converts between agent-specific formats. A `format = "claude"` hook will only fire on Claude — it won't be translated for Copilot or Antigravity. If you want cross-agent coverage, provide a symposium-format hook as a fallback.
 
