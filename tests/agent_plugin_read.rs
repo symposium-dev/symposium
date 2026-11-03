@@ -116,7 +116,19 @@ async fn use_wakes_a_dormant_package_and_remove_reaps_it() {
             };
             assert_eq!(pdf_server(), None);
 
-            ctx.symposium(&["use", "pdf-tools"]).await?;
+            let events = with_report(async || {
+                ctx.symposium(&["use", "pdf-tools"]).await.unwrap();
+            })
+            .await;
+            let skipped = events
+                .iter()
+                .filter(|e| {
+                    e["message"]
+                        .as_str()
+                        .is_some_and(|m| m.contains("`pdf-socket` skipped"))
+                })
+                .count();
+            assert_eq!(skipped, 1, "{events:#?}");
             assert_eq!(installed_skills(&ctx), ["extract-tables", "serde-tables"]);
             let root = dunce::canonicalize(ctx.sym.config_dir().join("plugins/pdf-tools"))?;
             let data = dunce::canonicalize(

@@ -5,6 +5,7 @@
 //! `ReportEvent`. A custom tracing layer picks these up and either
 //! pretty-prints them (`--verbose`) or accumulates JSON (`--json`).
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -413,6 +414,7 @@ pub struct ReportLayer {
     mode: ReportMode,
     buffer: Arc<Mutex<Vec<serde_json::Value>>>,
     max_level: tracing::Level,
+    warned: Mutex<HashSet<String>>,
 }
 
 impl ReportLayer {
@@ -426,6 +428,7 @@ impl ReportLayer {
                 mode,
                 buffer,
                 max_level,
+                warned: Mutex::default(),
             },
             handle,
         )
@@ -465,6 +468,13 @@ where
         let Some(json_str) = visitor.report_json else {
             return;
         };
+        if matches!(
+            serde_json::from_str(&json_str),
+            Ok(ReportEvent::Warning { .. })
+        ) && !self.warned.lock().unwrap().insert(json_str.clone())
+        {
+            return;
+        }
 
         match self.mode {
             ReportMode::Normal => {
