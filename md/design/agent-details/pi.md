@@ -108,6 +108,7 @@ cd src/agents/pi
 npm ci --ignore-scripts
 npm run check
 npm test
+npm run test:integration
 ```
 
 Rust tests cover init, scope selection, automatic sync, cleanup, wire conversion,
@@ -115,3 +116,7 @@ and MCP updates. Node tests cover event handling, subprocess errors, input
 changes, parallel calls, pre-tool context timing, warning-only hook failures,
 skill discovery using Pi's real skill loader, and MCP file discovery using
 `pi mcp list` with local test servers.
+
+The integration suite builds the real Symposium CLI and checks discovery from a
+Cargo workspace member, plus cancellation of a gated plugin command on Unix.
+Queued-input tests use Pi's actual session and extension runner without a model.

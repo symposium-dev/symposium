@@ -95,11 +95,20 @@ cd src/agents/pi
 npm ci --ignore-scripts
 npm run check
 npm test
+npm run test:integration
 ```
 
-Use Node.js 22.19 or later. These tests do not call a model. They check event
-mapping and use Pi's skill loader to verify that generated, gitignored skills
-load. CI runs them on Linux, macOS, and Windows.
+Use Node.js 22.19 or later. These tests do not call a model. `npm test` checks
+event mapping, generated skill loading, and delivery of hook context with queued
+inputs using Pi's session and extension runner.
+
+`npm run test:integration` builds the native debug `cargo-agents` binary, then
+checks actual CLI sync against Pi's project resource discovery and cancellation
+of a running plugin command. Fixtures use temporary homes and local plugins;
+they do not install packages or contact a model. The binary lookup honors Cargo's
+target directory, or an explicit `SYMPOSIUM_TEST_BINARY` when invoking Node tests
+directly. CI runs both suites on Linux, macOS, and Windows. Cancellation tests
+exercise Unix signals and are explicitly skipped on Windows.
 
 ## Windows
 
