@@ -288,6 +288,68 @@ async fn try_edits_reach_the_agents_on_the_next_sync() {
 }
 
 #[tokio::test]
+async fn try_remove_preserves_preexisting_dormant_enablement() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-try0"],
+        async |mut ctx| {
+            let kit = plugin_path(&ctx, "dormant-kit");
+            // Outside a workspace, removal cannot fetch a same-named crate after the
+            // local trial is unlinked; this test checks the durable configuration.
+            let outside = tempfile::tempdir()?;
+            ctx.workspace_root = Some(outside.path().to_path_buf());
+            let own = symposium::config::UseEntry::Global("dormant-kit".into());
+            ctx.sym.config.plugins.used.push(own.clone());
+            ctx.sym.save_config()?;
+
+            ctx.symposium(&["plugin", "try", &kit]).await?;
+            ctx.symposium(&["plugin", "try", "--remove", &kit]).await?;
+
+            assert!(!user_plugins(&ctx).join("dormant-kit").exists());
+            let saved = symposium::config::Symposium::from_dir(ctx.sym.config_dir());
+            assert_eq!(saved.config.plugins.used, [own]);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn try_remove_after_adding_a_gate_drops_its_enablement() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-try0"],
+        async |mut ctx| {
+            let kit = plugin_path(&ctx, "dormant-kit");
+            let outside = tempfile::tempdir()?;
+            ctx.workspace_root = Some(outside.path().to_path_buf());
+            assert!(ctx.sym.config.plugins.used.is_empty());
+
+            ctx.symposium(&["plugin", "try", &kit]).await?;
+            assert_eq!(
+                ctx.sym.config.plugins.used,
+                [symposium::config::UseEntry::Global("dormant-kit".into())]
+            );
+            let manifest = PathBuf::from(&kit).join("Symposium.toml");
+            let edited = std::fs::read_to_string(&manifest)?.replace(
+                "name = \"dormant-kit\"",
+                "name = \"dormant-kit\"\ndepends-on = [\"*\"]",
+            );
+            std::fs::write(&manifest, edited)?;
+            ctx.symposium(&["plugin", "try", "--remove", &kit]).await?;
+
+            assert!(!user_plugins(&ctx).join("dormant-kit").exists());
+            let saved = symposium::config::Symposium::from_dir(ctx.sym.config_dir());
+            assert!(saved.config.plugins.used.is_empty(), "{}", config(&ctx));
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn try_refuses_a_name_already_taken() {
     with_fixture(
         TestMode::SimulationOnly,
