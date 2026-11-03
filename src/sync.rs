@@ -806,21 +806,11 @@ fn lock_sync(sym: &Symposium) -> Result<fs::File> {
 /// Register global hooks for all configured agents.
 /// Register hooks for all configured agents. Uses `home_dir` (global scope).
 /// Called from `init` after writing the user config.
-pub async fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
-    let registry = plugins::load_registry(sym).await;
-    let mcp_servers: Vec<sacp::schema::McpServer> = registry
-        .plugins
-        .iter()
-        .flat_map(|p| {
-            let servers = p.manifest.mcp_servers.iter().map(|s| s.server.clone());
-            package_mcp_servers(sym, p, servers.collect())
-        })
-        .collect();
-
+pub fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
     let agent_names: Vec<String> = sym.config.agents.iter().map(|a| a.name.clone()).collect();
 
-    // `init` has no workspace in hand, so this is the user-level pass only;
-    // the project-level file is written by the first `sync` in a workspace.
+    // `init` has no workspace to evaluate a plugin's gate against, so MCP
+    // servers are left to `sync`.
     let home = sym.home_dir();
     for agent_name in &agent_names {
         let Ok(agent) = Agent::from_config_name(agent_name) else {
@@ -828,19 +818,6 @@ pub async fn register_hooks(sym: &Symposium, out: &Output) -> Result<()> {
             continue;
         };
         agent.register_hooks(home, sym, out)?;
-        let names = agent.register_mcp_servers(
-            crate::agents::McpScope::User,
-            home,
-            sym,
-            &mcp_servers,
-            out,
-        )?;
-        record_mcp_registrations(
-            sym,
-            agent,
-            &agent.mcp_config_path(crate::agents::McpScope::User, home, sym),
-            names,
-        );
     }
 
     // Unregister hooks for agents no longer configured
