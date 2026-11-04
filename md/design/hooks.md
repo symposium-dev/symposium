@@ -40,6 +40,8 @@ Symposium converts the hook's output back to the current agent's wire format bef
 - Native format matching the host agent → pass through directly.
 - Symposium format → convert to host agent's wire format.
 
+Stdout from a symposium-format hook that is not a canonical output, such as `null` or an object without the event tag, is ignored with a warning, like invalid JSON. Only translated output reaches the agent, so one plugin cannot replace or clear what the others returned.
+
 ## Alternatives considered
 
 ### Registering agent-specific hooks directly

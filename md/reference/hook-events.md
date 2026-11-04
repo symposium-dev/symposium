@@ -126,7 +126,7 @@ Your hook receives one of the following JSON objects on stdin, depending on whic
 
 ## Output schemas
 
-Your hook writes a JSON object to stdout. The object is wrapped in an enum tag matching the event, just like the input.
+Your hook writes a JSON object to stdout. The object is wrapped in an enum tag matching the event, just like the input. Stdout that is not one of these objects is ignored, with a warning in the log.
 
 ### `PreToolUse` output
 
