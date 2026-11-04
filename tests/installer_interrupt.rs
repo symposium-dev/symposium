@@ -69,12 +69,15 @@ fn write_gated_installer(root: &Path) -> PathBuf {
     // The release gate permits the side effect only after SIGINT. The cleanup
     // gate makes a surviving installer exit without signalling a stale PID.
     // A bounded loop is an additional failsafe if the test process is killed.
+    // The INT trap is needed because bash ignores a SIGINT that arrives as its
+    // `sleep` exits normally, which would let a signalled installer finish.
     std::fs::write(
         &cargo_script,
         "#!/bin/sh\n\
          case \"$1\" in binstall|install) ;; *) exit 1;; esac\n\
          cd \"$SYMPOSIUM_INSTALL_INTERRUPT_TEST_ROOT\" || exit 1\n\
          trap ': > installer-stopped' EXIT\n\
+         trap 'exit 130' INT\n\
          echo $$ > installer-pid\n\
          : > installer-started\n\
          i=0\n\
