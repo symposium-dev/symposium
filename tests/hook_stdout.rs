@@ -60,6 +60,7 @@ async fn install_command_output_stays_off_hook_stdout() {
                 "hookSpecificOutput": {
                     "hookEventName": "SessionStart",
                     "additionalContext": "noisy plugin context",
+                    "reloadSkills": true,
                 }
             })
         );
