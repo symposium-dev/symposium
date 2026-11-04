@@ -965,7 +965,7 @@ pub async fn dispatch_plugin_hooks(
                         let (host_json, hook_output) = if hook_agent == Some(host_agent) {
                             // Native format — parse as host agent output
                             match host_h.parse_output(&child_out.stdout) {
-                                Ok(o) => (o.to_hook_output(), Some(o.to_symposium())),
+                                Ok(o) => (o.to_hook_output(), o.to_symposium()),
                                 Err(e) => {
                                     tracing::warn!(error = %e, "failed to parse hook output");
                                     continue;
@@ -973,26 +973,27 @@ pub async fn dispatch_plugin_hooks(
                             }
                         } else {
                             // Symposium format — parse and convert to host agent
-                            match serde_json::from_slice::<serde_json::Value>(&child_out.stdout) {
-                                Ok(v) => {
-                                    if let Ok(sym_out) =
-                                        serde_json::from_value::<symposium::OutputEvent>(v.clone())
-                                    {
-                                        let host_out = host_h.translate_output(&sym_out);
-                                        (host_out.to_hook_output(), Some(sym_out))
-                                    } else {
-                                        (v, None)
-                                    }
+                            match serde_json::from_slice::<symposium::OutputEvent>(
+                                &child_out.stdout,
+                            ) {
+                                Ok(sym_out) => {
+                                    let host_out = host_h.translate_output(&sym_out);
+                                    (host_out.to_hook_output(), sym_out)
                                 }
                                 Err(e) => {
-                                    tracing::warn!(error = %e, "failed to parse hook output");
+                                    tracing::warn!(
+                                        plugin = %hook.plugin_name,
+                                        hook = %hook.hook_name,
+                                        error = %e,
+                                        "plugin hook output is not a symposium output; ignoring it"
+                                    );
                                     continue;
                                 }
                             }
                         };
 
                         merge(&mut output, host_json);
-                        if hook_output.as_ref().is_some_and(denies) {
+                        if denies(&hook_output) {
                             tracing::info!(
                                 plugin = %hook.plugin_name,
                                 hook = %hook.hook_name,
@@ -1000,7 +1001,7 @@ pub async fn dispatch_plugin_hooks(
                             );
                             return Ok(output);
                         }
-                        context.add(hook_output.as_ref(), &mut output, host_h.as_ref());
+                        context.add(&hook_output, &mut output, host_h.as_ref());
                     }
                 }
             }
@@ -1059,7 +1060,7 @@ impl JoinedContext {
     /// for Antigravity's `injectSteps` list, emptied).
     fn add(
         &mut self,
-        hook_output: Option<&symposium::OutputEvent>,
+        hook_output: &symposium::OutputEvent,
         output: &mut serde_json::Value,
         handler: &dyn crate::hook_schema::ErasedAgentHookEvent,
     ) {
@@ -1069,7 +1070,7 @@ impl JoinedContext {
         ) {
             return;
         }
-        if let Some(more) = hook_output.and_then(|o| o.additional_context()) {
+        if let Some(more) = hook_output.additional_context() {
             self.text = Some(match self.text.take() {
                 Some(text) => format!("{text}\n\n{more}"),
                 None => more.to_string(),

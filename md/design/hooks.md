@@ -42,6 +42,8 @@ Symposium converts the hook's output back to the current agent's wire format bef
 - Native format matching the host agent: pass through directly. A native Claude `SessionStart` or `UserPromptSubmit` hook may print plain text instead of JSON; Symposium adds it to the context, as Claude Code does.
 - Symposium format → convert to host agent's wire format.
 
+Stdout from a symposium-format hook that is not a canonical output, such as `null` or an object without the event tag, is ignored with a warning, like invalid JSON. Only translated output reaches the agent, so one plugin cannot replace or clear what the others returned.
+
 ## Time limits and cancellation
 
 A hook runs inside the single `cargo agents hook` call the agent is waiting for, so every plugin hook of one event shares an 8-second budget, and each one gets at most 5 seconds of it (see [the hook flow](./hook-flow.md)). The budget covers preparing the hook's command too: acquiring its source and running its `install_commands`. A `cargo binstall` or `cargo install` that acquisition started, and the `git ls-remote` that checks a git source, is killed with everything it started when acquisition stops at the deadline, so no installer keeps running, or keeps symposium from exiting, after the hook is skipped.
