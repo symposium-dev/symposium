@@ -217,9 +217,8 @@ pub(crate) enum ToolResult {
     Missing,
 }
 
-/// A skill the runner looks for in a transcript, with the `SKILL.md` sync installed for
-/// it, which may be in a `<name>-<hash>/` directory.
-#[derive(Debug, Clone)]
+/// A skill the runner looks for in a transcript, with the `SKILL.md` sync installs for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InstalledSkill {
     pub(crate) name: SkillName,
     pub(crate) skill_md: PathBuf,

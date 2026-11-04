@@ -14,7 +14,7 @@ use super::installed::{self, SkillInstall};
 use super::log::{CallEvidence, Counted};
 use super::sync::{self, SyncEvidence};
 use super::{SkillUse, Verdict, hooks, trace};
-use crate::client::{HookEvent, HookEvidence, ToolActivity};
+use crate::client::{HookEvent, HookEvidence, InstalledSkill, ToolActivity};
 use crate::run::client::Client;
 use crate::run::{Configuration, Trial};
 use crate::task::{ExpectedHook, SkillName, Task};
@@ -160,6 +160,20 @@ fn counted(event: &HookEvent) -> Counted {
 
 fn skills_dir(trial: &Trial, client: Client) -> PathBuf {
     trial.project().join(client.skill_dir())
+}
+
+/// Where `client` would install each skill `task` names, for the adapter to look for its
+/// loads. A trial starts with no skills, and each name has one provider, so sync installs
+/// it under its own name.
+pub(crate) fn installed_skills(trial: &Trial, client: Client, task: &Task) -> Vec<InstalledSkill> {
+    let skills = skills_dir(trial, client);
+    task.expected_skills()
+        .names()
+        .map(|name| InstalledSkill {
+            name: name.clone(),
+            skill_md: skills.join(name.as_str()).join("SKILL.md"),
+        })
+        .collect()
 }
 
 /// Decides each expectation in `facts`, with the concerns `outside` raises about its
@@ -567,6 +581,30 @@ mod tests {
 
         assert_eq!(expectations.installs[0].evidence_verdict(), Verdict::Pass);
         assert_eq!(expectations.installs[0].verdict(), Verdict::Inconclusive);
+    }
+
+    #[test]
+    fn each_named_skill_is_looked_for_where_sync_installs_it() {
+        let host = Host::new();
+        let evals = Evals::in_repository();
+        let task = Task::load(&evals, &TaskName::new("formatting").unwrap()).unwrap();
+        let trial = host
+            .batch()
+            .create_trial(1, Configuration::Symposium, &evals, &task)
+            .unwrap();
+
+        let skills = installed_skills(&trial, Client::ClaudeCode, &task);
+
+        let skill_md = [".claude", "skills", "rust-formatting", "SKILL.md"]
+            .iter()
+            .fold(trial.project(), |path, part| path.join(part));
+        assert_eq!(
+            skills,
+            [InstalledSkill {
+                name: SkillName::new("rust-formatting").unwrap(),
+                skill_md,
+            }]
+        );
     }
 
     #[test]
