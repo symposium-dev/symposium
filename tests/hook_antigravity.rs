@@ -89,3 +89,41 @@ async fn native_user_message_survives_joined_context() {
     .await
     .unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn hook_predicates_hold_in_the_payload_workspace() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["antigravity-workspace0"],
+        async |ctx| {
+            let cwd = ctx.tempdir.display().to_string();
+            let stdout = respond(&ctx, &cwd, tool_call("run_command")).await;
+            assert_eq!(
+                stdout,
+                json!({"decision": "deny", "reason": "denied in the workspace"})
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn plugin_hooks_run_in_the_payload_workspace() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["antigravity-workspace0"],
+        async |ctx| {
+            let cwd = ctx.tempdir.display().to_string();
+            let stdout = respond(&ctx, &cwd, HookStep::user_prompt("hello")).await;
+            assert_eq!(
+                stdout,
+                json!({"injectSteps": [{"ephemeralMessage": "hook ran in the workspace"}]})
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}

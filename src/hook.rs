@@ -197,11 +197,14 @@ async fn build_spawn_spec(sym: &Symposium, hook: &ResolvedHook) -> anyhow::Resul
     })
 }
 
-fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
+fn spawn_from_spec(spec: SpawnSpec, dir: Option<&Path>) -> std::io::Result<std::process::Child> {
     match spec {
         SpawnSpec::Script { path, args, env } => {
             let mut cmd = Command::new("sh");
             cmd.arg(path).args(args);
+            if let Some(dir) = dir {
+                cmd.current_dir(dir);
+            }
             for (k, v) in env {
                 cmd.env(k, v);
             }
@@ -213,6 +216,9 @@ fn spawn_from_spec(spec: SpawnSpec) -> std::io::Result<std::process::Child> {
         SpawnSpec::Exec { path, args, env } => {
             let mut cmd = Command::new(path);
             cmd.args(args);
+            if let Some(dir) = dir {
+                cmd.current_dir(dir);
+            }
             for (k, v) in env {
                 cmd.env(k, v);
             }
@@ -503,7 +509,9 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<Workspace>) {
         .as_ref()
         .map(|ws| crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root))
         .unwrap_or_default();
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids)
+        .with_used(&used)
+        .with_cwd(deps.start());
     let plugins = crate::plugins::active_plugins(
         sym,
         &registry,
@@ -607,7 +615,9 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String
         .as_ref()
         .map(|ws| crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root))
         .unwrap_or_default();
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids)
+        .with_used(&used)
+        .with_cwd(deps.start());
     let active = crate::plugins::active_plugins(
         sym,
         &registry,
@@ -745,7 +755,10 @@ pub async fn dispatch_plugin_hooks(
         .as_ref()
         .map(|ws| crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root))
         .unwrap_or_default();
-    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
+    let dir = deps.start().filter(|dir| dir.is_dir());
+    let mut ctx = crate::predicate::PredicateContext::new(&dep_ids)
+        .with_used(&used)
+        .with_cwd(dir);
     // Dispatch over the active set — registry plugins plus crate-sourced ones —
     // so a crate plugin's hooks fire exactly like a registry plugin's.
     let plugins = crate::plugins::active_plugins(
@@ -789,7 +802,7 @@ pub async fn dispatch_plugin_hooks(
         };
 
         let spawn_res = match build_spawn_spec(sym, &hook).await {
-            Ok(spec) => spawn_from_spec(spec),
+            Ok(spec) => spawn_from_spec(spec, dir),
             Err(e) => {
                 tracing::warn!(error = %e, "failed to prepare hook command");
                 continue;
