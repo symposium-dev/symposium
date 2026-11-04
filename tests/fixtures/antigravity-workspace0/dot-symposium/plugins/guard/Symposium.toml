@@ -1,0 +1,15 @@
+name = "guard"
+depends-on = ["*"]
+
+[[hooks]]
+name = "workspace-only"
+event = "PreToolUse"
+format = "symposium"
+predicates = ["path_exists(symposium-cwd-marker)", "shell(test -f symposium-cwd-marker)"]
+command = { script = "$TEST_DIR/dot-symposium/plugins/guard/scripts/deny.sh" }
+
+[[hooks]]
+name = "where"
+event = "UserPromptSubmit"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/guard/scripts/where.sh" }

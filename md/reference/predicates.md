@@ -28,6 +28,8 @@ The available predicate functions are:
 | `any(<p>, <p>, …)` | At least one inner predicate holds (logical **OR**). |
 | `all(<p>, <p>, …)` | Every inner predicate holds (logical **AND**). |
 
+The cwd that `shell(...)` runs in and a relative `path_exists(...)` resolves against is the directory the workspace is found from: for a hook, the agent's working directory from the hook payload (on Antigravity, the first workspace path); for a command, the directory `cargo agents` runs in. A payload directory that does not exist falls back to the directory `cargo agents` runs in.
+
 Predicates compose with **AND** semantics within a list: every entry must hold. `any(...)` gives OR within a single entry, `all(...)` gives an explicit AND group, and `not(...)` gives negation — together they form full boolean logic. They also compose with **AND** across levels (plugin ∧ group ∧ skill).
 
 The argument of a leaf predicate (`depends-on`, `shell`, `path_exists`, `env`) is taken **verbatim** between the parentheses — it is *not* quoted. `shell(command -v rg)` runs `command -v rg`; do not wrap the argument in quotes (they would become part of the command). An inner `)` is fine as long as parentheses balance, so `shell(echo $(date))` works. The combinators `not`, `any`, and `all` take nested predicates as their arguments and may be nested arbitrarily, e.g. `not(any(env(CI), path_exists(.skip)))`.
