@@ -8,6 +8,8 @@
 
 #[expect(dead_code, reason = "the runner starts sessions later in RFD step 4")]
 mod client;
+#[expect(dead_code, reason = "the runner records these later in RFD step 4")]
+mod digest;
 mod evals;
 #[expect(dead_code, reason = "the runner decides these later in RFD step 4")]
 mod expect;

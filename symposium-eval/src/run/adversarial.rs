@@ -285,10 +285,9 @@ while [ ! -f "$TMPDIR/child-ready" ]; do sleep 0.02; done
         trial.symposium_config().is_file(),
         "failed setup evidence was removed"
     );
-    let (evals, task) = store_durability();
-    let retry = real
-        .batch()
-        .create_trial(1, Configuration::Symposium, &evals, &task);
+    let retry =
+        real.batch()
+            .create_trial(1, Configuration::Symposium, &store_durability(real.batch()));
     assert!(
         matches!(retry, Err(RunError::Create { source, .. }) if source.kind() == std::io::ErrorKind::AlreadyExists)
     );
