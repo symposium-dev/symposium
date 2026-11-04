@@ -16,6 +16,14 @@ Codex's documented local enablement file is `.codex/config.toml`. We have not ve
 
 Claude's distinction is conditional: when Claude first writes `.claude/settings.local.json`, it arranges a global Git exclusion. Its documentation explicitly says manually created files need an ignore rule. Thus using native local-scope commands may avoid checkout noise, but direct generation by Symposium must not assume the same result. Already tracked files remain tracked despite ignore rules. [Claude settings reference](https://code.claude.com/docs/en/settings#keep-personal-settings-out-of-a-repository).
 
+### Possible mitigation: exclude files Symposium creates
+
+Symposium could add repository-local Git exclusions for newly created, machine-local files. For example, if it creates `.codex/config.toml` or `.agents/plugins/marketplace.json`, it could add the corresponding root-relative path to the repository's local exclude file. This applies the same idea as Claude's exclusion while keeping the effect local to that repository rather than changing global Git configuration.
+
+Only exclude exact paths to files Symposium created, preserving existing exclude rules. Do not blanket-ignore `.codex/` or hide pre-existing user configuration. Check ownership and tracking before writing: an already tracked file will still produce a diff, and ignoring it cannot hide just the Symposium-generated keys. Report that remaining limitation to the user.
+
+The implementation should locate the exclude file through Git rather than assuming `.git` is a directory, and test linked worktrees explicitly. Record which exclusions Symposium added so cleanup can preserve user-owned rules. This is a proposed mitigation to validate, not a change to Git settings made by this RFD.
+
 ## Claude Code
 
 ### Catalog and registration
@@ -151,7 +159,7 @@ Run in temporary homes/configuration directories and disposable workspaces. Reco
 | Start at repository root and at a nested package | Documented workspace visibility; no assumed parent-directory discovery |
 | Add a dependency during a session | Record whether refresh works or restart is required |
 | Existing user catalog and unrelated config keys | Both remain intact after sync and removal |
-| Clean Git checkout, with generated settings both untracked and already tracked | Record `git status` before/after; verify Claude-created versus Symposium-created local settings exclusions, and report unavoidable tracked-file changes |
+| Clean Git checkout, with generated settings both untracked and already tracked | Record `git status` before/after; verify Claude-created versus Symposium-created local settings exclusions, test exact-path exclusions for newly created Codex files in ordinary repositories and linked worktrees, preserve pre-existing files/rules, and report unavoidable tracked-file changes |
 | Denied version, including a formerly enabled global plugin | No new installation; existing violating state is disabled or reported as unenforceable |
 | Required plugin disabled through native controls | Independent Symposium hook detects the violation and its actual blocking behavior is verified |
 | Warning without acknowledgment | Native browsing/installation cannot silently bypass the gate; otherwise document unsupported enforcement |
