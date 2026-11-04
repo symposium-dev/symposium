@@ -1,0 +1,26 @@
+name = "third"
+depends-on = ["*"]
+
+[[hooks]]
+name = "claude-session"
+event = "SessionStart"
+format = "claude"
+command = { script = "$TEST_DIR/dot-symposium/plugins/third/scripts/text.sh" }
+
+[[hooks]]
+name = "claude-prompt"
+event = "UserPromptSubmit"
+format = "claude"
+command = { script = "$TEST_DIR/dot-symposium/plugins/third/scripts/text.sh" }
+
+[[hooks]]
+name = "codex-session"
+event = "SessionStart"
+format = "codex"
+command = { script = "$TEST_DIR/dot-symposium/plugins/third/scripts/text.sh" }
+
+[[hooks]]
+name = "codex-prompt"
+event = "UserPromptSubmit"
+format = "codex"
+command = { script = "$TEST_DIR/dot-symposium/plugins/third/scripts/text.sh" }
