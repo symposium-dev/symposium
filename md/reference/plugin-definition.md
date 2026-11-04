@@ -247,7 +247,7 @@ For one event, Symposium runs at most one hook per plugin. A hook is a candidate
 |-------|------|-------------|
 | `name` | string | Descriptive name for the hook (used in logs). |
 | `event` | string | Event type to match: one of the [supported hook events](#supported-hook-events) (e.g., `PreToolUse`). |
-| `matcher` | string (optional) | Regex over the tool name, as the agent names it (e.g., `Bash` in Claude Code, `bash` in Copilot; see [Matcher](./hook-events.md#matcher)). The regex is unanchored, so `Bash` also matches `BashOutput`; anchor it (`^Bash$`) to match one tool. Omit to match all. |
+| `matcher` | string (optional) | Regex over the tool name, as the agent names it (e.g., `Bash` in Claude Code, `bash` in Copilot; see [Matcher](./hook-events.md#matcher)). The regex is unanchored, so `Bash` also matches `BashOutput`; anchor it (`^Bash$`) to match one tool. Omit it, or write `*`, to match all. Any other value must be a valid regex, or the plugin fails validation. |
 | `command` | string or table | What to run. A string names a `[[installations]]` entry; a table is an inline installation (promoted to a synthetic entry named after the hook). |
 | `executable` | string (optional) | Path to a binary inside (or relative to) the installation. At most one of `executable`/`script` set across hook + installation. |
 | `script` | string (optional) | Path to a shell script to run via `sh`. Same exclusivity rule as `executable`. |
