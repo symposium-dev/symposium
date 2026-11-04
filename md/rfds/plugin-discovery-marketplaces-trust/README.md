@@ -38,7 +38,7 @@ cargo agents use --global rust-helper # make available across workspaces
 
 `use` no longer unconditionally means enable. It selects marketplace membership; policy, acknowledgments, auto-enable, and native choices determine activation. These are proposed semantics, not a description of the current CLI.
 
-See the [proposed user reference](./proposed-reference.md) for the user-facing behavior and the [host integration plan](./host-integration.md) for experiments needed before implementation.
+See the [proposed user reference](./proposed-reference.md) for the user-facing behavior and the [marketplace appendix](./host-integration.md) for experiments needed before implementation.
 
 ## Detailed plans
 
@@ -134,6 +134,14 @@ For each sync:
 Catalog presence, installed files, configured enablement, and loaded session state are different observations. Writing configuration is not evidence that the running agent loaded a plugin.
 
 Preserve unrelated settings and marketplace entries. Use stable internal marketplace identities that distinguish workspaces, even if their display labels are both Symposium (Local). Avoid concurrent syncs losing one another's changes. Failed discovery is not an empty catalog: retain the last known state and report the failure rather than reaping installations. Failure to obtain policy must not authorize new activation; mandatory-policy status remains unknown until checked.
+
+### Downside: generated configuration in the checkout
+
+Automatic local enablement in Codex requires editing `.codex/config.toml` under the documented mechanism, alongside the local `.agents/plugins/marketplace.json` catalog. These files may not be ignored by Git. Synchronization can therefore leave untracked files or modify tracked project configuration, mixing machine-local plugin choices with settings a team intentionally shares. Keeping plugin payloads under an ignored `.symposium/` directory does not avoid this cost.
+
+Claude Code offers a more suitable local scope through `.claude/settings.local.json`, which Claude excludes from Git when it creates the file. That protection is not automatic when Symposium creates it directly. Editing shared `.claude/settings.json` would have the same tracked-file downside as Codex. See the [appendix's file and Git behavior comparison](./host-integration.md#configuration-files-and-git-behavior) for the documented distinction and sources.
+
+The adapter must report which files it changes, preserve existing keys, and check whether generated local files are ignored or already tracked. A narrowly scoped local Git exclusion can hide an untracked generated file; it cannot hide edits to an already tracked configuration file. We should not automatically ignore all of `.codex/`, `.agents/`, or `.claude/`, or untrack team configuration. The remaining friction is a downside of adopting native project marketplaces.
 
 ### Hooks and enforcement limits
 

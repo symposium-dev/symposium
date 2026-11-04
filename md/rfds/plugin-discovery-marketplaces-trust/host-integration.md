@@ -1,27 +1,132 @@
-# Proposed: Native marketplace integration
+# Appendix: Claude Code and Codex marketplaces
 
-This is an adapter plan, not a record of successful end-to-end validation. The supplied integration notes suggest the mechanisms below. Official documentation was checked on 2026-11-04; supported host versions and runtime behavior must still be recorded by implementation experiments.
+This appendix describes the native mechanisms behind the proposal and the adapter we intend to build. Documentation was checked on 2026-11-04. The examples are proposed Symposium output, not evidence of successful end-to-end integration; supported host versions still need the admission experiments below.
+
+## Configuration files and Git behavior
+
+| Host and scope | Catalog or registration | Enablement | Effect on the checkout |
+|---|---|---|---|
+| Claude, user | Directory catalog registered in `~/.claude/settings.json` | User-scoped `enabledPlugins` | User settings are outside the checkout |
+| Claude, local | `extraKnownMarketplaces` in `.claude/settings.local.json` | Local-scoped `enabledPlugins` in that file | Claude excludes the file when it creates it; a direct Symposium write needs an exclusion check |
+| Claude, shared project | Registration in `.claude/settings.json` | Project-scoped `enabledPlugins` | Can modify tracked team configuration; avoid for generated personal choices |
+| Codex, personal | `~/.agents/plugins/marketplace.json` | `~/.codex/config.toml` | Outside the checkout |
+| Codex, project | `.agents/plugins/marketplace.json` | `.codex/config.toml` | Neither generated path can be assumed ignored; tracked settings can become dirty |
+
+Codex's documented local enablement file is `.codex/config.toml`. We have not verified `.codex/agents.json` as an alternative. The issue is the need to edit project configuration, regardless of the filename. [Codex packaging reference](https://developers.openai.com/plugins/build/plugins).
+
+Claude's distinction is conditional: when Claude first writes `.claude/settings.local.json`, it arranges a global Git exclusion. Its documentation explicitly says manually created files need an ignore rule. Thus using native local-scope commands may avoid checkout noise, but direct generation by Symposium must not assume the same result. Already tracked files remain tracked despite ignore rules. [Claude settings reference](https://code.claude.com/docs/en/settings#keep-personal-settings-out-of-a-repository).
 
 ## Claude Code
 
-Generate a directory marketplace with `.claude-plugin/marketplace.json` and register it at the appropriate user or project scope. The [marketplace documentation](https://code.claude.com/docs/en/plugin-marketplaces) describes the catalog mechanism. Prefer local user-specific project configuration for generated workspace registration; do not overwrite shared project settings.
+### Catalog and registration
 
-The implementation notes propose scoped CLI installation and enablement. Validate noninteractive behavior before invoking these operations from synchronization, particularly from a hook. Merely writing an enablement setting must not be treated as downloading an absent plugin.
+A directory marketplace holds `.claude-plugin/marketplace.json`. For example, Symposium could generate this under `.symposium/claude-marketplace/`:
 
-Use stable workspace-specific internal marketplace names. The work-organization discussion reports earlier trouble with shared names, cache refresh, and project settings. Reusing the display name Symposium (Local) must not make one workspace's catalog replace another's.
+```json
+{
+  "name": "symposium-local-example",
+  "owner": { "name": "Symposium" },
+  "plugins": [
+    { "name": "rust-helper", "source": "./plugins/rust-helper" }
+  ]
+}
+```
+
+Here the plugin lives at `.symposium/claude-marketplace/plugins/rust-helper/`; the source is relative to the marketplace root. Registration makes the catalog available; installation selects an entry. [Creating a marketplace](https://code.claude.com/docs/en/plugin-marketplaces).
+
+The proposed local registration in `.claude/settings.local.json` is:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "symposium-local-example": {
+      "source": {
+        "source": "directory",
+        "path": "/absolute/workspace/.symposium/claude-marketplace"
+      }
+    }
+  }
+}
+```
+
+A directory source names the directory containing `.claude-plugin/marketplace.json`. An absolute path here avoids assuming how relative settings paths resolve; its machine-specific nature is another reason to keep this registration local. [Marketplace source reference](https://code.claude.com/docs/en/plugins/marketplace-reference).
+
+### Installation, enablement, and refresh
+
+The native CLI offers separate operations with explicit scope:
+
+```bash
+claude plugin marketplace add /absolute/workspace/.symposium/claude-marketplace --scope local
+claude plugin install rust-helper@symposium-local-example --scope local
+claude plugin enable rust-helper@symposium-local-example --scope local
+claude plugin disable rust-helper@symposium-local-example --scope local
+```
+
+Use `--scope user` for global selection; `--scope project` affects shared project settings. These commands are an adapter candidate, subject to noninteractive and hook-path validation. [Plugin command reference](https://code.claude.com/docs/en/plugins/cli-reference).
+
+The corresponding enablement setting is separate from registration:
+
+```json
+{
+  "enabledPlugins": {
+    "rust-helper@symposium-local-example": true
+  }
+}
+```
+
+Writing this setting alone is not proof of installation or loading. Users can browse through `/plugin`. For directory marketplaces with relative plugin sources, Claude documents reading the local plugin directly and picking up edits on a new session or `/reload-plugins`; hosted marketplace installs use cached copies. [Marketplace development behavior](https://code.claude.com/docs/en/plugin-marketplaces).
+
+Use stable workspace-specific internal marketplace names. The Zulip discussion reports earlier trouble with shared names, cache refresh, and project settings. A common display label must not make one workspace replace another's catalog.
 
 ## Codex
 
-The [plugin packaging documentation](https://developers.openai.com/plugins/build/plugins) describes `.agents/plugins/marketplace.json` for a repository and `~/.agents/plugins/marketplace.json` for a personal catalog. Project enablement uses `.codex/config.toml`:
+### Catalog and registration
+
+Symposium would generate the project catalog at `.agents/plugins/marketplace.json`:
+
+```json
+{
+  "name": "symposium-local-example",
+  "interface": { "displayName": "Symposium (Local)" },
+  "plugins": [
+    {
+      "name": "rust-helper",
+      "source": {
+        "source": "local",
+        "path": "./.symposium/plugins/rust-helper"
+      },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Development"
+    }
+  ]
+}
+```
+
+The relative path starts at the repository's marketplace root, not `.agents/plugins/`. For personal discovery, use `~/.agents/plugins/marketplace.json`. These host `policy` fields do not encode Symposium's four vouch levels. [Packaging and marketplaces](https://developers.openai.com/plugins/build/plugins).
+
+### Enablement, installation, and refresh
+
+Project enablement is declarative:
 
 ```toml
 [plugins."rust-helper@symposium-local-example"]
 enabled = true
 ```
 
-Local `source.path` values resolve against the marketplace root, not its `.agents/plugins/` directory. Project configuration requires project trust. The documented refresh behavior can install or refresh configured plugins even when disabled, so downloaded files are not evidence of authorization or activation.
+The key couples the plugin and marketplace names. Global settings use `~/.codex/config.toml`. Project configuration requires trust. Refresh can fetch configured plugins even when disabled, so installation and activation remain distinct. The documented local plugin flow loads a cached copy; source edits need refresh/restart validation. [Local marketplace behavior](https://developers.openai.com/plugins/build/plugins).
 
-These mechanisms are candidates for the adapter. Test them with the supported Codex clients before depending on automatic installation. Existing personal/repository catalogs must be preserved; if a separate registered Symposium source cannot coexist, merge only owned entries or report a collision. Never replace an unrelated catalog wholesale.
+The background notes also identify marketplace-management commands:
+
+```bash
+codex plugin marketplace add /absolute/path/to/marketplace-root
+codex plugin marketplace list
+codex plugin marketplace upgrade symposium-local-example
+codex plugin marketplace remove symposium-local-example
+```
+
+These manage catalogs; they do not establish a scoped per-plugin installation equivalent to Claude's command. Validate fresh automatic activation from a generated catalog plus TOML before relying on it.
+
+Existing personal/repository catalogs must be preserved. If a separate Symposium source cannot coexist, merge only owned entries or report a collision. Never replace an unrelated catalog wholesale.
 
 ## Shared adapter requirements
 
@@ -46,6 +151,7 @@ Run in temporary homes/configuration directories and disposable workspaces. Reco
 | Start at repository root and at a nested package | Documented workspace visibility; no assumed parent-directory discovery |
 | Add a dependency during a session | Record whether refresh works or restart is required |
 | Existing user catalog and unrelated config keys | Both remain intact after sync and removal |
+| Clean Git checkout, with generated settings both untracked and already tracked | Record `git status` before/after; verify Claude-created versus Symposium-created local settings exclusions, and report unavoidable tracked-file changes |
 | Denied version, including a formerly enabled global plugin | No new installation; existing violating state is disabled or reported as unenforceable |
 | Required plugin disabled through native controls | Independent Symposium hook detects the violation and its actual blocking behavior is verified |
 | Warning without acknowledgment | Native browsing/installation cannot silently bypass the gate; otherwise document unsupported enforcement |
