@@ -39,7 +39,7 @@ A plugin with only `format = "claude"`:
 
 Symposium converts the hook's output back to the current agent's wire format before returning it to the agent:
 
-- Native format matching the host agent: pass through directly. A native Claude `SessionStart` or `UserPromptSubmit` hook may print plain text instead of JSON; Symposium adds it to the context, as Claude Code does.
+- Native format matching the host agent: pass through directly. A native Claude or Codex `SessionStart` or `UserPromptSubmit` hook may print plain text instead of JSON; Symposium adds it to the context, as those agents do.
 - Symposium format → convert to host agent's wire format.
 
 Stdout from a symposium-format hook that is not a canonical output, such as `null` or an object without the event tag, is ignored with a warning, like invalid JSON. Only translated output reaches the agent, so one plugin cannot replace or clear what the others returned.

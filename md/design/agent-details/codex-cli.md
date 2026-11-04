@@ -129,7 +129,7 @@ Method 2 — **Exit code 2** with reason on stderr.
 }
 ```
 
-Plain text on stdout also works for SessionStart and UserPromptSubmit (ignored for PreToolUse, PostToolUse, Stop).
+Plain text on stdout also works for SessionStart and UserPromptSubmit (ignored for PreToolUse, PostToolUse, Stop). Symposium reads a `format = "codex"` plugin hook's stdout the same way.
 
 ### Stop session
 

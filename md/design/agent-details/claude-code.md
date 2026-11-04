@@ -134,6 +134,8 @@ its server.
 
 Output is capped at **10,000 characters**.
 
+Plain text on stdout (anything that is not JSON) is added to the context on `SessionStart` and `UserPromptSubmit`; on the other events it does not reach the model. Symposium reads a `format = "claude"` plugin hook's stdout the same way.
+
 ### Universal fields
 
 | Field | Type | Description |

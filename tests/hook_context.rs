@@ -59,6 +59,35 @@ async fn session_start_keeps_symposium_and_plugin_context() {
     .unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn native_plain_text_is_context() {
+    with_fixture(TestMode::SimulationOnly, &["context-merge0"], async |ctx| {
+        for agent in [HookAgent::Claude, HookAgent::Codex] {
+            for (step, parts) in [
+                (
+                    HookStep::session_start(),
+                    &[
+                        "crate-a",
+                        "second plugin context",
+                        "third plugin plain text",
+                    ][..],
+                ),
+                (HookStep::user_prompt("hello"), &["third plugin plain text"]),
+            ] {
+                let stdout = respond(&ctx, agent, step).await;
+                let output: Value = serde_json::from_str(&stdout).unwrap();
+                let context = output["hookSpecificOutput"]["additionalContext"]
+                    .as_str()
+                    .unwrap_or_else(|| panic!("{agent:?}: no additionalContext in {stdout}"));
+                assert_in_order(agent, context, parts);
+            }
+        }
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
 /// Antigravity is left out: it reads no context on `PostToolUse` at all.
 #[tokio::test(flavor = "multi_thread")]
 async fn post_tool_use_keeps_every_plugin_context() {
@@ -94,10 +123,10 @@ async fn prompt_context_survives_a_non_zero_exit() {
     with_fixture(TestMode::SimulationOnly, &["context-merge0"], async |ctx| {
         let stdout = respond(&ctx, HookAgent::Claude, HookStep::user_prompt("hello")).await;
         let output: Value = serde_json::from_str(&stdout).unwrap();
-        assert_eq!(
-            output["hookSpecificOutput"]["additionalContext"],
-            "first prompt context"
-        );
+        let context = output["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap_or_else(|| panic!("no additionalContext in {stdout}"));
+        assert_in_order(HookAgent::Claude, context, &["first prompt context"]);
         Ok(())
     })
     .await
