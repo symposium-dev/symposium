@@ -1,27 +1,13 @@
 //! The event each `[expected] hooks` entry runs on, from the `[[hooks]]` of the task's
 //! plugins (RFD reference, "Synchronization and hooks").
 //!
-//! This reader is the checker's own, not Symposium's, and reads only the fields it
-//! needs. A task runs on every client, so a hook limited to one agent, by `agent` or by
-//! a `format` other than `symposium`, cannot be expected.
+//! A task runs on every client, so a hook limited to one agent, by `agent` or by a
+//! `format` other than `symposium`, cannot be expected. The manifest's schema already
+//! holds each hook to one of Symposium's events.
 
-use std::fs;
-use std::io;
-
-use serde::Deserialize;
-
+use super::manifest::{Plugin, RawHook};
 use super::{HookName, PluginName, TaskError, distinct};
 use crate::client::HookEvent;
-use crate::evals::Evals;
-
-/// Symposium's names for the events a hook can run on.
-const EVENTS: [&str; 5] = [
-    "PreToolUse",
-    "PostToolUse",
-    "UserPromptSubmit",
-    "SessionStart",
-    "Stop",
-];
 
 /// An expected plugin hook, with the event its plugin declares it on.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,57 +16,29 @@ pub(crate) struct ExpectedHook {
     pub(crate) event: HookEvent,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct Manifest {
-    #[serde(default)]
-    hooks: Vec<RawHook>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawHook {
-    name: String,
-    event: String,
-    agent: Option<String>,
-    format: Option<String>,
-}
-
 /// A hook a plugin declares.
 struct Declared<'a> {
     plugin: &'a PluginName,
-    hook: RawHook,
+    hook: &'a RawHook,
 }
 
 /// Finds each of `expected` in exactly one of `plugins`' manifests. A plugin without a
-/// `Symposium.toml` declares no hooks; one that cannot be read could declare any, so
-/// then only its error is reported.
+/// `Symposium.toml` declares no hooks.
 pub(super) fn resolve(
-    evals: &Evals,
-    plugins: &[PluginName],
+    plugins: &[Plugin<'_>],
     expected: &[HookName],
     errors: &mut Vec<TaskError>,
 ) -> Vec<ExpectedHook> {
-    if expected.is_empty() {
-        return Vec::new();
-    }
-    let mut declared = Vec::new();
-    let mut unreadable = false;
-    for plugin in distinct(plugins) {
-        match manifest(evals, plugin) {
-            Ok(manifest) => declared.extend(
-                manifest
-                    .hooks
-                    .into_iter()
-                    .map(|hook| Declared { plugin, hook }),
-            ),
-            Err(error) => {
-                errors.push(error);
-                unreadable = true;
-            }
-        }
-    }
-    if unreadable {
-        return Vec::new();
-    }
+    let declared: Vec<_> = plugins
+        .iter()
+        .flat_map(|plugin| {
+            let hooks = plugin.manifest.iter().flat_map(|manifest| &manifest.hooks);
+            hooks.map(|hook| Declared {
+                plugin: plugin.name,
+                hook,
+            })
+        })
+        .collect();
     distinct(expected)
         .filter_map(|name| {
             let mut matching = declared
@@ -108,7 +66,7 @@ fn check(
     found: &Declared<'_>,
     errors: &mut Vec<TaskError>,
 ) -> Option<ExpectedHook> {
-    let hook = &found.hook;
+    let hook = found.hook;
     let limited = hook.agent.is_some()
         || hook
             .format
@@ -121,28 +79,8 @@ fn check(
         });
         return None;
     }
-    if !EVENTS.contains(&hook.event.as_str()) {
-        errors.push(TaskError::UnknownHookEvent {
-            hook: name.clone(),
-            event: hook.event.clone(),
-        });
-        return None;
-    }
     Some(ExpectedHook {
         name: name.clone(),
         event: HookEvent::named(&hook.event),
-    })
-}
-
-fn manifest(evals: &Evals, plugin: &PluginName) -> Result<Manifest, TaskError> {
-    let path = evals.plugin_dir(plugin).join("Symposium.toml");
-    let text = match fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Manifest::default()),
-        Err(source) => return Err(TaskError::Inspect { path, source }),
-    };
-    toml::from_str(&text).map_err(|source| TaskError::PluginManifest {
-        plugin: plugin.clone(),
-        source,
     })
 }

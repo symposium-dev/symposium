@@ -2527,6 +2527,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml_ng",
+ "symposium-sdk",
  "syn",
  "tempfile",
  "thiserror 2.0.18",

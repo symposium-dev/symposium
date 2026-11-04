@@ -37,7 +37,9 @@ evals/
 - a skill appears in both `installed` and `not_installed`, or both `used` and `not_used`;
 - a skill in `used` also appears in `not_installed`;
 - a `checks/` file does not hold exactly one test, or a named plugin or fixture does not exist;
-- an expected hook is declared by none of the task's plugins or by more than one, runs on an event that is not one of Symposium's, or is limited to one agent by `agent` or `format`, since a task runs on every client.
+- a plugin holds a link or special file, which a trial cannot copy, or its `Symposium.toml` does not match the plugin schema;
+- an expected hook is declared by none of the task's plugins or by more than one, runs on an event that is not one of Symposium's, or is limited to one agent by `agent` or `format`, since a task runs on every client;
+- a skill in `installed` or `used` is provided by none of the task's plugins, or any named skill is provided by more than one, since sync would then install neither under its own name. A plugin provides the skills its `[[skills]] source.path` groups hold, or, without a `Symposium.toml`, the `SKILL.md` at its root; a skill is named by its frontmatter `name`, and must be one Symposium would load. A source must be a directory inside the plugin.
 
 Fixture crates are not workspace members and have no `skills/` directory, so the only way their rule reaches the agent through Symposium is a registry plugin.
 
