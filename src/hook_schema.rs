@@ -112,6 +112,10 @@ pub trait AgentHookEvent {
     fn respond(&self, output: &serde_json::Value) -> HookResponse {
         HookResponse::success(self.serialize_output(output))
     }
+
+    fn merge_output(&self, acc: &mut serde_json::Value, next: serde_json::Value) {
+        crate::hook::merge(acc, next)
+    }
 }
 
 /// What `cargo agents hook` hands back to the agent. Most agents read the
@@ -169,6 +173,8 @@ pub trait ErasedAgentHookEvent {
     /// The response for the final accumulated output (as JSON Value).
     /// Most agents take JSON on stdout; Kiro takes plain text, and exit 2 to deny.
     fn respond(&self, output: &serde_json::Value) -> HookResponse;
+
+    fn merge_output(&self, acc: &mut serde_json::Value, next: serde_json::Value);
 }
 
 struct ErasedAgentHookEventImpl<E: AgentHookEvent + 'static>(E);
@@ -198,6 +204,10 @@ where
 
     fn respond(&self, output: &serde_json::Value) -> HookResponse {
         self.0.respond(output)
+    }
+
+    fn merge_output(&self, acc: &mut serde_json::Value, next: serde_json::Value) {
+        self.0.merge_output(acc, next)
     }
 }
 

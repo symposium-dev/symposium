@@ -44,6 +44,8 @@ Stdout from a symposium-format hook that is not a canonical output, such as `nul
 
 A native hook's stdout is read the way its agent reads it, plain-text context included: on `SessionStart` and `UserPromptSubmit`, stdout from a `claude` or `codex` hook that is not JSON becomes context.
 
+On Antigravity, a native `PreToolUse` object with no `decision` (or an empty one) is read as the denial Antigravity takes it to be, and injected steps other than context (`userMessage`, `toolCall`) accumulate across hooks.
+
 ## Alternatives considered
 
 ### Registering agent-specific hooks directly

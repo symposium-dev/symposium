@@ -860,7 +860,7 @@ pub async fn dispatch_plugin_hooks(
                             }
                         };
 
-                        merge(&mut output, host_json);
+                        host_h.merge_output(&mut output, host_json);
                         if denies(&hook_output) {
                             tracing::info!(
                                 plugin = %hook.plugin_name,
@@ -915,8 +915,7 @@ impl JoinedContext {
     }
 
     /// Add `hook_output`'s context and write the joined text back into
-    /// `output`, whose context the hook's own output has just replaced (or,
-    /// for Antigravity's `injectSteps` list, emptied).
+    /// `output`, whose context the hook's own output has just replaced.
     fn add(
         &mut self,
         hook_output: &symposium::OutputEvent,
@@ -937,7 +936,7 @@ impl JoinedContext {
         }
         if let Some(text) = &self.text {
             let joined = OutputEvent::with_context(self.event, text.clone());
-            merge(output, handler.translate_output(&joined).to_hook_output());
+            handler.merge_output(output, handler.translate_output(&joined).to_hook_output());
         }
     }
 }

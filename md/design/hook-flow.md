@@ -33,7 +33,7 @@ The payload is parsed first, and the agent's parser can declare it not an occurr
      - Pass the event JSON (in the selected format) on stdin to the plugin's hook.
      - Collect output from each handler.
      - Convert output back to the agent's wire format.
-     - Merge results (e.g., allow/block decisions, output text) across all handlers. `merge` lets a later value replace an earlier one, so on `SessionStart`, `UserPromptSubmit` and `PostToolUse` a `JoinedContext` keeps every source's context (the builtin fragments first, then each hook) and writes the joined text back after each merge. `PreToolUse` and `Stop` are left out: there some agents keep context in the field that holds the decision.
+     - Merge results (e.g., allow/block decisions, output text) across all handlers. `merge` lets a later value replace an earlier one, so on `SessionStart`, `UserPromptSubmit` and `PostToolUse` a `JoinedContext` keeps every source's context (the builtin fragments first, then each hook) and writes the joined text back after each merge. `PreToolUse` and `Stop` are left out: there some agents keep context in the field that holds the decision. An agent's handler can merge a field itself (`merge_output`): Antigravity keeps the `injectSteps` that are not context (`userMessage`, `toolCall`) and appends each hook's.
      - Return the merged result to the agent.
    - **A hook that exits 2 blocks**: dispatch stops, and `blocked_response` turns its stderr into the reason. On `PreToolUse` that is a canonical deny, translated like any other so each agent receives it in the form it honors (Antigravity ignores exit codes, Copilot drops the reason of a failing hook). On other events the process exits 2 with the reason on stderr.
 
