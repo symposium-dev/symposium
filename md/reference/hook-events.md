@@ -20,7 +20,7 @@ Symposium registers one handler per event with each agent, under the agent's own
 |-------|--------------|---------------|--------------------|----------------|--------|
 | Claude Code (`claude`) | `PreToolUse` | `PostToolUse` | `UserPromptSubmit` | `SessionStart` | `Stop` |
 | Antigravity CLI (`antigravity`) | `PreToolUse` | `PostToolUse` | `PreInvocation` (first invocation of each turn only) | `SessionStart` | `Stop` |
-| Codex CLI (`codex`) | `PreToolUse` | `PostToolUse` | `UserPromptSubmit` | `SessionStart` | not delivered |
+| Codex CLI (`codex`) | `PreToolUse` | `PostToolUse` | `UserPromptSubmit` | `SessionStart` | `Stop` |
 | GitHub Copilot (`copilot`) | `preToolUse` | `postToolUse` | `userPromptSubmitted` | `sessionStart` | not delivered |
 | Kiro (`kiro`) | `preToolUse` | `postToolUse` | `userPromptSubmit` | `agentSpawn` | not delivered |
 | Goose | not delivered | not delivered | not delivered | not delivered | not delivered |
@@ -222,7 +222,7 @@ Tool input is the agent's own: write `updatedInput` in the shape that agent's to
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `additionalContext` | string or null | Text for the agent when the turn ends. Only Antigravity and Claude Code run `Stop` hooks, and neither treats this as plain context: Claude Code ignores it, while Antigravity takes it as a reason to keep going and starts another turn. |
+| `additionalContext` | string or null | Text for the agent when the turn ends. Only Antigravity, Claude Code and Codex run `Stop` hooks, and none treats this as plain context: Claude Code and Codex ignore it, while Antigravity takes it as a reason to keep going and starts another turn. |
 
 ## Exit codes
 

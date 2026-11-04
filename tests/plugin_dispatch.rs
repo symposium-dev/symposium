@@ -367,3 +367,28 @@ async fn later_invocations_of_a_turn_reach_no_plugin_hook() {
     .await
     .unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn codex_stop_reaches_plugin_stop_hooks() {
+    with_fixture(TestMode::SimulationOnly, &["stop-hook0"], async |ctx| {
+        let response = ctx
+            .invoke_hook(
+                HookAgent::Codex,
+                HookEvent::Stop,
+                &json!({
+                    "hook_event_name": "Stop",
+                    "session_id": "s",
+                    "turn_id": "t",
+                    "stop_hook_active": false,
+                    "last_assistant_message": "Done.",
+                }),
+            )
+            .await?;
+        let stderr = String::from_utf8(response.stderr)?;
+        assert_eq!(response.exit_code, 2, "stderr: {stderr}");
+        assert!(stderr.contains("stop-hook-ran"), "stderr: {stderr}");
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
