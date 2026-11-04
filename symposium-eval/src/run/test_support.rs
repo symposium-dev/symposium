@@ -5,9 +5,9 @@ use std::path::PathBuf;
 
 use tempfile::TempDir;
 
-use super::{ApiKey, Batch, Configuration, Machine, Trial};
+use super::{ApiKey, Batch, Configuration, Inputs, Machine, Trial};
 use crate::evals::Evals;
-use crate::task::{BatchName, Task, TaskName};
+use crate::task::{BatchName, TaskName};
 
 /// A canonical scratch directory holding `home/`, `checkout/evals/`, and a toolchain
 /// under the home, as rustup installs one.
@@ -56,16 +56,25 @@ impl Host {
     }
 }
 
-pub(crate) fn store_durability() -> (Evals, Task) {
-    let evals = Evals::in_repository();
-    let task = Task::load(&evals, &TaskName::new("store-durability").unwrap()).unwrap();
-    (evals, task)
+/// `batch`'s copy of the repository's task `name`, taken on first use and reused after,
+/// so a test can create several trials in one batch.
+pub(crate) fn inputs(batch: &Batch, name: &str) -> Inputs {
+    let name = TaskName::new(name).unwrap();
+    if batch.inputs().exists() {
+        Inputs::reopen(batch, &name).unwrap()
+    } else {
+        batch.snapshot(&Evals::in_repository(), &name).unwrap()
+    }
+}
+
+/// `batch`'s copy of `store-durability`.
+pub(crate) fn store_durability(batch: &Batch) -> Inputs {
+    inputs(batch, "store-durability")
 }
 
 pub(crate) fn trial(batch: &Batch, number: usize, configuration: Configuration) -> Trial {
-    let (evals, task) = store_durability();
     batch
-        .create_trial(number, configuration, &evals, &task)
+        .create_trial(number, configuration, &store_durability(batch))
         .unwrap()
 }
 
@@ -174,11 +183,9 @@ impl RealSrt {
         number: usize,
         configuration: Configuration,
     ) -> Trial {
-        let evals = Evals::in_repository();
-        let task = Task::load(&evals, name).unwrap();
         let trial = self
             .batch
-            .create_trial(number, configuration, &evals, &task)
+            .create_trial(number, configuration, &inputs(&self.batch, name.as_str()))
             .unwrap();
         let policy =
             super::Policy::for_trial(&trial, &self.machine, "api.example.com", &self.api_key)

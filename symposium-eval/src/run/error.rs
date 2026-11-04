@@ -7,7 +7,9 @@ use std::process::ExitStatus;
 
 use thiserror::Error;
 
+use crate::digest::DigestError;
 use crate::grade::{ImportError, ProcessError};
+use crate::task::TaskErrors;
 
 #[derive(Debug, Error)]
 pub(crate) enum RunError {
@@ -31,6 +33,14 @@ pub(crate) enum RunError {
     },
     #[error("cannot copy the task into the trial")]
     Copy(#[source] ImportError),
+    #[error("cannot copy the task's inputs into the batch")]
+    Snapshot(#[source] ImportError),
+    #[error("the inputs are batch `{}`'s, not this batch's", .0.display())]
+    ForeignInputs(PathBuf),
+    #[error("the task is not valid")]
+    Task(#[source] TaskErrors),
+    #[error("cannot hash the task")]
+    Digest(#[source] DigestError),
     #[error("cannot write the `srt` policy")]
     Policy(#[source] serde_json::Error),
     #[error("cannot write the client's sandbox settings")]

@@ -409,6 +409,18 @@ mod tests {
     }
 
     #[test]
+    fn a_trial_cannot_read_the_batchs_copy_of_the_task() {
+        let host = Host::new();
+        let batch = host.batch();
+        let symposium = trial(&batch, 1, Configuration::Symposium);
+
+        let policy = policy(&symposium, &host.machine());
+
+        // It holds the hidden checks.
+        assert!(!policy.can_read(&batch.inputs().join("tasks/store-durability/checks")));
+    }
+
+    #[test]
     fn a_trial_cannot_read_another_trial() {
         let host = Host::new();
         let batch = host.batch();
