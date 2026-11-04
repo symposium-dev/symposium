@@ -1171,17 +1171,24 @@ fn dispatched_hooks_for_payload(
             }
         }
 
-        let selected = if native_matches.is_empty() {
-            symposium_matches
-        } else {
-            native_matches
-        };
+        let any_candidate = !native_matches.is_empty() || !symposium_matches.is_empty();
+        let mut selected: Vec<_> = native_matches
+            .into_iter()
+            .filter(|hook| hook_predicates_hold(parsed_plugin, hook, input, ctx))
+            .collect();
         if selected.is_empty() {
-            if parsed_plugin
-                .manifest
-                .hooks
-                .iter()
-                .any(|h| h.event == input.event())
+            selected = symposium_matches
+                .into_iter()
+                .filter(|hook| hook_predicates_hold(parsed_plugin, hook, input, ctx))
+                .collect();
+        }
+        if selected.is_empty() {
+            if !any_candidate
+                && parsed_plugin
+                    .manifest
+                    .hooks
+                    .iter()
+                    .any(|h| h.event == input.event())
             {
                 tracing::debug!(
                     report = %crate::report::ReportEvent::HookConsidered {
@@ -1190,28 +1197,13 @@ fn dispatched_hooks_for_payload(
                         event: format!("{:?}", input.event()),
                         selected: false,
                         format: None,
-                        reason: Some("no matching format for this agent".into()),
+                        reason: Some("no hook matches this agent and tool".into()),
                     },
                 );
             }
             continue;
         }
         for hook in selected {
-            // Hook-level predicates are evaluated at dispatch so they pick up
-            // live state (file present, tool installed, crate present, …).
-            if !hook.predicates.evaluate(ctx) {
-                tracing::debug!(
-                    report = %crate::report::ReportEvent::HookConsidered {
-                        plugin: parsed_plugin.manifest.name.clone(),
-                        hook: hook.name.clone(),
-                        event: format!("{:?}", input.event()),
-                        selected: false,
-                        format: Some(format!("{:?}", hook.format)),
-                        reason: Some("hook predicates not satisfied".into()),
-                    },
-                );
-                continue;
-            }
             tracing::debug!(
                 report = %crate::report::ReportEvent::HookConsidered {
                     plugin: parsed_plugin.manifest.name.clone(),
@@ -1237,6 +1229,30 @@ fn dispatched_hooks_for_payload(
     }
 
     out
+}
+
+/// Hook-level predicates are evaluated at dispatch so they pick up live state
+/// (file present, tool installed, crate present, ...).
+fn hook_predicates_hold(
+    plugin: &Plugin,
+    hook: &crate::plugins::Hook,
+    input: &symposium::InputEvent,
+    ctx: &mut crate::predicate::PredicateContext,
+) -> bool {
+    let holds = hook.predicates.evaluate(ctx);
+    if !holds {
+        tracing::debug!(
+            report = %crate::report::ReportEvent::HookConsidered {
+                plugin: plugin.manifest.name.clone(),
+                hook: hook.name.clone(),
+                event: format!("{:?}", input.event()),
+                selected: false,
+                format: Some(format!("{:?}", hook.format)),
+                reason: Some("hook predicates not satisfied".into()),
+            },
+        );
+    }
+    holds
 }
 
 #[cfg(test)]
@@ -1617,6 +1633,49 @@ mod tests {
         };
         assert_eq!(dispatch(HookAgent::Claude), 1);
         assert_eq!(dispatch(HookAgent::Codex), 0);
+    }
+
+    #[test]
+    fn dispatch_falls_back_to_portable_hook_when_native_predicates_fail() {
+        use crate::plugins::HookFormat;
+
+        let with_native_predicate = |command: &str| {
+            let mut plugin = plugin_with_hook(vec![], vec![]);
+            let portable = plugin.manifest.hooks[0].clone();
+            let mut native = portable.clone();
+            native.name = "native".into();
+            native.format = HookFormat::Claude;
+            native.predicates.predicates = vec![crate::predicate::Predicate::Shell(command.into())];
+            plugin.manifest.hooks = vec![
+                crate::plugins::Hook {
+                    name: "portable-first".into(),
+                    ..portable.clone()
+                },
+                crate::plugins::Hook {
+                    name: "portable-last".into(),
+                    ..portable
+                },
+                native,
+            ];
+            plugin
+        };
+        let selected = |plugin: crate::plugins::Plugin| {
+            dispatched_hooks_for_payload(
+                &[plugin],
+                &pre_tool_use_input(),
+                HookAgent::Claude,
+                &mut crate::predicate::PredicateContext::new(&[]),
+            )
+            .into_iter()
+            .map(|hook| hook.hook_name)
+            .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            selected(with_native_predicate("false")),
+            ["portable-first", "portable-last"]
+        );
+        assert_eq!(selected(with_native_predicate("true")), ["native"]);
     }
 
     /// A plugin gated on a concrete crate must not dispatch its hooks in a

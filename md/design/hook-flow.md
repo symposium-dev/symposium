@@ -29,7 +29,7 @@ This bounds remote PM waiting; it is not a timeout on local plugin execution.
    Agents without hook registration (OpenCode, Goose) never receive this; for them the only discovery surface is `cargo agents --help` itself.
 
 3. **Dispatch to plugin hooks** — for each enabled plugin that defines a hook handler for the incoming event:
-   - **Select format**: for each plugin, pick the best format and deliver to every matching hook of it (see [Hooks](./hooks.md) for priority rules). A hook whose `agent` names another agent is not a candidate. If the plugin has hooks matching the current agent's format, deliver the input unmodified. Otherwise deliver in symposium canonical format to its symposium-format hooks; a hook for another agent never fires.
+   - **Select format**: for each plugin, pick the best format and deliver to every matching hook of it (see [Hooks](./hooks.md) for priority rules). A hook whose `agent` names another agent, or whose `predicates` do not hold, is not a candidate. If the plugin has hooks matching the current agent's format, deliver the input unmodified. Otherwise deliver in symposium canonical format to its symposium-format hooks; a hook for another agent never fires.
    - **Acquire and run**:
      - Ensure any `requirements` for the hook are acquired (on-demand, best-effort).
      - Resolve the hook's `command` (a named installation reference or inline declaration) into a runnable form:

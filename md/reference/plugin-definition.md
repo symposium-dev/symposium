@@ -245,6 +245,8 @@ install_commands = [
 
 Each `[[hooks]]` entry declares a hook that responds to agent events. For the JSON schemas that symposium-format hooks receive and produce, see [Symposium hook events](./hook-events.md).
 
+For one event, Symposium selects one format per plugin and runs every matching hook in it; a hook in another agent's format never fires. A hook is a candidate when its `event` and `matcher` match, its `agent`, if set, is the current agent, and its `predicates` hold. Among the candidates, the current agent's native format wins over `format = "symposium"`, and the candidates of the winning format run in manifest order.
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Descriptive name for the hook (used in logs). |
