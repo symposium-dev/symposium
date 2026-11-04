@@ -1153,6 +1153,9 @@ fn dispatched_hooks_for_payload(
             {
                 continue;
             }
+            if hook.agent.is_some_and(|agent| agent != host_agent) {
+                continue;
+            }
 
             match hook.format.as_agent() {
                 Some(agent) if agent == host_agent => {
@@ -1597,6 +1600,23 @@ mod tests {
         );
         let names: Vec<_> = hooks.iter().map(|h| h.hook_name.as_str()).collect();
         assert_eq!(names, ["check", "log"]);
+    }
+
+    #[test]
+    fn dispatch_skips_hook_restricted_to_another_agent() {
+        let mut plugin = plugin_with_hook(vec![], vec![]);
+        plugin.manifest.hooks[0].agent = Some(HookAgent::Claude);
+        let dispatch = |agent| {
+            dispatched_hooks_for_payload(
+                std::slice::from_ref(&plugin),
+                &pre_tool_use_input(),
+                agent,
+                &mut crate::predicate::PredicateContext::new(&[]),
+            )
+            .len()
+        };
+        assert_eq!(dispatch(HookAgent::Claude), 1);
+        assert_eq!(dispatch(HookAgent::Codex), 0);
     }
 
     /// A plugin gated on a concrete crate must not dispatch its hooks in a

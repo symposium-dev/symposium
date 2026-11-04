@@ -11,7 +11,7 @@ A plugin hook declares which wire format its handler expects:
 
 ## Dispatch rule
 
-When symposium's global handler receives an event from agent A, it loads all plugins and finds hooks matching the event. For each plugin, it picks one format and delivers to every matching hook of that format, in manifest order:
+When symposium's global handler receives an event from agent A, it loads all plugins and finds hooks matching the event. A hook whose `agent` names another agent is not a candidate. For each plugin, it picks one format and delivers to every remaining hook of that format, in manifest order:
 
 1. If the plugin declares hooks with `format` matching **agent A**, each receives the input unmodified (the handler already expects this agent's native format).
 2. Otherwise, if the plugin declares **symposium-format** hooks, each receives the input converted to symposium canonical.
