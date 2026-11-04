@@ -690,11 +690,18 @@ fn register_antigravity_hooks(hooks_path: &Path, out: &Output) -> Result<()> {
         };
         entry.insert((*event).to_string(), value);
     }
-    let entry = serde_json::Value::Object(entry);
+    let mut entry = serde_json::Value::Object(entry);
 
     let obj = config
         .as_object_mut()
         .with_context(|| format!("{display} is not a JSON object"))?;
+    if obj
+        .get(ANTIGRAVITY_HOOK_NAME)
+        .and_then(|existing| existing.get("enabled"))
+        == Some(&json!(false))
+    {
+        entry["enabled"] = json!(false);
+    }
     if obj.get(ANTIGRAVITY_HOOK_NAME) == Some(&entry) {
         out.already_ok(format!("{display}: hooks already registered"));
         return Ok(());
@@ -1732,6 +1739,37 @@ mod tests {
 
         // Timeout is in seconds for this agent, not milliseconds.
         assert_eq!(pre_invocation["timeout"], 30);
+    }
+
+    #[test]
+    fn antigravity_user_disabled_hook_stays_disabled() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("hooks.json");
+        register_antigravity_hooks(&path, &Output::quiet()).unwrap();
+        let mut cfg: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        cfg["symposium"]["enabled"] = json!(false);
+        cfg["symposium"]["Stop"][0]["command"] = json!("/old");
+        fs::write(&path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+
+        register_antigravity_hooks(&path, &Output::quiet()).unwrap();
+        let cfg: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(cfg["symposium"]["enabled"], false, "got: {cfg:#}");
+        assert_eq!(
+            cfg["symposium"]["Stop"][0]["command"],
+            "cargo-agents hook antigravity stop"
+        );
+
+        let out = Output::capturing();
+        register_antigravity_hooks(&path, &out).unwrap();
+        assert!(
+            out.captured()
+                .iter()
+                .any(|line| line.contains("already registered")),
+            "{:?}",
+            out.captured()
+        );
     }
 
     #[test]
