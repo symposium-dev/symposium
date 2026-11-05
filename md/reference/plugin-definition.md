@@ -241,11 +241,13 @@ install_commands = [
 
 Each `[[hooks]]` entry declares a hook that responds to agent events. For the JSON schemas that symposium-format hooks receive and produce, see [Symposium hook events](./hook-events.md).
 
+For one event, Symposium runs at most one hook per plugin. A hook is a candidate when its `event` and `matcher` match, its `agent`, if set, is the current agent, and its `predicates` hold. Among the candidates, a hook in the current agent's native format wins over a `format = "symposium"` one, and within the same format the last declared wins.
+
 | Field | Type | Description |
 |-------|------|-------------|
 | `name` | string | Descriptive name for the hook (used in logs). |
 | `event` | string | Event type to match: one of the [supported hook events](#supported-hook-events) (e.g., `PreToolUse`). |
-| `matcher` | string (optional) | Regex over the tool name, as the agent names it (e.g., `Bash` in Claude Code, `bash` in Copilot; see [Matcher](./hook-events.md#matcher)). The regex is unanchored, so `Bash` also matches `BashOutput`; anchor it (`^Bash$`) to match one tool. Omit to match all. |
+| `matcher` | string (optional) | Regex over the tool name, as the agent names it (e.g., `Bash` in Claude Code, `bash` in Copilot; see [Matcher](./hook-events.md#matcher)). The regex is unanchored, so `Bash` also matches `BashOutput`; anchor it (`^Bash$`) to match one tool. Omit it, or write `*`, to match all. Any other value must be a valid regex, or the plugin fails validation. |
 | `command` | string or table | What to run. A string names a `[[installations]]` entry; a table is an inline installation (promoted to a synthetic entry named after the hook). |
 | `executable` | string (optional) | Path to a binary inside (or relative to) the installation. At most one of `executable`/`script` set across hook + installation. |
 | `script` | string (optional) | Path to a shell script to run via `sh`. Same exclusivity rule as `executable`. |
@@ -435,7 +437,7 @@ Not every agent delivers every event, and agents name them differently. See [Age
 	- `2` (or no reported exit code): block. The action is blocked, dispatch stops, and the hook's stderr becomes the reason the agent is given. See [exit codes](./hook-events.md#exit-codes) for how each agent receives the block.
 	- any other non-zero code — treated as success for dispatching purposes; stdout is still parsed and merged when possible.
 
-- **Stdout handling**: Hooks should write a JSON object to stdout to contribute structured data back to the caller. Valid JSON objects are merged together across successful hooks; keys from later hooks overwrite earlier keys. The exception is `additionalContext` on `SessionStart`, `UserPromptSubmit` and `PostToolUse`: symposium's own context and every hook's are joined, in order, so none replaces another.
+- **Stdout handling**: A `format = "symposium"` hook writes one of the [output objects](./hook-events.md#output-schemas) to stdout to contribute structured data back to the caller. Stdout that is not one of them, invalid JSON included, is ignored with a warning in the log. A hook with an agent `format` writes that agent's own output, read the way the agent reads it: on `SessionStart` and `UserPromptSubmit`, plain text from a `claude` or `codex` hook is context. Valid outputs are merged together across successful hooks; keys from later hooks overwrite earlier keys. The exception is `additionalContext` on `SessionStart`, `UserPromptSubmit` and `PostToolUse`: symposium's own context and every hook's are joined, in order, so none replaces another.
 
 - **Stderr handling**: If a hook exits with code `2` (or no exit code), dispatch returns immediately with the hook's stderr as the block reason. Otherwise stderr is captured but not returned on success.
 

@@ -11,7 +11,7 @@ A plugin hook declares which wire format its handler expects:
 
 ## Dispatch rule
 
-When symposium's global handler receives an event from agent A, it loads all plugins and finds hooks matching the event. For each plugin, it picks at most one hook to deliver:
+When symposium's global handler receives an event from agent A, it loads all plugins and finds each plugin's candidate hooks: those whose event and `matcher` match, whose `agent`, if set, is A, and whose `predicates` hold. For each plugin, it picks at most one candidate to deliver, the last declared one when several share a tier:
 
 1. If the plugin declares a hook with `format` matching **agent A** → deliver the input unmodified (the handler already expects this agent's native format).
 2. Otherwise, if the plugin declares a **symposium-format** hook → convert to symposium canonical and deliver.
@@ -39,6 +39,10 @@ Symposium converts the hook's output back to the current agent's wire format bef
 
 - Native format matching the host agent → pass through directly.
 - Symposium format → convert to host agent's wire format.
+
+Stdout from a symposium-format hook that is not a canonical output, such as `null` or an object without the event tag, is ignored with a warning, like invalid JSON. Only translated output reaches the agent, so one plugin cannot replace or clear what the others returned.
+
+A native hook's stdout is read the way its agent reads it, plain-text context included: on `SessionStart` and `UserPromptSubmit`, stdout from a `claude` or `codex` hook that is not JSON becomes context.
 
 ## Alternatives considered
 

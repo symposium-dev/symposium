@@ -588,7 +588,7 @@ pub trait HookHandler {
 /// Run a hook handler. Reads the input event from stdin, dispatches to the
 /// handler, and writes the output to stdout with the correct exit code.
 ///
-/// - Empty output (all fields `None`) → exit 0, no stdout.
+/// - The default (no-op) output -> exit 0, no stdout.
 /// - Non-empty output → exit 0, JSON on stdout.
 /// - `Err(...)` → exit 1, error message on stderr.
 pub fn run(handler: impl HookHandler) -> ExitCode {
@@ -638,10 +638,28 @@ async fn run_async(handler: impl HookHandler) -> ExitCode {
 
 fn is_empty_output(output: &Output) -> bool {
     match output {
-        Output::PreToolUse(o) => o.additional_context.is_none() && o.updated_input.is_none(),
+        Output::PreToolUse(o) => {
+            o.decision.is_allow() && o.additional_context.is_none() && o.updated_input.is_none()
+        }
         Output::PostToolUse(o) => o.additional_context.is_none(),
         Output::UserPromptSubmit(o) => o.additional_context.is_none(),
         Output::SessionStart(o) => o.additional_context.is_none(),
         Output::Stop(o) => o.additional_context.is_none(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_deny_without_a_reason_is_written() {
+        let deny = Output::PreToolUse(PreToolUseOutput::new(Decision::Deny, None, None));
+        assert!(!is_empty_output(&deny));
+        assert_eq!(
+            serde_json::to_value(&deny).unwrap(),
+            serde_json::json!({"PreToolUse": {"decision": "deny"}})
+        );
+        assert!(is_empty_output(&Output::empty_for(HookEvent::PreToolUse)));
     }
 }

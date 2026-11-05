@@ -833,7 +833,7 @@ pub async fn dispatch_plugin_hooks(
                         let (host_json, hook_output) = if hook_agent == Some(host_agent) {
                             // Native format — parse as host agent output
                             match host_h.parse_output(&child_out.stdout) {
-                                Ok(o) => (o.to_hook_output(), Some(o.to_symposium())),
+                                Ok(o) => (o.to_hook_output(), o.to_symposium()),
                                 Err(e) => {
                                     tracing::warn!(error = %e, "failed to parse hook output");
                                     continue;
@@ -841,26 +841,27 @@ pub async fn dispatch_plugin_hooks(
                             }
                         } else {
                             // Symposium format — parse and convert to host agent
-                            match serde_json::from_slice::<serde_json::Value>(&child_out.stdout) {
-                                Ok(v) => {
-                                    if let Ok(sym_out) =
-                                        serde_json::from_value::<symposium::OutputEvent>(v.clone())
-                                    {
-                                        let host_out = host_h.translate_output(&sym_out);
-                                        (host_out.to_hook_output(), Some(sym_out))
-                                    } else {
-                                        (v, None)
-                                    }
+                            match serde_json::from_slice::<symposium::OutputEvent>(
+                                &child_out.stdout,
+                            ) {
+                                Ok(sym_out) => {
+                                    let host_out = host_h.translate_output(&sym_out);
+                                    (host_out.to_hook_output(), sym_out)
                                 }
                                 Err(e) => {
-                                    tracing::warn!(error = %e, "failed to parse hook output");
+                                    tracing::warn!(
+                                        plugin = %hook.plugin_name,
+                                        hook = %hook.hook_name,
+                                        error = %e,
+                                        "plugin hook output is not a symposium output; ignoring it"
+                                    );
                                     continue;
                                 }
                             }
                         };
 
                         merge(&mut output, host_json);
-                        if hook_output.as_ref().is_some_and(denies) {
+                        if denies(&hook_output) {
                             tracing::info!(
                                 plugin = %hook.plugin_name,
                                 hook = %hook.hook_name,
@@ -868,7 +869,7 @@ pub async fn dispatch_plugin_hooks(
                             );
                             return Ok(output);
                         }
-                        context.add(hook_output.as_ref(), &mut output, host_h.as_ref());
+                        context.add(&hook_output, &mut output, host_h.as_ref());
                     }
                     Some(code) => {
                         tracing::warn!(
@@ -918,7 +919,7 @@ impl JoinedContext {
     /// for Antigravity's `injectSteps` list, emptied).
     fn add(
         &mut self,
-        hook_output: Option<&symposium::OutputEvent>,
+        hook_output: &symposium::OutputEvent,
         output: &mut serde_json::Value,
         handler: &dyn crate::hook_schema::ErasedAgentHookEvent,
     ) {
@@ -928,7 +929,7 @@ impl JoinedContext {
         ) {
             return;
         }
-        if let Some(more) = hook_output.and_then(|o| o.additional_context()) {
+        if let Some(more) = hook_output.additional_context() {
             self.text = Some(match self.text.take() {
                 Some(text) => format!("{text}\n\n{more}"),
                 None => more.to_string(),
@@ -1000,8 +1001,8 @@ fn dispatched_hooks_for_payload(
             continue;
         }
 
-        let mut native_match: Option<&crate::plugins::Hook> = None;
-        let mut symposium_match: Option<&crate::plugins::Hook> = None;
+        let mut native_matches = Vec::new();
+        let mut symposium_matches = Vec::new();
 
         for hook in &parsed_plugin.manifest.hooks {
             if hook.event != input.event() {
@@ -1012,14 +1013,17 @@ fn dispatched_hooks_for_payload(
             {
                 continue;
             }
+            if hook.agent.is_some_and(|agent| agent != host_agent) {
+                continue;
+            }
 
             match hook.format.as_agent() {
                 Some(agent) if agent == host_agent => {
-                    native_match = Some(hook);
+                    native_matches.push(hook);
                 }
                 None => {
                     // format = "symposium"
-                    symposium_match = Some(hook);
+                    symposium_matches.push(hook);
                 }
                 Some(_) => {
                     // Different agent format — does not fire on this agent.
@@ -1027,23 +1031,28 @@ fn dispatched_hooks_for_payload(
             }
         }
 
-        let selected = native_match.or(symposium_match);
+        let any_candidate = !native_matches.is_empty() || !symposium_matches.is_empty();
+        let selected = native_matches
+            .into_iter()
+            .rev()
+            .chain(symposium_matches.into_iter().rev())
+            .find(|hook| {
+                let holds = hook.predicates.evaluate(ctx);
+                if !holds {
+                    tracing::debug!(
+                        report = %crate::report::ReportEvent::HookConsidered {
+                            plugin: parsed_plugin.manifest.name.clone(),
+                            hook: hook.name.clone(),
+                            event: format!("{:?}", input.event()),
+                            selected: false,
+                            format: Some(format!("{:?}", hook.format)),
+                            reason: Some("hook predicates not satisfied".into()),
+                        },
+                    );
+                }
+                holds
+            });
         if let Some(hook) = selected {
-            // Hook-level predicates are evaluated at dispatch so they pick up
-            // live state (file present, tool installed, crate present, …).
-            if !hook.predicates.evaluate(ctx) {
-                tracing::debug!(
-                    report = %crate::report::ReportEvent::HookConsidered {
-                        plugin: parsed_plugin.manifest.name.clone(),
-                        hook: hook.name.clone(),
-                        event: format!("{:?}", input.event()),
-                        selected: false,
-                        format: Some(format!("{:?}", hook.format)),
-                        reason: Some("hook predicates not satisfied".into()),
-                    },
-                );
-                continue;
-            }
             tracing::debug!(
                 report = %crate::report::ReportEvent::HookConsidered {
                     plugin: parsed_plugin.manifest.name.clone(),
@@ -1065,11 +1074,12 @@ fn dispatched_hooks_for_payload(
                     );
                 }
             }
-        } else if parsed_plugin
-            .manifest
-            .hooks
-            .iter()
-            .any(|h| h.event == input.event())
+        } else if !any_candidate
+            && parsed_plugin
+                .manifest
+                .hooks
+                .iter()
+                .any(|h| h.event == input.event())
         {
             tracing::debug!(
                 report = %crate::report::ReportEvent::HookConsidered {
@@ -1078,7 +1088,7 @@ fn dispatched_hooks_for_payload(
                     event: format!("{:?}", input.event()),
                     selected: false,
                     format: None,
-                    reason: Some("no matching format for this agent".into()),
+                    reason: Some("no hook matches this agent and tool".into()),
                 },
             );
         }
@@ -1358,6 +1368,63 @@ mod tests {
             &mut crate::predicate::PredicateContext::new(&[]),
         );
         assert_eq!(hooks.len(), 1);
+    }
+
+    #[test]
+    fn dispatch_skips_hook_restricted_to_another_agent() {
+        let mut plugin = plugin_with_hook(vec![], vec![]);
+        plugin.manifest.hooks[0].agent = Some(HookAgent::Claude);
+        let dispatch = |agent| {
+            dispatched_hooks_for_payload(
+                std::slice::from_ref(&plugin),
+                &pre_tool_use_input(),
+                agent,
+                &mut crate::predicate::PredicateContext::new(&[]),
+            )
+            .len()
+        };
+        assert_eq!(dispatch(HookAgent::Claude), 1);
+        assert_eq!(dispatch(HookAgent::Codex), 0);
+    }
+
+    #[test]
+    fn dispatch_falls_back_to_portable_hook_when_native_predicates_fail() {
+        use crate::plugins::HookFormat;
+
+        let with_native_predicate = |command: &str| {
+            let mut plugin = plugin_with_hook(vec![], vec![]);
+            let portable = plugin.manifest.hooks[0].clone();
+            let mut native = portable.clone();
+            native.name = "native".into();
+            native.format = HookFormat::Claude;
+            native.predicates.predicates = vec![crate::predicate::Predicate::Shell(command.into())];
+            plugin.manifest.hooks = vec![
+                crate::plugins::Hook {
+                    name: "portable-first".into(),
+                    ..portable.clone()
+                },
+                crate::plugins::Hook {
+                    name: "portable-last".into(),
+                    ..portable
+                },
+                native,
+            ];
+            plugin
+        };
+        let selected = |plugin: crate::plugins::Plugin| {
+            dispatched_hooks_for_payload(
+                &[plugin],
+                &pre_tool_use_input(),
+                HookAgent::Claude,
+                &mut crate::predicate::PredicateContext::new(&[]),
+            )
+            .into_iter()
+            .map(|hook| hook.hook_name)
+            .collect::<Vec<_>>()
+        };
+
+        assert_eq!(selected(with_native_predicate("false")), ["portable-last"]);
+        assert_eq!(selected(with_native_predicate("true")), ["native"]);
     }
 
     /// A plugin gated on a concrete crate must not dispatch its hooks in a
