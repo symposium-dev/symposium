@@ -22,7 +22,7 @@ The payload is parsed first, and the agent's parser can declare it not an occurr
    Agents without hook registration (OpenCode, Goose) never receive this; for them the only discovery surface is `cargo agents --help` itself.
 
 3. **Dispatch to plugin hooks** — for each enabled plugin that defines a hook handler for the incoming event:
-   - **Select format**: for each plugin, pick the best hook to deliver (see [Hooks](./hooks.md) for priority rules). If the plugin has a hook matching the current agent's format, deliver the input unmodified. Otherwise deliver in symposium canonical format (or convert to the declared format if only one non-symposium hook exists).
+   - **Select format**: for each plugin, pick the best format and deliver to every matching hook of it (see [Hooks](./hooks.md) for priority rules). If the plugin has hooks matching the current agent's format, deliver the input unmodified. Otherwise deliver in symposium canonical format to its symposium-format hooks; a hook for another agent never fires.
    - **Acquire and run**:
      - Ensure any `requirements` for the hook are acquired (on-demand, best-effort).
      - Resolve the hook's `command` (a named installation reference or inline declaration) into a runnable form:

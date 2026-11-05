@@ -147,11 +147,14 @@ pub async fn remove_plugin(
 
     let used = std::mem::take(&mut sym.config.plugins.used);
     let before = used.len();
+    let mut removed_global = Vec::new();
     for entry in used {
         let remove = in_scope(&entry, global, workspace_root.as_deref())
             && names(pms, &registry.plugins, entry.name(), name, id.as_ref()).await;
         if !remove {
             sym.config.plugins.used.push(entry);
+        } else if let UseEntry::Global(stored) = entry {
+            removed_global.push(stored);
         }
     }
     if sym.config.plugins.used.len() == before {
@@ -159,6 +162,9 @@ pub async fn remove_plugin(
         bail!("no `use` entry for `{name}` ({scope}); see `cargo agents status`");
     }
     sym.save_config().context("failed to write user config")?;
+    for stored in &removed_global {
+        crate::state::forget_trial_use(sym.config_dir(), stored);
+    }
     tracing::info!(
         report = %ReportEvent::PluginRemoved {
             name: name.to_string(),

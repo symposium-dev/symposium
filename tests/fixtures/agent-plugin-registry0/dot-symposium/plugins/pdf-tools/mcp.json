@@ -1,0 +1,15 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "pdf-tables": {
+      "type": "stdio",
+      "command": "./bin/pdf-server",
+      "args": ["--config", "${PLUGIN_ROOT}/config.json"],
+      "env": {"CACHE": "${PLUGIN_DATA}/cache"}
+    },
+    "pdf-socket": {
+      "type": "websocket",
+      "url": "wss://example.com/pdf"
+    }
+  }
+}

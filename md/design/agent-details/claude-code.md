@@ -163,7 +163,7 @@ Decision precedence across parallel hooks: **deny > defer > ask > allow**. The `
 
 | Code | Meaning |
 |---|---|
-| `0` | Success; stdout parsed as JSON |
+| `0` | Success; stdout parsed as JSON. For `SessionStart` and `UserPromptSubmit`, stdout that is not JSON is added to the context as plain text |
 | `2` | Blocking error — action blocked, stderr fed to Claude |
 | Other | Non-blocking warning, action proceeds |
 

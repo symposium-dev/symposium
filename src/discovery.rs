@@ -82,6 +82,7 @@ pub struct DiscoveredPlugin {
     pub description: Option<String>,
     /// How the `[plugins]` config decided this offer.
     pub enablement: Enablement,
+    pub format: Option<&'static str>,
 }
 
 impl DiscoveredPlugin {
@@ -138,10 +139,18 @@ pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin])
     for inst in pms.instances().filter(|i| !i.trusted) {
         for plugin in inst.active_plugins(dep_ids).await {
             let name = plugin.canonical.name.clone();
-            let description = Some(describe_plugin(&plugin.manifest));
+            let description = Some(match plugin.format() {
+                Some(_) => format!(
+                    "the Agent Plugins package `{}` ({})",
+                    plugin.manifest.name,
+                    describe_plugin(&plugin.manifest)
+                ),
+                None => describe_plugin(&plugin.manifest),
+            });
             let enablement = decide(sym, pms, &used, &plugin.canonical);
             let discovered = DiscoveredPlugin {
                 registry: inst.name.clone(),
+                format: plugin.format(),
                 id: plugin.canonical,
                 recommends: name,
                 description,
