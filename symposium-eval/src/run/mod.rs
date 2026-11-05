@@ -26,6 +26,7 @@ pub(crate) mod client;
 mod env;
 mod error;
 mod exploratory;
+mod grading;
 mod inputs;
 mod policy;
 mod prelaunch;

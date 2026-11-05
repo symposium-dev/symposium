@@ -70,6 +70,22 @@ pub(crate) enum RunError {
     #[error("`{}` has not been written, so the trial cannot run", .0.display())]
     NoPolicy(PathBuf),
     #[error(
+        "`{}` is too long for `srt`'s sockets; choose an evaluation root with a shorter path",
+        .0.display()
+    )]
+    TmpTooLong(PathBuf),
+    #[error(
+        "Cargo or rustfmt would read `{}` while grading, which could change the result; choose an evaluation root beneath no readable Cargo manifests, Cargo configuration, or rustfmt configuration",
+        .0.display()
+    )]
+    AmbientGradingInput(PathBuf),
+    #[error("cannot check `{}` for an ambient grading input", .path.display())]
+    GradingInputCheck {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
+    #[error(
         "`srt` reports version `{found}`, but the runner is pinned to {}",
         super::SRT_VERSION
     )]

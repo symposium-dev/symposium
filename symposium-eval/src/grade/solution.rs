@@ -9,7 +9,7 @@ use tempfile::TempDir;
 use super::import::copy_tree;
 use super::limits::GradeLimits;
 use super::process::Local;
-use super::{Grading, ImportError, Outcome, Report, grade};
+use super::{Grading, GradingDirs, ImportError, Outcome, Report, grade};
 use crate::evals::Evals;
 use crate::task::{DirProblem, Task, TaskError, TaskErrors};
 
@@ -57,12 +57,12 @@ fn grade_solution(evals: &Evals, task: &Task, solution: &Path) -> Result<Report,
         &scratch.path().join("submission"),
         &Local,
         &GradeLimits::default(),
-        &scratch.path().join("logs"),
+        &GradingDirs::under(&scratch.path().join("grading")),
     );
     match grading {
         Grading::Graded(report) => Ok(report),
         Grading::InvalidSubmission(error) => Err(TaskError::SolutionGrading(error.into())),
-        Grading::Infrastructure(error) => Err(TaskError::SolutionGrading(error)),
+        Grading::Infrastructure { error, .. } => Err(TaskError::SolutionGrading(error)),
     }
 }
 

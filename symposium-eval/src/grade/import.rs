@@ -14,19 +14,19 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 use globset::GlobMatcher;
-use tempfile::TempDir;
 
 use super::ImportError;
 use crate::evals::Evals;
 use crate::task::{CheckName, EditablePattern, Task, is_protected};
 use crate::tree::{self, EntryKind, TreeEntry, WalkError};
 
-/// A task's trusted project and fixtures in a private temporary directory, laid out as in
-/// a trial (`project/` beside `fixtures/<name>/`) so path dependencies resolve. Removed
-/// when dropped.
+/// A task's trusted project and fixtures in `sources/`, laid out as in a trial
+/// (`project/` beside `fixtures/<name>/`) so path dependencies resolve, and the commands'
+/// writable state in `work/`, kept apart so a sandbox can make the sources read-only.
 #[derive(Debug)]
 pub(crate) struct GradingCopy {
-    root: TempDir,
+    sources: PathBuf,
+    work: PathBuf,
     /// The starter as `evals/` holds it, listed before grading adds anything such as the
     /// hidden checks: the state a submission's changes are measured against.
     starter: Listing,
@@ -50,14 +50,151 @@ pub(crate) enum Change {
 
 impl GradingCopy {
     pub(crate) fn project(&self) -> PathBuf {
-        self.root.path().join("project")
+        self.sources.join("project")
     }
 
-    /// The copy's own directory, beside `project/`, for anything grading keeps out of
-    /// the project, such as Cargo's target directory.
-    pub(crate) fn scratch(&self) -> &Path {
-        self.root.path()
+    /// The commands' writable state: Cargo's target directory, `CARGO_HOME` and `tmp/`.
+    pub(crate) fn work(&self) -> &Path {
+        &self.work
     }
+
+    /// Empties [`Self::work`], leaving only an empty `tmp/`, so nothing one step left
+    /// there, such as build output or a planted `CARGO_HOME/config.toml`, reaches the
+    /// next. The runner does this from outside any sandbox, between steps, after the
+    /// command supervisor has stopped every descendant of the preceding command.
+    ///
+    /// # Errors
+    ///
+    /// When `work/` cannot be removed or recreated.
+    pub(crate) fn fresh_work(&self) -> Result<(), ImportError> {
+        let write_error = |source| ImportError::Write {
+            path: self.work.clone(),
+            source,
+        };
+        match remove_owned_tree(&self.work) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(source) => return Err(write_error(source)),
+        }
+        fs::create_dir_all(self.work.join("tmp")).map_err(write_error)
+    }
+}
+
+/// Makes the runner-owned directories in `root` traversable, then removes the tree.
+///
+/// Submission code may take permissions away from entries in `work/`. The command
+/// supervisor has stopped that code and all of its descendants before this runs, so the
+/// metadata checks cannot race a surviving submission process. The walk uses
+/// `symlink_metadata` and never changes permissions through a link; `remove_dir_all`
+/// is not used, since its own recursive descent can retain one descriptor per level.
+fn remove_owned_tree(root: &Path) -> io::Result<()> {
+    enum Pending {
+        Inspect(PathBuf),
+        RemoveDirectory(PathBuf),
+    }
+
+    let mut pending = vec![Pending::Inspect(root.to_owned())];
+    while let Some(entry) = pending.pop() {
+        match entry {
+            Pending::Inspect(path) => {
+                let metadata = fs::symlink_metadata(&path)?;
+                if is_link(&metadata) {
+                    remove_link(&path, &metadata)?;
+                } else if metadata.is_dir() {
+                    make_directory_accessible(&path, &metadata)?;
+                    // Consume and close this iterator before processing a child. A
+                    // recursive walk would retain one directory handle per level and
+                    // let a deep tree exhaust the runner's descriptor limit.
+                    let children = fs::read_dir(&path)?
+                        .map(|entry| entry.map(|entry| Pending::Inspect(entry.path())))
+                        .collect::<io::Result<Vec<_>>>()?;
+                    pending.push(Pending::RemoveDirectory(path));
+                    pending.extend(children);
+                } else {
+                    make_file_removable(&path, &metadata)?;
+                    fs::remove_file(path)?;
+                }
+            }
+            Pending::RemoveDirectory(path) => fs::remove_dir(path)?,
+        }
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn remove_link(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x10;
+    if metadata.file_attributes() & FILE_ATTRIBUTE_DIRECTORY != 0 {
+        fs::remove_dir(path)
+    } else {
+        fs::remove_file(path)
+    }
+}
+
+#[cfg(not(windows))]
+fn remove_link(path: &Path, _metadata: &fs::Metadata) -> io::Result<()> {
+    fs::remove_file(path)
+}
+
+#[cfg(unix)]
+fn make_directory_accessible(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mode = metadata.permissions().mode();
+    let accessible = mode | 0o700;
+    if accessible != mode {
+        fs::set_permissions(path, fs::Permissions::from_mode(accessible))?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn make_directory_accessible(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    clear_readonly(path, metadata)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn make_directory_accessible(_path: &Path, _metadata: &fs::Metadata) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+fn make_file_removable(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    clear_readonly(path, metadata)
+}
+
+#[cfg(not(windows))]
+fn make_file_removable(_path: &Path, _metadata: &fs::Metadata) -> io::Result<()> {
+    Ok(())
+}
+
+#[cfg(windows)]
+#[expect(
+    clippy::permissions_set_readonly_false,
+    reason = "on Windows this clears a file attribute, not Unix mode bits"
+)]
+fn clear_readonly(path: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    let mut permissions = metadata.permissions();
+    if permissions.readonly() {
+        permissions.set_readonly(false);
+        fs::set_permissions(path, permissions)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn is_link(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+
+    const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+    metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0
+}
+
+#[cfg(not(windows))]
+fn is_link(metadata: &fs::Metadata) -> bool {
+    metadata.file_type().is_symlink()
 }
 
 impl fmt::Display for OutsideEdit {
@@ -98,30 +235,46 @@ pub(crate) fn import_submission(
 }
 
 impl GradingCopy {
-    /// The starter and the task's fixtures, as `evals/` holds them.
-    pub(crate) fn from_trusted(evals: &Evals, task: &Task) -> Result<Self, ImportError> {
-        let root = TempDir::new().map_err(|source| ImportError::Write {
-            path: std::env::temp_dir(),
+    /// The starter and the task's fixtures, as `evals/` holds them, copied into
+    /// `sources`, which must not exist yet, with an empty `work`.
+    pub(crate) fn from_trusted(
+        evals: &Evals,
+        task: &Task,
+        sources: &Path,
+        work: &Path,
+    ) -> Result<Self, ImportError> {
+        let write_error = |source| ImportError::Write {
+            path: sources.to_owned(),
             source,
-        })?;
+        };
+        if let Some(parent) = sources.parent() {
+            fs::create_dir_all(parent).map_err(write_error)?;
+        }
+        // Not `create_dir_all`: stale sources must never be graded over.
+        fs::create_dir(sources).map_err(write_error)?;
         copy_tree(
             &evals.starter_dir(task.name()),
-            &root.path().join("project"),
+            &sources.join("project"),
             "starter",
         )?;
         for fixture in task.fixtures() {
             copy_tree(
                 &evals.fixture_dir(fixture),
-                &root.path().join("fixtures").join(fixture.as_str()),
+                &sources.join("fixtures").join(fixture.as_str()),
                 &format!("fixtures/{fixture}"),
             )?;
         }
-        let starter =
-            listing(&root.path().join("project")).map_err(|source| ImportError::Trusted {
-                tree: "starter".to_owned(),
-                source,
-            })?;
-        Ok(Self { root, starter })
+        let starter = listing(&sources.join("project")).map_err(|source| ImportError::Trusted {
+            tree: "starter".to_owned(),
+            source,
+        })?;
+        let copy = Self {
+            sources: sources.to_owned(),
+            work: work.to_owned(),
+            starter,
+        };
+        copy.fresh_work()?;
+        Ok(copy)
     }
 
     /// Removes the starter's editable files, then each editable directory this leaves
@@ -583,8 +736,248 @@ fn is_within(path: &str, dir: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use tempfile::TempDir;
+
     use super::*;
     use crate::grade::testing::{Imported, STARTER_MANIFEST, TaskFixture};
+
+    #[test]
+    fn existing_sources_are_never_graded_over() {
+        let fixture = TaskFixture::new("");
+        let dir = TempDir::new().unwrap();
+        let sources = dir.path().join("sources");
+        fs::create_dir(&sources).unwrap();
+
+        let result = GradingCopy::from_trusted(
+            fixture.evals(),
+            fixture.task(),
+            &sources,
+            &dir.path().join("work"),
+        );
+
+        assert!(
+            matches!(&result, Err(ImportError::Write { source, .. }) if source.kind() == io::ErrorKind::AlreadyExists),
+            "{result:?}"
+        );
+    }
+
+    #[test]
+    fn fresh_work_leaves_nothing_a_step_wrote() {
+        let fixture = TaskFixture::new("");
+        let import = fixture.build_copy(fixture.submission().path()).unwrap();
+        let planted = import.copy.work().join("cargo-home/config.toml");
+        fs::create_dir_all(planted.parent().unwrap()).unwrap();
+        fs::write(&planted, "[build]\nrustc-wrapper = \"wrapper\"\n").unwrap();
+        fs::write(import.copy.work().join("tmp/left"), "").unwrap();
+
+        import.copy.fresh_work().unwrap();
+
+        let left: Vec<_> = fs::read_dir(import.copy.work())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        assert_eq!(left, ["tmp"]);
+        assert_eq!(
+            fs::read_dir(import.copy.work().join("tmp"))
+                .unwrap()
+                .count(),
+            0
+        );
+        assert!(
+            import.copy.project().join("Cargo.toml").is_file(),
+            "the sources are kept"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_work_restores_directory_access_before_removing_it() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = TaskFixture::new("");
+        let import = fixture.build_copy(fixture.submission().path()).unwrap();
+        let locked = import.copy.work().join("tmp/locked/inner");
+        fs::create_dir_all(&locked).unwrap();
+        fs::set_permissions(locked.parent().unwrap(), fs::Permissions::from_mode(0o000)).unwrap();
+
+        import.copy.fresh_work().unwrap();
+
+        assert!(import.copy.work().join("tmp").is_dir());
+        assert!(!import.copy.work().join("tmp/locked").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_work_closes_each_directory_before_descending() {
+        const CHILD: &str = "SYMPOSIUM_EVAL_DEEP_CLEANUP_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "grade::import::tests::fresh_work_closes_each_directory_before_descending",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .status()
+                .unwrap();
+            assert!(status.success(), "cleanup subprocess failed: {status}");
+            return;
+        }
+
+        let fixture = TaskFixture::new("");
+        let import = fixture.build_copy(fixture.submission().path()).unwrap();
+        let mut deepest = import.copy.work().join("tmp");
+        for _ in 0..96 {
+            deepest.push("d");
+            fs::create_dir(&deepest).unwrap();
+        }
+
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        // SAFETY: `limit` points to writable storage for the process's current limit.
+        assert_eq!(
+            unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &raw mut limit) },
+            0
+        );
+        limit.rlim_cur = limit.rlim_max.min(32);
+        // SAFETY: the new soft limit does not exceed the hard limit just read. This
+        // process runs only this test, so lowering its limit cannot affect another test.
+        assert_eq!(
+            unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &raw const limit) },
+            0
+        );
+
+        import.copy.fresh_work().unwrap();
+
+        assert!(import.copy.work().join("tmp").is_dir());
+        assert!(
+            fs::read_dir(import.copy.work().join("tmp"))
+                .unwrap()
+                .next()
+                .is_none()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_work_never_follows_a_link_even_when_the_root_is_one() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let fixture = TaskFixture::new("");
+        let import = fixture.build_copy(fixture.submission().path()).unwrap();
+        let outside = TempDir::new().unwrap();
+        let sentinel = outside.path().join("sentinel");
+        fs::write(&sentinel, "outside").unwrap();
+        fs::set_permissions(outside.path(), fs::Permissions::from_mode(0o500)).unwrap();
+        let before = fs::metadata(outside.path()).unwrap().permissions().mode();
+
+        fs::remove_dir_all(import.copy.work()).unwrap();
+        symlink(outside.path(), import.copy.work()).unwrap();
+        import.copy.fresh_work().unwrap();
+
+        assert_eq!(fs::read_to_string(&sentinel).unwrap(), "outside");
+        assert_eq!(
+            fs::metadata(outside.path()).unwrap().permissions().mode(),
+            before
+        );
+        assert!(
+            !fs::symlink_metadata(import.copy.work())
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        fs::set_permissions(outside.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_work_removes_a_dangling_link_without_resolving_it() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = TaskFixture::new("");
+        let import = fixture.build_copy(fixture.submission().path()).unwrap();
+        let link = import.copy.work().join("tmp/dangling");
+        symlink("nowhere", &link).unwrap();
+
+        import.copy.fresh_work().unwrap();
+
+        assert!(import.copy.work().join("tmp").is_dir());
+        assert!(fs::symlink_metadata(link).is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fresh_work_removes_readonly_files() {
+        let fixture = TaskFixture::new("");
+        let import = fixture.build_copy(fixture.submission().path()).unwrap();
+        let readonly = import.copy.work().join("tmp/readonly");
+        fs::write(&readonly, "owned").unwrap();
+        let mut permissions = fs::metadata(&readonly).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&readonly, permissions).unwrap();
+
+        import.copy.fresh_work().unwrap();
+
+        assert!(!readonly.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fresh_work_does_not_follow_directory_symlinks() {
+        use std::os::windows::fs::symlink_dir;
+
+        let fixture = TaskFixture::new("");
+        let import = fixture.build_copy(fixture.submission().path()).unwrap();
+        let outside = TempDir::new().unwrap();
+        let sentinel = outside.path().join("sentinel");
+        fs::write(&sentinel, "outside").unwrap();
+        let link = import.copy.work().join("tmp/junction");
+        match symlink_dir(outside.path(), &link) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("cannot create directory link: {error}"),
+        }
+
+        import.copy.fresh_work().unwrap();
+
+        assert_eq!(fs::read_to_string(sentinel).unwrap(), "outside");
+        assert!(!link.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn fresh_work_does_not_follow_junctions() {
+        let fixture = TaskFixture::new("");
+        let import = fixture.build_copy(fixture.submission().path()).unwrap();
+        let outside = TempDir::new().unwrap();
+        let sentinel = outside.path().join("sentinel");
+        fs::write(&sentinel, "outside").unwrap();
+        let junction = import.copy.work().join("tmp").join("junction");
+        let output = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "New-Item -ItemType Junction -Path $env:SYMPOSIUM_JUNCTION -Target $env:SYMPOSIUM_TARGET | Out-Null",
+            ])
+            .env("SYMPOSIUM_JUNCTION", &junction)
+            .env("SYMPOSIUM_TARGET", outside.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "cannot create test junction: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        import.copy.fresh_work().unwrap();
+
+        assert_eq!(fs::read_to_string(sentinel).unwrap(), "outside");
+        assert!(!junction.exists());
+    }
 
     fn read_project(import: &Imported, path: &str) -> Option<String> {
         fs::read_to_string(import.copy.project().join(path)).ok()
@@ -844,7 +1237,7 @@ mod tests {
 
         let import = fixture.build_copy(submission.path()).unwrap();
 
-        let store = import.copy.root.path().join("fixtures/store/src/lib.rs");
+        let store = import.copy.sources.join("fixtures/store/src/lib.rs");
         assert_eq!(fs::read_to_string(store).unwrap(), "pub struct Store;");
     }
 

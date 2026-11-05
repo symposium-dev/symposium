@@ -9,7 +9,7 @@ use super::import::{Change, OutsideEdit};
 use super::limits::GradeLimits;
 use super::process::Local;
 use super::solution::overlay;
-use super::{Grading, Outcome, Report, StepKind, grade};
+use super::{Grading, GradingDirs, Outcome, Report, StepKind, grade};
 use crate::evals::Evals;
 use crate::task::{CheckName, Task, TaskName};
 
@@ -33,7 +33,7 @@ fn grade_scratch(evals: &Evals, task: &Task, scratch: &TempDir) -> Report {
         &scratch.path().join("submission"),
         &Local,
         &GradeLimits::default(),
-        &scratch.path().join("logs"),
+        &GradingDirs::under(&scratch.path().join("grading")),
     ) {
         Grading::Graded(report) => report,
         other => panic!("expected a report, got {other:?}"),
