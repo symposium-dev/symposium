@@ -1,0 +1,67 @@
+---
+source: symposium-eval/src/result/tests/mod.rs
+expression: result
+---
+{
+  "schema_version": 1,
+  "task": {
+    "name": "formatting",
+    "kind": "regression",
+    "content_hash": "[hash]"
+  },
+  "client": {
+    "name": "claude",
+    "version": "2.1.316"
+  },
+  "model": {
+    "name": "haiku",
+    "settings": {},
+    "reported": "claude-haiku-5-5"
+  },
+  "mode": "without-symposium",
+  "trial": 3,
+  "symposium": null,
+  "os": "linux x86_64",
+  "toolchain": "rustc 1.99.1",
+  "deadlines_secs": {
+    "setup": 120,
+    "agent": 600,
+    "grading": 300
+  },
+  "isolation": {
+    "mode": "enforced",
+    "srt_version": "0.0.81",
+    "config_changes": []
+  },
+  "reached": {
+    "phase": "graded"
+  },
+  "outcome": {
+    "result": "failed",
+    "failure": "session"
+  },
+  "session": {
+    "ended": {
+      "status": "failed",
+      "error": "the client reported an error: API Error: overloaded"
+    },
+    "elapsed_secs": 1.5,
+    "usage": {
+      "status": "unsupported"
+    },
+    "observed_loads": {
+      "rust-formatting": "loaded"
+    }
+  },
+  "code": {
+    "status": "graded",
+    "build": "pass",
+    "cargo_test_lib": "pass",
+    "hidden": {
+      "double": "pass"
+    },
+    "cargo_fmt_check": "pass",
+    "edits_outside_editable": []
+  },
+  "expectations": null
+}
