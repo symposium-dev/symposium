@@ -146,9 +146,18 @@ mod tests {
             "---\nname: style\ndescription: d\ndepends-on: serde\n---\nbody",
         )
         .unwrap();
+        std::fs::create_dir_all(source.join("cc/.claude-plugin")).unwrap();
+        std::fs::write(source.join("cc/.claude-plugin/plugin.json"), "{}").unwrap();
+        std::fs::create_dir_all(source.join("cc/skills/review")).unwrap();
+        std::fs::write(
+            source.join("cc/skills/review/SKILL.md"),
+            "---\nname: review\ndescription: d\n---\nbody",
+        )
+        .unwrap();
 
         let pm = PathPm::new("user-plugins", &source);
         let active = pm.active_plugins(&[]).await.unwrap();
+        assert!(active.complete);
         let mut names: Vec<&str> = active
             .plugins
             .iter()

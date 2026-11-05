@@ -1296,6 +1296,8 @@ mod tests {
             .collect();
         let plugin = PluginManifest {
             name: "test-plugin".into(),
+            version: None,
+            description: None,
             predicates: crate::predicate::PredicateSet {
                 predicates: plugin_predicates,
             },
@@ -1312,6 +1314,7 @@ mod tests {
             manifest: plugin,
             workspace_member: false,
             canonical: PackageId::new("test", "test-plugin", ANY_VERSION),
+            agent_plugin_root: None,
         }
     }
 
