@@ -57,14 +57,15 @@ pub async fn use_plugin(
     }
 
     // A configured registry is a trust root: what it offers is already
-    // enabled by configuration, so there is nothing to record. The exception
-    // is a dormant plugin, for which `use` is exactly the wake-up call.
+    // enabled by configuration, so there is nothing to record. The exceptions
+    // are a dormant plugin, for which `use` is exactly the wake-up call, and
+    // `--global`, which also installs the plugin for the user.
     let registry_plugin = registry
         .plugins
         .iter()
         .find(|p| pms.identity(&p.canonical) == id);
     let dormant = registry_plugin.is_some_and(|p| p.manifest.requires_use);
-    let already_trusted = registry_plugin.is_some() && !dormant;
+    let already_trusted = registry_plugin.is_some() && !dormant && !global;
     if already_trusted {
         tracing::info!(
             report = %ReportEvent::Info {

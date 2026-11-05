@@ -210,3 +210,32 @@ The `@github/copilot-sdk` (Node.js, Python, Go, .NET, Java) provides callback-st
 ### Agent firewall (Cloud Agent)
 
 Network-layer control with deny-by-default domain allowlist, configured at org/repo level. Not a hook — controls outbound network access.
+
+## Plugin Delivery
+
+A plugin enabled with `use --global` reaches the Copilot CLI through its user settings, `~/.copilot/settings.json` (`$COPILOT_HOME/settings.json` when that variable is set). While Codex or Copilot has plugins, symposium writes `.claude-plugin/marketplace.json` into the staging root `~/.symposium/installed/`, registers that root as a directory marketplace and enables each plugin from it:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "symposium": {
+      "source": { "source": "directory", "path": "/home/alex/.symposium/installed" }
+    }
+  },
+  "enabledPlugins": {
+    "pdf-tools@symposium": true
+  }
+}
+```
+
+These are the entries `copilot plugin marketplace add` and `copilot plugin install pdf-tools@symposium` write for a directory marketplace, and nothing else: no `installedPlugins` record in `config.json` and no copy under `~/.copilot/installed-plugins/`. Symposium owns only the `symposium` marketplace entry and the `<plugin>@symposium` keys, and keeps a `false`, which is what `copilot plugin disable` and `copilot plugin uninstall` write. A file it cannot read, or a `symposium` marketplace pointing elsewhere, is left untouched with a warning, and the skills arrive per project instead.
+
+Verified against the Copilot CLI 1.0.89 by asking the agent (`copilot plugin list --json`, `copilot skill list --json`, the `/skills` dashboard, and the skills a `-p` session offers its model):
+
+- The plugin loads in place in the first session after `cargo agents sync`, interactive and `-p` alike, and its skills keep their plain names (`/<skill>`). An edit at the same version reaches the next session.
+- Removing the entries and the directory leaves nothing behind. An entry left for a missing root makes every session warn that the marketplace was skipped.
+- A plugin registered during the `sessionStart` hook is offered after `/restart` or in the next session; `/skills reload` does not pick it up.
+- A skill of the same name in `~/.copilot/skills/`, `~/.agents/skills/` or the project's `.agents/skills/` silently replaces the plugin's, including a per-skill copy symposium writes there for another agent.
+- Claude Code's user-level skills-directory plugins (`~/.claude/skills/<plugin>/`) do not reach Copilot; its project `.claude/settings.json` registrations and `.claude/skills/<plugin>/` directories do.
+- Copilot CLI 1.0.79 and 1.0.80 load such a plugin only after an interactive session installs a copy of its own, which goes stale and outlives the entries. Copilot updates itself by default.
+- A `.github/copilot/settings.local.json` at the git root holding the same entries, under a marketplace name other than the user-level one, scopes a plugin to that repository. Symposium does not write it.

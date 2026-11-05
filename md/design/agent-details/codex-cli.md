@@ -234,6 +234,57 @@ Registration is idempotent — if the entry already exists with the
 correct values, no changes are made. If the entry exists but has stale
 values (e.g. the binary moved), it is updated in place.
 
+## Plugin Delivery
+
+A plugin enabled with `use --global` reaches Codex CLI as an installed plugin,
+the way `codex plugin marketplace add` and `codex plugin add` install one.
+Symposium writes, under `~/.codex/` (`$CODEX_HOME` when set):
+
+```toml
+# config.toml
+[marketplaces.symposium]
+source_type = "local"
+source = "/home/user/.symposium/installed"
+
+[plugins."<plugin>@symposium"]
+enabled = true
+```
+
+and a copy of the compiled directory in Codex's plugin cache,
+`plugins/cache/symposium/<plugin>/0.0.0/`, named after the manifest version.
+
+- The marketplace is the staging root, whose `.claude-plugin/marketplace.json`
+  symposium writes while Codex or the Copilot CLI has plugins. A `symposium`
+  marketplace pointing anywhere else is someone else's: symposium warns and
+  Codex gets per-skill copies.
+- An existing plugin entry is left as it is, so `enabled = false` (Space in
+  `/plugins`) keeps the plugin off, and once the plugin is no longer delivered
+  only an entry still set to `true` is removed.
+- The rest of `config.toml` is kept; a file that does not parse is reported,
+  left untouched, and Codex gets per-skill copies.
+
+Verified against Codex CLI 0.159.3 by asking the agent (`codex debug
+prompt-input`, the model request a session sends, `codex plugin list`, and
+the TUI's `/skills` and `/plugins`) after `cargo agents sync`, with Codex as
+the only agent and with the Copilot CLI configured too:
+
+- `codex plugin list` shows `<plugin>@symposium` installed and enabled,
+  `/plugins` lists it under a `symposium` tab, and the model sees its skills
+  as `<plugin>:<skill>` in TUI and `codex exec` sessions alike.
+- Sessions load a plugin only from the cache. Codex's startup refresh copies
+  it again only when the version directory differs from the manifest version,
+  and `codex exec` never fills it, so symposium writes the copy itself; an
+  edit reaches the next session.
+- A registered local marketplace whose root has no manifest makes
+  `codex plugin list` fail, so the index exists as long as a reader has
+  plugins.
+- `codex plugin remove` deletes the plugin entry and the cache copy; the next
+  sync installs it again. Removing the `use --global` entry leaves
+  `config.toml` as it was.
+- A plugin installed by the `SessionStart` hook appears in the next session:
+  Codex runs that hook when the first prompt is submitted, after the
+  session's skills are listed.
+
 ## Other Extensibility
 
 - `notify` in config.toml (fire-and-forget on agent-turn-complete)

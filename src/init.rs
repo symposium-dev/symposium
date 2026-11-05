@@ -116,6 +116,7 @@ pub async fn init(
 
     // Persist and apply.
     sym.save_config().context("failed to write user config")?;
+    crate::sync::unregister_user_plugins(sym);
 
     let config_path = sym.config_dir().join("config.toml");
 
