@@ -238,7 +238,7 @@ mod tests {
     }
 
     fn metric_snapshot() -> PreparedMetricSnapshot {
-        MetricSnapshot::empty(day()).prepare().unwrap()
+        MetricSnapshot::empty_for_test(day()).prepare().unwrap()
     }
 
     #[test]

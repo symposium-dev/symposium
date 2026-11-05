@@ -203,7 +203,7 @@ mod tests {
             let _staged = aggregates
                 .stage_hook_invocation(
                     &recording,
-                    MetricSnapshot::empty(recording.day()),
+                    MetricSnapshot::empty_for_test(recording.day()),
                     observation,
                 )
                 .unwrap();
@@ -243,7 +243,7 @@ mod tests {
         let mut state: TelemetryStateV1 =
             TelemetryStateV1::decode_for_test(IDENTIFIER_WINDOW_TEST_STATE);
         let recording = recording_observation(&mut state);
-        let recovery = MetricSnapshot::empty(recording.day()).recovery_index();
+        let recovery = MetricSnapshot::empty_for_test(recording.day()).recovery_index();
         let mut aggregates = AggregateState::new(recording.day());
 
         let (hook, plugin_hook, extension_invocation) = aggregates.hook_invocation_stores();

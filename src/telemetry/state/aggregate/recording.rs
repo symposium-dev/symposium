@@ -145,13 +145,6 @@ impl StagedAggregateRecording {
     pub(in crate::telemetry::state) fn into_snapshot(self) -> MetricSnapshot {
         self.snapshot
     }
-
-    #[cfg(test)]
-    pub(in crate::telemetry::state) const fn from_snapshot_for_test(
-        snapshot: MetricSnapshot,
-    ) -> Self {
-        Self { snapshot }
-    }
 }
 
 impl AggregateState {
