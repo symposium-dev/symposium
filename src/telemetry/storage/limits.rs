@@ -103,14 +103,14 @@ impl Error for DailyUsageError {
     }
 }
 
-impl LockedStorage {
+impl<Writer> LockedStorage<Writer> {
     /// Select the low-volume event write for one complete operation batch.
     ///
     /// A matching private stopped day avoids filesystem work. Otherwise the
     /// event file is also authoritative: a final marker repairs private state
     /// that was lost or reinitialized. Inspection or marker-preparation
     /// failure suppresses only this event append and does not close the day.
-    pub(in crate::telemetry) fn plan_event_write(
+    pub(super) fn plan_event_write(
         &self,
         batch: EventBatch,
         operation: DroppedOperation,
@@ -438,6 +438,7 @@ mod tests {
     use chrono::NaiveDate;
 
     use super::*;
+    use crate::telemetry::storage::Storage;
 
     fn day(day: u32) -> UtcDay {
         UtcDay::from_date(NaiveDate::from_ymd_opt(2026, 8, day).unwrap())
@@ -663,7 +664,7 @@ mod tests {
     #[test]
     fn marker_with_exactly_its_reserved_space_lands_on_the_allowance() {
         let temporary = tempfile::tempdir().unwrap();
-        let mut storage = LockedStorage::try_acquire(temporary.path()).unwrap();
+        let mut storage = Storage::try_acquire(temporary.path()).unwrap();
         let day = day(3);
         let path = storage.paths.event_file(day);
         let mut existing = vec![b'x'; 64];
@@ -698,7 +699,7 @@ mod tests {
     #[test]
     fn missing_daily_files_have_zero_usage() {
         let temporary = tempfile::tempdir().unwrap();
-        let storage = LockedStorage::try_acquire(temporary.path()).unwrap();
+        let storage = Storage::try_acquire(temporary.path()).unwrap();
 
         let usage = storage.inspect_daily_usage(day(3)).unwrap();
 
@@ -708,7 +709,7 @@ mod tests {
     #[test]
     fn daily_usage_measures_both_files_and_the_repair_byte() {
         let temporary = tempfile::tempdir().unwrap();
-        let storage = LockedStorage::try_acquire(temporary.path()).unwrap();
+        let storage = Storage::try_acquire(temporary.path()).unwrap();
         let day = day(3);
         fs::write(storage.paths.event_file(day), b"partial").unwrap();
         fs::write(storage.paths.metrics_file(day), b"metrics").unwrap();
@@ -724,7 +725,7 @@ mod tests {
     #[test]
     fn final_marker_recovers_a_missing_private_stopped_day() {
         let temporary = tempfile::tempdir().unwrap();
-        let mut storage = LockedStorage::try_acquire(temporary.path()).unwrap();
+        let mut storage = Storage::try_acquire(temporary.path()).unwrap();
         let day = day(3);
         let marker = batch(day, DroppedOperation::Configuration);
         storage.append_event_batch(&marker).unwrap();
@@ -747,7 +748,7 @@ mod tests {
     #[test]
     fn complete_unterminated_marker_still_closes_the_day() {
         let temporary = tempfile::tempdir().unwrap();
-        let storage = LockedStorage::try_acquire(temporary.path()).unwrap();
+        let storage = Storage::try_acquire(temporary.path()).unwrap();
         let day = day(3);
         let row = StorageLimitV1::new(day, DroppedOperation::Configuration);
         fs::write(
@@ -765,7 +766,7 @@ mod tests {
     #[test]
     fn marker_for_another_day_does_not_close_this_file() {
         let temporary = tempfile::tempdir().unwrap();
-        let storage = LockedStorage::try_acquire(temporary.path()).unwrap();
+        let storage = Storage::try_acquire(temporary.path()).unwrap();
         let file_day = day(3);
         let row = StorageLimitV1::new(day(4), DroppedOperation::Configuration);
         let mut line = serde_json::to_vec(&row).unwrap();
@@ -792,7 +793,7 @@ mod tests {
     #[test]
     fn usage_inspection_failure_suppresses_only_this_event_attempt() {
         let temporary = tempfile::tempdir().unwrap();
-        let storage = LockedStorage::try_acquire(temporary.path()).unwrap();
+        let storage = Storage::try_acquire(temporary.path()).unwrap();
         let day = day(3);
         fs::create_dir(storage.paths.event_file(day)).unwrap();
 
