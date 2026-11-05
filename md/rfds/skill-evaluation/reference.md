@@ -240,7 +240,7 @@ A hook record contradicted by the transcript, including more records than the tr
 
 ## Outcomes and counting
 
-A trial can succeed only if its client session completed. A timeout or client error is a failure even when the code it left would pass; that code is still graded and reported, and a grading infrastructure error during it does not move the trial out of the count. For a completed trial:
+A trial can succeed only if its client session completed. A timeout or client error is a failure even when the code it left would pass, and so is a session the runner lost hold of or whose ending its transcript cannot show, since it did not complete either; that code is still graded and reported, and a grading infrastructure error during it does not move the trial out of the count. For a completed trial:
 
 | Kind       | Succeeds when                                  | Inconclusive when                                               |
 | ---------- | ---------------------------------------------- | --------------------------------------------------------------- |
