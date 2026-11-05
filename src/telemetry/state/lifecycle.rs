@@ -14,7 +14,55 @@ use crate::telemetry::{
 /// [`CohortDay::D30`] bound, offset 30 starts a new window.
 const IDENTIFIER_WINDOW_DAYS: i64 = 30;
 
+/// Proof that maintenance was scheduled in private state for one accepted day.
+///
+/// Storage carries this value through the persisted-recording receipt. It
+/// deliberately exposes no constructor, so cleanup cannot be scheduled from
+/// the wall clock or without first updating private state.
+#[derive(Debug, PartialEq, Eq)]
+#[must_use]
+pub(in crate::telemetry) struct MaintenanceDue {
+    day: UtcDay,
+}
+
+impl MaintenanceDue {
+    /// Return the accepted day that controls retention and throttling.
+    #[must_use]
+    pub(in crate::telemetry) const fn day(&self) -> UtcDay {
+        self.day
+    }
+}
+
 impl TelemetryStateV1 {
+    /// Schedule at most one opportunistic maintenance attempt per accepted day.
+    ///
+    /// The marker records an attempt, not success. Once the state containing
+    /// it is persisted, a failed cleanup is therefore retried on the next
+    /// accepted day rather than on every hook operation. Requiring the
+    /// accepted transition prevents scheduling before the lifecycle has
+    /// advanced this state; a transition whose day no longer matches this
+    /// state is ignored.
+    #[must_use]
+    pub(in crate::telemetry) fn schedule_maintenance(
+        &mut self,
+        accepted: &RecordingObservation,
+    ) -> Option<MaintenanceDue> {
+        let accepted_day = accepted.completed_at.day();
+        debug_assert_eq!(
+            accepted_day, self.identity.latest_opened_day,
+            "BUG: maintenance requires an observation accepted by this state"
+        );
+        if accepted_day != self.identity.latest_opened_day {
+            return None;
+        }
+        if self.last_maintenance_attempt_day == Some(accepted_day) {
+            return None;
+        }
+
+        self.last_maintenance_attempt_day = Some(accepted_day);
+        Some(MaintenanceDue { day: accepted_day })
+    }
+
     /// Rotate future identifiers and begin a new identifier window.
     ///
     /// The new identifier-window anchor is the later of `current_day` and the
@@ -445,6 +493,13 @@ impl std::error::Error for RecordingObservationError {
 pub(in crate::telemetry) struct SessionObservation {
     recording: RecordingObservation,
     pub(super) return_cohort: ReturnCohortUpdate,
+}
+
+impl SessionObservation {
+    /// Return the accepted recording transition shared by this session.
+    pub(in crate::telemetry) fn recording(&self) -> &RecordingObservation {
+        &self.recording
+    }
 }
 
 /// A persisted session transition bound to both of its identity scopes.
@@ -1071,6 +1126,17 @@ mod tests {
     }
 
     #[test]
+    fn session_observation_supplies_the_accepted_maintenance_transition() {
+        let accepted_day = day(2026, 9, 10);
+        let mut state = TelemetryStateV1::new(accepted_day).unwrap();
+        let observation = state.observe_session(completion_time(2026, 9, 10)).unwrap();
+
+        let due = state.schedule_maintenance(observation.recording()).unwrap();
+
+        assert_eq!(due.day(), accepted_day);
+    }
+
+    #[test]
     fn binding_rejects_an_observation_from_an_older_identifier_window() {
         let source = state_with_anchors(KEY, "2026-09-10", "2026-09-10");
         let mut state: TelemetryStateV1 = TelemetryStateV1::decode_for_test(&source);
@@ -1297,5 +1363,65 @@ mod tests {
             "observed session day 2026-09-09 precedes the return-cohort anchor 2026-09-10"
         );
         assert_eq!(serialized, source);
+    }
+
+    #[test]
+    fn maintenance_is_scheduled_once_per_accepted_day() {
+        let first_day = day(2026, 9, 10);
+        let second_day = day(2026, 9, 11);
+        let mut state = TelemetryStateV1::new(first_day).unwrap();
+
+        let first_observation = state
+            .observe_recording(completion_time(2026, 9, 10))
+            .unwrap();
+        let first = state.schedule_maintenance(&first_observation).unwrap();
+        let repeated = state.schedule_maintenance(&first_observation);
+        let second_observation = state
+            .observe_recording(completion_time(2026, 9, 11))
+            .unwrap();
+        let second = state.schedule_maintenance(&second_observation).unwrap();
+
+        assert_eq!(first.day(), first_day);
+        assert!(repeated.is_none());
+        assert_eq!(second.day(), second_day);
+    }
+
+    #[test]
+    fn identifier_reset_preserves_the_maintenance_throttle() {
+        let accepted_day = day(2026, 9, 10);
+        let mut state = TelemetryStateV1::new(accepted_day).unwrap();
+        let observation = state
+            .observe_recording(completion_time(2026, 9, 10))
+            .unwrap();
+        let _ = state.schedule_maintenance(&observation).unwrap();
+
+        state.reset_identifiers(accepted_day).unwrap();
+
+        assert_eq!(state.last_maintenance_attempt_day, Some(accepted_day));
+        assert!(state.schedule_maintenance(&observation).is_none());
+    }
+
+    #[test]
+    fn identifier_window_rollover_preserves_the_maintenance_throttle() {
+        let first_day = day(2026, 8, 1);
+        let rollover_day = day(2026, 8, 31);
+        let mut state = TelemetryStateV1::new(first_day).unwrap();
+        let first_observation = state
+            .observe_recording(completion_time(2026, 8, 1))
+            .unwrap();
+        let _ = state.schedule_maintenance(&first_observation).unwrap();
+
+        let rollover_observation = state
+            .observe_recording(completion_time(2026, 8, 31))
+            .unwrap();
+
+        assert_eq!(state.last_maintenance_attempt_day, Some(first_day));
+        assert_eq!(
+            state
+                .schedule_maintenance(&rollover_observation)
+                .unwrap()
+                .day(),
+            rollover_day
+        );
     }
 }

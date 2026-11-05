@@ -37,23 +37,23 @@ impl Error for AtomicReplaceError {
     }
 }
 
-/// Replace one file with a completely prepared sibling temporary file.
+/// Replace one file through a completely prepared temporary file.
 ///
 /// The replacement is atomic at the filesystem path boundary but is not
 /// crash-durable: this intentionally does not call `sync_all` on the file or
 /// its parent directory. Callers must finish serialization before calling.
+/// `temporary_directory` may differ from the destination's parent, but both
+/// locations must reside on the same filesystem for persistence to succeed.
 ///
 /// # Errors
 ///
 /// Returns the stage that failed while creating, writing, or persisting the
 /// temporary file.
-pub(super) fn replace(path: &Path, contents: &[u8]) -> Result<(), AtomicReplaceError> {
-    let parent = path.parent().ok_or_else(|| {
-        AtomicReplaceError::Create(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "replacement path has no parent directory",
-        ))
-    })?;
+pub(super) fn replace(
+    temporary_directory: &Path,
+    path: &Path,
+    contents: &[u8],
+) -> Result<(), AtomicReplaceError> {
     let mut builder = tempfile::Builder::new();
     builder.prefix(TEMPORARY_FILE_PREFIX);
     #[cfg(unix)]
@@ -63,7 +63,7 @@ pub(super) fn replace(path: &Path, contents: &[u8]) -> Result<(), AtomicReplaceE
         builder.permissions(std::fs::Permissions::from_mode(0o600));
     }
     let mut temporary = builder
-        .tempfile_in(parent)
+        .tempfile_in(temporary_directory)
         .map_err(AtomicReplaceError::Create)?;
 
     temporary
@@ -87,7 +87,7 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let target = temporary.path().join("state.toml");
 
-        replace(&target, b"version = 1\n").unwrap();
+        replace(temporary.path(), &target, b"version = 1\n").unwrap();
 
         assert_eq!(fs::read(&target).unwrap(), b"version = 1\n");
     }
@@ -98,33 +98,49 @@ mod tests {
         let target = temporary.path().join("state.toml");
         fs::write(&target, b"old contents that are longer").unwrap();
 
-        replace(&target, b"new\n").unwrap();
+        replace(temporary.path(), &target, b"new\n").unwrap();
 
         assert_eq!(fs::read(&target).unwrap(), b"new\n");
     }
 
     #[test]
-    fn missing_parent_directory_reports_temporary_file_creation() {
+    fn missing_temporary_directory_reports_temporary_file_creation() {
         let temporary = tempfile::tempdir().unwrap();
-        let target = temporary.path().join("missing").join("state.toml");
+        let target = temporary.path().join("state.toml");
 
-        let error = replace(&target, b"version = 1\n").unwrap_err();
+        let error =
+            replace(&temporary.path().join("missing"), &target, b"version = 1\n").unwrap_err();
 
         assert!(matches!(error, AtomicReplaceError::Create(_)));
     }
 
     #[test]
     fn failed_persistence_preserves_the_destination_and_cleans_up_the_temporary_file() {
-        let temporary = tempfile::tempdir().unwrap();
-        let target = temporary.path().join("state.toml");
+        let root = tempfile::tempdir().unwrap();
+        let temporary = root.path().join("telemetry");
+        fs::create_dir(&temporary).unwrap();
+        let target = root.path().join("state.toml");
         fs::create_dir(&target).unwrap();
         fs::write(target.join("sentinel"), b"old").unwrap();
 
-        let error = replace(&target, b"new").unwrap_err();
+        let error = replace(&temporary, &target, b"new").unwrap_err();
 
         assert!(matches!(error, AtomicReplaceError::Persist(_)));
         assert_eq!(fs::read(target.join("sentinel")).unwrap(), b"old");
-        assert_eq!(fs::read_dir(temporary.path()).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(temporary).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn replacement_uses_an_explicit_temporary_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let temporary = root.path().join("telemetry");
+        fs::create_dir(&temporary).unwrap();
+        let target = root.path().join("state.toml");
+
+        replace(&temporary, &target, b"version = 1\n").unwrap();
+
+        assert_eq!(fs::read(target).unwrap(), b"version = 1\n");
+        assert_eq!(fs::read_dir(temporary).unwrap().count(), 0);
     }
 
     #[cfg(unix)]
@@ -137,7 +153,7 @@ mod tests {
         fs::write(&target, b"old").unwrap();
         fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
 
-        replace(&target, b"new").unwrap();
+        replace(temporary.path(), &target, b"new").unwrap();
 
         let mode = fs::metadata(target).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);

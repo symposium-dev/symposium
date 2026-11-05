@@ -150,7 +150,7 @@ pub(super) fn newest_day(directory: &Path) -> io::Result<Option<UtcDay>> {
     Ok(newest)
 }
 
-fn file_day(file_name: &OsStr) -> Option<UtcDay> {
+pub(super) fn file_day(file_name: &OsStr) -> Option<UtcDay> {
     file_identity(file_name).map(|(day, _)| day)
 }
 
