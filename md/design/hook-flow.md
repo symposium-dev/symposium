@@ -8,6 +8,8 @@ The payload is parsed first, and the agent's parser can declare it not an occurr
 
 1. **Auto-sync** (if enabled) — when `auto-sync = true` in the user config, runs [`cargo agents sync`](./sync-agent-flow.md) to ensure skills are current. The workspace is the project the package managers find from the payload's `cwd` field, or from the process's current working directory when the payload has none. Runs quietly and non-fatally — failures are logged but don't block hook dispatch.
 
+   That directory is also where the event's predicates run (`shell(...)`, a relative `path_exists(...)`), here and at dispatch, and where plugin hook processes run. When it is not an existing directory, they use the process's working directory instead. On Antigravity the process starts in the directory holding `hooks.json`, so this is what keeps hooks in the project.
+
    Auto-sync is also where a crate reached through a `[[plugins]]` chained reference or a `[plugins]` enablement entry is downloaded when cargo has not cached it yet. Dispatch only reads the cargo cache, so such a crate is absent from it until a sync has downloaded it.
 
    **`SessionStart` is the refresh point.** Because it fires once per agent session, it does the expensive work that other events skip: it bypasses the freshness gate (so skills re-sync even when no package manager's inputs changed) and passes `UpdateLevel::Check` so git registries and `source.git` skill groups are re-fetched if their upstream moved. Every other event keeps the cheap path, gated on the package managers' recorded inputs, with `UpdateLevel::None` (debounced) to avoid per-event network and package-manager cost. The registry refresh on `SessionStart` (`ensure_registries` with `Check`, decided in the binary entry point from the event) still honors each registry's `auto-update` toggle. `SessionStart` also runs `prewarm_hook_sources`, which *refreshes already-installed* hook binaries/scripts (the `cargo`/`github` sources backing plugin hooks) — refresh-only, so it never eagerly installs a tool a hook may never use; first install still happens lazily at dispatch.
@@ -22,7 +24,7 @@ The payload is parsed first, and the agent's parser can declare it not an occurr
    Agents without hook registration (OpenCode, Goose) never receive this; for them the only discovery surface is `cargo agents --help` itself.
 
 3. **Dispatch to plugin hooks** — for each enabled plugin that defines a hook handler for the incoming event:
-   - **Select format**: for each plugin, pick the best hook to deliver (see [Hooks](./hooks.md) for priority rules). If the plugin has a hook matching the current agent's format, deliver the input unmodified. Otherwise deliver in symposium canonical format (or convert to the declared format if only one non-symposium hook exists).
+   - **Select format**: for each plugin, pick the best hook to deliver (see [Hooks](./hooks.md) for priority rules). A hook whose `agent` names another agent, or whose `predicates` do not hold, is not a candidate. If the plugin has a hook matching the current agent's format, deliver the input unmodified. Otherwise, if it has a `format = "symposium"` hook, deliver that one in symposium canonical format. A hook in another agent's format never fires: Symposium does not convert between agent formats.
    - **Acquire and run**:
      - Ensure any `requirements` for the hook are acquired (on-demand, best-effort).
      - Resolve the hook's `command` (a named installation reference or inline declaration) into a runnable form:
@@ -33,7 +35,7 @@ The payload is parsed first, and the agent's parser can declare it not an occurr
      - Pass the event JSON (in the selected format) on stdin to the plugin's hook.
      - Collect output from each handler.
      - Convert output back to the agent's wire format.
-     - Merge results (e.g., allow/block decisions, output text) across all handlers. `merge` lets a later value replace an earlier one, so on `SessionStart`, `UserPromptSubmit` and `PostToolUse` a `JoinedContext` keeps every source's context (the builtin fragments first, then each hook) and writes the joined text back after each merge. `PreToolUse` and `Stop` are left out: there some agents keep context in the field that holds the decision.
+     - Merge results (e.g., allow/block decisions, output text) across all handlers. `merge` lets a later value replace an earlier one, so on `SessionStart`, `UserPromptSubmit` and `PostToolUse` a `JoinedContext` keeps every source's context (the builtin fragments first, then each hook) and writes the joined text back after each merge. `PreToolUse` and `Stop` are left out: there some agents keep context in the field that holds the decision. An agent's handler can merge a field itself (`merge_output`): Antigravity keeps the `injectSteps` that are not context (`userMessage`, `toolCall`) and appends each hook's.
      - Return the merged result to the agent.
    - **A hook that exits 2 blocks**: dispatch stops, and `blocked_response` turns its stderr into the reason. On `PreToolUse` that is a canonical deny, translated like any other so each agent receives it in the form it honors (Antigravity ignores exit codes, Copilot drops the reason of a failing hook). On other events the process exits 2 with the reason on stderr.
 

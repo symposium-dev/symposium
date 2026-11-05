@@ -27,12 +27,18 @@ knowing before debugging a hook that "does nothing".
 ### `{}` on `PreToolUse` denies the tool call
 
 Antigravity ignores hook exit codes entirely; only stdout decides. On
-`PreToolUse`, an object without a valid `decision` — `{}` included, as well as
-`{"decision": ""}` — is treated as a **denial**, while writing nothing at all
-allows. Symposium's dispatcher would otherwise return `{}` whenever no plugin contributed, which
-is the common case, so `AntigravityPreToolUseOutput` keeps `decision` as a plain
-always-serialized field defaulting to `allow`. Making it `Option` or adding
-`skip_serializing_if` would block every tool call.
+`PreToolUse`, an object without a valid `decision` (`{}` included, as well as
+`{"decision": ""}`) is treated as a **denial**, while writing nothing at all
+allows. A plugin hook in Antigravity's own format that answers with no
+`decision` (or an empty one) is read as the denial it is, so dispatch stops
+there.
+
+Symposium's own answer leaves `decision` unset unless something decided, so a
+hook that only adds context cannot overwrite another hook's `"ask"`. That makes
+`{}` the common final answer (no plugin contributed, or one only added context),
+so `AntigravityPreToolUseEvent::respond`, which every response goes through, adds
+`"decision": "allow"` to a final object that has none. Dropping that step would
+block every tool call.
 
 ### Unknown event names and shapes are accepted and never fire
 

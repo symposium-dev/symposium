@@ -1,0 +1,16 @@
+name = "zz-odd"
+depends-on = ["*"]
+
+[[hooks]]
+name = "null"
+event = "PreToolUse"
+matcher = "^RewriteProbe$"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/zz-odd/scripts/null.sh" }
+
+[[hooks]]
+name = "null-decision"
+event = "PreToolUse"
+matcher = "^NullDecisionProbe$"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/zz-odd/scripts/null-decision.sh" }

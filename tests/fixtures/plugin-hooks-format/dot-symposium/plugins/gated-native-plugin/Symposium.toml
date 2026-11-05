@@ -1,0 +1,16 @@
+name = "gated-native-plugin"
+depends-on = ["*"]
+
+[[hooks]]
+name = "portable"
+event = "PreToolUse"
+matcher = "^Glob$"
+command = { script = "$TEST_DIR/dot-symposium/plugins/gated-native-plugin/scripts/portable.sh" }
+
+[[hooks]]
+name = "gated-native"
+event = "PreToolUse"
+matcher = "^Glob$"
+format = "claude"
+predicates = ["env(SYMPOSIUM_TEST_NEVER_SET)"]
+command = { script = "$TEST_DIR/dot-symposium/plugins/gated-native-plugin/scripts/native.sh" }

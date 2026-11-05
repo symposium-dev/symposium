@@ -1,0 +1,9 @@
+name = "agent-restricted-plugin"
+depends-on = ["*"]
+
+[[hooks]]
+name = "claude-agent-only"
+event = "PreToolUse"
+matcher = "^Grep$"
+agent = "claude"
+command = { script = "$TEST_DIR/dot-symposium/plugins/agent-restricted-plugin/scripts/agent-restricted.sh" }

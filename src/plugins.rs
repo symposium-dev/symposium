@@ -567,6 +567,13 @@ fn validate_hook(
         predicates,
     } = raw;
 
+    if let Some(matcher) = &matcher
+        && matcher != "*"
+        && let Err(e) = regex::Regex::new(matcher)
+    {
+        bail!("hook `{hook_name}`: `matcher` is not a valid regex: {e}");
+    }
+
     let command = resolve_or_promote(
         raw_command,
         installations,
@@ -3774,6 +3781,31 @@ mod tests {
                 .contains("at most one of `executable` / `script`"),
             "got: {err}"
         );
+    }
+
+    #[test]
+    fn hook_matcher_must_compile() {
+        let with_matcher = |matcher: &str| {
+            from_str(&indoc::formatdoc! {r#"
+                name = "p"
+                depends-on = ["*"]
+
+                [[hooks]]
+                name = "h"
+                event = "PreToolUse"
+                matcher = "{matcher}"
+                command = {{ script = "x.sh" }}
+            "#})
+        };
+
+        let err = with_matcher("^(Bash|Write$").unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("hook `h`: `matcher` is not a valid regex"),
+            "got: {err}"
+        );
+        with_matcher("*").expect("`*` matches every tool");
+        with_matcher("^(Bash|Write)$").expect("a valid regex");
     }
 
     /// A bare-installation + hook-level `script` is valid: the installation

@@ -1,0 +1,14 @@
+name = "b-context"
+depends-on = ["*"]
+
+[[hooks]]
+name = "pre"
+event = "PreToolUse"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/b-context/scripts/pre.sh" }
+
+[[hooks]]
+name = "prompt"
+event = "UserPromptSubmit"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/b-context/scripts/prompt.sh" }
