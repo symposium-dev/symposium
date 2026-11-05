@@ -180,7 +180,7 @@ The runner first keeps the submission as the agent left it, then builds a **grad
 - Only regular files and directories are accepted. A symlink or special file under an editable path invalidates the submission, which is a failed trial. Every destination is checked to resolve inside the grading copy before it is written.
 - Edits outside `editable` are listed in the result and never graded.
 
-Grading runs under `srt` with its own fresh writable paths, read-only fixtures, no network, and no credentials. Then, in order:
+Grading runs under `srt` with its own fresh writable paths, read-only fixtures, no network, and no credentials. The project, fixtures, and hidden checks are read-only to the submission, and every step starts from an empty build and temporary directory, so code the agent wrote cannot change a later check. Within one check it runs in the check's own process, so it could in principle forge that check's output; the agent never sees the hidden checks. Then, in order:
 
 1. `cargo build`. If it fails, the trial fails and the remaining checks are skipped.
 2. `cargo test --lib`, however many tests the agent wrote.

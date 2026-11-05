@@ -1,9 +1,9 @@
 //! Grading: a trusted copy of the task holding only the submission's editable files, then
 //! the code checks (RFD reference, "Grading the code").
 //!
-//! Invariant: only repository-owned code runs outside the `srt` backend. Today that means
-//! `--check-tasks` grades each task's `solution/` with [`process::Local`]; an agent's
-//! submission is graded once grading runs through `srt`.
+//! Invariant: only repository-owned code runs outside the `srt` backend. `--check-tasks`
+//! grades each task's `solution/` with [`process::Local`]; an agent's submission is
+//! graded through `srt`, under the trial's grading policy (`run::grading`).
 
 mod cargo;
 mod error;
@@ -17,7 +17,8 @@ mod solution;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub(crate) use error::{GradeError, ImportError, ListingProblem, ProcessError, with_causes};
@@ -28,7 +29,8 @@ use crate::evals::Evals;
 use crate::task::{CheckName, Task};
 use cargo::{Cargo, StarterTargets};
 use import::{GradingCopy, import_submission};
-use limits::{Budget, GradeLimits};
+use limits::Budget;
+pub(crate) use limits::GradeLimits;
 use process::{Backend, Finished, Invocation};
 
 /// What grading concluded about one submission.
@@ -38,8 +40,12 @@ pub(crate) enum Grading {
     /// The submission cannot be graded, which fails the trial.
     InvalidSubmission(ImportError),
     /// Grading itself failed, which excludes the trial; its submission can be graded
-    /// again.
-    Infrastructure(GradeError),
+    /// again. `partial` keeps checks completed before the failure, but is never a
+    /// grading verdict.
+    Infrastructure {
+        error: GradeError,
+        partial: Option<Report>,
+    },
 }
 
 #[derive(Debug)]
@@ -48,6 +54,27 @@ pub(crate) struct Report {
     pub(crate) outside_editable: Vec<OutsideEdit>,
     /// The checks run on the submission, in order.
     pub(crate) steps: Vec<Step>,
+}
+
+/// A grading operation failed after zero or more checks completed.
+struct Interruption {
+    error: Box<GradeError>,
+    partial: Option<Report>,
+}
+
+impl From<GradeError> for Interruption {
+    fn from(error: GradeError) -> Self {
+        Self {
+            error: Box::new(error),
+            partial: None,
+        }
+    }
+}
+
+impl From<ImportError> for Interruption {
+    fn from(error: ImportError) -> Self {
+        GradeError::from(error).into()
+    }
 }
 
 /// One check run on the submission.
@@ -152,22 +179,46 @@ impl fmt::Display for Step {
     }
 }
 
-/// Grades `submission` against `task`, running commands through `backend` and writing
-/// their output to log files in `logs`.
+/// Where one grading puts its trusted copy, the commands' writable state, and their logs,
+/// each a directory a sandbox's policy can name.
+#[derive(Debug, Clone)]
+pub(crate) struct GradingDirs {
+    /// The project and fixtures; must not exist yet.
+    pub(crate) sources: PathBuf,
+    /// Emptied before each step.
+    pub(crate) work: PathBuf,
+    pub(crate) logs: PathBuf,
+}
+
+impl GradingDirs {
+    /// Everything under `dir`, for grading repository-owned code without `srt`.
+    pub(crate) fn under(dir: &Path) -> Self {
+        Self {
+            sources: dir.join("sources"),
+            work: dir.join("work"),
+            logs: dir.join("logs"),
+        }
+    }
+}
+
+/// Grades `submission` against `task`, running commands through `backend`, with the
+/// copy and the commands' logs where `dirs` says.
 pub(crate) fn grade(
     evals: &Evals,
     task: &Task,
     submission: &Path,
     backend: &impl Backend,
     limits: &GradeLimits,
-    logs: &Path,
+    dirs: &GradingDirs,
 ) -> Grading {
-    match try_grade(evals, task, submission, backend, limits, logs) {
+    match try_grade(evals, task, submission, backend, limits, dirs) {
         Ok(report) => Grading::Graded(report),
-        Err(GradeError::Import(error)) if error.invalidates_submission() => {
-            Grading::InvalidSubmission(error)
-        }
-        Err(error) => Grading::Infrastructure(error),
+        Err(Interruption { error, partial }) => match (*error, partial) {
+            (GradeError::Import(error), None) if error.invalidates_submission() => {
+                Grading::InvalidSubmission(error)
+            }
+            (error, partial) => Grading::Infrastructure { error, partial },
+        },
     }
 }
 
@@ -177,21 +228,37 @@ fn try_grade(
     submission: &Path,
     backend: &impl Backend,
     limits: &GradeLimits,
-    logs: &Path,
-) -> Result<Report, GradeError> {
+    dirs: &GradingDirs,
+) -> Result<Report, Interruption> {
+    fs::create_dir_all(&dirs.logs).map_err(|source| ImportError::Write {
+        path: dirs.logs.clone(),
+        source,
+    })?;
     let mut commands = Commands {
         backend,
         budget: Budget::new(limits.commands),
-        logs,
+        logs: &dirs.logs,
     };
-    let prepared = prepare(evals, task, &mut commands, limits)?;
+    let prepared = prepare(evals, task, dirs, &mut commands, limits)?;
     let outside_editable = import_submission(
         &prepared.copy,
         task.editable(),
         &prepared.starter_owned,
         submission,
     )?;
-    let steps = run_steps(task, &prepared.cargo, &mut commands, limits)?;
+    let steps = match run_steps(task, &prepared, &mut commands, limits) {
+        Ok(steps) => steps,
+        Err(StepsInterrupted { steps, error }) => {
+            let partial = (!steps.is_empty()).then_some(Report {
+                outside_editable,
+                steps,
+            });
+            return Err(Interruption {
+                error: Box::new(error),
+                partial,
+            });
+        }
+    };
     Ok(Report {
         outside_editable,
         steps,
@@ -211,11 +278,12 @@ struct Prepared {
 fn prepare(
     evals: &Evals,
     task: &Task,
+    dirs: &GradingDirs,
     commands: &mut Commands<'_, impl Backend>,
     limits: &GradeLimits,
 ) -> Result<Prepared, GradeError> {
-    let copy = GradingCopy::from_trusted(evals, task)?;
-    let cargo = Cargo::new(copy.project(), copy.scratch());
+    let copy = GradingCopy::from_trusted(evals, task, &dirs.sources, &dirs.work)?;
+    let cargo = Cargo::new(copy.project(), copy.work());
     let starter = inspect_starter(&cargo, "metadata", &copy, commands, limits.metadata)?;
     place_checks(evals, task, &copy, &starter.tests)?;
     let placed = inspect_starter(&cargo, "metadata-checks", &copy, commands, limits.metadata)?;
@@ -262,31 +330,58 @@ fn starter_owned(build_scripts: BTreeSet<String>, checks: &[CheckName]) -> BTree
 /// failed.
 fn run_steps(
     task: &Task,
-    cargo: &Cargo,
+    prepared: &Prepared,
     commands: &mut Commands<'_, impl Backend>,
     limits: &GradeLimits,
-) -> Result<Vec<Step>, GradeError> {
-    let build = run_step(StepKind::Build, &cargo.build(), commands, limits.build)?;
-    let build_passed = build.outcome == Outcome::Passed;
-    let mut later = vec![StepKind::TestLib];
-    later.extend(task.checks().iter().cloned().map(StepKind::Hidden));
-    if task.fmt_check() {
-        later.push(StepKind::Fmt);
+) -> Result<Vec<Step>, StepsInterrupted> {
+    let (cargo, copy) = (&prepared.cargo, &prepared.copy);
+    let mut steps = Vec::new();
+    let run = (|| -> Result<(), GradeError> {
+        // Each step starts from an empty `work/`: the submission's code runs in every
+        // step, and must leave nothing there for a later one.
+        reset_work(copy, &StepKind::Build)?;
+        let build = run_step(StepKind::Build, &cargo.build(), commands, limits.build)?;
+        let build_passed = build.outcome == Outcome::Passed;
+        let mut later = vec![StepKind::TestLib];
+        later.extend(task.checks().iter().cloned().map(StepKind::Hidden));
+        if task.fmt_check() {
+            later.push(StepKind::Fmt);
+        }
+        steps.push(build);
+        for kind in later {
+            if build_passed {
+                reset_work(copy, &kind)?;
+            }
+            let step = match kind {
+                _ if !build_passed => Step {
+                    kind,
+                    outcome: Outcome::Skipped,
+                },
+                StepKind::Hidden(check) => hidden::run(cargo, commands, &check, limits.test)?,
+                StepKind::TestLib => run_step(kind, &cargo.test_lib(), commands, limits.test)?,
+                StepKind::Fmt => run_step(kind, &cargo.fmt_check(), commands, limits.fmt)?,
+                StepKind::Build => unreachable!("the build runs first"),
+            };
+            steps.push(step);
+        }
+        Ok(())
+    })();
+    match run {
+        Ok(()) => Ok(steps),
+        Err(error) => Err(StepsInterrupted { steps, error }),
     }
-    let mut steps = vec![build];
-    for kind in later {
-        steps.push(match kind {
-            _ if !build_passed => Step {
-                kind,
-                outcome: Outcome::Skipped,
-            },
-            StepKind::Hidden(check) => hidden::run(cargo, commands, &check, limits.test)?,
-            StepKind::TestLib => run_step(kind, &cargo.test_lib(), commands, limits.test)?,
-            StepKind::Fmt => run_step(kind, &cargo.fmt_check(), commands, limits.fmt)?,
-            StepKind::Build => unreachable!("the build runs first"),
-        });
-    }
-    Ok(steps)
+}
+
+struct StepsInterrupted {
+    steps: Vec<Step>,
+    error: GradeError,
+}
+
+fn reset_work(copy: &GradingCopy, before: &StepKind) -> Result<(), GradeError> {
+    copy.fresh_work().map_err(|source| GradeError::ResetWork {
+        before: before.clone(),
+        source,
+    })
 }
 
 /// Runs grading's commands through one backend, charging each to the command budget.
@@ -435,6 +530,7 @@ fn preflight(
 mod tests {
     use std::cell::RefCell;
     use std::fs;
+    use std::io;
     use std::thread;
     use std::time::Duration;
 
@@ -458,7 +554,7 @@ mod tests {
             submission.path(),
             &Local,
             limits,
-            logs.path(),
+            &GradingDirs::under(logs.path()),
         ) {
             Grading::Graded(report) => report,
             other => panic!("expected a report, got {other:?}"),
@@ -590,6 +686,35 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_test_cannot_block_the_hidden_check_by_removing_directory_access() {
+        let grading = grade_check(
+            r#"
+pub fn double(x: i32) -> i32 { x }
+
+#[test]
+fn locks_grading_tmp() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let locked = std::env::temp_dir().join("locked");
+    std::fs::create_dir_all(locked.join("inner")).unwrap();
+    std::fs::set_permissions(locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+}
+"#,
+            DOUBLE_CHECK,
+        );
+
+        let Grading::Graded(report) = grading else {
+            panic!("expected completed grading");
+        };
+        assert_eq!(report.steps[1].outcome, Outcome::Passed);
+        assert!(
+            matches!(report.steps[2].outcome, Outcome::Failed { .. }),
+            "the wrong implementation must reach and fail the hidden check: {report:?}"
+        );
+    }
+
     #[test]
     fn the_fmt_check_runs_only_when_the_task_asks() {
         let unformatted = "pub fn   spaced ( ) {}\n";
@@ -622,7 +747,7 @@ mod tests {
             submission.path(),
             &Local,
             &GradeLimits::default(),
-            logs.path(),
+            &GradingDirs::under(logs.path()),
         )
     }
 
@@ -699,13 +824,16 @@ mod tests {
         assert!(
             matches!(
                 &grading,
-                Grading::Infrastructure(GradeError::Listing {
-                    problem: ListingProblem::Count {
-                        entries: 2,
-                        ignored: 0
+                Grading::Infrastructure {
+                    error: GradeError::Listing {
+                        problem: ListingProblem::Count {
+                            entries: 2,
+                            ignored: 0
+                        },
+                        ..
                     },
                     ..
-                })
+                }
             ),
             "{grading:?}"
         );
@@ -727,11 +855,14 @@ mod tests {
             submission.path(),
             &Local,
             &GradeLimits::default(),
-            logs.path(),
+            &GradingDirs::under(logs.path()),
         );
 
         assert!(
-            matches!(&grading, Grading::Infrastructure(GradeError::CheckTarget { found, .. }) if found.is_empty()),
+            matches!(&grading, Grading::Infrastructure {
+                error: GradeError::CheckTarget { found, .. },
+                ..
+            } if found.is_empty()),
             "{grading:?}"
         );
     }
@@ -752,11 +883,14 @@ mod tests {
             submission.path(),
             &Local,
             &GradeLimits::default(),
-            logs.path(),
+            &GradingDirs::under(logs.path()),
         );
 
         assert!(
-            matches!(&grading, Grading::Infrastructure(GradeError::CheckDeclared { check }) if check.as_str() == "works"),
+            matches!(&grading, Grading::Infrastructure {
+                error: GradeError::CheckDeclared { check },
+                ..
+            } if check.as_str() == "works"),
             "{grading:?}"
         );
     }
@@ -781,7 +915,7 @@ mod tests {
             submission.path(),
             &Local,
             &GradeLimits::default(),
-            logs.path(),
+            &GradingDirs::under(logs.path()),
         );
 
         // The real check calls `double`, which this submission lacks.
@@ -803,6 +937,83 @@ mod tests {
         };
         assert!(matches!(report.steps[1].outcome, Outcome::Failed { .. }));
         assert_eq!(report.steps[2].outcome, Outcome::Passed);
+    }
+
+    struct FailsOn {
+        argument: &'static str,
+    }
+
+    impl Backend for FailsOn {
+        fn run(
+            &self,
+            invocation: &Invocation,
+            deadline: Duration,
+            logs: &Path,
+        ) -> Result<Finished, ProcessError> {
+            if invocation
+                .args
+                .iter()
+                .any(|argument| argument.to_string_lossy() == self.argument)
+            {
+                Err(ProcessError::Output(io::Error::other("injected failure")))
+            } else {
+                Local.run(invocation, deadline, logs)
+            }
+        }
+    }
+
+    fn grade_with_failure(argument: &'static str) -> Grading {
+        let fixture = TaskFixture::new("");
+        let submission = fixture.submission();
+        fs::write(
+            submission.path().join("src/lib.rs"),
+            "pub fn double(x: i32) -> i32 { x * 2 }",
+        )
+        .unwrap();
+        let logs = TempDir::new().unwrap();
+        super::grade(
+            fixture.evals(),
+            fixture.task(),
+            Submitted::bare(submission.path()),
+            &FailsOn { argument },
+            &GradeLimits::default(),
+            &GradingDirs::under(logs.path()),
+        )
+    }
+
+    #[test]
+    fn an_infrastructure_failure_keeps_steps_that_already_completed() {
+        let grading = grade_with_failure("--test");
+
+        let Grading::Infrastructure {
+            error,
+            partial: Some(partial),
+        } = grading
+        else {
+            panic!("expected partial infrastructure evidence: {grading:?}");
+        };
+        assert!(matches!(error, GradeError::Process { .. }));
+        assert_eq!(
+            partial
+                .steps
+                .iter()
+                .map(|step| (&step.kind, &step.outcome))
+                .collect::<Vec<_>>(),
+            [
+                (&StepKind::Build, &Outcome::Passed),
+                (&StepKind::TestLib, &Outcome::Passed)
+            ]
+        );
+    }
+
+    #[test]
+    fn an_infrastructure_failure_before_the_first_check_has_no_partial_report() {
+        let grading = grade_with_failure("build");
+
+        assert!(
+            matches!(grading, Grading::Infrastructure { partial: None, .. }),
+            "{grading:?}"
+        );
     }
 
     /// A command the deadline stopped whose output then stayed open.
@@ -920,6 +1131,7 @@ pub(crate) mod testing {
     /// A grading copy with a submission imported, and what it changed outside `editable`.
     #[derive(Debug)]
     pub(crate) struct Imported {
+        _dir: TempDir,
         pub(crate) copy: GradingCopy,
         edits: Vec<OutsideEdit>,
     }
@@ -990,9 +1202,15 @@ pub(crate) mod testing {
             submission: &Path,
             build_scripts: &BTreeSet<String>,
         ) -> Result<Imported, ImportError> {
-            let copy = GradingCopy::from_trusted(&self.evals, &self.task)?;
+            let dir = TempDir::new().unwrap();
+            let (sources, work) = (dir.path().join("sources"), dir.path().join("work"));
+            let copy = GradingCopy::from_trusted(&self.evals, &self.task, &sources, &work)?;
             let edits = import_submission(&copy, self.task.editable(), build_scripts, submission)?;
-            Ok(Imported { copy, edits })
+            Ok(Imported {
+                _dir: dir,
+                copy,
+                edits,
+            })
         }
     }
 

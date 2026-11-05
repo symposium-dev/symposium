@@ -8,9 +8,10 @@
 //! `cargo xtask`, and `rustc` and `rustdoc` are taken from beside it, which keeps grading
 //! on that toolchain.
 //!
-//! Known gap: Cargo also reads `.cargo/config.toml` in every directory above the
-//! grading copy, which can include the developer's home. Only a run directory whose
-//! ancestors grading controls closes that, which the `srt` backend provides.
+//! Cargo also reads `.cargo/config.toml` in every directory above the grading copy, up to
+//! the root. A trial's copy is made under its `grading/`, and grading refuses to run
+//! beneath one the sandbox would let Cargo read (`run::grading`); `--check-tasks` grades
+//! only the repository's own solutions, without that check.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -26,16 +27,14 @@ use crate::task::CheckName;
 /// Variables passed through from the environment `cargo xtask` runs in, compared without
 /// regard to case as Windows does. `rustup` finds its toolchain through `PATH`, the
 /// `RUSTUP_*` pair, and the home directory; the Windows system variables are where the
-/// MSVC linker and system libraries are found.
-const PASSED_THROUGH: [&str; 17] = [
+/// MSVC linker and system libraries are found. The temporary directory is the copy's
+/// own instead, which a sandbox lets grading write.
+const PASSED_THROUGH: [&str; 14] = [
     "PATH",
     "HOME",
     "USERPROFILE",
     "RUSTUP_HOME",
     "RUSTUP_TOOLCHAIN",
-    "TMPDIR",
-    "TMP",
-    "TEMP",
     "SYSTEMROOT",
     "WINDIR",
     "COMSPEC",
@@ -74,7 +73,8 @@ struct Target {
 }
 
 impl Cargo {
-    /// `scratch` holds the target directory and `CARGO_HOME`, outside the project.
+    /// `scratch` holds the target directory, `CARGO_HOME` and the commands' `tmp/`, which
+    /// must exist, outside the project.
     pub(crate) fn new(project: PathBuf, scratch: &Path) -> Self {
         Self::with_environment(project, scratch, std::env::vars_os())
     }
@@ -85,11 +85,15 @@ impl Cargo {
         inherited: impl IntoIterator<Item = (OsString, OsString)>,
     ) -> Self {
         let (program, mut env) = passed_through(inherited);
+        toolchain_first(&program, &mut env);
         env.push(("CARGO_TARGET_DIR".into(), scratch.join("target").into()));
         env.push(("CARGO_HOME".into(), scratch.join("cargo-home").into()));
         env.push(("CARGO_INCREMENTAL".into(), "0".into()));
         // `cargo fmt` has no `--offline` flag; this covers every subcommand.
         env.push(("CARGO_NET_OFFLINE".into(), "true".into()));
+        for variable in ["TMPDIR", "TMP", "TEMP"] {
+            env.push((variable.into(), scratch.join("tmp").into()));
+        }
         for (variable, tool) in [("RUSTC", "rustc"), ("RUSTDOC", "rustdoc")] {
             if let Some(path) = beside(&program, tool) {
                 env.push((variable.into(), path.into()));
@@ -188,6 +192,27 @@ fn passed_through(
         }
     }
     (program, env)
+}
+
+/// Puts the directory holding `program` first on `PATH`, so a subcommand such as
+/// `cargo fmt` comes from the same toolchain, not from a `~/.cargo/bin` a sandbox hides.
+fn toolchain_first(program: &OsString, env: &mut Vec<(OsString, OsString)>) {
+    let Some(dir) = Path::new(program).parent().filter(|dir| dir.is_absolute()) else {
+        return;
+    };
+    let is_path = |name: &OsString| {
+        name.to_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case("PATH"))
+    };
+    let inherited = env
+        .iter()
+        .position(|(name, _)| is_path(name))
+        .map(|index| env.remove(index));
+    let (name, rest) = inherited.unwrap_or_else(|| ("PATH".into(), OsString::new()));
+    let dirs = std::iter::once(dir.to_owned()).chain(std::env::split_paths(&rest));
+    if let Ok(path) = std::env::join_paths(dirs) {
+        env.insert(0, (name, path));
+    }
 }
 
 /// `tool` in the directory holding `program`, when `program` is a path and it is there.
@@ -343,7 +368,13 @@ mod tests {
         assert_eq!(
             env,
             [
-                ("Path".to_owned(), "/usr/bin".to_owned()),
+                (
+                    "Path".to_owned(),
+                    std::env::join_paths([tools.clone(), PathBuf::from("/usr/bin")])
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned()
+                ),
                 ("HOME".to_owned(), "/home/someone".to_owned()),
                 (
                     "CARGO_TARGET_DIR".to_owned(),
@@ -352,6 +383,9 @@ mod tests {
                 ("CARGO_HOME".to_owned(), path(dir.path().join("cargo-home"))),
                 ("CARGO_INCREMENTAL".to_owned(), "0".to_owned()),
                 ("CARGO_NET_OFFLINE".to_owned(), "true".to_owned()),
+                ("TMPDIR".to_owned(), path(dir.path().join("tmp"))),
+                ("TMP".to_owned(), path(dir.path().join("tmp"))),
+                ("TEMP".to_owned(), path(dir.path().join("tmp"))),
                 ("RUSTC".to_owned(), path(exe("rustc"))),
                 ("RUSTDOC".to_owned(), path(exe("rustdoc"))),
             ]
