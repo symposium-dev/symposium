@@ -26,8 +26,8 @@ async fn creating_a_nested_workspace_invalidates_the_hook_workspace_cache() {
 
         ctx.invoke_hook(HookAgent::Claude, HookEvent::PreToolUse, &payload).await?;
         assert_eq!(std::fs::metadata(parent.join("Cargo.lock"))?.modified()?, parent_lock_mtime);
-        let installed = nested.join(".claude/skills");
-        assert!(std::fs::read_dir(&installed).is_ok_and(|entries| entries.flatten().any(|entry| entry.path().join("SKILL.md").is_file())), "the hook must discover the new nested workspace and install its skill at {}", installed.display());
+        let installed = nested.join(".claude/skills/new-project/skills/nested-guidance/SKILL.md");
+        assert!(installed.is_file(), "the hook must discover the new nested workspace and install its skill at {}", installed.display());
         Ok(())
     }).await.unwrap();
 }

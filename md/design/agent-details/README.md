@@ -125,10 +125,10 @@ All shell-based agents use the same convention (where applicable):
 | GitHub Copilot | `.agents/skills/<name>/SKILL.md` | *(none)* |
 | Codex CLI | `.agents/skills/<name>/SKILL.md` | `~/.agents/skills/<name>/SKILL.md` |
 | Kiro | `.kiro/skills/<name>/SKILL.md` | `~/.kiro/skills/<name>/SKILL.md` |
-| OpenCode | `.agents/skills/<name>/SKILL.md` | `~/.agents/skills/<name>/SKILL.md` |
+| OpenCode | `.opencode/skills/<name>/SKILL.md` | `~/.agents/skills/<name>/SKILL.md` |
 | Goose | *(N/A — uses MCP extensions)* | *(N/A)* |
 
-Symposium uses the vendor-neutral `.agents/skills/` path whenever the agent supports it, falling back to agent-specific paths (e.g., `.claude/skills/`, `.kiro/skills/`) when required. Codex CLI and OpenCode also support `.agents/skills/` natively.
+Symposium uses the vendor-neutral `.agents/skills/` path whenever the agent supports it, falling back to agent-specific paths (e.g., `.claude/skills/`, `.kiro/skills/`) when required. Codex CLI and OpenCode also support `.agents/skills/` natively; OpenCode still gets `.opencode/skills/`, so that an agent taking a plugin does not also find OpenCode's per-skill copies of its skills (see [OpenCode](./opencode.md#skills)).
 
 ### Custom instructions
 

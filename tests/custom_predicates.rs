@@ -24,14 +24,14 @@ async fn sync_custom_predicate_installs_skill() {
             let script_path = ctx.tempdir.join("bp-checker.sh");
             write_script(&script_path, "exit 0");
 
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let skills_dir = ctx
                 .workspace_root
                 .as_ref()
                 .unwrap()
-                .join(".claude")
+                .join(".agents")
                 .join("skills");
             let skill_dir = skills_dir.join("bp-skill");
             assert!(
@@ -104,14 +104,14 @@ async fn sync_custom_predicate_receives_correct_argument() {
                 r#"if [ "$1" = "cli" ]; then exit 0; else exit 1; fi"#,
             );
 
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let skills_dir = ctx
                 .workspace_root
                 .as_ref()
                 .unwrap()
-                .join(".claude")
+                .join(".agents")
                 .join("skills");
             assert!(
                 skills_dir.join("bp-skill").join("SKILL.md").exists(),
@@ -178,14 +178,14 @@ async fn sync_custom_predicate_cross_plugin() {
             let script_path = ctx.tempdir.join("cross-checker.sh");
             write_script(&script_path, "exit 0");
 
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
             ctx.symposium(&["sync"]).await?;
 
             let skills_dir = ctx
                 .workspace_root
                 .as_ref()
                 .unwrap()
-                .join(".claude")
+                .join(".agents")
                 .join("skills");
             assert!(
                 skills_dir.join("consumer-skill").join("SKILL.md").exists(),

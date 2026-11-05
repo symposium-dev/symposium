@@ -71,7 +71,7 @@ impl Skill {
 // only a string — not a structured origin — is carried to the sync layer.
 
 /// 8-hex-char prefix of SHA-256 over the JSON-serialized origin key.
-fn hash_origin_key<T: serde::Serialize>(key: &T) -> String {
+pub(crate) fn hash_origin_key<T: serde::Serialize>(key: &T) -> String {
     use sha2::{Digest, Sha256};
     let bytes = serde_json::to_vec(key).expect("origin key always serializes");
     let digest = Sha256::digest(&bytes);
@@ -96,11 +96,13 @@ pub(crate) fn skill_origin_hash(skill_md: &Path) -> String {
 ///
 /// The plugin-, group-, and skill-level predicate sets are all evaluated during
 /// collection; only skills whose every level holds end up here.
+#[derive(Clone)]
 pub struct SkillWithGroupContext {
     pub skill: Skill,
     /// The hash of where the skill was discovered. Drives install-path disambiguation
     /// and dedup at sync time.
     pub origin_hash: String,
+    pub plugin_index: usize,
 }
 
 /// Resolve all applicable skills from the registry.
@@ -156,7 +158,7 @@ pub(crate) async fn collect_skills(
     update: UpdateLevel,
 ) -> Vec<SkillWithGroupContext> {
     let mut results = Vec::new();
-    for parsed in active {
+    for (plugin_index, parsed) in active.iter().enumerate() {
         ctx.set_workspace_member(parsed.workspace_member);
         for group in &parsed.manifest.skills {
             let skills = load_skills_for_group(sym, parsed, group, ctx, update).await;
@@ -164,6 +166,7 @@ pub(crate) async fn collect_skills(
                 collect_skill_applicable_to(
                     skill,
                     origin_hash,
+                    plugin_index,
                     &parsed.manifest.name,
                     ctx,
                     &mut results,
@@ -389,7 +392,7 @@ fn find_skill_files_in(
     ancestors: &mut crate::dir_walk::Ancestors,
     out: &mut Vec<PathBuf>,
 ) {
-    if dir.join(crate::sync::MARKER_FILE).exists() {
+    if crate::sync::has_symposium_marker(dir) {
         return;
     }
     let entries = match std::fs::read_dir(dir) {
@@ -577,6 +580,7 @@ pub(crate) fn is_safe_dir_name(name: &str) -> bool {
 fn collect_skill_applicable_to(
     skill: Skill,
     origin_hash: String,
+    plugin_index: usize,
     plugin_name: &str,
     ctx: &mut PredicateContext,
     results: &mut Vec<SkillWithGroupContext>,
@@ -601,7 +605,11 @@ fn collect_skill_applicable_to(
             reason: None,
         },
     );
-    results.push(SkillWithGroupContext { skill, origin_hash });
+    results.push(SkillWithGroupContext {
+        skill,
+        origin_hash,
+        plugin_index,
+    });
 }
 
 /// Raw frontmatter fields extracted from a SKILL.md file.
