@@ -400,6 +400,12 @@ pub(in crate::telemetry) enum MetricSuppression {
 #[derive(Debug)]
 pub(in crate::telemetry) struct ReplaceMetricSnapshotError(AtomicReplaceError);
 
+impl ReplaceMetricSnapshotError {
+    pub(super) fn into_atomic(self) -> AtomicReplaceError {
+        self.0
+    }
+}
+
 impl fmt::Display for ReplaceMetricSnapshotError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("failed to replace aggregate metric snapshot")

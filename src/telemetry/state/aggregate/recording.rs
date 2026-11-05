@@ -136,6 +136,24 @@ pub(in crate::telemetry) struct StagedAggregateRecording {
     snapshot: MetricSnapshot,
 }
 
+impl StagedAggregateRecording {
+    /// Return the owned snapshot to the root recording transaction.
+    ///
+    /// Keeping this narrower than the telemetry module prevents an aggregate
+    /// stage from becoming independently publishable.
+    #[must_use]
+    pub(in crate::telemetry::state) fn into_snapshot(self) -> MetricSnapshot {
+        self.snapshot
+    }
+
+    #[cfg(test)]
+    pub(in crate::telemetry::state) const fn from_snapshot_for_test(
+        snapshot: MetricSnapshot,
+    ) -> Self {
+        Self { snapshot }
+    }
+}
+
 impl AggregateState {
     /// Stage one complete hook invocation across every aggregate family.
     ///
