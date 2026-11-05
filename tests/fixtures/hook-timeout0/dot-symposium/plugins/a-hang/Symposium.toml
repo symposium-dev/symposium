@@ -1,0 +1,8 @@
+name = "a-hang"
+depends-on = ["*"]
+
+[[hooks]]
+name = "hang"
+event = "PreToolUse"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/a-hang/scripts/hang.sh" }

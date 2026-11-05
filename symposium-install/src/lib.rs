@@ -11,6 +11,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 pub mod git;
+pub mod process_tree;
 
 /// Records the crates.io version resolved by the last freshness check, so a
 /// `None` acquire can reuse it without re-querying. Lives at
@@ -30,6 +31,7 @@ const COMMIT_SHA_FILENAME: &str = ".commit-sha";
 pub struct InstallContext {
     cache_dir: PathBuf,
     cargo_bin: Option<PathBuf>,
+    foreground: bool,
 }
 
 impl InstallContext {
@@ -40,7 +42,16 @@ impl InstallContext {
         Self {
             cache_dir,
             cargo_bin: None,
+            foreground: false,
         }
+    }
+
+    /// Run installers and the git probe in the caller's process group, so
+    /// Ctrl-C and terminal prompts reach them. Dropping an acquisition then
+    /// stops only the command itself, not what it started.
+    pub fn in_foreground(mut self) -> Self {
+        self.foreground = true;
+        self
     }
 
     /// Override the cargo binary used for `cargo install` / `cargo binstall`.
@@ -279,35 +290,9 @@ async fn install_cargo_crate(
     git: Option<String>,
     force: bool,
 ) -> Result<()> {
-    let ctx = ctx.clone();
-    let crate_name = crate_name.to_string();
-    let version = version.to_string();
-
-    tokio::task::spawn_blocking(move || {
-        install_cargo_crate_sync(
-            &ctx,
-            &crate_name,
-            &version,
-            binary_name,
-            cache_dir.as_deref(),
-            git,
-            force,
-        )
-    })
-    .await
-    .context("Cargo install task panicked")?
-}
-
-fn install_cargo_crate_sync(
-    ctx: &InstallContext,
-    crate_name: &str,
-    version: &str,
-    binary_name: Option<String>,
-    cache_dir: Option<&Path>,
-    git: Option<String>,
-    force: bool,
-) -> Result<()> {
     use std::fs;
+
+    let cache_dir = cache_dir.as_deref();
 
     if let Some(cache_dir) = cache_dir {
         if let Some(parent) = cache_dir.parent()
@@ -348,7 +333,7 @@ fn install_cargo_crate_sync(
         binstall_args.push(git);
     }
     binstall_args.push(&crate_spec);
-    let binstall_result = ctx.cargo_command().args(binstall_args).output();
+    let binstall_result = cargo_output(ctx, &binstall_args).await;
 
     let binary_path = match (cache_dir, binary_name.as_ref()) {
         (Some(dir), Some(bin)) => Some(dir.join("bin").join(platform_binary_exe(bin))),
@@ -392,10 +377,8 @@ fn install_cargo_crate_sync(
         args.push(git);
     }
     args.push(&crate_spec);
-    let install_result = ctx
-        .cargo_command()
-        .args(&args)
-        .output()
+    let install_result = cargo_output(ctx, &args)
+        .await
         .context("Failed to run cargo install")?;
 
     if !install_result.status.success() {
@@ -408,6 +391,25 @@ fn install_cargo_crate_sync(
 
     tracing::info!("Successfully installed {} via cargo install", crate_spec);
     Ok(())
+}
+
+async fn cargo_output(
+    ctx: &InstallContext,
+    args: &[&str],
+) -> std::io::Result<std::process::Output> {
+    let mut command = ctx.cargo_command();
+    command.args(args);
+    run(ctx, command).await
+}
+
+async fn run(
+    ctx: &InstallContext,
+    mut command: std::process::Command,
+) -> std::io::Result<std::process::Output> {
+    if !ctx.foreground {
+        process_tree::own_group(&mut command);
+    }
+    process_tree::output(command).await
 }
 
 fn get_binary_cache_dir(ctx: &InstallContext, krate: &str, version: &str) -> Result<PathBuf> {
@@ -493,7 +495,7 @@ async fn acquire_cargo(
         // ls-remote` and reinstall only when it differs from the commit we last
         // installed; under `None` we never touch the network.
         let remote_sha = if matches!(update, UpdateLevel::Check | UpdateLevel::Fetch) {
-            remote_git_head_sha(git_url).await
+            remote_git_head_sha(ctx, git_url).await
         } else {
             None
         };
@@ -525,7 +527,7 @@ async fn acquire_cargo(
             // Record the commit we just installed so the next check can compare.
             let installed_sha = match remote_sha {
                 Some(sha) => Some(sha),
-                None => remote_git_head_sha(git_url).await,
+                None => remote_git_head_sha(ctx, git_url).await,
             };
             if let Some(sha) = installed_sha {
                 let _ = std::fs::write(&sha_file, sha);
@@ -661,21 +663,16 @@ fn single_cached_binary(bin_dir: &Path) -> Option<String> {
 /// Resolve the remote default-branch (`HEAD`) commit of a git URL via `git
 /// ls-remote` — cheap, no clone. `None` on any failure, leaving the caller to
 /// fall back to a force reinstall.
-async fn remote_git_head_sha(url: &str) -> Option<String> {
-    let url = url.to_string();
-    tokio::task::spawn_blocking(move || {
-        let output = std::process::Command::new("git")
-            .args(["ls-remote", &url, "HEAD"])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
-        }
-        parse_ls_remote_sha(&String::from_utf8_lossy(&output.stdout))
-    })
-    .await
-    .ok()
-    .flatten()
+async fn remote_git_head_sha(ctx: &InstallContext, url: &str) -> Option<String> {
+    let mut command = std::process::Command::new("git");
+    command
+        .args(["ls-remote", url, "HEAD"])
+        .env("GIT_TERMINAL_PROMPT", "0");
+    let output = run(ctx, command).await.ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_ls_remote_sha(&String::from_utf8_lossy(&output.stdout))
 }
 
 /// Parse the commit SHA from `git ls-remote <url> HEAD` output, whose first

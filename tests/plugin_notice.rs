@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use symposium::hook_schema::{HookAgent, agent_event};
 use symposium_testlib::{HookStep, TestContext, TestMode, with_fixture};
 
-const NOTICE: &str = "there may be new agent plugins";
+const NOTICE: &str = "agent plugins that are not enabled yet";
 
 async fn respond(ctx: &TestContext, agent: HookAgent, step: HookStep) -> String {
     let event = step.event();
@@ -30,10 +30,10 @@ fn tool_call_finished() -> HookStep {
     }
 }
 
-fn add_crate_b(root: &Path) {
+fn add_dependency(root: &Path, name: &str) {
     let manifest = root.join("Cargo.toml");
     let mut text = std::fs::read_to_string(&manifest).unwrap();
-    text.push_str("crate-b = { path = \"crate-b\" }\n");
+    text.push_str(&format!("{name} = {{ path = \"{name}\" }}\n"));
     std::fs::write(&manifest, text).unwrap();
     let status = std::process::Command::new("cargo")
         .args(["generate-lockfile", "--offline"])
@@ -60,7 +60,12 @@ async fn start_session(ctx: &TestContext, agent: HookAgent) {
 }
 
 fn assert_notice(agent: HookAgent, stdout: &str) {
-    for expected in [NOTICE, "cargo agents sync", "Do not enable them yourself"] {
+    for expected in [
+        NOTICE,
+        "crate-b",
+        "cargo agents sync",
+        "Do not enable them yourself",
+    ] {
         assert!(
             stdout.contains(expected),
             "{agent:?} should get the notice: {stdout}"
@@ -77,7 +82,7 @@ async fn a_dependency_added_by_a_tool_call_is_noticed_once() {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             start_session(&ctx, HookAgent::Claude).await;
 
-            add_crate_b(ctx.workspace_root.as_ref().unwrap());
+            add_dependency(ctx.workspace_root.as_ref().unwrap(), "crate-b");
             let stdout = respond(&ctx, HookAgent::Claude, tool_call_finished()).await;
             assert_notice(HookAgent::Claude, &stdout);
 
@@ -101,7 +106,7 @@ async fn a_dependency_the_user_added_is_noticed_with_their_next_prompt() {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             start_session(&ctx, HookAgent::Claude).await;
 
-            add_crate_b(ctx.workspace_root.as_ref().unwrap());
+            add_dependency(ctx.workspace_root.as_ref().unwrap(), "crate-b");
             let stdout = respond(&ctx, HookAgent::Claude, HookStep::user_prompt("next")).await;
             assert_notice(HookAgent::Claude, &stdout);
             Ok(())
@@ -121,7 +126,7 @@ async fn agents_that_read_context_after_a_tool_call_get_the_notice() {
                 ctx.symposium(&["init", "--add-agent", "claude"]).await?;
                 start_session(&ctx, agent).await;
 
-                add_crate_b(ctx.workspace_root.as_ref().unwrap());
+                add_dependency(ctx.workspace_root.as_ref().unwrap(), "crate-b");
                 let stdout = respond(&ctx, agent, tool_call_finished()).await;
                 assert_notice(agent, &stdout);
                 Ok(())
@@ -130,4 +135,69 @@ async fn agents_that_read_context_after_a_tool_call_get_the_notice() {
         .await
         .unwrap();
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_workspace_seen_for_the_first_time_gets_no_notice() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-notice0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let stdout = respond(&ctx, HookAgent::Claude, HookStep::user_prompt("first")).await;
+            assert!(!stdout.contains(NOTICE), "first prompt: {stdout}");
+
+            add_dependency(ctx.workspace_root.as_ref().unwrap(), "crate-b");
+            let stdout = respond(&ctx, HookAgent::Claude, HookStep::user_prompt("next")).await;
+            assert_notice(HookAgent::Claude, &stdout);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dependency_auto_enable_covers_is_installed_without_a_notice() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-notice0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.sym
+                .config
+                .plugins
+                .auto_enable
+                .push("crate-b".to_string());
+            start_session(&ctx, HookAgent::Claude).await;
+
+            let root = ctx.workspace_root.clone().unwrap();
+            add_dependency(&root, "crate-b");
+            let stdout = respond(&ctx, HookAgent::Claude, tool_call_finished()).await;
+            assert!(!stdout.contains("cargo agents sync"), "{stdout}");
+            assert!(root.join(".claude/skills/b-guidance/SKILL.md").exists());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_dependency_without_plugins_gets_no_notice() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-notice0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            start_session(&ctx, HookAgent::Claude).await;
+
+            add_dependency(ctx.workspace_root.as_ref().unwrap(), "crate-c");
+            let stdout = respond(&ctx, HookAgent::Claude, tool_call_finished()).await;
+            assert!(!stdout.contains("cargo agents sync"), "{stdout}");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
 }

@@ -435,6 +435,8 @@ Not every agent delivers every event, and agents name them differently. See [Age
 	- `2` (or no reported exit code): block. The action is blocked, dispatch stops, and the hook's stderr becomes the reason the agent is given. See [exit codes](./hook-events.md#exit-codes) for how each agent receives the block.
 	- any other non-zero code — treated as success for dispatching purposes; stdout is still parsed and merged when possible.
 
+- **Time limits**: a hook may run for 5 seconds, and all plugin hooks of one event for 8 seconds together. Preparing a hook's command, `install_commands` included, counts toward the 8 seconds. A hook that reaches its limit is killed together with the commands it started, and treated as if it had written nothing: the action is not blocked, and the next hook still runs. A hook is done when its process exits; background jobs it leaves running are not waited for.
+
 - **Stdout handling**: Hooks should write a JSON object to stdout to contribute structured data back to the caller. Valid JSON objects are merged together across successful hooks; keys from later hooks overwrite earlier keys. The exception is `additionalContext` on `SessionStart`, `UserPromptSubmit` and `PostToolUse`: symposium's own context and every hook's are joined, in order, so none replaces another.
 
 - **Stderr handling**: If a hook exits with code `2` (or no exit code), dispatch returns immediately with the hook's stderr as the block reason. Otherwise stderr is captured but not returned on success.
