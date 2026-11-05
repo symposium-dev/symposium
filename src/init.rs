@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use dialoguer::MultiSelect;
 use symposium_install::UpdateLevel;
 
@@ -28,15 +28,25 @@ fn interactive(out: &Output) -> bool {
 
 /// Resolve which agents to configure. Priority:
 /// 1. Explicit `--add-agent` / `--remove-agent` flags (applied to existing set)
-/// 2. Interactive multi-select (if `should_prompt`), pre-selecting existing agents
-/// 3. Default to Claude in non-interactive mode
+/// 2. With agents configured: interactive multi-select (if `should_prompt`),
+///    else keep them. Deselecting all uninstalls.
+/// 3. With none configured: interactive multi-select insisting on at least one
+///    (if `should_prompt`), else every detected agent, and an error when none
+///    is detected
+///
+/// Explicit choices stay selected even when detection fails. Other choices
+/// follow detection history, preserving previous deselections.
 fn resolve_agents(
     opts: &InitOpts,
     existing: &[AgentEntry],
+    detected: &[Agent],
+    previously_detected: &[Agent],
+    explicit: &[String],
     should_prompt: bool,
+    out: &Output,
 ) -> Result<Vec<String>> {
-    let mut names: Vec<String> = existing.iter().map(|e| e.name.clone()).collect();
     if !opts.agents.is_empty() || !opts.remove_agents.is_empty() {
+        let mut names: Vec<String> = existing.iter().map(|e| e.name.clone()).collect();
         for name in &opts.agents {
             Agent::from_config_name(name)?;
             if !names.contains(name) {
@@ -51,16 +61,124 @@ fn resolve_agents(
         }
         return Ok(names);
     }
-    if should_prompt {
-        return Ok(prompt_for_agents(existing)?
+    if !existing.is_empty() {
+        if should_prompt {
+            report_changes_since_last_setup(existing, detected, previously_detected, explicit, out);
+            return Ok(prompt_for_agents(&preselected(
+                existing,
+                detected,
+                previously_detected,
+                explicit,
+            ))?
             .iter()
             .map(|a| a.config_name().to_string())
             .collect());
+        }
+        return Ok(existing.iter().map(|e| e.name.clone()).collect());
     }
-    if names.is_empty() {
-        names.push(Agent::Claude.config_name().to_string());
+    if detected.is_empty() {
+        if !should_prompt {
+            let names: Vec<_> = Agent::all().iter().map(|a| a.config_name()).collect();
+            bail!(
+                "no agents detected; pass `--add-agent <name>` ({})",
+                names.join(", ")
+            );
+        }
+        out.info("No agents detected");
+    } else {
+        let names: Vec<_> = detected.iter().map(|a| a.display_name()).collect();
+        out.info(format!("Detected: {}", names.join(", ")));
     }
-    Ok(names)
+    if should_prompt {
+        return Ok(prompt_until_chosen(
+            &preselected(existing, detected, previously_detected, explicit),
+            out,
+        )?
+        .iter()
+        .map(|a| a.config_name().to_string())
+        .collect());
+    }
+    Ok(detected
+        .iter()
+        .map(|a| a.config_name().to_string())
+        .collect())
+}
+
+fn preselected(
+    existing: &[AgentEntry],
+    detected: &[Agent],
+    previously_detected: &[Agent],
+    explicit: &[String],
+) -> Vec<Agent> {
+    Agent::all()
+        .iter()
+        .copied()
+        .filter(|a| {
+            let configured = existing.iter().any(|e| e.name == a.config_name());
+            (configured && explicit.iter().any(|name| name == a.config_name()))
+                || (detected.contains(a) && (configured || !previously_detected.contains(a)))
+        })
+        .collect()
+}
+
+fn report_changes_since_last_setup(
+    existing: &[AgentEntry],
+    detected: &[Agent],
+    previously_detected: &[Agent],
+    explicit: &[String],
+    out: &Output,
+) {
+    let configured = |a: &Agent| existing.iter().any(|e| e.name == a.config_name());
+    let added: Vec<_> = detected
+        .iter()
+        .filter(|a| !configured(a) && !previously_detected.contains(a))
+        .map(|a| a.display_name())
+        .collect();
+    let gone: Vec<_> = Agent::all()
+        .iter()
+        .filter(|a| {
+            configured(a)
+                && previously_detected.contains(a)
+                && !detected.contains(a)
+                && !explicit.iter().any(|name| name == a.config_name())
+        })
+        .map(|a| a.display_name())
+        .collect();
+    if !added.is_empty() {
+        out.info(format!("Detected since last setup: {}", added.join(", ")));
+    }
+    if !gone.is_empty() {
+        out.info(format!("No longer detected: {}", gone.join(", ")));
+    }
+}
+
+fn prompt_until_chosen(preselected: &[Agent], out: &Output) -> Result<Vec<Agent>> {
+    loop {
+        let agents = prompt_for_agents(preselected)?;
+        if !agents.is_empty() {
+            return Ok(agents);
+        }
+        out.warn("Select at least one agent (space to select, enter to confirm, Ctrl-C to cancel)");
+    }
+}
+
+/// Keep explicit choices while selected; flags and newly checked boxes express intent.
+fn explicit_after_selection(
+    previous: &[String],
+    selected: &[String],
+    defaults: &[Agent],
+    opts: &InitOpts,
+    prompted: bool,
+) -> Vec<String> {
+    selected
+        .iter()
+        .filter(|name| {
+            previous.contains(name)
+                || opts.agents.contains(name)
+                || (prompted && !defaults.iter().any(|a| a.config_name() == name.as_str()))
+        })
+        .cloned()
+        .collect()
 }
 
 /// Run user-wide initialization.
@@ -82,13 +200,43 @@ pub async fn init(
     let should_prompt = !cli_driven && interactive(out);
 
     // Resolve each setting: CLI flag > interactive prompt > keep existing.
-    let names = resolve_agents(opts, &sym.config.agents, should_prompt)?;
+    let first_run = sym.config.agents.is_empty();
+    let detected = Agent::detect_installed(sym.home_dir(), |name| std::env::var_os(name));
+    let state = crate::state::load(sym.config_dir()).unwrap_or_default();
+    let explicit = state.explicit_agents.clone().unwrap_or_else(|| {
+        sym.config
+            .agents
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect()
+    });
+    let previously_detected: Vec<Agent> = state
+        .detected_agents
+        .iter()
+        .filter_map(|name| Agent::from_config_name(name).ok())
+        .collect();
+    let defaults = preselected(
+        &sym.config.agents,
+        &detected,
+        &previously_detected,
+        &explicit,
+    );
+    let names = resolve_agents(
+        opts,
+        &sym.config.agents,
+        &detected,
+        &previously_detected,
+        &explicit,
+        should_prompt,
+        out,
+    )?;
     let removed_agent = sym.config.agents.iter().any(|e| !names.contains(&e.name));
+
     let agents: Vec<Agent> = names
         .iter()
         .filter_map(|n| Agent::from_config_name(n).ok())
         .collect();
-
+    let explicit = explicit_after_selection(&explicit, &names, &defaults, opts, should_prompt);
     sym.config.agents = names
         .iter()
         .map(|name| AgentEntry { name: name.clone() })
@@ -116,6 +264,22 @@ pub async fn init(
 
     // Persist and apply.
     sym.save_config().context("failed to write user config")?;
+    let mut detection_history = state.detected_agents;
+    if should_prompt || (!cli_driven && first_run) {
+        detection_history = detected
+            .iter()
+            .map(|a| a.config_name().to_string())
+            .collect();
+    } else {
+        // An explicit removal must not be re-added as a newly detected agent.
+        for name in &opts.remove_agents {
+            if detected.iter().any(|a| a.config_name() == name) && !detection_history.contains(name)
+            {
+                detection_history.push(name.clone());
+            }
+        }
+    }
+    crate::state::record_agent_choices(sym.config_dir(), explicit, detection_history);
 
     let config_path = sym.config_dir().join("config.toml");
 
@@ -227,14 +391,11 @@ fn prompt_for_telemetry(current: bool) -> Result<bool> {
         .interact()?)
 }
 
-fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {
+fn prompt_for_agents(preselected: &[Agent]) -> Result<Vec<Agent>> {
     let agents = Agent::all();
     let items: Vec<&str> = agents.iter().map(|a| a.display_name()).collect();
 
-    let defaults: Vec<bool> = agents
-        .iter()
-        .map(|a| existing.iter().any(|e| e.name == a.config_name()))
-        .collect();
+    let defaults: Vec<bool> = agents.iter().map(|a| preselected.contains(a)).collect();
 
     let selections = MultiSelect::new()
         .with_prompt("Which agents do you use? (space to select, enter to confirm)")
@@ -243,4 +404,180 @@ fn prompt_for_agents(existing: &[AgentEntry]) -> Result<Vec<Agent>> {
         .interact()?;
 
     Ok(selections.into_iter().map(|i| agents[i]).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entries(names: &[&str]) -> Vec<AgentEntry> {
+        names
+            .iter()
+            .map(|name| AgentEntry {
+                name: name.to_string(),
+            })
+            .collect()
+    }
+
+    fn resolve(opts: &InitOpts, existing: &[&str], detected: &[Agent]) -> Vec<Agent> {
+        resolve_agents(
+            opts,
+            &entries(existing),
+            detected,
+            &[],
+            &[],
+            false,
+            &Output::quiet(),
+        )
+        .unwrap()
+        .iter()
+        .map(|n| Agent::from_config_name(n).unwrap())
+        .collect()
+    }
+
+    #[test]
+    fn explicit_choices_survive_disappearance_but_detected_choices_do_not() {
+        let configured = entries(&["claude", "codex"]);
+        assert_eq!(
+            preselected(
+                &configured,
+                &[],
+                &[Agent::Claude, Agent::Codex],
+                &["claude".into()]
+            ),
+            vec![Agent::Claude]
+        );
+        assert_eq!(
+            preselected(&configured, &[], &[], &["claude".into(), "codex".into()]),
+            vec![Agent::Claude, Agent::Codex]
+        );
+    }
+
+    #[test]
+    fn accepting_detection_does_not_pin_but_checking_a_box_does() {
+        let selected = vec!["claude".into(), "codex".into()];
+        assert_eq!(
+            explicit_after_selection(&[], &selected, &[Agent::Codex], &InitOpts::default(), true),
+            vec!["claude".to_string()]
+        );
+        assert!(
+            explicit_after_selection(
+                &[],
+                &["codex".into()],
+                &[Agent::Codex],
+                &InitOpts::default(),
+                true
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn adding_an_already_detected_agent_pins_it_and_removing_clears_it() {
+        let opts = InitOpts {
+            agents: vec!["codex".into()],
+            ..InitOpts::default()
+        };
+        assert_eq!(
+            explicit_after_selection(&[], &["codex".into()], &[Agent::Codex], &opts, false),
+            vec!["codex".to_string()]
+        );
+        assert!(
+            explicit_after_selection(
+                &["codex".into()],
+                &[],
+                &[Agent::Codex],
+                &InitOpts::default(),
+                true
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn fresh_config_without_a_terminal_takes_detected_agents() {
+        let detected = [Agent::Codex, Agent::Kiro];
+        assert_eq!(resolve(&InitOpts::default(), &[], &detected), detected);
+    }
+
+    #[test]
+    fn fresh_config_without_detection_or_terminal_is_an_error() {
+        let result = resolve_agents(
+            &InitOpts::default(),
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+            &Output::quiet(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn first_run_preselects_every_detected_agent() {
+        let detected = [Agent::Claude, Agent::Codex];
+        assert_eq!(preselected(&[], &detected, &[], &[]), detected);
+    }
+
+    #[test]
+    fn rerun_preselects_configured_and_new_agents_but_not_deselected_ones() {
+        assert_eq!(
+            preselected(
+                &entries(&["codex", "kiro"]),
+                &[Agent::Claude, Agent::Codex, Agent::Copilot],
+                &[Agent::Claude, Agent::Codex, Agent::Kiro],
+                &[],
+            ),
+            vec![Agent::Codex, Agent::Copilot]
+        );
+    }
+
+    #[test]
+    fn rerun_reports_agents_detected_and_no_longer_detected() {
+        let out = Output::capturing();
+        report_changes_since_last_setup(
+            &entries(&["claude", "codex"]),
+            &[Agent::Claude, Agent::Copilot],
+            &[Agent::Claude, Agent::Codex],
+            &[],
+            &out,
+        );
+        let lines = out.captured().join("\n");
+        assert!(
+            lines.contains("Detected since last setup: GitHub Copilot"),
+            "{lines}"
+        );
+        assert!(lines.contains("No longer detected: Codex CLI"), "{lines}");
+    }
+
+    #[test]
+    fn rerun_does_not_report_deselected_agents_as_new() {
+        let out = Output::capturing();
+        report_changes_since_last_setup(
+            &entries(&["codex"]),
+            &[Agent::Claude, Agent::Codex],
+            &[Agent::Claude, Agent::Codex],
+            &[],
+            &out,
+        );
+        assert!(out.captured().is_empty(), "{:?}", out.captured());
+    }
+
+    #[test]
+    fn existing_config_without_a_terminal_ignores_detection() {
+        assert_eq!(
+            resolve(&InitOpts::default(), &["codex"], &[Agent::Claude]),
+            vec![Agent::Codex]
+        );
+    }
+
+    #[test]
+    fn flags_ignore_detection() {
+        let opts = InitOpts {
+            agents: vec!["goose".to_string()],
+            ..InitOpts::default()
+        };
+        assert_eq!(resolve(&opts, &[], &[Agent::Claude]), vec![Agent::Goose]);
+    }
 }
