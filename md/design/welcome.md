@@ -38,3 +38,4 @@ Log files are named `symposium-YYYYMMDD-HHMMSS.log`. When debugging an issue, th
 - [Important flows](./important-flows.md) — key paths through the code
 - [Testing guidelines](./testing-guidelines.md) — how to write and run tests
 - [Governance](./governance.md) — how we work together
+- [Tickets and the project board](./contributing-tickets.md) — how work is tracked and how to write a ticket
