@@ -17,7 +17,7 @@ Symposium merges hook entries into Codex's `hooks.json`.
 | Project | `.codex/hooks.json` |
 | Global | `~/.codex/hooks.json` (`$CODEX_HOME/hooks.json` when set) |
 
-Events registered: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SessionStart` (PascalCase).
+Events registered: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `Stop` (PascalCase).
 
 Output format: JSON. Exit code 2 blocks tool use.
 

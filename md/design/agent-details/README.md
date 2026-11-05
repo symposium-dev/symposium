@@ -52,7 +52,7 @@ The tables below summarize the answers for each agent. Individual agent pages co
 
 ## Event names
 
-Symposium registers hooks for four events on every agent with shell hooks, plus `stop` on Antigravity and Claude Code. Each agent uses different names and casing conventions; *not registered* marks an event the agent has but symposium does not hook.
+Symposium registers hooks for four events on every agent with shell hooks, plus `stop` on Antigravity, Claude Code and Codex. Each agent uses different names and casing conventions; *not registered* marks an event the agent has but symposium does not hook.
 
 | Symposium event | Antigravity CLI | Claude Code | Copilot | Codex CLI | Kiro CLI | OpenCode | Goose |
 |---|---|---|---|---|---|---|---|
@@ -60,7 +60,7 @@ Symposium registers hooks for four events on every agent with shell hooks, plus 
 | post-tool-use | `PostToolUse` | `PostToolUse` | `postToolUse` | `PostToolUse` | `postToolUse` | `tool.execute.after` | N/A |
 | user-prompt-submit | `PreInvocation` | `UserPromptSubmit` | `userPromptSubmitted` | `UserPromptSubmit` | `userPromptSubmit` | `message.updated` (filter by role) | N/A |
 | session-start | `SessionStart` | `SessionStart` | `sessionStart` | `SessionStart` | `agentSpawn` | `session.created` | N/A |
-| stop | `Stop` | `Stop` | *not registered* (`agentStop`) | *not registered* (`Stop`) | *not registered* (`stop`) | N/A | N/A |
+| stop | `Stop` | `Stop` | *not registered* (`agentStop`) | `Stop` | *not registered* (`stop`) | N/A | N/A |
 
 ### Blocking support
 

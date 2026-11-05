@@ -1,0 +1,8 @@
+name = "stop-plugin"
+depends-on = ["*"]
+
+[[hooks]]
+name = "check-on-stop"
+event = "Stop"
+command = { script = "scripts/check-on-stop.sh" }
+format = "symposium"
