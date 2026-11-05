@@ -12,6 +12,7 @@
 
 mod checks;
 mod error;
+mod hooks;
 mod name;
 mod pattern;
 mod protected;
@@ -26,6 +27,7 @@ use serde::Deserialize;
 
 pub(crate) use checks::CheckError;
 pub(crate) use error::{DirProblem, TaskError, TaskErrors};
+pub(crate) use hooks::ExpectedHook;
 pub(crate) use name::{
     BatchName, CheckName, FixtureName, HookName, NameError, PluginName, SkillName, TaskName,
     ToolName,
@@ -60,7 +62,7 @@ pub(crate) struct Task {
     editable: Vec<EditablePattern>,
     fmt_check: bool,
     checks: Vec<CheckName>,
-    expected_hooks: Vec<HookName>,
+    expected_hooks: Vec<ExpectedHook>,
     expected_skills: SkillExpectations,
 }
 
@@ -170,6 +172,19 @@ impl Task {
         &self.editable
     }
 
+    pub(crate) fn expected_skills(&self) -> &SkillExpectations {
+        &self.expected_skills
+    }
+
+    /// The plugin hooks that must leave a successful record, each with its event.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the runner decides these later in RFD step 4")
+    )]
+    pub(crate) fn expected_hooks(&self) -> &[ExpectedHook] {
+        &self.expected_hooks
+    }
+
     /// Applies the rules a single field cannot express, as Cargo's `to_real_manifest`
     /// turns a parsed `TomlManifest` into a `Manifest`.
     fn validate(evals: &Evals, name: &TaskName, raw: RawTask) -> Result<Self, TaskErrors> {
@@ -196,6 +211,7 @@ impl Task {
         errors.extend(duplicates("fixtures", &raw.fixtures));
         errors.extend(duplicates("editable", &editable));
         errors.extend(duplicates("hooks", &raw.expected.hooks));
+        let expected_hooks = hooks::resolve(evals, &raw.plugins, &raw.expected.hooks, &mut errors);
         let expected_skills = resolve_skills(raw.expected.skills, &mut errors);
         if !errors.is_empty() {
             return Err(TaskErrors(errors));
@@ -211,7 +227,7 @@ impl Task {
             editable,
             fmt_check: raw.fmt_check,
             checks,
-            expected_hooks: raw.expected.hooks,
+            expected_hooks,
             expected_skills,
         })
     }
@@ -424,6 +440,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::client::HookEvent;
 
     const ONE_CHECK: &str = "#[test]\nfn works() {}\n";
 
@@ -574,9 +591,120 @@ mod tests {
                 "`plugins` lists `p` more than once",
                 "`editable` lists `src/**` more than once",
                 "`hooks` lists `on-stop` more than once",
+                "expected hook `on-stop` is not declared by any of the task's plugins",
                 "`installed` lists `a` more than once",
             ]
         );
+    }
+
+    /// The `demo` task expecting `hooks`, with each of `plugins` declaring its manifest.
+    fn expecting_hooks(hooks: &str, plugins: &[(&str, &str)]) -> Result<Task, TaskErrors> {
+        let names: Vec<_> = plugins
+            .iter()
+            .map(|(name, _)| format!("\"{name}\""))
+            .collect();
+        let (root, evals) = evals_with_task(&format!(
+            "kind = \"regression\"\nprompt = \"x\"\nplugins = [{}]\n[expected]\nhooks = {hooks}\n",
+            names.join(", ")
+        ));
+        for (name, manifest) in plugins {
+            let dir = root.path().join("plugins").join(name);
+            fs::create_dir_all(&dir).unwrap();
+            fs::write(dir.join("Symposium.toml"), manifest).unwrap();
+        }
+        load_demo(&evals)
+    }
+
+    const ON_STOP: &str = "[[hooks]]\nname = \"on-stop\"\nevent = \"Stop\"\ncommand = \"run\"\n";
+
+    #[test]
+    fn an_expected_hook_takes_its_event_from_the_plugin_declaring_it() {
+        let task = expecting_hooks(
+            r#"["on-stop"]"#,
+            &[("first", "name = \"first\"\n"), ("second", ON_STOP)],
+        )
+        .unwrap();
+
+        assert_eq!(
+            task.expected_hooks(),
+            [ExpectedHook {
+                name: HookName::new("on-stop").unwrap(),
+                event: HookEvent::Stop,
+            }]
+        );
+    }
+
+    #[test]
+    fn an_expected_hook_declared_twice_is_ambiguous() {
+        let errors = expecting_hooks(r#"["on-stop"]"#, &[("first", ON_STOP), ("second", ON_STOP)])
+            .unwrap_err();
+
+        assert_eq!(
+            messages(&errors),
+            ["expected hook `on-stop` is declared by both `first` and `second`"]
+        );
+    }
+
+    #[test]
+    fn an_expected_hook_cannot_be_limited_to_one_agent() {
+        let limits = ["agent = \"claude\"", "format = \"codex\""];
+        for limit in limits {
+            let manifest = format!("{ON_STOP}{limit}\n");
+
+            let errors = expecting_hooks(r#"["on-stop"]"#, &[("plugin", &manifest)]).unwrap_err();
+
+            assert_eq!(
+                messages(&errors),
+                [
+                    "expected hook `on-stop` in plugin `plugin` is limited to one agent by `agent` or `format`, but a task runs on every client"
+                ],
+                "{limit}"
+            );
+        }
+        let portable = format!("{ON_STOP}format = \"symposium\"\n");
+        assert!(expecting_hooks(r#"["on-stop"]"#, &[("plugin", &portable)]).is_ok());
+    }
+
+    #[test]
+    fn an_expected_hook_must_run_on_a_symposium_event() {
+        let manifest = ON_STOP.replace("Stop", "stop");
+
+        let errors = expecting_hooks(r#"["on-stop"]"#, &[("plugin", &manifest)]).unwrap_err();
+
+        assert_eq!(
+            messages(&errors),
+            ["expected hook `on-stop` runs on `stop`, which is not a Symposium event"]
+        );
+    }
+
+    #[test]
+    fn a_manifest_that_does_not_parse_leaves_every_expected_hook_undecided() {
+        // The broken manifest could declare `on-stop` too, so neither "undeclared" nor
+        // "declared once" can be concluded.
+        let plugins = [
+            (
+                "broken",
+                "[[hooks]
+",
+            ),
+            ("working", ON_STOP),
+        ];
+
+        let errors = expecting_hooks(r#"["on-stop", "other"]"#, &plugins).unwrap_err();
+
+        assert_eq!(
+            messages(&errors),
+            ["invalid `Symposium.toml` in plugin `broken`"]
+        );
+    }
+
+    #[test]
+    fn the_formatting_tasks_hook_runs_on_stop() {
+        let evals = Evals::in_repository();
+
+        let task = Task::load(&evals, &TaskName::new("formatting").unwrap()).unwrap();
+
+        assert_eq!(task.expected_hooks()[0].event, HookEvent::Stop);
     }
 
     #[test]

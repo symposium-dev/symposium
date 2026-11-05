@@ -17,6 +17,10 @@ pub(super) const SKILL_LOADED: &str = include_str!("transcripts/skill_loaded.jso
 pub(super) const READ_LOADED: &str = include_str!("transcripts/read_loaded.jsonl");
 /// A `Skill` call for a skill that does not exist.
 pub(super) const SKILL_FAILED: &str = include_str!("transcripts/skill_failed.jsonl");
+/// `Write`, `Edit`, a `NotebookEdit` refused because the notebook was not read first,
+/// and `Bash`, each asked for in the prompt, with a `ToolSearch` that loaded
+/// `NotebookEdit`. Its hook events are left out.
+pub(super) const TOOLS_USED: &str = include_str!("transcripts/tools_used.jsonl");
 
 /// The session every fixture was recorded as.
 pub(super) const SESSION: &str = "00000000-0000-4000-8000-000000000000";
@@ -189,6 +193,7 @@ fn fixtures_name_no_home_session_or_service_of_the_recording_machine() {
         ("skill_loaded", SKILL_LOADED),
         ("read_loaded", READ_LOADED),
         ("skill_failed", SKILL_FAILED),
+        ("tools_used", TOOLS_USED),
     ];
     for (name, fixture) in fixtures {
         for (number, line) in fixture.lines().enumerate() {

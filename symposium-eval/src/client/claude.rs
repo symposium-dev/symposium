@@ -4,9 +4,11 @@
 //! `--no-session-persistence`, would skip hooks and skills or drop the session's own
 //! file, and so invalidate a trial. How its transcript is read is in [`transcript`].
 
+mod activity;
 mod calls;
 #[cfg(test)]
 mod fixtures;
+mod hooks;
 mod loads;
 mod transcript;
 pub(crate) mod version;
@@ -17,7 +19,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 use self::version::Version;
-use super::{ClientRunner, InstalledSkill, Reading};
+use super::{ClientRunner, HookEvidence, HookRuns, InstalledSkill, Reading};
 use crate::grade::process::Invocation;
 use crate::run::client::Client;
 use crate::run::{Machine, RunError, Trial};
@@ -106,6 +108,10 @@ impl ClientRunner for Claude {
             env,
             log_name: "claude".to_owned(),
         }
+    }
+
+    fn unread_hooks(&self) -> HookEvidence {
+        HookEvidence::Reported(HookRuns::unread(hooks::OBSERVED))
     }
 
     fn read(&self, trial: &Trial, transcript: &Path, skills: &[InstalledSkill]) -> Reading {

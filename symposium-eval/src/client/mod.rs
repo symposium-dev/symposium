@@ -9,13 +9,14 @@
 
 pub(crate) mod claude;
 mod error;
+pub(crate) mod paths;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::time::Duration;
 
-pub(crate) use error::{ClientError, ProvenanceError, TranscriptError, Unusable};
+pub(crate) use error::{ClientError, Malformation, ProvenanceError, TranscriptError, Unusable};
 
 use crate::grade::ProcessError;
 use crate::grade::process::{Backend, Finished, Invocation};
@@ -32,6 +33,10 @@ pub(crate) trait ClientRunner {
     /// What the transcript of this session in `trial` says, looking for `skills`. Each
     /// adapter documents which loads it detects.
     fn read(&self, trial: &Trial, transcript: &Path, skills: &[InstalledSkill]) -> Reading;
+
+    /// What a session's hooks are known to be when its transcript cannot be read: none
+    /// seen, from a client that reports them, or unsupported.
+    fn unread_hooks(&self) -> HookEvidence;
 }
 
 /// What one transcript says.
@@ -43,6 +48,169 @@ pub(crate) struct Reading {
     pub(crate) completion: Result<Completion, Unusable>,
     /// How each skill looked for reached the agent, in the same order.
     pub(crate) loads: Vec<Load>,
+    pub(crate) hooks: HookEvidence,
+    pub(crate) activity: ToolActivity,
+}
+
+/// What a transcript says about the hooks its client ran, a record the agent cannot
+/// write (RFD reference, "What the evidence can and cannot show").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HookEvidence {
+    /// The client's output does not report hook runs.
+    Unsupported,
+    Reported(HookRuns),
+}
+
+/// The hook runs a transcript reported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HookRuns {
+    pub(crate) runs: Vec<HookRun>,
+    /// The events the adapter promises to report every run of. Absence of another
+    /// event never decides anything.
+    pub(crate) observed: &'static [HookEvent],
+    /// Every line was read, the session reached its ending, and nothing unreadable
+    /// could have hidden a run of an observed event.
+    pub(crate) complete: bool,
+}
+
+impl HookRuns {
+    /// No runs, from a transcript that could not be read.
+    pub(crate) fn unread(observed: &'static [HookEvent]) -> Self {
+        Self {
+            runs: Vec::new(),
+            observed,
+            complete: false,
+        }
+    }
+
+    /// Whether every run of `event` would be reported.
+    pub(crate) fn observes(&self, event: &HookEvent) -> bool {
+        self.observed.contains(event)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HookRun {
+    pub(crate) event: HookEvent,
+    pub(crate) result: HookResult,
+}
+
+/// A hook event, by Symposium's names, which the clients share.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HookEvent {
+    SessionStart,
+    Stop,
+    /// Kept for diagnosis; no adapter observes these.
+    Other(String),
+}
+
+impl HookEvent {
+    pub(crate) fn named(name: &str) -> Self {
+        match name {
+            "SessionStart" => Self::SessionStart,
+            "Stop" => Self::Stop,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+}
+
+/// How one hook run ended, as its client reported it. Exit codes are detail: the
+/// client's outcome decides, and a missing code is never taken for 0.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HookResult {
+    Succeeded {
+        exit_code: Option<i32>,
+    },
+    Failed {
+        exit_code: Option<i32>,
+    },
+    Cancelled {
+        exit_code: Option<i32>,
+    },
+    /// It started, and the transcript ended without its response.
+    NoResponse,
+    /// An outcome the adapter does not know, which decides nothing.
+    Other {
+        outcome: String,
+        exit_code: Option<i32>,
+    },
+}
+
+/// The file mutations and shell commands a transcript shows the agent asking for, as
+/// facts to cross-check evidence with, not proof of what reached the disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ToolActivity {
+    pub(crate) mutations: Vec<FileMutation>,
+    pub(crate) commands: Vec<ShellCommand>,
+    /// Nothing could have hidden a mutation or command: the record was not damaged,
+    /// the session reached its ending, and every such call was read well enough to
+    /// keep. Only then does the absence of one say anything.
+    pub(crate) complete: bool,
+}
+
+impl ToolActivity {
+    /// No activity, from a transcript that could not be read.
+    pub(crate) fn unread() -> Self {
+        Self {
+            mutations: Vec::new(),
+            commands: Vec::new(),
+            complete: false,
+        }
+    }
+}
+
+/// A call to a tool that creates, changes or deletes the file at `path`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileMutation {
+    pub(crate) path: ObservedPath,
+    pub(crate) result: ToolResult,
+}
+
+/// The path a call named.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ObservedPath {
+    Readable {
+        reported: String,
+        /// Resolved by name against where the session ran (see [`paths`]); `None` when
+        /// that leaves it without a root.
+        resolved: Option<PathBuf>,
+    },
+    /// The call named no path that could be read, so it could have been any file.
+    Unreadable,
+}
+
+/// A shell command the agent asked to run. Only its text is known, never its effects.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ShellCommand {
+    pub(crate) text: CappedText,
+    pub(crate) result: ToolResult,
+}
+
+/// Text the agent chose, kept only up to a limit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CappedText {
+    /// Its first bytes, ending on a character boundary.
+    pub(crate) prefix: String,
+    pub(crate) original_bytes: usize,
+}
+
+impl CappedText {
+    pub(crate) fn new(text: &str, limit: usize) -> Self {
+        Self {
+            prefix: text[..text.floor_char_boundary(limit)].to_owned(),
+            original_bytes: text.len(),
+        }
+    }
+}
+
+/// How a tool call's result arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ToolResult {
+    Succeeded,
+    /// An error, which is also how a denial arrives.
+    Failed,
+    /// No result in the transcript.
+    Missing,
 }
 
 /// A skill the runner looks for in a transcript, with the `SKILL.md` sync installed for
@@ -85,6 +253,8 @@ pub(crate) struct Execution {
     pub(crate) transcript: PathBuf,
     pub(crate) ended: Ended,
     pub(crate) loads: Vec<Load>,
+    pub(crate) hooks: HookEvidence,
+    pub(crate) activity: ToolActivity,
 }
 
 #[derive(Debug)]
@@ -133,6 +303,8 @@ pub(crate) fn execute(
         transcript: transcript.clone(),
         ended,
         loads: vec![Load::Unknown; skills.len()],
+        hooks: runner.unread_hooks(),
+        activity: ToolActivity::unread(),
     };
     let finished = match backend.run(&invocation, deadline, &logs) {
         Ok(finished) => finished,
@@ -172,6 +344,8 @@ pub(crate) fn execute(
         transcript,
         ended,
         loads: reading.loads,
+        hooks: reading.hooks,
+        activity: reading.activity,
     }
 }
 
@@ -218,6 +392,10 @@ mod tests {
             }
         }
 
+        fn unread_hooks(&self) -> HookEvidence {
+            HookEvidence::Unsupported
+        }
+
         fn read(&self, _: &Trial, transcript: &Path, skills: &[InstalledSkill]) -> Reading {
             let text = fs::read_to_string(transcript);
             let load = match &text {
@@ -235,6 +413,8 @@ mod tests {
                     })
                     .and_then(|text| one_line(&text)),
                 loads: vec![load; skills.len()],
+                hooks: HookEvidence::Unsupported,
+                activity: ToolActivity::unread(),
             }
         }
     }
@@ -248,7 +428,7 @@ mod tests {
             "garbled" => {
                 return Err(TranscriptError::Malformed {
                     line: 1,
-                    reason: "not an event".to_owned(),
+                    problem: Malformation::Syntax { column: 1 },
                 }
                 .into());
             }
@@ -461,6 +641,8 @@ mod tests {
             ),
             "{execution:?}"
         );
+        // No transcript was read, but the client still cannot report hooks.
+        assert_eq!(execution.hooks, HookEvidence::Unsupported);
     }
 
     #[test]

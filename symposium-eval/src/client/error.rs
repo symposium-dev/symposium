@@ -29,8 +29,36 @@ pub(crate) enum TranscriptError {
     },
     /// An event the adapter needs is not in a shape it knows, so the client's format may
     /// have changed.
-    #[error("line {line} of the transcript: {reason}")]
-    Malformed { line: usize, reason: String },
+    #[error("line {line} of the transcript is {problem}")]
+    Malformed { line: usize, problem: Malformation },
+}
+
+/// What is wrong with a malformed line. It quotes nothing from the line, which the
+/// client wrote and which can be megabytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub(crate) enum Malformation {
+    #[error("longer than {limit} bytes")]
+    TooLong { limit: usize },
+    #[error("not JSON, at column {column}")]
+    Syntax { column: usize },
+    /// Valid JSON in a shape the adapter does not know: the client's format may have
+    /// changed.
+    #[error("not in the expected shape, at column {column}")]
+    Shape { column: usize },
+    #[error("cut off at column {column}")]
+    CutOff { column: usize },
+}
+
+impl From<&serde_json::Error> for Malformation {
+    fn from(error: &serde_json::Error) -> Self {
+        use serde_json::error::Category;
+        let column = error.column();
+        match error.classify() {
+            Category::Data => Self::Shape { column },
+            Category::Eof => Self::CutOff { column },
+            Category::Syntax | Category::Io => Self::Syntax { column },
+        }
+    }
 }
 
 /// Why a transcript is not this trial's session, from the client checked before launch.

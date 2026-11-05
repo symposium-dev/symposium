@@ -1,13 +1,14 @@
 //! Reading a Claude Code transcript (`stream-json`, one event per line) once, for its
-//! ending, provenance and skill loads.
+//! ending, provenance, skill loads and hook runs.
 //!
 //! Only `system/init` and `result` must have the expected shape; other events are
 //! skipped, so a new event kind leaves the transcript readable. A message's payload is
-//! decoded only for loads, so a reshaped message damages loads, never the ending.
+//! decoded only for its tool calls, so a reshaped message damages them, never the ending.
 //!
 //! Reading continues past a bad line, so later evidence still counts. A mismatch
 //! outranks a malformed line: another session's transcript says nothing about this one.
 
+use std::borrow::Cow;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -16,34 +17,40 @@ use serde::Deserialize;
 use serde_json::value::RawValue;
 use uuid::Uuid;
 
+use super::activity;
 use super::calls::{Calls, Scope};
+use super::hooks::{HookFields, Hooks};
 use super::loads::Skills;
 use super::version::Version;
 use crate::client::{
-    Completion, InstalledSkill, Load, ProvenanceError, Reading, TranscriptError, Unusable,
+    Completion, InstalledSkill, Load, Malformation, ProvenanceError, Reading, TranscriptError,
+    Unusable,
 };
 use crate::jsonl::{self, Line, MAX_LINE};
 
-/// What every event is first read for.
+/// Every event, read once, borrowed from its line. Its parts stay raw until something
+/// reads them, so a part only the tool call record reads cannot make the line malformed.
 #[derive(Debug, Deserialize)]
-struct Head {
-    #[serde(rename = "type")]
-    kind: String,
-}
-
-/// A `system` event, read for its `subtype`, which not every system event has.
-#[derive(Debug, Deserialize)]
-struct SystemHead {
-    subtype: Option<String>,
-}
-
-/// An assistant or user message. Its payload is left undecoded here, borrowed from the
-/// line, since only the load evidence reads it.
-#[derive(Debug, Deserialize)]
-struct Envelope<'a> {
-    session_id: Option<String>,
+struct Event<'a> {
+    #[serde(rename = "type", borrow)]
+    kind: Cow<'a, str>,
+    /// Not every system event has one.
     #[serde(borrow)]
-    message: &'a RawValue,
+    subtype: Option<&'a RawValue>,
+    #[serde(borrow)]
+    session_id: Option<&'a RawValue>,
+    #[serde(borrow)]
+    message: Option<&'a RawValue>,
+    #[serde(borrow)]
+    hook_id: Option<&'a RawValue>,
+    #[serde(borrow)]
+    hook_name: Option<&'a RawValue>,
+    #[serde(borrow)]
+    hook_event: Option<&'a RawValue>,
+    #[serde(borrow)]
+    outcome: Option<&'a RawValue>,
+    #[serde(borrow)]
+    exit_code: Option<&'a RawValue>,
 }
 
 /// A `system/init` event: who the client says it is.
@@ -78,7 +85,9 @@ struct Reader<'a> {
     introduced: bool,
     /// Why the transcript cannot say how the session ended, if it cannot.
     unusable: Option<Unusable>,
-    calls: Calls<Skills<'a>>,
+    calls: Calls,
+    hooks: Hooks,
+    skills: &'a [InstalledSkill],
 }
 
 /// Reads the transcript at `path`, of `session` run by Claude Code `version` in
@@ -128,7 +137,9 @@ impl<'a> Reader<'a> {
             completion: Completion::Missing,
             introduced: false,
             unusable: None,
-            calls: Calls::new(Skills::new(skills, project)),
+            calls: Calls::new(project),
+            hooks: Hooks::new(),
+            skills,
         }
     }
 
@@ -142,10 +153,9 @@ impl<'a> Reader<'a> {
                 Ok(Line::End) => break,
                 Ok(Line::Read) => {}
                 Ok(Line::TooLong) => {
-                    let reason = format!("longer than {MAX_LINE} bytes");
                     self.unreadable(TranscriptError::Malformed {
                         line: number,
-                        reason,
+                        problem: Malformation::TooLong { limit: MAX_LINE },
                     });
                     continue;
                 }
@@ -165,20 +175,37 @@ impl<'a> Reader<'a> {
 
     /// Reads one event. An error is a line the ending may rest on that cannot be read.
     fn line(&mut self, line: &[u8], number: usize) -> Result<(), TranscriptError> {
-        let head: Head = parse(line, number)?;
-        match head.kind.as_str() {
+        let event: Event<'_> = parse(line, number)?;
+        match &*event.kind {
             "system" => {
-                let system: SystemHead = parse(line, number)?;
-                if system.subtype.as_deref() == Some("init") {
-                    self.introduced = true;
-                    self.init(parse(line, number)?);
+                // A subtype that is not a string names no event the adapter reads.
+                let subtype = event
+                    .subtype
+                    .map(|raw| serde_json::from_str::<String>(raw.get()));
+                match subtype {
+                    Some(Ok(subtype)) if subtype == "init" => {
+                        self.introduced = true;
+                        self.init(parse(line, number)?);
+                    }
+                    // Other hook events, such as `hook_progress`, say nothing about how
+                    // a run ended.
+                    Some(Ok(subtype)) if matches!(&*subtype, "hook_started" | "hook_response") => {
+                        let fields = HookFields {
+                            hook_id: event.hook_id,
+                            hook_name: event.hook_name,
+                            hook_event: event.hook_event,
+                            outcome: event.outcome,
+                            exit_code: event.exit_code,
+                        };
+                        self.hook(&subtype, event.session_id, &fields);
+                    }
+                    _ => {}
                 }
             }
             "result" => self.ending(parse(line, number)?),
-            "assistant" | "user" => match serde_json::from_slice::<Envelope<'_>>(line) {
-                Ok(envelope) => self.message(&head.kind, envelope),
-                Err(_) => self.calls.damage(),
-            },
+            kind @ ("assistant" | "user") => {
+                self.message(kind, event.session_id, event.message);
+            }
             _ => {}
         }
         Ok(())
@@ -186,7 +213,7 @@ impl<'a> Reader<'a> {
 
     fn init(&mut self, init: Init) {
         if let Some(cwd) = &init.cwd {
-            self.calls.matcher_mut().ran_in(cwd);
+            self.calls.ran_in(cwd);
         }
         if let Err(error) = init.check(&self.session, self.version) {
             self.mismatched(error);
@@ -199,20 +226,39 @@ impl<'a> Reader<'a> {
         } else if self.is_ours(&ending.session_id) {
             self.completion = ending.completion();
             self.calls.finish();
+            self.hooks.finish();
         }
     }
 
     /// Hands a message of `kind` to the tool call evidence, if it is this session's.
-    fn message(&mut self, kind: &str, envelope: Envelope<'_>) {
-        match (envelope.session_id, kind) {
+    fn message(&mut self, kind: &str, session_id: Option<&RawValue>, payload: Option<&RawValue>) {
+        let session_id = session_id.map_or(Ok(None), |raw| {
+            serde_json::from_str::<Option<String>>(raw.get())
+        });
+        let (Ok(session_id), Some(payload)) = (session_id, payload) else {
+            return self.calls.damage();
+        };
+        match (session_id, kind) {
             (Some(session_id), _) => {
                 if self.is_ours(&session_id) {
-                    self.calls.message(envelope.message, Scope::Session);
+                    self.calls.message(payload, Scope::Session);
                 }
             }
-            (None, "user") => self.calls.message(envelope.message, Scope::Unscoped),
+            (None, "user") => self.calls.message(payload, Scope::Unscoped),
             // Nothing says whose calls these are.
             (None, _) => self.calls.damage(),
+        }
+    }
+
+    /// Hands a hook event of `subtype` to the hook evidence, if it is this session's.
+    fn hook(&mut self, subtype: &str, session_id: Option<&RawValue>, fields: &HookFields<'_>) {
+        let session_id = session_id.map(|raw| serde_json::from_str::<String>(raw.get()));
+        let Some(Ok(session_id)) = session_id else {
+            // Nothing says whose run this is.
+            return self.hooks.damage();
+        };
+        if self.is_ours(&session_id) {
+            self.hooks.event(subtype, fields);
         }
     }
 
@@ -234,19 +280,30 @@ impl<'a> Reader<'a> {
         if !matches!(self.unusable, Some(Unusable::Provenance(_))) {
             self.unusable = Some(error.into());
         }
-        self.calls.damage();
+        self.damage();
     }
 
     /// Part of the transcript cannot be read; the first such problem is kept.
     fn unreadable(&mut self, error: TranscriptError) {
         self.unusable.get_or_insert(error.into());
+        self.damage();
+    }
+
+    /// Something in the transcript could hide any evidence.
+    fn damage(&mut self) {
         self.calls.damage();
+        self.hooks.damage();
     }
 
     fn reading(self) -> Reading {
         Reading {
             completion: self.unusable.map_or(Ok(self.completion), Err),
-            loads: self.calls.outcomes().into_iter().map(Load::from).collect(),
+            loads: (self.calls.outcomes(&Skills::new(self.skills)))
+                .into_iter()
+                .map(Load::from)
+                .collect(),
+            activity: activity::activity(&self.calls),
+            hooks: self.hooks.evidence(),
         }
     }
 }
@@ -255,7 +312,7 @@ impl<'a> Reader<'a> {
 fn parse<'a, T: Deserialize<'a>>(line: &'a [u8], number: usize) -> Result<T, TranscriptError> {
     serde_json::from_slice(line).map_err(|error| TranscriptError::Malformed {
         line: number,
-        reason: error.to_string(),
+        problem: Malformation::from(&error),
     })
 }
 
@@ -353,6 +410,22 @@ mod tests {
             Err(Unusable::Transcript(TranscriptError::Malformed { line, .. })) => line,
             other => panic!("expected a malformed transcript, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_malformed_line_is_described_without_quoting_it() {
+        let long = "x".repeat(100_000);
+        let result = edited(recorded_result(), |event| {
+            event.insert("is_error".to_owned(), long.as_str().into());
+        });
+        let transcript = format!("{}\n{result}\n", recorded_init());
+
+        let Err(Unusable::Transcript(error)) = completion(&transcript) else {
+            panic!("expected a malformed transcript");
+        };
+        let message = error.to_string();
+        assert!(message.starts_with("line 2 of the transcript is not in the expected shape"));
+        assert!(!message.contains("xxx"), "{message}");
     }
 
     #[test]

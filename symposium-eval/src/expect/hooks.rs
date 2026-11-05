@@ -25,6 +25,11 @@ pub(crate) fn hook_record(records: &Path, hook: &HookName, counted: Counted) -> 
     })
 }
 
+/// How many of `records` are `hook`'s, among those that can be read.
+pub(crate) fn record_count(records: &Path, hook: &HookName) -> usize {
+    log::count(records, |record: &Record| record.hook == hook.as_ref())
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;

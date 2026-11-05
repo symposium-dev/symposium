@@ -45,10 +45,13 @@ struct Registry<'a> {
     path: &'a Path,
 }
 
+/// Where Symposium reads its config, relative to the home.
+pub(crate) const SYMPOSIUM_CONFIG: &str = ".symposium/config.toml";
+
 impl Trial {
     /// Where Symposium reads its config in this trial.
     pub(crate) fn symposium_config(&self) -> PathBuf {
-        self.home().join(".symposium").join("config.toml")
+        self.home().join(SYMPOSIUM_CONFIG)
     }
 
     /// Writes the trial's Symposium config, then runs the staged `cargo agents init` for

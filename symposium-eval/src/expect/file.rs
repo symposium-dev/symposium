@@ -4,7 +4,7 @@
 //! cannot be followed.
 
 use std::fs::{File, OpenOptions};
-use std::io;
+use std::io::{self, Read};
 use std::path::Path;
 
 /// Opens `path` as a regular file of at most `limit` bytes. `None` when there is no
@@ -23,6 +23,19 @@ pub(crate) fn open(path: &Path, limit: u64) -> io::Result<Option<File>> {
         return Err(io::Error::other("larger than any evidence written"));
     }
     Ok(Some(file))
+}
+
+/// The bytes of the file [`open`] opens, refusing more than `limit` even if it grew.
+pub(crate) fn read(path: &Path, limit: u64) -> io::Result<Option<Vec<u8>>> {
+    let Some(file) = open(path, limit)? else {
+        return Ok(None);
+    };
+    let mut bytes = Vec::new();
+    file.take(limit + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > limit {
+        return Err(io::Error::other("larger than any evidence written"));
+    }
+    Ok(Some(bytes))
 }
 
 /// Read access that does not follow a final link, nor block on a pipe.
@@ -59,6 +72,17 @@ mod tests {
 
         assert!(open(&path, 5).unwrap().is_some());
         assert!(open(&path, 4).is_err());
+    }
+
+    #[test]
+    fn read_gives_the_bytes_within_the_limit() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("evidence");
+        fs::write(&path, "12345").unwrap();
+
+        assert_eq!(read(&path, 5).unwrap().unwrap(), b"12345");
+        assert!(read(&path, 4).is_err());
+        assert!(read(&dir.path().join("absent"), 5).unwrap().is_none());
     }
 
     #[test]

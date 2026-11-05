@@ -5,13 +5,12 @@
 //! result is not an error; an error result is an attempt. `cat SKILL.md` is not
 //! detected. Subagent calls count. Pairing calls with results is [`super::calls`]'.
 
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use serde_json::Value;
 
-use super::calls::{Matcher, Outcome, Target};
-use crate::client::{InstalledSkill, Load};
+use super::calls::{Matcher, Outcome, Target, ToolCall};
+use crate::client::{InstalledSkill, Load, paths};
 
 #[derive(Debug, Deserialize)]
 struct SkillInput {
@@ -28,23 +27,14 @@ pub(super) struct Skills<'a> {
     skills: &'a [InstalledSkill],
     /// Each skill's `SKILL.md`, in every form a `Read` could name it by.
     files: Vec<Vec<PathBuf>>,
-    /// Where a relative `Read` path is resolved: where Claude Code says it ran, once it
-    /// has said so, and the project until then.
-    cwd: PathBuf,
 }
 
 impl<'a> Skills<'a> {
-    pub(super) fn new(skills: &'a [InstalledSkill], project: &Path) -> Self {
+    pub(super) fn new(skills: &'a [InstalledSkill]) -> Self {
         Self {
             skills,
             files: skills.iter().map(|skill| forms(&skill.skill_md)).collect(),
-            cwd: project.to_owned(),
         }
-    }
-
-    /// Claude Code reported running in `cwd`.
-    pub(super) fn ran_in(&mut self, cwd: &Path) {
-        self.cwd = cwd.to_owned();
     }
 
     fn position(&self, matches: impl Fn(usize) -> bool) -> Option<usize> {
@@ -57,10 +47,10 @@ impl Matcher for Skills<'_> {
         self.skills.len()
     }
 
-    fn target(&self, name: &str, input: Value) -> Target {
-        let found = match name {
+    fn target(&self, call: &ToolCall) -> Target {
+        let found = match call.name.as_str() {
             "Skill" => {
-                let Ok(SkillInput { skill: called }) = serde_json::from_value(input) else {
+                let Ok(SkillInput { skill: called }) = SkillInput::deserialize(&*call.input) else {
                     return Target::Unreadable;
                 };
                 // A plugin's skill is named `<plugin>:<skill>`.
@@ -68,10 +58,10 @@ impl Matcher for Skills<'_> {
                 self.position(|index| called == Some(self.skills[index].name.as_str()))
             }
             "Read" => {
-                let Ok(ReadInput { file_path }) = serde_json::from_value(input) else {
+                let Ok(ReadInput { file_path }) = ReadInput::deserialize(&*call.input) else {
                     return Target::Unreadable;
                 };
-                let read = forms(&self.cwd.join(file_path));
+                let read = forms(&call.cwd.join(file_path));
                 self.position(|index| self.files[index].iter().any(|file| read.contains(file)))
             }
             _ => None,
@@ -91,33 +81,17 @@ impl From<Outcome> for Load {
     }
 }
 
-/// The forms `path` can be named by: with `.` and `..` resolved by name, and, when it
-/// exists, with links resolved too (macOS keeps temporary files under `/var`, a link to
-/// `/private/var`).
+/// The forms `path` can be named by: with `.` and `..` resolved by name when it has
+/// a root, as written otherwise, and, when it exists, with links resolved too (macOS
+/// keeps temporary files under `/var`, a link to `/private/var`).
 fn forms(path: &Path) -> Vec<PathBuf> {
-    let mut forms = vec![normalize(path)];
+    let mut forms = vec![paths::lexical(path).unwrap_or_else(|| path.to_owned())];
     if let Ok(resolved) = path.canonicalize()
         && !forms.contains(&resolved)
     {
         forms.push(resolved);
     }
     forms
-}
-
-/// `path` with `.` and `..` resolved by name alone, since the transcript's paths need
-/// not exist when it is read.
-fn normalize(path: &Path) -> PathBuf {
-    let mut normal = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                normal.pop();
-            }
-            other => normal.push(other),
-        }
-    }
-    normal
 }
 
 #[cfg(test)]
@@ -224,6 +198,42 @@ mod tests {
         );
 
         assert_eq!(load_of(&transcript), Load::Loaded);
+    }
+
+    #[test]
+    fn each_relative_read_resolves_where_claude_code_ran_when_it_was_made() {
+        let call = line_with(READ_LOADED, r#""name":"Read""#);
+        let result = line_with(READ_LOADED, r#""type":"tool_result""#);
+        let init = line_with(READ_LOADED, r#""subtype":"init""#);
+        let moved = replaced(
+            init,
+            r#""cwd":"/trial/project""#,
+            r#""cwd":"/trial/elsewhere""#,
+        );
+        let id = "toolu_01516sTbHU5oWta7zdRLvjd5";
+        let (later_call, later_result) = (
+            replaced(call, id, "toolu_later"),
+            replaced(result, id, "toolu_later"),
+        );
+        // One `Read` before an `init` that moves the session, one after it.
+        let mut lines = Vec::new();
+        for line in READ_LOADED.lines() {
+            if line == init {
+                lines.extend([call, result, &moved, &later_call, &later_result]);
+            } else if line != call && line != result {
+                lines.push(line);
+            }
+        }
+        let transcript = lines.join("\n");
+        let elsewhere = InstalledSkill {
+            skill_md: "/trial/elsewhere/.claude/skills/fixture-greeting/SKILL.md".into(),
+            ..greeting()
+        };
+
+        assert_eq!(
+            loads_in(&transcript, &[greeting(), elsewhere]),
+            [Load::Loaded, Load::Loaded]
+        );
     }
 
     #[test]
