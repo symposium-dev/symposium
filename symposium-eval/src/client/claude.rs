@@ -79,6 +79,10 @@ impl Claude {
 }
 
 impl ClientRunner for Claude {
+    fn client(&self) -> Client {
+        Client::ClaudeCode
+    }
+
     fn invocation(
         &self,
         trial: &Trial,

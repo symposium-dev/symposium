@@ -6,6 +6,19 @@ use std::process::ExitStatus;
 
 use thiserror::Error;
 
+use crate::grade::ProcessError;
+
+/// Why a client never reached the beginning of a session.
+#[derive(Debug, Error)]
+pub(crate) enum LaunchError {
+    /// The runner could not start the client process.
+    #[error(transparent)]
+    Process(#[from] ProcessError),
+    /// A wrapper process started, but the client exited before introducing a session.
+    #[error("the client exited with {status} before starting a session: {stderr}")]
+    Exited { status: ExitStatus, stderr: String },
+}
+
 /// Why a session failed, by the client's own doing.
 #[derive(Debug, Error)]
 pub(crate) enum ClientError {
