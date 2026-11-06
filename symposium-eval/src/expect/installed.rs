@@ -17,9 +17,12 @@ use crate::skill_md::{self, MAX_SKILL_MD};
 use crate::task::{SkillExpectations, SkillName};
 
 /// The marker sync leaves in every directory it installs.
-const MARKER: &str = ".symposium";
+pub(super) const MARKER: &str = ".symposium";
+/// The `.gitignore` sync leaves beside it, and what it writes there.
+pub(super) const GITIGNORE: &str = ".gitignore";
+pub(super) const GITIGNORE_CONTENTS: &[u8] = b"*\n";
 /// The files sync adds, which are not skill content.
-const MANAGED: [&str; 2] = [MARKER, ".gitignore"];
+const MANAGED: [&str; 2] = [MARKER, GITIGNORE];
 
 /// Which of the two install assertions a skill is under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +60,8 @@ pub(crate) struct SkillInstall {
     pub(crate) assertion: InstallAssertion,
     pub(crate) evidence: InstallEvidence,
     pub(crate) verdict: Verdict,
+    /// The copy that matched, when `evidence` is [`InstallEvidence::Matching`].
+    pub(crate) matching_copy: Option<PathBuf>,
 }
 
 impl InstallAssertion {
@@ -90,36 +95,41 @@ pub(crate) fn skill_installs(
         .into_iter()
         .flat_map(|(assertion, names)| names.iter().map(move |skill| (assertion, skill)))
         .map(|(assertion, skill)| {
-            let evidence = match (assertion, source_of(skill)) {
-                (InstallAssertion::Installed, None) => InstallEvidence::NoSource,
+            let (evidence, matching_copy) = match (assertion, source_of(skill)) {
+                (InstallAssertion::Installed, None) => (InstallEvidence::NoSource, None),
                 (InstallAssertion::Installed, Some(source)) => installed(skills, skill, &source),
-                (InstallAssertion::NotInstalled, _) => presence(skills, skill),
+                (InstallAssertion::NotInstalled, _) => (presence(skills, skill), None),
             };
             SkillInstall {
                 skill: skill.clone(),
                 assertion,
                 evidence,
                 verdict: assertion.decide(evidence),
+                matching_copy,
             }
         })
         .collect()
 }
 
-/// What `skills` shows for `skill`, compared with its `source`: one matching copy
-/// settles it, whatever else is there.
-fn installed(skills: &Path, skill: &SkillName, source: &Path) -> InstallEvidence {
+/// What `skills` shows for `skill`, compared with its `source`, with the copy that
+/// matched: one matching copy settles it, whatever else is there.
+fn installed(
+    skills: &Path,
+    skill: &SkillName,
+    source: &Path,
+) -> (InstallEvidence, Option<PathBuf>) {
     let Ok(candidates) = candidates(skills, skill) else {
-        return InstallEvidence::Unreadable;
+        return (InstallEvidence::Unreadable, None);
     };
     let mut unreadable = candidates.unreadable;
     for copy in &candidates.copies {
         match same_contents(copy, source) {
-            Ok(true) => return InstallEvidence::Matching,
+            Ok(true) => return (InstallEvidence::Matching, Some(copy.clone())),
             Ok(false) => {}
             Err(_) => unreadable = true,
         }
     }
-    if unreadable {
+    let evidence = if unreadable {
         InstallEvidence::Unreadable
     } else if candidates.unidentified {
         InstallEvidence::Unidentified
@@ -127,7 +137,8 @@ fn installed(skills: &Path, skill: &SkillName, source: &Path) -> InstallEvidence
         InstallEvidence::Absent
     } else {
         InstallEvidence::Differing
-    }
+    };
+    (evidence, None)
 }
 
 /// Whether `skills` holds any copy of `skill`: one settles it, whatever else is there.
@@ -329,7 +340,7 @@ fn same_contents(copy: &Path, source: &Path) -> io::Result<bool> {
 
 /// Whether two files of `len` bytes hold the same bytes, read a chunk at a time, since
 /// the agent chose the copy's size.
-fn same_bytes(copy: &Path, source: &Path, len: u64) -> io::Result<bool> {
+pub(super) fn same_bytes(copy: &Path, source: &Path, len: u64) -> io::Result<bool> {
     // One byte past `len` shows a file that grew.
     let mut copy = File::open(copy)?.take(len + 1);
     let mut source = File::open(source)?.take(len + 1);
@@ -560,6 +571,25 @@ mod tests {
         // A file larger than its listed size grew after it was listed.
         fs::write(&copy, format!("{long}y")).unwrap();
         assert!(!same_bytes(&copy, &source, len).unwrap());
+    }
+
+    #[test]
+    fn only_a_matching_copy_is_kept() {
+        let root = TempDir::new().unwrap();
+        let skills = root.path().join("skills");
+        let differing = install(&skills, "first-skill");
+        fs::write(differing.join("added.md"), "").unwrap();
+        let matching = install(&skills, "first-skill-0123abcd");
+        let expected =
+            SkillExpectations::installing(vec![skill("first-skill")], vec![skill("second-skill")]);
+
+        let installs = skill_installs(&skills, &expected, |_| Some(source(root.path())));
+
+        let copies: Vec<_> = installs
+            .iter()
+            .map(|install| install.matching_copy.clone())
+            .collect();
+        assert_eq!(copies, [Some(matching), None]);
     }
 
     #[test]

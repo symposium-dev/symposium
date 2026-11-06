@@ -201,12 +201,52 @@ impl GradingDirs {
     }
 }
 
+/// Empty directories every trial's project starts with beside the starter, so grading's
+/// trusted copy starts with them too. `srt` write-protects `.claude/commands` in the
+/// project, and where `.claude/` is missing it protects all of `.claude/` instead, so no
+/// skill could be installed.
+pub(crate) const PROJECT_SCAFFOLD: [&str; 1] = [".claude"];
+
+/// A submission, with what the runner put in its project that the agent did not, so
+/// only the agent's changes are reported as its edits.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Submitted<'a> {
+    project: &'a Path,
+    /// Empty directories, `/`-joined, added to the starter before the agent started.
+    scaffold: &'static [&'static str],
+    /// Skill copies, `/`-joined and relative to the project, shown to be wholly
+    /// Symposium's (`expect::ownership`).
+    symposium_copies: &'a [String],
+}
+
+impl<'a> Submitted<'a> {
+    /// A project the runner added nothing to, such as a task's solution.
+    pub(crate) fn bare(project: &'a Path) -> Self {
+        Self {
+            project,
+            scaffold: &[],
+            symposium_copies: &[],
+        }
+    }
+
+    /// A trial's project, which started as the starter and [`PROJECT_SCAFFOLD`], holding
+    /// `symposium_copies`.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the trial driver comes next"))]
+    pub(crate) fn trial(project: &'a Path, symposium_copies: &'a [String]) -> Self {
+        Self {
+            project,
+            scaffold: &PROJECT_SCAFFOLD,
+            symposium_copies,
+        }
+    }
+}
+
 /// Grades `submission` against `task`, running commands through `backend`, with the
 /// copy and the commands' logs where `dirs` says.
 pub(crate) fn grade(
     evals: &Evals,
     task: &Task,
-    submission: &Path,
+    submission: Submitted<'_>,
     backend: &impl Backend,
     limits: &GradeLimits,
     dirs: &GradingDirs,
@@ -225,7 +265,7 @@ pub(crate) fn grade(
 fn try_grade(
     evals: &Evals,
     task: &Task,
-    submission: &Path,
+    submission: Submitted<'_>,
     backend: &impl Backend,
     limits: &GradeLimits,
     dirs: &GradingDirs,
@@ -239,12 +279,20 @@ fn try_grade(
         budget: Budget::new(limits.commands),
         logs: &dirs.logs,
     };
-    let prepared = prepare(evals, task, dirs, &mut commands, limits)?;
+    let prepared = prepare(
+        evals,
+        task,
+        submission.scaffold,
+        dirs,
+        &mut commands,
+        limits,
+    )?;
     let outside_editable = import_submission(
         &prepared.copy,
         task.editable(),
         &prepared.starter_owned,
-        submission,
+        submission.project,
+        submission.symposium_copies,
     )?;
     let steps = match run_steps(task, &prepared, &mut commands, limits) {
         Ok(steps) => steps,
@@ -278,11 +326,12 @@ struct Prepared {
 fn prepare(
     evals: &Evals,
     task: &Task,
+    scaffold: &[&str],
     dirs: &GradingDirs,
     commands: &mut Commands<'_, impl Backend>,
     limits: &GradeLimits,
 ) -> Result<Prepared, GradeError> {
-    let copy = GradingCopy::from_trusted(evals, task, &dirs.sources, &dirs.work)?;
+    let copy = GradingCopy::from_trusted(evals, task, scaffold, &dirs.sources, &dirs.work)?;
     let cargo = Cargo::new(copy.project(), copy.work());
     let starter = inspect_starter(&cargo, "metadata", &copy, commands, limits.metadata)?;
     place_checks(evals, task, &copy, &starter.tests)?;
@@ -551,7 +600,7 @@ mod tests {
         match super::grade(
             fixture.evals(),
             fixture.task(),
-            submission.path(),
+            Submitted::bare(submission.path()),
             &Local,
             limits,
             &GradingDirs::under(logs.path()),
@@ -744,7 +793,7 @@ fn locks_grading_tmp() {
         super::grade(
             fixture.evals(),
             fixture.task(),
-            submission.path(),
+            Submitted::bare(submission.path()),
             &Local,
             &GradeLimits::default(),
             &GradingDirs::under(logs.path()),
@@ -852,7 +901,7 @@ fn locks_grading_tmp() {
         let grading = super::grade(
             fixture.evals(),
             fixture.task(),
-            submission.path(),
+            Submitted::bare(submission.path()),
             &Local,
             &GradeLimits::default(),
             &GradingDirs::under(logs.path()),
@@ -880,7 +929,7 @@ fn locks_grading_tmp() {
         let grading = super::grade(
             fixture.evals(),
             fixture.task(),
-            submission.path(),
+            Submitted::bare(submission.path()),
             &Local,
             &GradeLimits::default(),
             &GradingDirs::under(logs.path()),
@@ -912,7 +961,7 @@ fn locks_grading_tmp() {
         let grading = super::grade(
             fixture.evals(),
             fixture.task(),
-            submission.path(),
+            Submitted::bare(submission.path()),
             &Local,
             &GradeLimits::default(),
             &GradingDirs::under(logs.path()),
@@ -1108,8 +1157,8 @@ pub(crate) mod testing {
 
     use tempfile::TempDir;
 
-    use super::ImportError;
     use super::import::{GradingCopy, OutsideEdit, copy_tree, import_submission};
+    use super::{ImportError, Submitted};
     use crate::evals::Evals;
     use crate::task::{CheckName, Task, TaskName};
 
@@ -1202,10 +1251,38 @@ pub(crate) mod testing {
             submission: &Path,
             build_scripts: &BTreeSet<String>,
         ) -> Result<Imported, ImportError> {
+            self.import(Submitted::bare(submission), build_scripts)
+        }
+
+        /// As [`Self::build_copy`], for a submission the runner prepared.
+        pub(crate) fn build_trial_copy(
+            &self,
+            submission: Submitted<'_>,
+        ) -> Result<Imported, ImportError> {
+            self.import(submission, &BTreeSet::new())
+        }
+
+        fn import(
+            &self,
+            submission: Submitted<'_>,
+            build_scripts: &BTreeSet<String>,
+        ) -> Result<Imported, ImportError> {
             let dir = TempDir::new().unwrap();
             let (sources, work) = (dir.path().join("sources"), dir.path().join("work"));
-            let copy = GradingCopy::from_trusted(&self.evals, &self.task, &sources, &work)?;
-            let edits = import_submission(&copy, self.task.editable(), build_scripts, submission)?;
+            let copy = GradingCopy::from_trusted(
+                &self.evals,
+                &self.task,
+                submission.scaffold,
+                &sources,
+                &work,
+            )?;
+            let edits = import_submission(
+                &copy,
+                self.task.editable(),
+                build_scripts,
+                submission.project,
+                submission.symposium_copies,
+            )?;
             Ok(Imported {
                 _dir: dir,
                 copy,

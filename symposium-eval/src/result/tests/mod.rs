@@ -94,6 +94,7 @@ pub(super) fn expectations() -> Expectations {
         assertion: InstallAssertion::Installed,
         evidence: InstallEvidence::Matching,
         verdict: Verdict::Pass,
+        matching_copy: None,
     };
     Expectations {
         session_start: unconcerned(CallEvidence::Succeeded),
