@@ -49,6 +49,7 @@ pub(crate) use policy::{Machine, Policy, Reach};
 pub(crate) use srt::SRT_VERSION;
 use stage::StagedTool;
 
+use crate::grade::PROJECT_SCAFFOLD;
 use crate::grade::ProcessError;
 use crate::grade::copy_tree;
 use crate::grade::process::Finished;
@@ -187,9 +188,7 @@ impl Batch {
         self.link_tools(&trial)?;
         copy_tree(&evals.starter_dir(task.name()), &trial.project(), "starter")
             .map_err(RunError::Copy)?;
-        // `srt` write-protects `.claude/commands` in the project. Where `.claude/` is
-        // missing, it protects all of `.claude/` instead, and no skill could be installed.
-        create_dirs([trial.project().join(".claude")])?;
+        create_dirs(PROJECT_SCAFFOLD.map(|dir| trial.project().join(dir)))?;
         // Fixtures are not in the policy's writable paths, so `srt` keeps them read-only.
         for fixture in task.fixtures() {
             let destination = trial.fixtures().join(fixture.as_str());

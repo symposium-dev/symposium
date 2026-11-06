@@ -312,6 +312,7 @@ mod tests {
                 assertion: InstallAssertion::Installed,
                 evidence: InstallEvidence::Matching,
                 verdict: Verdict::Pass,
+                matching_copy: None,
             }],
         }
     }

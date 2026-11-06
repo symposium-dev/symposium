@@ -223,11 +223,15 @@ pub(crate) fn import_submission(
     patterns: &[EditablePattern],
     starter_owned: &BTreeSet<String>,
     submission: &Path,
+    symposium_copies: &[String],
 ) -> Result<Vec<OutsideEdit>, ImportError> {
-    let editable = Editable::new(patterns, starter_owned);
+    let mut editable = Editable::new(patterns, starter_owned, symposium_copies);
     let submission = Submission::list(submission, &editable)?;
+    editable.leave_out_holders(&submission.entries);
     let starter = &copy.starter;
     let mut outside_editable = outside_edits(starter, &submission, &copy.project(), &editable)?;
+    // Symposium's copies are never imported, so they would show as outside edits.
+    outside_editable.retain(|edit| !within_any(&edit.path, symposium_copies));
     copy.clear_editable(starter, &editable)?;
     outside_editable.extend(copy.import(&submission, starter, &editable)?);
     outside_editable.sort_by(|left, right| left.path.cmp(&right.path));
@@ -236,10 +240,12 @@ pub(crate) fn import_submission(
 
 impl GradingCopy {
     /// The starter and the task's fixtures, as `evals/` holds them, copied into
-    /// `sources`, which must not exist yet, with an empty `work`.
+    /// `sources`, which must not exist yet, with the `scaffold` directories added to the
+    /// project and an empty `work`.
     pub(crate) fn from_trusted(
         evals: &Evals,
         task: &Task,
+        scaffold: &[&str],
         sources: &Path,
         work: &Path,
     ) -> Result<Self, ImportError> {
@@ -257,6 +263,12 @@ impl GradingCopy {
             &sources.join("project"),
             "starter",
         )?;
+        for dir in scaffold {
+            let path = dir
+                .split('/')
+                .fold(sources.join("project"), |path, part| path.join(part));
+            fs::create_dir_all(&path).map_err(|source| ImportError::Write { path, source })?;
+        }
         for fixture in task.fixtures() {
             copy_tree(
                 &evals.fixture_dir(fixture),
@@ -496,10 +508,18 @@ struct Editable {
     starter_owned: BTreeSet<String>,
     /// Each pattern's literal prefix, such as `src` for `src/**`.
     roots: Vec<String>,
+    /// Symposium's skill copies, which are never the agent's to submit.
+    symposium_copies: Vec<String>,
+    /// Directories that hold nothing but those copies, so exist only for them.
+    holders: BTreeSet<String>,
 }
 
 impl Editable {
-    fn new(patterns: &[EditablePattern], starter_owned: &BTreeSet<String>) -> Self {
+    fn new(
+        patterns: &[EditablePattern],
+        starter_owned: &BTreeSet<String>,
+        symposium_copies: &[String],
+    ) -> Self {
         Self {
             matchers: patterns.iter().map(EditablePattern::matcher).collect(),
             starter_owned: starter_owned
@@ -510,13 +530,43 @@ impl Editable {
                 .iter()
                 .map(|pattern| pattern.literal_prefix().to_owned())
                 .collect(),
+            symposium_copies: symposium_copies.to_vec(),
+            holders: BTreeSet::new(),
         }
+    }
+
+    /// Leaves out each directory in `submitted` that holds nothing but Symposium's
+    /// copies and directories like it. An agent's entry beside a copy is imported, which
+    /// recreates the directory.
+    fn leave_out_holders(&mut self, submitted: &Listing) {
+        let holds_a_copy = |path: &str| {
+            self.symposium_copies
+                .iter()
+                .any(|copy| is_within(copy, path))
+        };
+        let holders = submitted
+            .iter()
+            .filter(|&(path, &kind)| kind == EntryKind::Dir && holds_a_copy(path))
+            .filter(|&(path, _)| {
+                let children = format!("{path}/");
+                submitted
+                    .range(children.clone()..)
+                    .take_while(|(inner, _)| inner.starts_with(&children))
+                    .all(|(inner, _)| {
+                        within_any(inner, &self.symposium_copies) || holds_a_copy(inner)
+                    })
+            })
+            .map(|(path, _)| path.clone())
+            .collect();
+        self.holders = holders;
     }
 
     /// Whether grading takes `path` from the submission.
     fn imports(&self, path: &str) -> bool {
         !is_protected(path)
             && !self.starter_owned.contains(&path.to_ascii_lowercase())
+            && !within_any(path, &self.symposium_copies)
+            && !self.holders.contains(path)
             && self.matchers.iter().any(|matcher| matcher.is_match(path))
     }
 
@@ -734,11 +784,17 @@ fn is_within(path: &str, dir: &str) -> bool {
         .is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// Whether `path` is one of `dirs` or inside one.
+fn within_any(path: &str, dirs: &[String]) -> bool {
+    dirs.iter().any(|dir| path == dir || is_within(path, dir))
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::grade::Submitted;
     use crate::grade::testing::{Imported, STARTER_MANIFEST, TaskFixture};
 
     #[test]
@@ -751,6 +807,7 @@ mod tests {
         let result = GradingCopy::from_trusted(
             fixture.evals(),
             fixture.task(),
+            &[],
             &sources,
             &dir.path().join("work"),
         );
@@ -1105,6 +1162,136 @@ mod tests {
         assert_eq!(import.outside_editable(), []);
     }
 
+    /// The outside edits, as the report words them.
+    fn edits(import: &Imported) -> Vec<String> {
+        import
+            .outside_editable()
+            .iter()
+            .map(ToString::to_string)
+            .collect()
+    }
+
+    #[test]
+    fn the_runners_scaffolding_is_the_starting_state() {
+        let fixture = TaskFixture::new("");
+        let submission = fixture.submission();
+        fs::create_dir(submission.path().join(".claude")).unwrap();
+        let prepared = Submitted::trial(submission.path(), &[]);
+
+        let import = fixture.build_trial_copy(prepared).unwrap();
+        let bare = fixture.build_copy(submission.path()).unwrap();
+
+        assert_eq!(edits(&import), Vec::<String>::new());
+        assert!(import.copy.project().join(".claude").is_dir());
+        assert_eq!(edits(&bare), ["added `.claude`"]);
+    }
+
+    #[test]
+    fn what_the_agent_puts_in_the_scaffolding_is_an_edit() {
+        let fixture = TaskFixture::new("");
+        let submission = fixture.submission();
+        fs::create_dir(submission.path().join(".claude")).unwrap();
+        fs::write(submission.path().join(".claude/settings.json"), "{}").unwrap();
+        let prepared = Submitted::trial(submission.path(), &[]);
+
+        let import = fixture.build_trial_copy(prepared).unwrap();
+
+        assert_eq!(edits(&import), ["added `.claude/settings.json`"]);
+    }
+
+    #[test]
+    fn removing_the_scaffolding_is_an_edit() {
+        let fixture = TaskFixture::new("");
+        let submission = fixture.submission();
+        let prepared = Submitted::trial(submission.path(), &[]);
+
+        let import = fixture.build_trial_copy(prepared).unwrap();
+
+        assert_eq!(edits(&import), ["deleted `.claude`"]);
+    }
+
+    #[test]
+    fn only_symposiums_own_copies_are_left_out() {
+        let fixture = TaskFixture::new("");
+        let submission = fixture.submission();
+        let skills = submission.path().join(".claude/skills");
+        for skill in ["first-skill", "second-skill"] {
+            fs::create_dir_all(skills.join(skill)).unwrap();
+            fs::write(skills.join(skill).join("SKILL.md"), "").unwrap();
+        }
+        let copies = [".claude/skills/first-skill".to_owned()];
+        let prepared = Submitted::trial(submission.path(), &copies);
+
+        let import = fixture.build_trial_copy(prepared).unwrap();
+
+        assert_eq!(
+            edits(&import),
+            ["added `.claude/skills/second-skill/SKILL.md`"]
+        );
+    }
+
+    #[test]
+    fn a_copy_leaves_out_only_what_is_inside_it() {
+        let fixture = TaskFixture::new("");
+        let submission = fixture.submission();
+        let skills = submission.path().join(".claude/skills");
+        fs::create_dir_all(skills.join("first-skill")).unwrap();
+        fs::create_dir_all(skills.join("first-skill-extra")).unwrap();
+        fs::write(skills.join("first-skill-extra/SKILL.md"), "").unwrap();
+        let copies = [".claude/skills/first-skill".to_owned()];
+        let prepared = Submitted::trial(submission.path(), &copies);
+
+        let import = fixture.build_trial_copy(prepared).unwrap();
+
+        assert_eq!(
+            edits(&import),
+            ["added `.claude/skills/first-skill-extra/SKILL.md`"]
+        );
+    }
+
+    #[test]
+    fn symposiums_copies_are_never_imported_even_where_editable() {
+        let fixture = TaskFixture::new("editable = [\"src/**\", \".claude/**\"]\n");
+        let submission = fixture.submission();
+        let skills = submission.path().join(".claude/skills");
+        for skill in ["first-skill", "second-skill"] {
+            fs::create_dir_all(skills.join(skill)).unwrap();
+            fs::write(skills.join(skill).join("SKILL.md"), skill).unwrap();
+        }
+        let copies = [".claude/skills/first-skill".to_owned()];
+
+        let import = fixture
+            .build_trial_copy(Submitted::trial(submission.path(), &copies))
+            .unwrap();
+
+        let graded = import.copy.project().join(".claude/skills");
+        assert_eq!(edits(&import), Vec::<String>::new());
+        assert!(!graded.join("first-skill").exists());
+        assert_eq!(
+            fs::read_to_string(graded.join("second-skill/SKILL.md")).unwrap(),
+            "second-skill"
+        );
+    }
+
+    #[test]
+    fn a_directory_made_only_to_hold_symposiums_copies_is_not_imported() {
+        let fixture = TaskFixture::new("editable = [\"src/**\", \".claude/**\"]\n");
+        let submission = fixture.submission();
+        let copy = submission.path().join(".claude/skills/first-skill");
+        fs::create_dir_all(&copy).unwrap();
+        fs::write(copy.join("SKILL.md"), "first-skill").unwrap();
+        let copies = [".claude/skills/first-skill".to_owned()];
+
+        let import = fixture
+            .build_trial_copy(Submitted::trial(submission.path(), &copies))
+            .unwrap();
+
+        let graded = import.copy.project();
+        assert_eq!(edits(&import), Vec::<String>::new());
+        assert!(graded.join(".claude").is_dir(), "the trusted scaffolding");
+        assert!(!graded.join(".claude/skills").exists());
+    }
+
     #[test]
     fn empty_directories_outside_editable_are_reported() {
         let fixture = TaskFixture::new("");
@@ -1243,7 +1430,11 @@ mod tests {
 
     #[test]
     fn literal_prefixes_are_editable_roots() {
-        let editable = Editable::new(&[EditablePattern::new("src/**").unwrap()], &BTreeSet::new());
+        let editable = Editable::new(
+            &[EditablePattern::new("src/**").unwrap()],
+            &BTreeSet::new(),
+            &[],
+        );
 
         assert!(editable.reaches("src"));
         assert!(editable.reaches("src/nested/link"));
@@ -1253,6 +1444,7 @@ mod tests {
         let nested = Editable::new(
             &[EditablePattern::new("crates/core/src/*.rs").unwrap()],
             &BTreeSet::new(),
+            &[],
         );
         assert!(nested.reaches("crates"));
         assert!(nested.reaches("crates/core"));

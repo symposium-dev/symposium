@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use super::process::{Backend, Finished, Invocation, Local};
 use super::testing::TaskFixture;
-use super::{GradeLimits, Grading, GradingDirs, Outcome, ProcessError, grade};
+use super::{GradeLimits, Grading, GradingDirs, Outcome, ProcessError, Submitted, grade};
 
 /// Runs trusted fixture code, except for one command whose timeout is injected. The
 /// marker stands for state a surviving process may still be using.
@@ -60,7 +60,7 @@ fn timed_out(at: &'static str, uncertain: bool) -> (TempDir, Timeout, Grading) {
     let grading = grade(
         fixture.evals(),
         fixture.task(),
-        submission.path(),
+        Submitted::bare(submission.path()),
         &backend,
         &GradeLimits::default(),
         &dirs,

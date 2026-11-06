@@ -9,7 +9,7 @@ use super::import::{Change, OutsideEdit};
 use super::limits::GradeLimits;
 use super::process::Local;
 use super::solution::overlay;
-use super::{Grading, GradingDirs, Outcome, Report, StepKind, grade};
+use super::{Grading, GradingDirs, Outcome, Report, StepKind, Submitted, grade};
 use crate::evals::Evals;
 use crate::task::{CheckName, Task, TaskName};
 
@@ -30,7 +30,7 @@ fn grade_scratch(evals: &Evals, task: &Task, scratch: &TempDir) -> Report {
     match grade(
         evals,
         task,
-        &scratch.path().join("submission"),
+        Submitted::bare(&scratch.path().join("submission")),
         &Local,
         &GradeLimits::default(),
         &GradingDirs::under(&scratch.path().join("grading")),

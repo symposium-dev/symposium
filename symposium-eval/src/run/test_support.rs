@@ -208,7 +208,7 @@ impl RealSrt {
         crate::grade::grade(
             inputs.evals(),
             inputs.task(),
-            submission,
+            crate::grade::Submitted::trial(submission, &[]),
             &backend,
             &crate::grade::GradeLimits::default(),
             &dirs,

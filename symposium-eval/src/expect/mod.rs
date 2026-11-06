@@ -9,6 +9,7 @@ pub(crate) mod file;
 pub(crate) mod hooks;
 pub(crate) mod installed;
 pub(crate) mod log;
+pub(crate) mod ownership;
 pub(crate) mod sync;
 pub(crate) mod trace;
 

@@ -12,7 +12,7 @@ use std::thread;
 use tempfile::TempDir;
 
 use crate::grade::process::Local;
-use crate::grade::{GradeLimits, Grading, GradingDirs, Outcome, StepKind, grade};
+use crate::grade::{GradeLimits, Grading, GradingDirs, Outcome, StepKind, Submitted, grade};
 use crate::run::test_support::{RealSrt, api_key, inputs};
 use crate::run::{Configuration, Trial};
 use crate::task::TaskName;
@@ -51,7 +51,7 @@ fn grade_unsandboxed(real: &RealSrt, trial: &Trial) -> Grading {
     grade(
         inputs.evals(),
         inputs.task(),
-        &trial.project(),
+        Submitted::trial(&trial.project(), &[]),
         &Local,
         &GradeLimits::default(),
         &GradingDirs::under(logs.path()),
