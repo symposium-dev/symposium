@@ -22,6 +22,7 @@
 
 #[cfg(all(test, target_os = "linux"))]
 mod adversarial;
+mod allocate;
 pub(crate) mod client;
 mod env;
 mod error;
@@ -49,9 +50,7 @@ pub(crate) use policy::{Machine, Policy, Reach};
 pub(crate) use srt::SRT_VERSION;
 use stage::StagedTool;
 
-use crate::grade::PROJECT_SCAFFOLD;
 use crate::grade::ProcessError;
-use crate::grade::copy_tree;
 use crate::grade::process::Finished;
 use crate::task::BatchName;
 
@@ -151,59 +150,6 @@ impl Batch {
     /// The `cargo-agents` under evaluation, readable by Symposium trials only.
     pub(crate) fn symposium_tools(&self) -> PathBuf {
         self.root.join("tools").join("symposium")
-    }
-
-    /// Creates trial `number` of the task in `inputs`, this batch's copy: empty working
-    /// directories, the starter in `project/`, the fixtures beside it, and, for
-    /// Symposium, the task's plugins as the trial's registry.
-    ///
-    /// # Errors
-    ///
-    /// When `inputs` are another batch's, the trial already exists, a directory cannot
-    /// be created, or the task cannot be copied.
-    pub(crate) fn create_trial(
-        &self,
-        number: usize,
-        configuration: Configuration,
-        inputs: &Inputs,
-    ) -> Result<Trial, RunError> {
-        if inputs.batch() != self.root {
-            return Err(RunError::ForeignInputs(inputs.batch().to_owned()));
-        }
-        let (evals, task) = (inputs.evals(), inputs.task());
-        let trial = Trial {
-            batch: self.clone(),
-            root: self.root.join(format!("trial-{number}-{configuration}")),
-            configuration,
-        };
-        create_fresh(&trial.root)?;
-        create_dirs([
-            trial.home(),
-            trial.bin(),
-            trial.cargo_home(),
-            trial.tmp(),
-            trial.evidence(),
-            trial.session(),
-        ])?;
-        self.link_tools(&trial)?;
-        copy_tree(&evals.starter_dir(task.name()), &trial.project(), "starter")
-            .map_err(RunError::Copy)?;
-        create_dirs(PROJECT_SCAFFOLD.map(|dir| trial.project().join(dir)))?;
-        // Fixtures are not in the policy's writable paths, so `srt` keeps them read-only.
-        for fixture in task.fixtures() {
-            let destination = trial.fixtures().join(fixture.as_str());
-            copy_tree(&evals.fixture_dir(fixture), &destination, "fixture")
-                .map_err(RunError::Copy)?;
-        }
-        if configuration == Configuration::Symposium {
-            create_dirs([trial.registry()])?;
-            for plugin in task.plugins() {
-                let destination = trial.registry().join(plugin.as_str());
-                copy_tree(&evals.plugin_dir(plugin), &destination, "plugin")
-                    .map_err(RunError::Copy)?;
-            }
-        }
-        Ok(trial)
     }
 }
 
