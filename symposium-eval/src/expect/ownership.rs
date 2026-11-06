@@ -10,29 +10,34 @@
 
 use std::fs;
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Component, Path};
 
-use super::installed::{GITIGNORE, GITIGNORE_CONTENTS, MARKER, SkillInstall, same_bytes};
-use crate::task::SkillName;
+use super::installed::{GITIGNORE, GITIGNORE_CONTENTS, MARKER, copy_candidates, same_bytes};
+use crate::task::SkillSource;
 use crate::tree::{self, EntryKind, TreeEntry};
 
-/// The copies in `installs` that are wholly Symposium's, as `/`-joined paths relative to
-/// `project`, each compared with its skill's source from `source_of`.
-pub(crate) fn symposium_copies<'a>(
+/// Discovers copies independently of assertions, comparing every candidate against
+/// the task's trusted providers. Returns `/`-joined paths relative to `project`.
+pub(crate) fn symposium_copies(
     project: &Path,
-    installs: impl IntoIterator<Item = &'a SkillInstall>,
-    source_of: impl Fn(&SkillName) -> Option<PathBuf>,
+    skills: &Path,
+    sources: &[SkillSource],
 ) -> Vec<String> {
-    installs
-        .into_iter()
-        .filter_map(|install| {
-            let copy = install.matching_copy.as_deref()?;
-            let source = source_of(&install.skill)?;
-            is_symposium_copy(copy, &source)
-                .then(|| relative(project, copy))
-                .flatten()
+    let mut owned = sources
+        .iter()
+        .flat_map(|source| {
+            copy_candidates(skills, &source.name)
+                .into_iter()
+                .filter_map(|copy| {
+                    is_symposium_copy(&copy, &source.dir)
+                        .then(|| relative(project, &copy))
+                        .flatten()
+                })
         })
-        .collect()
+        .collect::<Vec<_>>();
+    owned.sort();
+    owned.dedup();
+    owned
 }
 
 /// Whether `copy` is exactly what sync writes from `source`. One that cannot be read is
@@ -106,11 +111,12 @@ fn relative(project: &Path, path: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
+    use crate::grade::copy_exact;
     use tempfile::TempDir;
 
     use super::*;
-    use crate::expect::Verdict;
-    use crate::expect::installed::{InstallAssertion, InstallEvidence};
 
     /// A skill source, and a project whose skill directory holds sync's copy of it.
     struct Installed {
@@ -143,14 +149,15 @@ mod tests {
         }
 
         fn owned(&self) -> Vec<String> {
-            let install = SkillInstall {
-                skill: SkillName::new("first-skill").unwrap(),
-                assertion: InstallAssertion::Installed,
-                evidence: InstallEvidence::Matching,
-                verdict: Verdict::Pass,
-                matching_copy: Some(self.copy.clone()),
+            let source = SkillSource {
+                name: "first-skill".to_owned(),
+                dir: self.source.clone(),
             };
-            symposium_copies(&self.project, [&install], |_| Some(self.source.clone()))
+            symposium_copies(
+                &self.project,
+                &self.project.join(".claude/skills"),
+                &[source],
+            )
         }
     }
 
@@ -159,6 +166,41 @@ mod tests {
         let installed = Installed::new();
 
         assert_eq!(installed.owned(), [".claude/skills/first-skill"]);
+    }
+
+    #[test]
+    fn a_hashed_copy_is_checked_against_each_provided_source() {
+        let installed = Installed::new();
+        let other_source = installed.project.join("other-source");
+        copy_exact(&installed.source, &other_source, "test source").unwrap();
+        fs::write(other_source.join("notes/more.md"), "different source").unwrap();
+        let hashed = installed.copy.with_file_name("first-skill-0123abcd");
+        copy_exact(&installed.copy, &hashed, "test copy").unwrap();
+        fs::write(hashed.join("notes/more.md"), "different source").unwrap();
+        let sources = [
+            SkillSource {
+                name: "first-skill".to_owned(),
+                dir: installed.source.clone(),
+            },
+            SkillSource {
+                name: "first-skill".to_owned(),
+                dir: other_source,
+            },
+        ];
+
+        let owned = symposium_copies(
+            &installed.project,
+            &installed.project.join(".claude/skills"),
+            &sources,
+        );
+
+        assert_eq!(
+            owned,
+            [
+                ".claude/skills/first-skill",
+                ".claude/skills/first-skill-0123abcd"
+            ]
+        );
     }
 
     #[test]
@@ -204,19 +246,13 @@ mod tests {
     }
 
     #[test]
-    fn a_copy_that_did_not_match_is_not_considered() {
+    fn a_copy_without_a_provided_source_is_not_considered() {
         let installed = Installed::new();
-        let install = SkillInstall {
-            skill: SkillName::new("first-skill").unwrap(),
-            assertion: InstallAssertion::Installed,
-            evidence: InstallEvidence::Differing,
-            verdict: Verdict::Fail,
-            matching_copy: None,
-        };
-
-        let owned = symposium_copies(&installed.project, [&install], |_| {
-            Some(installed.source.clone())
-        });
+        let owned = symposium_copies(
+            &installed.project,
+            &installed.project.join(".claude/skills"),
+            &[],
+        );
 
         assert!(owned.is_empty());
     }

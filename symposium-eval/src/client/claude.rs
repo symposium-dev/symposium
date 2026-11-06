@@ -83,6 +83,10 @@ impl ClientRunner for Claude {
         Client::ClaudeCode
     }
 
+    fn model(&self) -> &str {
+        &self.model
+    }
+
     fn invocation(
         &self,
         trial: &Trial,
@@ -183,6 +187,22 @@ mod tests {
                 "--",
                 "-do the task",
             ]
+        );
+    }
+
+    #[test]
+    fn the_model_launched_is_the_model_reported() {
+        let host = Host::new();
+        let trial = trial(&host.batch(), 1, Configuration::Symposium);
+        let claude = Claude::enforced(model(), version::MINIMUM);
+
+        let invocation = claude.invocation(&trial, "do the task", Vec::new());
+
+        let flag = invocation.args.iter().position(|arg| arg == "--model");
+        let launched = flag.and_then(|flag| invocation.args.get(flag + 1));
+        assert_eq!(
+            launched.map(|model| model.as_os_str()),
+            Some(claude.model().as_ref())
         );
     }
 

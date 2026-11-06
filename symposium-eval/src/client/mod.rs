@@ -31,6 +31,10 @@ pub(crate) trait ClientRunner {
     /// Which client this is, the only place a trial's client is named.
     fn client(&self) -> Client;
 
+    /// The model its sessions are asked to run, as requested: the only place a trial's
+    /// model is named.
+    fn model(&self) -> &str;
+
     /// The command that starts a new session in `trial` and runs `prompt`, with `env` as
     /// its whole environment.
     fn invocation(&self, trial: &Trial, prompt: &str, env: Vec<(OsString, OsString)>)
@@ -352,6 +356,19 @@ pub(crate) enum Ended {
     Mismatched(ProvenanceError),
 }
 
+impl Ended {
+    /// Whether every process that could still change the trial was proved stopped.
+    pub(crate) fn containment_is_certain(&self) -> bool {
+        !matches!(
+            self,
+            Self::Unsupervised(_)
+                | Self::TimedOut {
+                    after_deadline: Some(_)
+                }
+        )
+    }
+}
+
 /// Runs `prompt` as a new session of `runner`'s client in `trial`, through `backend`,
 /// until it ends or `deadline` passes, looking for `skills` in its transcript. Never an
 /// error: whatever goes wrong is how the session ended.
@@ -475,6 +492,10 @@ mod tests {
     impl ClientRunner for OneLine {
         fn client(&self) -> Client {
             Client::ClaudeCode
+        }
+
+        fn model(&self) -> &str {
+            "a-model"
         }
 
         fn invocation(
@@ -684,6 +705,10 @@ mod tests {
     impl ClientRunner for SlowReader {
         fn client(&self) -> Client {
             OneLine.client()
+        }
+
+        fn model(&self) -> &str {
+            "a-model"
         }
 
         fn invocation(

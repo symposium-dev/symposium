@@ -24,6 +24,8 @@ pub(super) enum ReachedRecord {
     },
     /// The client could not be launched; `session` says why.
     Launch,
+    /// The client may still be writing; code and expectations were not inspected.
+    UncontainedSession,
     Graded,
 }
 
@@ -50,6 +52,7 @@ pub(super) enum FailureRecord {
 impl<'a> Reached<'a> {
     pub(super) fn outcome(self, task: &Task) -> Outcome {
         match self {
+            Self::Uncontained { .. } => outcome::decide(task.kind(), Session::Uncontained, &[]),
             Self::Setup { .. } | Self::Session { .. } => {
                 outcome::decide(task.kind(), Session::NotStarted, &[])
             }
@@ -71,18 +74,31 @@ impl<'a> Reached<'a> {
 
     pub(super) fn session(self, task: &Task) -> Result<Option<SessionRecord>, ResultError> {
         match self {
-            Self::Session { execution, .. } | Self::Graded { execution, .. } => {
-                SessionRecord::new(task, execution).map(Some)
-            }
+            Self::Uncontained { execution }
+            | Self::Session { execution, .. }
+            | Self::Graded { execution, .. } => SessionRecord::new(task, execution).map(Some),
             Self::Setup { .. } => Ok(None),
         }
     }
 
-    /// A session is left ungraded exactly when its client never launched.
+    /// Only a contained, launched session may be graded. Uncertain containment has
+    /// its own phase, which carries no filesystem evidence.
     pub(super) fn check_session_phase(self) -> Result<(), ResultError> {
         let (launched, graded) = match self {
+            Self::Uncontained { execution } => {
+                return if execution.ended.containment_is_certain() {
+                    Err(ResultError::SessionContainment { certain: true })
+                } else {
+                    Ok(())
+                };
+            }
             Self::Session { execution, .. } => (launched(execution), false),
-            Self::Graded { execution, .. } => (launched(execution), true),
+            Self::Graded { execution, .. } => {
+                if !execution.ended.containment_is_certain() {
+                    return Err(ResultError::SessionContainment { certain: false });
+                }
+                (launched(execution), true)
+            }
             Self::Setup { .. } => return Ok(()),
         };
         if launched == graded {
@@ -114,29 +130,29 @@ impl<'a> Reached<'a> {
     pub(super) fn grading(self) -> Option<&'a Grading> {
         match self {
             Self::Graded { grading, .. } => Some(grading),
-            Self::Setup { .. } | Self::Session { .. } => None,
+            Self::Setup { .. } | Self::Session { .. } | Self::Uncontained { .. } => None,
         }
     }
 
     pub(super) fn expectations(self) -> Option<&'a Expectations> {
         match self {
             Self::Graded { expectations, .. } => expectations,
-            Self::Setup { .. } | Self::Session { .. } => None,
+            Self::Setup { .. } | Self::Session { .. } | Self::Uncontained { .. } => None,
         }
     }
 
     pub(super) fn changes(self) -> &'a [ConfigChange] {
         match self {
             Self::Session { changes, .. } | Self::Graded { changes, .. } => changes,
-            Self::Setup { .. } => &[],
+            Self::Setup { .. } | Self::Uncontained { .. } => &[],
         }
     }
 
     pub(super) fn reported_model(self) -> Option<String> {
         match self {
-            Self::Session { execution, .. } | Self::Graded { execution, .. } => {
-                execution.summary.model.clone()
-            }
+            Self::Uncontained { execution }
+            | Self::Session { execution, .. }
+            | Self::Graded { execution, .. } => execution.summary.model.clone(),
             Self::Setup { .. } => None,
         }
     }
@@ -162,6 +178,7 @@ impl From<Reached<'_>> for ReachedRecord {
                 error: sanitized(error),
             },
             Reached::Session { .. } => Self::Launch,
+            Reached::Uncontained { .. } => Self::UncontainedSession,
             Reached::Graded { .. } => Self::Graded,
         }
     }

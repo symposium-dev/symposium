@@ -73,7 +73,7 @@ pub(crate) enum Arm {
 }
 
 impl Arm {
-    fn configuration(&self) -> Configuration {
+    pub(crate) fn configuration(&self) -> Configuration {
         match self {
             Self::Baseline => Configuration::Baseline,
             Self::Symposium(_) => Configuration::Symposium,
@@ -128,6 +128,8 @@ pub(crate) enum SetupStep {
 /// How far a trial got, with what each phase it reached left.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Reached<'a> {
+    /// The client started but its writers may survive; no filesystem evidence is read.
+    Uncontained { execution: &'a Execution },
     Setup {
         step: SetupStep,
         error: &'a dyn std::error::Error,
@@ -159,6 +161,8 @@ pub(crate) enum ResultError {
     Loads { named: usize, observed: usize },
     #[error("a client that {} was {}", if *.launched { "launched" } else { "never launched" }, if *.launched { "left ungraded" } else { "graded" })]
     SessionPhase { launched: bool },
+    #[error("a session with {} containment was recorded in the wrong phase", if *.certain { "proven" } else { "uncertain" })]
+    SessionContainment { certain: bool },
 }
 
 #[derive(Debug, Serialize)]

@@ -174,6 +174,11 @@ impl Task {
         self.kind
     }
 
+    /// What the agent is asked to do.
+    pub(crate) fn prompt(&self) -> &str {
+        &self.prompt
+    }
+
     pub(crate) fn fixtures(&self) -> &[FixtureName] {
         &self.fixtures
     }
@@ -205,10 +210,17 @@ impl Task {
         expect(dead_code, reason = "the runner decides these later in RFD step 4")
     )]
     pub(crate) fn skill_source(&self, skill: &SkillName) -> Option<&Path> {
-        self.skill_sources
+        let mut sources = self
+            .skill_sources
             .iter()
-            .find(|source| source.name == *skill)
-            .map(|source| source.dir.as_path())
+            .filter(|source| source.name == skill.as_str());
+        let source = sources.next()?;
+        sources.next().is_none().then_some(source.dir.as_path())
+    }
+
+    /// Every trusted provider, whether or not an expectation names its skill.
+    pub(crate) fn provided_skills(&self) -> &[SkillSource] {
+        &self.skill_sources
     }
 
     /// The plugin hooks that must leave a successful record, each with its event.
@@ -770,6 +782,30 @@ mod tests {
             messages(&task.unwrap_err()),
             ["expected skill `unused` is not provided by any of the task's plugins"]
         );
+    }
+
+    #[test]
+    fn the_provider_catalogue_keeps_unnamed_skills_from_every_origin() {
+        let files = [
+            ("first/Symposium.toml", SKILLS.to_owned()),
+            ("first/skills/named/SKILL.md", skill_md("named")),
+            ("first/skills/unnamed/SKILL.md", skill_md("unnamed")),
+            ("second/SKILL.md", skill_md("unnamed")),
+        ];
+        let (_root, task) =
+            expecting_skills(&["first", "second"], r#"installed = ["named"]"#, &files);
+        let task = task.unwrap();
+
+        assert_eq!(task.provided_skills().len(), 3);
+        assert_eq!(
+            task.provided_skills()
+                .iter()
+                .filter(|source| source.name == "unnamed")
+                .count(),
+            2
+        );
+        assert!(task.skill_source(&skill_name("named")).is_some());
+        assert!(task.skill_source(&skill_name("unnamed")).is_none());
     }
 
     #[test]

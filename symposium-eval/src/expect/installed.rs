@@ -118,7 +118,7 @@ fn installed(
     skill: &SkillName,
     source: &Path,
 ) -> (InstallEvidence, Option<PathBuf>) {
-    let Ok(candidates) = candidates(skills, skill) else {
+    let Ok(candidates) = candidates(skills, skill.as_str()) else {
         return (InstallEvidence::Unreadable, None);
     };
     let mut unreadable = candidates.unreadable;
@@ -143,7 +143,7 @@ fn installed(
 
 /// Whether `skills` holds any copy of `skill`: one settles it, whatever else is there.
 fn presence(skills: &Path, skill: &SkillName) -> InstallEvidence {
-    match candidates(skills, skill) {
+    match candidates(skills, skill.as_str()) {
         Ok(candidates) if !candidates.copies.is_empty() => InstallEvidence::Present,
         Ok(candidates) if candidates.unreadable => InstallEvidence::Unreadable,
         Ok(candidates) if candidates.unidentified => InstallEvidence::Unidentified,
@@ -165,7 +165,7 @@ struct Candidates {
 
 /// What `skills` holds for `skill`. A missing `skills` holds nothing. An entry that
 /// cannot be inspected is noted and passed over, so it cannot hide a copy that settles.
-fn candidates(skills: &Path, skill: &SkillName) -> io::Result<Candidates> {
+fn candidates(skills: &Path, skill: &str) -> io::Result<Candidates> {
     let entries = match fs::read_dir(skills) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
@@ -186,11 +186,19 @@ fn candidates(skills: &Path, skill: &SkillName) -> io::Result<Candidates> {
     Ok(candidates)
 }
 
+/// Marked copies of a provided skill, independently of install assertions. An
+/// unreadable or unidentified entry cannot establish ownership and is left out.
+pub(super) fn copy_candidates(skills: &Path, skill: &str) -> Vec<PathBuf> {
+    candidates(skills, skill)
+        .map(|candidates| candidates.copies)
+        .unwrap_or_default()
+}
+
 /// The directory `entry` is and whose copy, if it is one of sync's copies that could be
 /// `skill`'s.
 fn candidate(
     entry: io::Result<fs::DirEntry>,
-    skill: &SkillName,
+    skill: &str,
 ) -> io::Result<Option<(PathBuf, Identity)>> {
     let entry = entry?;
     let Some(slot) = entry
@@ -219,8 +227,8 @@ enum Slot {
     Hashed,
 }
 
-fn slot(name: &str, skill: &SkillName) -> Option<Slot> {
-    match name.strip_prefix(skill.as_str())? {
+fn slot(name: &str, skill: &str) -> Option<Slot> {
+    match name.strip_prefix(skill)? {
         "" => Some(Slot::Plain),
         rest => {
             let hash = rest.strip_prefix('-')?;
@@ -252,14 +260,14 @@ enum Identity {
 /// Whose copy `dir` is, by the name in its `SKILL.md`, which sync names a copy after.
 /// The agent can write there, so the file is opened as evidence is, which a pipe cannot
 /// block.
-fn identity(dir: &Path, skill: &SkillName) -> io::Result<Identity> {
+fn identity(dir: &Path, skill: &str) -> io::Result<Identity> {
     let Some(bytes) = file::read(&dir.join("SKILL.md"), MAX_SKILL_MD)? else {
         return Ok(Identity::Unknown);
     };
     let text = String::from_utf8(bytes)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     Ok(match skill_md::name(&text) {
-        Some(name) if name == skill.as_str() => Identity::Expected,
+        Some(name) if name == skill => Identity::Expected,
         Some(_) => Identity::Other,
         None => Identity::Unknown,
     })

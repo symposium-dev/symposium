@@ -1,4 +1,4 @@
-//! The `SKILL.md` that provides each expected skill, from the task's plugins (RFD
+//! The `SKILL.md` for every skill provided by the task's plugins (RFD
 //! reference, "Skills").
 //!
 //! Skills are found as Symposium finds a registry plugin's: a plugin with a
@@ -21,29 +21,22 @@ use crate::tree::EntryKind;
 /// holding an entry of this name, whatever kind it is.
 const MARKER: &str = ".symposium";
 
-/// An expected skill, and the directory in `evals/` that provides it.
+/// A provided skill, and its trusted source directory in `evals/`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SkillSource {
-    pub(crate) name: SkillName,
+    pub(crate) name: String,
     pub(crate) dir: PathBuf,
 }
 
-/// A skill a plugin provides.
-struct Provided {
-    name: String,
-    dir: PathBuf,
-}
-
-/// Finds the one provider of each skill `expected` names. A skill that must be installed
-/// or used needs one; any named skill with two is refused, since sync would then install
-/// neither under its own name. One `SKILL.md` reached through two groups is one
-/// provider, as sync counts it.
+/// Catalogues every provider and validates the skills `expected` names. A skill that
+/// must be installed or used needs one provider; any named skill with two is refused.
+/// One `SKILL.md` reached through two groups is one provider, as sync counts it.
 pub(super) fn resolve(
     plugins: &[Plugin<'_>],
     expected: &SkillExpectations,
     errors: &mut Vec<TaskError>,
 ) -> Vec<SkillSource> {
-    let mut provided: Vec<Provided> = Vec::new();
+    let mut provided: Vec<SkillSource> = Vec::new();
     for plugin in plugins {
         for skill in plugin_skills(plugin, errors) {
             if !provided.iter().any(|seen| seen.dir == skill.dir) {
@@ -53,7 +46,6 @@ pub(super) fn resolve(
     }
     let needed =
         |skill: &SkillName| expected.installed().contains(skill) || expected.used().contains(skill);
-    let mut sources = Vec::new();
     for skill in expected.names() {
         let mut providers = provided
             .iter()
@@ -64,18 +56,15 @@ pub(super) fn resolve(
                 first: first.dir.clone(),
                 second: second.dir.clone(),
             }),
-            (Some(only), None) => sources.push(SkillSource {
-                name: skill.clone(),
-                dir: only.dir.clone(),
-            }),
+            (Some(_), None) => {}
             (None, _) if needed(skill) => errors.push(TaskError::UnprovidedSkill(skill.clone())),
             (None, _) => {}
         }
     }
-    sources
+    provided
 }
 
-fn plugin_skills(plugin: &Plugin<'_>, errors: &mut Vec<TaskError>) -> Vec<Provided> {
+fn plugin_skills(plugin: &Plugin<'_>, errors: &mut Vec<TaskError>) -> Vec<SkillSource> {
     let Some(manifest) = &plugin.manifest else {
         // A plugin without a manifest is a registry's bare skill only at its root.
         let bare = plugin
@@ -190,7 +179,7 @@ fn is_within(path: &str, dir: &str) -> bool {
 }
 
 /// Each skill in `dirs` with its name, if Symposium would load it.
-fn named(plugin: &Plugin<'_>, dirs: Vec<PathBuf>, errors: &mut Vec<TaskError>) -> Vec<Provided> {
+fn named(plugin: &Plugin<'_>, dirs: Vec<PathBuf>, errors: &mut Vec<TaskError>) -> Vec<SkillSource> {
     dirs.into_iter()
         .filter_map(|dir| {
             let path = dir.join("SKILL.md");
@@ -202,7 +191,7 @@ fn named(plugin: &Plugin<'_>, dirs: Vec<PathBuf>, errors: &mut Vec<TaskError>) -
                 }
             };
             match skill_md::loadable_name(&text) {
-                Ok(name) => Some(Provided { name, dir }),
+                Ok(name) => Some(SkillSource { name, dir }),
                 Err(problem) => {
                     errors.push(TaskError::UnloadableSkill {
                         plugin: plugin.name.clone(),

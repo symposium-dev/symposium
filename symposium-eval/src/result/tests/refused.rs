@@ -85,3 +85,37 @@ fn only_a_client_that_never_launched_goes_ungraded() {
         ResultError::SessionPhase { launched: false }
     );
 }
+
+#[test]
+fn uncertain_containment_has_its_own_ungraded_phase() {
+    let grading = passing();
+    for ended in [
+        Ended::Unsupervised(crate::grade::ProcessError::OutputNotClosed),
+        Ended::TimedOut {
+            after_deadline: Some(crate::grade::ProcessError::OutputNotClosed),
+        },
+    ] {
+        let execution = execution(ended, Usage::Unknown);
+        let reached = Reached::Uncontained {
+            execution: &execution,
+        };
+        for configuration in [Configuration::Baseline, Configuration::Symposium] {
+            assert!(try_result_of(configuration, reached).is_ok());
+        }
+        assert_eq!(
+            try_result_of(Configuration::Baseline, graded(&execution, &grading, None)).unwrap_err(),
+            ResultError::SessionContainment { certain: false }
+        );
+    }
+    let contained = execution(Ended::Completed, Usage::Unknown);
+    assert_eq!(
+        try_result_of(
+            Configuration::Baseline,
+            Reached::Uncontained {
+                execution: &contained
+            }
+        )
+        .unwrap_err(),
+        ResultError::SessionContainment { certain: true }
+    );
+}
