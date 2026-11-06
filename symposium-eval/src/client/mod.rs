@@ -31,6 +31,10 @@ pub(crate) trait ClientRunner {
     /// Which client this is, the only place a trial's client is named.
     fn client(&self) -> Client;
 
+    /// The model its sessions are asked to run, as requested: the only place a trial's
+    /// model is named.
+    fn model(&self) -> &str;
+
     /// The command that starts a new session in `trial` and runs `prompt`, with `env` as
     /// its whole environment.
     fn invocation(&self, trial: &Trial, prompt: &str, env: Vec<(OsString, OsString)>)
@@ -477,6 +481,10 @@ mod tests {
             Client::ClaudeCode
         }
 
+        fn model(&self) -> &str {
+            "a-model"
+        }
+
         fn invocation(
             &self,
             trial: &Trial,
@@ -684,6 +692,10 @@ mod tests {
     impl ClientRunner for SlowReader {
         fn client(&self) -> Client {
             OneLine.client()
+        }
+
+        fn model(&self) -> &str {
+            "a-model"
         }
 
         fn invocation(

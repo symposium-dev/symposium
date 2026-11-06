@@ -73,7 +73,7 @@ pub(crate) enum Arm {
 }
 
 impl Arm {
-    fn configuration(&self) -> Configuration {
+    pub(crate) fn configuration(&self) -> Configuration {
         match self {
             Self::Baseline => Configuration::Baseline,
             Self::Symposium(_) => Configuration::Symposium,
