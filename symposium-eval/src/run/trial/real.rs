@@ -59,14 +59,27 @@ fn a_trial_runs_end_to_end_under_srt() {
         api_key: real.api_key(),
         provenance: &provenance,
     };
+    let results = sources.path().join("results");
     let run = |number, arm| -> Result<Value, TrialError> {
         let runner = Claude::enforced("a-model".to_owned(), version);
-        let path = driver.run(number, arm, &runner)?;
-        Ok(serde_json::from_slice(&fs::read(path).unwrap()).unwrap())
+        let done = driver.run(number, arm, &runner)?;
+        done.retain(&results.join(number.to_string())).unwrap();
+        Ok(serde_json::from_slice(&fs::read(done.result()).unwrap()).unwrap())
     };
 
     let symposium = run(1, Arm::Symposium(build)).unwrap();
     let baseline = run(2, Arm::Baseline).unwrap();
+
+    // What the real trial left is kept, the transcript and Symposium's logs included.
+    for kept in [
+        "result.json",
+        "transcript.jsonl",
+        "submission/src/lib.rs",
+        "symposium.log",
+    ] {
+        assert!(results.join("1").join(kept).is_file(), "{kept}");
+    }
+    assert!(!results.join("1").join(super::retain::SKIPPED_FILE).exists());
 
     assert_eq!(symposium["outcome"]["result"], "succeeded", "{symposium:#}");
     assert_eq!(

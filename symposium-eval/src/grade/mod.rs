@@ -122,6 +122,44 @@ pub(crate) enum Outcome {
     Skipped,
 }
 
+impl Grading {
+    /// Whether every command grading started was proved stopped and reaped.
+    pub(crate) fn containment_is_certain(&self) -> bool {
+        match self {
+            Self::Graded(report) => report.containment_is_certain(),
+            Self::InvalidSubmission(_) => true,
+            Self::Infrastructure { error, partial } => {
+                grade_error_is_certain(error)
+                    && partial.as_ref().is_none_or(Report::containment_is_certain)
+            }
+        }
+    }
+}
+
+impl Report {
+    fn containment_is_certain(&self) -> bool {
+        self.steps.iter().all(|step| {
+            !matches!(
+                step.outcome,
+                Outcome::TimedOut {
+                    after_deadline: Some(_)
+                }
+            )
+        })
+    }
+}
+
+fn grade_error_is_certain(error: &GradeError) -> bool {
+    !matches!(
+        error,
+        GradeError::Process { .. }
+            | GradeError::TimedOut {
+                after_deadline: Some(_),
+                ..
+            }
+    )
+}
+
 impl StepKind {
     /// The command line the step runs, for messages.
     pub(crate) fn command(&self) -> String {
@@ -607,6 +645,36 @@ mod tests {
             Grading::Graded(report) => report,
             other => panic!("expected a report, got {other:?}"),
         }
+    }
+
+    fn timeout_report(after_deadline: Option<&str>) -> Report {
+        Report {
+            outside_editable: Vec::new(),
+            steps: vec![Step {
+                kind: StepKind::Build,
+                outcome: Outcome::TimedOut {
+                    after_deadline: after_deadline.map(str::to_owned),
+                },
+            }],
+        }
+    }
+
+    #[test]
+    fn containment_checks_completed_and_partial_timeout_steps() {
+        assert!(Grading::Graded(timeout_report(None)).containment_is_certain());
+        assert!(
+            !Grading::Graded(timeout_report(Some("output stayed open"))).containment_is_certain()
+        );
+
+        let later_error = GradeError::Preflight {
+            step: "a later operation".to_owned(),
+            stderr: "failed".to_owned(),
+        };
+        let partial = Grading::Infrastructure {
+            error: later_error,
+            partial: Some(timeout_report(Some("output stayed open"))),
+        };
+        assert!(!partial.containment_is_certain());
     }
 
     /// Records each allowance it is given, then spends `running` as if a command ran.

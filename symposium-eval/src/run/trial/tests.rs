@@ -28,6 +28,8 @@ use crate::run::{Configuration, Trial};
 enum Init {
     Succeeds,
     Fails,
+    /// Times out, then loses certainty that its process tree stopped.
+    UncleanTimeout,
     /// Succeeds, but leaves a sync record, as a sync would.
     Syncs,
 }
@@ -42,6 +44,10 @@ enum Session {
     CannotStart,
     /// The sandbox starts, but the client exits before introducing a session.
     WrapperExits(i32),
+    /// Starts, but the runner loses supervision of its process tree.
+    Unsupervised,
+    /// Times out, but a descendant keeps an output pipe open.
+    UncleanTimeout,
     /// Solves, and writes a `result.json` in the trial's root.
     PlantsResult,
 }
@@ -53,6 +59,8 @@ struct Scripted {
     trial_sandbox: bool,
     /// Whether grading's sandbox can be prepared.
     grading_sandbox: bool,
+    /// Whether the build times out without proving its process tree stopped.
+    unclean_grading_timeout: bool,
     grading_calls: Cell<usize>,
 }
 
@@ -63,6 +71,7 @@ impl Scripted {
             session,
             trial_sandbox: true,
             grading_sandbox: true,
+            unclean_grading_timeout: false,
             grading_calls: Cell::new(0),
         }
     }
@@ -70,7 +79,7 @@ impl Scripted {
 
 enum Played<'a> {
     Trial { script: &'a Scripted, trial: Trial },
-    Grading,
+    Grading { script: &'a Scripted },
 }
 
 impl Sandbox for Scripted {
@@ -89,7 +98,7 @@ impl Sandbox for Scripted {
     fn for_grading(&self, trial: &Trial) -> Result<Played<'_>, RunError> {
         self.grading_calls.set(self.grading_calls.get() + 1);
         if self.grading_sandbox {
-            Ok(Played::Grading)
+            Ok(Played::Grading { script: self })
         } else {
             Err(RunError::NoPolicy(trial.grading_policy_file()))
         }
@@ -103,9 +112,17 @@ impl Backend for Played<'_> {
         deadline: Duration,
         logs: &Path,
     ) -> Result<Finished, ProcessError> {
-        let Self::Trial { script, trial } = self else {
-            return Local.run(invocation, deadline, logs);
+        let (script, trial) = match self {
+            Self::Trial { script, trial } => (*script, Some(trial)),
+            Self::Grading { script } => (*script, None),
         };
+        if trial.is_none() {
+            if script.unclean_grading_timeout && invocation.log_name == "build" {
+                return Ok(unclean_timeout());
+            }
+            return Local.run(invocation, deadline, logs);
+        }
+        let trial = trial.unwrap();
         if invocation.program == "cargo-agents" {
             return Ok(init(script.init, trial));
         }
@@ -129,6 +146,7 @@ fn init(init: Init, trial: &Trial) -> Finished {
     match init {
         Init::Succeeds => exited(0),
         Init::Fails => exited(1),
+        Init::UncleanTimeout => unclean_timeout(),
         Init::Syncs => {
             fs::create_dir_all(trial.sync_records()).unwrap();
             exited(0)
@@ -149,6 +167,12 @@ fn play(session: Session, trial: &Trial, transcript: &Path) -> Result<Finished, 
             return Ok(exited(code));
         }
         Session::TimesOut => return Ok(Finished::never_started()),
+        Session::Unsupervised => return Err(ProcessError::OutputNotClosed),
+        Session::UncleanTimeout => {
+            let mut finished = Finished::never_started();
+            finished.after_deadline = Some(ProcessError::OutputNotClosed);
+            return Ok(finished);
+        }
         Session::Solves | Session::CannotStart | Session::PlantsResult => {}
     }
     fs::copy(solution(), trial.project().join("src/lib.rs")).unwrap();
@@ -166,6 +190,12 @@ fn solution() -> PathBuf {
 fn exited(code: i32) -> Finished {
     let mut finished = Finished::never_started();
     finished.status = Some(exit_status(code));
+    finished
+}
+
+fn unclean_timeout() -> Finished {
+    let mut finished = Finished::never_started();
+    finished.after_deadline = Some(ProcessError::OutputNotClosed);
     finished
 }
 
@@ -307,7 +337,7 @@ impl Bench {
         configuration: Configuration,
         sandbox: &Scripted,
         runner: &Stub,
-    ) -> Result<PathBuf, TrialError> {
+    ) -> Result<Done, TrialError> {
         let key = api_key();
         let driver = Driver {
             batch: &self.batch,
@@ -323,7 +353,10 @@ impl Bench {
 
     /// The result of trial 1, which must have one.
     fn result(&self, configuration: Configuration, sandbox: &Scripted) -> Value {
-        let path = self.run(configuration, sandbox, &Stub::new()).unwrap();
+        let path = self
+            .run(configuration, sandbox, &Stub::new())
+            .unwrap()
+            .result();
         serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
     }
 
@@ -406,6 +439,99 @@ fn a_failed_check_before_launch_stops_at_prelaunch() {
     assert_eq!(result["reached"]["phase"], "prelaunch", "{result:#}");
     assert_eq!(result["outcome"]["result"], "setup_failure");
     assert!(result["session"].is_null());
+}
+
+#[test]
+fn a_client_that_cannot_start_leaves_no_session_to_keep() {
+    let bench = Bench::new();
+    let done = bench
+        .run(
+            Configuration::Baseline,
+            &Scripted::new(Session::CannotStart),
+            &Stub::new(),
+        )
+        .unwrap();
+    let kept = bench
+        .trial_root(Configuration::Baseline)
+        .with_extension("kept");
+
+    done.retain(&kept).unwrap();
+
+    assert!(done.session.is_none(), "{done:?}");
+    for absent in ["transcript.jsonl", "stderr.log", "response.txt"] {
+        assert!(!kept.join(absent).exists(), "{absent}");
+    }
+    assert!(kept.join(RESULT_FILE).is_file());
+}
+
+#[test]
+fn uncertain_client_containment_prevents_retention() {
+    for session in [Session::Unsupervised, Session::UncleanTimeout] {
+        let bench = Bench::new();
+        let done = bench
+            .run(
+                Configuration::Baseline,
+                &Scripted::new(session),
+                &Stub::new(),
+            )
+            .unwrap();
+        let kept = bench
+            .trial_root(Configuration::Baseline)
+            .with_extension("kept");
+
+        let retained = done.retain(&kept);
+
+        assert!(matches!(retained, Err(retain::RetainError::NotQuiescent)));
+        assert!(!kept.exists());
+    }
+}
+
+fn assert_retention_stops_before_inspection(done: Done) {
+    let destination = done.root.with_extension("kept");
+    let parent = destination.parent().unwrap();
+    fs::remove_dir_all(&done.root).unwrap();
+    let before: Vec<_> = fs::read_dir(parent)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+
+    let retained = done.retain(&destination);
+
+    assert!(matches!(retained, Err(retain::RetainError::NotQuiescent)));
+    assert!(!destination.exists());
+    let after: Vec<_> = fs::read_dir(parent)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(after, before, "retention left a staging artifact");
+}
+
+#[test]
+fn uncertain_setup_timeout_prevents_retention_before_inspection() {
+    let bench = Bench::new();
+    let sandbox = Scripted {
+        init: Init::UncleanTimeout,
+        ..Scripted::new(Session::Solves)
+    };
+    let done = bench
+        .run(Configuration::Symposium, &sandbox, &Stub::new())
+        .unwrap();
+
+    assert_retention_stops_before_inspection(done);
+}
+
+#[test]
+fn uncertain_grading_timeout_prevents_retention_before_inspection() {
+    let bench = Bench::new();
+    let sandbox = Scripted {
+        unclean_grading_timeout: true,
+        ..Scripted::new(Session::Solves)
+    };
+    let done = bench
+        .run(Configuration::Baseline, &sandbox, &Stub::new())
+        .unwrap();
+
+    assert_retention_stops_before_inspection(done);
 }
 
 #[test]
@@ -515,7 +641,8 @@ fn the_result_names_the_client_and_model_the_runner_launched() {
             &Scripted::new(Session::CannotStart),
             &runner,
         )
-        .unwrap();
+        .unwrap()
+        .result();
 
     let result: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
     assert_eq!(result["client"]["name"], "codex", "{result:#}");

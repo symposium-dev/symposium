@@ -13,6 +13,7 @@
 mod phases;
 #[cfg(all(test, target_os = "linux"))]
 mod real;
+mod retain;
 mod sandbox;
 #[cfg(test)]
 mod tests;
@@ -24,8 +25,8 @@ use thiserror::Error;
 
 pub(crate) use sandbox::Sandbox;
 
-use super::{ApiKey, Batch, Inputs, Machine, RunError};
-use crate::client::{ClientRunner, Execution};
+use super::{ApiKey, Batch, Configuration, Inputs, Machine, RunError};
+use crate::client::{ClientRunner, Ended, Execution};
 use crate::expect::config::ConfigChange;
 use crate::expect::decide::Expectations;
 use crate::grade::Grading;
@@ -45,6 +46,34 @@ pub(crate) struct Driver<'a, S> {
     pub(crate) api_host: &'a str,
     pub(crate) api_key: &'a ApiKey,
     pub(crate) provenance: &'a Provenance,
+}
+
+/// A trial whose result is written, with what the runner keeps of it.
+#[derive(Debug)]
+pub(crate) struct Done {
+    /// Canonical runner-owned directory above every batch and trial.
+    pub(crate) anchor: PathBuf,
+    pub(crate) root: PathBuf,
+    pub(crate) configuration: Configuration,
+    /// What the client left, when it was launched.
+    pub(crate) session: Option<SessionOutput>,
+    /// Every process tree that could write the trial has been stopped and reaped.
+    pub(crate) quiescent: bool,
+}
+
+/// A launched client's output.
+#[derive(Debug)]
+pub(crate) struct SessionOutput {
+    pub(crate) transcript: PathBuf,
+    pub(crate) stderr: PathBuf,
+    /// The agent's last message, from a session that finished.
+    pub(crate) response: Option<String>,
+}
+
+impl Done {
+    pub(crate) fn result(&self) -> PathBuf {
+        self.root.join(RESULT_FILE)
+    }
 }
 
 /// Why a trial has no result.
@@ -88,7 +117,6 @@ struct Stopped {
 
 impl<S: Sandbox> Driver<'_, S> {
     /// Runs trial `number` of `arm` with `runner`'s client, and writes its result.
-    /// Returns where the result is.
     ///
     /// # Errors
     ///
@@ -99,12 +127,14 @@ impl<S: Sandbox> Driver<'_, S> {
         number: usize,
         arm: Arm,
         runner: &impl ClientRunner,
-    ) -> Result<PathBuf, TrialError> {
+    ) -> Result<Done, TrialError> {
+        let configuration = arm.configuration();
         let new = self
             .batch
-            .allocate_trial(number, arm.configuration(), self.inputs)
+            .allocate_trial(number, configuration, self.inputs)
             .map_err(TrialError::Allocate)?;
-        let path = new.root().join(RESULT_FILE);
+        let root = new.root().to_owned();
+        let path = root.join(RESULT_FILE);
         let planned = Planned {
             task: self.inputs.task(),
             content_hash: self.inputs.digest(),
@@ -116,15 +146,57 @@ impl<S: Sandbox> Driver<'_, S> {
         let ran = self.ran(new, runner);
         let result = TrialResult::new(planned, self.provenance.clone(), ran.reached())
             .map_err(TrialError::Result)?;
-        result.write(&path).map_err(|source| TrialError::Write {
-            path: path.clone(),
-            source,
-        })?;
-        Ok(path)
+        result
+            .write(&path)
+            .map_err(|source| TrialError::Write { path, source })?;
+        let quiescent = ran.quiescent();
+        Ok(Done {
+            anchor: self.batch.eval_root().to_owned(),
+            root,
+            configuration,
+            session: ran.into_session(),
+            quiescent,
+        })
     }
 }
 
 impl Ran {
+    /// Whether every process tree that could still alter the trial was stopped.
+    fn quiescent(&self) -> bool {
+        match self {
+            Self::Setup(Stopped {
+                error:
+                    RunError::Process { .. }
+                    | RunError::ToolTimeout {
+                        after_deadline: Some(_),
+                        ..
+                    },
+                ..
+            }) => false,
+            Self::Setup(_) => true,
+            Self::Session { execution, .. } => execution_is_quiescent(execution),
+            Self::Graded {
+                execution, grading, ..
+            } => execution_is_quiescent(execution) && grading_is_quiescent(grading),
+        }
+    }
+
+    /// What the client left, when it was launched.
+    fn into_session(self) -> Option<SessionOutput> {
+        let execution = match self {
+            Self::Setup(_) => return None,
+            Self::Session { execution, .. } | Self::Graded { execution, .. } => execution,
+        };
+        if matches!(execution.ended, Ended::NotLaunched(_)) {
+            return None;
+        }
+        Some(SessionOutput {
+            transcript: execution.transcript,
+            stderr: execution.stderr,
+            response: execution.summary.response,
+        })
+    }
+
     fn reached(&self) -> Reached<'_> {
         match self {
             Self::Setup(stopped) => Reached::Setup {
@@ -145,4 +217,18 @@ impl Ran {
             },
         }
     }
+}
+
+fn execution_is_quiescent(execution: &Execution) -> bool {
+    !matches!(
+        execution.ended,
+        Ended::Unsupervised(_)
+            | Ended::TimedOut {
+                after_deadline: Some(_)
+            }
+    )
+}
+
+fn grading_is_quiescent(grading: &Grading) -> bool {
+    grading.containment_is_certain()
 }
