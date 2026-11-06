@@ -1,7 +1,6 @@
 //! What a result records of the client's session.
 
 use std::collections::BTreeMap;
-use std::time::Duration;
 
 use serde::Serialize;
 
@@ -68,14 +67,10 @@ impl SessionRecord {
     ///
     /// When it shows a different number of loads than skills, so none can be matched
     /// to its skill.
-    pub(super) fn new(
-        task: &Task,
-        execution: &Execution,
-        elapsed: Duration,
-    ) -> Result<Self, ResultError> {
+    pub(super) fn new(task: &Task, execution: &Execution) -> Result<Self, ResultError> {
         Ok(Self {
             ended: EndedRecord::from(&execution.ended),
-            elapsed_secs: elapsed.as_secs_f64(),
+            elapsed_secs: execution.elapsed.as_secs_f64(),
             usage: UsageRecord::from(execution.summary.usage),
             observed_loads: observed_loads(task, &execution.loads)?,
         })

@@ -132,10 +132,14 @@ pub(crate) enum Reached<'a> {
         step: SetupStep,
         error: &'a dyn std::error::Error,
     },
+    /// The client could not be launched, so nothing was graded: a setup failure, with
+    /// the attempt kept.
+    Session {
+        execution: &'a Execution,
+        changes: &'a [ConfigChange],
+    },
     Graded {
         execution: &'a Execution,
-        /// The agent's time, setup and grading left out.
-        elapsed: Duration,
         grading: &'a Grading,
         changes: &'a [ConfigChange],
         /// A Symposium trial's, and only a Symposium trial's.
@@ -153,6 +157,8 @@ pub(crate) enum ResultError {
     },
     #[error("the session looked for {named} skills but showed {observed} loads")]
     Loads { named: usize, observed: usize },
+    #[error("a client that {} was {}", if *.launched { "launched" } else { "never launched" }, if *.launched { "left ungraded" } else { "graded" })]
+    SessionPhase { launched: bool },
 }
 
 #[derive(Debug, Serialize)]
@@ -190,6 +196,7 @@ impl TrialResult {
         let task = planned.task;
         let configuration = planned.arm.configuration();
         reached.check_expectations(configuration)?;
+        reached.check_session_phase()?;
         Ok(Self {
             schema_version: SCHEMA_VERSION,
             task: TaskRecord::new(task, planned.content_hash),

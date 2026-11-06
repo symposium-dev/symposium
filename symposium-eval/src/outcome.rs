@@ -51,7 +51,8 @@ pub(crate) enum Failure {
 /// How far a trial got.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Session<'a> {
-    /// Setup or the pre-launch check failed, so the client was never started.
+    /// Setup or the pre-launch check failed, or the client could not be launched, so
+    /// it never started.
     NotStarted,
     /// The session ended, and its submission was graded.
     Graded {
@@ -181,7 +182,7 @@ mod tests {
 
     #[test]
     fn a_trial_that_never_launched_is_a_setup_failure() {
-        let not_launched = Ended::NotLaunched(process_error());
+        let not_launched = Ended::NotLaunched(process_error().into());
 
         assert_eq!(
             decide(Regression, Session::NotStarted, &[]),
