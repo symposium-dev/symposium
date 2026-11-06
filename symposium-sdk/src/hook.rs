@@ -40,6 +40,21 @@ use std::process::ExitCode;
 /// Lives here rather than in Symposium because a plugin manifest names an
 /// agent (`[[hooks]] agent = "claude"`), and manifests cross the package-manager
 /// boundary. Dispatching an event to an agent's wire format stays in Symposium.
+/// Match with a fallback so future agents do not break your code.
+///
+/// An exhaustive match in another crate is not supported:
+///
+/// ```compile_fail
+/// use symposium_sdk::hook::HookAgent;
+/// fn known_agent(agent: HookAgent) {
+///     match agent {
+///         HookAgent::Antigravity | HookAgent::Claude | HookAgent::Codex
+///         | HookAgent::Copilot | HookAgent::Goose | HookAgent::Kiro
+///         | HookAgent::OpenCode | HookAgent::Pi => (),
+///     }
+/// }
+/// ```
+#[non_exhaustive]
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum HookAgent {
@@ -64,6 +79,9 @@ pub enum HookAgent {
     #[cfg_attr(feature = "clap", value(name = "opencode"))]
     #[serde(rename = "opencode")]
     OpenCode,
+    #[cfg_attr(feature = "clap", value(name = "pi"))]
+    #[serde(rename = "pi")]
+    Pi,
 }
 
 impl HookAgent {
@@ -77,6 +95,7 @@ impl HookAgent {
             HookAgent::Goose => "goose",
             HookAgent::Kiro => "kiro",
             HookAgent::OpenCode => "opencode",
+            HookAgent::Pi => "pi",
         }
     }
 }
@@ -304,6 +323,17 @@ pub enum Output {
 }
 
 impl Output {
+    /// Returns the event type for this output.
+    pub fn event(&self) -> HookEvent {
+        match self {
+            Output::PreToolUse(_) => HookEvent::PreToolUse,
+            Output::PostToolUse(_) => HookEvent::PostToolUse,
+            Output::UserPromptSubmit(_) => HookEvent::UserPromptSubmit,
+            Output::SessionStart(_) => HookEvent::SessionStart,
+            Output::Stop(_) => HookEvent::Stop,
+        }
+    }
+
     /// Create an empty output for the given event type.
     pub fn empty_for(event: HookEvent) -> Self {
         match event {
@@ -643,5 +673,24 @@ fn is_empty_output(output: &Output) -> bool {
         Output::UserPromptSubmit(o) => o.additional_context.is_none(),
         Output::SessionStart(o) => o.additional_context.is_none(),
         Output::Stop(o) => o.additional_context.is_none(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_preserves_event_type() {
+        for event in [
+            HookEvent::PreToolUse,
+            HookEvent::PostToolUse,
+            HookEvent::UserPromptSubmit,
+            HookEvent::SessionStart,
+            HookEvent::Stop,
+        ] {
+            assert_eq!(Output::empty_for(event).event(), event);
+            assert_eq!(Output::with_context(event, "context".into()).event(), event);
+        }
     }
 }

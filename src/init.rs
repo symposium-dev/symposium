@@ -74,6 +74,7 @@ pub async fn init(
     opts: &InitOpts,
     update: UpdateLevel,
 ) -> Result<()> {
+    sym.ensure_config_usable()?;
     tracing::info!("init started");
     out.println("Setting up symposium for your user account.\n");
 

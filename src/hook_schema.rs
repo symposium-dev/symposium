@@ -10,6 +10,7 @@ pub mod copilot;
 pub mod goose;
 pub mod kiro;
 pub mod opencode;
+pub mod pi;
 pub mod symposium;
 
 /// [`HookAgent`] and [`HookEvent`] are the SDK's: a plugin manifest names both
@@ -29,6 +30,8 @@ pub fn agent_event(agent: HookAgent, event: HookEvent) -> Option<Box<dyn ErasedA
         HookAgent::Goose => goose::Goose.event(event),
         HookAgent::Kiro => kiro::Kiro.event(event),
         HookAgent::OpenCode => opencode::OpenCode.event(event),
+        HookAgent::Pi => pi::Pi.event(event),
+        _ => None,
     }
 }
 

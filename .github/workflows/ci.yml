@@ -163,3 +163,30 @@ jobs:
 
       - name: Check agent-eval tasks
         run: cargo xtask agent-eval --check-tasks
+
+  pi-extension:
+    name: Check Pi extension (${{ matrix.os }})
+    timeout-minutes: 30
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: src/agents/pi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+          cache-dependency-path: src/agents/pi/package-lock.json
+      - name: Install Rust for CLI integration tests
+        uses: dtolnay/rust-toolchain@stable
+      - id: pi-deps
+        run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm test
+      - name: Test Pi with the real Symposium CLI
+        if: ${{ !cancelled() && steps.pi-deps.outcome == 'success' }}
+        run: npm run test:integration

@@ -86,6 +86,30 @@ cargo test --test hook_agent -- --nocapture
 
 On failure, the test's temporary directory is preserved and its path is printed to stderr so you can inspect the fixture state.
 
+## Pi extension
+
+The Pi bridge also has TypeScript and Node tests:
+
+```bash
+cd src/agents/pi
+npm ci --ignore-scripts
+npm run check
+npm test
+npm run test:integration
+```
+
+Use Node.js 22.19 or later. These tests do not call a model. `npm test` checks
+event mapping, generated skill loading, and delivery of hook context with queued
+inputs using Pi's session and extension runner.
+
+`npm run test:integration` builds the native debug `cargo-agents` binary, then
+checks actual CLI sync against Pi's project resource discovery and cancellation
+of a running plugin command. Fixtures use temporary homes and local plugins;
+they do not install packages or contact a model. The binary lookup honors Cargo's
+target directory, or an explicit `SYMPOSIUM_TEST_BINARY` when invoking Node tests
+directly. CI runs both suites on Linux, macOS, and Windows. Cancellation tests
+exercise Unix signals and are explicitly skipped on Windows.
+
 ## Windows
 
 CI runs the full test suite on `windows-latest` as part of the `test` matrix (see `.github/workflows/ci.yml`). To run the tests locally on Windows:
