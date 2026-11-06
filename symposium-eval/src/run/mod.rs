@@ -31,6 +31,8 @@ mod grading;
 mod inputs;
 mod policy;
 mod prelaunch;
+#[cfg(all(test, target_os = "linux"))]
+mod runtime_tmp;
 pub(crate) mod setup;
 #[cfg(all(test, target_os = "linux"))]
 mod smoke;
