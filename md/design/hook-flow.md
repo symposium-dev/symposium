@@ -6,6 +6,13 @@ Entry point invoked by the agent's hook system on session events.
 
 The payload is parsed first, and the agent's parser can declare it not an occurrence of the symposium event (`AgentHookInput::should_dispatch`; false for an Antigravity `PreInvocation` after the first of a turn). Such a payload is answered with the agent's neutral output and skips every step below.
 
+All remote package-manager operations in `execute_hook` share a two-second
+absolute deadline, including initialization and work across multiple PMs. An
+expired request terminates that PM's process tree and fails through the normal
+PM error path. Later PM requests fail immediately, while local plugin dispatch
+continues so its decisions can reach agents with ten-second hook deadlines.
+This bounds remote PM waiting; it is not a timeout on local plugin execution.
+
 1. **Auto-sync** (if enabled) — when `auto-sync = true` in the user config, runs [`cargo agents sync`](./sync-agent-flow.md) to ensure skills are current. The workspace is the project the package managers find from the payload's `cwd` field, or from the process's current working directory when the payload has none. Runs quietly and non-fatally — failures are logged but don't block hook dispatch.
 
    Auto-sync is also where a crate reached through a `[[plugins]]` chained reference or a `[plugins]` enablement entry is downloaded when cargo has not cached it yet. Dispatch only reads the cargo cache, so such a crate is absent from it until a sync has downloaded it.

@@ -24,6 +24,7 @@ use super::{PackageId, PluginInfo, ProjectInfo, UnvalidatedPlugin};
 /// no plugins.
 pub const PROTOCOL_VERSION: u32 = 1;
 
+pub const CANONICAL_NAMES: &str = "canonical_names";
 pub const INITIALIZE: &str = "initialize";
 pub const ACTIVE_PLUGINS: &str = "active_plugins";
 pub const LOAD_PLUGIN: &str = "load_plugin";
@@ -55,6 +56,16 @@ pub struct InitializeResult {
     pub protocol_version: u32,
     /// The name this PM owns: the `pm` component of every id it mints.
     pub name: String,
+    /// Older protocol-v1 PMs compare names exactly. New servers advertise
+    /// normalization so the client can ask the owning PM about arbitrary names.
+    #[serde(default)]
+    pub canonical_names: bool,
+}
+
+/// Names to normalize, and their canonical forms in the same order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalNames {
+    pub names: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

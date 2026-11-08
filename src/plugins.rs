@@ -1273,7 +1273,9 @@ pub async fn active_plugins(
     // enqueue its own chained references.
     while let Some(id) = worklist.pop() {
         for plugin in pms.load_plugin(&id, update).await {
-            if visited.insert(pms.identity(&plugin.canonical)) {
+            if let Ok(identity) = pms.identity(&plugin.canonical).await
+                && visited.insert(identity)
+            {
                 record_active(plugin, ctx, &mut active, &mut worklist);
             }
         }

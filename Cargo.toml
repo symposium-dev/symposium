@@ -65,6 +65,7 @@ uuid = { version = "1.26.0", features = ["v4", "serde"] }
 hmac = "0.12.1"
 getrandom = "0.4.2"
 dunce = "1.0.5"
+process-wrap = { version = "10.0.1", default-features = false, features = ["tokio1", "process-group", "job-object", "kill-on-drop"] }
 
 [dev-dependencies]
 assert_matches = "1.5"

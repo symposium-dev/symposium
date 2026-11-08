@@ -617,3 +617,106 @@ async fn an_event_where_nothing_changed_spawns_no_package_manager() {
     std::fs::write(&input, "{}").unwrap();
     assert!(spawned(&sym).await, "an input appeared, so the event syncs");
 }
+
+/// Name rules belong to the PM even when they have nothing to do with Cargo.
+/// Both returned names and arbitrary configuration names pass through the RPC.
+#[tokio::test]
+async fn remote_name_rules_cover_lookup_and_configuration() {
+    use symposium::config::{PluginsConfig, UseEntry};
+    let tmp = tempfile::tempdir().unwrap();
+    let pm = remote(
+        "demo",
+        &script(
+            tmp.path(),
+            "case-fold.sh",
+            r#"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":1,"name":"demo","canonical_names":true}}\n' "$id" ;;
+    *'"list_deps"'*)
+      printf '{"id":%s,"jsonrpc":"2.0","result":{"deps":[{"pm":"demo","name":"WIDGET-LIB","version":"1"}]}}\n' "$id" ;;
+    *'"canonical_names"'*)
+      names=$(printf '%s' "$line" | sed 's/.*"names":\(\[[^]]*\]\).*/\1/' | tr '[:upper:]' '[:lower:]')
+      printf '{"id":%s,"jsonrpc":"2.0","result":{"names":%s}}\n' "$id" "$names" ;;
+  esac
+done
+"#,
+        ),
+    );
+    let pms = PmRegistry::new(vec![PmInstance::new(
+        "demo",
+        false,
+        PluginKind::Package,
+        Box::new(pm),
+    )]);
+    let id = pms
+        .identify(&[], "Widget-Lib", UpdateLevel::None)
+        .await
+        .unwrap();
+    assert_eq!(id, PackageId::any_version("demo", "widget-lib"));
+    let config = PluginsConfig {
+        auto_enable: vec!["Widget-Lib".into()],
+        disable: vec!["widget-lib".into()],
+        used: vec![UseEntry::Global("wIdGeT-lIb".into())],
+    };
+    let returned = PackageId::any_version("demo", "WIDGET-LIB");
+    assert!(config.is_auto_enabled(&pms, &returned).await);
+    assert!(config.is_disabled(&pms, &returned).await);
+    assert!(config.is_used_in(&pms, &returned, tmp.path()).await);
+    // This PM folds case, not underscores: do not borrow Cargo's rule.
+    assert!(
+        !config
+            .is_disabled(&pms, &PackageId::any_version("demo", "widget_lib"))
+            .await
+    );
+}
+
+#[tokio::test]
+async fn failed_normalization_cannot_bypass_disable_or_allow_cleanup() {
+    use symposium::config::{PluginsConfig, UseEntry};
+    let tmp = tempfile::tempdir().unwrap();
+    let pm = remote(
+        "demo",
+        &script(
+            tmp.path(),
+            "bad-names.sh",
+            r#"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":1,"name":"demo","canonical_names":true}}\n' "$id" ;;
+    *) printf '{"id":%s,"jsonrpc":"2.0","result":{"names":[]}}\n' "$id" ;;
+  esac
+done
+"#,
+        ),
+    );
+    let pms = PmRegistry::new(vec![PmInstance::new(
+        "demo",
+        false,
+        PluginKind::Package,
+        Box::new(pm),
+    )]);
+    let config = PluginsConfig {
+        auto_enable: vec!["widget".into()],
+        disable: vec!["widget".into()],
+        used: vec![UseEntry::Global("widget".into())],
+    };
+    let id = PackageId::any_version("demo", "Widget");
+    assert!(config.is_disabled(&pms, &id).await);
+    assert!(!config.is_auto_enabled(&pms, &id).await);
+    assert!(!config.is_used_in(&pms, &id, tmp.path()).await);
+    assert!(pms.identity(&id).await.is_err());
+    assert_eq!(pms.failed(), vec!["demo"]);
+}
+
+#[tokio::test]
+async fn legacy_pm_names_compare_exactly() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pm = remote("demo", &synthesizing_pm(tmp.path(), tmp.path()));
+    let names = vec!["Widget-Lib".to_string(), "widget_lib".to_string()];
+    assert_eq!(pm.canonical_names(&names).await.unwrap(), names);
+}

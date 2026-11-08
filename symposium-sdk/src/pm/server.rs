@@ -119,6 +119,7 @@ where
             let result = InitializeResult {
                 protocol_version: PROTOCOL_VERSION,
                 name: built.name().to_string(),
+                canonical_names: true,
             };
             *pm = Some(built);
             reply(id, result)
@@ -160,6 +161,12 @@ async fn dispatch<P: PackageManager>(pm: &P, request: Request) -> Response {
     }
 
     match request.method.as_str() {
+        protocol::CANONICAL_NAMES => {
+            let p: CanonicalNames = parse!(CanonicalNames);
+            answer!(pm.canonical_names(&p.names).await, |names| CanonicalNames {
+                names
+            })
+        }
         protocol::ACTIVE_PLUGINS => {
             let p: ActivePluginsParams = parse!(ActivePluginsParams);
             answer!(pm.active_plugins(&p.deps).await, |listing| listing)

@@ -23,10 +23,11 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use process_wrap::tokio::{ChildWrapper, CommandWrap, KillOnDrop};
 use symposium_install::UpdateLevel;
 use symposium_sdk::pm::protocol::{self, *};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use tokio::process::{ChildStdin, ChildStdout, Command};
 use tokio::sync::Mutex;
 
 use super::{
@@ -37,8 +38,51 @@ use super::{
 /// How long a single request may take before the PM is considered dead, unless
 /// the command sets its own. A hook makes several requests, but a PM that
 /// times out is dead for the rest of the invocation, so one hung PM costs one
-/// timeout, not one per request.
+/// timeout, not one per request. Hooks additionally share [`HOOK_PM_BUDGET`].
 pub const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// All remote PM work in a hook shares this deadline, leaving most of the
+/// shortest registered agent deadline (ten seconds) for local plugins/output.
+pub const HOOK_PM_BUDGET: Duration = Duration::from_secs(2);
+tokio::task_local! {
+    static HOOK_DEADLINE: tokio::time::Instant;
+}
+
+pub(crate) async fn with_hook_budget<T>(future: impl std::future::Future<Output = T>) -> T {
+    HOOK_DEADLINE
+        .scope(tokio::time::Instant::now() + HOOK_PM_BUDGET, future)
+        .await
+}
+
+/// Installed immediately after spawn, before the first await or handshake.
+/// Drop synchronously signals the entire process tree, then reaps the PM in
+/// the background. Tokio's kill-on-drop remains a runtime-shutdown fallback.
+struct ProcessTree(Option<Box<dyn ChildWrapper>>);
+
+impl ProcessTree {
+    fn child(&mut self) -> &mut dyn ChildWrapper {
+        self.0.as_mut().unwrap().as_mut()
+    }
+
+    async fn stop(&mut self) {
+        let _ = self.child().start_kill();
+        let _ = self.child().wait().await;
+        self.0.take();
+    }
+}
+
+impl Drop for ProcessTree {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.start_kill();
+            if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                runtime.spawn(async move {
+                    let _ = child.wait().await;
+                });
+            }
+        }
+    }
+}
 
 /// How to start a package-manager binary.
 pub struct RemotePmCommand {
@@ -94,11 +138,11 @@ impl RemotePmCommand {
 
 /// A live connection to a PM process.
 ///
-/// Dropping it closes the PM's stdin, so the PM exits once it finishes the
-/// request it is on, and so do any `cargo` processes it started. It is killed
-/// only when it stops answering.
+/// Dropping it terminates the PM and its descendants, including during a
+/// handshake or request abandoned by the caller.
 struct Connection {
-    child: Child,
+    child: ProcessTree,
+    canonical_names: bool,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
@@ -117,6 +161,7 @@ pub struct RemotePm {
     /// in flight, so a request abandoned midway leaves the PM marked unusable
     /// rather than a connection whose next read is the abandoned answer.
     state: Mutex<Option<Result<Connection, String>>>,
+    names: Mutex<BTreeMap<String, String>>,
 }
 
 impl RemotePm {
@@ -125,6 +170,7 @@ impl RemotePm {
             name: name.into(),
             command,
             state: Mutex::new(None),
+            names: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -143,7 +189,18 @@ impl RemotePm {
         params: Option<serde_json::Value>,
     ) -> Result<R> {
         let mut guard = self.state.lock().await;
-        let mut conn = match guard.take() {
+        let previous = guard.take();
+        // Mark in flight BEFORE connect: dropping an initialize future must
+        // not let the next request spawn a replacement PM.
+        *guard = Some(Err(format!("a `{method}` request was abandoned")));
+        if HOOK_DEADLINE
+            .try_with(|deadline| tokio::time::Instant::now() >= *deadline)
+            .unwrap_or(false)
+        {
+            *guard = Some(Err("hook PM budget exhausted".to_string()));
+            bail!("`{method}` timed out: hook PM budget exhausted");
+        }
+        let mut conn = match previous {
             Some(Ok(conn)) => conn,
             Some(Err(e)) => {
                 *guard = Some(Err(e.clone()));
@@ -158,8 +215,13 @@ impl RemotePm {
                 }
             },
         };
-        *guard = Some(Err(format!("a `{method}` request was abandoned")));
 
+        // Protocol-v1 implementations predating normalization use exact names.
+        if method == protocol::CANONICAL_NAMES && !conn.canonical_names {
+            *guard = Some(Ok(conn));
+            return serde_json::from_value(params.context("missing names")?)
+                .context("decoding names");
+        }
         let reply = match request(&mut conn, method, params).await {
             Ok(reply) => {
                 *guard = Some(Ok(conn));
@@ -168,7 +230,7 @@ impl RemotePm {
             Err(e) => {
                 // The process is no longer trustworthy: kill it, and mark it
                 // dead so later calls fail fast instead of hanging again.
-                let _ = conn.child.start_kill();
+                conn.child.stop().await;
                 *guard = Some(Err(format!("`{method}` failed: {e:#}")));
                 return Err(e);
             }
@@ -202,12 +264,29 @@ impl RemotePm {
             cmd.env(k, v);
         }
 
-        let mut child = cmd
-            .spawn()
-            .with_context(|| format!("spawning `{}`", self.command.program.display()))?;
-        let stdin = child.stdin.take().context("child stdin was not piped")?;
-        let stdout = BufReader::new(child.stdout.take().context("child stdout was not piped")?);
-        if let Some(stderr) = child.stderr.take() {
+        let mut cmd = CommandWrap::from(cmd);
+        cmd.wrap(KillOnDrop);
+        #[cfg(unix)]
+        cmd.wrap(process_wrap::tokio::ProcessGroup::leader());
+        #[cfg(windows)]
+        cmd.wrap(process_wrap::tokio::JobObject);
+        let mut child =
+            ProcessTree(Some(cmd.spawn().with_context(|| {
+                format!("spawning `{}`", self.command.program.display())
+            })?));
+        let stdin = child
+            .child()
+            .stdin()
+            .take()
+            .context("child stdin was not piped")?;
+        let stdout = BufReader::new(
+            child
+                .child()
+                .stdout()
+                .take()
+                .context("child stdout was not piped")?,
+        );
+        if let Some(stderr) = child.child().stderr().take() {
             let pm = self.name.clone();
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stderr).lines();
@@ -218,6 +297,7 @@ impl RemotePm {
         }
         let mut conn = Connection {
             child,
+            canonical_names: false,
             stdin,
             stdout,
             next_id: 1,
@@ -256,6 +336,7 @@ impl RemotePm {
                 init.name
             );
         }
+        conn.canonical_names = init.canonical_names;
         tracing::debug!(pm = %self.name, "package manager initialized");
         Ok(conn)
     }
@@ -319,9 +400,18 @@ async fn request(
     };
 
     let timeout = conn.timeout;
-    let buf = tokio::time::timeout(timeout, exchange)
+    let request_deadline = tokio::time::Instant::now() + timeout;
+    let deadline = HOOK_DEADLINE
+        .try_with(|hook| (*hook).min(request_deadline))
+        .unwrap_or(request_deadline);
+    anyhow::ensure!(
+        tokio::time::Instant::now() < deadline,
+        "`{method}` timed out: hook PM budget exhausted"
+    );
+    let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+    let buf = tokio::time::timeout_at(deadline, exchange)
         .await
-        .with_context(|| format!("`{method}` timed out after {timeout:?}"))??;
+        .with_context(|| format!("`{method}` timed out after {remaining:?}"))??;
 
     let response: Response =
         serde_json::from_str(buf.trim()).with_context(|| format!("malformed response: {buf:?}"))?;
@@ -339,6 +429,31 @@ async fn request(
 impl PackageManager for RemotePm {
     fn name(&self) -> &str {
         &self.name
+    }
+
+    async fn canonical_names(&self, names: &[String]) -> Result<Vec<String>> {
+        let mut cache = self.names.lock().await;
+        let missing: Vec<_> = names
+            .iter()
+            .filter(|name| !cache.contains_key(*name))
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            let answer: CanonicalNames = self
+                .call(
+                    protocol::CANONICAL_NAMES,
+                    Some(serde_json::to_value(CanonicalNames {
+                        names: missing.clone(),
+                    })?),
+                )
+                .await?;
+            anyhow::ensure!(
+                answer.names.len() == missing.len(),
+                "invalid canonical_names response length"
+            );
+            cache.extend(missing.into_iter().zip(answer.names));
+        }
+        Ok(names.iter().map(|name| cache[name].clone()).collect())
     }
 
     async fn active_plugins(&self, deps: &[PackageId]) -> Result<PluginListing> {

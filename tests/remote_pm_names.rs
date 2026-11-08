@@ -32,22 +32,22 @@ fn replace_cargo_with_binary(sym: &mut Symposium) {
     });
 }
 
-#[test]
-fn configured_cargo_preserves_disable_name_equivalence() {
+#[tokio::test]
+async fn configured_cargo_preserves_disable_name_equivalence() {
     let tmp = tempfile::tempdir().unwrap();
     let mut sym = configured_symposium(tmp.path());
     let id = PackageId::new("cargo", "widget-lib", "0.1.0");
     let builtin = sym.detached_managers();
-    assert!(sym.config.plugins.is_disabled(&builtin, &id));
+    assert!(sym.config.plugins.is_disabled(&builtin, &id).await);
 
     replace_cargo_with_binary(&mut sym);
     let remote = sym.detached_managers();
     assert!(
-        sym.config.plugins.is_auto_enabled(&remote, &id),
+        sym.config.plugins.is_auto_enabled(&remote, &id).await,
         "the wildcard enables the package unless disable takes precedence"
     );
     assert!(
-        sym.config.plugins.is_disabled(&remote, &id),
+        sym.config.plugins.is_disabled(&remote, &id).await,
         "running Cargo out of process must not let widget-lib escape disable = [widget_lib]"
     );
 }

@@ -84,7 +84,7 @@ pub async fn workspace_status(
     let registry = crate::plugins::load_registry_with_workspace(sym, Some(&ws)).await;
     let dep_ids = workspace.dep_ids().await.to_vec();
     let pms = workspace.pms();
-    let used = crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root);
+    let used = crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root).await;
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
     for parsed in &registry.plugins {
         let root = if parsed.workspace_member {
@@ -129,20 +129,26 @@ pub async fn workspace_status(
     // Discovery only sees dependencies, so these are invisible above; surface
     // them from the config the same way sync loads them
     // ([`enabled_dependencies`](crate::discovery::enabled_dependencies)).
-    let shown: std::collections::HashSet<crate::pm::PackageId> = registry
-        .plugins
-        .iter()
-        .map(|p| pms.identity(&p.canonical))
-        .chain(
-            discovery
-                .active
-                .iter()
-                .chain(&discovery.auto_enabled)
-                .chain(&discovery.candidates)
-                .chain(&discovery.declined)
-                .map(|d| pms.identity(&d.id)),
-        )
-        .collect();
+    let mut shown = std::collections::HashSet::new();
+    for id in registry.plugins.iter().map(|p| &p.canonical).chain(
+        discovery
+            .active
+            .iter()
+            .chain(&discovery.auto_enabled)
+            .chain(&discovery.candidates)
+            .chain(&discovery.declined)
+            .map(|d| &d.id),
+    ) {
+        if let Ok(id) = pms.identity(id).await {
+            shown.insert(id);
+        }
+    }
+    let mut dependency_ids = std::collections::HashSet::new();
+    for id in &dep_ids {
+        if let Ok(id) = pms.identity(id).await {
+            dependency_ids.insert(id);
+        }
+    }
     let enabled = crate::discovery::enabled_dependencies(
         sym,
         pms,
@@ -156,13 +162,14 @@ pub async fn workspace_status(
         crate::discovery::resolve_used(sym, pms, &registry.plugins, &ws.root, UpdateLevel::None)
             .await;
     for id in enabled {
-        if shown.contains(&pms.identity(&id)) {
+        let Ok(identity) = pms.identity(&id).await else {
+            continue;
+        };
+        if shown.contains(&identity) {
             continue;
         }
-        let dependency = dep_ids
-            .iter()
-            .any(|dep| pms.identity(dep) == pms.identity(&id));
-        let named = used.iter().any(|(_, used)| *used == pms.identity(&id));
+        let dependency = dependency_ids.contains(&identity);
+        let named = used.iter().any(|(_, used)| *used == identity);
         if dependency && !named {
             continue;
         }
@@ -204,11 +211,12 @@ pub async fn workspace_status(
     // Names declined without ever being discovered (a `disable` entry for a
     // dependency whose source isn't on disk, or one added by hand). A name no
     // package manager has can only be compared as written.
-    let mut declined: std::collections::HashSet<crate::pm::PackageId> = discovery
-        .declined
-        .iter()
-        .map(|d| pms.identity(&d.id))
-        .collect();
+    let mut declined = std::collections::HashSet::new();
+    for offer in &discovery.declined {
+        if let Ok(id) = pms.identity(&offer.id).await {
+            declined.insert(id);
+        }
+    }
     let mut unknown = std::collections::HashSet::new();
     for name in &sym.config.plugins.disable {
         if name == "*" {

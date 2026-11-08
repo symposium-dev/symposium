@@ -170,25 +170,30 @@ impl PluginsConfig {
     }
 
     /// Does `auto-enable` name the package `id` (directly or via `"*"`)?
-    pub fn is_auto_enabled(&self, pms: &PmRegistry, id: &PackageId) -> bool {
-        self.auto_enable
-            .iter()
-            .any(|entry| name_matches(pms, entry, id))
+    pub async fn is_auto_enabled(&self, pms: &PmRegistry, id: &PackageId) -> bool {
+        names_match(pms, self.auto_enable.iter().map(String::as_str), id)
+            .await
+            .unwrap_or(false)
     }
 
-    /// Does `disable` name the package `id`?
-    pub fn is_disabled(&self, pms: &PmRegistry, id: &PackageId) -> bool {
-        self.disable
-            .iter()
-            .any(|entry| name_matches(pms, entry, id))
+    /// Does `disable` name the package `id`? Failure to compare is a denial,
+    /// never permission to activate a potentially disabled package.
+    pub async fn is_disabled(&self, pms: &PmRegistry, id: &PackageId) -> bool {
+        names_match(pms, self.disable.iter().map(String::as_str), id)
+            .await
+            .unwrap_or(true)
     }
 
-    /// Is the package `id` enabled by a `use` entry applicable in
-    /// `workspace_root`?
-    pub fn is_used_in(&self, pms: &PmRegistry, id: &PackageId, workspace_root: &Path) -> bool {
-        self.used_names_in(workspace_root)
-            .iter()
-            .any(|entry| name_matches(pms, entry, id))
+    /// Is the package enabled by a `use` entry in this workspace?
+    pub async fn is_used_in(
+        &self,
+        pms: &PmRegistry,
+        id: &PackageId,
+        workspace_root: &Path,
+    ) -> bool {
+        names_match(pms, self.used_names_in(workspace_root).into_iter(), id)
+            .await
+            .unwrap_or(false)
     }
 
     /// Whether any enablement entry could pull in a crate plugin. With neither
@@ -204,8 +209,22 @@ impl PluginsConfig {
 /// Does a configured entry name the package `id`? `"*"` matches everything.
 /// An entry carries no package manager of its own, so the one owning `id`
 /// decides whether the two names are the same package.
-fn name_matches(pms: &PmRegistry, entry: &str, id: &PackageId) -> bool {
-    entry == "*" || pms.identity(&PackageId::any_version(&id.pm, entry)) == pms.identity(id)
+pub(crate) async fn names_match<'a>(
+    pms: &PmRegistry,
+    entries: impl Iterator<Item = &'a str>,
+    id: &PackageId,
+) -> anyhow::Result<bool> {
+    let mut names = vec![id.name.clone()];
+    for entry in entries {
+        if entry == "*" {
+            return Ok(true);
+        }
+        names.push(entry.to_string());
+    }
+    if names.len() == 1 {
+        return Ok(false);
+    }
+    pms.names_match(&id.pm, &names).await
 }
 
 /// One `[plugins] use` entry: a plugin name enabled deliberately, scoped
@@ -1203,8 +1222,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parse_plugins_enablement() {
+    #[tokio::test]
+    async fn parse_plugins_enablement() {
         let config = parse_config(indoc! {r#"
             [plugins]
             auto-enable = ["widget-lib"]
@@ -1215,9 +1234,19 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let pms = Symposium::from_dir(tmp.path()).detached_managers();
         let krate = |name| PackageId::new(crate::pm::CARGO_PM, name, "1.0.0");
-        assert!(config.plugins.is_auto_enabled(&pms, &krate("widget_lib")));
-        assert!(!config.plugins.is_auto_enabled(&pms, &krate("other")));
-        assert!(config.plugins.is_disabled(&pms, &krate("noisy-crate")));
+        assert!(
+            config
+                .plugins
+                .is_auto_enabled(&pms, &krate("widget_lib"))
+                .await
+        );
+        assert!(!config.plugins.is_auto_enabled(&pms, &krate("other")).await);
+        assert!(
+            config
+                .plugins
+                .is_disabled(&pms, &krate("noisy-crate"))
+                .await
+        );
 
         assert_eq!(
             config.plugins.used,
@@ -1241,11 +1270,13 @@ mod tests {
             config
                 .plugins
                 .is_used_in(&pms, &krate("scoped"), Path::new("/ws/a"))
+                .await
         );
         assert!(
             !config
                 .plugins
                 .is_used_in(&pms, &krate("scoped"), Path::new("/ws/other"))
+                .await
         );
 
         // Entries survive a round trip through the config file.
@@ -1253,8 +1284,8 @@ mod tests {
         assert_eq!(reparsed.plugins, config.plugins);
     }
 
-    #[test]
-    fn auto_enable_wildcard_matches_every_name() {
+    #[tokio::test]
+    async fn auto_enable_wildcard_matches_every_name() {
         let config = parse_config(indoc! {r#"
             [plugins]
             auto-enable = ["*"]
@@ -1265,13 +1296,14 @@ mod tests {
             config
                 .plugins
                 .is_auto_enabled(&pms, &PackageId::any_version("anything", "anything"))
+                .await
         );
     }
 
     /// An entry names a package the way that package's manager compares
     /// names: cargo folds `-` and `_`, a registry compares exactly.
-    #[test]
-    fn plugins_entries_match_under_the_owning_package_manager() {
+    #[tokio::test]
+    async fn plugins_entries_match_under_the_owning_package_manager() {
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(
             tmp.path().join("config.toml"),
@@ -1293,14 +1325,26 @@ mod tests {
         let krate = |name| PackageId::new(crate::pm::CARGO_PM, name, "1.0.0");
         let plugin = |name| PackageId::any_version("reg", name);
 
-        assert!(plugins.is_auto_enabled(&pms, &krate("widget-lib")));
-        assert!(plugins.is_disabled(&pms, &krate("noisy-crate")));
-        assert!(plugins.is_used_in(&pms, &krate("serde-json"), tmp.path()));
+        assert!(plugins.is_auto_enabled(&pms, &krate("widget-lib")).await);
+        assert!(plugins.is_disabled(&pms, &krate("noisy-crate")).await);
+        assert!(
+            plugins
+                .is_used_in(&pms, &krate("serde-json"), tmp.path())
+                .await
+        );
 
-        assert!(plugins.is_disabled(&pms, &plugin("my_plugin")));
-        assert!(plugins.is_used_in(&pms, &plugin("my_plugin"), tmp.path()));
-        assert!(!plugins.is_disabled(&pms, &plugin("my-plugin")));
-        assert!(!plugins.is_used_in(&pms, &plugin("my-plugin"), tmp.path()));
+        assert!(plugins.is_disabled(&pms, &plugin("my_plugin")).await);
+        assert!(
+            plugins
+                .is_used_in(&pms, &plugin("my_plugin"), tmp.path())
+                .await
+        );
+        assert!(!plugins.is_disabled(&pms, &plugin("my-plugin")).await);
+        assert!(
+            !plugins
+                .is_used_in(&pms, &plugin("my-plugin"), tmp.path())
+                .await
+        );
     }
 
     #[test]

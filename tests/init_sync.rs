@@ -656,8 +656,8 @@ async fn sync_cleans_up_without_a_user_plugins_directory() {
 }
 
 /// Copilot uses vendor-neutral `.agents/skills/` path, not `.claude/skills/`.
-#[test]
-fn copilot_uses_vendor_neutral_skill_path() {
+#[tokio::test]
+async fn copilot_uses_vendor_neutral_skill_path() {
     let root = std::path::Path::new("/project");
     let agent = symposium::agents::Agent::Copilot;
 

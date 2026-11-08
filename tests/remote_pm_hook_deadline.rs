@@ -52,7 +52,11 @@ fn assert_healthy_plugin_answered(agent: HookAgent, response: HookResponse) {
     );
 }
 
-async fn healthy_plugin_answers_despite_a_silent_pm(agent: HookAgent) {
+async fn healthy_plugin_answers_despite_a_silent_pm(
+    agent: HookAgent,
+    pm_count: usize,
+    slow_handshake: bool,
+) {
     with_fixture(
         TestMode::SimulationOnly,
         &["plugin-hook-decisions0"],
@@ -82,10 +86,27 @@ async fn healthy_plugin_answers_despite_a_silent_pm(agent: HookAgent) {
             let requested = ctx.tempdir.join("pm-requested");
             // Consume requests without replying. `read` blocks in the shell
             // itself, so cancelling the test leaves no sleeping descendant.
-            std::fs::write(
-                &script,
-                "while IFS= read -r line; do printf requested > \"$1\"; done\n",
-            )?;
+            let body = if slow_handshake {
+                // Each response takes less than the PM budget, but together
+                // initialize and project_info exceed it. The latter must be
+                // cancelled before its completion marker can be written.
+                r#"while IFS= read -r line; do
+  printf requested > "$1"
+  id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
+  sleep 1.2
+  case "$line" in
+    *'"initialize"'*)
+      printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":1,"name":"silent"}}\n' "$id" ;;
+    *)
+      printf completed > "$1-completed"
+      printf '{"id":%s,"jsonrpc":"2.0","result":{"project":{}}}\n' "$id" ;;
+  esac
+done
+"#
+            } else {
+                "while IFS= read -r line; do printf requested > \"$1\"; done\n"
+            };
+            std::fs::write(&script, body)?;
             let config_path = ctx.sym.config_dir().join("config.toml");
             let mut config = std::fs::read_to_string(&config_path)?;
             config.push_str(&format!(
@@ -93,6 +114,12 @@ async fn healthy_plugin_answers_despite_a_silent_pm(agent: HookAgent) {
                 script.to_string_lossy(),
                 requested.to_string_lossy(),
             ));
+            for index in 1..pm_count {
+                config.push_str(&format!(
+                    "\n[[package-manager]]\nname = \"silent-{index}\"\ncommand = \"/bin/sh\"\nargs = [{:?}, {:?}]\n",
+                    script.to_string_lossy(), requested.with_file_name(format!("pm-requested-{index}")).to_string_lossy(),
+                ));
+            }
             std::fs::write(&config_path, config)?;
             ctx.sym = Symposium::from_dir(ctx.sym.config_dir());
 
@@ -108,6 +135,12 @@ async fn healthy_plugin_answers_despite_a_silent_pm(agent: HookAgent) {
                 )
             })?;
             assert_healthy_plugin_answered(agent, response);
+            if slow_handshake {
+                assert!(!ctx.tempdir.join("pm-requested-completed").exists(), "initialization and later requests must share the budget");
+            }
+            for index in 1..pm_count {
+                assert!(!ctx.tempdir.join(format!("pm-requested-{index}")).exists(), "an exhausted shared budget must not spawn another PM");
+            }
             Ok(())
         },
     )
@@ -117,10 +150,20 @@ async fn healthy_plugin_answers_despite_a_silent_pm(agent: HookAgent) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_silent_pm_preserves_codex_hook_output_before_its_deadline() {
-    healthy_plugin_answers_despite_a_silent_pm(HookAgent::Codex).await;
+    healthy_plugin_answers_despite_a_silent_pm(HookAgent::Codex, 1, false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_silent_pm_preserves_copilot_hook_output_before_its_deadline() {
-    healthy_plugin_answers_despite_a_silent_pm(HookAgent::Copilot).await;
+    healthy_plugin_answers_despite_a_silent_pm(HookAgent::Copilot, 1, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn several_silent_pms_share_one_hook_budget() {
+    healthy_plugin_answers_despite_a_silent_pm(HookAgent::Codex, 6, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn initialization_and_operations_share_one_hook_budget() {
+    healthy_plugin_answers_despite_a_silent_pm(HookAgent::Copilot, 1, true).await;
 }

@@ -139,7 +139,7 @@ pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin])
         for plugin in inst.active_plugins(dep_ids).await {
             let name = plugin.canonical.name.clone();
             let description = Some(describe_plugin(&plugin.manifest));
-            let enablement = decide(sym, pms, &used, &plugin.canonical);
+            let enablement = decide(sym, pms, &used, &plugin.canonical).await;
             let discovered = DiscoveredPlugin {
                 registry: inst.name.clone(),
                 id: plugin.canonical,
@@ -186,18 +186,28 @@ pub async fn enabled_dependencies(
     let mut enabled = Vec::new();
     let mut known = HashSet::new();
     for id in dep_ids.iter().filter(|id| id.pm == CARGO_PM) {
-        let identity = pms.identity(id);
+        let Ok(identity) = pms.identity(id).await else {
+            continue;
+        };
         let is_used = used.iter().any(|(_, used)| *used == identity);
         known.insert(identity);
-        if !plugins.is_disabled(pms, id) && (plugins.is_auto_enabled(pms, id) || is_used) {
+        if !plugins.is_disabled(pms, id).await
+            && (plugins.is_auto_enabled(pms, id).await || is_used)
+        {
             enabled.push(PackageId::any_version(&id.pm, &id.name));
         }
     }
 
+    let mut registry_ids = HashSet::new();
+    for plugin in registry {
+        if let Ok(id) = pms.identity(&plugin.canonical).await {
+            registry_ids.insert(id);
+        }
+    }
     for (name, id) in used {
         let named = PackageId::any_version(&id.pm, name);
-        if !registry.iter().any(|p| pms.identity(&p.canonical) == id)
-            && !plugins.is_disabled(pms, &named)
+        if !registry_ids.contains(&id)
+            && !plugins.is_disabled(pms, &named).await
             && known.insert(id)
         {
             enabled.push(named);
@@ -227,20 +237,25 @@ pub(crate) async fn resolve_used<'a>(
 /// The canonical ids of the `plugins` an applicable `use` entry names, which
 /// is what wakes a dormant one. A plugin is named by its manifest name, under
 /// the rule of the package manager it came from.
-pub fn used_plugins(
+pub async fn used_plugins(
     sym: &Symposium,
     pms: &PmRegistry,
     plugins: &[Plugin],
     workspace_root: &Path,
 ) -> Vec<PackageId> {
-    plugins
-        .iter()
-        .filter(|p| {
-            let named = PackageId::any_version(&p.canonical.pm, &p.manifest.name);
-            sym.config.plugins.is_used_in(pms, &named, workspace_root)
-        })
-        .map(|p| p.canonical.clone())
-        .collect()
+    let mut used = Vec::new();
+    for plugin in plugins {
+        let named = PackageId::any_version(&plugin.canonical.pm, &plugin.manifest.name);
+        if sym
+            .config
+            .plugins
+            .is_used_in(pms, &named, workspace_root)
+            .await
+        {
+            used.push(plugin.canonical.clone());
+        }
+    }
+    used
 }
 
 /// Run [`discover`] for the workspace `deps` points at, against the plugins
@@ -273,19 +288,35 @@ pub async fn pending_candidates(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<S
 ///
 /// Split out from the prompt so the decision recording is testable without a
 /// terminal, and so other entry points can record the same way.
-pub fn apply_consent(sym: &mut Symposium, approved: &[String], declined: &[String]) -> Result<()> {
+pub async fn apply_consent(
+    sym: &mut Symposium,
+    approved: &[String],
+    declined: &[String],
+) -> Result<()> {
     if approved.is_empty() && declined.is_empty() {
         return Ok(());
     }
     let pms = sym.detached_managers();
     let plugins = &mut sym.config.plugins;
     for name in approved {
-        if !plugins.is_auto_enabled(&pms, &CargoPm::id_for(name, None)) {
+        if !crate::config::names_match(
+            &pms,
+            plugins.auto_enable.iter().map(String::as_str),
+            &CargoPm::id_for(name, None),
+        )
+        .await?
+        {
             plugins.auto_enable.push(name.clone());
         }
     }
     for name in declined {
-        if !plugins.is_disabled(&pms, &CargoPm::id_for(name, None)) {
+        if !crate::config::names_match(
+            &pms,
+            plugins.disable.iter().map(String::as_str),
+            &CargoPm::id_for(name, None),
+        )
+        .await?
+        {
             plugins.disable.push(name.clone());
         }
     }
@@ -360,7 +391,7 @@ pub async fn prompt_for_consent(
             None => break, // Esc — leave the rest undecided
         }
     }
-    apply_consent(sym, &approved, &declined)
+    apply_consent(sym, &approved, &declined).await
 }
 
 /// A short human summary of what a discovered plugin contributes, for the
@@ -392,7 +423,7 @@ fn count_phrase(n: usize, singular: &str, plural: &str) -> Option<String> {
 /// Classify one offer against the `[plugins]` config. An explicit decision —
 /// `use`, then `disable` — outranks the standing `auto-enable`, so a name the
 /// user declined stays declined.
-fn decide(
+async fn decide(
     sym: &Symposium,
     pms: &PmRegistry,
     used: &HashSet<PackageId>,
@@ -404,11 +435,14 @@ fn decide(
     // may not. Activation agrees (see `record_active`), so classifying a
     // disabled plugin as `Used` here would report it active while it stays
     // off.
-    if plugins.is_disabled(pms, id) {
+    let Ok(identity) = pms.identity(id).await else {
+        return Enablement::Declined;
+    };
+    if plugins.is_disabled(pms, id).await {
         Enablement::Declined
-    } else if used.contains(&pms.identity(id)) {
+    } else if used.contains(&identity) {
         Enablement::Used
-    } else if plugins.is_auto_enabled(pms, id) {
+    } else if plugins.is_auto_enabled(pms, id).await {
         Enablement::AutoEnabled
     } else {
         Enablement::Candidate
@@ -712,7 +746,7 @@ mod tests {
             let plugins = crate::plugins::load_registry(&sym).await.plugins;
             assert_eq!(plugins.len(), 1);
             assert!(plugins[0].manifest.requires_use);
-            used_plugins(&sym, &sym.detached_managers(), &plugins, tmp.path())
+            used_plugins(&sym, &sym.detached_managers(), &plugins, tmp.path()).await
                 == [plugins[0].canonical.clone()]
         };
 
