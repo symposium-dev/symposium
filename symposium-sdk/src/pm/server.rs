@@ -119,7 +119,6 @@ where
             let result = InitializeResult {
                 protocol_version: PROTOCOL_VERSION,
                 name: built.name().to_string(),
-                canonical_names: true,
             };
             *pm = Some(built);
             reply(id, result)

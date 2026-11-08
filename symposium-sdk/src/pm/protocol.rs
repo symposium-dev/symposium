@@ -56,13 +56,10 @@ pub struct InitializeResult {
     pub protocol_version: u32,
     /// The name this PM owns: the `pm` component of every id it mints.
     pub name: String,
-    /// Older protocol-v1 PMs compare names exactly. New servers advertise
-    /// normalization so the client can ask the owning PM about arbitrary names.
-    #[serde(default)]
-    pub canonical_names: bool,
 }
 
 /// Names to normalize, and their canonical forms in the same order.
+/// Every PM must support this operation; exact-name PMs return the input names.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanonicalNames {
     pub names: Vec<String>,

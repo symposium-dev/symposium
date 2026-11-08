@@ -76,6 +76,21 @@ A PM is otherwise **self-contained**: it holds whatever it needs to resolve its 
 
 Version negotiation is strict for now: a PM reporting a `protocol_version` Symposium doesn't know is refused with a warning, and its plugins are simply absent.
 
+#### `canonical_names`
+
+```json
+// Request
+{ "method": "canonical_names", "params": { "names": ["widget-lib", "widget_lib"] } }
+
+// Response from the cargo PM
+{ "result": { "names": ["widget_lib", "widget_lib"] } }
+```
+
+Required for every PM. Returns each name's canonical form in the same order,
+with the same number of names. Names need not identify existing packages.
+Normalization must be stable and idempotent because Symposium caches it.
+The SDK's default returns names unchanged for exact comparison.
+
 #### `active_plugins`
 
 ```json

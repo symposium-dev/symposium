@@ -634,7 +634,7 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
   case "$line" in
     *'"initialize"'*)
-      printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":1,"name":"demo","canonical_names":true}}\n' "$id" ;;
+      printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":1,"name":"demo"}}\n' "$id" ;;
     *'"list_deps"'*)
       printf '{"id":%s,"jsonrpc":"2.0","result":{"deps":[{"pm":"demo","name":"WIDGET-LIB","version":"1"}]}}\n' "$id" ;;
     *'"canonical_names"'*)
@@ -687,7 +687,7 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
   case "$line" in
     *'"initialize"'*)
-      printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":1,"name":"demo","canonical_names":true}}\n' "$id" ;;
+      printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":1,"name":"demo"}}\n' "$id" ;;
     *) printf '{"id":%s,"jsonrpc":"2.0","result":{"names":[]}}\n' "$id" ;;
   esac
 done
@@ -714,9 +714,20 @@ done
 }
 
 #[tokio::test]
-async fn legacy_pm_names_compare_exactly() {
+async fn a_pm_without_normalization_cannot_compare_names() {
     let tmp = tempfile::tempdir().unwrap();
+    // This fixture answers initialize but rejects canonical_names as unknown.
     let pm = remote("demo", &synthesizing_pm(tmp.path(), tmp.path()));
-    let names = vec!["Widget-Lib".to_string(), "widget_lib".to_string()];
-    assert_eq!(pm.canonical_names(&names).await.unwrap(), names);
+    let pms = PmRegistry::new(vec![PmInstance::new(
+        "demo",
+        false,
+        PluginKind::Package,
+        Box::new(pm),
+    )]);
+    let error = pms
+        .identity(&PackageId::any_version("demo", "Widget-Lib"))
+        .await
+        .expect_err("normalization must be provided by the PM");
+    assert!(format!("{error:#}").contains("unknown method"), "{error:#}");
+    assert_eq!(pms.failed(), ["demo"]);
 }

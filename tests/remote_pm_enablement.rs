@@ -26,7 +26,7 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
   case "$line" in
     *'"initialize"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":1,"name":"%s","canonical_names":true}}\n' "$id" "$name" ;;
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":1,"name":"%s"}}\n' "$id" "$name" ;;
     *'"canonical_names"'*)
       params=$(printf '%s' "$line" | sed 's/^.*"params"://; s/}$//')
       printf '{"jsonrpc":"2.0","id":%s,"result":%s}\n' "$id" "$params" ;;

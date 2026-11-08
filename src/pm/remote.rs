@@ -142,7 +142,6 @@ impl RemotePmCommand {
 /// handshake or request abandoned by the caller.
 struct Connection {
     child: ProcessTree,
-    canonical_names: bool,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     next_id: u64,
@@ -240,12 +239,6 @@ impl RemotePm {
             },
         };
 
-        // Protocol-v1 implementations predating normalization use exact names.
-        if method == protocol::CANONICAL_NAMES && !conn.canonical_names {
-            *guard = Some(Ok(conn));
-            return serde_json::from_value(params.context("missing names")?)
-                .context("decoding names");
-        }
         let reply = match request(&mut conn, method, params).await {
             Ok(reply) => {
                 *guard = Some(Ok(conn));
@@ -321,7 +314,6 @@ impl RemotePm {
         }
         let mut conn = Connection {
             child,
-            canonical_names: false,
             stdin,
             stdout,
             next_id: 1,
@@ -360,7 +352,6 @@ impl RemotePm {
                 init.name
             );
         }
-        conn.canonical_names = init.canonical_names;
         tracing::debug!(pm = %self.name, "package manager initialized");
         Ok(conn)
     }

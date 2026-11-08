@@ -62,8 +62,8 @@ Whether two names are the same package is the package manager's rule, not a stri
 
 ## Remote package managers need identity and lifecycle boundaries
 
-A remote PM's naming rules do not come from its configured name. The SDK
-advertises `canonical_names` at initialization and answers batches of names;
+A remote PM's naming rules do not come from its configured name. Every PM
+implements `canonical_names` to answer batches of names;
 lookup and config comparisons await that operation for both returned package
 names and user entries. Failed normalization marks the PM failed and cannot
 bypass `disable` or authorize cleanup. Consent decisions retain the discovered
