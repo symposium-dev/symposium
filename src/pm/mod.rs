@@ -135,6 +135,15 @@ impl PmInstance {
         Err(e)
     }
 
+    /// Package-specific errors may be ignored by lookups and plugin loading,
+    /// but losing the transport invalidates this instance's answers for cleanup.
+    fn record_transport_failure<T>(&self, operation: &str, result: Result<T>) -> Result<T> {
+        match result {
+            Err(e) if e.is::<remote::Unavailable>() => self.failure(operation, e),
+            result => result,
+        }
+    }
+
     /// This instance's active plugins, validated. Each entry the PM could not
     /// read is reported, and a plugin that fails validation is reported and
     /// dropped; either leaves the listing with errors.
@@ -188,13 +197,11 @@ impl PmInstance {
 
     /// The plugin(s) an id maps to, validated.
     ///
-    /// A failure is logged, not recorded against the instance: it says that
-    /// one package could not be loaded (yanked, misspelled in a `use` entry,
-    /// unreachable offline), not that the package manager's answers about the
-    /// workspace are missing. Recording it would stop sync from removing any
-    /// stale skill of the whole ecosystem for as long as that package fails.
+    /// A package-specific error is logged without blocking stale-artifact
+    /// cleanup for the ecosystem. A transport failure is recorded against the
+    /// instance: missing answers from a dead PM cannot authorize cleanup.
     pub async fn load_plugin(&self, id: &PackageId, update: UpdateLevel) -> Vec<Plugin> {
-        match self.pm.load_plugin(id, update).await {
+        match self.record_transport_failure("load_plugin", self.pm.load_plugin(id, update).await) {
             Ok(plugins) => self.validate_all(plugins),
             Err(e) => {
                 tracing::warn!(instance = %self.name, id = %id, error = %format!("{e:#}"), "failed to load package");
@@ -215,13 +222,14 @@ impl PmInstance {
         if self.trusted {
             return None;
         }
-        if let Ok(deps) = self.pm.list_deps().await
+        if let Ok(deps) = self.record_transport_failure("list_deps", self.pm.list_deps().await)
             && let Some(dep) = self.find_matching(name, deps).await
         {
             return Some(dep);
         }
         let named = PackageId::any_version(&self.name, name);
-        if let Ok(cached) = self.pm.fetch(&named, UpdateLevel::None).await
+        if let Ok(cached) =
+            self.record_transport_failure("fetch", self.pm.fetch(&named, UpdateLevel::None).await)
             && let Some(id) = self.find_matching(name, vec![cached.id]).await
         {
             return Some(id);
@@ -229,7 +237,9 @@ impl PmInstance {
         if matches!(update, UpdateLevel::None) {
             return None;
         }
-        let found = self.pm.search(name).await.ok()?;
+        let found = self
+            .record_transport_failure("search", self.pm.search(name).await)
+            .ok()?;
         self.find_matching(name, found.into_iter().map(|info| info.id).collect())
             .await
     }
@@ -443,7 +453,7 @@ impl PmRegistry {
         let inst = self.owner(id).ok_or_else(|| {
             anyhow::anyhow!("unknown package manager `{}` in package id `{id}`", id.pm)
         })?;
-        let fetched = inst.pm.fetch(id, update).await?;
+        let fetched = inst.record_transport_failure("fetch", inst.pm.fetch(id, update).await)?;
         anyhow::ensure!(
             inst.owns(&fetched.id),
             "`{}` answered a fetch of `{id}` with `{}`",
@@ -525,7 +535,7 @@ impl PmRegistry {
     pub async fn search(&self, query: &str) -> Vec<(String, PluginInfo)> {
         let mut out = Vec::new();
         for inst in self.instances() {
-            match inst.pm.search(query).await {
+            match inst.record_transport_failure("search", inst.pm.search(query).await) {
                 Ok(infos) => out.extend(
                     infos
                         .into_iter()

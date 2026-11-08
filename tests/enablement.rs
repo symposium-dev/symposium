@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use symposium::config::UseEntry;
 use symposium::output::Output;
+use symposium::pm::PackageId;
 use symposium::status_command::StatusState;
 use symposium_testlib::{HookStep, TestContext, TestMode, with_fixture};
 
@@ -491,8 +492,14 @@ async fn use_on_a_disabled_plugin_errors() {
         &["auto-enable0"],
         async |mut ctx| {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
-            symposium::discovery::apply_consent(&mut ctx.sym, &[], &["crate-a".to_string()])
-                .await?;
+            let pms = ctx.sym.detached_managers();
+            symposium::discovery::apply_consent(
+                &mut ctx.sym,
+                &pms,
+                &[],
+                &[PackageId::any_version("cargo", "crate-a")],
+            )
+            .await?;
 
             let err = ctx
                 .symposium(&["use", "crate-a"])
@@ -534,8 +541,14 @@ async fn status_reports_candidate_then_used() {
             assert!(candidate.root.contains("awaiting consent"), "{candidate:?}");
 
             ctx.symposium(&["use", "crate-a"]).await?;
-            symposium::discovery::apply_consent(&mut ctx.sym, &[], &["noisy-crate".to_string()])
-                .await?;
+            let pms = ctx.sym.detached_managers();
+            symposium::discovery::apply_consent(
+                &mut ctx.sym,
+                &pms,
+                &[],
+                &[PackageId::any_version("cargo", "noisy-crate")],
+            )
+            .await?;
 
             let deps = ctx.sym.workspace(&workspace_root);
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
@@ -693,9 +706,24 @@ async fn apply_consent_records_both_answers() {
             ctx.symposium(&["init", "--add-agent", "claude"]).await?;
             let workspace_root = ctx.workspace_root.clone().unwrap();
 
-            symposium::discovery::apply_consent(&mut ctx.sym, &["crate-a".to_string()], &[])
-                .await?;
+            let pms = ctx.sym.detached_managers();
+            symposium::discovery::apply_consent(
+                &mut ctx.sym,
+                &pms,
+                &[PackageId::any_version("cargo", "crate-a")],
+                &[],
+            )
+            .await?;
             assert!(read_config(&ctx).contains("auto-enable"));
+            // Cargo's two spellings still record one decision.
+            symposium::discovery::apply_consent(
+                &mut ctx.sym,
+                &pms,
+                &[PackageId::any_version("cargo", "crate_a")],
+                &[],
+            )
+            .await?;
+            assert_eq!(ctx.sym.config.plugins.auto_enable, ["crate-a"]);
 
             ctx.symposium(&["sync"]).await?;
             find_installed_skill(&workspace_root.join(".claude/skills"), "a-guidance");
@@ -708,8 +736,14 @@ async fn apply_consent_records_both_answers() {
                 "a decided dependency is not offered again"
             );
 
-            symposium::discovery::apply_consent(&mut ctx.sym, &[], &["other-dep".to_string()])
-                .await?;
+            let pms = ctx.sym.detached_managers();
+            symposium::discovery::apply_consent(
+                &mut ctx.sym,
+                &pms,
+                &[],
+                &[PackageId::any_version("cargo", "other-dep")],
+            )
+            .await?;
             assert!(read_config(&ctx).contains("disable"));
             Ok(())
         },
@@ -779,8 +813,14 @@ async fn status_reports_a_used_but_disabled_plugin_as_declined() {
             ctx.symposium(&["use", "crate-a"]).await?;
             // Straight into the config: `use` itself now refuses this pairing,
             // but a hand-edited config can still hold both.
-            symposium::discovery::apply_consent(&mut ctx.sym, &[], &["crate-a".to_string()])
-                .await?;
+            let pms = ctx.sym.detached_managers();
+            symposium::discovery::apply_consent(
+                &mut ctx.sym,
+                &pms,
+                &[],
+                &[PackageId::any_version("cargo", "crate-a")],
+            )
+            .await?;
 
             let deps = ctx.sym.workspace(&workspace_root);
             let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;

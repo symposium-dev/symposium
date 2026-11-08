@@ -66,8 +66,17 @@ A remote PM's naming rules do not come from its configured name. The SDK
 advertises `canonical_names` at initialization and answers batches of names;
 lookup and config comparisons await that operation for both returned package
 names and user entries. Failed normalization marks the PM failed and cannot
-bypass `disable` or authorize cleanup. Consent recording propagates the error
-instead of reporting an unwritten decision as saved.
+bypass `disable` or authorize cleanup. Consent decisions retain the discovered
+package's PM identity, and recording them uses that PM's naming rules for both
+approvals and declines. Activation includes enabled dependencies from every
+ecosystem. Consent recording propagates normalization errors instead of
+reporting an unwritten decision as saved.
+
+A remote PM can die after successfully describing the project and dependencies.
+Transport failures carry an `Unavailable` error marker so `PmInstance` also
+records failures during package lookup and `load_plugin`. Those failures must
+suppress stale-skill and MCP cleanup. A valid error response about one package
+leaves the PM usable and does not block cleanup for its whole ecosystem.
 
 Killing only the PM leaves its workers running. `RemotePm` owns a process group
 on Unix or a job object on Windows, guarded from spawn through initialization,

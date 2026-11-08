@@ -4,7 +4,7 @@
 //! Discovery is the read side of the enablement axis. It runs in two phases:
 //!
 //! 1. list the workspace's dependencies ([`Workspace::dep_ids`]);
-//! 2. ask each *untrusted* instance — the cargo transport — for the plugins
+//! 2. ask each *untrusted* instance — the ecosystem transports — for the plugins
 //!    its dependencies embed ([`PackageManager::active_plugins`]).
 //!
 //! Each such offer is then classified against the `[plugins]` config:
@@ -44,7 +44,7 @@ use symposium_install::UpdateLevel;
 use crate::config::Symposium;
 use crate::output::Output;
 use crate::plugins::Plugin;
-use crate::pm::{CARGO_PM, CargoPm, PackageId, PmRegistry};
+use crate::pm::{PackageId, PmRegistry};
 use crate::report::ReportEvent;
 
 /// Why a discovered offer is (or is not) enabled.
@@ -132,8 +132,8 @@ pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin])
             .collect();
 
     let mut discovery = Discovery::default();
-    // Untrusted instances = the cargo transport: its `active_plugins` are the
-    // plugins embedded in dependencies, which run only with consent. Classify
+    // Untrusted instances are ecosystem transports: their `active_plugins`
+    // are embedded in dependencies and run only with consent. Classify
     // each against the `[plugins]` config.
     for inst in pms.instances().filter(|i| !i.trusted) {
         for plugin in inst.active_plugins(dep_ids).await {
@@ -185,7 +185,7 @@ pub async fn enabled_dependencies(
     let used = resolve_used(sym, pms, registry, workspace_root, update).await;
     let mut enabled = Vec::new();
     let mut known = HashSet::new();
-    for id in dep_ids.iter().filter(|id| id.pm == CARGO_PM) {
+    for id in dep_ids {
         let Ok(identity) = pms.identity(id).await else {
             continue;
         };
@@ -283,41 +283,32 @@ pub async fn pending_candidates(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<S
 }
 
 /// Record consent decisions: approvals into `[plugins] auto-enable`,
-/// declines into `[plugins] disable`, then save the config. Both lists hold
-/// dependency crate names, as [`discover`] offers them.
+/// declines into `[plugins] disable`, then save the config. Decisions retain
+/// the discovered package's owner so deduplication uses that PM's name rules;
+/// the config stores the package name.
 ///
 /// Split out from the prompt so the decision recording is testable without a
 /// terminal, and so other entry points can record the same way.
 pub async fn apply_consent(
     sym: &mut Symposium,
-    approved: &[String],
-    declined: &[String],
+    pms: &PmRegistry,
+    approved: &[PackageId],
+    declined: &[PackageId],
 ) -> Result<()> {
     if approved.is_empty() && declined.is_empty() {
         return Ok(());
     }
-    let pms = sym.detached_managers();
     let plugins = &mut sym.config.plugins;
-    for name in approved {
-        if !crate::config::names_match(
-            &pms,
-            plugins.auto_enable.iter().map(String::as_str),
-            &CargoPm::id_for(name, None),
-        )
-        .await?
+    for id in approved {
+        if !crate::config::names_match(pms, plugins.auto_enable.iter().map(String::as_str), id)
+            .await?
         {
-            plugins.auto_enable.push(name.clone());
+            plugins.auto_enable.push(id.name.clone());
         }
     }
-    for name in declined {
-        if !crate::config::names_match(
-            &pms,
-            plugins.disable.iter().map(String::as_str),
-            &CargoPm::id_for(name, None),
-        )
-        .await?
-        {
-            plugins.disable.push(name.clone());
+    for id in declined {
+        if !crate::config::names_match(pms, plugins.disable.iter().map(String::as_str), id).await? {
+            plugins.disable.push(id.name.clone());
         }
     }
     sym.save_config().context("failed to write user config")?;
@@ -325,7 +316,7 @@ pub async fn apply_consent(
     if !approved.is_empty() {
         tracing::info!(
             report = %ReportEvent::Info {
-                message: format!("enabled dependency plugins: {}", approved.join(", ")),
+                message: format!("enabled dependency plugins: {}", approved.iter().map(|id| id.name.as_str()).collect::<Vec<_>>().join(", ")),
             },
         );
     }
@@ -334,7 +325,7 @@ pub async fn apply_consent(
             report = %ReportEvent::Info {
                 message: format!(
                     "declined dependency plugins (recorded in `[plugins] disable`): {}",
-                    declined.join(", ")
+                    declined.iter().map(|id| id.name.as_str()).collect::<Vec<_>>().join(", ")
                 ),
             },
         );
@@ -370,7 +361,7 @@ pub async fn prompt_for_consent(
     let mut declined = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for candidate in candidates {
-        let name = candidate.id.name;
+        let name = &candidate.id.name;
         if !seen.insert(name.clone()) {
             continue;
         }
@@ -385,13 +376,13 @@ pub async fn prompt_for_consent(
             .interact_opt()
             .context("consent prompt failed")?;
         match answer {
-            Some(1) => approved.push(name),
-            Some(2) => declined.push(name),
+            Some(1) => approved.push(candidate.id),
+            Some(2) => declined.push(candidate.id),
             Some(_) => {}  // ask me later — record nothing
             None => break, // Esc — leave the rest undecided
         }
     }
-    apply_consent(sym, &approved, &declined).await
+    apply_consent(sym, deps.pms(), &approved, &declined).await
 }
 
 /// A short human summary of what a discovered plugin contributes, for the
@@ -452,8 +443,8 @@ async fn decide(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pm::ANY_VERSION;
     use crate::pm::WorkspaceCrate;
+    use crate::pm::{ANY_VERSION, CARGO_PM};
     use indoc::indoc;
 
     /// A workspace with `widget-lib` as a path dependency carrying skills,
@@ -675,13 +666,25 @@ mod tests {
             PackageId::new(CARGO_PM, "tokio", "1.0.0"),
             PackageId::new(CARGO_PM, "clap", "4.0.0"),
             PackageId::new(CARGO_PM, "anyhow", "1.0.0"),
-            // Not a cargo package: not a crate to load.
+            // The same name in another ecosystem is independently enabled.
             PackageId::new("npm", "serde", ANY_VERSION),
         ];
 
         assert_eq!(
-            enabled_names(&sym, &deps, tmp.path()).await,
-            vec!["serde".to_string(), "tokio".to_string()]
+            enabled_dependencies(
+                &sym,
+                &cached_crates(),
+                &[],
+                &deps,
+                tmp.path(),
+                UpdateLevel::None,
+            )
+            .await,
+            vec![
+                PackageId::any_version(CARGO_PM, "serde"),
+                PackageId::any_version(CARGO_PM, "tokio"),
+                PackageId::any_version("npm", "serde"),
+            ]
         );
     }
 

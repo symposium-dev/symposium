@@ -149,6 +149,20 @@ struct Connection {
     timeout: Duration,
 }
 
+/// Marks errors that make the entire remote PM unavailable, as distinct from
+/// a valid error response about one package. Consumers must preserve installed
+/// artifacts when an operation fails this way.
+#[derive(Debug)]
+pub(super) struct Unavailable;
+
+impl std::fmt::Display for Unavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("package manager is unavailable")
+    }
+}
+
+impl std::error::Error for Unavailable {}
+
 /// A package manager running in another process.
 pub struct RemotePm {
     /// The name Symposium knows this PM by. Confirmed against the name the PM
@@ -198,20 +212,30 @@ impl RemotePm {
             .unwrap_or(false)
         {
             *guard = Some(Err("hook PM budget exhausted".to_string()));
-            bail!("`{method}` timed out: hook PM budget exhausted");
+            return Err(
+                anyhow::anyhow!("`{method}` timed out: hook PM budget exhausted")
+                    .context(Unavailable),
+            );
         }
         let mut conn = match previous {
             Some(Ok(conn)) => conn,
             Some(Err(e)) => {
                 *guard = Some(Err(e.clone()));
-                bail!("package manager `{}` is unavailable: {e}", self.name);
+                return Err(
+                    anyhow::anyhow!("package manager `{}` is unavailable: {e}", self.name)
+                        .context(Unavailable),
+                );
             }
             None => match self.connect().await {
                 Ok(conn) => conn,
                 Err(e) => {
                     let e = format!("{e:#}");
                     *guard = Some(Err(e.clone()));
-                    bail!("package manager `{}` is unavailable: {e}", self.name);
+                    return Err(anyhow::anyhow!(
+                        "package manager `{}` is unavailable: {e}",
+                        self.name
+                    )
+                    .context(Unavailable));
                 }
             },
         };
@@ -232,7 +256,7 @@ impl RemotePm {
                 // dead so later calls fail fast instead of hanging again.
                 conn.child.stop().await;
                 *guard = Some(Err(format!("`{method}` failed: {e:#}")));
-                return Err(e);
+                return Err(e.context(Unavailable));
             }
         };
         let value = reply.map_err(|e| {
