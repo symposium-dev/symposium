@@ -399,6 +399,7 @@ impl Policy {
     /// Whether `srt` lets the trial write `path`. `srt`'s own rules are not modelled: it
     /// always allows writing its shared temporary directory and never `.git/hooks` or
     /// shell startup files.
+    #[cfg(test)]
     pub(crate) fn can_write(&self, path: &Path) -> bool {
         most_specific(&self.filesystem.allow_write, path).is_some()
     }

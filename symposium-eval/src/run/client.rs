@@ -7,6 +7,10 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Client {
     ClaudeCode,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "the Codex adapter comes in RFD step 7")
+    )]
     Codex,
 }
 

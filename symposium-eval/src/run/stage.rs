@@ -29,7 +29,7 @@ pub(crate) enum Audience {
 }
 
 /// How a tool is installed on the developer's machine.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Tool {
     /// One executable file, such as a native client or `node`.
     Executable(PathBuf),
@@ -94,7 +94,7 @@ impl Batch {
         name: ToolName,
         tool: &Tool,
         audience: Audience,
-    ) -> Result<&StagedTool, RunError> {
+    ) -> Result<StagedTool, RunError> {
         if self.staged.iter().any(|staged| staged.name == name) {
             return Err(RunError::StagedTwice(name.to_string()));
         }
@@ -127,13 +127,14 @@ impl Batch {
                 (destination.join(entry), Copy::Package(destination))
             }
         };
-        self.staged.push(StagedTool {
+        let staged = StagedTool {
             name,
             audience,
             command,
             copy,
-        });
-        Ok(self.staged.last().expect("just pushed"))
+        };
+        self.staged.push(staged.clone());
+        Ok(staged)
     }
 
     /// Links every tool `trial` may run into its `bin/`.
