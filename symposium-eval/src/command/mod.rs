@@ -17,6 +17,8 @@ mod credential;
 pub(crate) mod host;
 #[cfg(test)]
 mod preflight_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod real;
 mod report;
 mod symposium;
 
