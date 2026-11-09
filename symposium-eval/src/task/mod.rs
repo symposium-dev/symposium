@@ -166,10 +166,6 @@ impl Task {
         &self.name
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the runner records this later in RFD step 4")
-    )]
     pub(crate) fn kind(&self) -> TaskKind {
         self.kind
     }
@@ -205,10 +201,6 @@ impl Task {
     }
 
     /// The directory in `evals/` that provides `skill`, when one does.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the runner decides these later in RFD step 4")
-    )]
     pub(crate) fn skill_source(&self, skill: &SkillName) -> Option<&Path> {
         self.skill_sources
             .iter()
@@ -217,10 +209,6 @@ impl Task {
     }
 
     /// The plugin hooks that must leave a successful record, each with its event.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the runner decides these later in RFD step 4")
-    )]
     pub(crate) fn expected_hooks(&self) -> &[ExpectedHook] {
         &self.expected_hooks
     }

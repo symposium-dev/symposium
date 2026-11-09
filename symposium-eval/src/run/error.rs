@@ -43,10 +43,22 @@ pub(crate) enum RunError {
     Digest(#[source] DigestError),
     #[error("cannot write the `srt` policy")]
     Policy(#[source] serde_json::Error),
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "--exploratory needs its own design")
+    )]
     #[error("cannot write the client's sandbox settings")]
     ClientSettings(#[source] serde_json::Error),
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "--exploratory needs its own design")
+    )]
     #[error("`{}` would be read as a pattern by the client's sandbox", .0.display())]
     PatternInPath(PathBuf),
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "--exploratory needs its own design")
+    )]
     #[error("`{}` is not valid Unicode, which the client's config needs", .0.display())]
     NotUnicode(PathBuf),
     #[error("`{}` is a baseline trial, which has no Symposium to set up", .0.display())]

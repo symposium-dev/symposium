@@ -6,35 +6,29 @@
 //! is `md/rfds/skill-evaluation/`; `md/design/agent-eval.md` maps it onto this
 //! crate's modules.
 
-#[expect(dead_code, reason = "the runner starts sessions later in RFD step 4")]
 mod client;
-#[expect(dead_code, reason = "the runner records these later in RFD step 4")]
+mod command;
 mod digest;
 mod evals;
-#[expect(dead_code, reason = "the runner decides these later in RFD step 4")]
 mod expect;
 mod grade;
 mod jsonl;
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the runner decides these later in RFD step 4")
-)]
 mod outcome;
-#[expect(dead_code, reason = "the runner writes these later in RFD step 4")]
 mod result;
-#[expect(dead_code, reason = "the runner launches trials later in RFD step 2")]
 mod run;
 mod skill_md;
 mod task;
 mod tree;
 
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 use anyhow::{Context, bail};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
+use crate::command::{Checkout, Request};
 use crate::evals::{Evals, TaskEntry};
-use crate::task::{Task, TaskError, TaskErrors};
+use crate::task::{Task, TaskError, TaskErrors, TaskName};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -44,8 +38,33 @@ use crate::task::{Task, TaskError, TaskErrors};
 )]
 struct Cli {
     /// Validate every task under evals/ without running an agent
-    #[arg(long)]
+    #[arg(long, conflicts_with = "task")]
     check_tasks: bool,
+
+    /// The task to run, a directory under evals/tasks/
+    #[arg(required_unless_present = "check_tasks", requires_all = ["client", "model"])]
+    task: Option<String>,
+
+    /// The client to run the task on
+    #[arg(long, value_enum)]
+    client: Option<ClientArg>,
+
+    /// The model to ask the client for, as the client names it
+    #[arg(long)]
+    model: Option<String>,
+
+    /// Evaluate this cargo-agents instead of building one from the checkout
+    #[arg(long, value_name = "PATH")]
+    symposium_bin: Option<PathBuf>,
+
+    /// Where batches run, outside the checkout [default: the system's temporary directory]
+    #[arg(long, value_name = "DIR")]
+    eval_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ClientArg {
+    Claude,
 }
 
 /// `args` is everything after `agent-eval`. Clap handles `--help` and invalid
@@ -65,7 +84,24 @@ where
     if cli.check_tasks {
         return check_tasks(&Evals::in_repository());
     }
-    bail!("running a task is not implemented yet; use --check-tasks")
+    let request = request(cli)?;
+    command::run(&request, &Checkout::in_repository(), |name| {
+        std::env::var_os(name)
+    })
+}
+
+/// What `cli` asks to run. Clap has already required a task, client, and model.
+fn request(cli: Cli) -> anyhow::Result<Request> {
+    let (Some(task), Some(ClientArg::Claude), Some(model)) = (cli.task, cli.client, cli.model)
+    else {
+        bail!("a task needs --client and --model");
+    };
+    Ok(Request {
+        task: TaskName::new(task)?,
+        model,
+        symposium_bin: cli.symposium_bin,
+        eval_root: cli.eval_root,
+    })
 }
 
 fn check_tasks(evals: &Evals) -> anyhow::Result<()> {
@@ -129,6 +165,49 @@ mod tests {
     #[test]
     fn cli_definition_is_consistent() {
         Cli::command().debug_assert();
+    }
+
+    fn parses(args: &[&str]) -> bool {
+        Cli::try_parse_from(std::iter::once("agent-eval").chain(args.iter().copied())).is_ok()
+    }
+
+    #[test]
+    fn a_task_needs_a_client_and_a_model() {
+        assert!(!parses(&[]));
+        assert!(!parses(&["formatting"]));
+        assert!(!parses(&["formatting", "--client", "claude"]));
+        assert!(!parses(&["formatting", "--model", "haiku"]));
+        assert!(parses(&[
+            "formatting",
+            "--client",
+            "claude",
+            "--model",
+            "haiku"
+        ]));
+    }
+
+    #[test]
+    fn only_a_client_with_an_adapter_is_accepted() {
+        assert!(!parses(&[
+            "formatting",
+            "--client",
+            "codex",
+            "--model",
+            "m"
+        ]));
+    }
+
+    #[test]
+    fn checking_tasks_runs_none() {
+        assert!(parses(&["--check-tasks"]));
+        assert!(!parses(&[
+            "--check-tasks",
+            "formatting",
+            "--client",
+            "claude",
+            "--model",
+            "m"
+        ]));
     }
 
     #[test]

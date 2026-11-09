@@ -22,6 +22,7 @@ pub(crate) struct NewTrial<'a> {
 /// A trial whose preparation failed, with the root it keeps for its result.
 #[derive(Debug)]
 pub(crate) struct NotPrepared {
+    #[cfg_attr(not(test), expect(dead_code, reason = "only tests read it"))]
     root: PathBuf,
     error: RunError,
 }
@@ -53,11 +54,40 @@ impl Batch {
         Ok(NewTrial { trial, inputs })
     }
 
+    /// Allocates the named workspace used to prove that `inputs` can be prepared for
+    /// grading before any client is launched.
+    ///
+    /// Preflights live under `preflight/<task>` rather than the numbered trial
+    /// namespace. A failed preflight is retained for diagnosis and cannot be reused.
+    ///
+    /// # Errors
+    ///
+    /// When `inputs` belong to another batch, the named workspace already exists, or
+    /// its directory cannot be created.
+    pub(crate) fn allocate_preflight<'a>(
+        &self,
+        inputs: &'a Inputs,
+    ) -> Result<NewTrial<'a>, RunError> {
+        if inputs.batch() != self.root {
+            return Err(RunError::ForeignInputs(inputs.batch().to_owned()));
+        }
+        let parent = self.root.join("preflight");
+        create_dirs([parent.clone()])?;
+        let trial = Trial {
+            batch: self.clone(),
+            root: parent.join(inputs.task().name().as_str()),
+            configuration: Configuration::Baseline,
+        };
+        create_fresh(&trial.root)?;
+        Ok(NewTrial { trial, inputs })
+    }
+
     /// Allocates trial `number` and prepares it from `inputs`.
     ///
     /// # Errors
     ///
     /// As [`Self::allocate_trial`] and [`NewTrial::prepare`].
+    #[cfg(test)]
     pub(crate) fn create_trial(
         &self,
         number: usize,
@@ -128,10 +158,12 @@ impl NewTrial<'_> {
 
 impl NotPrepared {
     /// The root the trial was allocated, where its result goes.
+    #[cfg(test)]
     pub(crate) fn root(&self) -> &Path {
         &self.root
     }
 
+    #[cfg(test)]
     pub(crate) fn error(&self) -> &RunError {
         &self.error
     }
@@ -228,5 +260,44 @@ mod tests {
         assert_eq!(trial.root(), allocated);
         assert!(trial.project().join("Cargo.lock").is_file());
         assert!(trial.project().join(".claude").is_dir());
+    }
+
+    #[test]
+    fn a_task_preflight_has_its_own_named_workspace() {
+        let root = TempDir::new().unwrap();
+        let batch = batch(&root);
+        let inputs = store_durability(&batch);
+
+        let new = batch.allocate_preflight(&inputs).unwrap();
+
+        assert_eq!(
+            new.root(),
+            batch
+                .root()
+                .join("preflight")
+                .join(inputs.task().name().as_str())
+        );
+        assert_eq!(fs::read_dir(new.root()).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn a_failed_task_preflight_is_kept_and_never_reused() {
+        let root = TempDir::new().unwrap();
+        let batch = batch(&root);
+        let inputs = store_durability(&batch);
+        fs::remove_dir_all(inputs.evals().starter_dir(inputs.task().name())).unwrap();
+        let failed = batch
+            .allocate_preflight(&inputs)
+            .unwrap()
+            .prepare()
+            .unwrap_err();
+
+        let again = batch.allocate_preflight(&inputs);
+
+        assert!(failed.root().is_dir());
+        assert!(
+            matches!(&again, Err(RunError::Create { source, .. }) if source.kind() == io::ErrorKind::AlreadyExists),
+            "{again:?}"
+        );
     }
 }

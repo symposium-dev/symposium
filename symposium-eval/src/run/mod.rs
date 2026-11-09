@@ -8,6 +8,7 @@
 //! <eval-root>/<batch>/
 //!   tools/common/        staged clients, readable by every trial
 //!   tools/symposium/     staged cargo-agents, readable by Symposium trials only
+//!   preflight/<task>/    retained model-free grading preparation
 //!   trial-<n>-<with|without>-symposium/
 //! ```
 //!
@@ -26,6 +27,10 @@ mod allocate;
 pub(crate) mod client;
 mod env;
 mod error;
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "--exploratory needs its own design")
+)]
 mod exploratory;
 mod grading;
 mod inputs;
@@ -36,7 +41,7 @@ mod runtime_tmp;
 pub(crate) mod setup;
 #[cfg(all(test, target_os = "linux"))]
 mod smoke;
-mod srt;
+pub(crate) mod srt;
 pub(crate) mod stage;
 #[cfg(test)]
 pub(crate) mod test_support;
@@ -129,6 +134,11 @@ impl Batch {
         create_private(&batch.root)?;
         create_dirs([batch.common_tools(), batch.symposium_tools()])?;
         Ok(batch)
+    }
+
+    /// The batch's own directory, named for the batch.
+    pub(crate) fn root(&self) -> &Path {
+        &self.root
     }
 
     /// The canonical evaluation root, which holds other batches and their trials.
