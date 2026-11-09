@@ -159,6 +159,20 @@ Output is capped at **10,000 characters**.
 
 Decision precedence across parallel hooks: **deny > defer > ask > allow**. The `allow` decision does **not** override deny rules from settings. `updatedInput` replaces the entire tool input; if multiple hooks return it, the last to finish wins (non-deterministic).
 
+### SessionStart output
+
+```json
+{
+  "hookSpecificOutput": {
+    "hookEventName": "SessionStart",
+    "additionalContext": "string",
+    "reloadSkills": true
+  }
+}
+```
+
+`reloadSkills` makes Claude Code rescan the skill and command directories after the `SessionStart` hooks complete. Skill discovery runs before they finish, so symposium sets it on every `SessionStart` response; without it, the skills its sync installs are missing until the next session.
+
 ## Exit Codes
 
 | Code | Meaning |

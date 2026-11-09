@@ -37,6 +37,6 @@ The payload is parsed first, and the agent's parser can declare it not an occurr
      - Return the merged result to the agent.
    - **A hook that exits 2 blocks**: dispatch stops, and `blocked_response` turns its stderr into the reason. On `PreToolUse` that is a canonical deny, translated like any other so each agent receives it in the form it honors (Antigravity ignores exit codes, Copilot drops the reason of a failing hook). On other events the process exits 2 with the reason on stderr.
 
-4. **Respond**: the agent's handler renders the final output as a `HookResponse` (stdout, stderr, exit code). Most agents read everything from stdout; Kiro, whose stdout is plain context, is told to deny a tool through exit 2.
+4. **Respond**: the agent's handler renders the final output as a `HookResponse` (stdout, stderr, exit code). Most agents read everything from stdout; Kiro, whose stdout is plain context, is told to deny a tool through exit 2. Claude Code's `SessionStart` response always carries `reloadSkills: true`: Claude Code lists skills before `SessionStart` hooks finish, so without the rescan the skills this sync installs stay hidden until the next session. It is sent even when nothing changed, since knowing that would need `sync` to report what it installed, and a rescan is cheap.
 
 Plugin hooks can respond to agent-specific events (e.g., `pre-tool-use`, `post-tool-use`, `user-prompt-submit` for Claude Code). The available events depend on which agent is in use.
