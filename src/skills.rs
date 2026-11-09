@@ -132,9 +132,10 @@ pub async fn skills_applicable_to(
 ) -> Vec<SkillWithGroupContext> {
     let for_crates = ws.dep_ids().await.to_vec();
     let pms = ws.pms();
-    let used = workspace_root
-        .map(|root| crate::discovery::used_plugins(sym, pms, &registry.plugins, root))
-        .unwrap_or_default();
+    let used = match workspace_root {
+        Some(root) => crate::discovery::used_plugins(sym, pms, &registry.plugins, root).await,
+        None => Vec::new(),
+    };
     let mut ctx = PredicateContext::with_custom_predicates(&for_crates, custom_predicate_entries)
         .with_used(&used);
 

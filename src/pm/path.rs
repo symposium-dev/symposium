@@ -21,7 +21,6 @@ use super::{
     ANY_VERSION, FetchedPackage, PackageId, PackageManager, PluginInfo, PluginListing,
     RegistrySource, UnvalidatedPlugin, layout,
 };
-use crate::report::ReportEvent;
 
 /// A configured path registry: one local directory whose tree is a
 /// collection of plugin entries.
@@ -59,8 +58,8 @@ impl PackageManager for PathPm {
     /// trust root, so these activate without consent.
     ///
     /// Fails when the directory cannot be read, since sync removes what a
-    /// registry stops offering. One entry that fails to load is reported and
-    /// skipped, and leaves the listing incomplete.
+    /// registry stops offering. One entry that fails to load is skipped and
+    /// named in the listing's errors.
     async fn active_plugins(&self, _deps: &[PackageId]) -> Result<PluginListing> {
         std::fs::read_dir(&self.dir).with_context(|| {
             format!(
@@ -75,17 +74,10 @@ impl PackageManager for PathPm {
         for entry in entries {
             match crate::plugins::entry_plugin(&self.dir, &entry.subpath, &self.name) {
                 Some(Ok(p)) => listing.plugins.push(p),
-                Some(Err(e)) => {
-                    listing.complete = false;
-                    tracing::warn!(
-                        report = %ReportEvent::Warning {
-                            message: format!(
-                                "skipping {}: {e:#}",
-                                crate::output::display_path(&self.dir.join(&entry.subpath))
-                            ),
-                        },
-                    );
-                }
+                Some(Err(e)) => listing.errors.push(format!(
+                    "{}: {e:#}",
+                    crate::output::display_path(&self.dir.join(&entry.subpath))
+                )),
                 None => {}
             }
         }

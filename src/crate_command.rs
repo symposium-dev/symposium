@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use crate::config::Symposium;
-use crate::crate_sources::normalize_crate_name;
 use crate::pm::CargoPm;
+use symposium_pm_cargo::sources::normalize_crate_name;
 
 /// Result of dispatching a command.
 pub enum DispatchResult {

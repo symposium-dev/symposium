@@ -401,7 +401,7 @@ pub async fn sync(sym: &Symposium, ws: &Arc<Workspace>, update: UpdateLevel) -> 
     // custom predicate results survive across sync runs; results are persisted
     // at the end of this evaluation pass.
     let pms = ws.pms();
-    let used = crate::discovery::used_plugins(sym, pms, &registry.plugins, &project_root);
+    let used = crate::discovery::used_plugins(sym, pms, &registry.plugins, &project_root).await;
     let predicate_cache_path =
         crate::predicate_cache::PredicateCache::path_for_workspace(sym.cache_dir(), &project_root);
     let mut ctx =

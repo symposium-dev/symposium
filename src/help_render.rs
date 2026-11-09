@@ -95,10 +95,10 @@ pub async fn render_help(sym: &Symposium, cwd: &Path) -> String {
     let registry = load_registry_with_workspace(sym, workspace.as_ref()).await;
     let dep_ids = ws.dep_ids().await.to_vec();
     let pms = ws.pms();
-    let used = workspace
-        .as_ref()
-        .map(|ws| crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root))
-        .unwrap_or_default();
+    let used = match &workspace {
+        Some(ws) => crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root).await,
+        None => Vec::new(),
+    };
 
     // Resolve the active plugin set so crate-sourced subcommands appear in help.
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);

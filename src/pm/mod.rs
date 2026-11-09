@@ -1,10 +1,10 @@
-//! Package managers: the in-process seam from the [registry-centric plugin
+//! Package managers: the seam from the [registry-centric plugin
 //! distribution RFD](../../md/rfds/registry-centric-plugins/README.md).
 //!
 //! A [`PackageId`] names a package as a `(pm, name, version)` tuple, and a
 //! [`PackageManager`] resolves ids of its ecosystem to content on disk. The
-//! trait is the SDK's, since the operation set is what any package manager
-//! implements.
+//! trait is the SDK's, so a package manager written against it runs either
+//! way: called directly in this process, or as a binary behind [`RemotePm`].
 //!
 //! A `PackageManager` value is an *instance*, not just an ecosystem. A
 //! **transport** ([`CargoPm`]) can `fetch` any id of its ecosystem, because the
@@ -19,9 +19,6 @@
 //! `pm` component of every id it mints and the name its plugins are attributed
 //! to. Registry instances resolve their own ids, so those ids are never routed
 //! through the ecosystem transports.
-//!
-//! In-process for now — when PMs move out of process, [`PmRegistry`] becomes
-//! the seam that spawns and talks to them.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,15 +28,20 @@ use symposium_install::UpdateLevel;
 
 use crate::plugins::Plugin;
 
-mod cargo;
 mod git;
 pub mod layout;
 mod path;
-pub use cargo::{
-    CargoPm, LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
-};
+pub mod remote;
+
 pub use git::GitPm;
 pub use path::PathPm;
+pub use remote::{RemotePm, RemotePmCommand};
+/// The cargo package manager is its own crate, because it has to be one to run
+/// as its own binary. Re-exported here so the rest of Symposium keeps naming one `pm`
+/// module regardless of where a PM's code lives.
+pub use symposium_pm_cargo::{
+    CargoPm, LoadedWorkspace, WorkspaceCrate, WorkspaceDeps, file_mtime, workspace_dir_name,
+};
 
 /// The identity types and the operation set are the SDK's, since they cross
 /// the PM boundary: a package-manager binary speaks in them too.
@@ -88,6 +90,9 @@ pub struct PmInstance {
     pub kind: PluginKind,
     /// How a registry's content is sourced; `None` for a transport.
     pub source: Option<RegistrySource>,
+    /// Whether Symposium refreshes this registry on its own, rather than only
+    /// when the user names it (`plugin sync <name>`).
+    pub auto_update: bool,
     pub pm: Box<dyn PackageManager>,
     /// Whether an operation on this instance has failed. Its silence is not
     /// an empty answer, so nothing it would have offered is removed on its
@@ -107,6 +112,7 @@ impl PmInstance {
             trusted,
             kind,
             source: None,
+            auto_update: true,
             pm,
             failed: AtomicBool::new(false),
         }
@@ -129,18 +135,35 @@ impl PmInstance {
         Err(e)
     }
 
-    /// This instance's active plugins, validated. A plugin that fails
-    /// validation is logged and dropped, and leaves the listing incomplete:
-    /// best-effort, like the PM layer above.
+    /// Package-specific errors may be ignored by lookups and plugin loading,
+    /// but losing the transport invalidates this instance's answers for cleanup.
+    fn record_transport_failure<T>(&self, operation: &str, result: Result<T>) -> Result<T> {
+        match result {
+            Err(e) if e.is::<remote::Unavailable>() => self.failure(operation, e),
+            result => result,
+        }
+    }
+
+    /// This instance's active plugins, validated. Each entry the PM could not
+    /// read is reported, and a plugin that fails validation is reported and
+    /// dropped; either leaves the listing with errors.
     pub async fn try_active_plugins(&self, deps: &[PackageId]) -> Result<PluginListing<Plugin>> {
         match self.pm.active_plugins(deps).await {
             Ok(listing) => {
                 let total = listing.plugins.len();
+                let mut errors = listing.errors;
+                for e in &errors {
+                    self.skipped(e);
+                }
                 let plugins = self.validate_all(listing.plugins);
-                Ok(PluginListing {
-                    complete: listing.complete && plugins.len() == total,
-                    plugins,
-                })
+                if plugins.len() < total {
+                    errors.push(format!(
+                        "{} of `{}`'s plugins were dropped",
+                        total - plugins.len(),
+                        self.name
+                    ));
+                }
+                Ok(PluginListing { plugins, errors })
             }
             Err(e) => self.failure("active_plugins", e),
         }
@@ -174,13 +197,11 @@ impl PmInstance {
 
     /// The plugin(s) an id maps to, validated.
     ///
-    /// A failure is logged, not recorded against the instance: it says that
-    /// one package could not be loaded (yanked, misspelled in a `use` entry,
-    /// unreachable offline), not that the package manager's answers about the
-    /// workspace are missing. Recording it would stop sync from removing any
-    /// stale skill of the whole ecosystem for as long as that package fails.
+    /// A package-specific error is logged without blocking stale-artifact
+    /// cleanup for the ecosystem. A transport failure is recorded against the
+    /// instance: missing answers from a dead PM cannot authorize cleanup.
     pub async fn load_plugin(&self, id: &PackageId, update: UpdateLevel) -> Vec<Plugin> {
-        match self.pm.load_plugin(id, update).await {
+        match self.record_transport_failure("load_plugin", self.pm.load_plugin(id, update).await) {
             Ok(plugins) => self.validate_all(plugins),
             Err(e) => {
                 tracing::warn!(instance = %self.name, id = %id, error = %format!("{e:#}"), "failed to load package");
@@ -201,25 +222,67 @@ impl PmInstance {
         if self.trusted {
             return None;
         }
-        let wanted = self.pm.canonical_name(name);
-        let same =
-            |id: &PackageId| id.pm == self.name && self.pm.canonical_name(&id.name) == wanted;
-        if let Ok(deps) = self.pm.list_deps().await
-            && let Some(dep) = deps.into_iter().find(|dep| same(dep))
+        if let Ok(deps) = self.record_transport_failure("list_deps", self.pm.list_deps().await)
+            && let Some(dep) = self.find_matching(name, deps).await
         {
             return Some(dep);
         }
         let named = PackageId::any_version(&self.name, name);
-        if let Ok(cached) = self.pm.fetch(&named, UpdateLevel::None).await
-            && same(&cached.id)
+        if let Ok(cached) =
+            self.record_transport_failure("fetch", self.pm.fetch(&named, UpdateLevel::None).await)
+            && let Some(id) = self.find_matching(name, vec![cached.id]).await
         {
-            return Some(cached.id);
+            return Some(id);
         }
         if matches!(update, UpdateLevel::None) {
             return None;
         }
-        let found = self.pm.search(name).await.ok()?;
-        found.into_iter().map(|info| info.id).find(|id| same(id))
+        let found = self
+            .record_transport_failure("search", self.pm.search(name).await)
+            .ok()?;
+        self.find_matching(name, found.into_iter().map(|info| info.id).collect())
+            .await
+    }
+
+    async fn find_matching(&self, name: &str, ids: Vec<PackageId>) -> Option<PackageId> {
+        let ids: Vec<_> = ids.into_iter().filter(|id| id.pm == self.name).collect();
+        let names: Vec<_> = std::iter::once(name.to_string())
+            .chain(ids.iter().map(|id| id.name.clone()))
+            .collect();
+        let canonical = self.canonical_names(&names).await.ok()?;
+        ids.into_iter()
+            .zip(&canonical[1..])
+            .find(|(_, name)| **name == canonical[0])
+            .map(|(id, _)| id)
+    }
+
+    /// A failed normalization invalidates identity decisions for this PM and
+    /// prevents cleanup, just like an incomplete dependency listing.
+    async fn canonical_names(&self, names: &[String]) -> Result<Vec<String>> {
+        let result = self.pm.canonical_names(names).await.and_then(|canonical| {
+            anyhow::ensure!(
+                canonical.len() == names.len(),
+                "invalid canonical_names response length"
+            );
+            Ok(canonical)
+        });
+        if let Err(e) = &result {
+            self.failed.store(true, Ordering::Relaxed);
+            tracing::warn!(instance = %self.name, error = %e, "package name normalization failed");
+        }
+        result
+    }
+
+    /// Whether `id` belongs to this instance. Every id a PM answers with must:
+    /// ids route by their `pm` component, and consent and `disable` are keyed
+    /// on them, so a PM answering for another could take the consent given to
+    /// that PM's packages, or escape a `disable` entry naming its own.
+    fn owns(&self, id: &PackageId) -> bool {
+        if id.pm != self.name {
+            tracing::warn!(instance = %self.name, id = %id, "package manager answered with another package manager's id");
+            return false;
+        }
+        true
     }
 
     /// A registry entry that fails validation is the user's to fix, so it is
@@ -228,21 +291,20 @@ impl PmInstance {
     fn validate_all(&self, unvalidated: Vec<UnvalidatedPlugin>) -> Vec<Plugin> {
         unvalidated
             .into_iter()
+            .filter(|plugin| self.owns(&plugin.id))
+            .filter(|plugin| {
+                absolute(&self.name, &plugin.id, &plugin.root)
+                    && plugin
+                        .label_root
+                        .as_ref()
+                        .is_none_or(|dir| absolute(&self.name, &plugin.id, dir))
+            })
             .filter_map(|plugin| {
                 let id = plugin.id.clone();
                 match crate::plugins::validate_plugin(plugin, self.kind) {
                     Ok(p) => Some(p),
                     Err(e) => {
-                        match self.kind {
-                            PluginKind::Registry => tracing::warn!(
-                                report = %crate::report::ReportEvent::Warning {
-                                    message: format!("skipping {e:#}"),
-                                },
-                            ),
-                            PluginKind::Package => {
-                                tracing::warn!(id = %id, error = %e, "failed to validate plugin")
-                            }
-                        }
+                        self.skipped(&format!("`{id}`: {e:#}"));
                         None
                     }
                 }
@@ -250,12 +312,52 @@ impl PmInstance {
             .collect()
     }
 
-    async fn project_info(&self) -> Result<ProjectInfo> {
-        match self.pm.project_info().await {
-            Ok(project) => Ok(project),
-            Err(e) => self.failure("project_info", e),
+    /// Report or log one entry this instance skipped, as for a plugin that
+    /// fails validation.
+    fn skipped(&self, error: &str) {
+        match self.kind {
+            PluginKind::Registry => tracing::warn!(
+                report = %crate::report::ReportEvent::Warning {
+                    message: format!("skipping {error}"),
+                },
+            ),
+            PluginKind::Package => {
+                tracing::warn!(instance = %self.name, error, "skipping a plugin")
+            }
         }
     }
+
+    /// This instance's project, checked: every path must be absolute, since a
+    /// relative one would resolve against wherever Symposium happens to run.
+    async fn project_info(&self) -> Result<ProjectInfo> {
+        let project = match self.pm.project_info().await {
+            Ok(project) => project,
+            Err(e) => return self.failure("project_info", e),
+        };
+        let relative = project
+            .root
+            .iter()
+            .chain(&project.local_packages)
+            .chain(&project.inputs)
+            .find(|path| !path.is_absolute());
+        match relative {
+            Some(path) => self.failure(
+                "project_info",
+                anyhow::anyhow!("reported a relative path, {}", path.display()),
+            ),
+            None => Ok(project),
+        }
+    }
+}
+
+/// Whether a directory a package manager gave for `id` is absolute. A relative
+/// one would resolve against wherever Symposium happens to run, which differs
+/// from one agent's hook to another's, so the plugin is dropped.
+fn absolute(instance: &str, id: &PackageId, dir: &std::path::Path) -> bool {
+    if !dir.is_absolute() {
+        tracing::warn!(instance, id = %id, dir = %dir.display(), "package manager answered with a relative path");
+    }
+    dir.is_absolute()
 }
 
 /// The active set of package-manager instances — one flat collection, the cargo
@@ -289,14 +391,31 @@ impl PmRegistry {
     }
 
     /// `id` in the form two ids of the same package compare equal in, under
-    /// its package manager's [`canonical_name`](PackageManager::canonical_name),
+    /// its package manager's [`canonical_names`](PackageManager::canonical_names),
     /// with the version dropped.
-    pub fn identity(&self, id: &PackageId) -> PackageId {
+    pub async fn identity(&self, id: &PackageId) -> Result<PackageId> {
         let name = match self.owner(id) {
-            Some(inst) => inst.pm.canonical_name(&id.name),
+            Some(inst) => inst
+                .canonical_names(std::slice::from_ref(&id.name))
+                .await?
+                .remove(0),
             None => id.name.clone(),
         };
-        PackageId::any_version(&id.pm, name)
+        Ok(PackageId::any_version(&id.pm, name))
+    }
+
+    /// Whether the first name matches any subsequent name under this PM's
+    /// rule. All names, including arbitrary user/configuration entries, are
+    /// normalized together.
+    pub async fn names_match(&self, pm: &str, names: &[String]) -> Result<bool> {
+        if names.len() < 2 {
+            return Ok(false);
+        }
+        let canonical = match self.instances.iter().find(|inst| inst.name == pm) {
+            Some(inst) => inst.canonical_names(names).await?,
+            None => names.to_vec(),
+        };
+        Ok(canonical[1..].iter().any(|name| *name == canonical[0]))
     }
 
     /// The identity of the package a user-typed `name` refers to. A plugin in
@@ -309,15 +428,21 @@ impl PmRegistry {
         name: &str,
         update: UpdateLevel,
     ) -> Result<PackageId> {
-        if let Some(plugin) = plugins.iter().find(|p| {
-            self.identity(&PackageId::any_version(&p.canonical.pm, &p.manifest.name))
-                == self.identity(&PackageId::any_version(&p.canonical.pm, name))
-        }) {
-            return Ok(self.identity(&plugin.canonical));
+        for plugin in plugins {
+            if self
+                .names_match(
+                    &plugin.canonical.pm,
+                    &[plugin.manifest.name.clone(), name.to_string()],
+                )
+                .await
+                .unwrap_or(false)
+            {
+                return self.identity(&plugin.canonical).await;
+            }
         }
         for inst in &self.instances {
             if let Some(id) = inst.find(name, update).await {
-                return Ok(self.identity(&id));
+                return self.identity(&id).await;
             }
         }
         anyhow::bail!("no package named `{name}`")
@@ -328,7 +453,20 @@ impl PmRegistry {
         let inst = self.owner(id).ok_or_else(|| {
             anyhow::anyhow!("unknown package manager `{}` in package id `{id}`", id.pm)
         })?;
-        inst.pm.fetch(id, update).await
+        let fetched = inst.record_transport_failure("fetch", inst.pm.fetch(id, update).await)?;
+        anyhow::ensure!(
+            inst.owns(&fetched.id),
+            "`{}` answered a fetch of `{id}` with `{}`",
+            inst.name,
+            fetched.id
+        );
+        anyhow::ensure!(
+            fetched.root.is_absolute(),
+            "`{}` answered a fetch of `{id}` with a relative path, {}",
+            inst.name,
+            fetched.root.display()
+        );
+        Ok(fetched)
     }
 
     /// Union of `list_deps` across the instances — the workspace's full
@@ -342,7 +480,20 @@ impl PmRegistry {
         let mut deps = Vec::new();
         for inst in &self.instances {
             match inst.pm.list_deps().await {
-                Ok(found) => deps.extend(found),
+                Ok(found) => {
+                    let total = found.len();
+                    let owned: Vec<_> = found.into_iter().filter(|id| inst.owns(id)).collect();
+                    if owned.len() != total {
+                        inst.failure::<()>(
+                            "list_deps",
+                            anyhow::anyhow!(
+                                "dependency listing contains another package manager's ids"
+                            ),
+                        )
+                        .unwrap_or_default();
+                    }
+                    deps.extend(owned);
+                }
                 Err(e) => inst.failure::<()>("list_deps", e).unwrap_or_default(),
             }
         }
@@ -384,8 +535,13 @@ impl PmRegistry {
     pub async fn search(&self, query: &str) -> Vec<(String, PluginInfo)> {
         let mut out = Vec::new();
         for inst in self.instances() {
-            match inst.pm.search(query).await {
-                Ok(infos) => out.extend(infos.into_iter().map(|info| (inst.name.clone(), info))),
+            match inst.record_transport_failure("search", inst.pm.search(query).await) {
+                Ok(infos) => out.extend(
+                    infos
+                        .into_iter()
+                        .filter(|info| inst.owns(&info.id))
+                        .map(|info| (inst.name.clone(), info)),
+                ),
                 Err(e) => {
                     tracing::debug!(instance = %inst.name, error = %e, "search failed, skipping");
                 }
@@ -598,6 +754,24 @@ mod tests {
     }
 
     /// A PM that answers with one plugin whose manifest fails validation.
+    /// An absolute directory that does not exist, for a stub's plugin root. A
+    /// leading `/` is not absolute on Windows, where a path needs a prefix, and
+    /// a plugin whose root is not absolute is dropped.
+    #[cfg(windows)]
+    const MISSING_DIR: &str = r"C:\nonexistent";
+    #[cfg(not(windows))]
+    const MISSING_DIR: &str = "/nonexistent";
+
+    /// That directory's `broken` entry, `/`-separated for matching against a
+    /// report, which renders it with the platform's separator.
+    fn missing_entry() -> String {
+        PathBuf::from(MISSING_DIR)
+            .join("broken")
+            .display()
+            .to_string()
+            .replace('\\', "/")
+    }
+
     struct InvalidPluginPm;
 
     #[async_trait::async_trait]
@@ -612,7 +786,7 @@ mod tests {
             .unwrap();
             Ok(PluginListing::complete(vec![UnvalidatedPlugin::new(
                 PackageId::any_version("stub", "broken"),
-                PathBuf::from("/nonexistent/broken"),
+                PathBuf::from(MISSING_DIR).join("broken"),
                 manifest,
             )]))
         }
@@ -756,6 +930,24 @@ mod tests {
         assert!(ws.failed().is_empty());
     }
 
+    /// A relative path would resolve against wherever Symposium runs, so a
+    /// package manager reporting one has failed, rather than been believed.
+    #[tokio::test]
+    async fn a_relative_path_in_a_project_is_a_failure() {
+        let ws = workspace_of(
+            std::path::Path::new("/"),
+            vec![(
+                "npm",
+                ProjectInfo {
+                    root: Some(PathBuf::from("web")),
+                    ..Default::default()
+                },
+            )],
+        );
+        assert!(ws.info().await.is_none());
+        assert_eq!(ws.failed(), vec!["npm"]);
+    }
+
     /// One package failing to load says nothing about the rest of its
     /// ecosystem, so it is not recorded against the package manager.
     #[tokio::test]
@@ -779,9 +971,28 @@ mod tests {
             EchoPm {
                 name,
                 answers_as,
-                root: "/nonexistent",
+                root: MISSING_DIR,
             },
         )
+    }
+
+    /// A plugin root must be absolute: a relative one would resolve against
+    /// wherever Symposium happens to run.
+    #[tokio::test]
+    async fn a_plugin_with_a_relative_root_is_dropped() {
+        let pms = PmRegistry::new(vec![package_manager(
+            "npm",
+            EchoPm {
+                name: "npm",
+                answers_as: "npm",
+                root: "relative/dir",
+            },
+        )]);
+        assert!(
+            pms.load_plugin(&PackageId::any_version("npm", "widget"), UpdateLevel::None)
+                .await
+                .is_empty()
+        );
     }
 
     #[tokio::test]
@@ -794,9 +1005,36 @@ mod tests {
         assert_eq!(ids, vec!["cargo:foo:*"]);
     }
 
+    /// Consent and `disable` are keyed on the id, so a PM must not be able to
+    /// answer as another: not with a plugin, and not with a dependency, which
+    /// would satisfy another ecosystem's `depends-on` and enablement.
+    #[tokio::test]
+    async fn an_answer_under_another_pms_id_is_dropped() {
+        let pms = PmRegistry::new(vec![echo("npm", "cargo")]);
+        assert!(
+            pms.load_plugin(&PackageId::any_version("npm", "foo"), UpdateLevel::None)
+                .await
+                .is_empty()
+        );
+        assert!(pms.list_deps().await.is_empty());
+        assert_eq!(
+            pms.failed(),
+            vec!["npm"],
+            "an incomplete listing must prevent cleanup"
+        );
+
+        let pms = PmRegistry::new(vec![echo("npm", "cargo"), echo("cargo", "cargo")]);
+        assert_eq!(
+            pms.list_deps().await,
+            vec![PackageId::any_version("cargo", "dep")]
+        );
+        assert_eq!(pms.failed(), vec!["npm"]);
+    }
+
     /// The report events emitted while validating the stub's plugin under `kind`.
     async fn reports_for_invalid_plugin(kind: PluginKind) -> Vec<serde_json::Value> {
         use tracing_subscriber::layer::SubscriberExt;
+        symposium_testlib::install_tracing_baseline();
         let (layer, handle) =
             crate::report::ReportLayer::new(crate::report::ReportMode::Json, tracing::Level::DEBUG);
         let _guard = tracing::subscriber::set_default(tracing_subscriber::registry().with(layer));
@@ -809,8 +1047,8 @@ mod tests {
     async fn invalid_registry_plugin_is_reported_with_its_path() {
         let reports = reports_for_invalid_plugin(PluginKind::Registry).await;
         assert_eq!(reports.len(), 1, "{reports:?}");
-        let message = reports[0]["message"].as_str().unwrap();
-        assert!(message.contains("/nonexistent/broken"), "{message}");
+        let message = reports[0]["message"].as_str().unwrap().replace('\\', "/");
+        assert!(message.contains(&missing_entry()), "{message}");
     }
 
     /// A package's manifest is its author's problem, and the hook path prints
@@ -825,7 +1063,7 @@ mod tests {
     async fn git_registry_without_its_copy_is_unreadable() {
         let tmp = tempfile::tempdir().unwrap();
         let ctx = symposium_install::InstallContext::new(tmp.path().to_path_buf());
-        let pm = GitPm::new("reg", "https://github.com/example/reg", false, ctx).unwrap();
+        let pm = GitPm::new("reg", "https://github.com/example/reg", ctx).unwrap();
         let err = pm.active_plugins(&[]).await.unwrap_err();
         assert!(
             err.to_string().contains("cargo agents plugin sync reg"),
@@ -833,8 +1071,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn each_package_manager_decides_which_names_match() {
+    #[tokio::test]
+    async fn each_package_manager_decides_which_names_match() {
         let tmp = tempfile::tempdir().unwrap();
         let pms = PmRegistry::new(vec![
             PmInstance::new(
@@ -851,12 +1089,20 @@ mod tests {
             ),
         ]);
         assert_eq!(
-            pms.identity(&PackageId::new(CARGO_PM, "widget_lib", "1.0.0")),
+            pms.identity(&PackageId::new(CARGO_PM, "widget_lib", "1.0.0"))
+                .await
+                .unwrap(),
             pms.identity(&PackageId::any_version(CARGO_PM, "widget-lib"))
+                .await
+                .unwrap()
         );
         assert_ne!(
-            pms.identity(&PackageId::any_version("reg", "my_plugin")),
+            pms.identity(&PackageId::any_version("reg", "my_plugin"))
+                .await
+                .unwrap(),
             pms.identity(&PackageId::any_version("reg", "my-plugin"))
+                .await
+                .unwrap()
         );
     }
 
@@ -902,9 +1148,9 @@ mod tests {
             Box::new(CargoPm::new(deps)),
         );
         let (pms, plugins) = registry_beside(cargo, &tmp.path().join("reg")).await;
-        let registry_id = |name: &str| {
+        let registry_id = async |name: &str| {
             let plugin = plugins.iter().find(|p| p.manifest.name == name).unwrap();
-            pms.identity(&plugin.canonical)
+            pms.identity(&plugin.canonical).await.unwrap()
         };
 
         assert_eq!(
@@ -917,13 +1163,13 @@ mod tests {
             pms.identify(&plugins, "my-plugin", UpdateLevel::None)
                 .await
                 .unwrap(),
-            registry_id("my-plugin")
+            registry_id("my-plugin").await
         );
         assert_eq!(
             pms.identify(&plugins, "widget-lib", UpdateLevel::None)
                 .await
                 .unwrap(),
-            registry_id("widget-lib")
+            registry_id("widget-lib").await
         );
         assert_eq!(
             pms.identify(&plugins, "widget_lib", UpdateLevel::None)

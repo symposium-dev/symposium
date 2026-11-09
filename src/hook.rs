@@ -236,6 +236,15 @@ pub async fn execute_hook(
     event: HookEvent,
     input: &str,
 ) -> anyhow::Result<HookResponse> {
+    crate::pm::remote::with_hook_budget(execute_hook_inner(sym, agent, event, input)).await
+}
+
+async fn execute_hook_inner(
+    sym: &Symposium,
+    agent: HookAgent,
+    event: HookEvent,
+    input: &str,
+) -> anyhow::Result<HookResponse> {
     let event_handler = crate::hook_schema::agent_event(agent, event);
 
     if let Some(handler) = event_handler {
@@ -499,10 +508,10 @@ async fn prewarm_hook_sources(sym: &Symposium, deps: &Arc<Workspace>) {
         Vec::new()
     };
     let pms = deps.pms();
-    let used = workspace
-        .as_ref()
-        .map(|ws| crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root))
-        .unwrap_or_default();
+    let used = match &workspace {
+        Some(ws) => crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root).await,
+        None => Vec::new(),
+    };
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
     let plugins = crate::plugins::active_plugins(
         sym,
@@ -603,10 +612,10 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String
     let dep_ids = deps.dep_ids().await.to_vec();
 
     let pms = deps.pms();
-    let used = workspace
-        .as_ref()
-        .map(|ws| crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root))
-        .unwrap_or_default();
+    let used = match &workspace {
+        Some(ws) => crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root).await,
+        None => Vec::new(),
+    };
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
     let active = crate::plugins::active_plugins(
         sym,
@@ -741,10 +750,10 @@ pub async fn dispatch_plugin_hooks(
         Vec::new()
     };
     let pms = deps.pms();
-    let used = workspace
-        .as_ref()
-        .map(|ws| crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root))
-        .unwrap_or_default();
+    let used = match &workspace {
+        Some(ws) => crate::discovery::used_plugins(sym, pms, &registry.plugins, &ws.root).await,
+        None => Vec::new(),
+    };
     let mut ctx = crate::predicate::PredicateContext::new(&dep_ids).with_used(&used);
     // Dispatch over the active set — registry plugins plus crate-sourced ones —
     // so a crate plugin's hooks fire exactly like a registry plugin's.

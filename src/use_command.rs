@@ -52,6 +52,7 @@ pub async fn use_plugin(
         .config
         .plugins
         .is_disabled(pms, &PackageId::any_version(&id.pm, name))
+        .await
     {
         bail!("`{name}` is disabled in `[plugins] disable`; remove that entry to enable it again");
     }
@@ -59,10 +60,13 @@ pub async fn use_plugin(
     // A configured registry is a trust root: what it offers is already
     // enabled by configuration, so there is nothing to record. The exception
     // is a dormant plugin, for which `use` is exactly the wake-up call.
-    let registry_plugin = registry
-        .plugins
-        .iter()
-        .find(|p| pms.identity(&p.canonical) == id);
+    let mut registry_plugin = None;
+    for plugin in &registry.plugins {
+        if pms.identity(&plugin.canonical).await? == id {
+            registry_plugin = Some(plugin);
+            break;
+        }
+    }
     let dormant = registry_plugin.is_some_and(|p| p.manifest.requires_use);
     let already_trusted = registry_plugin.is_some() && !dormant;
     if already_trusted {

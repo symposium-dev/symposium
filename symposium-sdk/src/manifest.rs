@@ -23,6 +23,10 @@ use symposium_install::Source;
 use crate::hook::{HookAgent, HookEvent};
 use crate::predicate::{DependsOnList, PredicateSet};
 
+/// The file a plugin manifest is written in, wherever it lives: a registry
+/// entry, a workspace member, or a package's source.
+pub const MANIFEST_FILE: &str = "Symposium.toml";
+
 /// Default subdirectory scanned for skills when a manifest says nothing.
 pub const DEFAULT_SKILLS_PATH: &str = "skills";
 

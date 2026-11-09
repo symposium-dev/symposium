@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use crate::pm::WorkspaceCrate;
+use crate::workspace::WorkspaceCrate;
 use anyhow::{Context, Result};
 
 mod probe;
@@ -17,7 +17,7 @@ mod probe;
 /// Cargo treats `foo-bar` and `foo_bar` as the same crate name (published
 /// name on crates.io vs. Rust module identifier), so any name-equality check
 /// against a user-supplied query should go through this normalization.
-pub(crate) fn normalize_crate_name(name: &str) -> String {
+pub fn normalize_crate_name(name: &str) -> String {
     name.replace('-', "_")
 }
 
