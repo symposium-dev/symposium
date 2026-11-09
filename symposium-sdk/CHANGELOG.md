@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `hook::hook_main` runs portable hook binaries directly under agents, with explicit `--agent` selection, Claude → Codex → Kiro input fallback, and an optional `--event` argument. The existing `hook::run` remains canonical-only.
+- Agent hook schemas and translations are available in `hook_schema`, shared with Symposium's dispatcher.
+
+### Fixed
+
+- Preserve pre-tool denial and input replacement when converting canonical output to Claude and Codex, and preserve denial in Copilot output.
+- Preserve denial-only output in the canonical hook harness.
+
 ## [0.1.1](https://github.com/symposium-dev/symposium/compare/symposium-sdk-v0.1.0...symposium-sdk-v0.1.1) - 2026-10-01
 
 ### Other

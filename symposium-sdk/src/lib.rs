@@ -6,6 +6,11 @@
 //!
 //! # Hooks
 //!
+//! Use [`hook::run`] when Symposium supplies canonical events. For a standalone
+//! binary installed directly in an agent's hook configuration, use
+//! [`hook::hook_main`] instead: it accepts `--agent` / `--event` arguments and
+//! otherwise tries Claude Code, Codex, then Kiro before invoking the handler.
+//!
 //! ```no_run
 //! use std::process::ExitCode;
 //! use symposium_sdk::hook::{HookHandler, PreToolUseInput, PreToolUseOutput, run};
@@ -48,6 +53,7 @@
 pub mod env;
 pub mod fs;
 pub mod hook;
+pub mod hook_schema;
 pub mod manifest;
 pub mod pm;
 pub mod predicate;

@@ -1,6 +1,23 @@
 # Hooks
 
-Symposium's hook system is guided by the project [tenets](./tenets.md): symposium is always the intermediary, it never dirties the user's repo, and portability is the default.
+Symposium's plugin hook system is guided by the project [tenets](./tenets.md): symposium dispatches plugin hooks through its registered handler, it never dirties the user's repo, and portability is the default. The SDK also supports standalone hook binaries registered directly with an agent.
+
+## Standalone portable hooks
+
+`symposium_sdk::hook::hook_main(handler)` runs a `HookHandler` directly under an agent. It reads arguments and stdin, converts the native input to the SDK's canonical `Input`, invokes the handler once, and converts its `Output` back to the selected protocol. Agent schemas and conversions live in `symposium_sdk::hook_schema`; Symposium re-exports them from its own `hook_schema` module.
+
+The command-line contract is:
+
+- `--agent=claude`, `codex`, `kiro`, `copilot`, or `antigravity` selects that agent's protocol. Invalid input is an error, without fallback to another agent.
+- `--agent=symposium` selects canonical Symposium input and output. The existing `hook::run(handler)` remains a canonical-only entry point.
+- Omitting `--agent`, or passing `--agent=guess`, tries Claude Code, then Codex, then Kiro. The first successful input conversion chooses the output protocol too. Overlapping inputs intentionally resolve to Claude Code; this selects a compatible interpretation rather than identifying the calling agent.
+- `--event=pre-tool-use` (or an agent's native event name) supplies the event when the input omits it. A conflicting event in the input is an error. Native event names are validated: Claude and Codex use PascalCase, while Kiro uses camelCase.
+
+Fallback only covers input decoding. If no adapter accepts the input, the process reports an error on stderr and exits unsuccessfully. Once the handler runs, neither a handler error nor an output conversion error retries another adapter.
+
+Claude and Codex receive JSON containing `hookSpecificOutput`, including context, pre-tool permission decisions, and rewritten tool input where supplied. Kiro receives context as plain stdout; denying a `PreToolUse` event exits with code 2 and puts the reason on stderr. Input replacement is unsupported by the Kiro and Copilot adapters, so requesting a rewrite reports an error instead of silently dropping it. Other errors exit with code 1.
+
+This entry point does not install or discover hooks. The agent still needs a registration that invokes the binary. A portable binary used as a Symposium-format plugin hook must be invoked with `--agent=symposium`.
 
 ## Hook formats
 

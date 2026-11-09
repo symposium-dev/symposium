@@ -9,9 +9,11 @@ Depended on by both Symposium and anything that extends it. Beyond the hook hand
 - `manifest`: the unvalidated `Symposium.toml` schema (the `Raw*` types), `Serialize` as well as `Deserialize` so a manifest can travel on the wire. Retired fields (`crates`, `source.crate`, git/path chained sources) still *parse*, so validation can reject them with a migration hint rather than an unknown-field error.
 - `pm`: `PackageId`, `PluginInfo`, and `UnvalidatedPlugin` (what a package manager answers with: Symposium validates it into a `Plugin`), re-exported from Symposium's `pm` module.
 - `predicate::syntax`: the predicate tree and its parsing.
-- `hook::HookAgent`, `manifest::HookFormat`, `manifest::Audience`: named by manifests, so they travel with the schema. Mapping a `HookAgent` to its wire-format handler needs Symposium's agent modules, so that stays behind as `hook_schema::agent_event`.
+- `hook::HookAgent`, `manifest::HookFormat`, `manifest::Audience`: named by manifests, so they travel with the schema.
+- `hook::run`: the canonical Symposium hook harness. `hook::hook_main` adds standalone agent invocation: explicit `--agent` selection or ordered Claude → Codex → Kiro input fallback, followed by one handler call and output translation using the selected adapter.
+- `hook_schema`: agent wire types, `agent_event` adapter selection, and conversions between native and canonical hook events. Symposium re-exports this module for existing callers; standalone hook binaries need only the SDK.
 
-What deliberately stays in Symposium is *validation*: defaults, inline-installation promotion, dormancy, trust. The schema says what a manifest can contain; Symposium decides what it means.
+What deliberately stays in Symposium is *manifest validation*: defaults, inline-installation promotion, dormancy, trust. The schema says what a manifest can contain; Symposium decides what it means. Agent registration, installation, and plugin discovery also stay in Symposium; the SDK's portable harness only handles an individual invocation.
 
 ### `config.rs` — application context
 

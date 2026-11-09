@@ -339,7 +339,7 @@ mod tests {
         expected: PluginHookMetricsUpdateError,
     ) {
         let row_before = row.clone();
-        drop(select_private(store, recording, attribution.clone(), hook));
+        let _ = select_private(store, recording, attribution.clone(), hook);
         let store_before = store.clone();
         let selected = select_private(store, recording, attribution, hook);
 
@@ -631,12 +631,12 @@ mod tests {
             None,
         );
         let row_before = row.clone();
-        drop(select_private(
+        let _ = select_private(
             &mut store,
             &recording,
             PluginHookAttribution::Unnamed,
             HookSurface::PreToolUse,
-        ));
+        );
         let store_before = store.clone();
         let selected = select_private(
             &mut store,

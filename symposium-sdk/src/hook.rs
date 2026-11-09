@@ -39,7 +39,7 @@ use std::process::ExitCode;
 ///
 /// Lives here rather than in Symposium because a plugin manifest names an
 /// agent (`[[hooks]] agent = "claude"`), and manifests cross the package-manager
-/// boundary. Dispatching an event to an agent's wire format stays in Symposium.
+/// boundary. Agent wire-format adapters live in [`crate::hook_schema`].
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 pub enum HookAgent {
@@ -585,6 +585,9 @@ pub trait HookHandler {
 
 // ── Harness ─────────────────────────────────────────────────────────────
 
+mod portable;
+pub use portable::hook_main;
+
 /// Run a hook handler. Reads the input event from stdin, dispatches to the
 /// handler, and writes the output to stdout with the correct exit code.
 ///
@@ -638,7 +641,11 @@ async fn run_async(handler: impl HookHandler) -> ExitCode {
 
 fn is_empty_output(output: &Output) -> bool {
     match output {
-        Output::PreToolUse(o) => o.additional_context.is_none() && o.updated_input.is_none(),
+        Output::PreToolUse(o) => {
+            o.decision == Decision::Allow
+                && o.additional_context.is_none()
+                && o.updated_input.is_none()
+        }
         Output::PostToolUse(o) => o.additional_context.is_none(),
         Output::UserPromptSubmit(o) => o.additional_context.is_none(),
         Output::SessionStart(o) => o.additional_context.is_none(),

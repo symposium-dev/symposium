@@ -70,6 +70,15 @@ pub struct CodexHookSpecificOutput {
         skip_serializing_if = "Option::is_none"
     )]
     pub additional_context: Option<String>,
+    #[serde(rename = "permissionDecision", skip_serializing_if = "Option::is_none")]
+    pub permission_decision: Option<String>,
+    #[serde(
+        rename = "permissionDecisionReason",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub permission_decision_reason: Option<String>,
+    #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
+    pub updated_input: Option<serde_json::Value>,
     #[serde(flatten)]
     pub rest: serde_json::Map<String, serde_json::Value>,
 }
@@ -158,21 +167,36 @@ impl AgentHookOutput for CodexPreToolUseOutput {
         Ok(serde_json::from_slice(output)?)
     }
     fn from_symposium(event: &symposium::OutputEvent) -> Self {
-        codex_hook_output_from_symposium("PreToolUse", event)
-            .map(|v| serde_json::from_value(v).unwrap())
-            .unwrap_or_default()
+        let output = super::claude::ClaudePreToolUseOutput::from_symposium(event);
+        Self {
+            hook_specific_output: output
+                .hook_specific_output
+                .map(|h| CodexHookSpecificOutput {
+                    hook_event_name: h.hook_event_name,
+                    permission_decision: h.permission_decision,
+                    permission_decision_reason: h.permission_decision_reason,
+                    additional_context: h.additional_context,
+                    updated_input: h.updated_input,
+                    rest: h.rest,
+                }),
+            ..Default::default()
+        }
     }
     fn to_symposium(&self) -> symposium::OutputEvent {
-        let decision = match self.decision.as_deref() {
-            Some("block") | Some("deny") => symposium_sdk::hook::Decision::Deny,
-            _ => symposium_sdk::hook::Decision::Allow,
+        let h = self.hook_specific_output.as_ref();
+        let decision = match h
+            .and_then(|h| h.permission_decision.as_deref())
+            .or(self.decision.as_deref())
+        {
+            Some("block") | Some("deny") => crate::hook::Decision::Deny,
+            _ => crate::hook::Decision::Allow,
         };
         symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
             decision,
-            self.hook_specific_output
-                .as_ref()
-                .and_then(|h| h.additional_context.clone()),
-            None,
+            h.and_then(|h| h.additional_context.clone())
+                .or_else(|| h.and_then(|h| h.permission_decision_reason.clone()))
+                .or_else(|| self.reason.clone()),
+            h.and_then(|h| h.updated_input.clone()),
         ))
     }
     fn to_hook_output(&self) -> serde_json::Value {
@@ -180,6 +204,59 @@ impl AgentHookOutput for CodexPreToolUseOutput {
     }
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hook::Decision;
+    use serde_json::json;
+
+    #[test]
+    fn modern_pre_tool_fields_override_legacy_decision() {
+        for (modern, legacy, expected) in [
+            ("allow", "block", Decision::Allow),
+            ("deny", "allow", Decision::Deny),
+        ] {
+            let wire = serde_json::to_vec(&json!({
+                "decision": legacy,
+                "reason": "Legacy reason",
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": modern,
+                    "permissionDecisionReason": "Modern reason",
+                    "updatedInput": {"command": "pwd"}
+                }
+            }))
+            .unwrap();
+            let symposium::OutputEvent::PreToolUse(output) =
+                CodexPreToolUseOutput::parse_output(&wire)
+                    .unwrap()
+                    .to_symposium()
+            else {
+                panic!("wrong event type")
+            };
+            assert_eq!(output.decision, expected);
+            assert_eq!(output.additional_context.as_deref(), Some("Modern reason"));
+            assert_eq!(output.updated_input, Some(json!({"command": "pwd"})));
+        }
+    }
+
+    #[test]
+    fn legacy_denial_keeps_its_reason() {
+        let symposium::OutputEvent::PreToolUse(output) = CodexPreToolUseOutput::parse_output(
+            br#"{"decision":"block","reason":"Protected directory"}"#,
+        )
+        .unwrap()
+        .to_symposium() else {
+            panic!("wrong event type")
+        };
+        assert_eq!(output.decision, Decision::Deny);
+        assert_eq!(
+            output.additional_context.as_deref(),
+            Some("Protected directory")
+        );
     }
 }
 

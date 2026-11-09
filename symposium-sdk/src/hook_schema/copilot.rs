@@ -86,18 +86,28 @@ macro_rules! copilot_output_impl {
                 Ok(serde_json::from_slice(output)?)
             }
             fn from_symposium(event: &symposium::OutputEvent) -> Self {
-                let mut out = Self::default();
-                out.additional_context = event.additional_context().map(String::from);
-                out
+                let symposium::OutputEvent::PreToolUse(output) = event else {
+                    panic!("wrong event type")
+                };
+                let denied = output.decision == crate::hook::Decision::Deny;
+                Self {
+                    permission_decision: denied.then(|| "deny".into()),
+                    permission_decision_reason: denied
+                        .then(|| super::denial_reason(output.additional_context.as_deref())),
+                    additional_context: output.additional_context.clone(),
+                    ..Default::default()
+                }
             }
             fn to_symposium(&self) -> symposium::OutputEvent {
                 let decision = match self.permission_decision.as_deref() {
-                    Some("deny") => symposium_sdk::hook::Decision::Deny,
-                    _ => symposium_sdk::hook::Decision::Allow,
+                    Some("deny") => crate::hook::Decision::Deny,
+                    _ => crate::hook::Decision::Allow,
                 };
                 symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
                     decision,
-                    self.additional_context.clone(),
+                    self.additional_context
+                        .clone()
+                        .or_else(|| self.permission_decision_reason.clone()),
                     None,
                 ))
             }
@@ -389,6 +399,31 @@ copilot_output_impl!(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portable_denial_preserves_decision_and_context() {
+        let output = symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
+            crate::hook::Decision::Deny,
+            Some("Protected directory".into()),
+            None,
+        ));
+        let wire = CopilotPreToolUseOutput::from_symposium(&output).to_hook_output();
+        assert_eq!(
+            wire,
+            serde_json::json!({
+                "permissionDecision": "deny",
+                "permissionDecisionReason": "Protected directory",
+                "additionalContext": "Protected directory"
+            })
+        );
+        let roundtrip = CopilotPreToolUseOutput::parse_output(&serde_json::to_vec(&wire).unwrap())
+            .unwrap()
+            .to_symposium();
+        assert_eq!(
+            serde_json::to_value(roundtrip).unwrap(),
+            serde_json::to_value(output).unwrap()
+        );
+    }
 
     #[test]
     fn pre_tool_use_parses_string_tool_args() {

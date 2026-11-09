@@ -74,7 +74,7 @@ Each handler method returns its event-specific output type:
 
 | Method | Return type | Key fields |
 |--------|-------------|------------|
-| `pre_tool_use` | `PreToolUseOutput` | `additional_context`, `updated_input` |
+| `pre_tool_use` | `PreToolUseOutput` | `decision`, `additional_context`, `updated_input` |
 | `post_tool_use` | `PostToolUseOutput` | `additional_context` |
 | `user_prompt_submit` | `UserPromptSubmitOutput` | `additional_context` |
 | `session_start` | `SessionStartOutput` | `additional_context` |
@@ -101,6 +101,36 @@ pub trait HookHandler {
 ```
 
 Override `handle_event` only if you need custom dispatch logic (e.g., shared state across events). Otherwise, just override the per-event methods.
+
+## Running directly under an agent
+
+To use the same handler in a standalone binary that an agent invokes directly, replace the call to `run` with `hook_main`:
+
+```rust
+fn main() -> std::process::ExitCode {
+    symposium_sdk::hook::hook_main(MyHook)
+}
+```
+
+`hook_main` translates agent-native input into the same `Input` your handler already uses and translates its output back. With no arguments, it tries Claude Code, then Codex, then Kiro, choosing the first adapter that accepts the input. Overlapping inputs use Claude's protocol. Only input decoding is retried; the handler runs once.
+
+An agent's hook registration can select a protocol explicitly:
+
+```text
+my-hook-handler --agent=claude
+my-hook-handler --agent=codex
+my-hook-handler --agent=kiro
+my-hook-handler --agent=copilot --event=pre-tool-use
+my-hook-handler --agent=antigravity --event=pre-tool-use
+```
+
+`--event` supplies a missing event name; canonical names such as `pre-tool-use` and agent-native names are accepted. If the input already names a different event, the invocation fails. Explicit `--agent` selection does not fall back on invalid input. `--agent=guess` is equivalent to omitting the option.
+
+To invoke this binary from a Symposium-format plugin hook, include `--agent=symposium` in its command arguments. Existing binaries using `run` continue to read canonical input without any flags.
+
+Context and pre-tool decisions use each agent's output convention. In particular, Kiro context is plain stdout, and a denied tool call exits with code 2 and the reason on stderr. Input replacement is unsupported by the Kiro and Copilot adapters; requesting that operation reports an error. Keep diagnostic messages on stderr so they do not corrupt the response.
+
+The SDK does not register the binary with agents or provide a shared hook installation directory. Tool names and arguments also remain agent-specific: the example's `Bash` check only matches agents that use that tool name. See [Hooks](../design/hooks.md#standalone-portable-hooks) for the adapter contract.
 
 ## Testing locally
 

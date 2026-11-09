@@ -39,7 +39,6 @@ impl Agent for Antigravity {
                 Some(erase_agent_hook_event(AntigravitySessionStartEvent))
             }
             super::HookEvent::Stop => Some(erase_agent_hook_event(AntigravityStopEvent)),
-            _ => None,
         }
     }
 }
@@ -237,7 +236,7 @@ impl AgentHookOutput for AntigravityPreToolUseOutput {
         let symposium::OutputEvent::PreToolUse(o) = event else {
             return Self::default();
         };
-        let denied = matches!(o.decision, symposium_sdk::hook::Decision::Deny);
+        let denied = matches!(o.decision, crate::hook::Decision::Deny);
         Self {
             decision: if denied {
                 "deny".into()
@@ -252,8 +251,8 @@ impl AgentHookOutput for AntigravityPreToolUseOutput {
     }
     fn to_symposium(&self) -> symposium::OutputEvent {
         let decision = match self.decision.as_str() {
-            "deny" | "deny_unless_prior_grant" => symposium_sdk::hook::Decision::Deny,
-            _ => symposium_sdk::hook::Decision::Allow,
+            "deny" | "deny_unless_prior_grant" => crate::hook::Decision::Deny,
+            _ => crate::hook::Decision::Allow,
         };
         symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
             decision,

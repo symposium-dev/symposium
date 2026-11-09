@@ -2,15 +2,17 @@
 
 ## Known hook implementation gaps
 
-The following issues were identified by auditing our hook implementations against the agent reference docs (`md/design/agent-details/`). They don't cause crashes (the fallback path handles events without agent-specific handlers) but mean some features are incomplete.
-
-### `permissionDecision` dropped (Copilot)
-
-`CopilotPreToolUseOutput::from_hook_output()` never maps `permissionDecision` or `permissionDecisionReason` from the builtin hook output. If a builtin handler wants to deny a tool call, the decision is silently lost in Copilot output.
-
 ### Copilot also runs Claude Code's hooks
 
 Copilot CLI reads `.claude/settings.json` as well as its own hook files. In a project where both agents are configured, every Copilot event runs `cargo agents hook` twice: as `copilot` from `.github/hooks/symposium.json`, and as `claude` from Claude's settings. Plugin hooks with side effects run twice, and whatever symposium tells the agent once (such as a notice) is taken by whichever invocation runs first.
+
+## Portable hook fallback is input-only
+
+`symposium_sdk::hook::hook_main` tries Claude, Codex, then Kiro when no explicit agent is selected. Several native input schemas overlap, so successful decoding selects the first compatible interpretation, not the caller's identity. Validate native event names before using the schemas: Kiro's camelCase names must not be accepted by the PascalCase Claude adapter merely because both use `hook_event_name` and `tool_name`.
+
+Decode and select the adapter before calling `HookHandler`. Retrying after a handler or output conversion error would repeat side effects. Keep the chosen adapter for output as well: Kiro needs plain text and an exit status for denial, not Claude JSON. Use `--agent=symposium` when invoking a portable binary through a canonical Symposium plugin registration; canonical input is not part of the native fallback sequence.
+
+An empty pre-tool response must also account for its decision. A denial with neither context nor rewritten input is still meaningful output and must not be suppressed.
 
 ## Hook stdout belongs to the agent
 

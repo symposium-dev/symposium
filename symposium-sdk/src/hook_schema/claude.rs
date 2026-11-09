@@ -15,7 +15,6 @@ impl Agent for ClaudeCode {
             }
             super::HookEvent::SessionStart => Some(erase_agent_hook_event(ClaudeSessionStartEvent)),
             super::HookEvent::Stop => Some(erase_agent_hook_event(ClaudeStopEvent)),
-            _ => None,
         }
     }
 }
@@ -164,20 +163,51 @@ impl AgentHookOutput for ClaudePreToolUseOutput {
         Ok(serde_json::from_slice(output)?)
     }
     fn from_symposium(event: &symposium::OutputEvent) -> Self {
-        match claude_hook_output_from_symposium("PreToolUse", event) {
-            Some(v) => serde_json::from_value(v).unwrap_or_default(),
-            None => Self::default(),
+        let symposium::OutputEvent::PreToolUse(output) = event else {
+            panic!("wrong event type")
+        };
+        let permission_decision = match output.decision {
+            crate::hook::Decision::Deny => Some("deny".into()),
+            // Input replacement requires an explicit allow in Codex's shared
+            // Claude-compatible protocol. Otherwise leave permission checks
+            // to the agent instead of overriding them with an explicit allow.
+            crate::hook::Decision::Allow if output.updated_input.is_some() => Some("allow".into()),
+            crate::hook::Decision::Allow => None,
+        };
+        let permission_decision_reason = (output.decision == crate::hook::Decision::Deny)
+            .then(|| super::denial_reason(output.additional_context.as_deref()));
+        if permission_decision.is_none() && output.additional_context.is_none() {
+            return Self::default();
+        }
+        Self {
+            hook_specific_output: Some(ClaudePreToolUseHookOutput {
+                hook_event_name: "PreToolUse".into(),
+                permission_decision,
+                permission_decision_reason,
+                // A denial wins over a requested replacement. Codex rejects
+                // updatedInput unless permissionDecision is allow.
+                updated_input: (output.decision == crate::hook::Decision::Allow)
+                    .then(|| output.updated_input.clone())
+                    .flatten(),
+                additional_context: output.additional_context.clone(),
+                rest: Default::default(),
+            }),
+            ..Default::default()
         }
     }
     fn to_symposium(&self) -> symposium::OutputEvent {
         let h = self.hook_specific_output.as_ref();
         let decision = match h.and_then(|h| h.permission_decision.as_deref()) {
-            Some("deny") => symposium_sdk::hook::Decision::Deny,
-            _ => symposium_sdk::hook::Decision::Allow,
+            Some("deny") => crate::hook::Decision::Deny,
+            _ => crate::hook::Decision::Allow,
         };
         symposium::OutputEvent::PreToolUse(symposium::PreToolUseOutput::new(
             decision,
-            h.and_then(|h| h.additional_context.clone()),
+            h.and_then(|h| {
+                h.additional_context
+                    .clone()
+                    .or_else(|| h.permission_decision_reason.clone())
+            }),
             h.and_then(|h| h.updated_input.clone()),
         ))
     }

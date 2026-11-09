@@ -3,12 +3,11 @@
 //! Each agent module converts to/from these types. Builtin dispatch
 //! operates entirely on these types.
 //!
-//! Type definitions are owned by `symposium-sdk` so that hook authors can
-//! depend on them without pulling in the full symposium binary. This module
-//! re-exports those types.
+//! Type definitions live in [`crate::hook`]. This module re-exports them and
+//! implements the native-input adapter trait for the canonical protocol.
 
-// Re-export wire types from the SDK crate.
-pub use symposium_sdk::hook::{
+// Re-export the portable hook wire types.
+pub use crate::hook::{
     Input as InputEvent, Output as OutputEvent, PostToolUseInput, PostToolUseOutput,
     PreToolUseInput, PreToolUseOutput, SessionStartInput, SessionStartOutput, StopInput,
     StopOutput, UserPromptSubmitInput, UserPromptSubmitOutput,
