@@ -392,7 +392,7 @@ done
         .package_managers
         .push(symposium::config::PackageManagerConfig {
             name: "other".to_string(),
-            command: "/bin/sh".to_string(),
+            command: "sh".to_string(),
             args: vec![script.display().to_string()],
         });
 }
