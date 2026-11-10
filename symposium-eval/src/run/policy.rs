@@ -427,10 +427,10 @@ mod tests {
     }
 
     #[test]
-    fn only_a_symposium_trial_can_read_the_staged_cargo_agents() {
+    fn only_a_symposium_trial_can_read_the_staged_symposium() {
         let host = Host::new();
         let batch = host.batch();
-        let staged = batch.symposium_tools().join("cargo-agents");
+        let staged = batch.symposium_tools().join("symposium");
         let symposium = trial(&batch, 1, Configuration::Symposium);
         let baseline = trial(&batch, 2, Configuration::Baseline);
 
@@ -449,7 +449,7 @@ mod tests {
         for path in [
             host.join("checkout/evals/tasks/formatting/checks/double.rs"),
             host.join("home/dev/.cargo/credentials.toml"),
-            host.join("home/dev/.cargo/bin/cargo-agents"),
+            host.join("home/dev/.cargo/bin/symposium"),
         ] {
             assert!(!policy.can_read(&path), "{}", path.display());
         }
@@ -483,7 +483,7 @@ mod tests {
             trial.registry().join("fixture-store/Symposium.toml"),
             trial.bin().join("cargo"),
             trial.policy_file(),
-            batch.symposium_tools().join("cargo-agents"),
+            batch.symposium_tools().join("symposium"),
         ] {
             assert!(!policy.can_write(&path), "{}", path.display());
         }

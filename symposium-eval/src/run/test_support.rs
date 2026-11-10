@@ -84,7 +84,7 @@ pub(crate) struct RealSrt {
     batch: Batch,
     api_key: ApiKey,
     _eval_root: TempDir,
-    /// A home with a shell profile and an installed `cargo-agents`, denied like every
+    /// A home with a shell profile and an installed `symposium`, denied like every
     /// user's, so the boundary is checked against files that are surely there.
     decoy_home: TempDir,
 }
@@ -268,7 +268,7 @@ impl RealSrt {
         self.run_claude_hook(trial, "Stop", "stop", fields)
     }
 
-    /// Runs `cargo-agents hook claude <command>` in the project with the payload Claude
+    /// Runs `symposium hook claude <command>` in the project with the payload Claude
     /// Code sends for `event`: what it sends every hook, and `fields`.
     fn run_claude_hook(
         &self,
@@ -289,7 +289,7 @@ impl RealSrt {
             .extend(fields.as_object().unwrap().clone());
         self.run(
             trial,
-            &format!(r#"printf '%s' "$1" | cargo-agents hook claude {command}"#),
+            &format!(r#"printf '%s' "$1" | symposium hook claude {command}"#),
             &[payload.to_string().into()],
             std::time::Duration::from_secs(60),
         )
@@ -323,7 +323,7 @@ fn sysroot() -> PathBuf {
     PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
 }
 
-/// A home holding a shell profile and an installed `cargo-agents`, which a trial must
+/// A home holding a shell profile and an installed `symposium`, which a trial must
 /// not read or run.
 #[cfg(target_os = "linux")]
 fn decoy_home() -> TempDir {
@@ -331,9 +331,9 @@ fn decoy_home() -> TempDir {
     fs::write(home.path().join(".bashrc"), "export DECOY=1\n").unwrap();
     // A name `sh` would need quoted, which reaches the script as an argument.
     fs::write(home.path().join("it's private"), "decoy\n").unwrap();
-    let installed = home.path().join(".cargo/bin/cargo-agents");
+    let installed = home.path().join(".cargo/bin/symposium");
     fs::create_dir_all(installed.parent().unwrap()).unwrap();
-    executable(&installed, "#!/bin/sh\necho 'installed cargo-agents'\n");
+    executable(&installed, "#!/bin/sh\necho 'installed symposium'\n");
     home
 }
 
@@ -346,16 +346,16 @@ pub(crate) fn executable(path: &std::path::Path, script: &str) {
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
-/// The `cargo-agents` under evaluation: built from this checkout, at the path Cargo
+/// The `symposium` under evaluation: built from this checkout, at the path Cargo
 /// reports, wherever its target directory is. Built once per test run.
 #[cfg(target_os = "linux")]
-pub(crate) fn built_cargo_agents() -> PathBuf {
+pub(crate) fn built_symposium() -> PathBuf {
     static BUILT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-    BUILT.get_or_init(build_cargo_agents).clone()
+    BUILT.get_or_init(build_symposium).clone()
 }
 
 #[cfg(target_os = "linux")]
-fn build_cargo_agents() -> PathBuf {
+fn build_symposium() -> PathBuf {
     let output = std::process::Command::new(env!("CARGO"))
         .args([
             "build",
@@ -364,7 +364,7 @@ fn build_cargo_agents() -> PathBuf {
             "--package",
             "symposium",
             "--bin",
-            "cargo-agents",
+            "symposium",
         ])
         .arg("--message-format=json-render-diagnostics")
         .current_dir(checkout())
@@ -372,16 +372,16 @@ fn build_cargo_agents() -> PathBuf {
         .unwrap();
     assert!(
         output.status.success(),
-        "cannot build cargo-agents: {}",
+        "cannot build symposium: {}",
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout)
         .unwrap()
         .lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-        .find(|message| message["target"]["name"] == "cargo-agents")
-        .and_then(|message| message["executable"].as_str().map(PathBuf::from))
-        .expect("Cargo reports the cargo-agents executable")
+        .filter(|message| message["target"]["name"] == "symposium")
+        .find_map(|message| message["executable"].as_str().map(PathBuf::from))
+        .expect("Cargo reports the symposium executable")
 }
 
 /// The Symposium checkout this crate is built from.
