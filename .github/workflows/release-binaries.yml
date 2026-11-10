@@ -55,7 +55,7 @@ jobs:
           cp target/${{ matrix.target }}/release/cargo-agents dist/
           cp target/${{ matrix.target }}/release/symposium-pm-cargo dist/
           cd dist
-          tar -czvf cargo-agents-${{ matrix.target }}.tar.gz symposium cargo-agents symposium-pm-cargo
+          tar -czvf symposium-${{ matrix.target }}.tar.gz symposium cargo-agents symposium-pm-cargo
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
@@ -65,13 +65,13 @@ jobs:
           copy target\${{ matrix.target }}\release\cargo-agents.exe dist\
           copy target\${{ matrix.target }}\release\symposium-pm-cargo.exe dist\
           cd dist
-          7z a cargo-agents-${{ matrix.target }}.zip symposium.exe cargo-agents.exe symposium-pm-cargo.exe
+          7z a symposium-${{ matrix.target }}.zip symposium.exe cargo-agents.exe symposium-pm-cargo.exe
 
       - name: Upload to release
         if: github.event_name == 'release'
         uses: softprops/action-gh-release@v1
         with:
-          files: dist/cargo-agents-${{ matrix.target }}.*
+          files: dist/symposium-${{ matrix.target }}.*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -79,4 +79,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.target }}
-          path: dist/cargo-agents*
+          path: dist/symposium-${{ matrix.target }}.*
