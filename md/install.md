@@ -20,6 +20,8 @@ On Arch Linux, install the [`symposium`](https://archlinux.org/packages/extra/x8
 pacman -S symposium
 ```
 
+Installing gives you a `symposium` binary and the `cargo agents` command. They accept the same subcommands and behave the same way, so `symposium init` and `cargo agents init` are interchangeable. This guide uses `cargo agents`.
+
 ## Initialization
 
 Once you have installed Symposium, you need to run the [`init` command](./reference/cargo-agents-init.md):

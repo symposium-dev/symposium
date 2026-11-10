@@ -2,6 +2,8 @@
 
 `cargo agents` manages agent extensions for Rust projects. It discovers skills based on your project's dependencies and configures your AI agent to use them.
 
+The same command is installed as the `symposium` binary: `symposium <args>` and `cargo agents <args>` accept the same subcommands and options and behave the same way. Help and usage messages name the one you ran.
+
 ## Subcommands
 
 | Command | Description |

@@ -1,6 +1,10 @@
 # Key modules
 
-Symposium is a Rust crate with both a library (`src/lib.rs`) and a binary (`src/bin/cargo-agents.rs`). The library re-exports all modules so that integration tests can access internals.
+Symposium is a Rust crate with a library (`src/lib.rs`) and two command binaries, `symposium` (`src/bin/symposium.rs`) and `cargo-agents` (`src/bin/cargo-agents.rs`), plus the `symposium-pm-cargo` package manager binary. The library re-exports all modules so that integration tests can access internals.
+
+### `binary.rs`: the shared `main`
+
+Both command binaries are thin wrappers over `binary::main(Binary, args)`, so `symposium <args>` and `cargo agents <args>` run the same code. `cargo-agents` first drops the `agents` argument cargo inserts when it runs `cargo agents`. `cli::Binary` names the binary that was invoked and sets clap's `bin_name` from it (`Binary::command`, `Binary::parse`), so usage lines, parse errors and the [help renderer](./important-flows.md#help-rendering) name `symposium` or `cargo agents` to match. Nothing else depends on which binary ran: hook commands written into agent configs stay `cargo-agents hook ...` whichever binary ran `init` or `sync`.
 
 ### `symposium-sdk`: the shared plugin vocabulary
 
@@ -20,7 +24,7 @@ Its own crate, because it is its own binary. It holds everything specific to the
 It implements the SDK's `PackageManager` trait, the same trait every package manager implements, and runs two ways:
 
 - **In-process**, the default: Symposium constructs it and calls the trait directly. The cargo PM is the one Symposium cannot do without, so it should not depend on finding a second binary, and the hook path should not pay a spawn.
-- **Out-of-process**, as the `symposium-pm-cargo` binary: `pm::server::run` over the same type, constructed by `CargoPm::from_initialize` from the `initialize` handshake. The binary ships from the *main* crate (`src/bin/symposium-pm-cargo.rs`) so `cargo install symposium` installs it alongside `cargo-agents`; a PM the user has to install separately would be a PM that is usually missing.
+- **Out-of-process**, as the `symposium-pm-cargo` binary: `pm::server::run` over the same type, constructed by `CargoPm::from_initialize` from the `initialize` handshake. The binary ships from the *main* crate (`src/bin/symposium-pm-cargo.rs`) so `cargo install symposium` installs it alongside `symposium` and `cargo-agents`; a PM the user has to install separately would be a PM that is usually missing.
 
 `CargoPmConfig` (cache dir + cargo override) is what `WorkspaceDeps` needs from its host, built either from Symposium's `SymposiumDirs` or from the `initialize` handshake, so the resolver has no knowledge of Symposium's directory layout.
 
