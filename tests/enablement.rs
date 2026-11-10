@@ -1264,3 +1264,46 @@ async fn disable_turns_off_a_registry_plugin() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn disable_naming_an_unknown_pm_does_not_leave_the_plugin_on() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.sym.config.defaults.user_plugins = true;
+            let advice = ctx.sym.config_dir().join("plugins/advice");
+            std::fs::create_dir_all(advice.join("skills/advice"))?;
+            std::fs::write(
+                advice.join("Symposium.toml"),
+                "name = \"advice\"\ndepends-on = [\"*\"]\n\n[[skills]]\nsource.path = \"skills\"\n",
+            )?;
+            std::fs::write(
+                advice.join("skills/advice/SKILL.md"),
+                "---\nname: advice\ndescription: Advice\n---\nAdvice.\n",
+            )?;
+            let skills_dir = ctx.workspace_root.clone().unwrap().join(".claude/skills");
+            ctx.symposium(&["sync"]).await?;
+            find_installed_skill(&skills_dir, "advice");
+
+            ctx.sym
+                .config
+                .plugins
+                .disable
+                .push(symposium::config::PluginRef::new("user-plugin", "advice"));
+            ctx.sym.save_config()?;
+            ctx.sym = symposium::config::Symposium::from_dir(ctx.sym.config_dir());
+
+            let synced = ctx.symposium(&["sync"]).await;
+            assert!(
+                synced.is_err() || find_installed_skills(&skills_dir, "advice").is_empty(),
+                "a `disable` entry whose `pm` names no package manager or registry \
+                 left `advice` installed without an error"
+            );
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
