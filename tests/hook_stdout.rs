@@ -1,6 +1,6 @@
 //! A hook's stdout is the agent's protocol: the agent parses all of it, and a
 //! single line ahead of the JSON makes it discard the whole output. These
-//! tests run the real `cargo agents hook` process, since what leaks is written
+//! tests run the real `symposium hook` process, since what leaks is written
 //! by the binary around the in-process pipeline.
 
 use serde_json::{Value, json};
@@ -137,7 +137,7 @@ async fn rejected_skill_warning_stays_off_hook_stdout() {
     .unwrap();
 }
 
-/// Run `cargo agents hook <agent> session-start` as the agent would, from `cwd`.
+/// Run `symposium hook <agent> session-start` as the agent would, from `cwd`.
 fn run_session_start(
     ctx: &TestContext,
     agent: HookAgent,
@@ -152,7 +152,7 @@ fn run_session_start(
         .to_string()
         .unwrap();
 
-    let binary = std::env::var("CARGO_BIN_EXE_cargo-agents").expect("must run via cargo test");
+    let binary = std::env::var("CARGO_BIN_EXE_symposium").expect("must run via cargo test");
     let mut child = std::process::Command::new(binary)
         .args(["hook", agent.as_str(), "session-start"])
         .env("SYMPOSIUM_HOME", ctx.sym.config_dir())
@@ -161,7 +161,7 @@ fn run_session_start(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .expect("spawn cargo-agents");
+        .expect("spawn symposium");
     child
         .stdin
         .take()

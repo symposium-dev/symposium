@@ -141,7 +141,7 @@ pub struct PluginsConfig {
     #[serde(default, rename = "auto-enable", skip_serializing_if = "Vec::is_empty")]
     pub auto_enable: Vec<String>,
 
-    /// Plugins enabled deliberately, the durable record `cargo agents use`
+    /// Plugins enabled deliberately, the durable record `symposium use`
     /// writes. Unlike `auto-enable` (consent for what a dependency already
     /// carries), a used plugin is enabled whether or not any dependency
     /// references it — it is also what wakes a dormant registry plugin.

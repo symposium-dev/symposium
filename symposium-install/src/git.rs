@@ -136,7 +136,7 @@ struct GitHubClient {
 impl GitHubClient {
     fn new() -> Self {
         let client = reqwest::Client::builder()
-            .user_agent("cargo-agents")
+            .user_agent("symposium")
             .build()
             .expect("failed to build HTTP client");
         Self { client }

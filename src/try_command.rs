@@ -52,7 +52,7 @@ pub async fn try_plugin(
         }
         Slot::Trial(target) if target == dir => {}
         Slot::Trial(target) => bail!(
-            "`{name}` is already being tried from `{}`; run `cargo agents plugin try --remove {name}` first",
+            "`{name}` is already being tried from `{}`; run `symposium plugin try --remove {name}` first",
             target.display()
         ),
         Slot::Taken => bail!(
@@ -259,7 +259,7 @@ fn load_plugin_dir(dir: &Path) -> Result<Plugin> {
     let unvalidated = crate::plugins::entry_plugin(dir, Path::new(""), USER_PLUGINS)
         .with_context(|| format!("no Symposium.toml or SKILL.md in `{}`", dir.display()))??;
     crate::plugins::validate_plugin(unvalidated, PluginKind::Registry)
-        .with_context(|| format!("run `cargo agents plugin validate` on `{}`", dir.display()))
+        .with_context(|| format!("run `symposium plugin validate` on `{}`", dir.display()))
 }
 
 async fn report_gate(sym: &Symposium, cwd: &Path, plugin: &Plugin) {

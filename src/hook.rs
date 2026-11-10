@@ -769,7 +769,7 @@ async fn handle_session_start(
     (output, pending)
 }
 
-/// Suggest `cargo agents --help` when the active workspace exposes crate-aware plugin subcommands.
+/// Suggest `symposium --help` when the active workspace exposes crate-aware plugin subcommands.
 /// Reuses the help renderer's `applicable_subcommands`, so the hint fires only when there is actually something to discover; `None` otherwise.
 async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String> {
     let workspace = deps.info().await.cloned();
@@ -797,8 +797,8 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String
 
     any_subcommand.then(|| {
         format!(
-            "This project has crate-aware tools available via `cargo agents`. \
-             Run `cargo agents --help` to list them before working with the Rust code. \
+            "This project has crate-aware tools available via `symposium`. \
+             Run `symposium --help` to list them before working with the Rust code. \
              Only use tools under the '{AGENTS_HEADING}' section unless the user \
              explicitly asks you to run one from '{HUMANS_HEADING}'."
         )
@@ -836,8 +836,8 @@ fn pending_notice(pending: &[DiscoveredPlugin]) -> Option<String> {
     Some(format!(
         "These dependencies ship agent plugins that are not enabled yet: {}. \
          They stay off until the user consents{audited_or_not}. Tell the user \
-         to run `cargo agents sync` (which asks about each one) or \
-         `cargo agents use <name>`. Do not enable them yourself.",
+         to run `symposium sync` (which asks about each one) or \
+         `symposium use <name>`. Do not enable them yourself.",
         named.join(", ")
     ))
 }
@@ -859,7 +859,7 @@ fn update_nudge(sym: &Symposium) -> Option<String> {
     let latest = crate::self_update::check_upgrade(sym).ok()??;
     Some(format!(
         "symposium {latest} is available (current: {CURRENT_VERSION}). \
-         Run `cargo agents self-update` to upgrade."
+         Run `symposium self-update` to upgrade."
     ))
 }
 

@@ -79,7 +79,7 @@ fn assert_notice(agent: HookAgent, stdout: &str) {
     for expected in [
         NOTICE,
         "crate-b",
-        "cargo agents sync",
+        "symposium sync",
         "Do not enable them yourself",
     ] {
         assert!(
@@ -255,7 +255,7 @@ async fn a_dependency_auto_enable_covers_is_installed_without_a_notice() {
             let root = ctx.workspace_root.clone().unwrap();
             add_dependency(&root, "crate-b");
             let stdout = respond(&ctx, HookAgent::Claude, tool_call_finished()).await;
-            assert!(!stdout.contains("cargo agents sync"), "{stdout}");
+            assert!(!stdout.contains("symposium sync"), "{stdout}");
             assert!(
                 root.join(".claude/skills/crate-b/skills/b-guidance/SKILL.md")
                     .exists()
@@ -278,7 +278,7 @@ async fn a_dependency_without_plugins_gets_no_notice() {
 
             add_dependency(ctx.workspace_root.as_ref().unwrap(), "crate-c");
             let stdout = respond(&ctx, HookAgent::Claude, tool_call_finished()).await;
-            assert!(!stdout.contains("cargo agents sync"), "{stdout}");
+            assert!(!stdout.contains("symposium sync"), "{stdout}");
             Ok(())
         },
     )
