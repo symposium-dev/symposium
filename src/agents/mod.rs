@@ -479,6 +479,7 @@ fn register_codex_hooks(hooks_path: &Path, out: &Output) -> Result<()> {
         "PostToolUse",
         "UserPromptSubmit",
         "SessionStart",
+        "Stop",
     ] {
         let command = format!("cargo-agents hook codex {}", event_to_cli_arg(event));
         if ensure_codex_hook_entry(event_hooks(hooks_obj, event, &display)?, &command) {
@@ -1432,6 +1433,10 @@ mod tests {
         assert!(hooks.get("PostToolUse").is_some());
         assert!(hooks.get("UserPromptSubmit").is_some());
         assert!(hooks.get("SessionStart").is_some());
+        assert_eq!(
+            hooks["Stop"][0]["hooks"][0]["command"],
+            "cargo-agents hook codex stop"
+        );
 
         // Verify the structure uses empty matcher
         let pre_tool = hooks["PreToolUse"].as_array().unwrap();
