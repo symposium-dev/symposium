@@ -4,7 +4,7 @@ Symposium is a Rust crate with a library (`src/lib.rs`) and two command binaries
 
 ### `binary.rs`: the shared `main`
 
-Both command binaries are thin wrappers over `binary::main(Binary, args)`, so `symposium <args>` and `cargo agents <args>` run the same code. `cargo-agents` first drops the `agents` argument cargo inserts when it runs `cargo agents`. `cli::Binary` names the binary that was invoked and sets clap's `bin_name` from it (`Binary::command`, `Binary::parse`), so usage lines, parse errors and the [help renderer](./important-flows.md#help-rendering) name `symposium` or `cargo agents` to match. Nothing else depends on which binary ran: hook commands written into agent configs stay `cargo-agents hook ...` whichever binary ran `init` or `sync`.
+Both command binaries are thin wrappers over `binary::main(Binary, args)`, so `symposium <args>` and `cargo agents <args>` run the same code. `cargo-agents` first drops the `agents` argument cargo inserts when it runs `cargo agents`. `cli::Binary` names the binary that was invoked and sets clap's `bin_name` from it (`Binary::command`, `Binary::parse`), so usage lines, parse errors and the [help renderer](./important-flows.md#help-rendering) name `symposium` or `cargo agents` to match. Nothing else depends on which binary ran: hook commands written into agent configs are `symposium hook ...` whichever binary ran `init` or `sync`.
 
 ### `symposium-sdk`: the shared plugin vocabulary
 
