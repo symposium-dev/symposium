@@ -267,19 +267,19 @@ pub async fn discover_for(sym: &Symposium, ws: &Arc<Workspace>) -> Discovery {
     discover(sym, ws, &registry.plugins).await
 }
 
-/// The names of the discovered offers still awaiting consent, deduplicated
-/// and sorted — what a consent prompt would ask about, and what the
-/// non-interactive hint names.
-pub async fn pending_candidates(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<String> {
-    let mut names: Vec<String> = discover_for(sym, deps)
+/// The discovered offers still awaiting consent, deduplicated and sorted:
+/// what a consent prompt would ask about, and what the non-interactive hint
+/// names.
+pub async fn pending_candidates(sym: &Symposium, deps: &Arc<Workspace>) -> Vec<PackageId> {
+    let mut ids: Vec<PackageId> = discover_for(sym, deps)
         .await
         .candidates
         .into_iter()
-        .map(|c| c.id.name)
+        .map(|c| c.id)
         .collect();
-    names.sort();
-    names.dedup();
-    names
+    ids.sort();
+    ids.dedup();
+    ids
 }
 
 /// Record consent decisions: approvals into `[plugins] auto-enable`,

@@ -692,7 +692,11 @@ async fn consent_prompt_never_fires_non_interactively() {
             // vacuous.
             let deps = ctx.sym.workspace(&workspace_root);
             assert_eq!(
-                symposium::discovery::pending_candidates(&ctx.sym, &deps).await,
+                symposium::discovery::pending_candidates(&ctx.sym, &deps)
+                    .await
+                    .into_iter()
+                    .map(|id| id.name)
+                    .collect::<Vec<_>>(),
                 vec!["crate-a".to_string()]
             );
 
@@ -712,7 +716,11 @@ async fn consent_prompt_never_fires_non_interactively() {
             // Still undecided, and still not installed.
             let deps = ctx.sym.workspace(&workspace_root);
             assert_eq!(
-                symposium::discovery::pending_candidates(&ctx.sym, &deps).await,
+                symposium::discovery::pending_candidates(&ctx.sym, &deps)
+                    .await
+                    .into_iter()
+                    .map(|id| id.name)
+                    .collect::<Vec<_>>(),
                 vec!["crate-a".to_string()]
             );
             assert!(

@@ -14,7 +14,7 @@ use crate::installation::{
     resolve_runnable,
 };
 use crate::plugins::{HookFormat, Installation};
-use crate::pm::Workspace;
+use crate::pm::{PackageId, Workspace};
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
@@ -759,7 +759,15 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String
 /// context, with a pointer at the interactive command that can actually ask.
 /// `None` when nothing is pending.
 async fn consent_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String> {
-    let names = crate::discovery::pending_candidates(sym, deps).await;
+    let pending = crate::discovery::pending_candidates(sym, deps).await;
+    record_surfaced(sym, deps, &pending);
+    pending_notice(&pending)
+}
+
+fn pending_notice(pending: &[PackageId]) -> Option<String> {
+    let mut names: Vec<&str> = pending.iter().map(|id| id.name.as_str()).collect();
+    names.sort();
+    names.dedup();
     if names.is_empty() {
         return None;
     }
@@ -801,7 +809,8 @@ async fn mid_session_sync_notices(
     plugin_reload_notice: Option<String>,
 ) -> symposium::OutputEvent {
     let possible_new_plugins = if notify_about_possible_new_plugins {
-        consent_hint(sym, deps).await
+        let pending = crate::discovery::pending_candidates(sym, deps).await;
+        pending_notice(&record_surfaced(sym, deps, &pending))
     } else {
         None
     };
@@ -814,6 +823,22 @@ async fn mid_session_sync_notices(
     } else {
         symposium::OutputEvent::with_context(event, fragments.join("\n\n"))
     }
+}
+
+fn record_surfaced(
+    sym: &Symposium,
+    deps: &Arc<Workspace>,
+    pending: &[PackageId],
+) -> Vec<PackageId> {
+    let Some(start) = deps.start().filter(|_| !pending.is_empty()) else {
+        return pending.to_vec();
+    };
+    let mut state = crate::workspace_state::WorkspaceState::load(sym, start);
+    let new = state.surface(pending);
+    if !new.is_empty() {
+        state.save(sym, start);
+    }
+    new
 }
 
 pub enum PluginHookOutput {
