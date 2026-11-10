@@ -2598,7 +2598,6 @@ version = "0.1.0"
 dependencies = [
  "acpr",
  "anyhow",
- "clap",
  "sacp",
  "sacp-tokio",
  "serde",

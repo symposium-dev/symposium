@@ -8,10 +8,10 @@
 
 use std::{fmt::Write as _, path::Path};
 
-use clap::{Command, CommandFactory};
+use clap::Command;
 
 use crate::{
-    cli::{Cli, Commands, builtin_audience},
+    cli::{Binary, Cli, Commands, builtin_audience},
     config::Symposium,
     plugins::{Audience, Plugin, load_registry_with_workspace},
     pm::PackageId,
@@ -32,6 +32,7 @@ pub const AGENTS_HEADING: &str = "Commands for agents";
 /// - `<built-in> --help` (incl. nested and required-arg commands) -> clap's own per command help, re-rendered;
 /// - a plugin-vended `<name> --help` -> `None`, so dispatch forwards `--help` to the child.
 pub async fn help_text(
+    binary: Binary,
     parse: Result<&Cli, &clap::Error>,
     args: &[String],
     sym: &Symposium,
@@ -42,14 +43,14 @@ pub async fn help_text(
             let help_keyword = matches!(&cli.command, Some(Commands::External(argv)) if argv.first().and_then(|fst| fst.to_str()) == Some("help"));
 
             if cli.command.is_none() || help_keyword {
-                return Some(render_help(sym, cwd).await);
+                return Some(render_help(binary, sym, cwd).await);
             }
 
             if cli.help {
                 // `<built-in> --help`; fall back to top-level if the target is a plugin (External) or `--help` come before any subcommand name.
-                return match subcommand_help(args) {
+                return match subcommand_help(binary, args) {
                     Some(text) => Some(text),
-                    None => Some(render_help(sym, cwd).await),
+                    None => Some(render_help(binary, sym, cwd).await),
                 };
             }
 
@@ -58,14 +59,14 @@ pub async fn help_text(
         // Parse failed. If help was requested on a built-in with required args/subcommands, recover by rendering that command's help; otherwise it's a genuine error and the caller let's clap report it.
         Err(_) => {
             let asked = args.iter().any(|arg| arg == "-h" || arg == "--help");
-            asked.then(|| subcommand_help(args)).flatten()
+            asked.then(|| subcommand_help(binary, args)).flatten()
         }
     }
 }
 
 /// Render clap's help for the deepest built-in subcommand named in `args`, or `None` if none is present (top-level invocation, or a plugin name).
-pub fn subcommand_help(args: &[String]) -> Option<String> {
-    let mut root = Cli::command();
+pub fn subcommand_help(binary: Binary, args: &[String]) -> Option<String> {
+    let mut root = binary.command();
     root.build();
 
     let mut current = &root;
@@ -89,7 +90,7 @@ pub fn subcommand_help(args: &[String]) -> Option<String> {
     })
 }
 
-pub async fn render_help(sym: &Symposium, cwd: &Path) -> String {
+pub async fn render_help(binary: Binary, sym: &Symposium, cwd: &Path) -> String {
     let ws = sym.workspace(cwd);
     let workspace = ws.info().await.cloned();
     let registry = load_registry_with_workspace(sym, workspace.as_ref()).await;
@@ -112,11 +113,11 @@ pub async fn render_help(sym: &Symposium, cwd: &Path) -> String {
     )
     .await;
 
-    render(&active, &dep_ids, &used)
+    render(binary, &active, &dep_ids, &used)
 }
 
-fn render(plugins: &[Plugin], deps: &[PackageId], used: &[PackageId]) -> String {
-    let mut cmd = Cli::command();
+fn render(binary: Binary, plugins: &[Plugin], deps: &[PackageId], used: &[PackageId]) -> String {
+    let mut cmd = binary.command();
     let full = cmd.render_help().to_string();
 
     let (Some(commands_idx), Some(options_idx)) =
@@ -304,7 +305,7 @@ mod tests {
               -h, --help             Print help
               -V, --version          Print version
         "#]]
-             .assert_eq(&redact(render(&reg.plugins, &ws, &[])));
+             .assert_eq(&redact(render(Binary::CargoAgents, &reg.plugins, &ws, &[])));
     }
 
     #[test]
@@ -317,7 +318,7 @@ mod tests {
         let reg = registry(vec![plugin_with("example-plugin", "*", subs)]);
         let ws = vec![workspace_crate("example-crate", "1.0.0")];
 
-        let out = render(&reg.plugins, &ws, &[]);
+        let out = render(Binary::CargoAgents, &reg.plugins, &ws, &[]);
         let humans = extract_section(&out, "Commands for humans:");
         assert!(
             humans.contains("example-tool"),
@@ -342,7 +343,7 @@ mod tests {
         let reg = registry(vec![plugin_with("example-plugin", "*", subs)]);
         let ws = vec![workspace_crate("example-crate", "1.0.0")];
 
-        let out = render(&reg.plugins, &ws, &[]);
+        let out = render(Binary::CargoAgents, &reg.plugins, &ws, &[]);
         let agents = extract_section(&out, "Commands for agents:");
         assert!(
             agents.contains("example-tool"),
@@ -371,7 +372,7 @@ mod tests {
         let reg = registry(vec![plugin_with("example-plugin", "*", subs)]);
         let ws = vec![workspace_crate("other-crate-sources", "1.0.0")];
 
-        let out = render(&reg.plugins, &ws, &[]);
+        let out = render(Binary::CargoAgents, &reg.plugins, &ws, &[]);
         assert!(
             !out.contains("example-tool"),
             "example-tool should be filtered when workspace lacks example-crate:\n{out}"
@@ -393,7 +394,7 @@ mod tests {
         let reg = registry(vec![plugin_with("example-plugin", "*", subs)]);
         let ws = vec![workspace_crate("example-crate", "1.0.0")];
 
-        let out = render(&reg.plugins, &ws, &[]);
+        let out = render(Binary::CargoAgents, &reg.plugins, &ws, &[]);
         let agents = extract_section(&out, "Commands for agents:");
         let bar_pos = agents.find("bar-tool").expect("bar-tool present");
         let foo_pos = agents.find("foo-tool").expect("foo-tool present");
