@@ -1066,7 +1066,7 @@ mod tests {
         let pm = GitPm::new("reg", "https://github.com/example/reg", ctx).unwrap();
         let err = pm.active_plugins(&[]).await.unwrap_err();
         assert!(
-            err.to_string().contains("cargo agents plugin sync reg"),
+            err.to_string().contains("symposium plugin sync reg"),
             "{err}"
         );
     }

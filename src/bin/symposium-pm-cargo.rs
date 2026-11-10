@@ -2,7 +2,7 @@
 //!
 //! Speaks the SDK's package-manager protocol on stdin/stdout. It lives in this
 //! crate rather than in `symposium-pm-cargo` so that `cargo install symposium`
-//! installs it alongside `cargo-agents`. A PM the user has to install
+//! installs it alongside `symposium`. A PM the user has to install
 //! separately would be a PM that is usually missing.
 //!
 //! The `CargoPm` here is the same type Symposium uses in-process, built from

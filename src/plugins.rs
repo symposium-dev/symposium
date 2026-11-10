@@ -359,7 +359,7 @@ pub struct PluginManifest {
     /// MCP servers to register for this plugin.
     pub mcp_servers: Vec<PluginMcpServer>,
     /// Subcommands vended by this plugin, keyed by the name the user types
-    /// after `cargo agents`. Empty for plugins that vend no subcommands.
+    /// after `symposium`. Empty for plugins that vend no subcommands.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub subcommands: std::collections::BTreeMap<String, Subcommand>,
     /// Custom predicate definitions vended by this plugin.
@@ -1548,7 +1548,7 @@ pub fn validate_source_dir(dir: &Path) -> Result<Vec<ValidationResult>> {
             parsed.manifest.requires_use.then(|| {
                 format!(
                     "plugin `{name}` references no dependency; it stays dormant until enabled \
-                     with `cargo agents use {name}`",
+                     with `symposium use {name}`",
                     name = parsed.manifest.name,
                 )
             })
@@ -1826,7 +1826,7 @@ fn validate_manifest(
     })
 }
 
-/// Whether `name` collides with a built-in `cargo agents` command. Clap
+/// Whether `name` collides with a built-in `symposium` command. Clap
 /// matches built-ins before falling back to `External`, so a plugin
 /// subcommand with one of these names could never run.
 ///
@@ -1846,7 +1846,7 @@ fn validate_subcommand_name(name: &str) -> Result<()> {
         bail!("subcommand name is empty");
     }
     if is_reserved_subcommand_name(name) {
-        bail!("subcommand `{name}` shadows a built-in `cargo agents` command");
+        bail!("subcommand `{name}` shadows a built-in `symposium` command");
     }
     if !name
         .chars()

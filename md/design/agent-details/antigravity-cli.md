@@ -47,12 +47,12 @@ Each top-level key is a **hook name** mapping to its events. `PreToolUse` and
       {
         "matcher": "*",
         "hooks": [
-          { "type": "command", "command": "cargo-agents hook antigravity pre-tool-use", "timeout": 30 }
+          { "type": "command", "command": "symposium hook antigravity pre-tool-use", "timeout": 30 }
         ]
       }
     ],
     "PreInvocation": [
-      { "type": "command", "command": "cargo-agents hook antigravity user-prompt-submit", "timeout": 30 }
+      { "type": "command", "command": "symposium hook antigravity user-prompt-submit", "timeout": 30 }
     ]
   }
 }
@@ -241,7 +241,7 @@ plugins it finds, which symposium leaves alone: `plugins.<dir>.enabled` in
 Antigravity's record of its own installs, so it never shows these plugins;
 `/skills` does.
 
-Verified against agy 1.2.14 through `cargo agents sync`, by asking the agent
+Verified against agy 1.2.14 through `symposium sync`, by asking the agent
 (`/skills` in the TUI and the model request of `agy -p`):
 
 - The plugin is listed in the first session after the sync, with no bare

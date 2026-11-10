@@ -250,7 +250,7 @@ impl PackageManager for CargoPm {
     /// Name-based, like `cargo search`: the results are *candidate* crates —
     /// whether one actually carries plugin content is only known once it is
     /// fetched (any fetchable crate yields at least a default `skills/` plugin).
-    /// So this lets `cargo agents use <crate>` name a crate the workspace
+    /// So this lets `symposium use <crate>` name a crate the workspace
     /// doesn't depend on; the fetch/load step decides what it contributes.
     async fn search(&self, query: &str) -> Result<Vec<PluginInfo>> {
         let client = crates_io_api::AsyncClient::new(

@@ -1,6 +1,6 @@
 //! Structured report layer.
 //!
-//! Emits user-facing events during `cargo agents` commands as tracing events
+//! Emits user-facing events during `symposium` commands as tracing events
 //! carrying a single `report` field whose value is a serialized
 //! `ReportEvent`. A custom tracing layer picks these up and either
 //! pretty-prints them (`--verbose`) or accumulates JSON (`--json`).
@@ -130,7 +130,7 @@ pub enum ReportEvent {
     },
 
     // ── Enablement events (`search` / `use` / `status`) ──────────────
-    /// One `cargo agents search` hit.
+    /// One `symposium search` hit.
     SearchMatch {
         /// The instance the hit came from: a configured registry's name, a
         /// package-manager transport, or `(workspace)`.
@@ -142,13 +142,13 @@ pub enum ReportEvent {
         description: Option<String>,
     },
 
-    /// A `[plugins] use` entry was recorded by `cargo agents use`.
+    /// A `[plugins] use` entry was recorded by `symposium use`.
     PluginEnabled { name: String, global: bool },
 
-    /// A `[plugins] use` entry was dropped by `cargo agents use --remove`.
+    /// A `[plugins] use` entry was dropped by `symposium use --remove`.
     PluginRemoved { name: String, global: bool },
 
-    /// One line of the `cargo agents status` enablement report.
+    /// One line of the `symposium status` enablement report.
     PluginStatus {
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]

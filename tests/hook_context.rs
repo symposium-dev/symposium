@@ -1,4 +1,4 @@
-//! One `cargo agents hook` invocation answers for many sources: symposium's
+//! One `symposium hook` invocation answers for many sources: symposium's
 //! own output (here, the notice that `crate-a` ships a plugin awaiting
 //! consent) and every plugin hook. Each one's context must reach the agent,
 //! in dispatch order, the way agents themselves combine several hooks.

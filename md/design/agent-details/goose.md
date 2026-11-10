@@ -70,7 +70,7 @@ extensions:
   symposium:
     name: symposium
     type: stdio
-    cmd: /path/to/cargo-agents
+    cmd: /path/to/symposium
     args: [mcp]
     enabled: true
     envs:
@@ -105,7 +105,7 @@ empty value counts as unset. Symposium writes its MCP servers there too.
 Verified against Goose 1.54.0 with a different MCP server in each candidate
 file, by which one `goose run --text hi` started: the one under
 `$GOOSE_PATH_ROOT` when both variables were set, and the `XDG_CONFIG_HOME` one
-when `GOOSE_PATH_ROOT` was empty. Through `cargo agents sync` with the variable
+when `GOOSE_PATH_ROOT` was empty. Through `symposium sync` with the variable
 set, a server left in `~/.config/goose/config.yaml` never started, while the
 one symposium wrote under `$GOOSE_PATH_ROOT` started and was offered to the
 model as a tool.
@@ -138,7 +138,7 @@ stays, and an entry left after a removal is harmless. Goose 1.55.0 also searches
 same skills from Claude Code's copy (`~/.claude/skills/<plugin>/skills/<skill>/`),
 and turning the plugin off in Goose then has no effect.
 
-Verified against Goose 1.53.0 through `cargo agents sync`, by asking the agent
+Verified against Goose 1.53.0 through `symposium sync`, by asking the agent
 (`goose skills list`, and the system prompt a `goose session` sends to a local
 model endpoint):
 

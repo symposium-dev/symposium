@@ -66,30 +66,30 @@ pub async fn main(binary: Binary, args: Vec<OsString>) -> ExitCode {
 
     // Log the command being invoked
     match &cli.command {
-        Some(Commands::Init { .. }) => tracing::info!("cargo agents init"),
-        Some(Commands::Sync) => tracing::info!("cargo agents sync"),
-        Some(Commands::Search { query }) => tracing::info!(%query, "cargo agents search"),
+        Some(Commands::Init { .. }) => tracing::info!("symposium init"),
+        Some(Commands::Sync) => tracing::info!("symposium sync"),
+        Some(Commands::Search { query }) => tracing::info!(%query, "symposium search"),
         Some(Commands::Use {
             name,
             global,
             remove,
-        }) => tracing::info!(%name, global, remove, "cargo agents use"),
-        Some(Commands::Status) => tracing::info!("cargo agents status"),
+        }) => tracing::info!(%name, global, remove, "symposium use"),
+        Some(Commands::Status) => tracing::info!("symposium status"),
         Some(Commands::Plugin { command }) => {
-            tracing::info!(subcommand = ?command, "cargo agents plugin");
+            tracing::info!(subcommand = ?command, "symposium plugin");
         }
         Some(Commands::Hook { agent, event }) => {
-            tracing::debug!(?agent, ?event, "cargo agents hook");
+            tracing::debug!(?agent, ?event, "symposium hook");
         }
-        Some(Commands::SelfUpdate) => tracing::info!("cargo agents self-update"),
+        Some(Commands::SelfUpdate) => tracing::info!("symposium self-update"),
         Some(Commands::CrateInfo { name, version }) => {
-            tracing::debug!(%name, version = ?version, "cargo agents crate-info");
+            tracing::debug!(%name, version = ?version, "symposium crate-info");
         }
         Some(Commands::Telemetry { command }) => {
-            tracing::info!(subcommand = ?command, "cargo agents telemetry");
+            tracing::info!(subcommand = ?command, "symposium telemetry");
         }
         Some(Commands::External(argv)) => {
-            tracing::info!(argv = ?argv, "cargo agents <external>");
+            tracing::info!(argv = ?argv, "symposium <external>");
         }
         None => {}
     }

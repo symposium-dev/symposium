@@ -316,7 +316,7 @@ mod tests {
     };
 
     fn parse_command(arguments: &[&str]) -> Commands {
-        Cli::try_parse_from(std::iter::once("cargo-agents").chain(arguments.iter().copied()))
+        Cli::try_parse_from(std::iter::once("symposium").chain(arguments.iter().copied()))
             .unwrap()
             .command
             .unwrap()

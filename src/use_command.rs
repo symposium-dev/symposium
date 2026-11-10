@@ -1,4 +1,4 @@
-//! `cargo agents use` — explicit plugin enablement.
+//! `symposium use`: explicit plugin enablement.
 //!
 //! Enablement is the consent axis: the workspace and the configured
 //! registries are trust roots, but a dependency is not, so a plugin embedded
@@ -41,7 +41,7 @@ pub async fn use_plugin(
         .await
     {
         Ok(id) => id,
-        Err(e) => bail!("{e} (try `cargo agents search {name}`)"),
+        Err(e) => bail!("{e} (try `symposium search {name}`)"),
     };
 
     // `disable` outranks every way of enabling a plugin, `use` included, so
@@ -161,7 +161,7 @@ pub async fn remove_plugin(
     }
     if sym.config.plugins.used.len() == before {
         let scope = if global { "--global" } else { "this workspace" };
-        bail!("no `use` entry for `{name}` ({scope}); see `cargo agents status`");
+        bail!("no `use` entry for `{name}` ({scope}); see `symposium status`");
     }
     sym.save_config().context("failed to write user config")?;
     tracing::info!(

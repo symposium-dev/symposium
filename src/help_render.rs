@@ -1,4 +1,4 @@
-//! Custom `cargo agents --help` renderer.
+//! Custom `symposium --help` renderer.
 //!
 //! clap's auto help flag and help subcommand are disabled (see[`crate::cli::Cli`]), so top-level `--help` / `-h` / `help` / no-subcommand invocations land here *after* parsing and get an audience-grouped help text per `md/design/subcommands.md`.
 //!
@@ -282,7 +282,7 @@ mod tests {
         expect![[r#"
             AI the Rust Way
 
-            Usage: cargo agents [OPTIONS] [COMMAND]
+            Usage: symposium [OPTIONS] [COMMAND]
 
             Commands for humans:
             init         Set up user-wide configuration
@@ -305,7 +305,7 @@ mod tests {
               -h, --help             Print help
               -V, --version          Print version
         "#]]
-             .assert_eq(&redact(render(Binary::CargoAgents, &reg.plugins, &ws, &[])));
+             .assert_eq(&redact(render(Binary::Symposium, &reg.plugins, &ws, &[])));
     }
 
     #[test]
@@ -318,7 +318,7 @@ mod tests {
         let reg = registry(vec![plugin_with("example-plugin", "*", subs)]);
         let ws = vec![workspace_crate("example-crate", "1.0.0")];
 
-        let out = render(Binary::CargoAgents, &reg.plugins, &ws, &[]);
+        let out = render(Binary::Symposium, &reg.plugins, &ws, &[]);
         let humans = extract_section(&out, "Commands for humans:");
         assert!(
             humans.contains("example-tool"),
@@ -343,7 +343,7 @@ mod tests {
         let reg = registry(vec![plugin_with("example-plugin", "*", subs)]);
         let ws = vec![workspace_crate("example-crate", "1.0.0")];
 
-        let out = render(Binary::CargoAgents, &reg.plugins, &ws, &[]);
+        let out = render(Binary::Symposium, &reg.plugins, &ws, &[]);
         let agents = extract_section(&out, "Commands for agents:");
         assert!(
             agents.contains("example-tool"),
@@ -372,7 +372,7 @@ mod tests {
         let reg = registry(vec![plugin_with("example-plugin", "*", subs)]);
         let ws = vec![workspace_crate("other-crate-sources", "1.0.0")];
 
-        let out = render(Binary::CargoAgents, &reg.plugins, &ws, &[]);
+        let out = render(Binary::Symposium, &reg.plugins, &ws, &[]);
         assert!(
             !out.contains("example-tool"),
             "example-tool should be filtered when workspace lacks example-crate:\n{out}"
@@ -394,7 +394,7 @@ mod tests {
         let reg = registry(vec![plugin_with("example-plugin", "*", subs)]);
         let ws = vec![workspace_crate("example-crate", "1.0.0")];
 
-        let out = render(Binary::CargoAgents, &reg.plugins, &ws, &[]);
+        let out = render(Binary::Symposium, &reg.plugins, &ws, &[]);
         let agents = extract_section(&out, "Commands for agents:");
         let bar_pos = agents.find("bar-tool").expect("bar-tool present");
         let foo_pos = agents.find("foo-tool").expect("foo-tool present");

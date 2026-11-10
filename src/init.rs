@@ -1,4 +1,4 @@
-//! Init command: `cargo agents init`.
+//! Init command: `symposium init`.
 
 use std::path::Path;
 
@@ -161,7 +161,7 @@ async fn reap_removed_agent_skills(
     if ws.info().await.is_some() {
         crate::sync::sync(sym, &ws, update).await?;
     }
-    out.info("skills installed in other workspaces stay until `cargo agents sync` runs there");
+    out.info("skills installed in other workspaces stay until `symposium sync` runs there");
     Ok(())
 }
 
@@ -222,7 +222,7 @@ fn prompt_for_telemetry(current: bool) -> Result<bool> {
         .with_prompt(
             "Enable anonymous usage telemetry? It is stored locally under \
              ~/.symposium/telemetry/ and never uploaded automatically — you can review \
-             it with `cargo agents telemetry show` and share it yourself",
+             it with `symposium telemetry show` and share it yourself",
         )
         .default(current)
         .interact()?)

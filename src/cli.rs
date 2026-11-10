@@ -269,7 +269,7 @@ pub async fn run(
 
         Commands::Sync => {
             let deps = sym.workspace(cwd);
-            // The consent prompt belongs to a human running `cargo agents
+            // The consent prompt belongs to a human running `symposium
             // sync`; it is inert unless `out` is interactive, and the
             // hook-triggered auto-sync path calls `sync::sync` directly and
             // never reaches here at all.
@@ -325,7 +325,7 @@ pub async fn run(
                     out.println(
                         "Telemetry enabled. Events are stored locally under the telemetry \
                          directory and are never uploaded automatically — review them with \
-                         `cargo agents telemetry show`.",
+                         `symposium telemetry show`.",
                     );
                 }
                 TelemetryCommand::Disable => {

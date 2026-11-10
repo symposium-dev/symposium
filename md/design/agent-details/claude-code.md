@@ -219,7 +219,7 @@ shows nothing, and a session sees no tools). MCP has its own two files:
 {
   "mcpServers": {
     "symposium": {
-      "command": "/path/to/cargo-agents",
+      "command": "/path/to/symposium",
       "args": ["mcp"]
     }
   }
@@ -265,7 +265,7 @@ touches.
 Verified against Claude Code 2.1.284 by asking the agent (`claude plugin list
 --json`, `claude plugin details`, and the `system/init` event of `claude -p`):
 
-- The plugin is listed in the first session after `cargo agents sync`, and
+- The plugin is listed in the first session after `symposium sync`, and
   `claude plugin list` shows it without a prior session.
 - An edit at the same version is picked up by the next session: the copy is
   read in place, and nothing is cached under `~/.claude/plugins/cache/`.
