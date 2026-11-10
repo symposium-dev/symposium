@@ -371,8 +371,15 @@ async fn execute_hook_inner(
         .await
         {
             Ok(final_output) => {
-                remember_surfaced(sym, &deps, &named);
-                handler.respond(&final_output)
+                let response = handler.respond(&final_output);
+                if receives(
+                    handler.as_ref(),
+                    &response,
+                    builtin_sym_output.additional_context(),
+                ) {
+                    remember_surfaced(sym, &deps, &named);
+                }
+                response
             }
             Err(stderr) => blocked_response(handler.as_ref(), event, &stderr),
         };
@@ -386,6 +393,22 @@ async fn execute_hook_inner(
         // Agent doesn't support this event
         anyhow::bail!("agent {agent:?} does not support hook event {event:?}")
     }
+}
+
+fn receives(
+    handler: &dyn crate::hook_schema::ErasedAgentHookEvent,
+    response: &HookResponse,
+    context: Option<&str>,
+) -> bool {
+    let Some(context) = context else {
+        return false;
+    };
+    handler.parse_output(&response.stdout).is_ok_and(|output| {
+        output
+            .to_symposium()
+            .additional_context()
+            .is_some_and(|received| received.contains(context))
+    })
 }
 
 /// The response for a plugin hook that exited 2, which the plugin contract
