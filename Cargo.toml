@@ -27,11 +27,11 @@ name = "symposium-pm-cargo"
 path = "src/bin/symposium-pm-cargo.rs"
 
 [package.metadata.binstall]
-pkg-url = "{ repo }/releases/download/{ name }-v{ version }/cargo-agents-{ target }.tar.gz"
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/symposium-{ target }.tar.gz"
 bin-dir = "{ bin }{ binary-ext }"
 pkg-fmt = "tgz"
 [package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
-pkg-url = "{ repo }/releases/download/{ name }-v{ version }/cargo-agents-{ target }.zip"
+pkg-url = "{ repo }/releases/download/{ name }-v{ version }/symposium-{ target }.zip"
 pkg-fmt = "zip"
 
 [dependencies]
