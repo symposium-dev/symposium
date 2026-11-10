@@ -19,7 +19,7 @@ Symposium merges hook entries into Codex's `hooks.json`.
 
 Events registered: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `Stop` (PascalCase).
 
-Output format: JSON. Exit code 2 blocks tool use.
+Output format: JSON. For `PreToolUse`, exit code 2 blocks the tool call. For `Stop`, exit code 2 makes Codex continue, using stderr as the continuation prompt.
 
 **Caveat:** Codex runs a hook only after you trust it. Until then it skips the hook, warning at startup; open `/hooks` in Codex to review and trust symposium's entries. A changed entry needs trusting again. Project hooks also require the project itself to be trusted.
 

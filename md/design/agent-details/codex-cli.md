@@ -149,6 +149,8 @@ Supported on SessionStart, UserPromptSubmit, PostToolUse, Stop.
 
 For the Stop event, `{ "decision": "block", "reason": "Run tests again" }` tells Codex to create a **continuation prompt** — it does not reject the turn.
 
+Exit code 2 with a non-empty stderr does the same, using stderr as the continuation prompt. With an empty stderr the hook counts as failed and the turn ends.
+
 ## Exit Codes
 
 | Code | Meaning |
