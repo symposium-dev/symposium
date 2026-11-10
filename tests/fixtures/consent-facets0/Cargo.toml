@@ -1,0 +1,7 @@
+[package]
+name = "consent-host"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crate-d = { path = "crate-d" }

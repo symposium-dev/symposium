@@ -1,0 +1,21 @@
+[[mcp_servers]]
+name = "d-server"
+depends-on = ["*"]
+command = "/usr/bin/true"
+args = ["--stdio"]
+env = []
+
+[[installations]]
+name = "d-install"
+executable = "rustc"
+
+[subcommand.d-tool]
+description = "Print rustc version (from crate-d)"
+command = "d-install"
+
+[[hooks]]
+name = "d-hook"
+event = "PreToolUse"
+matcher = "Task"
+command = { script = "scripts/d-hook.sh" }
+format = "symposium"

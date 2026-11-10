@@ -752,6 +752,131 @@ async fn apply_consent_records_both_answers() {
     .unwrap();
 }
 
+async fn decide_crate_d(ctx: &mut TestContext, approve: bool) -> anyhow::Result<()> {
+    let workspace_root = ctx.workspace_root.clone().unwrap();
+    let deps = ctx.sym.workspace(&workspace_root);
+    let candidate = symposium::discovery::discover_for(&ctx.sym, &deps)
+        .await
+        .candidates
+        .into_iter()
+        .find(|c| c.id.name == "crate-d")
+        .expect("crate-d is pending approval");
+    let (approved, declined) = if approve {
+        (vec![candidate.id], vec![])
+    } else {
+        (vec![], vec![candidate.id])
+    };
+    symposium::discovery::apply_consent(&mut ctx.sym, deps.pms(), &approved, &declined).await
+}
+
+async fn crate_d_is_offered(ctx: &mut TestContext) -> anyhow::Result<bool> {
+    let workspace_root = ctx.workspace_root.clone().unwrap();
+    let deps = ctx.sym.workspace(&workspace_root);
+    let pending = symposium::discovery::pending_candidates(&ctx.sym, &deps).await;
+    let session = ctx
+        .prompt_or_hook(
+            "hello",
+            &[HookStep::session_start()],
+            symposium::hook_schema::HookAgent::Claude,
+        )
+        .await?;
+    Ok(pending.contains(&"crate-d".to_string()) || session.has_context_containing("crate-d"))
+}
+
+async fn active_crate_d_facets(ctx: &mut TestContext) -> anyhow::Result<Vec<&'static str>> {
+    let workspace_root = ctx.workspace_root.clone().unwrap();
+    let mut active = Vec::new();
+    if !find_installed_skills(&workspace_root.join(".claude/skills"), "d-guidance").is_empty() {
+        active.push("skill");
+    }
+    let mcp = std::fs::read_to_string(workspace_root.join(".mcp.json")).unwrap_or_default();
+    if mcp.contains("d-server") {
+        active.push("mcp server");
+    }
+    let hook = ctx
+        .prompt_or_hook(
+            "ignored",
+            &[HookStep::PreToolUse {
+                tool_name: "Task".to_string(),
+                tool_input: serde_json::json!({}),
+            }],
+            symposium::hook_schema::HookAgent::Claude,
+        )
+        .await?;
+    if hook.has_context_containing("d-hook-output") {
+        active.push("hook");
+    }
+    if ctx
+        .symposium(&["d-tool", "--version"])
+        .await
+        .is_ok_and(|out| out.contains("rustc"))
+    {
+        active.push("subcommand");
+    }
+    Ok(active)
+}
+
+async fn crate_d_status(ctx: &TestContext) -> anyhow::Result<StatusState> {
+    let workspace_root = ctx.workspace_root.clone().unwrap();
+    let deps = ctx.sym.workspace(&workspace_root);
+    let entries = symposium::status_command::workspace_status(&ctx.sym, &deps).await?;
+    Ok(entries
+        .into_iter()
+        .find(|e| e.name == "crate-d")
+        .expect("crate-d listed")
+        .state)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn declined_dependency_plugin_stays_inactive() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["consent-facets0"],
+        async |mut ctx| {
+            ctx.sym.config.auto_update = symposium::config::AutoUpdate::Off;
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            assert!(crate_d_is_offered(&mut ctx).await?);
+
+            decide_crate_d(&mut ctx, false).await?;
+            assert_eq!(ctx.sym.config.plugins.disable, ["crate-d"]);
+            ctx.symposium(&["sync"]).await?;
+
+            assert_eq!(active_crate_d_facets(&mut ctx).await?, Vec::<&str>::new());
+            assert_eq!(crate_d_status(&ctx).await?, StatusState::Declined);
+            assert!(!crate_d_is_offered(&mut ctx).await?);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn approved_dependency_plugin_activates() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["consent-facets0"],
+        async |mut ctx| {
+            ctx.sym.config.auto_update = symposium::config::AutoUpdate::Off;
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            assert!(crate_d_is_offered(&mut ctx).await?);
+
+            decide_crate_d(&mut ctx, true).await?;
+            ctx.symposium(&["sync"]).await?;
+
+            assert_eq!(
+                active_crate_d_facets(&mut ctx).await?,
+                ["skill", "mcp server", "hook", "subcommand"]
+            );
+            assert_eq!(crate_d_status(&ctx).await?, StatusState::Active);
+            assert!(!crate_d_is_offered(&mut ctx).await?);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// Non-interactively, pending candidates surface as `SessionStart` context
 /// rather than a prompt — and the agent is told not to act on them itself.
 #[tokio::test]
