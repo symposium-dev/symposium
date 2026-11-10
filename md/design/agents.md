@@ -20,7 +20,7 @@ The agent name is stored in `[agent] name` in either the user or project config.
 
 For each agent, `cargo agents` needs to know how to:
 
-1. **Register hooks** — write the hook configuration so the agent calls `cargo-agents hook` on the right events.
+1. **Register hooks**: write the hook configuration so the agent calls `symposium hook` on the right events.
 2. **Install extensions** — place skill files (and eventually workflow/MCP definitions) where the agent expects them.
 
 Where these files go depends on whether the agent is configured at the user level or the project level (see [`sync --agent`](./sync-agent-flow.md)).
@@ -83,7 +83,7 @@ Example hook registration:
         "hooks": [
           {
             "type": "command",
-            "command": "cargo-agents hook claude pre-tool-use"
+            "command": "symposium hook claude pre-tool-use"
           }
         ]
       }
@@ -146,7 +146,7 @@ Example hook registration:
     "preToolUse": [
       {
         "type": "command",
-        "bash": "cargo-agents hook copilot pre-tool-use",
+        "bash": "symposium hook copilot pre-tool-use",
         "timeoutSec": 10
       }
     ]
@@ -209,7 +209,7 @@ else in the file untouched.
         "hooks": [
           {
             "type": "command",
-            "command": "cargo-agents hook antigravity pre-tool-use",
+            "command": "symposium hook antigravity pre-tool-use",
             "timeout": 30
           }
         ]
@@ -218,7 +218,7 @@ else in the file untouched.
     "SessionStart": [
       {
         "type": "command",
-        "command": "cargo-agents hook antigravity session-start",
+        "command": "symposium hook antigravity session-start",
         "timeout": 30
       }
     ]
@@ -274,12 +274,12 @@ Example hook registration:
     "preToolUse": [
       {
         "matcher": "*",
-        "command": "cargo-agents hook kiro pre-tool-use"
+        "command": "symposium hook kiro pre-tool-use"
       }
     ],
     "agentSpawn": [
       {
-        "command": "cargo-agents hook kiro session-start"
+        "command": "symposium hook kiro session-start"
       }
     ]
   }
@@ -336,7 +336,7 @@ Example hook registration:
         "matcher": "",
         "hooks": [{
           "type": "command",
-          "command": "cargo-agents hook codex pre-tool-use",
+          "command": "symposium hook codex pre-tool-use",
           "timeout": 10
         }]
       }
