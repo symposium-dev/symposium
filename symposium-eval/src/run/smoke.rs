@@ -1,10 +1,10 @@
 //! The no-model smoke test of RFD step 2, under real `srt` and the generated policy.
 //!
 //! Each trial builds and tests its project, then fails to read what it must not: a home
-//! (including a `cargo-agents` installed there, run by absolute path), the checkout's
+//! (including a `symposium` installed there, run by absolute path), the checkout's
 //! `evals/`, and another trial. It cannot change its fixtures, its policy, the staged
-//! `cargo-agents`, a registry, or another trial, and only a Symposium trial can run the
-//! staged `cargo-agents`. Every check is one `sh` script per trial, which stops at the
+//! `symposium`, a registry, or another trial, and only a Symposium trial can run the
+//! staged `symposium`. Every check is one `sh` script per trial, which stops at the
 //! first surprise and names it.
 //!
 //! The home is a decoy the test makes and adds to the denied user data roots, so the test
@@ -16,10 +16,10 @@
 //!
 //! Tools are staged as the runner stages them, and each trial runs them by name from its
 //! `bin/`: the machine's `node`, a small npm-style package that finds the staged `node`
-//! through its `env node` line, and a stand-in for `cargo-agents`, which a baseline trial
+//! through its `env node` line, and a stand-in for `symposium`, which a baseline trial
 //! must not find at all.
 //!
-//! FIXME: stage and launch the real clients and `cargo-agents` with `--version`.
+//! FIXME: stage and launch the real clients and `symposium` with `--version`.
 //!
 //! Run on Linux with `cargo test -p symposium-eval -- --ignored`.
 
@@ -106,10 +106,10 @@ impl Smoke {
         let entry = PathBuf::from("cli.js");
         let tool = Tool::NodePackage { package, entry };
         real.stage("package", &tool, Audience::Common);
-        let stand_in = sources.path().join("cargo-agents");
-        executable(&stand_in, "#!/bin/sh\necho 'cargo-agents stand-in'\n");
+        let stand_in = sources.path().join("symposium");
+        executable(&stand_in, "#!/bin/sh\necho 'symposium stand-in'\n");
         let tool = Tool::Executable(stand_in);
-        let staged = real.stage("cargo-agents", &tool, Audience::Symposium);
+        let staged = real.stage("symposium", &tool, Audience::Symposium);
         let symposium = real.trial(1, Configuration::Symposium);
         let baseline = real.trial(2, Configuration::Baseline);
         Self {
@@ -145,16 +145,16 @@ impl Smoke {
             unreadable: self.unreadable(other),
             unwritable: self.unwritable(trial, other),
             runnable: Vec::new(),
-            not_runnable: vec![self.installed_cargo_agents()],
+            not_runnable: vec![self.installed_symposium()],
             commands: vec!["node", "package"],
             absent_commands: Vec::new(),
         };
         if is_symposium {
             boundary.runnable.push(self.staged.clone());
-            boundary.commands.push("cargo-agents");
+            boundary.commands.push("symposium");
         } else {
             boundary.not_runnable.push(self.staged.clone());
-            boundary.absent_commands.push("cargo-agents");
+            boundary.absent_commands.push("symposium");
             boundary.unreadable.push(self.registry_file());
         }
         boundary
@@ -192,19 +192,19 @@ impl Smoke {
             .join("fixture-store/Symposium.toml")
     }
 
-    /// The developer's own `cargo-agents`, in the decoy home.
-    fn installed_cargo_agents(&self) -> PathBuf {
-        self.real.decoy_home().join(".cargo/bin/cargo-agents")
+    /// The developer's own `symposium`, in the decoy home.
+    fn installed_symposium(&self) -> PathBuf {
+        self.real.decoy_home().join(".cargo/bin/symposium")
     }
 }
 
 /// A shell profile and the tools in `~/.cargo/bin`, where a developer's own
-/// `cargo-agents` is installed: those of them `home` holds.
+/// `symposium` is installed: those of them `home` holds.
 fn home_files(home: &Path) -> Vec<PathBuf> {
     [
         ".bashrc",
         ".profile",
-        ".cargo/bin/cargo-agents",
+        ".cargo/bin/symposium",
         ".cargo/bin/cargo",
     ]
     .iter()

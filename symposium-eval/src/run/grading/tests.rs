@@ -50,7 +50,7 @@ fn grading_reads_the_toolchain_and_nothing_of_the_trial_or_batch() {
         batch
             .inputs()
             .join("tasks/store-durability/checks/settings_persist.rs"),
-        batch.symposium_tools().join("cargo-agents"),
+        batch.symposium_tools().join("symposium"),
         other.project().join("src/lib.rs"),
         host.join("home/dev/.cargo/credentials.toml"),
         host.join("checkout/evals/tasks/formatting/checks/double.rs"),

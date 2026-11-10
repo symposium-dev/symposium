@@ -21,7 +21,7 @@ expression: "result_of(Configuration::Symposium, reached)"
   "mode": "with-symposium",
   "trial": 3,
   "symposium": {
-    "version": "cargo-agents 1.0.0",
+    "version": "symposium 1.0.0",
     "sha256": "[hash]",
     "revision": null
   },

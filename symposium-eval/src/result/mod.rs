@@ -64,7 +64,7 @@ pub(crate) struct Planned<'a> {
     pub(crate) trial: usize,
 }
 
-/// Which configuration a trial ran, with the `cargo-agents` a Symposium trial ran, which
+/// Which configuration a trial ran, with the `symposium` a Symposium trial ran, which
 /// is known before any trial launches. A baseline trial cannot carry one.
 #[derive(Debug, Clone)]
 pub(crate) enum Arm {
@@ -93,7 +93,7 @@ pub(crate) struct Provenance {
     pub(crate) deadlines: Deadlines,
 }
 
-/// The `cargo-agents` a Symposium trial ran.
+/// The `symposium` a Symposium trial ran.
 #[derive(Debug, Clone)]
 pub(crate) struct SymposiumBuild {
     pub(crate) version: String,
