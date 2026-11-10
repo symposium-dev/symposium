@@ -1,0 +1,8 @@
+name = "blocker"
+depends-on = ["*"]
+
+[[hooks]]
+name = "block-prompt"
+event = "UserPromptSubmit"
+format = "symposium"
+command = { script = "$TEST_DIR/dot-symposium/plugins/blocker/scripts/block.sh" }
