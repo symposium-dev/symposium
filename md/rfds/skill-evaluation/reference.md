@@ -49,19 +49,19 @@ All batches live under one evaluation root:
 <eval-root>/<batch>/
   tools/
     common/                      # staged clients, readable by every trial
-    symposium/                   # staged cargo-agents, readable by Symposium trials only
+    symposium/                   # staged symposium, readable by Symposium trials only
   trial-1-with-symposium/        # <run>
     home/         # HOME for every process in the trial
     project/      # copy of the starter
     fixtures/     # read-only copies of the task's fixture crates
-    bin/          # links to staged tools: the client, sh, and (Symposium only) cargo-agents
+    bin/          # links to staged tools: the client, sh, and (Symposium only) symposium
     cargo-home/   # CARGO_HOME, empty at start
     tmp/          # TMPDIR
     evidence/     # EVAL_EVIDENCE_DIR and SYMPOSIUM_HOOK_TRACE, outside the project
     registry/     # the task's plugins (Symposium configuration only)
 ```
 
-The executables a trial runs are **staged** once per batch: the client into `tools/common/` (a single binary for native installs; for npm installs, the package directory and the Node.js runtime), and the `cargo-agents` under evaluation into `tools/symposium/`. They are copied, not linked: on Linux, `srt` matches read rules by the name a path is opened under, so a link to a client under the developer's home would not launch. Staging also fixes the binaries for the whole batch, and their hashes go into each result.
+The executables a trial runs are **staged** once per batch: the client into `tools/common/` (a single binary for native installs; for npm installs, the package directory and the Node.js runtime), and the `symposium` under evaluation into `tools/symposium/`. They are copied, not linked: on Linux, `srt` matches read rules by the name a path is opened under, so a link to a client under the developer's home would not launch. Staging also fixes the binaries for the whole batch, and their hashes go into each result.
 
 Claude Code (`~/.claude`), Codex (`~/.codex`), and Symposium (`~/.symposium`) keep their configuration and state under the home directory, so pointing `HOME` (and `USERPROFILE` on Windows) at `<run>/home` gives each trial fresh state.
 
@@ -71,9 +71,9 @@ The client starts with a cleared environment holding only `HOME`, `PATH`, `TMPDI
 2. the active toolchain's own `bin/` directory (the directory of `rustup which cargo`), which holds only Rust tools;
 3. the system directories (`/usr/bin`, `/bin`), which hold the linker and the tools the client needs.
 
-The developer's `~/.cargo/bin` is never on `PATH`, since it can hold their own `cargo-agents`.
+The developer's `~/.cargo/bin` is never on `PATH`, since it can hold their own `symposium`.
 
-In the Symposium configuration, the runner copies the task's plugins into `<run>/registry`, writes this config, and runs `cargo agents init --add-agent <client>`:
+In the Symposium configuration, the runner copies the task's plugins into `<run>/registry`, writes this config, and runs `symposium init --add-agent <client>`:
 
 ```toml
 auto-sync = true
@@ -91,7 +91,7 @@ path = "<run>/registry"
 
 `init` registers hooks without syncing. Global scope matters: project-scoped hooks only exist after a sync, which would install skills before the behavior under test. The prompt never mentions Symposium, and telemetry stays at its default (off).
 
-Before launch, the runner checks that the skill directory is empty and that the client's machine-wide managed-settings locations are empty. For a baseline, it also checks that `cargo-agents` resolves nowhere on `PATH` and that there is no `~/.symposium` and no Symposium entry in the client's hook or MCP configuration. A failed check is a setup failure.
+Before launch, the runner checks that the skill directory is empty and that the client's machine-wide managed-settings locations are empty. For a baseline, it also checks that `symposium` resolves nowhere on `PATH` and that there is no `~/.symposium` and no Symposium entry in the client's hook or MCP configuration. A failed check is a setup failure.
 
 The starter has no git history, so one trial cannot read another's work through it. Each trial starts a new conversation. The real API key never enters the sandbox: `srt` masks it (`credentials.envVars` with `mode: "mask"`), so the client and every tool the agent starts see a sentinel, and `srt`'s proxy, outside the sandbox, substitutes the key only into requests to the model API host over TLS it terminates and re-encrypts to a verified upstream. The key is never retained. The runner refuses clients older than a pinned minimum version, since hook and transcript formats change between versions.
 
@@ -99,16 +99,16 @@ The starter has no git history, so one trial cannot read another's work through 
 
 ### What "without Symposium" means
 
-`cargo-agents` stays installed on the developer's machine throughout. "Without Symposium" means no process in the trial can reach it. Nothing is installed or uninstalled between configurations.
+`symposium` stays installed on the developer's machine throughout. "Without Symposium" means no process in the trial can reach it. Nothing is installed or uninstalled between configurations.
 
 |                                     | Without Symposium | With Symposium                    |
 | ----------------------------------- | ----------------- | --------------------------------- |
-| `<run>/bin/cargo-agents`            | absent            | link to the staged binary         |
+| `<run>/bin/symposium`            | absent            | link to the staged binary         |
 | Staged binary in `tools/symposium/` | unreadable        | readable                          |
-| Hooks in `<run>/home`               | none              | registered by `cargo agents init` |
+| Hooks in `<run>/home`               | none              | registered by `symposium init` |
 | Developer's installed copies        | unreadable        | unreadable                        |
 
-Symposium registers its hooks as `cargo-agents hook <agent> <event>`, a bare name the client resolves on `PATH`. The trial's `PATH` holds no developer directories, and `srt` makes the developer's home unreadable, so an installed copy cannot be reached by any path.
+Symposium registers its hooks as `symposium hook <agent> <event>`, a bare name the client resolves on `PATH`. The trial's `PATH` holds no developer directories, and `srt` makes the developer's home unreadable, so an installed copy cannot be reached by any path.
 
 ### Enforced: `srt`
 
@@ -148,7 +148,7 @@ When `srt` is unavailable, or on Windows until its support leaves alpha, `--expl
 - **Claude Code**: through `--settings`, `sandbox.enabled`, `failIfUnavailable`, `allowUnsandboxedCommands: false`, `filesystem.denyRead` for the developer's home with `allowRead` for the trial and toolchain, `allowWrite` for `<run>/cargo-home`, and `permissions.blockReadsOutsideWorkingDirectories`, with `--permission-mode acceptEdits`.
 - **Codex**: `--sandbox workspace-write`, with `<run>/cargo-home`, `<run>/home`, and `<run>/evidence` as `sandbox_workspace_write.writable_roots`. Codex documents no way to restrict reads.
 
-An escape audit scans each transcript for paths outside the trial and for any `cargo-agents` call in a baseline. It parses command text, so it can be evaded and an empty audit proves nothing; that is why exploratory results are labeled and never compared. In enforced mode, the same audit runs as a secondary check.
+An escape audit scans each transcript for paths outside the trial and for any `symposium` call in a baseline. It parses command text, so it can be evaded and an empty audit proves nothing; that is why exploratory results are labeled and never compared. In enforced mode, the same audit runs as a secondary check.
 
 ## Running the client
 
@@ -299,7 +299,7 @@ A trial's `result.json`:
   "mode": "with-symposium",
   "trial": 3,
   "order": 2,
-  "symposium": { "version": "<cargo-agents --version>", "sha256": "<binary hash>", "revision": "<git sha or null>" },
+  "symposium": { "version": "<symposium --version>", "sha256": "<binary hash>", "revision": "<git sha or null>" },
   "os": "<os and arch>",
   "toolchain": "<rustc version>",
   "deadlines_secs": { "setup": 120, "agent": 600, "grading": 300 },
@@ -405,7 +405,7 @@ fn baseline_cannot_reach_cargo_agents() -> anyhow::Result<()> {
     let status = run
         .env()
         .command("sh")
-        .args(["-c", "command -v cargo-agents || cat \"$DEVELOPER_CARGO_BIN/cargo-agents\""])
+        .args(["-c", "command -v symposium || cat \"$DEVELOPER_CARGO_BIN/symposium\""])
         .env("DEVELOPER_CARGO_BIN", opts.developer_cargo_bin())
         .status()?;
     assert!(!status.success());

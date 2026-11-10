@@ -2,12 +2,12 @@
 
 > For AI coding agents: how to write a Symposium plugin (skills, hooks, MCP servers, and subcommands) for a Rust crate, and how to check that it works.
 
-Symposium (the `cargo agents` CLI, https://symposium.dev) gives AI coding agents (Claude Code, Codex, GitHub Copilot, Kiro, Antigravity, OpenCode, Goose) knowledge about the crates a Rust project directly depends on. A plugin carries that knowledge for one crate:
+Symposium (the `symposium` CLI, https://symposium.dev) gives AI coding agents (Claude Code, Codex, GitHub Copilot, Kiro, Antigravity, OpenCode, Goose) knowledge about the crates a Rust project directly depends on. A plugin carries that knowledge for one crate:
 
 - skills: `SKILL.md` guidance documents, installed into each agent's skills directory;
 - hooks: programs that run on agent events (before or after a tool call, when the user submits a prompt, when a session starts, when the agent finishes its turn);
 - MCP servers: registered into each agent's MCP configuration;
-- subcommands: the crate's own command-line tool, which agents and users run as `cargo agents <crate> <command>`.
+- subcommands: the crate's own command-line tool, which agents and users run as `symposium <crate> <command>`.
 
 Read the whole file. If your tool gave you a summary instead of the text (web-fetch tools often do), download it with `curl -fsSL https://symposium.dev/crate-authors/llms.txt`. Examples use the crate `widgetlib`; substitute your crate's name.
 
@@ -24,7 +24,7 @@ Each section ends with links to the full reference.
 
 ### 1.1 Where it lives
 
-- **You maintain the crate:** ship the plugin inside it (recommended). Its files go next to the crate's `Cargo.toml` (the package directory, not the workspace root) and must be part of the published package. Users who depend on the crate enable its plugin with `cargo agents use <crate>`, or when an interactive `cargo agents sync` asks them.
+- **You maintain the crate:** ship the plugin inside it (recommended). Its files go next to the crate's `Cargo.toml` (the package directory, not the workspace root) and must be part of the published package. Users who depend on the crate enable its plugin with `symposium use <crate>`, or when an interactive `symposium sync` asks them.
 - **You don't maintain the crate:** for the user's own projects, a workspace skill in `.agents/skills/<skill-name>/SKILL.md`, or `~/.symposium/plugins/<skill-name>/SKILL.md` with `depends-on: <crate>` in its frontmatter to get it in every project that depends on the crate. To share it, an entry in the recommendations repository (2.1); ask the user before opening a pull request.
 
 ### 1.2 Minimum files: one skill
@@ -46,24 +46,24 @@ Always call `.validate()` before passing widgets to the runtime.
 
 ### 1.3 Check it
 
-Prerequisite: the CLI from the `symposium` crate (`cargo binstall symposium` or `cargo install symposium`), set up for the user's agent with `cargo agents init --add-agent <agent>` (`claude`, `codex`, `copilot`, `kiro`, `antigravity`, `opencode`, or `goose`; repeat the flag for several). With no agent configured, `cargo agents use` installs nothing. Without `--add-agent`, `init` asks interactively, which needs a terminal. `init` writes the user's Symposium configuration and their agents' hook settings, so ask the user before running it.
+Prerequisite: the CLI from the `symposium` crate (`cargo binstall symposium` or `cargo install symposium`), set up for the user's agent with `symposium init --add-agent <agent>` (`claude`, `codex`, `copilot`, `kiro`, `antigravity`, `opencode`, or `goose`; repeat the flag for several). With no agent configured, `symposium use` installs nothing. Without `--add-agent`, `init` asks interactively, which needs a terminal. `init` writes the user's Symposium configuration and their agents' hook settings, so ask the user before running it.
 
 In a scratch project that depends on the crate by path:
 
 ```bash
 cargo new try-widgetlib && cd try-widgetlib
 cargo add widgetlib --path ../widgetlib
-cargo agents use widgetlib
-cargo agents status
+symposium use widgetlib
+symposium status
 ```
 
-`cargo agents status` should list `widgetlib` with `[plugins] use` as the reason, and its skills appear in each configured agent's skills directory in the project (`.claude/skills/` for Claude Code, `.kiro/skills/` for Kiro, `.agents/skills/` for the others), next to any skills other plugins install. A path dependency reads the source tree, so check what you will publish separately with `cargo package --list --allow-dirty` in the crate. When you have finished testing, including anything from parts 3 and 4, remove the test enablement with `cargo agents use widgetlib --remove`.
+`symposium status` should list `widgetlib` with `[plugins] use` as the reason, and its skills appear in each configured agent's skills directory in the project (`.claude/skills/` for Claude Code, `.kiro/skills/` for Kiro, `.agents/skills/` for the others), next to any skills other plugins install. A path dependency reads the source tree, so check what you will publish separately with `cargo package --list --allow-dirty` in the crate. When you have finished testing, including anything from parts 3 and 4, remove the test enablement with `symposium use widgetlib --remove`.
 
 ### 1.4 Common failure modes
 
 - Errors are not printed, even with `--verbose`: a mistake in the crate's `Symposium.toml`, `[package.metadata.symposium]`, or `SKILL.md` files skips the broken file, or the whole plugin, and the error goes to the newest log in `~/.symposium/logs/`. Read it whenever a skill, hook, MCP server, or subcommand is missing.
 - Every frontmatter value must be a string: lists, maps (including the agentskills.io `metadata` map), numbers, booleans, and empty values are rejected, so quote values such as `version: "1.0"`. Double-quote a value that starts with anything other than a letter or digit (a backtick, `*`, `[`, a quote; for example `depends-on: "*"`) or that contains `: ` or ` #`. Unquoted, YAML rejects most of these, and treats everything after ` #` as a comment, silently shortening the value.
-- Installed skills are copies: after changing the crate, run `cargo agents sync` again (a skill synced less than 5 seconds earlier is not copied again).
+- Installed skills are copies: after changing the crate, run `symposium sync` again (a skill synced less than 5 seconds earlier is not copied again).
 - A file that `cargo package --list` does not show is not published, even though the path dependency found it; if `Cargo.toml` has an `include` list, add `skills/` (and `Symposium.toml`) to it.
 - A manifest must be named exactly `Symposium.toml`. On a case-sensitive filesystem (the usual case on Linux), another spelling such as `SYMPOSIUM.toml` is not read, so a misspelled file can work on macOS and still be skipped for users on Linux.
 - Symposium only looks at the direct dependencies of the workspace's members.
@@ -92,11 +92,11 @@ The repository does not accept `source.git` skill groups.
 Validate from the root of a checkout, passing the directory that contains your entry rather than the entry itself:
 
 ```bash
-cargo agents plugin validate .
-cargo agents plugin validate . --no-check-crates   # skip the crates.io name check
+symposium plugin validate .
+symposium plugin validate . --no-check-crates   # skip the crates.io name check
 ```
 
-To try the entry before opening the pull request, copy its directory into `~/.symposium/plugins/`, a registry Symposium reads by default (`mkdir -p ~/.symposium/plugins && cp -R widgetlib ~/.symposium/plugins/`), and run `cargo agents sync` in a project that depends on the crate. Afterwards, delete the copy and run `cargo agents sync` again. Once a shared entry is merged, remove any personal copy of the same skill, or both copies install.
+To try the entry before opening the pull request, copy its directory into `~/.symposium/plugins/`, a registry Symposium reads by default (`mkdir -p ~/.symposium/plugins && cp -R widgetlib ~/.symposium/plugins/`), and run `symposium sync` in a project that depends on the crate. Afterwards, delete the copy and run `symposium sync` again. Once a shared entry is merged, remove any personal copy of the same skill, or both copies install.
 
 Reference: https://symposium.dev/reference/plugin-source.html
 
@@ -220,7 +220,7 @@ Reference: https://symposium.dev/reference/plugin-definition.html#mcp_servers
 
 ### 3.3 Subcommands
 
-A subcommand puts the crate's own command-line tool behind `cargo agents`, named after the crate by convention: an agent runs `cargo agents widgetlib --help` to discover the tool, then its commands. Symposium runs the installation with its `args` followed by everything typed after the name, `--help` included, and exits with the tool's exit code; the tool owns its commands, flags, and help text.
+A subcommand puts the crate's own command-line tool behind `symposium`, named after the crate by convention: an agent runs `symposium widgetlib --help` to discover the tool, then its commands. Symposium runs the installation with its `args` followed by everything typed after the name, `--help` included, and exits with the tool's exit code; the tool owns its commands, flags, and help text.
 
 ```toml
 [[installations]]
@@ -229,15 +229,15 @@ source = "cargo"
 crate = "widgetlib-cli"
 executable = "widgetlib-cli"
 
-# `cargo agents widgetlib --help` runs `widgetlib-cli --help`;
-# `cargo agents widgetlib check --strict` runs `widgetlib-cli check --strict`.
+# `symposium widgetlib --help` runs `widgetlib-cli --help`;
+# `symposium widgetlib check --strict` runs `widgetlib-cli check --strict`.
 [subcommand.widgetlib]
 description = "Inspect and check widgetlib widget definitions"
 command = "widgetlib-cli" # the [[installations]] entry that provides the tool
 ```
 
 - The tool is a crate with a binary that you publish, here `widgetlib-cli`. `crate` names the crates.io crate Symposium installs it from, so it must be yours, published before the crate whose plugin uses it. To try the subcommand before then, point the installation at your local build (part 4).
-- `description` is required (at most 1024 bytes) and is shown in `cargo agents --help`, which Symposium's session-start hook tells agents to run when a project has subcommands.
+- `description` is required (at most 1024 bytes) and is shown in `symposium --help`, which Symposium's session-start hook tells agents to run when a project has subcommands.
 - `audience` is `"agents"` (default) or `"humans"`. It only picks the `--help` section, but the session-start hint tells agents to use only the commands listed for agents unless the user asks.
 - The name may contain ASCII letters, digits, `-`, and `_`, and must not be the name of a built-in command (the reference lists them). If two active plugins define the same name, running it fails.
 
@@ -245,7 +245,7 @@ Reference: https://symposium.dev/reference/plugin-definition.html#subcommandname
 
 ## 4. Troubleshooting
 
-Start with the newest log in `~/.symposium/logs/` (1.4), and check from the scratch project of 1.3, as a user would. `cargo agents sync --verbose` shows which plugins and skills Symposium considered.
+Start with the newest log in `~/.symposium/logs/` (1.4), and check from the scratch project of 1.3, as a user would. `symposium sync --verbose` shows which plugins and skills Symposium considered.
 
 **Try a hook or subcommand before its binary is published.** Point its installation at the local build: drop `source` and `crate`, and set `executable` to the binary's absolute path. Restore the `source = "cargo"` installation before publishing.
 
@@ -253,12 +253,12 @@ Start with the newest log in `~/.symposium/logs/` (1.4), and check from the scra
 
 ```bash
 echo '{"session_id":"test","cwd":"'"$PWD"'","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo publish"}}' \
-  | cargo agents hook claude pre-tool-use
+  | symposium hook claude pre-tool-use
 ```
 
 Other agents send their own payload format; see https://symposium.dev/design/agent-details/index.html. If the hook does not fire, rerun with `--verbose` to see which plugins and hooks Symposium considered, read that log, and check the `matcher` against that agent's tool name (3.1).
 
-**Subcommand.** `cargo agents --help` lists it only while its plugin is active; otherwise running it fails with "no plugin defines subcommand". `cargo agents widgetlib --help` should print the tool's own help.
+**Subcommand.** `symposium --help` lists it only while its plugin is active; otherwise running it fails with "no plugin defines subcommand". `symposium widgetlib --help` should print the tool's own help.
 
 **MCP server.** `name` is the server's key in each agent's MCP configuration; to check a registration, look for it there (for Claude Code, `~/.claude.json`, or `.mcp.json` in the project with project scope).
 

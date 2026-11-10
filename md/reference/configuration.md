@@ -1,8 +1,8 @@
 # Configuration
 
-`cargo agents` uses a single user-wide configuration file at `~/.symposium/config.toml`. Created by `cargo agents init`.
+`symposium` uses a single user-wide configuration file at `~/.symposium/config.toml`. Created by `symposium init`.
 
-If the file cannot be read or parsed, `cargo agents` prints a warning and runs with the defaults and `auto-update` off. Commands that would save the configuration, such as `init` or `use`, stop with an error instead of overwriting it, so fix or remove the file and run them again. `sync` stops too, rather than treating every agent as removed.
+If the file cannot be read or parsed, `symposium` prints a warning and runs with the defaults and `auto-update` off. Commands that would save the configuration, such as `init` or `use`, stop with an error instead of overwriting it, so fix or remove the file and run them again. `sync` stops too, rather than treating every agent as removed.
 
 ## Full example
 
@@ -38,7 +38,7 @@ path = "my-plugins"
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `auto-sync` | bool | `true` | Automatically run `cargo agents sync` during hook invocations. When enabled, skills are kept in sync with workspace dependencies without manual intervention. |
+| `auto-sync` | bool | `true` | Automatically run `symposium sync` during hook invocations. When enabled, skills are kept in sync with workspace dependencies without manual intervention. |
 | `agents-syncing` | bool | `true` | Include each workspace plugin's `.agents/skills/` default skill group, so skills you author there install into every configured agent's skill directory (such as `.claude/skills/` or `.kiro/skills/`). Skills that symposium itself installed — identified by the `.symposium` marker file — are never treated as sources. See [Workspace skills](../workspace-skills.md) for the user-guide overview, or [Agents syncing](#agents-syncing-mirror-user-authored-skills) below for details. |
 | `hook-scope` | string | `"global"` | Where agent hooks are installed. `"global"` writes to the user's home directory (e.g., `~/`). `"project"` writes to the project directory, keeping hooks local to the workspace. |
 | `auto-update` | string | `"on"` | Controls automatic update behavior. `"off"` disables update checks entirely. `"warn"` checks the registry (at most once per 24 hours) and prints a message when a newer version is available. `"on"` automatically installs the update via `cargo install` and re-executes the command with the new binary. |
@@ -68,7 +68,7 @@ Because these are real skills now, `SKILL.md` frontmatter must carry `name` and 
 
 Registering hooks globally ensures that Symposium activates whenever you use the selected agent, which means that it will work in any Rust project automatically.
 
-Registering hooks at the project level requires you to run `cargo agents sync` within each project at least once to create the hooks. After that, the `auto-sync` feature will keep you up-to-date.
+Registering hooks at the project level requires you to run `symposium sync` within each project at least once to create the hooks. After that, the `auto-sync` feature will keep you up-to-date.
 
 ## `[[agent]]`
 
@@ -89,13 +89,13 @@ Each `[[agent]]` entry identifies an agent you use. You can configure multiple a
 Opt-in, per-user usage telemetry. Off by default. When enabled, Symposium
 appends anonymous events as JSON lines to a local, per-day log under
 `~/.symposium/telemetry/`. **Nothing is uploaded automatically** — you inspect
-and share the data yourself with `cargo agents telemetry show`. The preference
-is also collected during `cargo agents init`. See the
+and share the data yourself with `symposium telemetry show`. The preference
+is also collected during `symposium init`. See the
 [telemetry design chapter](../design/telemetry.md) for the event format.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `enabled` | bool | `false` | Record anonymous usage events (session starts, prompts, tool usage — counts and metadata only, no prompt or command content). Toggle with `cargo agents telemetry enable` / `disable`. |
+| `enabled` | bool | `false` | Record anonymous usage events (session starts, prompts, tool usage; counts and metadata only, no prompt or command content). Toggle with `symposium telemetry enable` / `disable`. |
 
 ```toml
 [telemetry]
@@ -137,7 +137,7 @@ The `cargo` package manager is built in and needs no entry. An entry named `carg
 ```toml
 [[package-manager]]
 name = "cargo"
-command = "symposium-pm-cargo"   # installed alongside `cargo-agents`
+command = "symposium-pm-cargo"   # installed alongside `symposium`
 ```
 
 | Key | Type | Default | Description |
@@ -175,7 +175,7 @@ use = ["standalone-plugin", { name = "team-tools", workspace = "/home/me/work/se
 
 `use` is what wakes a dormant plugin, and it also enables a plugin whether or not any dependency references it. `auto-enable` is narrower: it is consent for what a dependency you already have carries with it.
 
-You rarely edit this section by hand. [`cargo agents use`](./cargo-agents-use.md) writes and removes `use` entries; the [consent prompt](./cargo-agents-sync.md#consent-prompt) in an interactive `cargo agents sync` writes `auto-enable` and `disable`; and [`cargo agents status`](./cargo-agents-status.md) reports what the section currently decides.
+You rarely edit this section by hand. [`symposium use`](./symposium-use.md) writes and removes `use` entries; the [consent prompt](./symposium-sync.md#consent-prompt) in an interactive `symposium sync` writes `auto-enable` and `disable`; and [`symposium status`](./symposium-status.md) reports what the section currently decides.
 
 ## Directory resolution
 

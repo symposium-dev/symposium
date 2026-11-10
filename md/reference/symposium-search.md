@@ -1,11 +1,11 @@
-# `cargo agents search`
+# `symposium search`
 
 Find plugins across every configured registry.
 
 ## Usage
 
 ```bash
-cargo agents search <QUERY>
+symposium search <QUERY>
 ```
 
 ## Options
@@ -40,7 +40,7 @@ With `--json`, each hit is emitted as a `search_match` event carrying its
 ## Example
 
 ```bash
-$ cargo agents search widget
+$ symposium search widget
 ℹ️  from user-plugins:
   widget-guidance
       Guidance for working with widgets
@@ -49,5 +49,5 @@ $ cargo agents search widget
       Skills for widget
 ```
 
-Pass a name from the output to [`cargo agents use`](./cargo-agents-use.md) to
+Pass a name from the output to [`symposium use`](./symposium-use.md) to
 enable it.

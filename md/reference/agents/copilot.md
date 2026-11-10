@@ -13,7 +13,7 @@ Copilot has no global skills path.
 
 ## Plugins
 
-A plugin enabled with `cargo agents use --global` is installed for you as a Copilot CLI plugin:
+A plugin enabled with `symposium use --global` is installed for you as a Copilot CLI plugin:
 
 | Scope | File |
 |-------|------|
@@ -36,7 +36,7 @@ Output format: JSON. Uses `"bash"` key instead of `"command"` for platform-speci
 
 **Caveat:** Copilot loads a project's hooks only once you trust the folder (it asks the first time you open it).
 
-**Caveat:** Copilot also runs the hooks in `.claude/settings.json`. In a project where Claude Code is configured too, each Copilot event runs `cargo agents hook` twice, once as each agent.
+**Caveat:** Copilot also runs the hooks in `.claude/settings.json`. In a project where Claude Code is configured too, each Copilot event runs `symposium hook` twice, once as each agent.
 
 ## MCP servers
 

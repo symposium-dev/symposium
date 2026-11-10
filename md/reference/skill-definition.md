@@ -80,7 +80,7 @@ Other fields, such as `license`, `allowed-tools`, or the agentskills.io `metadat
 - The `crates` field is rejected; use `depends-on`.
 - In [workspace skills](../workspace-skills.md) the frontmatter is optional: `name` defaults to the name of the skill's directory, and `description` may be omitted. Skills from a registry or a crate need both.
 
-> **Security:** a skill's `name` comes from plugin content and becomes a directory on disk, so Symposium treats it as untrusted input. A name that would resolve outside the agent's skills directory is rejected: the skill fails to load instead of being installed, and `cargo agents sync` and `cargo agents plugin validate` report it.
+> **Security:** a skill's `name` comes from plugin content and becomes a directory on disk, so Symposium treats it as untrusted input. A name that would resolve outside the agent's skills directory is rejected: the skill fails to load instead of being installed, and `symposium sync` and `symposium plugin validate` report it.
 
 ## Crate atoms
 

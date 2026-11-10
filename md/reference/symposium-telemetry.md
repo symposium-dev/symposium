@@ -1,4 +1,4 @@
-# `cargo agents telemetry`
+# `symposium telemetry`
 
 Manage opt-in, per-user usage telemetry. See the
 [telemetry design chapter](../design/telemetry.md) for the event format and the
@@ -7,15 +7,15 @@ config key.
 
 Telemetry is **off by default**, **local-first**, and **never uploaded
 automatically** — you share it yourself. The preference is also offered during
-`cargo agents init`.
+`symposium init`.
 
 ## Usage
 
 ```bash
-cargo agents telemetry [status]      # whether enabled, where data lives, how much is stored (default)
-cargo agents telemetry enable        # turn on collection (writes [telemetry] enabled = true)
-cargo agents telemetry disable       # turn it off
-cargo agents telemetry show [--count N]   # print recent events (JSON lines) for inspection
+symposium telemetry [status]      # whether enabled, where data lives, how much is stored (default)
+symposium telemetry enable        # turn on collection (writes [telemetry] enabled = true)
+symposium telemetry disable       # turn it off
+symposium telemetry show [--count N]   # print recent events (JSON lines) for inspection
 ```
 
 ## Where the data lives

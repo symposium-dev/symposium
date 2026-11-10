@@ -14,7 +14,7 @@ what symposium writes applies to all of them.
 
 ## Plugins
 
-A plugin enabled with `cargo agents use --global` is installed for you as a plugin directory:
+A plugin enabled with `symposium use --global` is installed for you as a plugin directory:
 
 | Scope | Path |
 |-------|------|

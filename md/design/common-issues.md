@@ -13,11 +13,11 @@ A deny or rewrite that the translation drops fails open: the tool runs, and sinc
 
 ### Copilot also runs Claude Code's hooks
 
-Copilot CLI reads `.claude/settings.json` as well as its own hook files. In a project where both agents are configured, every Copilot event runs `cargo agents hook` twice: as `copilot` from `.github/hooks/symposium.json`, and as `claude` from Claude's settings. Plugin hooks with side effects run twice, and whatever symposium tells the agent once (such as a notice) is taken by whichever invocation runs first.
+Copilot CLI reads `.claude/settings.json` as well as its own hook files. In a project where both agents are configured, every Copilot event runs `symposium hook` twice: as `copilot` from `.github/hooks/symposium.json`, and as `claude` from Claude's settings. Plugin hooks with side effects run twice, and whatever symposium tells the agent once (such as a notice) is taken by whichever invocation runs first.
 
 ## Hook stdout belongs to the agent
 
-An agent parses everything `cargo agents hook` writes to stdout. One line ahead of the JSON and Claude Code falls back to treating it all as plain text (which reaches the model only on `SessionStart` and `UserPromptSubmit`), while Copilot drops the output entirely. The in-process test pipeline cannot see this, because the leaks come from around it: the report layer, which the binary installs (and leaves out for hooks), and child processes that inherit stdout (plugin `install_commands` send theirs to stderr). Anything new that prints during a hook, or spawns a child that might, needs the same care; `tests/hook_stdout.rs` runs the real binary to catch it.
+An agent parses everything `symposium hook` writes to stdout. One line ahead of the JSON and Claude Code falls back to treating it all as plain text (which reaches the model only on `SessionStart` and `UserPromptSubmit`), while Copilot drops the output entirely. The in-process test pipeline cannot see this, because the leaks come from around it: the report layer, which the binary installs (and leaves out for hooks), and child processes that inherit stdout (plugin `install_commands` send theirs to stderr). Anything new that prints during a hook, or spawns a child that might, needs the same care; `tests/hook_stdout.rs` runs the real binary to catch it.
 
 ## Antigravity footguns
 

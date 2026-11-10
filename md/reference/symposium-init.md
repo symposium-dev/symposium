@@ -1,11 +1,11 @@
-# `cargo agents init`
+# `symposium init`
 
 Set up Symposium for the current user.
 
 ## Usage
 
 ```bash
-cargo agents init [OPTIONS]
+symposium init [OPTIONS]
 ```
 
 ## Behavior
@@ -16,7 +16,7 @@ If a user config already exists, `init` updates it (preserving existing settings
 
 Without a terminal and without `--add-agent`, `init` keeps the configured agents, or configures Claude Code when there are none.
 
-Removing an agent also runs [`cargo agents sync`](./cargo-agents-sync.md) when `init` is run inside a Rust workspace, which removes the skills Symposium installed there for that agent. Copies in other workspaces stay until `cargo agents sync` runs in each of them.
+Removing an agent also runs [`symposium sync`](./symposium-sync.md) when `init` is run inside a Rust workspace, which removes the skills Symposium installed there for that agent. Copies in other workspaces stay until `symposium sync` runs in each of them.
 
 ## Options
 
@@ -31,23 +31,23 @@ Removing an agent also runs [`cargo agents sync`](./cargo-agents-sync.md) when `
 Interactive setup:
 
 ```bash
-cargo agents init
+symposium init
 ```
 
 Non-interactive, specifying agents directly:
 
 ```bash
-cargo agents init --add-agent claude --add-agent antigravity
+symposium init --add-agent claude --add-agent antigravity
 ```
 
 Adding an agent to an existing config:
 
 ```bash
-cargo agents init --add-agent copilot
+symposium init --add-agent copilot
 ```
 
 Removing an agent:
 
 ```bash
-cargo agents init --remove-agent antigravity
+symposium init --remove-agent antigravity
 ```

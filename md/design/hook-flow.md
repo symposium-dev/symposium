@@ -1,4 +1,4 @@
-# `cargo agents hook`
+# `symposium hook`
 
 Entry point invoked by the agent's hook system on session events.
 
@@ -13,22 +13,22 @@ PM error path. Later PM requests fail immediately, while local plugin dispatch
 continues so its decisions can reach agents with ten-second hook deadlines.
 This bounds remote PM waiting; it is not a timeout on local plugin execution.
 
-1. **Auto-sync** (if enabled) — when `auto-sync = true` in the user config, runs [`cargo agents sync`](./sync-agent-flow.md) to ensure skills are current. The workspace is the project the package managers find from the payload's `cwd` field, or from the process's current working directory when the payload has none. Runs quietly and non-fatally — failures are logged but don't block hook dispatch.
+1. **Auto-sync** (if enabled): when `auto-sync = true` in the user config, runs [`symposium sync`](./sync-agent-flow.md) to ensure skills are current. The workspace is the project the package managers find from the payload's `cwd` field, or from the process's current working directory when the payload has none. Runs quietly and non-fatally: failures are logged but don't block hook dispatch.
 
    Auto-sync is also where a crate reached through a `[[plugins]]` chained reference or a `[plugins]` enablement entry is downloaded when cargo has not cached it yet. Dispatch only reads the cargo cache, so such a crate is absent from it until a sync has downloaded it.
 
    **`SessionStart` is the refresh point.** Because it fires once per agent session, it does the expensive work that other events skip: it bypasses the freshness gate (so skills re-sync even when no package manager's inputs changed) and passes `UpdateLevel::Check` so git registries and `source.git` skill groups are re-fetched if their upstream moved. Every other event keeps the cheap path, gated on the package managers' recorded inputs, with `UpdateLevel::None` (debounced) to avoid per-event network and package-manager cost. The registry refresh on `SessionStart` (`ensure_registries` with `Check`, decided in the binary entry point from the event) still honors each registry's `auto-update` toggle. `SessionStart` also runs `prewarm_hook_sources`, which *refreshes already-installed* hook binaries/scripts (the `cargo`/`github` sources backing plugin hooks) — refresh-only, so it never eagerly installs a tool a hook may never use; first install still happens lazily at dispatch.
 
-2. **Built-in dispatch** — symposium's own handling, before plugin hooks. `PreToolUse` produces nothing. On `SessionStart` three fragments are computed independently and, when present, joined into one `additionalContext`:
-   - **Discovery hint** — when the active workspace exposes plugin-vended subcommands (the same workspace-filtered set listed by [`cargo agents --help`](./subcommands.md#help-text-grouping)), a line suggesting the agent run `cargo agents --help` to find them. Computed independently of the update-check throttle, so it fires whenever there is something to discover.
-   - **Consent hint**: the dependency plugins awaiting consent, telling the agent to point the user at `cargo agents sync` or `cargo agents use`.
-   - **Update nudge** — when `auto-update = "warn"`, the 24-hour check throttle has elapsed, and the registry reports a newer version: a line suggesting `cargo agents self-update`.
+2. **Built-in dispatch**: symposium's own handling, before plugin hooks. `PreToolUse` produces nothing. On `SessionStart` three fragments are computed independently and, when present, joined into one `additionalContext`:
+   - **Discovery hint**: when the active workspace exposes plugin-vended subcommands (the same workspace-filtered set listed by [`symposium --help`](./subcommands.md#help-text-grouping)), a line suggesting the agent run `symposium --help` to find them. Computed independently of the update-check throttle, so it fires whenever there is something to discover.
+   - **Consent hint**: the dependency plugins awaiting consent, telling the agent to point the user at `symposium sync` or `symposium use`.
+   - **Update nudge**: when `auto-update = "warn"`, the 24-hour check throttle has elapsed, and the registry reports a newer version: a line suggesting `symposium self-update`.
 
-   On `PostToolUse` and `UserPromptSubmit`, when auto-sync just re-synced because a package manager's input changed, a generic notice says there may be new plugins and points at `cargo agents sync`. That is right after a tool call that changed the dependencies, or the user's next prompt when they changed them. `run_auto_sync` returns that as a bool, so an event with unchanged inputs does no extra work. When that sync installed or updated plugins for the hook's agent, the notice `SessionStart` gives is added too: which plugins, and how this agent loads them now. The notice is lost when the agent ignores context on that event (Antigravity after a tool call), or when the change is first seen on `PreToolUse` or `Stop`, which sync but carry no notice.
+   On `PostToolUse` and `UserPromptSubmit`, when auto-sync just re-synced because a package manager's input changed, a generic notice says there may be new plugins and points at `symposium sync`. That is right after a tool call that changed the dependencies, or the user's next prompt when they changed them. `run_auto_sync` returns that as a bool, so an event with unchanged inputs does no extra work. When that sync installed or updated plugins for the hook's agent, the notice `SessionStart` gives is added too: which plugins, and how this agent loads them now. The notice is lost when the agent ignores context on that event (Antigravity after a tool call), or when the change is first seen on `PreToolUse` or `Stop`, which sync but carry no notice.
 
-   Agents without hook registration (OpenCode, Goose) never receive this; for them the only discovery surface is `cargo agents --help` itself.
+   Agents without hook registration (OpenCode, Goose) never receive this; for them the only discovery surface is `symposium --help` itself.
 
-3. **Dispatch to plugin hooks** — for each enabled plugin that defines a hook handler for the incoming event:
+3. **Dispatch to plugin hooks**: for each enabled plugin that defines a hook handler for the incoming event:
    - **Select format**: for each plugin, pick the best hook to deliver (see [Hooks](./hooks.md) for priority rules). If the plugin has a hook matching the current agent's format, deliver the input unmodified. Otherwise deliver in symposium canonical format (or convert to the declared format if only one non-symposium hook exists).
    - **Acquire and run**:
      - Ensure any `requirements` for the hook are acquired (on-demand, best-effort).
