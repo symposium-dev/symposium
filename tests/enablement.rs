@@ -1307,3 +1307,35 @@ async fn disable_naming_an_unknown_pm_does_not_leave_the_plugin_on() {
     .await
     .unwrap();
 }
+
+#[tokio::test]
+async fn use_remove_drops_an_exact_entry_while_its_pm_is_broken() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["auto-enable0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            add_pm_that_finds_everything(&mut ctx);
+            ctx.symposium(&["use", "crate-a", "--global", "--pm", "other"])
+                .await?;
+            assert_eq!(used_names(&ctx), vec!["other:crate-a"]);
+
+            let other = ctx
+                .sym
+                .config
+                .package_managers
+                .iter_mut()
+                .find(|pm| pm.name == "other")
+                .unwrap();
+            other.command = "symposium-test-missing-pm".to_string();
+            other.args.clear();
+
+            ctx.symposium(&["use", "--remove", "crate-a", "--global", "--pm", "other"])
+                .await?;
+            assert!(used_names(&ctx).is_empty());
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
