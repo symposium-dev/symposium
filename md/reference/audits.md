@@ -10,13 +10,13 @@ For any dependency plugin, the audits give exactly one answer:
 | audited | otherwise, the payload digest matches an `[[audit]]` entry |
 | not audited | anything else, including a payload that cannot be digested |
 
-A revoked plugin never loads. The other two answers are shown wherever Symposium asks or tells you about a dependency plugin, always in the same words (``audited by the `symposium-audits` list`` or `not audited`): the [consent prompt](./cargo-agents-sync.md#consent-prompt) of an interactive `cargo agents sync`, the hint your agent gets when a session starts, and [`cargo agents status`](./cargo-agents-status.md). When the list audits the crate but this payload [has no digest](#when-there-is-no-digest), "not audited" comes with the reason in a few words, since no audit can ever cover that payload. When no list was read (it is off, or has never been fetched), these places show no audit answer at all, rather than a "not audited" no list backs. Otherwise an audited plugin is treated like any other: the consent prompt still asks about it, and nothing loads without your consent.
+A revoked plugin never loads. The other two answers are shown wherever Symposium asks or tells you about a dependency plugin, always in the same words (``audited by the `symposium-audits` list`` or `not audited`): the [consent prompt](./symposium-sync.md#consent-prompt) of an interactive `symposium sync`, the hint your agent gets when a session starts, and [`symposium status`](./symposium-status.md). When the list audits the crate but this payload [has no digest](#when-there-is-no-digest), "not audited" comes with the reason in a few words, since no audit can ever cover that payload. When no list was read (it is off, or has never been fetched), these places show no audit answer at all, rather than a "not audited" no list backs. Otherwise an audited plugin is treated like any other: the consent prompt still asks about it, and nothing loads without your consent.
 
 ## Where audits come from
 
-The community list is the builtin `symposium-audits` list, the [symposium-dev/audits](https://github.com/symposium-dev/audits) repository. It is off by default until the community list exists; [`[defaults] symposium-audits = true`](./configuration.md#defaults) turns it on. It is a git repository that Symposium fetches into its cache and reads only the `audits/` directory of. It is **not a registry**: nothing in it ever loads as a plugin, a `Symposium.toml` or `SKILL.md` in it included, and it does not appear in `cargo agents plugin list`.
+The community list is the builtin `symposium-audits` list, the [symposium-dev/audits](https://github.com/symposium-dev/audits) repository. It is off by default until the community list exists; [`[defaults] symposium-audits = true`](./configuration.md#defaults) turns it on. It is a git repository that Symposium fetches into its cache and reads only the `audits/` directory of. It is **not a registry**: nothing in it ever loads as a plugin, a `Symposium.toml` or `SKILL.md` in it included, and it does not appear in `symposium plugin list`.
 
-It is refreshed alongside the git registries: Symposium checks it for changes when an agent session starts, and on every other invocation, agent hook events included, at most once a minute (a fresh cache skips the check). `cargo agents plugin sync` refreshes it on demand, with the other sources or by its name (`cargo agents plugin sync symposium-audits`). When it cannot be fetched (offline, or the repository is unreachable), a list fetched before keeps answering from the cache, and a list never fetched is no list: every lookup answers "not audited". A failed first fetch is retried at most once a minute (and at every session start), so an offline machine does not try the network on every hook event. Either way the failure is only logged: unlike an unreachable registry, it never holds back the cleanup of installed skills or MCP servers.
+It is refreshed alongside the git registries: Symposium checks it for changes when an agent session starts, and on every other invocation, agent hook events included, at most once a minute (a fresh cache skips the check). `symposium plugin sync` refreshes it on demand, with the other sources or by its name (`symposium plugin sync symposium-audits`). When it cannot be fetched (offline, or the repository is unreachable), a list fetched before keeps answering from the cache, and a list never fetched is no list: every lookup answers "not audited". A failed first fetch is retried at most once a minute (and at every session start), so an offline machine does not try the network on every hook event. Either way the failure is only logged: unlike an unreachable registry, it never holds back the cleanup of installed skills or MCP servers.
 
 It is the only place audits are read from. Reading them is cache-only: it never touches the network.
 
@@ -67,7 +67,7 @@ A digest that is both audited and revoked is revoked.
 
 ### Reasons
 
-`reason` is a code, never prose, so Symposium renders the sentence itself (for example in [`cargo agents status`](./cargo-agents-status.md)).
+`reason` is a code, never prose, so Symposium renders the sentence itself (for example in [`symposium status`](./symposium-status.md)).
 
 | Code | Rendered as |
 |------|-------------|
@@ -80,7 +80,7 @@ A digest that is both audited and revoked is revoked.
 
 ## Payload digest
 
-An audit covers the *plugin payload* of a crate, not its code: the manifest that says what the crate contributes, and the skill content that manifest names. A release that changes only `src/` has the same payload and the same digest, so one audit covers it, while any change to skill text makes a new digest that nobody has audited yet. [`cargo agents plugin digest`](./cargo-agents-plugin.md#cargo-agents-plugin-digest) prints the digest of a crate or a directory.
+An audit covers the *plugin payload* of a crate, not its code: the manifest that says what the crate contributes, and the skill content that manifest names. A release that changes only `src/` has the same payload and the same digest, so one audit covers it, while any change to skill text makes a new digest that nobody has audited yet. [`symposium plugin digest`](./symposium-plugin.md#symposium-plugin-digest) prints the digest of a crate or a directory.
 
 The payload is these entries:
 
@@ -116,7 +116,7 @@ Some payloads cannot be pinned, so they have no digest and are never audited:
 - a manifest that does not parse as a plugin manifest: a TOML or schema error (an unknown key included) in `Symposium.toml` or in `[package.metadata.symposium]`. Loading drops such a layer and uses the rest, but the digest does not pin what the crate ships as if it were valid;
 - more than 4 MiB of payload content.
 
-`cargo agents plugin digest` prints which of these applies.
+`symposium plugin digest` prints which of these applies.
 
 ## Revocations
 
@@ -126,8 +126,8 @@ A revocation stops a crate's plugin from loading, on every route a crate's plugi
 - It outranks every grant: `use` and `auto-enable` do not load a revoked crate, and its own chained references are not followed.
 - [`[plugins] disable`](./configuration.md#plugins) outranks it. A crate that is both revoked and disabled counts as declined.
 - A payload with no [digest](#when-there-is-no-digest) cannot match a `digest` revocation; a `versions` revocation still applies to it.
-- The check never prompts and never prints. A revoked plugin is skipped quietly, never offered for consent, and shown by [`cargo agents status`](./cargo-agents-status.md) as `revoked` with the reason, as in ``revoked by the `symposium-audits` list: it tells the agent to fetch and run remote code``. A revoked crate that is reached only through another plugin's chain is not listed there; `cargo agents sync -v` names it.
-- Skills and MCP servers a crate installed before its revocation come off on the next sync, even one that otherwise keeps what is installed because a registry could not be read or a package manager failed. Its MCP servers are removed for every agent and from every file Symposium registered them in, user-level files included, unless an active plugin still declares a server of the same name. With [`auto-sync`](./configuration.md) off, they stay installed until you run `cargo agents sync`; hooks and subcommands stop at once, since they are resolved on every call. Listing what the crate installed runs nothing from it: none of its predicates is evaluated, and a `source.git` skill group is read from the cache only, never fetched.
+- The check never prompts and never prints. A revoked plugin is skipped quietly, never offered for consent, and shown by [`symposium status`](./symposium-status.md) as `revoked` with the reason, as in ``revoked by the `symposium-audits` list: it tells the agent to fetch and run remote code``. A revoked crate that is reached only through another plugin's chain is not listed there; `symposium sync -v` names it.
+- Skills and MCP servers a crate installed before its revocation come off on the next sync, even one that otherwise keeps what is installed because a registry could not be read or a package manager failed. Its MCP servers are removed for every agent and from every file Symposium registered them in, user-level files included, unless an active plugin still declares a server of the same name. With [`auto-sync`](./configuration.md) off, they stay installed until you run `symposium sync`; hooks and subcommands stop at once, since they are resolved on every call. Listing what the crate installed runs nothing from it: none of its predicates is evaluated, and a `source.git` skill group is read from the cache only, never fetched.
 
 ## How Symposium reads it
 

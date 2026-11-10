@@ -18,8 +18,8 @@ Every plugin that applies to your project is installed as a plugin directory, at
 
 | Scope | Path | Plugins |
 |-------|------|---------|
-| Project | `.claude/skills/<plugin>/` at the workspace root | registry plugins active in the project, workspace members, enabled dependencies, `cargo agents use` without `--global` |
-| Global | `~/.claude/skills/<plugin>/` (`$CLAUDE_CONFIG_DIR/skills/<plugin>/` when set) | `cargo agents use --global` |
+| Project | `.claude/skills/<plugin>/` at the workspace root | registry plugins active in the project, workspace members, enabled dependencies, `symposium use` without `--global` |
+| Global | `~/.claude/skills/<plugin>/` (`$CLAUDE_CONFIG_DIR/skills/<plugin>/` when set) | `symposium use --global` |
 
 Claude Code loads each one as `<plugin>@skills-dir`, and its skills are invoked as `/<plugin>:<skill>`. A global plugin loads in every project; a project plugin loads only in that project. Symposium writes no settings for them, so a `claude plugin disable <plugin>@skills-dir` stays in effect. A plugin installed while a session runs appears in the next session, or after `/reload-plugins`; when the automatic sync installs one, for example after a dependency is added, the agent is told to suggest it.
 

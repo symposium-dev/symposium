@@ -1,4 +1,4 @@
-# `cargo agents init`
+# `symposium init`
 
 Sets up the user-wide configuration.
 

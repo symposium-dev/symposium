@@ -1,55 +1,55 @@
-# `cargo agents plugin`
+# `symposium plugin`
 
 Manage plugin sources.
 
 ## Usage
 
 ```bash
-cargo agents plugin <SUBCOMMAND>
+symposium plugin <SUBCOMMAND>
 ```
 
 ## Subcommands
 
-### `cargo agents plugin sync`
+### `symposium plugin sync`
 
 ```bash
-cargo agents plugin sync [PROVIDER]
+symposium plugin sync [PROVIDER]
 ```
 
 Fetch or update git-based plugin sources. If a provider name is given, syncs only that provider (ignoring `auto-update` settings). If omitted, syncs all providers that have `auto-update = true`. The [audits list](./audits.md#where-audits-come-from), when it is on, is synced with them, or alone as `symposium-audits`.
 
-### `cargo agents plugin list`
+### `symposium plugin list`
 
 ```bash
-cargo agents plugin list
+symposium plugin list
 ```
 
 List all configured plugin sources and the plugins they provide.
 
-### `cargo agents plugin show`
+### `symposium plugin show`
 
 ```bash
-cargo agents plugin show <PLUGIN>
+symposium plugin show <PLUGIN>
 ```
 
 Show a plugin: its id and its effective configuration as TOML, after validation has filled in defaults and promoted inline installations.
 
-### `cargo agents plugin digest`
+### `symposium plugin digest`
 
 ```bash
-cargo agents plugin digest <TARGET>
+symposium plugin digest <TARGET>
 ```
 
-Print the [payload digest](./audits.md#payload-digest) of a crate: the value an [audits file](./audits.md) matches the crate on. `<TARGET>` is a crate's source directory when it names an existing directory (relative to the working directory). A target that looks like a path (it starts with `.` or contains a path separator) or names something that is not a directory is an error. Anything else is a crate name, resolved the way [`cargo agents crate-info`](./cargo-agents-crate-info.md) resolves it (a workspace member's own directory, or the source cargo fetches). Write `name@version` (for example `serde@1.0.200`) to digest one exact release: the workspace's own copy when the workspace resolved that release, otherwise the source cargo fetches for `=<version>`.
+Print the [payload digest](./audits.md#payload-digest) of a crate: the value an [audits file](./audits.md) matches the crate on. `<TARGET>` is a crate's source directory when it names an existing directory (relative to the working directory). A target that looks like a path (it starts with `.` or contains a path separator) or names something that is not a directory is an error. Anything else is a crate name, resolved the way [`symposium crate-info`](./symposium-crate-info.md) resolves it (a workspace member's own directory, or the source cargo fetches). Write `name@version` (for example `serde@1.0.200`) to digest one exact release: the workspace's own copy when the workspace resolved that release, otherwise the source cargo fetches for `=<version>`.
 
 On success the command prints the digest and nothing else (`sha256:` followed by 64 hex characters), so it can be used in a script. It skips the startup [auto-update](./configuration.md) check, so no update notice reaches its output and the binary is never replaced under a script mid-run. When the payload has no digest it prints the reason on stderr, leaving stdout empty, and exits non-zero. With `--json` it emits a `payload_digest` event carrying `target`, `digest` or `ineligible`, and, for a crate name, `krate` (the crate and the version it resolved to).
 
 Use it to check a crate before adding it to an audits file, or from tooling that maintains one, so that the tooling hashes exactly as Symposium does. The digest it prints is computed by the same code the lookup uses.
 
-### `cargo agents plugin validate`
+### `symposium plugin validate`
 
 ```bash
-cargo agents plugin validate <PATH> [--no-check-crates]
+symposium plugin validate <PATH> [--no-check-crates]
 ```
 
 Validate plugins without installing anything. Useful when authoring plugins. Each item is reported with its kind: `plugin`, `agent plugin` or `skill`. `<PATH>` is one of:
@@ -71,13 +71,13 @@ Besides errors, it warns about a plugin that loads but does not work the same on
 - a hook event handled only by agent-format hooks, which fire on that agent alone (see [Agent-specific hooks](../crate-authors/authoring-a-plugin.md#agent-specific-hooks));
 - a skill file or folder that is not installed: a link that resolves outside its package, a broken link, or a link back into the skill.
 
-### `cargo agents plugin import`
+### `symposium plugin import`
 
 ```bash
-cargo agents plugin import <PATH> [--out <DIR>]
+symposium plugin import <PATH> [--out <DIR>]
 ```
 
-Turn a Claude Code plugin into an [Agent Plugins package](./agent-plugins.md) that Symposium loads, written to `<DIR>/<name>/`. The command refuses to overwrite an existing folder, and validates the result as [`plugin validate`](#cargo-agents-plugin-validate) does.
+Turn a Claude Code plugin into an [Agent Plugins package](./agent-plugins.md) that Symposium loads, written to `<DIR>/<name>/`. The command refuses to overwrite an existing folder, and validates the result as [`plugin validate`](#symposium-plugin-validate) does.
 
 | Flag | Description |
 |------|-------------|
@@ -108,18 +108,18 @@ Everything that is not imported is reported, one line each:
 
 A skill that mentions `${CLAUDE_PLUGIN_ROOT}` is copied, with a warning: Claude Code only fills that in for the skills of its own plugins.
 
-The imported plugin names no crate, so in a plugin source it stays dormant until enabled with [`cargo agents use`](./cargo-agents-use.md).
+The imported plugin names no crate, so in a plugin source it stays dormant until enabled with [`symposium use`](./symposium-use.md).
 
-### `cargo agents plugin try`
+### `symposium plugin try`
 
 ```bash
-cargo agents plugin try <PATH>
-cargo agents plugin try --remove <PATH or NAME>
+symposium plugin try <PATH>
+symposium plugin try --remove <PATH or NAME>
 ```
 
 Install a plugin you are writing in your agents, the way a user would have it, so you can open an agent and use it. `<PATH>` is a plugin directory (with a `Symposium.toml`), an [Agent Plugins package](./agent-plugins.md) directory (with a `plugin.json`) or a skill directory (with a `SKILL.md`).
 
-The plugin is linked into `~/.symposium/plugins/` under its name, then the current workspace is synced. A plugin that names no dependency is also enabled in every workspace, as [`cargo agents use --global`](./cargo-agents-use.md) would. Symposium reads your directory in place, so an edit reaches your agents on the next sync: `cargo agents sync`, or the automatic one when an agent starts a session. Most agents then need a new session (Claude Code also takes `/reload-plugins`, Copilot CLI `/restart`).
+The plugin is linked into `~/.symposium/plugins/` under its name, then the current workspace is synced. A plugin that names no dependency is also enabled in every workspace, as [`symposium use --global`](./symposium-use.md) would. Symposium reads your directory in place, so an edit reaches your agents on the next sync: `symposium sync`, or the automatic one when an agent starts a session. Most agents then need a new session (Claude Code also takes `/reload-plugins`, Copilot CLI `/restart`).
 
 A plugin with its own `depends-on` or predicates is left to them, as it is for its users: it is active only in workspaces where they hold. `try` names the dependency and warns when the current workspace does not have it.
 
