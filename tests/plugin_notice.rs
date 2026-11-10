@@ -362,3 +362,29 @@ async fn a_new_version_of_a_noticed_dependency_is_named_again() {
     .await
     .unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_notice_lost_to_a_blocked_prompt_is_given_on_the_next_change() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-notice0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.sym.config.defaults.user_plugins = true;
+            start_session(&ctx, HookAgent::Claude).await;
+            let root = ctx.workspace_root.clone().unwrap();
+
+            add_dependency(&root, "crate-b");
+            let stdout = respond(&ctx, HookAgent::Claude, HookStep::user_prompt("next")).await;
+            assert!(!stdout.contains(NOTICE), "blocked prompt: {stdout}");
+
+            add_dependency(&root, "crate-d");
+            let stdout = respond(&ctx, HookAgent::Claude, tool_call_finished()).await;
+            assert_notice(HookAgent::Claude, &stdout);
+            assert!(stdout.contains("crate-d"), "{stdout}");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
