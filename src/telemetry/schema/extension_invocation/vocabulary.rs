@@ -48,6 +48,7 @@ impl TryFrom<Agent> for ExtensionInvocationAgent {
             Agent::Claude => Ok(Self::Claude),
             Agent::Antigravity
             | Agent::Codex
+            | Agent::CommandCode
             | Agent::Copilot
             | Agent::Goose
             | Agent::Kiro

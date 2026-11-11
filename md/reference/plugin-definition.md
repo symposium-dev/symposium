@@ -252,7 +252,7 @@ Each `[[hooks]]` entry declares a hook that responds to agent events. For the JS
 | `args` | array (optional) | Invocation arguments. Forbidden when the installation also declares `args`. |
 | `requirements` | array (optional) | Installations to acquire before running. Same shape as `command` (string name or inline declaration). |
 | `agent` | string (optional) | Restrict the hook to a specific agent (`antigravity`, `claude`, `copilot`, `kiro`, ...). It does not change the input; `format` still decides that (canonical JSON by default). |
-| `format` | string | Wire format the handler expects on stdin. `symposium` (default): symposium converts the agent's event to its canonical format before delivering. Any agent name (`antigravity`, `claude`, `codex`, `copilot`, `kiro`): the hook fires only when Symposium runs for that agent, and receives that agent's native input unchanged; on every other agent it does not fire, and nothing is converted. Pair it with a `format = "symposium"` hook to cover the other agents (see [Agent-specific hooks](#agent-specific-hooks)). Symposium always intermediates: it never registers plugin hooks directly into agent configs. See [Hooks](../crate-authors/authoring-a-plugin.md#hooks). |
+| `format` | string | Wire format the handler expects on stdin. `symposium` (default): symposium converts the agent's event to its canonical format before delivering. Any agent name (`antigravity`, `claude`, `codex`, `commandcode`, `copilot`, `kiro`): the hook fires only when Symposium runs for that agent, and receives that agent's native input unchanged; on every other agent it does not fire, and nothing is converted. Pair it with a `format = "symposium"` hook to cover the other agents (see [Agent-specific hooks](#agent-specific-hooks)). Symposium always intermediates: it never registers plugin hooks directly into agent configs. See [Hooks](../crate-authors/authoring-a-plugin.md#hooks). |
 | `predicates` | array (optional) | Predicates (`depends-on`, `shell`, `path_exists`, `env`, `workspace-member`, `not`, `any`, `all`) that must all hold for the hook to dispatch. Evaluated per-dispatch. A hook has no `depends-on` field: gate it on a dependency with `predicates = ["depends-on(serde)"]`. See [Predicates](./predicates.md). |
 
 ### Examples
@@ -607,6 +607,7 @@ All supported agents have MCP server configuration. Symposium handles the format
 | Claude Code | `.mcp.json` | `mcpServers.<name>` |
 | GitHub Copilot | `~/.copilot/mcp-config.json` (no project file) | `mcpServers.<name>` |
 | Codex CLI | `~/.codex/config.toml` (no project file) | `[mcp_servers.<name>]` |
+| Command Code | `~/.commandcode/mcp.json` (no project file) | `mcpServers.<name>` |
 | Kiro | `.kiro/settings/mcp.json` | `mcpServers.<name>` |
 | OpenCode | `opencode.json` | `mcp.<name>` |
 | Goose | `~/.config/goose/config.yaml` (no project file) | `extensions.<name>` |

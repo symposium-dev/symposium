@@ -26,6 +26,8 @@ pub(in crate::telemetry) enum SupportedAgent {
     Antigravity,
     Claude,
     Codex,
+    #[serde(rename = "commandcode")]
+    CommandCode,
     Copilot,
     Kiro,
     #[serde(rename = "opencode")]
@@ -40,6 +42,7 @@ impl SupportedAgent {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::CommandCode => "commandcode",
             Self::Copilot => "copilot",
             Self::Antigravity => "antigravity",
             Self::Kiro => "kiro",
@@ -64,6 +67,7 @@ impl From<Agent> for SupportedAgent {
             Agent::Antigravity => Self::Antigravity,
             Agent::Claude => Self::Claude,
             Agent::Codex => Self::Codex,
+            Agent::CommandCode => Self::CommandCode,
             Agent::Copilot => Self::Copilot,
             Agent::Kiro => Self::Kiro,
             Agent::OpenCode => Self::OpenCode,
@@ -82,6 +86,8 @@ pub(in crate::telemetry) enum HookAgent {
     Antigravity,
     Claude,
     Codex,
+    #[serde(rename = "commandcode")]
+    CommandCode,
     Copilot,
     Kiro,
 }
@@ -93,6 +99,7 @@ impl HookAgent {
         match self {
             Self::Claude => "claude",
             Self::Codex => "codex",
+            Self::CommandCode => "commandcode",
             Self::Copilot => "copilot",
             Self::Antigravity => "antigravity",
             Self::Kiro => "kiro",
@@ -112,6 +119,7 @@ impl From<HookAgent> for SupportedAgent {
             HookAgent::Antigravity => Self::Antigravity,
             HookAgent::Claude => Self::Claude,
             HookAgent::Codex => Self::Codex,
+            HookAgent::CommandCode => Self::CommandCode,
             HookAgent::Copilot => Self::Copilot,
             HookAgent::Kiro => Self::Kiro,
         }

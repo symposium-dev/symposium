@@ -10,9 +10,21 @@ use symposium::hook::HookResponse;
 use symposium::hook_schema::{HookAgent, agent_event};
 use symposium_testlib::{HookStep, TestContext, TestMode, with_fixture};
 
+/// The agents with a `UserPromptSubmit` hook.
 const ALL_AGENTS: [HookAgent; 5] = [
     HookAgent::Claude,
     HookAgent::Codex,
+    HookAgent::Copilot,
+    HookAgent::Kiro,
+    HookAgent::Antigravity,
+];
+
+/// The agents with a `PreToolUse` hook: [`ALL_AGENTS`], plus Command Code,
+/// which has no `UserPromptSubmit`.
+const TOOL_AGENTS: [HookAgent; 6] = [
+    HookAgent::Claude,
+    HookAgent::Codex,
+    HookAgent::CommandCode,
     HookAgent::Copilot,
     HookAgent::Kiro,
     HookAgent::Antigravity,
@@ -64,7 +76,7 @@ fn assert_denied(agent: HookAgent, response: &HookResponse, reason: &str) {
         return;
     }
     let expected = match agent {
-        HookAgent::Claude | HookAgent::Codex => json!({
+        HookAgent::Claude | HookAgent::Codex | HookAgent::CommandCode => json!({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
@@ -93,7 +105,7 @@ async fn plugin_deny_reaches_every_agent() {
         TestMode::SimulationOnly,
         &["plugin-hook-decisions0"],
         async |ctx| {
-            for agent in ALL_AGENTS {
+            for agent in TOOL_AGENTS {
                 let response = respond(&ctx, agent, tool_call("DenyProbe")).await;
                 assert_denied(agent, &response, DENY_REASON);
             }
@@ -113,7 +125,7 @@ async fn plugin_exit_2_denies_the_tool_call_on_every_agent() {
         TestMode::SimulationOnly,
         &["plugin-hook-decisions0"],
         async |ctx| {
-            for agent in ALL_AGENTS {
+            for agent in TOOL_AGENTS {
                 let response = respond(&ctx, agent, tool_call("BlockProbe")).await;
                 assert_denied(agent, &response, BLOCK_REASON);
             }
@@ -126,8 +138,8 @@ async fn plugin_exit_2_denies_the_tool_call_on_every_agent() {
 
 /// A rewrite reaches every agent that can apply it without approving the
 /// call on the user's behalf: Claude gets `ask`, so the user sees the
-/// rewritten call. Codex (allow-only) and Kiro (no rewrite) leave the call
-/// untouched rather than run something else.
+/// rewritten call. Codex (allow-only), Command Code (allow or deny only) and
+/// Kiro (no rewrite) leave the call untouched rather than run something else.
 #[tokio::test(flavor = "multi_thread")]
 async fn plugin_rewrite_reaches_agents_that_can_apply_it() {
     with_fixture(
@@ -135,7 +147,7 @@ async fn plugin_rewrite_reaches_agents_that_can_apply_it() {
         &["plugin-hook-decisions0"],
         async |ctx| {
             let rewritten = json!({"command": "echo rewritten"});
-            for agent in ALL_AGENTS {
+            for agent in TOOL_AGENTS {
                 let response = respond(&ctx, agent, tool_call("RewriteProbe")).await;
                 assert_eq!(response.exit_code, 0, "{agent:?} rewrite exit code");
                 if agent == HookAgent::Kiro {
@@ -150,7 +162,7 @@ async fn plugin_rewrite_reaches_agents_that_can_apply_it() {
                             "updatedInput": rewritten,
                         }
                     }),
-                    HookAgent::Codex => json!({}),
+                    HookAgent::Codex | HookAgent::CommandCode => json!({}),
                     HookAgent::Copilot => json!({"modifiedArgs": rewritten}),
                     HookAgent::Antigravity => json!({"decision": "allow", "overwrite": rewritten}),
                     other => unreachable!("{other:?} has no PreToolUse hook"),

@@ -16,6 +16,7 @@ async fn sync_progress_stays_off_hook_stdout() {
         for agent in [
             HookAgent::Claude,
             HookAgent::Codex,
+            HookAgent::CommandCode,
             HookAgent::Copilot,
             HookAgent::Antigravity,
             HookAgent::Kiro,

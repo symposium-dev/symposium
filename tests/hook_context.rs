@@ -42,6 +42,7 @@ async fn session_start_keeps_symposium_and_plugin_context() {
         for agent in [
             HookAgent::Claude,
             HookAgent::Codex,
+            HookAgent::CommandCode,
             HookAgent::Copilot,
             HookAgent::Kiro,
             HookAgent::Antigravity,
@@ -71,6 +72,7 @@ async fn post_tool_use_keeps_every_plugin_context() {
         for agent in [
             HookAgent::Claude,
             HookAgent::Codex,
+            HookAgent::CommandCode,
             HookAgent::Copilot,
             HookAgent::Kiro,
         ] {

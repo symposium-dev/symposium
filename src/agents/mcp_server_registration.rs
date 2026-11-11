@@ -306,6 +306,58 @@ pub(super) fn register_claude_mcp_servers(
     )
 }
 
+/// [`server_to_json`] plus the explicit `transport` Command Code's own
+/// `mcp add` writes. Its CLI accepts `stdio` and `http` only.
+fn command_code_server_to_json(server: &McpServer) -> serde_json::Value {
+    let mut v = server_to_json(server);
+    v["transport"] = json!(match server {
+        McpServer::Stdio(_) => "stdio",
+        _ => "http",
+    });
+    v
+}
+
+/// Command Code: `mcpServers.<name>` in the user-level `~/.commandcode/mcp.json`.
+///
+/// An SSE server is skipped rather than written as a transport Command Code
+/// does not offer.
+pub(super) fn register_command_code_mcp_servers(
+    path: &Path,
+    servers: &[McpServer],
+    out: &Output,
+) -> Result<Vec<String>> {
+    let display = display_path(path);
+    let supported: Vec<McpServer> = servers
+        .iter()
+        .filter(|server| {
+            let sse = matches!(server, McpServer::Sse(_));
+            if sse {
+                out.info(format!(
+                    "{display}: skipping SSE MCP server {} (Command Code supports stdio and HTTP only)",
+                    server_name(server)
+                ));
+            }
+            !sse
+        })
+        .cloned()
+        .collect();
+    register_json_mcp_servers_with(
+        path,
+        &supported,
+        Some("mcpServers"),
+        command_code_server_to_json,
+        out,
+    )
+}
+
+pub(super) fn unregister_command_code_mcp_servers(
+    path: &Path,
+    names: &[&str],
+    out: &Output,
+) -> Result<()> {
+    unregister_json_mcp_servers(path, names, Some("mcpServers"), out)
+}
+
 pub(super) fn unregister_claude_mcp_servers(
     path: &Path,
     names: &[&str],
@@ -835,6 +887,43 @@ mod tests {
         assert_eq!(config["mcpServers"]["withenv"]["type"], "local");
         assert_eq!(config["mcpServers"]["remote"]["type"], "http");
         assert_eq!(config["mcpServers"]["withenv"]["env"]["TOKEN"], "abc");
+    }
+
+    /// Command Code entries carry an explicit `transport`, with `env` and
+    /// `headers` as objects, and an SSE server (which it does not offer) is
+    /// skipped rather than written as something else.
+    #[test]
+    fn command_code_entries_carry_a_transport_and_skip_sse() {
+        use sacp::schema::McpServerSse;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("mcp.json");
+        let mut servers = env_and_remote_servers();
+        servers.push(McpServer::Sse(McpServerSse::new(
+            "legacy",
+            "http://localhost:8081/sse",
+        )));
+        let registered =
+            register_command_code_mcp_servers(&path, &servers, &Output::quiet()).unwrap();
+        assert_eq!(registered, ["withenv", "remote"]);
+
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(config["mcpServers"]["withenv"]["transport"], "stdio");
+        assert_eq!(config["mcpServers"]["withenv"]["env"]["TOKEN"], "abc");
+        assert_eq!(config["mcpServers"]["remote"]["transport"], "http");
+        assert_eq!(
+            config["mcpServers"]["remote"]["headers"]["Authorization"],
+            "Bearer t"
+        );
+        assert!(config["mcpServers"].get("legacy").is_none());
+
+        // Re-registering is a no-op, and unregistering removes only its entries.
+        register_command_code_mcp_servers(&path, &servers, &Output::quiet()).unwrap();
+        unregister_command_code_mcp_servers(&path, &["withenv"], &Output::quiet()).unwrap();
+        let config: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(config["mcpServers"].get("withenv").is_none());
+        assert!(config["mcpServers"].get("remote").is_some());
     }
 
     /// Claude Code drops a remote entry without a `type`, but reads a stdio

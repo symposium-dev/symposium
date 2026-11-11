@@ -2,7 +2,7 @@
 
 > For AI coding agents: how to write a Symposium plugin (skills, hooks, MCP servers, and subcommands) for a Rust crate, and how to check that it works.
 
-Symposium (the `cargo agents` CLI, https://symposium.dev) gives AI coding agents (Claude Code, Codex, GitHub Copilot, Kiro, Antigravity, OpenCode, Goose) knowledge about the crates a Rust project directly depends on. A plugin carries that knowledge for one crate:
+Symposium (the `cargo agents` CLI, https://symposium.dev) gives AI coding agents (Claude Code, Codex, Command Code, GitHub Copilot, Kiro, Antigravity, OpenCode, Goose) knowledge about the crates a Rust project directly depends on. A plugin carries that knowledge for one crate:
 
 - skills: `SKILL.md` guidance documents, installed into each agent's skills directory;
 - hooks: programs that run on agent events (before or after a tool call, when the user submits a prompt, when a session starts, when the agent finishes its turn);
@@ -46,7 +46,7 @@ Always call `.validate()` before passing widgets to the runtime.
 
 ### 1.3 Check it
 
-Prerequisite: the CLI from the `symposium` crate (`cargo binstall symposium` or `cargo install symposium`), set up for the user's agent with `cargo agents init --add-agent <agent>` (`claude`, `codex`, `copilot`, `kiro`, `antigravity`, `opencode`, or `goose`; repeat the flag for several). With no agent configured, `cargo agents use` installs nothing. Without `--add-agent`, `init` asks interactively, which needs a terminal. `init` writes the user's Symposium configuration and their agents' hook settings, so ask the user before running it.
+Prerequisite: the CLI from the `symposium` crate (`cargo binstall symposium` or `cargo install symposium`), set up for the user's agent with `cargo agents init --add-agent <agent>` (`claude`, `codex`, `commandcode`, `copilot`, `kiro`, `antigravity`, `opencode`, or `goose`; repeat the flag for several). With no agent configured, `cargo agents use` installs nothing. Without `--add-agent`, `init` asks interactively, which needs a terminal. `init` writes the user's Symposium configuration and their agents' hook settings, so ask the user before running it.
 
 In a scratch project that depends on the crate by path:
 
@@ -146,7 +146,7 @@ matcher = "^(Bash|bash|run_command|execute_bash)$"
 command = "widgetlib-hooks"
 ```
 
-- Events: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `Stop`. Symposium delivers `Stop` only on Claude Code and Antigravity, and Goose and OpenCode run no shell hooks at all (they still get skills and MCP servers).
+- Events: `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `Stop`. Symposium delivers `Stop` only on Claude Code and Antigravity, Command Code has no `UserPromptSubmit`, and Goose and OpenCode run no shell hooks at all (they still get skills and MCP servers).
 - `matcher` is an unanchored regex over the tool name, so anchor it with `^...$`. Agents name tools differently: the shell is `Bash` in Claude Code and Codex, `bash` in Copilot, `run_command` in Antigravity (its input uses `CommandLine` instead of `command`), and `execute_bash` in Kiro. Tool names reach the handler exactly as the agent sent them, and tool inputs keep the agent's own argument names.
 - A hook has no `depends-on` field; gate it with `predicates = ["depends-on(serde)"]`.
 - The handler reads one JSON event on stdin and writes its answer to stdout in Symposium's canonical format, which Symposium converts to and from each agent's format. Setting `format = "claude"` (or another agent) instead makes the hook fire only on that agent, with that agent's native JSON.

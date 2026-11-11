@@ -35,6 +35,7 @@ pub enum Agent {
     Antigravity,
     Claude,
     Codex,
+    CommandCode,
     Copilot,
     Goose,
     Kiro,
@@ -48,12 +49,13 @@ impl Agent {
             "antigravity" => Ok(Agent::Antigravity),
             "claude" => Ok(Agent::Claude),
             "codex" => Ok(Agent::Codex),
+            "commandcode" => Ok(Agent::CommandCode),
             "copilot" => Ok(Agent::Copilot),
             "goose" => Ok(Agent::Goose),
             "kiro" => Ok(Agent::Kiro),
             "opencode" => Ok(Agent::OpenCode),
             other => bail!(
-                "unknown agent: {other} (expected antigravity, claude, codex, copilot, goose, kiro, or opencode)"
+                "unknown agent: {other} (expected antigravity, claude, codex, commandcode, copilot, goose, kiro, or opencode)"
             ),
         }
     }
@@ -64,6 +66,7 @@ impl Agent {
             Agent::Antigravity => "antigravity",
             Agent::Claude => "claude",
             Agent::Codex => "codex",
+            Agent::CommandCode => "commandcode",
             Agent::Copilot => "copilot",
             Agent::Goose => "goose",
             Agent::Kiro => "kiro",
@@ -77,6 +80,7 @@ impl Agent {
             Agent::Antigravity => "Antigravity CLI",
             Agent::Claude => "Claude Code",
             Agent::Codex => "Codex CLI",
+            Agent::CommandCode => "Command Code",
             Agent::Copilot => "GitHub Copilot",
             Agent::Goose => "Goose",
             Agent::Kiro => "Kiro",
@@ -90,6 +94,7 @@ impl Agent {
             Agent::Antigravity,
             Agent::Claude,
             Agent::Codex,
+            Agent::CommandCode,
             Agent::Copilot,
             Agent::Goose,
             Agent::Kiro,
@@ -113,7 +118,7 @@ impl Agent {
         );
         match self {
             Agent::Claude => project_root.join(".claude").join("skills").join(skill_name),
-            Agent::Antigravity | Agent::Codex | Agent::Copilot => {
+            Agent::Antigravity | Agent::Codex | Agent::CommandCode | Agent::Copilot => {
                 project_root.join(".agents").join("skills").join(skill_name)
             }
             Agent::Goose => project_root.join(".agents").join("skills").join(skill_name),
@@ -139,6 +144,7 @@ impl Agent {
             ),
             Agent::Claude => Some(home.join(".claude").join("skills").join(skill_name)),
             Agent::Codex => Some(home.join(".agents").join("skills").join(skill_name)),
+            Agent::CommandCode => Some(home.join(".agents").join("skills").join(skill_name)),
             Agent::Copilot => None, // no global skills path
             Agent::Goose => Some(home.join(".agents").join("skills").join(skill_name)),
             Agent::Kiro => Some(home.join(".kiro").join("skills").join(skill_name)),
@@ -167,6 +173,10 @@ impl Agent {
             Agent::Codex => {
                 register_codex_hooks(&project_root.join(".codex").join("hooks.json"), out)
             }
+            Agent::CommandCode => register_command_code_hooks(
+                &project_root.join(".commandcode").join("settings.json"),
+                out,
+            ),
             Agent::Copilot => {
                 register_copilot_hooks(&project_root.join(".github").join("hooks"), out)
             }
@@ -199,6 +209,9 @@ impl Agent {
                 register_claude_hooks(&claude_config_dir(sym).join("settings.json"), out)
             }
             Agent::Codex => register_codex_hooks(&codex_dir(sym).join("hooks.json"), out),
+            Agent::CommandCode => {
+                register_command_code_hooks(&home.join(".commandcode").join("settings.json"), out)
+            }
             Agent::Copilot => {
                 register_copilot_hooks_global(&copilot_config_dir(sym).join("settings.json"), out)
             }
@@ -273,6 +286,11 @@ impl Agent {
             // scope therefore resolves to the same user-level file rather than
             // to a file nobody reads.
             (Agent::Codex, _) => codex_dir(sym).join("config.toml"),
+            // Command Code does read a project `.mcp.json`, but so does Claude
+            // Code, with a differently shaped entry for the same server name.
+            // Writing both would make each agent's sync rewrite the other's
+            // entry on every run, so only the user-level file is written.
+            (Agent::CommandCode, _) => home.join(".commandcode").join("mcp.json"),
             (Agent::Copilot, _) => copilot_config_dir(sym).join("mcp-config.json"),
             (Agent::Goose, _) => goose_path_root(sym)
                 .map(|root| root.join("config"))
@@ -311,6 +329,9 @@ impl Agent {
             Agent::Codex => {
                 mcp_server_registration::register_codex_mcp_servers(&path, servers, out)
             }
+            Agent::CommandCode => {
+                mcp_server_registration::register_command_code_mcp_servers(&path, servers, out)
+            }
             Agent::Copilot => {
                 mcp_server_registration::register_copilot_mcp_servers(&path, servers, out)
             }
@@ -334,6 +355,9 @@ impl Agent {
                 mcp_server_registration::unregister_claude_mcp_servers(path, names, out)
             }
             Agent::Codex => mcp_server_registration::unregister_codex_mcp_servers(path, names, out),
+            Agent::CommandCode => {
+                mcp_server_registration::unregister_command_code_mcp_servers(path, names, out)
+            }
             Agent::Copilot => {
                 mcp_server_registration::unregister_copilot_mcp_servers(path, names, out)
             }
@@ -360,6 +384,10 @@ impl Agent {
             Agent::Codex => {
                 unregister_codex_hooks(&project_root.join(".codex").join("hooks.json"), out)
             }
+            Agent::CommandCode => unregister_command_code_hooks(
+                &project_root.join(".commandcode").join("settings.json"),
+                out,
+            ),
             Agent::Copilot => {
                 unregister_copilot_hooks(&project_root.join(".github").join("hooks"), out)
             }
@@ -380,6 +408,9 @@ impl Agent {
                 unregister_claude_hooks(&claude_config_dir(sym).join("settings.json"), out)
             }
             Agent::Codex => unregister_codex_hooks(&codex_dir(sym).join("hooks.json"), out),
+            Agent::CommandCode => {
+                unregister_command_code_hooks(&home.join(".commandcode").join("settings.json"), out)
+            }
             Agent::Copilot => {
                 unregister_copilot_hooks_global(&copilot_config_dir(sym).join("settings.json"), out)
             }
@@ -528,6 +559,73 @@ fn ensure_codex_hook_entry(arr: &mut Vec<serde_json::Value>, command: &str) -> b
 
 fn unregister_codex_hooks(hooks_path: &Path, out: &Output) {
     unregister_settings_hooks(hooks_path, "cargo-agents hook", out);
+}
+
+// ---------------------------------------------------------------------------
+// Command Code hook registration
+// ---------------------------------------------------------------------------
+
+/// Register hooks in a Command Code `settings.json`.
+///
+/// Command Code has no `UserPromptSubmit`, and `Stop` is left unregistered as
+/// for Codex. Its handlers carry no `matcher`: the field is a regex tested
+/// against the tool's display name, so `"*"` is not valid there, and omitting
+/// it matches every tool.
+fn register_command_code_hooks(settings_path: &Path, out: &Output) -> Result<()> {
+    let mut settings = load_json_or_empty(settings_path)?;
+    let display = display_path(settings_path);
+    let hooks_obj = hooks_object(&mut settings, &display)?;
+
+    let mut added = Vec::new();
+
+    for event in ["PreToolUse", "PostToolUse", "SessionStart"] {
+        let command = format!("cargo-agents hook commandcode {}", event_to_cli_arg(event));
+        if ensure_command_code_hook_entry(event_hooks(hooks_obj, event, &display)?, &command) {
+            added.push(event);
+        }
+    }
+
+    if added.is_empty() {
+        out.already_ok(format!("{display}: hooks already registered"));
+    } else {
+        save_json(settings_path, &settings)?;
+        out.done(format!("{display}: added hooks ({})", added.join(", ")));
+    }
+
+    Ok(())
+}
+
+/// Returns `true` if a new entry was added, `false` if already registered.
+fn ensure_command_code_hook_entry(arr: &mut Vec<serde_json::Value>, command: &str) -> bool {
+    let already_registered = arr.iter().any(|group| {
+        group
+            .get("hooks")
+            .and_then(|h| h.as_array())
+            .is_some_and(|hooks| {
+                hooks.iter().any(|h| {
+                    h.get("command")
+                        .and_then(|c| c.as_str())
+                        .is_some_and(|c| c.starts_with("cargo-agents hook"))
+                })
+            })
+    });
+
+    if already_registered {
+        return false;
+    }
+
+    arr.push(json!({
+        "hooks": [{
+            "type": "command",
+            "command": command,
+            "timeout": 10
+        }]
+    }));
+    true
+}
+
+fn unregister_command_code_hooks(settings_path: &Path, out: &Output) {
+    unregister_settings_hooks(settings_path, "cargo-agents hook", out);
 }
 
 // ---------------------------------------------------------------------------
@@ -1352,6 +1450,7 @@ mod tests {
         match agent {
             Agent::Claude => vec![root.join(".claude").join("settings.json")],
             Agent::Codex => vec![root.join(".codex").join("hooks.json")],
+            Agent::CommandCode => vec![root.join(".commandcode").join("settings.json")],
             Agent::Copilot => vec![root.join(".github").join("hooks")],
             Agent::Antigravity => vec![
                 root.join(".agents").join("hooks.json"),
@@ -1407,6 +1506,111 @@ mod tests {
             serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
         let pre_tool = settings["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(pre_tool.len(), 1);
+    }
+
+    #[test]
+    fn command_code_skill_dirs_use_vendor_neutral() {
+        let root = Path::new("/project");
+        assert_eq!(
+            Agent::CommandCode.project_skill_dir(root, "tokio"),
+            PathBuf::from("/project/.agents/skills/tokio")
+        );
+        let global = Agent::CommandCode
+            .global_skill_dir(Path::new("/home/me"), "tokio")
+            .unwrap();
+        assert_eq!(global, PathBuf::from("/home/me/.agents/skills/tokio"));
+    }
+
+    #[test]
+    fn command_code_config_name_round_trips() {
+        assert_eq!(
+            Agent::from_config_name("commandcode").unwrap(),
+            Agent::CommandCode
+        );
+        assert_eq!(Agent::CommandCode.config_name(), "commandcode");
+        assert_eq!(Agent::CommandCode.display_name(), "Command Code");
+    }
+
+    #[test]
+    fn register_command_code_hooks_writes_tool_and_session_events_without_matchers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let settings_path = tmp.path().join("settings.json");
+        register_command_code_hooks(&settings_path, &Output::quiet()).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+        let hooks = settings["hooks"].as_object().unwrap();
+
+        // Command Code has no UserPromptSubmit, and Stop is left unregistered.
+        let mut events: Vec<_> = hooks.keys().map(String::as_str).collect();
+        events.sort();
+        assert_eq!(events, ["PostToolUse", "PreToolUse", "SessionStart"]);
+
+        for (event, groups) in hooks {
+            let group = &groups.as_array().unwrap()[0];
+            // `matcher` is a regex there, so "*" is invalid; omitted means all tools.
+            assert!(
+                group.get("matcher").is_none(),
+                "{event} must have no matcher"
+            );
+            let command = group["hooks"][0]["command"].as_str().unwrap();
+            assert!(
+                command.starts_with("cargo-agents hook commandcode "),
+                "{event}: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn register_command_code_hooks_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let settings_path = tmp.path().join("settings.json");
+        register_command_code_hooks(&settings_path, &Output::quiet()).unwrap();
+        register_command_code_hooks(&settings_path, &Output::quiet()).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(settings["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn register_command_code_hooks_keeps_the_users_own_hooks_and_settings() {
+        let tmp = tempfile::tempdir().unwrap();
+        let settings_path = tmp.path().join("settings.json");
+        fs::write(
+            &settings_path,
+            r#"{"theme":"dark","hooks":{"PreToolUse":[{"matcher":"shell","hooks":[{"type":"command","command":"my-lint"}]}]}}"#,
+        )
+        .unwrap();
+        register_command_code_hooks(&settings_path, &Output::quiet()).unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+        assert_eq!(settings["theme"], "dark");
+        assert_eq!(settings["hooks"]["PreToolUse"].as_array().unwrap().len(), 2);
+
+        unregister_command_code_hooks(&settings_path, &Output::quiet());
+        let settings: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&settings_path).unwrap()).unwrap();
+        let pre = settings["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre.len(), 1);
+        assert_eq!(pre[0]["hooks"][0]["command"], "my-lint");
+        assert!(settings["hooks"].get("PostToolUse").is_none());
+    }
+
+    #[test]
+    fn command_code_mcp_is_user_scope_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sym = Symposium::from_dir(tmp.path());
+        let project = Path::new("/project");
+        let user = Agent::CommandCode.mcp_config_path(McpScope::User, project, &sym);
+        let proj = Agent::CommandCode.mcp_config_path(McpScope::Project, project, &sym);
+        assert_eq!(
+            user, proj,
+            "project scope must not touch Claude's .mcp.json"
+        );
+        assert!(user.ends_with(Path::new(".commandcode").join("mcp.json")));
+        assert!(!Agent::CommandCode.supports_project_mcp_scope());
     }
 
     #[test]

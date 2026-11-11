@@ -377,6 +377,7 @@ pub enum HookFormat {
     Antigravity,
     Claude,
     Codex,
+    CommandCode,
     Copilot,
     Kiro,
 }
@@ -389,6 +390,7 @@ impl HookFormat {
             HookFormat::Antigravity => Some(HookAgent::Antigravity),
             HookFormat::Claude => Some(HookAgent::Claude),
             HookFormat::Codex => Some(HookAgent::Codex),
+            HookFormat::CommandCode => Some(HookAgent::CommandCode),
             HookFormat::Copilot => Some(HookAgent::Copilot),
             HookFormat::Kiro => Some(HookAgent::Kiro),
         }

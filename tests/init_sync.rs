@@ -720,6 +720,63 @@ async fn removing_agent_removes_hooks() {
     .unwrap();
 }
 
+/// Command Code takes its hooks from `.commandcode/settings.json`, registers
+/// the tool and session events with no `matcher`, and gives them up again when
+/// the agent is removed, leaving the user's own settings alone.
+#[tokio::test]
+async fn command_code_hooks_are_registered_and_removed() {
+    with_fixture(TestMode::SimulationOnly, &["plugins0"], async |mut ctx| {
+        let settings = ctx.sym.home_dir().join(".commandcode/settings.json");
+        std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+        std::fs::write(&settings, r#"{"theme":"dark"}"#).unwrap();
+
+        ctx.symposium(&[
+            "init",
+            "--hook-scope",
+            "global",
+            "--add-agent",
+            "commandcode",
+        ])
+        .await?;
+
+        let config: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(config["theme"], "dark", "the user's settings are kept");
+        for (event, arg) in [
+            ("PreToolUse", "pre-tool-use"),
+            ("PostToolUse", "post-tool-use"),
+            ("SessionStart", "session-start"),
+        ] {
+            let group = &config["hooks"][event][0];
+            assert_eq!(
+                group["hooks"][0]["command"],
+                format!("cargo-agents hook commandcode {arg}")
+            );
+            assert!(group.get("matcher").is_none(), "{event} has no matcher");
+        }
+        assert!(config["hooks"].get("UserPromptSubmit").is_none());
+
+        ctx.symposium(&[
+            "init",
+            "--hook-scope",
+            "global",
+            "--remove-agent",
+            "commandcode",
+        ])
+        .await?;
+
+        let contents = std::fs::read_to_string(&settings).unwrap();
+        assert!(
+            !contents.contains("cargo-agents hook"),
+            "command code hooks should be removed"
+        );
+        assert!(contents.contains("dark"), "the user's settings are kept");
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
 #[tokio::test]
 async fn removing_an_agent_reaps_its_skills_in_the_workspace() {
     with_fixture(

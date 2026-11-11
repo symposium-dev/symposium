@@ -21,6 +21,7 @@ Symposium registers one handler per event with each agent, under the agent's own
 | Claude Code (`claude`) | `PreToolUse` | `PostToolUse` | `UserPromptSubmit` | `SessionStart` | `Stop` |
 | Antigravity CLI (`antigravity`) | `PreToolUse` | `PostToolUse` | `PreInvocation` (first invocation of each turn only) | `SessionStart` | `Stop` |
 | Codex CLI (`codex`) | `PreToolUse` | `PostToolUse` | `UserPromptSubmit` | `SessionStart` | not delivered |
+| Command Code (`commandcode`) | `PreToolUse` | `PostToolUse` | not delivered | `SessionStart` | not delivered |
 | GitHub Copilot (`copilot`) | `preToolUse` | `postToolUse` | `userPromptSubmitted` | `sessionStart` | not delivered |
 | Kiro (`kiro`) | `preToolUse` | `postToolUse` | `userPromptSubmit` | `agentSpawn` | not delivered |
 | Goose | not delivered | not delivered | not delivered | not delivered | not delivered |
@@ -162,6 +163,7 @@ Each agent receives the decision in the form it honors:
 |-------|----------|----------------|
 | Claude Code | `permissionDecision: "deny"`, reason shown to Claude | Sent with `permissionDecision: "ask"`: the user confirms the rewritten call. Claude applies a rewrite only alongside a decision, and `"allow"` would skip the user's permission prompt. In a headless run (`claude -p`) there is nobody to ask, so the rewritten call is blocked. |
 | Codex CLI | `permissionDecision: "deny"` | Not applied. Codex rewrites only with `"allow"` and has no `"ask"`; the original call runs and a warning is logged. |
+| Command Code | `permissionDecision: "deny"` | Not applied. Command Code's `PreToolUse` output has no `updatedInput` and no `ask`; the original call runs and a warning is logged. |
 | GitHub Copilot | `permissionDecision: "deny"` | Sent as `modifiedArgs`. |
 | Kiro | Exit 2, reason on stderr (Kiro reads no decision from stdout) | Not applied; the original call runs and a warning is logged. |
 | Antigravity | `decision: "deny"` | Sent as `overwrite`. |
@@ -238,7 +240,7 @@ The `matcher` field on a hook entry is a regex matched against `tool_name` for `
 
 The regex is unanchored: it matches if it is found anywhere in the tool name, so `Bash` also matches `BashOutput`. Anchor it with `^...$` (`^Bash$`) to match one tool exactly.
 
-`tool_name` is passed through exactly as the agent sends it, and `tool_input` keeps the agent's own argument names. Agents name the same tool differently: the shell tool is `Bash` in Claude Code and Codex, `bash` in Copilot, `execute_bash` in Kiro, and `run_command` in Antigravity, whose input carries `CommandLine` rather than `command`. A symposium-format hook meant to fire on several agents must match each name, for example `matcher = "^(Bash|bash|run_command|execute_bash)$"`, and read the input in each shape.
+`tool_name` is passed through exactly as the agent sends it, and `tool_input` keeps the agent's own argument names. Agents name the same tool differently: the shell tool is `Bash` in Claude Code and Codex, `bash` in Copilot, `execute_bash` in Kiro, `shell_command` in Command Code, and `run_command` in Antigravity, whose input carries `CommandLine` rather than `command`. A symposium-format hook meant to fire on several agents must match each name, for example `matcher = "^(Bash|bash|run_command|execute_bash|shell_command)$"`, and read the input in each shape.
 
 ## Testing
 
@@ -249,7 +251,7 @@ echo '{"PreToolUse":{"tool_name":"Bash","tool_input":{"command":"rm -rf /"},"ses
   | sh scripts/check.sh
 ```
 
-To test end to end, pipe the agent's own native JSON into [`cargo agents hook <agent> <event>`](./cargo-agents-hook.md), where `<agent>` is one of `antigravity`, `claude`, `codex`, `copilot`, or `kiro` and `<event>` is `pre-tool-use`, `post-tool-use`, `user-prompt-submit`, `session-start`, or `stop`. For Claude Code:
+To test end to end, pipe the agent's own native JSON into [`cargo agents hook <agent> <event>`](./cargo-agents-hook.md), where `<agent>` is one of `antigravity`, `claude`, `codex`, `commandcode`, `copilot`, or `kiro` and `<event>` is `pre-tool-use`, `post-tool-use`, `user-prompt-submit`, `session-start`, or `stop`. For Claude Code:
 
 ```bash
 echo '{"session_id":"s","cwd":"/path/to/project","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test"}}' \

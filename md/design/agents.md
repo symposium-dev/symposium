@@ -10,6 +10,7 @@
 | `claude` | Claude Code |
 | `copilot` | GitHub Copilot |
 | `codex` | Codex CLI |
+| `commandcode` | Command Code |
 | `kiro` | Kiro |
 | `opencode` | OpenCode |
 | `goose` | Goose |
@@ -33,11 +34,11 @@ When installing skills, `cargo agents` prefers vendor-neutral paths where possib
 
 | Scope | Path | Supported by |
 |-------|------|-------------|
-| Project skills | `.agents/skills/<skill-name>/SKILL.md` | Antigravity, Copilot, Codex, OpenCode, Goose |
+| Project skills | `.agents/skills/<skill-name>/SKILL.md` | Antigravity, Copilot, Codex, Command Code, OpenCode, Goose |
 | Project skills | `.claude/skills/<skill-name>/SKILL.md` | Claude Code (does not support `.agents/skills/`) |
 | Project skills | `.kiro/skills/<skill-name>/SKILL.md` | Kiro (uses its own path) |
 
-At the project level, Claude Code requires `.claude/skills/`, Kiro requires `.kiro/skills/`, while Antigravity, Copilot, Codex, OpenCode, and Goose all support `.agents/skills/`. `cargo agents` uses the vendor-neutral `.agents/skills/` path whenever the agent supports it.
+At the project level, Claude Code requires `.claude/skills/`, Kiro requires `.kiro/skills/`, while Antigravity, Copilot, Codex, Command Code, OpenCode, and Goose all support `.agents/skills/`. `cargo agents` uses the vendor-neutral `.agents/skills/` path whenever the agent supports it.
 
 At the global level, each agent has its own path:
 
@@ -47,6 +48,7 @@ At the global level, each agent has its own path:
 | Claude Code | `~/.claude/skills/<skill-name>/SKILL.md` |
 | Copilot | *(no global skills path)* |
 | Codex | `~/.agents/skills/<skill-name>/SKILL.md` |
+| Command Code | `~/.agents/skills/<skill-name>/SKILL.md` |
 | Kiro | `~/.kiro/skills/<skill-name>/SKILL.md` |
 | OpenCode | `~/.agents/skills/<skill-name>/SKILL.md` |
 | Goose | `~/.agents/skills/<skill-name>/SKILL.md` |
@@ -366,6 +368,63 @@ Input includes `session_id`, `cwd`, `hook_event_name`, `model`, `turn_id`, `tool
 
 ---
 
+## Command Code
+
+[Hooks reference](./agent-details/command-code.md)
+
+### Hook registration
+
+Command Code hooks live in `settings.json` under a `hooks` key, in matcher groups like Claude Code's. `timeout` is in seconds.
+
+| Scope | File |
+|-------|------|
+| Global | `~/.commandcode/settings.json` |
+| Project | `.commandcode/settings.json` |
+
+Example hook registration:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [{
+          "type": "command",
+          "command": "cargo-agents hook commandcode pre-tool-use",
+          "timeout": 10
+        }]
+      }
+    ]
+  }
+}
+```
+
+Note: the entries carry **no** `matcher`. It is a regex tested against the tool's display name, so `"*"` is invalid, and on `Stop` and `SessionStart` any `matcher` stops the hook firing. Omitting it matches every tool.
+
+Unregistering works as in Claude Code.
+
+### Supported events
+
+| Event | Description |
+|-------|-------------|
+| `PreToolUse` | Before a tool is invoked. Can deny. |
+| `PostToolUse` | After a tool completes. Advisory only. |
+| `SessionStart` | A session begins. Context only. |
+
+Command Code also has `Stop`, which symposium does not register (as for Codex). It has no `UserPromptSubmit`.
+
+### Hook payload/output
+
+`PreToolUse` takes `hookSpecificOutput.permissionDecision` (`allow` or `deny`) with `permissionDecisionReason` and `additionalContext`; exit code 2 also blocks. It has no `updatedInput` and no `ask`, so a plugin's rewrite is not applied and a warning is logged. The other events take `hookSpecificOutput.additionalContext`.
+
+Input includes `session_id`, `cwd`, `hook_event_name`, `permission_mode`, `tool_name`, `tool_use_id` and `tool_input`. Tool names and fields are Command Code's own (`shell_command`, `read_file` with `absolute_path`, `write_file`, `edit_file` with `old_value` and `new_value`) and reach plugin hooks unchanged. Hooks are skipped in plan mode.
+
+### MCP
+
+Written to the user-level `~/.commandcode/mcp.json` only: Claude Code reads the project `.mcp.json` too, with a differently shaped entry for the same name.
+
+---
+
 ## OpenCode
 
 [Hooks reference](./agent-details/opencode.md)
@@ -401,15 +460,15 @@ Goose is supported as a **skills-only** agent — `cargo agents sync` will insta
 
 ## Cross-agent event mapping
 
-The following table maps symposium's internal event names to each agent's wire-format event name. `—` means the agent does not support shell-command hooks; *not registered* means symposium does not hook that event there.
+The following table maps symposium's internal event names to each agent's wire-format event name. `—` means the agent has no such event, or (OpenCode, Goose) does not support shell-command hooks; *not registered* means symposium does not hook that event there.
 
-| Symposium event | Antigravity | Claude | Copilot | Codex | Kiro | OpenCode | Goose |
-|---|---|---|---|---|---|---|---|
-| `pre-tool-use` | `PreToolUse` | `PreToolUse` | `preToolUse` | `PreToolUse` | `preToolUse` | — | — |
-| `post-tool-use` | `PostToolUse` | `PostToolUse` | `postToolUse` | `PostToolUse` | `postToolUse` | — | — |
-| `user-prompt-submit` | `PreInvocation` | `UserPromptSubmit` | `userPromptSubmitted` | `UserPromptSubmit` | `userPromptSubmit` | — | — |
-| `session-start` | `SessionStart` | `SessionStart` | `sessionStart` | `SessionStart` | `agentSpawn` | — | — |
-| `stop` | `Stop` | `Stop` | *not registered* | *not registered* | *not registered* | — | — |
+| Symposium event | Antigravity | Claude | Copilot | Codex | Kiro | OpenCode | Goose | Command Code |
+|---|---|---|---|---|---|---|---|---|
+| `pre-tool-use` | `PreToolUse` | `PreToolUse` | `preToolUse` | `PreToolUse` | `preToolUse` | — | — | `PreToolUse` |
+| `post-tool-use` | `PostToolUse` | `PostToolUse` | `postToolUse` | `PostToolUse` | `postToolUse` | — | — | `PostToolUse` |
+| `user-prompt-submit` | `PreInvocation` | `UserPromptSubmit` | `userPromptSubmitted` | `UserPromptSubmit` | `userPromptSubmit` | — | — | — |
+| `session-start` | `SessionStart` | `SessionStart` | `sessionStart` | `SessionStart` | `agentSpawn` | — | — | `SessionStart` |
+| `stop` | `Stop` | `Stop` | *not registered* | *not registered* | *not registered* | — | — | *not registered* |
 
 Tool names are each agent's own, and symposium passes them to plugin hooks unchanged: the same shell tool is `Bash` in Claude Code and Codex, `bash` in Copilot, `execute_bash` in Kiro and `run_command` in Antigravity. A `matcher` that should fire on several agents has to name each of them.
 

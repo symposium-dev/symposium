@@ -37,6 +37,7 @@ Which agents do you use? (space to select, enter to confirm):
 > [ ] Antigravity CLI
   [ ] Claude Code
   [x] Codex CLI
+  [ ] Command Code
   [ ] GitHub Copilot
   [ ] Goose
   [x] Kiro

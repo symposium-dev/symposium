@@ -28,8 +28,8 @@ Implement `HookHandler` and override the methods for the events you care about:
 use std::process::ExitCode;
 use symposium_sdk::hook::{HookHandler, PreToolUseInput, PreToolUseOutput, run};
 
-// The shell tool's name in Claude Code and Codex, Copilot, Antigravity, and Kiro.
-const SHELL_TOOLS: &[&str] = &["Bash", "bash", "run_command", "execute_bash"];
+// The shell tool's name in Claude Code and Codex, Copilot, Antigravity, Kiro, and Command Code.
+const SHELL_TOOLS: &[&str] = &["Bash", "bash", "run_command", "execute_bash", "shell_command"];
 
 struct MyHook;
 

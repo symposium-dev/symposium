@@ -22,6 +22,7 @@ The tables below summarize the answers for each agent. Individual agent pages co
 | [Claude Code](./claude-code.md) | `.claude/settings.json` | `~/.claude/settings.json` | JSON, `hooks` key with matcher groups |
 | [GitHub Copilot](./copilot.md) | `.github/hooks/*.json` | `~/.copilot/settings.json` | JSON, `version: 1` with `hooks` key |
 | [Codex CLI](./codex-cli.md) | `.codex/hooks.json` | `~/.codex/hooks.json` | JSON, `hooks` key with matcher groups |
+| [Command Code](./command-code.md) | `.commandcode/settings.json` | `~/.commandcode/settings.json` | JSON, `hooks` key with matcher groups |
 | [Kiro](./kiro.md) | `.kiro/agents/*.json` | `~/.kiro/agents/*.json` | JSON, `hooks` key in agent config |
 | [OpenCode](./opencode.md) | `.opencode/plugins/` | `~/.config/opencode/plugins/` | JS/TS plugins (not shell hooks) |
 | [Goose](./goose.md) | *(no hooks)* | *(no hooks)* | N/A |
@@ -34,6 +35,7 @@ The tables below summarize the answers for each agent. Individual agent pages co
 | Claude Code | `command` | No |
 | GitHub Copilot | `bash` / `powershell` | Yes |
 | Codex CLI | `command` | No |
+| Command Code | `command` | No |
 | Kiro | `command` | No |
 | OpenCode | N/A (JS function) | N/A |
 | Goose | N/A | N/A |
@@ -46,21 +48,22 @@ The tables below summarize the answers for each agent. Individual agent pages co
 | Claude Code | 600 | seconds |
 | GitHub Copilot | 30 | seconds (`timeoutSec`) |
 | Codex CLI | 600 | seconds (`timeout` or `timeoutSec`) |
+| Command Code | 30 | seconds (`timeout`, maximum 600) |
 | Kiro | 30,000 | milliseconds (`timeout_ms`) |
 | OpenCode | 60,000 | milliseconds (community hooks plugin) |
 | Goose | N/A | N/A |
 
 ## Event names
 
-Symposium registers hooks for four events on every agent with shell hooks, plus `stop` on Antigravity and Claude Code. Each agent uses different names and casing conventions; *not registered* marks an event the agent has but symposium does not hook.
+Symposium registers hooks for four events on every agent with shell hooks, plus `stop` on Antigravity and Claude Code. Command Code has no user-prompt-submit event, so it gets three. Each agent uses different names and casing conventions; *not registered* marks an event the agent has but symposium does not hook.
 
-| Symposium event | Antigravity CLI | Claude Code | Copilot | Codex CLI | Kiro CLI | OpenCode | Goose |
-|---|---|---|---|---|---|---|---|
-| pre-tool-use | `PreToolUse` | `PreToolUse` | `preToolUse` | `PreToolUse` | `preToolUse` | `tool.execute.before` | N/A |
-| post-tool-use | `PostToolUse` | `PostToolUse` | `postToolUse` | `PostToolUse` | `postToolUse` | `tool.execute.after` | N/A |
-| user-prompt-submit | `PreInvocation` | `UserPromptSubmit` | `userPromptSubmitted` | `UserPromptSubmit` | `userPromptSubmit` | `message.updated` (filter by role) | N/A |
-| session-start | `SessionStart` | `SessionStart` | `sessionStart` | `SessionStart` | `agentSpawn` | `session.created` | N/A |
-| stop | `Stop` | `Stop` | *not registered* (`agentStop`) | *not registered* (`Stop`) | *not registered* (`stop`) | N/A | N/A |
+| Symposium event | Antigravity CLI | Claude Code | Copilot | Codex CLI | Kiro CLI | OpenCode | Goose | Command Code |
+|---|---|---|---|---|---|---|---|---|
+| pre-tool-use | `PreToolUse` | `PreToolUse` | `preToolUse` | `PreToolUse` | `preToolUse` | `tool.execute.before` | N/A | `PreToolUse` |
+| post-tool-use | `PostToolUse` | `PostToolUse` | `postToolUse` | `PostToolUse` | `postToolUse` | `tool.execute.after` | N/A | `PostToolUse` |
+| user-prompt-submit | `PreInvocation` | `UserPromptSubmit` | `userPromptSubmitted` | `UserPromptSubmit` | `userPromptSubmit` | `message.updated` (filter by role) | N/A | N/A |
+| session-start | `SessionStart` | `SessionStart` | `sessionStart` | `SessionStart` | `agentSpawn` | `session.created` | N/A | `SessionStart` |
+| stop | `Stop` | `Stop` | *not registered* (`agentStop`) | *not registered* (`Stop`) | *not registered* (`stop`) | N/A | N/A | *not registered* (`Stop`) |
 
 ### Blocking support
 
@@ -72,6 +75,7 @@ Not all events can block the action in all agents.
 | Claude Code | Yes | No | Yes (exit 2) | No |
 | GitHub Copilot | Yes | No | No | No |
 | Codex CLI | Yes | Yes (`continue: false`) | Yes (`continue: false`) | Yes (`continue: false`) |
+| Command Code | Yes | No | N/A | No |
 | Kiro | Yes (exit 2) | No | No | No |
 | OpenCode | Yes (throw Error) | No | No (observe only) | No (observe only) |
 | Goose | N/A | N/A | N/A | N/A |
@@ -86,6 +90,7 @@ Not all events can block the action in all agents.
 | Claude Code | `tool_name` | `tool_input` (object) | `session_id`, `cwd`, `hook_event_name` |
 | GitHub Copilot | `toolName` | `toolArgs` (JSON **string**) | `timestamp`, `cwd` |
 | Codex CLI | `tool_name` | `tool_input` (object) | `session_id`, `cwd`, `hook_event_name`, `model` |
+| Command Code | `tool_name` | `tool_input` (object) | `session_id`, `cwd`, `hook_event_name`, `permission_mode` |
 | Kiro | `tool_name` | `tool_input` (object) | `hook_event_name`, `cwd` |
 | OpenCode | `tool` | `args` (mutable output object) | `sessionID`, `callID` |
 | Goose | N/A | N/A | N/A |
@@ -98,6 +103,7 @@ Not all events can block the action in all agents.
 | Claude Code | `permissionDecision` | allow, deny, ask, defer | `updatedInput` | nested in `hookSpecificOutput` |
 | GitHub Copilot | `permissionDecision` | allow, deny, ask | `modifiedArgs` | flat |
 | Codex CLI | `decision` or `permissionDecision` | block/deny | *(not yet implemented)* | flat or nested `hookSpecificOutput` |
+| Command Code | `permissionDecision` | allow, deny | *(not supported)* | nested in `hookSpecificOutput` |
 | Kiro | *(exit code only)* | exit 0 = allow, exit 2 = block | *(not supported)* | N/A |
 | OpenCode | *(throw to block)* | allow (return) / deny (throw) | mutate `output.args` | JS mutation |
 | Goose | N/A | N/A | N/A | N/A |
@@ -124,6 +130,7 @@ All shell-based agents use the same convention (where applicable):
 | Claude Code | `.claude/skills/<name>/SKILL.md` | `~/.claude/skills/<name>/SKILL.md` |
 | GitHub Copilot | `.agents/skills/<name>/SKILL.md` | *(none)* |
 | Codex CLI | `.agents/skills/<name>/SKILL.md` | `~/.agents/skills/<name>/SKILL.md` |
+| Command Code | `.agents/skills/<name>/SKILL.md` | `~/.agents/skills/<name>/SKILL.md` |
 | Kiro | `.kiro/skills/<name>/SKILL.md` | `~/.kiro/skills/<name>/SKILL.md` |
 | OpenCode | `.agents/skills/<name>/SKILL.md` | `~/.agents/skills/<name>/SKILL.md` |
 | Goose | *(N/A — uses MCP extensions)* | *(N/A)* |
@@ -138,6 +145,7 @@ Symposium uses the vendor-neutral `.agents/skills/` path whenever the agent supp
 | Claude Code | `CLAUDE.md`, `.claude/CLAUDE.md` | `~/.claude/CLAUDE.md` |
 | GitHub Copilot | `.github/copilot-instructions.md`, `AGENTS.md` | `~/.copilot/copilot-instructions.md` |
 | Codex CLI | `AGENTS.md` (each dir level) | `~/.codex/AGENTS.md` |
+| Command Code | `AGENTS.md` | ? |
 | Kiro | `.kiro/steering/*.md`, `AGENTS.md` | `~/.kiro/steering/*.md` |
 | OpenCode | `AGENTS.md`, `CLAUDE.md` | `~/.config/opencode/AGENTS.md` |
 | Goose | `.goosehints`, `AGENTS.md` | `~/.config/goose/.goosehints` |
@@ -159,6 +167,7 @@ symposium reports success for a file the agent never reads.
 | Antigravity CLI | `<project>/.agents/mcp_config.json` | `~/.gemini/config/mcp_config.json` | `mcpServers.<name>` = `{command, args}` | yes (`agy mcp add`) |
 | OpenCode | `<project>/opencode.json` | `~/.config/opencode/opencode.json` | `mcp.<name>` = `{type: "local", command: [bin, ...args], enabled, environment}` | yes |
 | Codex CLI | *(none - user scope only)* | `~/.codex/config.toml` | `[mcp_servers.<name>]` = `command`, `args` | yes |
+| Command Code | *(none - user scope only)* | `~/.commandcode/mcp.json` | `mcpServers.<name>` = `{transport, command, args}` | no (from its docs; not yet checked with `cmd mcp list`) |
 | GitHub Copilot CLI | *(none - user scope only)* | `~/.copilot/mcp-config.json` | `mcpServers.<name>` = `{command, args}` | yes |
 | Kiro | `.kiro/settings/mcp.json` | `~/.kiro/settings/mcp.json` | `mcpServers.<name>` = `{command, args}` | no (GUI only) |
 | Goose | *(none - user scope only)* | `~/.config/goose/config.yaml` | `extensions.<name>` = `{name, type: stdio, cmd, args, enabled, envs}` | yes |
@@ -176,6 +185,10 @@ Notes that cost real debugging time:
   `environment` (an `env` key parses but never reaches the child).
 - Codex, Copilot CLI and Goose have no project-level MCP config, so project
   scope resolves to their user-level file rather than to a file nobody reads.
+- Command Code does read a project `.mcp.json`, but so does Claude Code, with a
+  differently shaped entry for the same server name. Writing both would have each
+  agent's sync rewrite the other's entry on every run, so Command Code is
+  user-scope only here too.
 - Antigravity keeps MCP in its own `mcp_config.json`, not in the `hooks.json`
   beside it, so a broken hooks file cannot take MCP down with it. `agy mcp add`
   has no scope flag and always writes the user-level file.

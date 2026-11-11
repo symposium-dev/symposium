@@ -67,6 +67,7 @@ Which agents do you use? (space to select, enter to confirm):
 > [ ] Antigravity CLI
   [ ] Claude Code
   [x] Codex CLI
+  [ ] Command Code
   [ ] GitHub Copilot
   [ ] Goose
   [x] Kiro
@@ -136,6 +137,7 @@ Every agent receives skill installation. Hook registration is available for a su
 | Claude Code | `.claude/skills/` | Yes |
 | GitHub Copilot | `.agents/skills/` | Yes |
 | Codex CLI | `.agents/skills/` | Yes |
+| Command Code | `.agents/skills/` | Yes |
 | Kiro | `.kiro/skills/` | Yes |
 | OpenCode | `.agents/skills/` | No |
 | Goose | `.agents/skills/` | No |

@@ -171,9 +171,11 @@ const fn extension_agent(
 ) -> Result<ExtensionInvocationAgent, AggregateRecordingError> {
     match agent {
         HookAgent::Claude => Ok(ExtensionInvocationAgent::Claude),
-        HookAgent::Antigravity | HookAgent::Codex | HookAgent::Copilot | HookAgent::Kiro => {
-            Err(AggregateRecordingError::UnsupportedExtensionAgent(agent))
-        }
+        HookAgent::Antigravity
+        | HookAgent::Codex
+        | HookAgent::CommandCode
+        | HookAgent::Copilot
+        | HookAgent::Kiro => Err(AggregateRecordingError::UnsupportedExtensionAgent(agent)),
     }
 }
 

@@ -6,6 +6,7 @@ use std::{any::Any, fmt::Debug};
 pub mod antigravity;
 pub mod claude;
 pub mod codex;
+pub mod command_code;
 pub mod copilot;
 pub mod goose;
 pub mod kiro;
@@ -25,6 +26,7 @@ pub fn agent_event(agent: HookAgent, event: HookEvent) -> Option<Box<dyn ErasedA
         HookAgent::Antigravity => antigravity::Antigravity.event(event),
         HookAgent::Claude => claude::ClaudeCode.event(event),
         HookAgent::Codex => codex::Codex.event(event),
+        HookAgent::CommandCode => command_code::CommandCode.event(event),
         HookAgent::Copilot => copilot::Copilot.event(event),
         HookAgent::Goose => goose::Goose.event(event),
         HookAgent::Kiro => kiro::Kiro.event(event),

@@ -52,6 +52,9 @@ pub enum HookAgent {
     #[cfg_attr(feature = "clap", value(name = "codex"))]
     #[serde(rename = "codex")]
     Codex,
+    #[cfg_attr(feature = "clap", value(name = "commandcode"))]
+    #[serde(rename = "commandcode")]
+    CommandCode,
     #[cfg_attr(feature = "clap", value(name = "copilot"))]
     #[serde(rename = "copilot")]
     Copilot,
@@ -73,6 +76,7 @@ impl HookAgent {
             HookAgent::Antigravity => "antigravity",
             HookAgent::Claude => "claude",
             HookAgent::Codex => "codex",
+            HookAgent::CommandCode => "commandcode",
             HookAgent::Copilot => "copilot",
             HookAgent::Goose => "goose",
             HookAgent::Kiro => "kiro",
