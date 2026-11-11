@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use symposium::audits::digest::payload_digest;
-use symposium::audits::{Answer, AuditIndex};
+use symposium::audits::{Answer, AuditIndex, Verdict};
 use symposium::config::{RegistryConfig, Symposium, UseEntry};
 use symposium::discovery::{DiscoveredPlugin, Discovery};
 use symposium_testlib::{HookStep, TestContext, TestMode, with_fixture};
@@ -177,7 +177,8 @@ async fn a_crate_revoked_by_digest_does_not_load() {
     .await;
 }
 
-/// `disable` is the last word: a revoked and disabled crate is declined.
+/// `disable` is the last word: a revoked and disabled crate is declined, and
+/// the revocation does not leak into its audit answer.
 #[tokio::test]
 async fn disable_outranks_a_revocation() {
     with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
@@ -195,6 +196,53 @@ async fn disable_outranks_a_revocation() {
         let found = discover(&ctx).await;
         assert_eq!(names(&found.declined), ["crate-d"]);
         assert!(found.revoked.is_empty());
+        assert_eq!(found.declined[0].audit, None);
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+/// The `SessionStart` hint names each pending candidate with its audit
+/// answer, and an audited one is still pending: an audit is not consent.
+#[tokio::test]
+async fn the_session_start_hint_says_whether_a_candidate_is_audited() {
+    with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
+        ctx.sym.config.auto_update = symposium::config::AutoUpdate::Off;
+        ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+        let digest = payload_digest(&crate_d(&ctx)).unwrap();
+        write_audits(
+            &mut ctx.sym,
+            "crate-d",
+            &format!("format = 1\n[[audit]]\ndigest = \"{digest}\"\n"),
+        );
+
+        let result = ctx
+            .prompt_or_hook(
+                "hello",
+                &[HookStep::session_start()],
+                symposium::hook_schema::HookAgent::Claude,
+            )
+            .await?;
+        let context = result
+            .hooks
+            .iter()
+            .find_map(|h| {
+                h.output
+                    .get("hookSpecificOutput")
+                    .and_then(|o| o.get("additionalContext"))
+                    .and_then(|v| v.as_str())
+            })
+            .expect("session-start should produce additionalContext");
+        assert!(
+            context.contains(
+                "not enabled yet: crate-d (audited by the `symposium-audits` list). \
+                 They stay off until the user consents, audited or not"
+            ),
+            "{context}"
+        );
+        assert!(context.contains("Do not enable them yourself"), "{context}");
+        assert!(ctx.sym.config.plugins.auto_enable.is_empty());
         Ok(())
     })
     .await
@@ -546,7 +594,7 @@ async fn an_unfetched_list_answers_not_audited_and_does_not_hold_back_cleanup() 
             "1.0.0",
             Some(&digest.parse().unwrap())
         ),
-        Answer::NotAudited
+        Answer::Verdict(Verdict::NotAudited)
     );
 
     // `audits0` turns the list on and never fetches it: a sync still removes

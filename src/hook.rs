@@ -777,18 +777,26 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String
 /// Surface dependency plugins awaiting consent. A hook runs on the agent's
 /// behalf, so it must never block on stdin — the candidates are reported as
 /// context, with a pointer at the interactive command that can actually ask.
-/// `None` when nothing is pending.
+/// Each is named with what the audits say about it, in the consent prompt's
+/// words, so the agent can pass that on. `None` when nothing is pending.
 async fn consent_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String> {
-    let names = crate::discovery::pending_candidates(sym, deps).await;
-    if names.is_empty() {
+    let pending = crate::discovery::pending_candidates(sym, deps).await;
+    if pending.is_empty() {
         return None;
     }
+    let named: Vec<String> = pending
+        .iter()
+        .map(|c| match &c.audit {
+            Some(audit) => format!("{} ({audit})", c.name()),
+            None => c.name().to_string(),
+        })
+        .collect();
     Some(format!(
         "These dependencies ship agent plugins that are not enabled yet: {}. \
-         They stay off until the user consents — tell the user to run \
-         `cargo agents sync` (which asks about each one) or \
+         They stay off until the user consents, audited or not — tell the user \
+         to run `cargo agents sync` (which asks about each one) or \
          `cargo agents use <name>`. Do not enable them yourself.",
-        names.join(", ")
+        named.join(", ")
     ))
 }
 
