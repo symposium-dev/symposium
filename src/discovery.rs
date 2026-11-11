@@ -7,9 +7,10 @@
 //! 2. ask each *untrusted* instance — the ecosystem transports — for the plugins
 //!    its dependencies embed ([`PackageManager::active_plugins`]).
 //!
-//! Each such offer is then classified against the `[plugins]` config:
-//! already enabled, auto-enabled, declined, or a candidate still awaiting
-//! consent. Discovery itself neither fetches nor writes.
+//! Each such offer is then classified against the `[plugins]` config and the
+//! [audits list](crate::audits): already enabled,
+//! auto-enabled, declined, revoked, or a candidate still awaiting consent.
+//! Discovery itself neither fetches nor writes.
 //!
 //! On top of that read side sits the consent write side:
 //! [`prompt_for_consent`] asks about each candidate and [`apply_consent`]
@@ -41,6 +42,7 @@ use anyhow::{Context, Result};
 use std::sync::Arc;
 use symposium_install::UpdateLevel;
 
+use crate::audits::{AuditIndex, Revocation};
 use crate::config::Symposium;
 use crate::output::Output;
 use crate::plugins::Plugin;
@@ -48,7 +50,7 @@ use crate::pm::{PackageId, PmRegistry};
 use crate::report::ReportEvent;
 
 /// Why a discovered offer is (or is not) enabled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Enablement {
     /// Enabled by a `[plugins] use` entry naming it.
     Used,
@@ -56,13 +58,16 @@ pub enum Enablement {
     AutoEnabled,
     /// Declined: `[plugins] disable` names it.
     Declined,
+    /// The audits list revokes this release or payload. Outranks
+    /// `use` and `auto-enable`; only `disable` outranks it.
+    Revoked(Revocation),
     /// Nobody has decided yet — this is what a consent prompt would ask about.
     Candidate,
 }
 
 impl Enablement {
     /// Does this decision let the plugin run?
-    pub fn is_enabled(self) -> bool {
+    pub fn is_enabled(&self) -> bool {
         matches!(self, Self::Used | Self::AutoEnabled)
     }
 }
@@ -103,6 +108,9 @@ pub struct Discovery {
     pub candidates: Vec<DiscoveredPlugin>,
     /// Declined previously, recorded in `[plugins] disable`.
     pub declined: Vec<DiscoveredPlugin>,
+    /// Revoked by the audits list. Never loaded, whatever else
+    /// says it may be, and never offered for consent.
+    pub revoked: Vec<DiscoveredPlugin>,
 }
 
 impl Discovery {
@@ -124,6 +132,7 @@ pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin])
         return Discovery::default();
     };
     let pms = ws.pms();
+    let audits = AuditIndex::configured(sym);
     let dep_ids = ws.dep_ids().await;
     let used: HashSet<PackageId> =
         resolve_used(sym, pms, registry, &workspace_root, UpdateLevel::None)
@@ -147,7 +156,7 @@ pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin])
                 ),
                 None => describe_plugin(&plugin.manifest),
             });
-            let enablement = decide(sym, pms, &used, &plugin.canonical).await;
+            let enablement = decide(sym, pms, &audits, &used, &plugin.canonical).await;
             let discovered = DiscoveredPlugin {
                 registry: inst.name.clone(),
                 format: plugin.format(),
@@ -156,10 +165,11 @@ pub async fn discover(sym: &Symposium, ws: &Arc<Workspace>, registry: &[Plugin])
                 description,
                 enablement,
             };
-            match enablement {
+            match discovered.enablement {
                 Enablement::Used => discovery.active.push(discovered),
                 Enablement::AutoEnabled => discovery.auto_enabled.push(discovered),
                 Enablement::Declined => discovery.declined.push(discovered),
+                Enablement::Revoked(_) => discovery.revoked.push(discovered),
                 Enablement::Candidate => discovery.candidates.push(discovered),
             }
         }
@@ -420,12 +430,15 @@ fn count_phrase(n: usize, singular: &str, plural: &str) -> Option<String> {
     (n > 0).then(|| format!("{n} {}", if n == 1 { singular } else { plural }))
 }
 
-/// Classify one offer against the `[plugins]` config. An explicit decision —
-/// `use`, then `disable` — outranks the standing `auto-enable`, so a name the
-/// user declined stays declined.
+/// Classify one offer against the `[plugins]` config. Precedence, first match
+/// wins: `disable` (the last word), then a revocation in the audits list
+/// (outranks every grant, so a revoked release stays out whatever consented
+/// to it), then `use`, then the standing `auto-enable`; anything else is a
+/// candidate.
 async fn decide(
     sym: &Symposium,
     pms: &PmRegistry,
+    audits: &AuditIndex,
     used: &HashSet<PackageId>,
     id: &PackageId,
 ) -> Enablement {
@@ -440,6 +453,8 @@ async fn decide(
     };
     if plugins.is_disabled(pms, id).await {
         Enablement::Declined
+    } else if let Some(revocation) = audits.revocation(pms, id).await {
+        Enablement::Revoked(revocation)
     } else if used.contains(&identity) {
         Enablement::Used
     } else if plugins.is_auto_enabled(pms, id).await {

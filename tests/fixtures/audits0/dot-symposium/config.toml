@@ -2,3 +2,4 @@ hook-scope = "project"
 
 [defaults]
 symposium-recommendations = false
+symposium-audits = true

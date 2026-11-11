@@ -376,6 +376,9 @@ impl RawConfig {
         if self.defaults.symposium_recommendations {
             builtin_registries.push("symposium-recommendations");
         }
+        if self.defaults.symposium_audits {
+            builtin_registries.push(BUILTIN_AUDITS_REGISTRY);
+        }
         if self.defaults.user_plugins {
             builtin_registries.push("user-plugins");
         }
@@ -414,6 +417,12 @@ pub struct DefaultsConfig {
     #[serde(default = "default_true", rename = "symposium-recommendations")]
     pub symposium_recommendations: bool,
 
+    /// Include the `symposium-dev/audits` git source, the community list of
+    /// audited and revoked plugin payloads (default: false, until that
+    /// repository exists).
+    #[serde(default, rename = "symposium-audits")]
+    pub symposium_audits: bool,
+
     /// Include `~/.symposium/plugins/` as a local source (default: true).
     #[serde(default = "default_true", rename = "user-plugins")]
     pub user_plugins: bool,
@@ -423,6 +432,7 @@ impl Default for DefaultsConfig {
     fn default() -> Self {
         Self {
             symposium_recommendations: true,
+            symposium_audits: false,
             user_plugins: true,
         }
     }
@@ -488,6 +498,12 @@ pub const REGISTRY_CACHE_SUBDIR: &str = "plugin-sources";
 pub const INSTALLED_PLUGINS_SUBDIR: &str = "installed";
 
 const BUILTIN_RECOMMENDATIONS_URL: &str = "https://github.com/symposium-dev/recommendations";
+
+const BUILTIN_AUDITS_URL: &str = "https://github.com/symposium-dev/audits";
+
+/// The builtin registry that holds the community audits list, the only place
+/// [audits](crate::audits) are read from.
+pub const BUILTIN_AUDITS_REGISTRY: &str = "symposium-audits";
 
 /// Full application context: parsed config + resolved directory paths.
 ///
@@ -775,13 +791,13 @@ impl Symposium {
     }
 
     /// The registry package-manager instances, in effect order: the builtin
-    /// recommendations repo, the builtin `user-plugins` directory, then the
-    /// configured `[[registry]]` entries. Each is a trust root — a git entry is
-    /// a [`GitPm`](crate::pm::GitPm), a path entry a [`PathPm`](crate::pm::PathPm)
-    /// — so refreshing (pulling git content) is the PM's own concern rather than
-    /// a separate step. A registry whose source can't be resolved (a malformed
-    /// git URL, or an entry naming neither `git` nor `path`) is skipped with a
-    /// warning.
+    /// recommendations repo, the builtin audits repo, the builtin
+    /// `user-plugins` directory, then the configured `[[registry]]` entries.
+    /// Each is a trust root — a git entry is a [`GitPm`](crate::pm::GitPm), a
+    /// path entry a [`PathPm`](crate::pm::PathPm) — so refreshing (pulling git
+    /// content) is the PM's own concern rather than a separate step. A registry
+    /// whose source can't be resolved (a malformed git URL, or an entry naming
+    /// neither `git` nor `path`) is skipped with a warning.
     pub fn registry_instances(&self) -> Vec<crate::pm::PmInstance> {
         let mut configs: Vec<RegistryConfig> = Vec::new();
 
@@ -789,6 +805,18 @@ impl Symposium {
             configs.push(RegistryConfig {
                 name: "symposium-recommendations".to_string(),
                 git: Some(BUILTIN_RECOMMENDATIONS_URL.to_string()),
+                path: None,
+                auto_update: true,
+            });
+        }
+
+        // An ordinary git registry whose only content is `audits/`: it offers
+        // no plugins, and is fetched, refreshed and reported on exactly like
+        // the recommendations repo, unreachable included.
+        if self.config.defaults.symposium_audits {
+            configs.push(RegistryConfig {
+                name: BUILTIN_AUDITS_REGISTRY.to_string(),
+                git: Some(BUILTIN_AUDITS_URL.to_string()),
                 path: None,
                 auto_update: true,
             });
@@ -846,6 +874,17 @@ impl Symposium {
                 .with_source(source);
         instance.auto_update = cfg.auto_update;
         Some(instance)
+    }
+
+    /// Where the builtin `symposium-audits` registry is cached, whether or not
+    /// it has been fetched: the one directory [audits](crate::audits) are read
+    /// from. `None` while that registry is off.
+    pub fn audits_dir(&self) -> Option<PathBuf> {
+        if !self.config.defaults.symposium_audits {
+            return None;
+        }
+        symposium_install::git::GitCacheManager::new(&self.install_context(), REGISTRY_CACHE_SUBDIR)
+            .cache_path_for_url(BUILTIN_AUDITS_URL)
     }
 
     pub fn config_error(&self) -> Option<&str> {
@@ -960,6 +999,7 @@ mod tests {
     fn parse_empty_config() {
         let config = parse_config("");
         assert!(config.defaults.symposium_recommendations);
+        assert!(!config.defaults.symposium_audits);
         assert!(config.defaults.user_plugins);
         assert!(config.registries.is_empty());
     }
@@ -972,6 +1012,33 @@ mod tests {
         "});
         assert!(!config.defaults.symposium_recommendations);
         assert!(config.defaults.user_plugins);
+    }
+
+    /// The audits repo is a builtin git registry beside the recommendations
+    /// one, and the one place audits are read from. It is off until the
+    /// community list exists, and turns on by name.
+    #[test]
+    fn builtin_audits_registry_follows_its_default() {
+        let sym = |config: &str| {
+            let tmp = tempfile::tempdir().unwrap();
+            std::fs::write(tmp.path().join("config.toml"), config).unwrap();
+            (Symposium::from_dir(tmp.path()), tmp)
+        };
+        let names = |sym: &Symposium| {
+            sym.registry_instances()
+                .into_iter()
+                .map(|inst| inst.name)
+                .collect::<Vec<_>>()
+        };
+        let (off, _tmp) = sym("");
+        assert_eq!(names(&off), ["symposium-recommendations"]);
+        assert_eq!(off.audits_dir(), None);
+        let (on, _tmp) = sym("[defaults]\nsymposium-audits = true\n");
+        assert_eq!(
+            names(&on),
+            ["symposium-recommendations", BUILTIN_AUDITS_REGISTRY]
+        );
+        assert!(on.audits_dir().unwrap().starts_with(on.cache_dir()));
     }
 
     #[test]
@@ -1409,6 +1476,13 @@ mod tests {
         assert!(check(&pm("cargo")).is_ok(), "replaces the built-in cargo");
         assert!(check(&format!("{}{}", pm("npm"), pm("npm"))).is_err());
         assert!(check(&pm("user-plugins")).is_err());
+        assert!(
+            check(&format!(
+                "[defaults]\nsymposium-audits = true\n{}",
+                pm("symposium-audits")
+            ))
+            .is_err()
+        );
         assert!(
             check(&format!(
                 "[[registry]]\nname = \"mine\"\npath = \"mine\"\n{}",

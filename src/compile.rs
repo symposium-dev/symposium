@@ -223,7 +223,7 @@ fn staged_plugins(root: &Path, compiled: &[CompiledPlugin]) -> Vec<CompiledPlugi
 }
 
 /// Stricter than Agent Plugins names: Antigravity rejects `.`.
-fn normalize_name(name: &str) -> Option<String> {
+pub(crate) fn normalize_name(name: &str) -> Option<String> {
     let mut out = String::new();
     for c in name.chars().map(|c| c.to_ascii_lowercase()) {
         if c.is_ascii_alphanumeric() {

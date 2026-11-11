@@ -1,9 +1,13 @@
-//! Audits: the payload digest and `plugin digest`.
+//! Audits: `plugin digest`, the builtin list, and how revocations are
+//! enforced at activation.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use symposium::audits::digest::payload_digest;
-use symposium_testlib::{TestContext, TestMode, with_fixture};
+use symposium::audits::{Answer, AuditIndex};
+use symposium::config::{Symposium, UseEntry};
+use symposium::discovery::{DiscoveredPlugin, Discovery};
+use symposium_testlib::{HookStep, TestContext, TestMode, with_fixture};
 
 /// Run `f` with a JSON report layer installed and return the drained events.
 async fn with_report<F>(f: F) -> Vec<serde_json::Value>
@@ -25,6 +29,372 @@ where
 /// `crate-d`'s source directory in the `audits0` fixture.
 fn crate_d(ctx: &TestContext) -> PathBuf {
     ctx.workspace_root.clone().unwrap().join("deps/crate-d")
+}
+
+/// Turn the builtin audits list on and write `audits/cargo/<name>.toml` into
+/// its cache directory, as if the registry had been fetched with it. Returns
+/// the file.
+fn write_audits(sym: &mut Symposium, name: &str, text: &str) -> PathBuf {
+    sym.config.defaults.symposium_audits = true;
+    let dir = sym.audits_dir().unwrap().join("audits/cargo");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(format!("{name}.toml"));
+    std::fs::write(&file, text).unwrap();
+    file
+}
+
+/// Where Claude Code's skills land: the workspace's directory, and the
+/// user-level one a plugin enabled for every workspace is delivered to.
+fn skill_dirs(ctx: &TestContext) -> Vec<PathBuf> {
+    vec![
+        ctx.workspace_root.clone().unwrap().join(".claude/skills"),
+        ctx.sym.home_dir().join(".claude/skills"),
+    ]
+}
+
+/// Every installed skill directory named `<name>` or `<name>-<hash>` under
+/// `parents`, on its own or inside a plugin directory delivered there.
+fn installed(parents: &[PathBuf], name: &str) -> Vec<PathBuf> {
+    let children = |dir: &Path| -> Vec<PathBuf> {
+        std::fs::read_dir(dir)
+            .map(|entries| entries.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default()
+    };
+    parents
+        .iter()
+        .flat_map(|parent| children(parent))
+        .flat_map(|dir| {
+            let in_plugin = children(&dir.join("skills"));
+            std::iter::once(dir).chain(in_plugin)
+        })
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n == name || n.starts_with(&format!("{name}-")))
+                && p.join("SKILL.md").is_file()
+        })
+        .collect()
+}
+
+async fn discover(ctx: &TestContext) -> Discovery {
+    let ws = ctx.sym.workspace(ctx.workspace_root.as_ref().unwrap());
+    symposium::discovery::discover_for(&ctx.sym, &ws).await
+}
+
+fn names(found: &[DiscoveredPlugin]) -> Vec<&str> {
+    found.iter().map(|d| d.name()).collect()
+}
+
+/// The standing grants, each one enough on its own to load an unrevoked
+/// crate-d, and no grant at all, which leaves it a candidate.
+type Grant = (&'static str, fn(&mut Symposium));
+
+fn grants() -> Vec<Grant> {
+    vec![
+        ("auto-enable", |sym| {
+            sym.config.plugins.auto_enable = vec!["crate-d".into()];
+        }),
+        ("use", |sym| {
+            sym.config.plugins.used = vec![UseEntry::Global("crate-d".into())];
+        }),
+        ("none", |_| {}),
+    ]
+}
+
+/// Run `audits` (the text of crate-d's audits file, given its payload digest)
+/// under each grant: the crate must not load, must never be offered for
+/// consent, and sync must say why; without the file the same grant loads it
+/// (or, with no grant, offers it).
+async fn assert_revoked_under_every_grant(audits: impl Fn(&str) -> String) {
+    for (grant_name, grant) in grants() {
+        let granted = grant_name != "none";
+        with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let skills = skill_dirs(&ctx);
+            grant(&mut ctx.sym);
+            let digest = payload_digest(&crate_d(&ctx)).unwrap().to_string();
+
+            let file = write_audits(&mut ctx.sym, "crate-d", &audits(&digest));
+            let events = ctx.sync_with_report(tracing::Level::DEBUG).await?;
+            assert!(
+                installed(&skills, "d-guidance").is_empty(),
+                "{grant_name}: a revoked crate must not load"
+            );
+            let found = discover(&ctx).await;
+            assert_eq!(names(&found.revoked), ["crate-d"], "{grant_name}");
+            assert!(found.candidates.is_empty(), "{grant_name}");
+            if granted {
+                let reason = events
+                    .iter()
+                    .find(|e| e["kind"] == "plugin_considered" && e["plugin"] == "crate-d")
+                    .and_then(|e| e["reason"].as_str())
+                    .unwrap_or_else(|| panic!("{grant_name}: no reason in {events:?}"));
+                assert_eq!(
+                    reason,
+                    "revoked by registry `symposium-audits`: it tells the agent to fetch and run remote code",
+                );
+            }
+
+            // The grant itself is fine: lifting the revocation loads the
+            // crate, or offers it for consent.
+            std::fs::remove_file(file)?;
+            ctx.symposium(&["sync"]).await?;
+            assert_eq!(
+                installed(&skills, "d-guidance").len(),
+                usize::from(granted),
+                "{grant_name}"
+            );
+            let found = discover(&ctx).await;
+            assert!(found.revoked.is_empty(), "{grant_name}");
+            assert_eq!(found.candidates.len(), usize::from(!granted), "{grant_name}");
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+}
+
+/// A revoked version range beats `use` and `auto-enable`.
+#[tokio::test]
+async fn a_crate_revoked_by_version_does_not_load() {
+    assert_revoked_under_every_grant(|_| {
+        "format = 1\n[[revoked]]\nversions = \">=1.0.0, <1.3.0\"\nreason = \"remote-exec\"\n"
+            .to_string()
+    })
+    .await;
+}
+
+/// So does a revoked payload digest, which wins over an audit of the same
+/// digest.
+#[tokio::test]
+async fn a_crate_revoked_by_digest_does_not_load() {
+    assert_revoked_under_every_grant(|digest| {
+        format!(
+            "format = 1\n[[audit]]\ndigest = \"{digest}\"\n\
+             [[revoked]]\ndigest = \"{digest}\"\nreason = \"remote-exec\"\n"
+        )
+    })
+    .await;
+}
+
+/// `disable` is the last word: a revoked and disabled crate is declined.
+#[tokio::test]
+async fn disable_outranks_a_revocation() {
+    with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
+        ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+        let skills = skill_dirs(&ctx);
+        ctx.sym.config.plugins.auto_enable = vec!["crate-d".into()];
+        ctx.sym.config.plugins.disable = vec!["crate_d".into()];
+        write_audits(
+            &mut ctx.sym,
+            "crate-d",
+            "format = 1\n[[revoked]]\nversions = \"*\"\nreason = \"off-task\"\n",
+        );
+        ctx.symposium(&["sync"]).await?;
+        assert!(installed(&skills, "d-guidance").is_empty());
+        let found = discover(&ctx).await;
+        assert_eq!(names(&found.declined), ["crate-d"]);
+        assert!(found.revoked.is_empty());
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+/// `chained-crate0`: a registry plugin vouches for `crate-w` through a
+/// `[[plugins]]` chained reference, so `crate-w` loads with no `[plugins]`
+/// entry of its own.
+async fn chained_skill_installs(ctx: &mut TestContext) -> usize {
+    ctx.symposium(&["sync"]).await.unwrap();
+    installed(&skill_dirs(ctx), "w-guidance").len()
+}
+
+/// A revoked crate is not loaded even through a chained reference: the
+/// registry vouches for it, but the list has the last word.
+#[tokio::test]
+async fn a_revoked_chained_crate_is_not_loaded() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["chained-crate0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            assert_eq!(chained_skill_installs(&mut ctx).await, 1, "baseline");
+            write_audits(
+                &mut ctx.sym,
+                "crate-w",
+                "format = 1\n[[revoked]]\nversions = \"<1.0.0\"\nreason = \"exfiltration\"\n",
+            );
+            assert_eq!(chained_skill_installs(&mut ctx).await, 0);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// A revocation covers cargo-sourced plugins only: an audits file naming a
+/// registry plugin does not switch it off.
+#[tokio::test]
+async fn revocations_do_not_apply_to_registry_plugins() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["chained-crate0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let revoke = "format = 1\n[[revoked]]\nversions = \"*\"\nreason = \"off-task\"\n";
+            let file = write_audits(&mut ctx.sym, "vouch-plugin", revoke);
+            let user_plugins = file.parent().unwrap().with_file_name("user-plugins");
+            std::fs::create_dir_all(&user_plugins)?;
+            std::fs::write(user_plugins.join("vouch-plugin.toml"), revoke)?;
+            assert_eq!(chained_skill_installs(&mut ctx).await, 1);
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+/// The hook path does not load a revoked crate, and its answer to the agent
+/// says nothing about it, even with a malformed entry in the file to warn
+/// about: warnings go to the log.
+#[tokio::test]
+async fn a_revoked_crate_leaves_hook_stdout_alone() {
+    with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
+        ctx.sym.config.auto_update = symposium::config::AutoUpdate::Off;
+        ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+        let skills = skill_dirs(&ctx);
+        ctx.sym.config.plugins.auto_enable = vec!["crate-d".into()];
+        let file = write_audits(
+            &mut ctx.sym,
+            "crate-d",
+            "format = 1\n[[revoked]]\nversions = \"*\"\nreason = \"off-task\"\n\
+             [[revoked]]\nversions = \"broken\"\n",
+        );
+
+        let session_start = async |ctx: &mut TestContext| {
+            let result = ctx
+                .prompt_or_hook(
+                    "hello",
+                    &[HookStep::session_start()],
+                    symposium::hook_schema::HookAgent::Claude,
+                )
+                .await
+                .unwrap();
+            // The output parsed as JSON to get here.
+            result.hooks[0].output.to_string()
+        };
+
+        let output = session_start(&mut ctx).await;
+        assert!(!output.contains("revoked"), "{output}");
+        assert!(!output.contains("crate-d"), "{output}");
+        assert!(installed(&skills, "d-guidance").is_empty());
+
+        // The hook does sync, so without the revocation the same setup
+        // installs the skill: the assertion above is not vacuous.
+        std::fs::remove_file(file)?;
+        session_start(&mut ctx).await;
+        assert_eq!(installed(&skills, "d-guidance").len(), 1);
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+/// A revocation that lands after a crate's skills were installed removes them,
+/// even when the sync otherwise skips cleanup because a registry could not be
+/// read: the safety net keeps what a silent source installed, never what the
+/// list revoked.
+#[tokio::test]
+async fn a_revocation_removes_installed_skills_even_when_a_registry_is_unreadable() {
+    for break_registry in [false, true] {
+        with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let skills = skill_dirs(&ctx);
+            ctx.sym.config.plugins.used = vec![UseEntry::Global("crate-d".into())];
+            ctx.symposium(&["sync"]).await?;
+            assert_eq!(installed(&skills, "d-guidance").len(), 1);
+
+            write_audits(
+                &mut ctx.sym,
+                "crate-d",
+                "format = 1\n[[revoked]]\nversions = \"*\"\nreason = \"remote-exec\"\n",
+            );
+            if break_registry {
+                // A manifest at the audits registry's root: its entries
+                // cannot be listed, so the sync skips cleanup. Its audits
+                // still count.
+                std::fs::write(ctx.sym.audits_dir().unwrap().join("Symposium.toml"), "")?;
+            }
+            // A managed skill nothing installs this run, as if its registry
+            // were the unreadable one: only a full cleanup may remove it.
+            let held_back = skills[0].join("held-back");
+            std::fs::create_dir_all(&held_back)?;
+            std::fs::write(held_back.join(".symposium"), "")?;
+            std::fs::write(held_back.join("SKILL.md"), "---\nname: held-back\n---\n")?;
+            ctx.symposium(&["sync"]).await?;
+            assert!(
+                installed(&skills, "d-guidance").is_empty(),
+                "broken registry: {break_registry}"
+            );
+            assert_eq!(
+                held_back.exists(),
+                break_registry,
+                "a revocation removes only its own skills while cleanup is skipped"
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    }
+}
+
+/// The builtin `symposium-audits` registry, never fetched (offline, or the
+/// repository unreachable), degrades exactly like the builtin recommendations
+/// registry: the same warning and the same unreadable mark, nothing more, and
+/// every lookup is "not audited".
+#[tokio::test]
+async fn an_unfetched_audits_registry_degrades_like_the_recommendations_one() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("config.toml"),
+        "[defaults]\nuser-plugins = false\nsymposium-audits = true\n",
+    )
+    .unwrap();
+    let sym = Symposium::from_dir(tmp.path());
+
+    let mut registry = None;
+    let events = with_report(async || {
+        registry = Some(symposium::plugins::load_registry(&sym).await);
+    })
+    .await;
+    let registry = registry.unwrap();
+    assert!(registry.plugins.is_empty());
+    assert_eq!(
+        registry.unreadable_registries,
+        ["symposium-recommendations", "symposium-audits"]
+    );
+    let warnings: Vec<String> = events
+        .iter()
+        .filter(|e| e["kind"] == "warning")
+        .map(|e| e["message"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(warnings.len(), 2, "{events:?}");
+    assert_eq!(
+        warnings[1],
+        warnings[0].replace("symposium-recommendations", "symposium-audits"),
+        "the same report for both"
+    );
+
+    let digest = "sha256:".to_string() + &"a".repeat(64);
+    assert_eq!(
+        AuditIndex::configured(&sym).lookup(
+            "cargo",
+            "serde",
+            "1.0.0",
+            Some(&digest.parse().unwrap())
+        ),
+        Answer::NotAudited
+    );
 }
 
 /// `plugin digest` prints the library's digest for a directory, a crate name
