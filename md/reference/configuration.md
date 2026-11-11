@@ -23,6 +23,7 @@ level = "info"
 
 [defaults]
 symposium-recommendations = true
+symposium-audits = false
 user-plugins = true
 
 [[registry]]
@@ -104,11 +105,12 @@ enabled = true
 
 ## `[defaults]`
 
-Controls the two built-in registries. Both are enabled by default.
+Controls the three built-in registries. All are enabled by default except `symposium-audits`.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `symposium-recommendations` | bool | `true` | Fetch plugins from the [symposium-dev/recommendations](https://github.com/symposium-dev/recommendations) repository. |
+| `symposium-audits` | bool | `false` | Fetch the community [audits](./audits.md) list from the [symposium-dev/audits](https://github.com/symposium-dev/audits) repository: which dependency plugin payloads were audited, and which releases are revoked and never load. It offers no plugins, and is fetched, refreshed and reported on like the recommendations registry, including when it cannot be reached. Off until the community list exists; set it to `true` to turn it on. |
 | `user-plugins` | bool | `true` | Scan `~/.symposium/plugins/` for user-defined plugins. |
 
 ## `[[registry]]`
@@ -162,7 +164,7 @@ Trust follows whoever supplies the *content*, not the package the content is abo
 |-----|------|---------|-------------|
 | `auto-enable` | array of strings | `[]` | Dependency names whose embedded plugins load without being asked about. `"*"` pre-consents to every dependency. |
 | `use` | array | `[]` | Plugins enabled deliberately. Each entry is either a plain name (enabled in every workspace, and installed for you as a plugin directory on the agents that support it) or `{ name = "...", workspace = "/path" }` (enabled only while working in that workspace root). |
-| `disable` | array of strings | `[]` | Names that must never be enabled. Takes precedence over `auto-enable`, including over `"*"`. |
+| `disable` | array of strings | `[]` | Names that must never be enabled. Takes precedence over `auto-enable`, including over `"*"`. A crate that is both disabled and [revoked](./audits.md#revocations) counts as declined. |
 
 Each name is matched by the package manager its package comes from: a crate name the way cargo matches it, hyphen/underscore-insensitively (`widget-lib` and `widget_lib` are the same entry), and a registry plugin's name exactly. A `use` name that names both a registry plugin and a crate (a dependency or one on crates.io) means the registry plugin only, so it does not also consent to that crate's embedded plugin, and a `use` name no package manager has enables nothing.
 
