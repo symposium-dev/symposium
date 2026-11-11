@@ -1,0 +1,8 @@
+name = "json-blocker"
+depends-on = ["*"]
+
+[[hooks]]
+name = "block-prompt"
+event = "UserPromptSubmit"
+format = "claude"
+command = { script = "scripts/block.sh" }

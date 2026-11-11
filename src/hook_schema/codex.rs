@@ -325,6 +325,9 @@ impl AgentHookOutput for CodexPostToolUseOutput {
     fn to_hook_output(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap()
     }
+    fn blocks(&self) -> bool {
+        self.decision.as_deref() == Some("block")
+    }
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
     }
@@ -413,6 +416,12 @@ impl AgentHookOutput for CodexUserPromptSubmitOutput {
     }
     fn to_hook_output(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap()
+    }
+    fn blocks(&self) -> bool {
+        self.rest
+            .get("decision")
+            .and_then(serde_json::Value::as_str)
+            == Some("block")
     }
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self

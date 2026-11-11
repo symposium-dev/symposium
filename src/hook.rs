@@ -403,12 +403,14 @@ fn receives(
     let Some(context) = context else {
         return false;
     };
-    handler.parse_output(&response.stdout).is_ok_and(|output| {
-        output
-            .to_symposium()
-            .additional_context()
-            .is_some_and(|received| received.contains(context))
-    })
+    response.exit_code == 0
+        && handler.parse_output(&response.stdout).is_ok_and(|output| {
+            !output.blocks()
+                && output
+                    .to_symposium()
+                    .additional_context()
+                    .is_some_and(|received| received.contains(context))
+        })
 }
 
 /// The response for a plugin hook that exited 2, which the plugin contract

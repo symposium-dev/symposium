@@ -375,13 +375,69 @@ async fn a_notice_lost_to_a_blocked_prompt_is_given_on_the_next_change() {
             let root = ctx.workspace_root.clone().unwrap();
 
             add_dependency(&root, "crate-b");
-            let stdout = respond(&ctx, HookAgent::Claude, HookStep::user_prompt("next")).await;
+            let prompt = HookStep::user_prompt("block with exit 2");
+            let stdout = respond(&ctx, HookAgent::Claude, prompt).await;
             assert!(!stdout.contains(NOTICE), "blocked prompt: {stdout}");
 
             add_dependency(&root, "crate-d");
             let stdout = respond(&ctx, HookAgent::Claude, tool_call_finished()).await;
             assert_notice(HookAgent::Claude, &stdout);
             assert!(stdout.contains("crate-d"), "{stdout}");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_notice_on_a_prompt_blocked_by_a_decision_is_given_on_the_next_change() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-notice0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.sym.config.defaults.user_plugins = true;
+            start_session(&ctx, HookAgent::Claude).await;
+            let root = ctx.workspace_root.clone().unwrap();
+
+            add_dependency(&root, "crate-b");
+            let prompt = HookStep::user_prompt("block with json");
+            let stdout = respond(&ctx, HookAgent::Claude, prompt).await;
+            assert!(stdout.contains("\"decision\":\"block\""), "{stdout}");
+
+            add_dependency(&root, "crate-d");
+            let stdout = respond(&ctx, HookAgent::Claude, tool_call_finished()).await;
+            assert_notice(HookAgent::Claude, &stdout);
+            assert!(stdout.contains("crate-d"), "{stdout}");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_block_a_later_hook_lifts_still_delivers_the_notice() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-notice0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.sym.config.defaults.user_plugins = true;
+            start_session(&ctx, HookAgent::Claude).await;
+            let root = ctx.workspace_root.clone().unwrap();
+
+            add_dependency(&root, "crate-b");
+            let prompt = HookStep::user_prompt("block, then lift it");
+            let stdout = respond(&ctx, HookAgent::Claude, prompt).await;
+            assert_notice(HookAgent::Claude, &stdout);
+            assert!(!stdout.contains("\"decision\""), "{stdout}");
+
+            add_dependency(&root, "crate-d");
+            let stdout = respond(&ctx, HookAgent::Claude, tool_call_finished()).await;
+            assert!(stdout.contains("crate-d"), "{stdout}");
+            assert!(!stdout.contains("crate-b"), "named crate-b again: {stdout}");
             Ok(())
         },
     )
