@@ -785,7 +785,7 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String
 }
 
 /// Surface dependency plugins awaiting consent. A hook runs on the agent's
-/// behalf, so it must never block on stdin — the candidates are reported as
+/// behalf, so it must never block on stdin: the candidates are reported as
 /// context, with a pointer at the interactive command that can actually ask.
 /// `None` when nothing is pending.
 async fn consent_hint(sym: &Symposium, deps: &Arc<Workspace>) -> (Option<String>, Vec<PackageId>) {
@@ -802,7 +802,7 @@ fn pending_notice(pending: &[PackageId]) -> Option<String> {
     }
     Some(format!(
         "These dependencies ship agent plugins that are not enabled yet: {}. \
-         They stay off until the user consents — tell the user to run \
+         They stay off until the user consents. Tell the user to run \
          `cargo agents sync` (which asks about each one) or \
          `cargo agents use <name>`. Do not enable them yourself.",
         names.join(", ")
