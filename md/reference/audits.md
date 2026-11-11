@@ -10,7 +10,7 @@ For any dependency plugin, the audits give exactly one answer:
 | audited | otherwise, the payload digest matches an `[[audit]]` entry |
 | not audited | anything else, including a payload that cannot be digested |
 
-A revoked plugin never loads. An audited plugin is otherwise treated like any other, so the consent prompt still asks about it.
+A revoked plugin never loads. The other two answers are shown wherever Symposium asks or tells you about a dependency plugin, always in the same words (``audited by the `symposium-audits` list`` or `not audited`): the [consent prompt](./cargo-agents-sync.md#consent-prompt) of an interactive `cargo agents sync`, the hint your agent gets when a session starts, and [`cargo agents status`](./cargo-agents-status.md). When the list audits the crate but this payload [has no digest](#when-there-is-no-digest), "not audited" comes with the reason in a few words, since no audit can ever cover that payload. Otherwise an audited plugin is treated like any other: the consent prompt still asks about it, and nothing loads without your consent.
 
 ## Where audits come from
 
@@ -67,7 +67,7 @@ A digest that is both audited and revoked is revoked.
 
 ### Reasons
 
-`reason` is a code, never prose, so Symposium renders the sentence itself.
+`reason` is a code, never prose, so Symposium renders the sentence itself (for example in [`cargo agents status`](./cargo-agents-status.md)).
 
 | Code | Rendered as |
 |------|-------------|
@@ -126,7 +126,7 @@ A revocation stops a crate's plugin from loading, on every route a crate's plugi
 - It outranks every grant: `use` and `auto-enable` do not load a revoked crate, and its own chained references are not followed.
 - [`[plugins] disable`](./configuration.md#plugins) outranks it. A crate that is both revoked and disabled counts as declined.
 - A payload with no [digest](#when-there-is-no-digest) cannot match a `digest` revocation; a `versions` revocation still applies to it.
-- The check never prompts and never prints. A revoked plugin is skipped quietly and never offered for consent; `cargo agents sync -v` names it with the reason, as in ``revoked by the `symposium-audits` list: it tells the agent to fetch and run remote code``.
+- The check never prompts and never prints. A revoked plugin is skipped quietly, never offered for consent, and shown by [`cargo agents status`](./cargo-agents-status.md) as `revoked` with the reason, as in ``revoked by the `symposium-audits` list: it tells the agent to fetch and run remote code``. A revoked crate that is reached only through another plugin's chain is not listed there; `cargo agents sync -v` names it.
 - Skills and MCP servers a crate installed before its revocation come off on the next sync, even one that otherwise keeps what is installed because a registry could not be read or a package manager failed. Its MCP servers are removed for every agent and from every file Symposium registered them in, user-level files included, unless an active plugin still declares a server of the same name. With [`auto-sync`](./configuration.md) off, they stay installed until you run `cargo agents sync`; hooks and subcommands stop at once, since they are resolved on every call. Listing what the crate installed runs nothing from it: none of its predicates is evaluated, and a `source.git` skill group is read from the cache only, never fetched.
 
 ## How Symposium reads it

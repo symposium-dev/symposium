@@ -174,12 +174,18 @@ pub enum ReportEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         version: Option<String>,
         /// Why the entry is in the state it is: its enablement root, or the
-        /// reason it will not load.
+        /// reason it will not load (for `revoked`, who revoked it and why).
         root: String,
-        /// `active`, `dormant`, `candidate`, or `declined`.
+        /// `active`, `dormant`, `candidate`, `declined`, or `revoked`.
         state: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         format: Option<String>,
+        /// For a dependency plugin, what the audits say about it, in the
+        /// consent prompt's words: ``audited by registry `<name>` ``,
+        /// `not audited`, or `not audited: <why>`. Never a revocation, which
+        /// is the `root` of a `revoked` line and absent from a `declined` one.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audit: Option<String>,
     },
 
     /// The result of `cargo agents plugin digest`.
@@ -416,11 +422,13 @@ impl ReportEvent {
                 root,
                 state,
                 format,
+                audit,
             } => {
                 let marker = match state.as_str() {
                     "active" => "✅",
                     "dormant" => "💤",
                     "candidate" => "❓",
+                    "revoked" => "⛔",
                     _ => "➖",
                 };
                 let version = version
@@ -431,7 +439,11 @@ impl ReportEvent {
                     Some(label) => format!("{version} ({label})"),
                     None => version,
                 };
-                format!("{marker} {name}{version} — {root}")
+                let audit = audit
+                    .as_deref()
+                    .map(|audit| format!(" — {audit}"))
+                    .unwrap_or_default();
+                format!("{marker} {name}{version} — {root}{audit}")
             }
 
             Self::ProviderListed {
@@ -577,5 +589,30 @@ mod tests {
         let digest = symposium_sdk::audits::Digest::from_bytes([0; 32]);
         assert!(!event(DigestOutcome::Digest(digest)).human_to_stderr());
         assert!(event(DigestOutcome::Ineligible("why".into())).human_to_stderr());
+    }
+
+    /// A status line ends with the audit answer, in the consent prompt's
+    /// words, and has no audit part when none was looked up.
+    #[test]
+    fn a_status_line_ends_with_the_audit_answer() {
+        let line = |audit: Option<&str>| {
+            ReportEvent::PluginStatus {
+                name: "widget-lib".into(),
+                version: Some("0.3.1".into()),
+                root: "found via dependency `widget-lib`, awaiting consent (`cargo agents use widget-lib`)".into(),
+                state: "candidate".into(),
+                format: None,
+                audit: audit.map(str::to_string),
+            }
+            .format_human()
+        };
+        assert_eq!(
+            line(Some("not audited")),
+            "❓ widget-lib 0.3.1 — found via dependency `widget-lib`, awaiting consent (`cargo agents use widget-lib`) — not audited"
+        );
+        assert_eq!(
+            line(None),
+            "❓ widget-lib 0.3.1 — found via dependency `widget-lib`, awaiting consent (`cargo agents use widget-lib`)"
+        );
     }
 }

@@ -7,6 +7,7 @@ use symposium::audits::digest::payload_digest;
 use symposium::audits::{Answer, AuditIndex, Verdict};
 use symposium::config::{RegistryConfig, Symposium, UseEntry};
 use symposium::discovery::{DiscoveredPlugin, Discovery};
+use symposium::status_command::{StatusEntry, StatusState};
 use symposium_testlib::{HookStep, TestContext, TestMode, with_fixture};
 
 /// Run `f` with a JSON report layer installed and return the drained events.
@@ -85,6 +86,31 @@ fn names(found: &[DiscoveredPlugin]) -> Vec<&str> {
     found.iter().map(|d| d.name()).collect()
 }
 
+/// crate-d's line of `cargo agents status`.
+async fn status(ctx: &TestContext) -> StatusEntry {
+    let ws = ctx.sym.workspace(ctx.workspace_root.as_ref().unwrap());
+    let entries = symposium::status_command::workspace_status(&ctx.sym, &ws)
+        .await
+        .unwrap();
+    entries
+        .into_iter()
+        .find(|e| e.name == "crate-d")
+        .expect("a status entry for crate-d")
+}
+
+/// The `plugin_status` line for `crate-d` from `cargo agents status --json`.
+async fn status_line(ctx: &mut TestContext) -> serde_json::Value {
+    let events = with_report(async || {
+        ctx.symposium(&["status"]).await.unwrap();
+    })
+    .await;
+    events
+        .iter()
+        .find(|e| e["kind"] == "plugin_status" && e["name"] == "crate-d")
+        .unwrap_or_else(|| panic!("{events:?}"))
+        .clone()
+}
+
 /// The standing grants, each one enough on its own to load an unrevoked
 /// crate-d, and no grant at all, which leaves it a candidate.
 type Grant = (&'static str, fn(&mut Symposium));
@@ -123,6 +149,12 @@ async fn assert_revoked_under_every_grant(audits: impl Fn(&str) -> String) {
             let found = discover(&ctx).await;
             assert_eq!(names(&found.revoked), ["crate-d"], "{grant_name}");
             assert!(found.candidates.is_empty(), "{grant_name}");
+            let entry = status(&ctx).await;
+            assert_eq!(entry.state, StatusState::Revoked, "{grant_name}: {entry:?}");
+            assert_eq!(
+                entry.root,
+                "revoked by the `symposium-audits` list: it tells the agent to fetch and run remote code",
+            );
             if granted {
                 let reason = events
                     .iter()
@@ -147,6 +179,12 @@ async fn assert_revoked_under_every_grant(audits: impl Fn(&str) -> String) {
             let found = discover(&ctx).await;
             assert!(found.revoked.is_empty(), "{grant_name}");
             assert_eq!(found.candidates.len(), usize::from(!granted), "{grant_name}");
+            let expected = if granted {
+                StatusState::Active
+            } else {
+                StatusState::Candidate
+            };
+            assert_eq!(status(&ctx).await.state, expected, "{grant_name}");
             Ok(())
         })
         .await
@@ -196,7 +234,75 @@ async fn disable_outranks_a_revocation() {
         let found = discover(&ctx).await;
         assert_eq!(names(&found.declined), ["crate-d"]);
         assert!(found.revoked.is_empty());
-        assert_eq!(found.declined[0].audit, None);
+        let entry = status(&ctx).await;
+        assert_eq!(entry.state, StatusState::Declined, "{entry:?}");
+        assert_eq!(entry.audit, None, "{entry:?}");
+        let line = status_line(&mut ctx).await;
+        assert_eq!(line["state"], "declined");
+        assert!(line.get("audit").is_none(), "{line}");
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+/// `status` says an active crate's payload is audited; an audit changes
+/// nothing else.
+#[tokio::test]
+async fn status_says_an_active_payload_is_audited() {
+    with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
+        ctx.sym.config.plugins.auto_enable = vec!["crate-d".into()];
+        let entry = status(&ctx).await;
+        assert_eq!(entry.audit, Some(Verdict::NotAudited), "{entry:?}");
+
+        let digest = payload_digest(&crate_d(&ctx)).unwrap();
+        write_audits(
+            &mut ctx.sym,
+            "crate-d",
+            &format!("format = 1\n[[audit]]\ndigest = \"{digest}\"\nversions = [\"1.2.0\"]\n"),
+        );
+        let entry = status(&ctx).await;
+        assert_eq!(entry.state, StatusState::Active, "{entry:?}");
+        assert_eq!(entry.audit, Some(Verdict::Audited));
+        let line = status_line(&mut ctx).await;
+        assert_eq!(line["audit"], "audited by the `symposium-audits` list");
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
+/// A candidate awaiting consent shows its audit answer in `status`, in the
+/// consent prompt's words (the human form renders the same `audit` string);
+/// an audit leaves it a candidate.
+#[tokio::test]
+async fn a_candidate_awaiting_consent_shows_its_audit_answer() {
+    with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
+        let line = status_line(&mut ctx).await;
+        assert_eq!(line["state"], "candidate");
+        assert_eq!(line["audit"], "not audited");
+
+        let digest = payload_digest(&crate_d(&ctx)).unwrap();
+        write_audits(
+            &mut ctx.sym,
+            "crate-d",
+            &format!("format = 1\n[[audit]]\ndigest = \"{digest}\"\n"),
+        );
+        let line = status_line(&mut ctx).await;
+        assert_eq!(line["state"], "candidate");
+        assert_eq!(line["audit"], "audited by the `symposium-audits` list");
+
+        // A payload that cannot be digested is not audited, and says why.
+        std::fs::write(
+            crate_d(&ctx).join("Symposium.toml"),
+            "[[skills]]\nsource.git = \"https://github.com/example/skills\"\n",
+        )?;
+        let line = status_line(&mut ctx).await;
+        assert_eq!(line["state"], "candidate");
+        assert_eq!(
+            line["audit"],
+            "not audited: its payload cannot be checked against an audit because it fetches skills with `source.git`"
+        );
         Ok(())
     })
     .await

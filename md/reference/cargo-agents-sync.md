@@ -67,10 +67,25 @@ agent context, so these stay off until you say otherwise. Three answers:
 Only explicit answers are recorded, so hitting Enter through the prompt never
 permanently declines anything. Escape leaves the remaining questions undecided.
 
+Each question also says what the registries' [audits](./audits.md) say about
+the plugin: audited by a named registry, or not audited. When a registry has
+audited the crate but this release's payload cannot be checked against an
+audit, it says why in a few words:
+
+```text
+Dependency `tidy-crate` provides 1 skill group — audited by the `symposium-audits` list. Enable it?
+Dependency `widget-lib` provides 1 skill group, 1 hook — not audited. Enable it?
+Dependency `remote-skills` provides 1 skill group — not audited: its payload cannot be checked against an audit because it fetches skills with `source.git`. Enable it?
+```
+
+An audit is information for your decision, not a decision: an audited plugin
+is asked about like any other, and the answers record the same thing. A
+[revoked](./audits.md#revocations) plugin is never asked about.
+
 The prompt only runs in a real terminal session. The automatic sync below —
 and anything else an agent triggers — never prompts. Instead, your agent is told
 so it can point you here: pending candidates are named when a session starts,
-and when your dependencies change mid-session the agent hears that there may be
+each with the same audit answer, and when your dependencies change mid-session the agent hears that there may be
 new ones. [`cargo agents status`](./cargo-agents-status.md) lists them as
 `candidate`.
 
