@@ -828,8 +828,9 @@ async fn session_start_hints_pending_candidates() {
             // No audits list is read here, so the candidate is named with no
             // audit answer at all.
             assert!(
-                context
-                    .contains("not enabled yet: crate-a. They stay off until the user consents —"),
+                context.contains(
+                    "not enabled yet: crate-a. They stay off until the user consents. Tell"
+                ),
                 "{context}"
             );
             assert!(context.contains("cargo agents use"), "{context}");
