@@ -1266,6 +1266,32 @@ async fn disable_turns_off_a_registry_plugin() {
 }
 
 #[tokio::test]
+async fn disable_turns_off_a_crate_reached_through_a_chain() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["crate-facets0"],
+        async |mut ctx| {
+            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            let mcp = ctx.workspace_root.clone().unwrap().join(".mcp.json");
+            let registered = || {
+                std::fs::read_to_string(&mcp)
+                    .unwrap_or_default()
+                    .contains("facet-server")
+            };
+            ctx.symposium(&["sync"]).await?;
+            assert!(registered(), "chained crate before disable");
+
+            ctx.sym.config.plugins.disable = vec![symposium::config::PluginRef::bare("crate-f")];
+            ctx.symposium(&["sync"]).await?;
+            assert!(!registered(), "chained crate after disable");
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
 async fn disable_naming_an_unknown_pm_does_not_leave_the_plugin_on() {
     with_fixture(
         TestMode::SimulationOnly,
