@@ -231,6 +231,16 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
             }
             ExitCode::SUCCESS
         }
+        PluginCommand::Digest { target } => {
+            let cwd = env::current_dir().expect("failed to get current directory");
+            match symposium::audits::digest_command::run(sym, &cwd, &target).await {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("Error: {e:#}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         PluginCommand::Validate {
             path,
             no_check_crates,

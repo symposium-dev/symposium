@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod audits;
 pub mod cli;
 pub mod config;
 pub mod crate_command;

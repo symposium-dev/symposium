@@ -1860,6 +1860,23 @@ fn agents_skills_group() -> RawSkillGroup {
     .expect("static default group")
 }
 
+/// The validated manifest of a crate's plugin, from its manifest sources: what
+/// [`validate_plugin`] makes of the cargo PM's merge under
+/// [`PluginKind::Package`], minus resolving paths against a root. For callers
+/// that need to know what a crate's manifest *says* (its skill groups, with
+/// the default `skills/` group appended) without a package manager, such as
+/// the [payload digest](crate::audits::digest).
+pub(crate) fn package_manifest(
+    metadata: Option<toml::Table>,
+    file: Option<&str>,
+    crate_name: &str,
+) -> Result<PluginManifest> {
+    validate_manifest(
+        symposium_pm_cargo::manifest::merge(metadata, file, crate_name),
+        ManifestOrigin::Crate { crate_name },
+    )
+}
+
 /// Convert a raw manifest into a validated `PluginManifest`.
 ///
 /// User-declared `[[installations]]` come first in the resulting list, in

@@ -88,6 +88,83 @@ impl Ancestors {
     }
 }
 
+/// A tree walked with symlinks followed, every path relative to its root.
+#[derive(Debug, Default)]
+pub struct Tree {
+    /// Every directory and regular file, sorted by path, so each directory
+    /// comes before its children.
+    pub entries: Vec<(PathBuf, EntryKind)>,
+    /// What the walk would not follow or list, in the order it met them.
+    pub refused: Vec<Refused>,
+}
+
+/// An entry [`walk`] did not follow or list. Each caller decides whether it
+/// is worth a warning or a refusal.
+#[derive(Debug)]
+pub enum Refused {
+    /// A link that points nowhere, and why its target could not be read.
+    BrokenLink(PathBuf, std::io::Error),
+    /// A directory link back into a directory the walk is inside.
+    Loop(PathBuf),
+    /// Neither a directory nor a regular file: a socket or a fifo.
+    Special(PathBuf),
+}
+
+/// Walk `root` depth-first with symlinks followed. A directory that is gone
+/// when the walk reaches it counts as empty; any other error listing or
+/// reading one fails the walk, naming the directory.
+pub fn walk(root: &Path) -> std::io::Result<Tree> {
+    walk_where(root, &mut |_| true)
+}
+
+/// [`walk`], asking `follow` about each directory and regular file before
+/// listing it: one it turns down is left out, a directory with all it holds.
+pub fn walk_where(root: &Path, follow: &mut dyn FnMut(&Path) -> bool) -> std::io::Result<Tree> {
+    let mut tree = Tree::default();
+    let mut ancestors = Ancestors::rooted_at(root);
+    walk_in(root, root, follow, &mut ancestors, &mut tree)?;
+    tree.entries.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(tree)
+}
+
+fn walk_in(
+    root: &Path,
+    dir: &Path,
+    follow: &mut dyn FnMut(&Path) -> bool,
+    ancestors: &mut Ancestors,
+    tree: &mut Tree,
+) -> std::io::Result<()> {
+    let named =
+        |e: std::io::Error| std::io::Error::new(e.kind(), format!("read {}: {e}", dir.display()));
+    let read = match fs::read_dir(dir) {
+        Ok(read) => read,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(named(e)),
+    };
+    for entry in read {
+        let entry = entry.map_err(named)?;
+        let path = entry.path();
+        let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
+        match resolved_kind(&path, entry.file_type().map_err(named)?) {
+            Ok(Some(_)) if !follow(&path) => {}
+            Ok(Some(EntryKind::Dir)) => {
+                if !ancestors.enter(&path) {
+                    tree.refused.push(Refused::Loop(rel));
+                    continue;
+                }
+                tree.entries.push((rel, EntryKind::Dir));
+                let result = walk_in(root, &path, follow, ancestors, tree);
+                ancestors.leave();
+                result?;
+            }
+            Ok(Some(EntryKind::File)) => tree.entries.push((rel, EntryKind::File)),
+            Ok(None) => tree.refused.push(Refused::Special(rel)),
+            Err(e) => tree.refused.push(Refused::BrokenLink(rel, e)),
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
