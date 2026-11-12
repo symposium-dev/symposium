@@ -75,6 +75,13 @@ pub trait AgentHookOutput: Debug {
     /// Convert this output into a JSON value to return to the agent.
     fn to_hook_output(&self) -> serde_json::Value;
 
+    fn blocks(&self) -> bool {
+        matches!(
+            self.to_symposium(),
+            symposium::OutputEvent::PreToolUse(o) if o.decision == symposium_sdk::hook::Decision::Deny
+        )
+    }
+
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
 }
 

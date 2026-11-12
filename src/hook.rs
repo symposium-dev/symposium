@@ -14,7 +14,7 @@ use crate::installation::{
     resolve_runnable,
 };
 use crate::plugins::{HookFormat, Installation};
-use crate::pm::Workspace;
+use crate::pm::{PackageId, Workspace};
 use crate::{
     config::Symposium,
     hook_schema::{AgentHookInput, symposium},
@@ -354,7 +354,7 @@ async fn execute_hook_inner(
         }
 
         // Builtin dispatch → symposium output → host agent output as Value
-        let builtin_sym_output = dispatch_builtin(
+        let (builtin_sym_output, named) = dispatch_builtin(
             sym,
             &sym_input,
             &deps,
@@ -378,7 +378,17 @@ async fn execute_hook_inner(
         )
         .await
         {
-            Ok(final_output) => handler.respond(&final_output),
+            Ok(final_output) => {
+                let response = handler.respond(&final_output);
+                if receives(
+                    handler.as_ref(),
+                    &response,
+                    builtin_sym_output.additional_context(),
+                ) {
+                    remember_surfaced(sym, &deps, &named);
+                }
+                response
+            }
             Err(stderr) => blocked_response(handler.as_ref(), event, &stderr),
         };
         tracing::trace!(
@@ -391,6 +401,24 @@ async fn execute_hook_inner(
         // Agent doesn't support this event
         anyhow::bail!("agent {agent:?} does not support hook event {event:?}")
     }
+}
+
+fn receives(
+    handler: &dyn crate::hook_schema::ErasedAgentHookEvent,
+    response: &HookResponse,
+    context: Option<&str>,
+) -> bool {
+    let Some(context) = context else {
+        return false;
+    };
+    response.exit_code == 0
+        && handler.parse_output(&response.stdout).is_ok_and(|output| {
+            !output.blocks()
+                && output
+                    .to_symposium()
+                    .additional_context()
+                    .is_some_and(|received| received.contains(context))
+        })
 }
 
 /// The response for a plugin hook that exited 2, which the plugin contract
@@ -670,11 +698,12 @@ pub async fn dispatch_builtin(
     deps: &Arc<Workspace>,
     notify_about_possible_new_plugins: bool,
     plugin_reload_notice: Option<String>,
-) -> symposium::OutputEvent {
+) -> (symposium::OutputEvent, Vec<PackageId>) {
     match input {
-        symposium::InputEvent::PreToolUse(_) => {
-            symposium::OutputEvent::empty_for(HookEvent::PreToolUse)
-        }
+        symposium::InputEvent::PreToolUse(_) => (
+            symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
+            Vec::new(),
+        ),
         symposium::InputEvent::PostToolUse(_) => {
             mid_session_sync_notices(
                 sym,
@@ -698,7 +727,10 @@ pub async fn dispatch_builtin(
         symposium::InputEvent::SessionStart(session) => {
             handle_session_start(sym, session, deps, plugin_reload_notice).await
         }
-        _ => symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
+        _ => (
+            symposium::OutputEvent::empty_for(HookEvent::PreToolUse),
+            Vec::new(),
+        ),
     }
 }
 
@@ -710,22 +742,20 @@ async fn handle_session_start(
     _payload: &SessionStartInput,
     deps: &Arc<Workspace>,
     plugin_reload_notice: Option<String>,
-) -> OutputEvent {
-    let fragments = [
-        discovery_hint(sym, deps).await,
-        consent_hint(sym, deps).await,
-        update_nudge(sym),
-        plugin_reload_notice,
-    ]
-    .into_iter()
-    .flatten()
-    .collect::<Vec<String>>();
+) -> (OutputEvent, Vec<PackageId>) {
+    let discovery = discovery_hint(sym, deps).await;
+    let (consent, pending) = consent_hint(sym, deps).await;
+    let fragments = [discovery, consent, update_nudge(sym), plugin_reload_notice]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<String>>();
 
-    if fragments.is_empty() {
+    let output = if fragments.is_empty() {
         OutputEvent::empty_for(HookEvent::SessionStart)
     } else {
         OutputEvent::with_context(HookEvent::SessionStart, fragments.join("\n\n"))
-    }
+    };
+    (output, pending)
 }
 
 /// Suggest `cargo agents --help` when the active workspace exposes crate-aware plugin subcommands.
@@ -763,17 +793,24 @@ async fn discovery_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String
 }
 
 /// Surface dependency plugins awaiting consent. A hook runs on the agent's
-/// behalf, so it must never block on stdin — the candidates are reported as
+/// behalf, so it must never block on stdin: the candidates are reported as
 /// context, with a pointer at the interactive command that can actually ask.
 /// `None` when nothing is pending.
-async fn consent_hint(sym: &Symposium, deps: &Arc<Workspace>) -> Option<String> {
-    let names = crate::discovery::pending_candidates(sym, deps).await;
+async fn consent_hint(sym: &Symposium, deps: &Arc<Workspace>) -> (Option<String>, Vec<PackageId>) {
+    let pending = crate::discovery::pending_candidates(sym, deps).await;
+    (pending_notice(&pending), pending)
+}
+
+fn pending_notice(pending: &[PackageId]) -> Option<String> {
+    let mut names: Vec<&str> = pending.iter().map(|id| id.name.as_str()).collect();
+    names.sort();
+    names.dedup();
     if names.is_empty() {
         return None;
     }
     Some(format!(
         "These dependencies ship agent plugins that are not enabled yet: {}. \
-         They stay off until the user consents — tell the user to run \
+         They stay off until the user consents. Tell the user to run \
          `cargo agents sync` (which asks about each one) or \
          `cargo agents use <name>`. Do not enable them yourself.",
         names.join(", ")
@@ -807,20 +844,41 @@ async fn mid_session_sync_notices(
     event: HookEvent,
     notify_about_possible_new_plugins: bool,
     plugin_reload_notice: Option<String>,
-) -> symposium::OutputEvent {
-    let possible_new_plugins = if notify_about_possible_new_plugins {
-        consent_hint(sym, deps).await
+) -> (symposium::OutputEvent, Vec<PackageId>) {
+    let named = if notify_about_possible_new_plugins {
+        let pending = crate::discovery::pending_candidates(sym, deps).await;
+        unsurfaced(sym, deps, &pending)
     } else {
-        None
+        Vec::new()
     };
-    let fragments: Vec<String> = [possible_new_plugins, plugin_reload_notice]
+    let fragments: Vec<String> = [pending_notice(&named), plugin_reload_notice]
         .into_iter()
         .flatten()
         .collect();
     if fragments.is_empty() {
-        symposium::OutputEvent::empty_for(event)
+        (symposium::OutputEvent::empty_for(event), named)
     } else {
-        symposium::OutputEvent::with_context(event, fragments.join("\n\n"))
+        (
+            symposium::OutputEvent::with_context(event, fragments.join("\n\n")),
+            named,
+        )
+    }
+}
+
+fn unsurfaced(sym: &Symposium, deps: &Arc<Workspace>, pending: &[PackageId]) -> Vec<PackageId> {
+    let Some(start) = deps.start().filter(|_| !pending.is_empty()) else {
+        return pending.to_vec();
+    };
+    crate::workspace_state::WorkspaceState::load(sym, start).surface(pending)
+}
+
+fn remember_surfaced(sym: &Symposium, deps: &Arc<Workspace>, named: &[PackageId]) {
+    let Some(start) = deps.start().filter(|_| !named.is_empty()) else {
+        return;
+    };
+    let mut state = crate::workspace_state::WorkspaceState::load(sym, start);
+    if !state.surface(named).is_empty() {
+        state.save(sym, start);
     }
 }
 
@@ -1353,7 +1411,7 @@ mod tests {
             None,
             None,
         ));
-        let output = dispatch_builtin(&sym, &input, &deps, false, None).await;
+        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -1369,7 +1427,7 @@ mod tests {
             Some("test-session".to_string()),
             Some("/tmp".to_string()),
         ));
-        let output = dispatch_builtin(&sym, &input, &deps, false, None).await;
+        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None).await;
         assert!(output.additional_context().is_none());
     }
 
@@ -1383,7 +1441,7 @@ mod tests {
             Some("test-session".to_string()),
             Some("/tmp".to_string()),
         ));
-        let output = dispatch_builtin(&sym, &input, &deps, false, None).await;
+        let (output, _) = dispatch_builtin(&sym, &input, &deps, false, None).await;
         assert!(output.additional_context().is_none());
     }
 

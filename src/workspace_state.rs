@@ -8,7 +8,7 @@
 //! The directory name uses the directory's final component for readability
 //! and an 8-hex-char SHA-256 prefix of the full path for uniqueness.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -22,6 +22,8 @@ pub struct WorkspaceState {
     /// `None` until the first successful sync.
     #[serde(default, rename = "last-sync")]
     pub last_sync: Option<LastSync>,
+    #[serde(default)]
+    pub surfaced: BTreeSet<PackageId>,
 }
 
 /// What a sync found: the workspace and its dependencies, with each input's
@@ -72,6 +74,14 @@ impl WorkspaceState {
             };
             (info, last.deps.clone())
         })
+    }
+
+    pub fn surface(&mut self, pending: &[PackageId]) -> Vec<PackageId> {
+        pending
+            .iter()
+            .filter(|id| self.surfaced.insert((*id).clone()))
+            .cloned()
+            .collect()
     }
 
     /// Record a sync over `info` and `deps`.
