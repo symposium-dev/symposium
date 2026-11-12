@@ -183,6 +183,32 @@ async fn plugin_rewrite_reaches_agents_that_can_apply_it() {
     .unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn portable_output_that_is_not_canonical_is_ignored() {
+    with_fixture(
+        TestMode::SimulationOnly,
+        &["plugin-hook-decisions0"],
+        async |ctx| {
+            for agent in ALL_AGENTS {
+                let response = respond(&ctx, agent, tool_call("NullDecisionProbe")).await;
+                assert_eq!(response.exit_code, 0, "{agent:?} exit code");
+                let expected = match agent {
+                    HookAgent::Kiro => {
+                        assert!(response.stdout.is_empty(), "Kiro stdout");
+                        continue;
+                    }
+                    HookAgent::Antigravity => json!({"decision": "allow"}),
+                    _ => json!({}),
+                };
+                assert_eq!(stdout_json(&response), expected, "{agent:?} output");
+            }
+            Ok(())
+        },
+    )
+    .await
+    .unwrap();
+}
+
 /// Outside a tool call, exit 2 passes through with its reason, and each agent
 /// applies its own blocking semantics (Claude erases the prompt, for one).
 #[tokio::test(flavor = "multi_thread")]

@@ -276,6 +276,13 @@ mod tests {
             assert_eq!(output.additional_context(), Some("use the guide"));
         }
     }
+
+    #[test]
+    fn plain_text_on_other_events_is_not_output() {
+        assert!(ClaudePreToolUseOutput::parse_output(b"not json").is_err());
+        assert!(ClaudePostToolUseOutput::parse_output(b"not json").is_err());
+        assert!(ClaudeStopOutput::parse_output(b"not json").is_err());
+    }
 }
 
 // ── PostToolUse ───────────────────────────────────────────────────────
@@ -473,7 +480,7 @@ impl AgentHookInput for ClaudeUserPromptSubmitInput {
 
 impl AgentHookOutput for ClaudeUserPromptSubmitOutput {
     fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
-        if output.is_empty() {
+        if output.trim_ascii().is_empty() {
             return Ok(Self::default());
         }
         Ok(serde_json::from_slice(output).unwrap_or_else(|_| Self {
@@ -585,7 +592,7 @@ impl AgentHookInput for ClaudeSessionStartInput {
 
 impl AgentHookOutput for ClaudeSessionStartOutput {
     fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
-        if output.is_empty() {
+        if output.trim_ascii().is_empty() {
             return Ok(Self::default());
         }
         Ok(serde_json::from_slice(output).unwrap_or_else(|_| Self {

@@ -11,7 +11,7 @@ A plugin hook declares which wire format its handler expects:
 
 ## Dispatch rule
 
-When symposium's global handler receives an event from agent A, it loads all plugins and finds hooks matching the event. For each plugin, it picks one format and delivers to every matching hook of that format, in manifest order:
+When symposium's global handler receives an event from agent A, it loads all plugins and finds each plugin's candidate hooks: those whose event and `matcher` match, whose `agent`, if set, is A, and whose `predicates` hold. For each plugin, it picks one format and delivers to every candidate of that format, in manifest order:
 
 1. If the plugin declares hooks with `format` matching **agent A**, each receives the input unmodified (the handler already expects this agent's native format).
 2. Otherwise, if the plugin declares **symposium-format** hooks, each receives the input converted to symposium canonical.
@@ -39,8 +39,10 @@ A plugin with only `format = "claude"`:
 
 Symposium converts the hook's output back to the current agent's wire format before returning it to the agent:
 
-- Native format matching the host agent: pass through directly. A native Claude `SessionStart` or `UserPromptSubmit` hook may print plain text instead of JSON; Symposium adds it to the context, as Claude Code does.
+- Native format matching the host agent: pass through directly. A native Claude or Codex `SessionStart` or `UserPromptSubmit` hook may print plain text instead of JSON; Symposium adds it to the context, as those agents do.
 - Symposium format → convert to host agent's wire format.
+
+Stdout from a symposium-format hook that is not a canonical output, such as `null` or an object without the event tag, is ignored with a warning, like invalid JSON. Only translated output reaches the agent, so one plugin cannot replace or clear what the others returned.
 
 ## Time limits and cancellation
 

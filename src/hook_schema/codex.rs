@@ -394,10 +394,15 @@ impl AgentHookInput for CodexUserPromptSubmitInput {
 
 impl AgentHookOutput for CodexUserPromptSubmitOutput {
     fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
-        if output.is_empty() {
+        if output.trim_ascii().is_empty() {
             return Ok(Self::default());
         }
-        Ok(serde_json::from_slice(output)?)
+        Ok(serde_json::from_slice(output).unwrap_or_else(|_| {
+            Self::from_symposium(&symposium::OutputEvent::with_context(
+                super::HookEvent::UserPromptSubmit,
+                String::from_utf8_lossy(output).trim().to_string(),
+            ))
+        }))
     }
     fn from_symposium(event: &symposium::OutputEvent) -> Self {
         codex_hook_output_from_symposium("UserPromptSubmit", event)
@@ -543,10 +548,15 @@ impl AgentHookInput for CodexSessionStartInput {
 
 impl AgentHookOutput for CodexSessionStartOutput {
     fn parse_output(output: &[u8]) -> anyhow::Result<Self> {
-        if output.is_empty() {
+        if output.trim_ascii().is_empty() {
             return Ok(Self::default());
         }
-        Ok(serde_json::from_slice(output)?)
+        Ok(serde_json::from_slice(output).unwrap_or_else(|_| {
+            Self::from_symposium(&symposium::OutputEvent::with_context(
+                super::HookEvent::SessionStart,
+                String::from_utf8_lossy(output).trim().to_string(),
+            ))
+        }))
     }
     fn from_symposium(event: &symposium::OutputEvent) -> Self {
         codex_hook_output_from_symposium("SessionStart", event)
@@ -565,5 +575,44 @@ impl AgentHookOutput for CodexSessionStartOutput {
     }
     fn into_any(self: Box<Self>) -> Box<dyn std::any::Any> {
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_text_on_session_start_and_prompt_is_context() {
+        let session = CodexSessionStartOutput::parse_output(b"Project rule\n").unwrap();
+        assert_eq!(
+            session.to_symposium().additional_context(),
+            Some("Project rule")
+        );
+        assert_eq!(
+            session.to_hook_output(),
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "SessionStart",
+                    "additionalContext": "Project rule",
+                }
+            })
+        );
+        let prompt = CodexUserPromptSubmitOutput::parse_output(b"Project rule\n").unwrap();
+        assert_eq!(
+            prompt.to_hook_output(),
+            serde_json::json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "additionalContext": "Project rule",
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn plain_text_on_tool_events_is_not_output() {
+        assert!(CodexPreToolUseOutput::parse_output(b"not json").is_err());
+        assert!(CodexPostToolUseOutput::parse_output(b"not json").is_err());
     }
 }

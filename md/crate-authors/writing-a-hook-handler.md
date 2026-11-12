@@ -53,7 +53,7 @@ The `run()` function:
 1. Reads symposium canonical JSON from stdin.
 2. Deserializes it into an `Input` event.
 3. Calls `handler.handle_event()`, which dispatches to the appropriate method.
-4. Serializes the output to stdout.
+4. Serializes the output to stdout. Only the default (no-op) output writes nothing, so a `Decision::Deny` is written even without a reason.
 
 You only need to override the methods you care about — unimplemented methods return the default (empty) output for their event type.
 
