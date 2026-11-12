@@ -73,6 +73,13 @@ fn mark_generated_skill_directory(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The install directory name a skill falls back to when its plain name is
+/// unavailable: `<skill-name>-<origin-hash>`. The revocation cleanup rebuilds
+/// the same names, so both go through here.
+fn suffixed_skill_dir(skill_name: &str, origin_hash: &str) -> String {
+    format!("{skill_name}-{origin_hash}")
+}
+
 fn slot_taken(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
@@ -119,71 +126,34 @@ pub(crate) fn unfollowed_entries(root: &Path, package_root: Option<&Path>) -> Ve
 }
 
 fn walk_tree(root: &Path, package_root: Option<&Path>) -> Result<(Vec<TreeEntry>, Vec<String>)> {
-    let mut entries = Vec::new();
     let mut skipped = Vec::new();
-    let mut ancestors = dir_walk::Ancestors::rooted_at(root);
-    walk_tree_inner(
-        root,
-        root,
-        package_root,
-        &mut ancestors,
-        &mut entries,
-        &mut skipped,
-    )?;
-    entries.sort_by(|a, b| a.0.cmp(&b.0));
-    Ok((entries, skipped))
-}
-
-fn walk_tree_inner(
-    root: &Path,
-    dir: &Path,
-    package_root: Option<&Path>,
-    ancestors: &mut dir_walk::Ancestors,
-    entries: &mut Vec<TreeEntry>,
-    skipped: &mut Vec<String>,
-) -> Result<()> {
-    let read = match fs::read_dir(dir) {
-        Ok(read) => read,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e).with_context(|| format!("read {}", dir.display())),
-    };
-    for entry in read {
-        let entry = entry?;
-        let path = entry.path();
-        let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
-        let file_type = entry.file_type()?;
-        match dir_walk::resolved_kind(&path, file_type) {
-            Ok(Some(_))
-                if package_root
-                    .is_some_and(|package| !plugins::resolves_inside(package, &path)) =>
-            {
-                skipped.push(format!(
-                    "skipping {}: resolves outside the package",
-                    display_path(&path)
-                ));
-            }
-            Ok(Some(EntryKind::Dir)) => {
-                if !ancestors.enter(&path) {
-                    skipped.push(format!(
-                        "skipping {}: symlink re-enters a directory it is inside",
-                        display_path(&path)
-                    ));
-                    continue;
-                }
-                entries.push((rel, EntryKind::Dir));
-                walk_tree_inner(root, &path, package_root, ancestors, entries, skipped)?;
-                ancestors.leave();
-            }
-            Ok(Some(EntryKind::File)) => entries.push((rel, EntryKind::File)),
-            // A socket or a fifo. Never skill content, so never worth a word.
-            Ok(None) => {}
-            Err(e) => skipped.push(format!(
-                "skipping {}: broken symlink ({e})",
-                display_path(&path)
-            )),
+    let tree = dir_walk::walk_where(root, &mut |path| {
+        let outside = package_root.is_some_and(|package| !plugins::resolves_inside(package, path));
+        if outside {
+            skipped.push(format!(
+                "skipping {}: resolves outside the package",
+                display_path(path)
+            ));
         }
-    }
-    Ok(())
+        !outside
+    })?;
+    skipped.extend(
+        tree.refused
+            .into_iter()
+            .filter_map(|refused| match refused {
+                dir_walk::Refused::Loop(rel) => Some(format!(
+                    "skipping {}: symlink re-enters a directory it is inside",
+                    display_path(&root.join(rel))
+                )),
+                dir_walk::Refused::BrokenLink(rel, e) => Some(format!(
+                    "skipping {}: broken symlink ({e})",
+                    display_path(&root.join(rel))
+                )),
+                // A socket or a fifo. Never skill content, so never worth a word.
+                dir_walk::Refused::Special(_) => None,
+            }),
+    );
+    Ok((tree.entries, skipped))
 }
 
 /// Recursively copy the contents of `src` into `dst`. Creates `dst` if
@@ -551,7 +521,7 @@ pub async fn sync(
     // reached through `[[plugins]]` chained references and dependency
     // enablement. Every facet resolves over this one set, so a crate plugin's
     // skills and MCP servers install exactly like a registry plugin's.
-    let active = plugins::active_plugins(
+    let plugins::ActivePlugins { active, revoked } = plugins::resolve_active_plugins(
         sym,
         &registry,
         pms,
@@ -563,6 +533,16 @@ pub async fn sync(
 
     // Find all applicable skills.
     let applicable = skills::collect_skills(sym, &active, &mut ctx, update).await;
+
+    // The install directory names (plain and suffixed) of the skills a revoked
+    // package would install. A revocation overrides the cleanup safety net
+    // below: these come off even when cleanup is otherwise skipped. The
+    // listing runs nothing from the revoked package: none of its predicates
+    // is evaluated, and a `source.git` group is read from the git cache only.
+    let revoked_dirs: BTreeSet<String> = skills::skills_on_disk(sym, &revoked)
+        .into_iter()
+        .flat_map(|(name, origin_hash)| [suffixed_skill_dir(&name, &origin_hash), name])
+        .collect();
 
     // Dedup by `(skill_name, origin_hash)`: two crate origins with the same
     // (name, version, skill-path-within-crate) collapse (the same skill bytes
@@ -640,6 +620,21 @@ pub async fn sync(
 
     let mut warned = BTreeSet::new();
     let plugins_root = sym.config_dir().join(INSTALLED_PLUGINS_SUBDIR);
+    // A revoked package's staged plugin comes off first, so the hold-back
+    // below cannot hand it to the agents again.
+    if skip_cleanup && !revoked.is_empty() {
+        let revoked_plugins: BTreeSet<String> = revoked
+            .iter()
+            .filter_map(|p| compile::normalize_name(&p.manifest.name))
+            .collect();
+        for root in [&plugins_root, &compile::project_plugins_root(&project_root)] {
+            reap_unlisted(root, |dir| {
+                !dir.file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| revoked_plugins.contains(name))
+            });
+        }
+    }
     let compiled = compile::compile(&plugins_root, &global, debounce, &mut warned, skip_cleanup);
     crate::agents::sync_marketplace_index(sym, &compiled.plugins);
     let project_compiled =
@@ -800,7 +795,7 @@ pub async fn sync(
             let dir_name = if unique_name && plain_available {
                 skill_name.clone()
             } else {
-                format!("{skill_name}-{}", origin_hash)
+                suffixed_skill_dir(skill_name, origin_hash)
             };
             let dest_dir = agent.project_skill_dir(&project_root, &dir_name);
 
@@ -847,6 +842,30 @@ pub async fn sync(
         }
     }
 
+    // A revoked package's MCP servers come off wherever Symposium registered
+    // them: every agent, every file in the ledger (user scope included, the
+    // default), even while the cleanup below is held back. The names come
+    // from its manifest, with no predicate evaluated; a name an active plugin
+    // still declares stays, since the entry may now be that plugin's.
+    let still_declared: BTreeSet<&str> = active
+        .iter()
+        .flat_map(|p| p.manifest.mcp_servers.iter())
+        .map(|s| crate::agents::mcp_server_name(&s.server))
+        .collect();
+    let revoked_mcp: BTreeSet<&str> = revoked
+        .iter()
+        .flat_map(|p| p.manifest.mcp_servers.iter())
+        .map(|s| crate::agents::mcp_server_name(&s.server))
+        .filter(|name| !still_declared.contains(name))
+        .collect();
+    if !revoked_mcp.is_empty() {
+        unregister_recorded_mcp_servers(
+            sym,
+            |_, registration| revoked_mcp.contains(registration.name.as_str()),
+            out,
+        );
+    }
+
     // Stale-skill cleanup: scan every agent's skills parent directory (across
     // all known agents, so we also clean up after agents removed from config)
     // and remove subdirs containing the marker that we didn't just install.
@@ -861,11 +880,22 @@ pub async fn sync(
         let Ok(parent) = skills_parent_dir(agent, &project_root).canonicalize() else {
             continue;
         };
-        if skip_cleanup || !scanned.insert(parent.clone()) {
+        if (skip_cleanup && revoked_dirs.is_empty()) || !scanned.insert(parent.clone()) {
             continue;
         }
+        // While cleanup is skipped, only directories named like a revoked
+        // package's skills are removed. A plain-named directory belonging
+        // to another, currently unreadable origin can be removed too; its
+        // source is untouched, so the next sync that can read it
+        // reinstalls it.
         reap_unlisted(&parent, |dir| {
-            installed.contains(dir) || compile::is_plugin_dir(dir)
+            installed.contains(dir)
+                || compile::is_plugin_dir(dir)
+                || (skip_cleanup
+                    && !dir
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| revoked_dirs.contains(name)))
         });
     }
     for name in &registry.unreadable_registries {

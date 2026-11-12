@@ -366,11 +366,20 @@ fn absolute(instance: &str, id: &PackageId, dir: &std::path::Path) -> bool {
 /// by their `pm` component ([`PackageId::pm`]) to the instance that owns them.
 pub struct PmRegistry {
     instances: Vec<PmInstance>,
+    /// The payload digests computed through this set, so one invocation
+    /// hashes each loaded payload once however many routes look it up. The
+    /// package managers never read it: it belongs to the [audits](crate::audits)
+    /// reader, and lives here because this is the per-invocation value every
+    /// lookup is handed.
+    pub(crate) payload_digests: crate::audits::DigestMemo,
 }
 
 impl PmRegistry {
     pub fn new(instances: Vec<PmInstance>) -> Self {
-        Self { instances }
+        Self {
+            instances,
+            payload_digests: Default::default(),
+        }
     }
 
     /// Every instance, in order (cargo transport first, then registries).

@@ -851,6 +851,10 @@ pub async fn ensure_registries(sym: &Symposium, update: UpdateLevel) {
             tracing::warn!(registry = %inst.name, error = %e, "failed to refresh registry");
         }
     }
+    // The audits list is no registry, but it is refreshed alongside them.
+    if let Err(e) = crate::audits::refresh_audits(sym, update).await {
+        tracing::warn!(error = %e, "failed to refresh the audits list");
+    }
 }
 
 /// Refresh registry content.
@@ -880,6 +884,20 @@ pub async fn sync_registries(sym: &Symposium, provider: Option<&str>) -> Result<
             }
             Ok(false) => {}
             Err(e) => tracing::warn!(registry = %inst.name, error = %e, "failed to sync"),
+        }
+    }
+
+    // The audits list is no registry, but `plugin sync` refreshes it too, by
+    // its name or with everything else.
+    let audits = crate::config::BUILTIN_AUDITS_LIST;
+    if provider.is_none_or(|name| name == audits) {
+        match crate::audits::refresh_audits(sym, UpdateLevel::Fetch).await {
+            Ok(true) => {
+                tracing::info!(list = audits, "synced");
+                synced.push(audits.to_string());
+            }
+            Ok(false) => {}
+            Err(e) => tracing::warn!(list = audits, error = %e, "failed to sync"),
         }
     }
 
@@ -1289,7 +1307,31 @@ pub async fn active_plugins(
     ctx: &mut crate::predicate::PredicateContext<'_>,
     update: UpdateLevel,
 ) -> Vec<Plugin> {
+    resolve_active_plugins(sym, registry, pms, workspace_root, ctx, update)
+        .await
+        .active
+}
+
+/// What [`resolve_active_plugins`] found: the active set, and the packages
+/// withheld from it because the audits list revoked them.
+pub struct ActivePlugins {
+    pub active: Vec<Plugin>,
+    /// Never active. Sync reads them to retire what they installed before the
+    /// revocation landed.
+    pub revoked: Vec<Plugin>,
+}
+
+/// [`active_plugins`], also returning the revoked packages it withheld.
+pub async fn resolve_active_plugins(
+    sym: &Symposium,
+    registry: &PluginRegistry,
+    pms: &crate::pm::PmRegistry,
+    workspace_root: Option<&Path>,
+    ctx: &mut crate::predicate::PredicateContext<'_>,
+    update: UpdateLevel,
+) -> ActivePlugins {
     let mut active = Vec::new();
+    let mut revoked = Vec::new();
     // Crate identities already loaded through the set, keyed on `(pm, name)` so
     // a crate reached through two chains — or a chain and dependency enablement —
     // loads once (its hooks don't double-fire, its subcommands aren't a false
@@ -1321,18 +1363,53 @@ pub async fn active_plugins(
     }
 
     // Fixed-point: resolve each id through the set, record any new plugin, and
-    // enqueue its own chained references.
+    // enqueue its own chained references. Every package reaches the active set
+    // through here, whether a chained reference, `auto-enable` or `use` named
+    // it, so this is the one place a revocation is enforced.
+    let audits = crate::audits::AuditIndex::configured(sym);
     while let Some(id) = worklist.pop() {
         for plugin in pms.load_plugin(&id, update).await {
             if let Ok(identity) = pms.identity(&plugin.canonical).await
                 && visited.insert(identity)
             {
-                record_active(plugin, ctx, &mut active, &mut worklist);
+                if withheld(pms, &audits, &plugin).await {
+                    revoked.push(plugin);
+                } else {
+                    record_active(plugin, ctx, &mut active, &mut worklist);
+                }
             }
         }
     }
 
-    active
+    ActivePlugins { active, revoked }
+}
+
+/// Whether the audits list revokes `plugin`, a package the package managers
+/// loaded. A revoked plugin never runs, whatever `use` or `auto-enable` say,
+/// and its own chained references are not followed. The
+/// trust-root plugins (registry and workspace) never come through here: a
+/// revocation has nothing to say about what the user put there.
+///
+/// Reports and logs at debug level, never prints: this runs on the hook path,
+/// where stdout is the agent's, and on every resolution, so a louder log would
+/// repeat on every tool call. The report event is what `cargo agents sync -v`
+/// shows for it.
+async fn withheld(
+    pms: &crate::pm::PmRegistry,
+    audits: &crate::audits::AuditIndex,
+    plugin: &Plugin,
+) -> bool {
+    let Some(revocation) = audits.revocation(pms, &plugin.canonical).await else {
+        return false;
+    };
+    tracing::debug!(
+        report = %crate::report::ReportEvent::PluginConsidered {
+            plugin: plugin.manifest.name.clone(),
+            matched: false,
+            reason: Some(revocation.to_string()),
+        },
+    );
+    true
 }
 
 /// Gate `plugin` and, if it passes, record it into `active` and enqueue its
@@ -1858,6 +1935,23 @@ fn agents_skills_group() -> RawSkillGroup {
         source.path = ".agents/skills"
     "#})
     .expect("static default group")
+}
+
+/// The validated manifest of a crate's plugin, from its manifest sources: what
+/// [`validate_plugin`] makes of the cargo PM's merge under
+/// [`PluginKind::Package`], minus resolving paths against a root. For callers
+/// that need to know what a crate's manifest *says* (its skill groups, with
+/// the default `skills/` group appended) without a package manager, such as
+/// the [payload digest](crate::audits::digest).
+pub(crate) fn package_manifest(
+    metadata: Option<toml::Table>,
+    file: Option<&str>,
+    crate_name: &str,
+) -> Result<PluginManifest> {
+    validate_manifest(
+        symposium_pm_cargo::manifest::merge(metadata, file, crate_name),
+        ManifestOrigin::Crate { crate_name },
+    )
 }
 
 /// Convert a raw manifest into a validated `PluginManifest`.

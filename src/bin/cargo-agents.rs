@@ -132,10 +132,12 @@ async fn main() -> ExitCode {
     plugins::ensure_registries(&sym, source_update).await;
 
     // Auto-update = "on": check for updates and re-exec if a new binary was
-    // installed.  Skipped for self-update (which always checks explicitly)
-    // and for hooks (session-start injects the warn nudge into hook output;
-    // the "on" re-exec for hooks is handled here).
-    if !matches!(cli.command, Some(Commands::SelfUpdate)) && !is_hook {
+    // installed.  Skipped for self-update (which always checks explicitly),
+    // for `plugin digest` (its stdout is its result, read by tooling), and
+    // for hooks (session-start injects the warn nudge into hook output; the
+    // "on" re-exec for hooks is handled here).
+    let checks = cli.command.as_ref().is_none_or(self_update::checks_before);
+    if checks && !is_hook {
         if self_update::maybe_check_for_update(&sym, &out).await {
             self_update::re_exec();
         }
@@ -230,6 +232,16 @@ async fn handle_plugin_command(sym: &config::Symposium, command: PluginCommand) 
                 );
             }
             ExitCode::SUCCESS
+        }
+        PluginCommand::Digest { target } => {
+            let cwd = env::current_dir().expect("failed to get current directory");
+            match symposium::audits::digest_command::run(sym, &cwd, &target).await {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("Error: {e:#}");
+                    ExitCode::FAILURE
+                }
+            }
         }
         PluginCommand::Validate {
             path,

@@ -120,6 +120,7 @@ pub async fn workspace_status(
         .chain(&discovery.auto_enabled)
         .chain(&discovery.candidates)
         .chain(&discovery.declined)
+        .chain(&discovery.revoked)
     {
         entries.push(entry_for(found));
     }
@@ -137,6 +138,7 @@ pub async fn workspace_status(
             .chain(&discovery.auto_enabled)
             .chain(&discovery.candidates)
             .chain(&discovery.declined)
+            .chain(&discovery.revoked)
             .map(|d| &d.id),
     ) {
         if let Ok(id) = pms.identity(id).await {
@@ -248,13 +250,15 @@ pub async fn workspace_status(
 
 /// Render one discovered dependency plugin as a status line.
 fn entry_for(found: &DiscoveredPlugin) -> StatusEntry {
-    let (state, root) = match found.enablement {
+    let (state, root) = match &found.enablement {
         Enablement::Used => (StatusState::Active, "`[plugins] use`".to_string()),
         Enablement::AutoEnabled => (StatusState::Active, "`[plugins] auto-enable`".to_string()),
         Enablement::Declined => (
             StatusState::Declined,
             "declined (`[plugins] disable`)".to_string(),
         ),
+        // Not loaded, like a declined one; the root says who revoked it and why.
+        Enablement::Revoked(revocation) => (StatusState::Declined, revocation.to_string()),
         Enablement::Candidate => (
             StatusState::Candidate,
             format!(

@@ -54,6 +54,7 @@
     - [Goose](./reference/agents/goose.md)
   - [Configuration](./reference/configuration.md)
   - [Plugin sources](./reference/plugin-source.md)
+  - [Audits file](./reference/audits.md)
   - [Plugin definition](./reference/plugin-definition.md)
   - [Agent Plugins packages](./reference/agent-plugins.md)
   - [Symposium hook events](./reference/hook-events.md)

@@ -195,6 +195,13 @@ pub enum PluginCommand {
         plugin: String,
     },
 
+    /// Print the payload digest an audits file matches a crate on
+    Digest {
+        /// A crate's source directory, or a crate name, optionally
+        /// `name@version` for one exact release
+        target: String,
+    },
+
     /// Validate a plugin source directory or a single TOML manifest
     Validate {
         /// Path to a directory or a single .toml file
@@ -239,11 +246,11 @@ pub async fn run(
     out: &Output,
     update: symposium_install::UpdateLevel,
 ) -> Result<()> {
-    // Periodic update check (skipped for self-update, which always checks).
-    // In the binary, re-exec happens if auto-update = "on" succeeds.
-    // Here in the library we just run the warn check; the binary wraps
-    // this with re-exec logic.
-    if !matches!(cmd, Commands::SelfUpdate) {
+    // Periodic update check (skipped for self-update, which always checks,
+    // and for `plugin digest`, whose stdout is its result). In the binary,
+    // re-exec happens if auto-update = "on" succeeds. Here in the library we
+    // just run the warn check; the binary wraps this with re-exec logic.
+    if self_update::checks_before(&cmd) {
         self_update::maybe_warn_for_update(sym, out);
     }
 
@@ -363,6 +370,11 @@ pub async fn run(
                 try_command::try_plugin(sym, cwd, &path, update).await
             }
         }
+        // `plugin digest` is library code (it only reports), so the test
+        // harness exercises the same path as the binary.
+        Commands::Plugin {
+            command: PluginCommand::Digest { target },
+        } => crate::audits::digest_command::run(sym, cwd, &target).await,
 
         // These commands can't easily be extracted since they do I/O
         // (stdin/stdout for hooks). The binary handles them directly.

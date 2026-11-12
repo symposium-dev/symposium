@@ -60,6 +60,13 @@ When a registry plugin and a crate share the name, the registry plugin wins.
 Otherwise the command fails with `no package named <NAME>` and writes nothing.
 Use [`cargo agents search`](./cargo-agents-search.md) to find the right name.
 
+A crate the [audits list](./audits.md#revocations) revokes cannot be enabled:
+`use` fails with the revocation and its reason (for example ``revoked by the
+`symposium-audits` list: it tells the agent to fetch and run remote code``) and
+writes nothing, since a revocation outranks every `use` entry. The check is
+made against the release that would load. A name in `[plugins] disable` is
+refused the same way.
+
 ### `--remove`
 
 Removes the entry in the matching scope: without `--global` the entry recorded

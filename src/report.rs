@@ -24,6 +24,17 @@ pub enum ReportMode {
     Json,
 }
 
+/// The outcome of `cargo agents plugin digest`: a digest, or the reason the
+/// payload has none. Exactly one, by construction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DigestOutcome {
+    /// The payload digest (`sha256:<hex>` in JSON).
+    Digest(symposium_sdk::audits::Digest),
+    /// Why there is no digest.
+    Ineligible(String),
+}
+
 /// A structured event emitted during command execution.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -171,6 +182,19 @@ pub enum ReportEvent {
         format: Option<String>,
     },
 
+    /// The result of `cargo agents plugin digest`.
+    PayloadDigest {
+        /// What was asked about: a directory or a crate name.
+        target: String,
+        /// The crate and version, when the target was a crate.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        krate: Option<String>,
+        /// Either the payload digest or why there is none. Flattened, so the
+        /// JSON keys are `digest` or `ineligible`.
+        #[serde(flatten)]
+        outcome: DigestOutcome,
+    },
+
     /// A provider was listed with its plugins.
     ProviderListed {
         name: String,
@@ -190,6 +214,20 @@ impl std::fmt::Display for ReportEvent {
 }
 
 impl ReportEvent {
+    /// Whether the human form goes to stderr even in normal mode: output a
+    /// script must not capture as a result. `plugin digest` prints a bare
+    /// digest on stdout so `$(cargo agents plugin digest ..)` works, so its
+    /// "no digest" explanation must not land there in the digest's place.
+    fn human_to_stderr(&self) -> bool {
+        matches!(
+            self,
+            Self::PayloadDigest {
+                outcome: DigestOutcome::Ineligible(_),
+                ..
+            }
+        )
+    }
+
     fn format_human(&self) -> String {
         match self {
             Self::PluginConsidered {
@@ -361,6 +399,17 @@ impl ReportEvent {
                 )
             }
             Self::PluginTrialRemoved { name } => format!("stopped trying {name}"),
+            // A bare digest on success, so `$(cargo agents plugin digest ..)`
+            // is usable in scripts. The failure goes to stderr
+            // (`human_to_stderr`).
+            Self::PayloadDigest {
+                target, outcome, ..
+            } => match outcome {
+                DigestOutcome::Digest(digest) => digest.to_string(),
+                DigestOutcome::Ineligible(why) => {
+                    format!("no payload digest for {target}: {why}")
+                }
+            },
             Self::PluginStatus {
                 name,
                 version,
@@ -491,7 +540,11 @@ where
         match self.mode {
             ReportMode::Normal => {
                 if let Ok(evt) = serde_json::from_str::<ReportEvent>(&json_str) {
-                    println!("{}", evt.format_human());
+                    if evt.human_to_stderr() {
+                        eprintln!("{}", evt.format_human());
+                    } else {
+                        println!("{}", evt.format_human());
+                    }
                 }
             }
             ReportMode::Verbose => {
@@ -505,5 +558,24 @@ where
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Only a digest goes to stdout from `plugin digest`; the reason there is
+    /// none goes to stderr, so a script capturing stdout gets nothing.
+    #[test]
+    fn only_the_digest_itself_goes_to_stdout() {
+        let event = |outcome| ReportEvent::PayloadDigest {
+            target: "x".into(),
+            krate: None,
+            outcome,
+        };
+        let digest = symposium_sdk::audits::Digest::from_bytes([0; 32]);
+        assert!(!event(DigestOutcome::Digest(digest)).human_to_stderr());
+        assert!(event(DigestOutcome::Ineligible("why".into())).human_to_stderr());
     }
 }

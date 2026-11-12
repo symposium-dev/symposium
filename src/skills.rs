@@ -180,6 +180,36 @@ pub(crate) async fn collect_skills(
     results
 }
 
+/// Every skill `plugins` could have installed, as `(name, origin hash)`,
+/// found without running anything the plugins carry.
+///
+/// This is for plugins that must not run, such as a revoked crate whose
+/// installs sync retires. No predicate is evaluated at any level (a `shell`
+/// or custom predicate would run the plugin's code), and a `source.git` group
+/// is read only from the git cache, never fetched: one not cached contributes
+/// nothing. A skill that does not load is skipped silently.
+pub(crate) fn skills_on_disk(sym: &Symposium, plugins: &[Plugin]) -> Vec<(String, String)> {
+    let git_cache = symposium_install::git::GitCacheManager::new(&sym.install_context(), "plugins");
+    let mut out = Vec::new();
+    for plugin in plugins {
+        for group in &plugin.manifest.skills {
+            let dir = match &group.source {
+                PluginSource::Path(dir) => Some(dir.clone()),
+                PluginSource::Git(url) => git_cache.cache_path_for_url(url),
+            };
+            let Some(dir) = dir else { continue };
+            for skill in discover_skills(&dir, group.workspace_member, &group.predicates)
+                .into_iter()
+                .flatten()
+            {
+                let origin_hash = skill_origin_hash(&skill.path);
+                out.push((skill.name().to_string(), origin_hash));
+            }
+        }
+    }
+    out
+}
+
 /// Discover and load skills for a group, applying pre-fetch filtering.
 ///
 /// Checks group-level `depends-on` predicates against `for_crates` before
