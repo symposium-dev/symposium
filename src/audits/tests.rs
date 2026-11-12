@@ -1,6 +1,9 @@
 use super::*;
 
-use symposium_sdk::pm::{FetchedPackage, PackageManager};
+use symposium_sdk::pm::{
+    FetchedPackage, PackageKey, PackageLoadTarget, PackageManager, PackageResolution,
+    PackageSourceClaim, PluginListing,
+};
 
 use crate::pm::{PluginKind, PmInstance};
 
@@ -297,10 +300,10 @@ impl PackageManager for OnePackage {
 
     async fn load_plugin(
         &self,
-        _id: &PackageId,
+        _target: &PackageLoadTarget,
         _update: UpdateLevel,
-    ) -> anyhow::Result<Vec<symposium_sdk::pm::UnvalidatedPlugin>> {
-        Ok(Vec::new())
+    ) -> anyhow::Result<PluginListing> {
+        Ok(PluginListing::complete(Vec::new()))
     }
 
     async fn fetch(&self, id: &PackageId, _update: UpdateLevel) -> anyhow::Result<FetchedPackage> {
@@ -314,7 +317,11 @@ impl PackageManager for OnePackage {
             None => id.version.strip_prefix('=').unwrap_or(&id.version),
         };
         Ok(FetchedPackage {
-            id: PackageId::new(&id.pm, &id.name, version),
+            package: PackageResolution::new(
+                PackageId::new(&id.pm, &id.name, version),
+                PackageSourceClaim::Unknown,
+                PackageKey::new(format!("{}:{}:{version}", id.pm, id.name)).unwrap(),
+            ),
             root: root.clone(),
         })
     }

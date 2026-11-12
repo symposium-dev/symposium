@@ -66,18 +66,19 @@ async fn resolve(sym: &Symposium, cwd: &Path, target: &str) -> Result<ResolvedCr
     };
     let version = semver::Version::parse(version)
         .with_context(|| format!("failed to read the version in `{target}`"))?;
+    let version_string = version.to_string();
     let normalized = normalize_crate_name(name);
     let deps = sym.workspace_deps(cwd);
     if let Some((krate, dir)) = deps
         .member_crates()
         .iter()
         .chain(deps.crates())
-        .filter(|c| normalize_crate_name(&c.name) == normalized && c.version == version)
+        .filter(|c| normalize_crate_name(c.name()) == normalized && c.version() == version_string)
         .find_map(|c| Some((c, c.path.as_ref().or(c.source_dir.as_ref())?)))
     {
         return Ok(ResolvedCrate {
-            name: krate.name.clone(),
-            version: krate.version.to_string(),
+            name: krate.name().to_owned(),
+            version: krate.version().to_string(),
             root: dir.clone(),
         });
     }

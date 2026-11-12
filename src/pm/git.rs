@@ -12,8 +12,8 @@ use symposium_install::UpdateLevel;
 use symposium_install::git::GitCacheManager;
 
 use super::{
-    FetchedPackage, PackageId, PackageManager, PathPm, PluginInfo, PluginListing, RegistrySource,
-    UnvalidatedPlugin,
+    FetchedPackage, PackageId, PackageLoadTarget, PackageManager, PackageResolution,
+    PackageSourceClaim, PathPm, PluginInfo, PluginListing, RegistrySource,
 };
 use crate::config::REGISTRY_CACHE_SUBDIR;
 
@@ -56,6 +56,18 @@ impl GitPm {
             url: self.git_url.clone(),
         }
     }
+
+    fn restamp(&self, resolution: PackageResolution) -> PackageResolution {
+        let (id, _, key) = resolution.into_parts();
+        PackageResolution::new(id, PackageSourceClaim::Git, key)
+    }
+
+    fn restamp_listing(&self, mut listing: PluginListing) -> PluginListing {
+        for plugin in &mut listing.plugins {
+            plugin.package = self.restamp(plugin.package.clone());
+        }
+        listing
+    }
 }
 
 #[async_trait::async_trait]
@@ -66,22 +78,22 @@ impl PackageManager for GitPm {
 
     /// The registry's entries, once it has been fetched; until then it cannot
     /// say what it offers, which is not the same as offering nothing.
-    async fn active_plugins(&self, deps: &[PackageId]) -> Result<PluginListing> {
+    async fn active_plugins(&self, deps: &[PackageResolution]) -> Result<PluginListing> {
         let name = &self.name;
         if !self.inner.dir.exists() {
             anyhow::bail!(
                 "registry `{name}` has not been fetched yet; run `cargo agents plugin sync {name}`"
             );
         }
-        self.inner.active_plugins(deps).await
+        Ok(self.restamp_listing(self.inner.active_plugins(deps).await?))
     }
 
     async fn load_plugin(
         &self,
-        id: &PackageId,
+        target: &PackageLoadTarget,
         update: UpdateLevel,
-    ) -> Result<Vec<UnvalidatedPlugin>> {
-        self.inner.load_plugin(id, update).await
+    ) -> Result<PluginListing> {
+        Ok(self.restamp_listing(self.inner.load_plugin(target, update).await?))
     }
 
     async fn search(&self, query: &str) -> Result<Vec<PluginInfo>> {
@@ -89,7 +101,9 @@ impl PackageManager for GitPm {
     }
 
     async fn fetch(&self, id: &PackageId, update: UpdateLevel) -> Result<FetchedPackage> {
-        self.inner.fetch(id, update).await
+        let mut fetched = self.inner.fetch(id, update).await?;
+        fetched.package = self.restamp(fetched.package);
+        Ok(fetched)
     }
 
     /// Pull the repository at `update`.

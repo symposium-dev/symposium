@@ -263,13 +263,13 @@ async fn loaded_digest(pms: &PmRegistry, id: &PackageId) -> Option<Result<Digest
         .fetch(&PackageId::any_version(&id.pm, &id.name), UpdateLevel::None)
         .await
     {
-        Ok(fetched) if fetched.id.version == id.version => Ok(fetched),
+        Ok(fetched) if fetched.id().version == id.version => Ok(fetched),
         _ => pms.fetch(&exact_release(id), UpdateLevel::None).await,
     };
     let fetched = match fetched {
-        Ok(fetched) if fetched.id.version == id.version => fetched,
+        Ok(fetched) if fetched.id().version == id.version => fetched,
         Ok(fetched) => {
-            tracing::debug!(id = %id, served = %fetched.id, "no payload of this release to digest");
+            tracing::debug!(id = %id, served = %fetched.id(), "no payload of this release to digest");
             return None;
         }
         Err(e) => {
@@ -277,7 +277,7 @@ async fn loaded_digest(pms: &PmRegistry, id: &PackageId) -> Option<Result<Digest
             return None;
         }
     };
-    let digest = pms.payload_digests.digest(&fetched.id, &fetched.root);
+    let digest = pms.payload_digests.digest(fetched.id(), &fetched.root);
     if let Err(why) = &digest {
         tracing::debug!(id = %id, %why, "no payload digest; digest entries cannot match");
     }

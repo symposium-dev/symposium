@@ -13,14 +13,16 @@
 //! `symposium-pm-cargo` binary, which is
 //! [`run`](symposium_sdk::pm::server::run) over this same type.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use symposium_sdk::pm::protocol::InitializeParams;
 use symposium_sdk::pm::{
-    ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageManager, PluginInfo, PluginListing,
-    ProjectInfo, UnvalidatedPlugin, UpdateLevel,
+    ANY_VERSION, CARGO_PM, FetchedPackage, PackageId, PackageKey, PackageLoadTarget,
+    PackageManager, PackageResolution, PluginInfo, PluginListing, ProjectInfo, UnvalidatedPlugin,
+    UpdateLevel,
 };
 
 use crate::sources::RustCrateFetch;
@@ -67,12 +69,16 @@ const SEARCH_PAGE_SIZE: u64 = 10;
 /// cached `cargo metadata`.
 pub struct CargoPm {
     workspace: Arc<WorkspaceDeps>,
+    resolved: Mutex<HashMap<PackageKey, FetchedPackage>>,
 }
 
 impl CargoPm {
     /// A transport resolving against `workspace`.
     pub fn new(workspace: Arc<WorkspaceDeps>) -> Self {
-        Self { workspace }
+        Self {
+            workspace,
+            resolved: Mutex::new(HashMap::new()),
+        }
     }
 
     /// A transport resolving the workspace containing `cwd`.
@@ -103,7 +109,7 @@ impl CargoPm {
     /// manifest, which validation turns into a plugin whose only content is the
     /// default `skills/` group.
     pub fn plugin_from_fetched(fetched: FetchedPackage) -> UnvalidatedPlugin {
-        let name = &fetched.id.name;
+        let name = &fetched.id().name;
         let metadata = crate::metadata::symposium_metadata(&fetched.root.join("Cargo.toml"))
             .unwrap_or_else(|e| {
                 tracing::warn!(
@@ -141,7 +147,7 @@ impl CargoPm {
             return UnvalidatedPlugin {
                 agent_plugin: true,
                 ..UnvalidatedPlugin::new(
-                    fetched.id,
+                    fetched.package,
                     fetched.root,
                     symposium_sdk::manifest::RawPluginManifest::default(),
                 )
@@ -149,7 +155,52 @@ impl CargoPm {
         }
 
         let manifest = manifest::merge(metadata, file.as_deref(), name);
-        UnvalidatedPlugin::new(fetched.id, fetched.root, manifest)
+        UnvalidatedPlugin::new(fetched.package, fetched.root, manifest)
+    }
+
+    fn remember(&self, fetched: FetchedPackage) -> Result<FetchedPackage> {
+        let mut resolved = self.resolved.lock().unwrap();
+        if let Some(previous) = resolved.get(fetched.package.key()) {
+            anyhow::ensure!(
+                previous.package == fetched.package && previous.root == fetched.root,
+                "cargo reused one package key for conflicting resolutions"
+            );
+            return Ok(previous.clone());
+        }
+        resolved.insert(fetched.package.key().clone(), fetched.clone());
+        Ok(fetched)
+    }
+
+    fn resolved(&self, key: &PackageKey) -> Result<FetchedPackage> {
+        if let Some(fetched) = self.resolved.lock().unwrap().get(key).cloned() {
+            return Ok(fetched);
+        }
+        let package = self
+            .workspace
+            .crates()
+            .iter()
+            .chain(self.workspace.member_crates())
+            .find(|package| package.package.key() == key)
+            .context("cargo does not know this package key in the current session")?;
+        let root = package
+            .source_dir
+            .clone()
+            .context("cargo has no source directory for this resolved package")?;
+        self.remember(FetchedPackage {
+            package: package.package.clone(),
+            root,
+        })
+    }
+
+    async fn load_target(
+        &self,
+        target: &PackageLoadTarget,
+        update: UpdateLevel,
+    ) -> Result<FetchedPackage> {
+        match target {
+            PackageLoadTarget::Coordinate { id } => self.fetch(id, update).await,
+            PackageLoadTarget::Resolved { key } => self.resolved(key),
+        }
     }
 }
 
@@ -227,19 +278,14 @@ impl PackageManager for CargoPm {
     /// source `cargo metadata` already extracted — no probe, no network — so
     /// registry dependencies are surfaced exactly like path ones. A dependency
     /// whose source can't be served from cache is skipped.
-    async fn active_plugins(&self, deps: &[PackageId]) -> Result<PluginListing> {
+    async fn active_plugins(&self, deps: &[PackageResolution]) -> Result<PluginListing> {
         let mut out = Vec::new();
-        for id in deps.iter().filter(|id| id.pm == CARGO_PM) {
-            // Fetch by name only: the concrete version in `id` would make
-            // `fetch` treat it as an explicit `--version` and probe, bypassing
-            // the workspace-source shortcut.
-            let fetched = match self
-                .fetch(&Self::id_for(&id.name, None), UpdateLevel::None)
-                .await
-            {
+        for dependency in deps.iter().filter(|package| package.id().pm == CARGO_PM) {
+            let target = PackageLoadTarget::resolved(dependency.key().clone());
+            let fetched = match self.load_target(&target, UpdateLevel::None).await {
                 Ok(f) => f,
                 Err(e) => {
-                    tracing::debug!(id = %id, error = %e, "cannot serve dependency source from cache; skipping");
+                    tracing::debug!(id = %dependency.id(), error = %e, "cannot serve dependency source from cache; skipping");
                     continue;
                 }
             };
@@ -258,14 +304,16 @@ impl PackageManager for CargoPm {
     /// cargo's cache only.
     async fn load_plugin(
         &self,
-        id: &PackageId,
+        target: &PackageLoadTarget,
         update: UpdateLevel,
-    ) -> Result<Vec<UnvalidatedPlugin>> {
+    ) -> Result<PluginListing> {
         let fetched = self
-            .fetch(id, update)
+            .load_target(target, update)
             .await
-            .with_context(|| format!("fetching `{id}` for its plugin"))?;
-        Ok(vec![Self::plugin_from_fetched(fetched)])
+            .context("fetching a package for its plugin")?;
+        Ok(PluginListing::complete(vec![Self::plugin_from_fetched(
+            fetched,
+        )]))
     }
 
     /// Search crates.io for crates matching `query`.
@@ -305,22 +353,30 @@ impl PackageManager for CargoPm {
             fetch = fetch.version(&id.version);
         }
         let result = fetch.fetch().await?;
-        Ok(FetchedPackage {
-            id: PackageId::new(CARGO_PM, result.name, result.version),
+        self.remember(FetchedPackage {
+            package: result.package,
             root: result.path,
         })
     }
 
     /// Fails when `cargo metadata` failed, rather than answering that there
     /// are no dependencies.
-    async fn list_deps(&self) -> Result<Vec<PackageId>> {
+    async fn list_deps(&self) -> Result<Vec<PackageResolution>> {
         let Some(ws) = self.workspace.try_load().map_err(anyhow::Error::msg)? else {
             return Ok(Vec::new());
         };
+        for package in &ws.crates {
+            if let Some(root) = &package.source_dir {
+                self.remember(FetchedPackage {
+                    package: package.package.clone(),
+                    root: root.clone(),
+                })?;
+            }
+        }
         Ok(ws
             .crates
             .iter()
-            .map(|c| PackageId::new(CARGO_PM, c.name.clone(), c.version.to_string()))
+            .map(|package| package.package.clone())
             .collect())
     }
 
@@ -432,14 +488,28 @@ mod tests {
 
     /// A path dependency: `source_dir` defaults to its local path.
     fn path_dep(name: &str, dir: PathBuf) -> WorkspaceCrate {
-        WorkspaceCrate::new(name.to_string(), semver::Version::new(1, 0, 0), Some(dir))
+        WorkspaceCrate::new(
+            PackageResolution::new(
+                PackageId::new(CARGO_PM, name, "1.0.0"),
+                symposium_sdk::pm::PackageSourceClaim::Path,
+                PackageKey::new(format!("path:{name}")).unwrap(),
+            ),
+            Some(dir),
+        )
     }
 
     /// A registry dependency whose extracted source `cargo metadata` located —
     /// no local `path`, but a known `source_dir` (as populated in production).
     fn registry_dep(name: &str, source_dir: PathBuf) -> WorkspaceCrate {
-        WorkspaceCrate::new(name.to_string(), semver::Version::new(1, 0, 0), None)
-            .with_source_dir(Some(source_dir))
+        WorkspaceCrate::new(
+            PackageResolution::new(
+                PackageId::new(CARGO_PM, name, "1.0.0"),
+                symposium_sdk::pm::PackageSourceClaim::CratesIo,
+                PackageKey::new(format!("registry:{name}")).unwrap(),
+            ),
+            None,
+        )
+        .with_source_dir(Some(source_dir))
     }
 
     #[tokio::test]
@@ -464,17 +534,18 @@ mod tests {
             registry_dep("registry-embedded", registry_embedded),
             path_dep("plain", plain),
         ];
-        let deps: Vec<PackageId> = crates
-            .iter()
-            .map(|c| PackageId::new(CARGO_PM, &c.name, c.version.to_string()))
-            .collect();
+        let deps: Vec<PackageResolution> = crates.iter().map(|c| c.package.clone()).collect();
         let pm = CargoPm::new(WorkspaceDeps::fixture(tmp.path().to_path_buf(), crates));
 
         let active = pm.active_plugins(&deps).await.unwrap();
-        let got: Vec<&str> = active.plugins.iter().map(|o| o.id.name.as_str()).collect();
+        let got: Vec<&str> = active
+            .plugins
+            .iter()
+            .map(|o| o.id().name.as_str())
+            .collect();
         // `plain` embeds nothing, so it is not surfaced.
         assert_eq!(got, vec!["with-skills", "registry-embedded"]);
-        assert!(active.plugins.iter().all(|o| o.id.pm == CARGO_PM));
+        assert!(active.plugins.iter().all(|o| o.id().pm == CARGO_PM));
         // The plugin points at the crate source; the default `skills/` group is
         // added by validation, not by the PM.
         assert!(active.plugins[0].root.join("skills").is_dir());
@@ -490,7 +561,7 @@ mod tests {
 
         let loaded = pm
             .load_plugin(
-                &CargoPm::id_for("zz-symposium-no-such-crate", None),
+                &PackageLoadTarget::coordinate(CargoPm::id_for("zz-symposium-no-such-crate", None)),
                 UpdateLevel::None,
             )
             .await;

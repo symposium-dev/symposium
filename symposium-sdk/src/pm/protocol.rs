@@ -17,12 +17,12 @@ use serde::{Deserialize, Serialize};
 
 use symposium_install::UpdateLevel;
 
-use super::{PackageId, PluginInfo, ProjectInfo, UnvalidatedPlugin};
+use super::{PackageId, PackageLoadTarget, PackageResolution, PluginInfo, ProjectInfo};
 
 /// The protocol version this SDK speaks. Negotiation is strict: Symposium
 /// refuses a PM reporting a version it does not know, and that PM contributes
 /// no plugins.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 pub const INITIALIZE: &str = "initialize";
 pub const ACTIVE_PLUGINS: &str = "active_plugins";
@@ -59,18 +59,18 @@ pub struct InitializeResult {
     pub name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ActivePluginsParams {
     /// The workspace's dependency set. A registry ignores it; an ecosystem
     /// transport reports what these dependencies embed.
     #[serde(default)]
-    pub deps: Vec<PackageId>,
+    pub deps: Vec<PackageResolution>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct LoadPluginParams {
-    /// The id to resolve. Its version component may be a requirement.
-    pub id: PackageId,
+    /// Resolve a coordinate or inspect an exact supplier-session key.
+    pub target: PackageLoadTarget,
     /// Under `none`, serve only what is already on disk.
     #[serde(default)]
     pub update: UpdateLevel,
@@ -115,14 +115,6 @@ pub struct CanonicalName {
     pub name: String,
 }
 
-/// Unvalidated plugins, the result shape of `load_plugin`. `active_plugins`
-/// answers with a [`PluginListing`](super::PluginListing): the same, plus
-/// whether that is every plugin (`complete`, true when left out).
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PluginsResult {
-    pub plugins: Vec<UnvalidatedPlugin>,
-}
-
 /// Infos, the result shape of `search`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
@@ -130,9 +122,9 @@ pub struct SearchResult {
 }
 
 /// Ids, the result shape of `list_deps`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ListDepsResult {
-    pub deps: Vec<PackageId>,
+    pub deps: Vec<PackageResolution>,
 }
 
 /// The result shape of `project_info`.
@@ -146,7 +138,7 @@ pub struct ProjectInfoResult {
 
 /// A request. Every request carries an `id`: the protocol has no
 /// notifications.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Request {
     pub jsonrpc: String,
     pub id: u64,
@@ -167,7 +159,7 @@ impl Request {
 }
 
 /// A response: exactly one of `result` / `error` is set.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct Response {
     pub jsonrpc: String,
     pub id: u64,
@@ -230,7 +222,12 @@ mod tests {
         let req = Request::new(
             1,
             LOAD_PLUGIN,
-            Some(serde_json::json!({"id": {"pm": "cargo", "name": "serde", "version": "*"}})),
+            Some(serde_json::json!({
+                "target": {
+                    "kind": "coordinate",
+                    "id": {"pm": "cargo", "name": "serde", "version": "*"}
+                }
+            })),
         );
         let line = serde_json::to_string(&req).unwrap();
         assert!(

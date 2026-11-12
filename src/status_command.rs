@@ -198,15 +198,16 @@ pub async fn workspace_status(
         UpdateLevel::None,
     )
     .await;
-    for id in enabled {
-        let identity = pms.identity(&id);
+    for request in enabled {
+        let id = request.id();
+        let identity = pms.identity(id);
         if shown.contains(&identity) {
             continue;
         }
         let dependency = dep_ids
             .iter()
-            .any(|dep| pms.identity(dep) == pms.identity(&id));
-        let named = used.plugins.iter().any(|entry| entry.matches(&id));
+            .any(|dep| pms.identity(dep) == pms.identity(id));
+        let named = used.plugins.iter().any(|entry| entry.matches(id));
         if dependency && !named {
             continue;
         }
@@ -216,11 +217,11 @@ pub async fn workspace_status(
         let mut audit = None;
         if !dependency && let Ok(fetched) = pms.fetch(&id, UpdateLevel::None).await {
             let audits = AuditIndex::configured(sym);
-            match audits.answer(pms, &fetched.id).await {
+            match audits.answer(pms, fetched.id()).await {
                 Answer::Revoked(revocation) => {
                     entries.push(StatusEntry {
-                        name: id.name,
-                        version: Some(fetched.id.version),
+                        name: id.name.clone(),
+                        version: Some(fetched.id().version.clone()),
                         root: revocation.to_string(),
                         state: StatusState::Revoked,
                         format: None,
@@ -233,7 +234,7 @@ pub async fn workspace_status(
             }
         }
         entries.push(StatusEntry {
-            name: id.name,
+            name: id.name.clone(),
             version: None,
             root: if dependency {
                 "`[plugins] use` (offers no plugin)"

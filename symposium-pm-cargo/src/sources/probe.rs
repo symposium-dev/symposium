@@ -11,11 +11,21 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use cargo_metadata::MetadataCommand;
+use symposium_sdk::pm::{CARGO_PM, PackageId, PackageKey, PackageResolution, PackageSourceClaim};
 
 use super::{FetchResult, normalize_crate_name};
 
 const PROBE_PACKAGE: &str = "symposium-crate-probe";
 const CRATES_IO_SRC_PREFIX: &str = "index.crates.io-";
+const CRATES_IO_SOURCE: &str = "registry+https://github.com/rust-lang/crates.io-index";
+
+fn crates_io_resolution(name: &str, version: &str) -> Result<PackageResolution> {
+    Ok(PackageResolution::new(
+        PackageId::new(CARGO_PM, name, version),
+        PackageSourceClaim::CratesIo,
+        PackageKey::new(format!("{CRATES_IO_SOURCE}#{name}@{version}"))?,
+    ))
+}
 
 /// Fetch a crate via a temporary dummy cargo package.
 ///
@@ -89,8 +99,7 @@ pub fn find_cached(crate_name: &str, version_req: &str, cargo_home: &Path) -> Re
         })?;
 
     Ok(FetchResult {
-        name,
-        version: version.to_string(),
+        package: crates_io_resolution(&name, &version.to_string())?,
         path,
     })
 }
@@ -169,8 +178,8 @@ fn find_crate_in_metadata(dir: &Path, crate_name: &str) -> Result<Option<FetchRe
         .to_path_buf();
 
     Ok(Some(FetchResult {
-        name: package.name.to_string(),
-        version: package.version.to_string(),
+        package: crate::workspace::package_resolution(package, false)
+            .map_err(anyhow::Error::msg)?,
         path,
     }))
 }
@@ -190,11 +199,12 @@ fn find_crate_in_lockfile(dir: &Path, crate_name: &str, cargo_home: &Path) -> Re
         .and_then(|packages| packages.as_array())
         .map(Vec::as_slice)
         .unwrap_or_default();
-    let (name, version) = locked_probe_dependency(packages, crate_name).ok_or_else(|| {
-        anyhow::anyhow!(
-            "crate '{crate_name}' not found in cargo metadata or the probe's Cargo.lock"
-        )
-    })?;
+    let (name, version, source) =
+        locked_probe_dependency(packages, crate_name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "crate '{crate_name}' not found in cargo metadata or the probe's Cargo.lock"
+            )
+        })?;
 
     let registry_src = cargo_home.join("registry/src");
     let entries = std::fs::read_dir(&registry_src)
@@ -210,9 +220,17 @@ fn find_crate_in_lockfile(dir: &Path, crate_name: &str, cargo_home: &Path) -> Re
             )
         })?;
 
+    let cargo_source = source.map(|repr| cargo_metadata::Source {
+        repr: repr.to_string(),
+    });
+    let claim = crate::workspace::classify_package_source(cargo_source.as_ref(), false);
+    let key_source = source.unwrap_or("path");
     Ok(FetchResult {
-        name: name.to_string(),
-        version: version.to_string(),
+        package: PackageResolution::new(
+            PackageId::new(CARGO_PM, name, version),
+            claim,
+            PackageKey::new(format!("{key_source}#{name}@{version}"))?,
+        ),
         path,
     })
 }
@@ -227,34 +245,35 @@ fn find_crate_in_lockfile(dir: &Path, crate_name: &str, cargo_home: &Path) -> Re
 fn locked_probe_dependency<'a>(
     packages: &'a [toml::Value],
     crate_name: &str,
-) -> Option<(&'a str, &'a str)> {
+) -> Option<(&'a str, &'a str, Option<&'a str>)> {
     let field = |package: &'a toml::Value, key: &str| package.get(key)?.as_str();
     let probe = packages
         .iter()
         .find(|package| field(package, "name") == Some(PROBE_PACKAGE))?;
 
     let normalized = normalize_crate_name(crate_name);
-    let mut entry = probe
+    let entry = probe
         .get("dependencies")?
         .as_array()?
         .iter()
         .filter_map(|dep| dep.as_str())
-        .map(|dep| dep.split(' '))
-        .find(|parts| {
-            parts
-                .clone()
+        .find(|dep| {
+            dep.split(' ')
                 .next()
                 .is_some_and(|name| normalize_crate_name(name) == normalized)
         })?;
-    let name = entry.next()?;
-    let version = match entry.next() {
-        Some(version) => version,
-        None => packages
-            .iter()
-            .find(|package| field(package, "name") == Some(name))
-            .and_then(|package| field(package, "version"))?,
-    };
-    Some((name, version))
+    let mut parts = entry.splitn(3, ' ');
+    let name = parts.next()?;
+    let version = parts.next();
+    let source = parts
+        .next()
+        .and_then(|source| source.strip_prefix('(')?.strip_suffix(')'));
+    let package = packages.iter().find(|package| {
+        field(package, "name") == Some(name)
+            && version.is_none_or(|version| field(package, "version") == Some(version))
+            && source.is_none_or(|source| field(package, "source") == Some(source))
+    })?;
+    Some((name, field(package, "version")?, field(package, "source")))
 }
 
 #[cfg(test)]
@@ -297,8 +316,8 @@ mod tests {
         let source = extracted_source(cargo_home.path(), "bin_only-0.1.1");
 
         let found = find_crate_in_lockfile(probe.path(), "bin-only", cargo_home.path()).unwrap();
-        assert_eq!(found.name, "bin_only");
-        assert_eq!(found.version, "0.1.1");
+        assert_eq!(found.package.id().name, "bin_only");
+        assert_eq!(found.package.id().version, "0.1.1");
         assert_eq!(found.path, source);
     }
 
@@ -332,7 +351,7 @@ mod tests {
         let source = extracted_source(cargo_home.path(), "tool-2.0.0");
 
         let found = find_crate_in_lockfile(probe.path(), "tool", cargo_home.path()).unwrap();
-        assert_eq!(found.version, "2.0.0");
+        assert_eq!(found.package.id().version, "2.0.0");
         assert_eq!(found.path, source);
     }
 
@@ -365,16 +384,16 @@ mod tests {
         std::fs::remove_file(unfinished.join(".cargo-ok")).unwrap();
 
         let found = find_cached("foo", "*", cargo_home.path()).unwrap();
-        assert_eq!(found.name, "foo");
-        assert_eq!(found.version, "1.10.0");
+        assert_eq!(found.package.id().name, "foo");
+        assert_eq!(found.package.id().version, "1.10.0");
         assert_eq!(found.path, newest);
 
         let found = find_cached("foo", "=1.2.0", cargo_home.path()).unwrap();
-        assert_eq!(found.version, "1.2.0");
+        assert_eq!(found.package.id().version, "1.2.0");
 
         let found = find_cached("foo_bar", "*", cargo_home.path()).unwrap();
-        assert_eq!(found.name, "foo-bar");
-        assert_eq!(found.version, "2.0.0");
+        assert_eq!(found.package.id().name, "foo-bar");
+        assert_eq!(found.package.id().version, "2.0.0");
         assert_eq!(found.path, foo_bar);
 
         assert!(find_cached("baz", "*", cargo_home.path()).is_err());

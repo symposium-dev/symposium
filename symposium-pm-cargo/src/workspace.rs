@@ -5,7 +5,7 @@
 //! that come out. This is the cargo PM's private business: Symposium learns
 //! the workspace through the PM's `project_info` and `list_deps`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
@@ -13,15 +13,14 @@ use std::{fmt::Write as _, fs};
 
 use cargo_metadata::{CargoOpt, MetadataCommand};
 use serde::{Deserialize, Serialize};
+use symposium_sdk::pm::{CARGO_PM, PackageId, PackageKey, PackageResolution, PackageSourceClaim};
 
 /// A crate in the workspace's direct dependency graph.
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct WorkspaceCrate {
-    /// The crate name as published (e.g. `"serde"`, `"tokio"`).
-    pub name: String,
-    /// The resolved version.
-    pub version: semver::Version,
+    /// Cargo's exact coordinate, source classification, and opaque package id.
+    pub package: PackageResolution,
     /// Local source path for path dependencies (unpublished, so `fetch` must
     /// resolve them locally). `None` for registry crates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -35,14 +34,10 @@ pub struct WorkspaceCrate {
 }
 
 impl WorkspaceCrate {
-    /// A crate whose source lives at `path` (a path dependency), or a registry
-    /// crate when `path` is `None`. `source_dir` defaults to `path`; use
-    /// [`with_source_dir`](Self::with_source_dir) for a registry crate whose
-    /// extracted source is known.
-    pub fn new(name: String, version: semver::Version, path: Option<PathBuf>) -> Self {
+    /// A resolved crate whose local override, when any, lives at `path`.
+    pub fn new(package: PackageResolution, path: Option<PathBuf>) -> Self {
         Self {
-            name,
-            version,
+            package,
             source_dir: path.clone(),
             path,
         }
@@ -53,11 +48,19 @@ impl WorkspaceCrate {
         self.source_dir = source_dir;
         self
     }
+
+    pub fn name(&self) -> &str {
+        &self.package.id().name
+    }
+
+    pub fn version(&self) -> &str {
+        &self.package.id().version
+    }
 }
 
 /// The resolved workspace: root path + dependency list + member directories.
 #[non_exhaustive]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct LoadedWorkspace {
     /// Workspace root directory.
     pub root: PathBuf,
@@ -338,46 +341,37 @@ fn load_workspace(cwd: &Path, cargo_path: Option<&Path>) -> Result<LoadedWorkspa
         }
     }
 
-    let path_overrides: HashMap<String, PathBuf> = metadata
-        .packages
-        .iter()
-        .filter(|p| p.source.is_none())
-        .filter_map(|p| {
-            p.manifest_path
-                .parent()
-                .map(|dir| (p.name.clone(), dir.into()))
-        })
-        .collect();
-
     let mut crates: Vec<_> = metadata
         .packages
         .iter()
         .filter(|p| direct_dep_ids.contains(&p.id) && !ws_members.contains(&p.id))
-        .filter_map(|p| {
-            semver::Version::parse(&p.version.to_string())
-                .ok()
-                .map(|v| WorkspaceCrate {
-                    path: path_overrides.get(&p.name).cloned(),
-                    source_dir: p.manifest_path.parent().map(|dir| dir.into()),
-                    name: p.name.to_string(),
-                    version: v,
-                })
+        .map(|p| {
+            let source_dir = p.manifest_path.parent().map(PathBuf::from);
+            let path = p.source.is_none().then(|| source_dir.clone()).flatten();
+            Ok(WorkspaceCrate {
+                package: package_resolution(p, false)?,
+                path,
+                source_dir,
+            })
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
 
-    crates.sort_by(|a, b| a.name.cmp(&b.name));
-    crates.dedup_by(|a, b| a.name == b.name);
+    crates.sort_by(|a, b| a.package.key().cmp(b.package.key()));
+    crates.dedup_by(|a, b| a.package.key() == b.package.key());
 
     let mut member_crates: Vec<WorkspaceCrate> = metadata
         .packages
         .iter()
         .filter(|p| ws_members.contains(&p.id))
-        .filter_map(|p| {
-            let version = semver::Version::parse(&p.version.to_string()).ok()?;
-            let dir = p.manifest_path.parent()?.into();
-            Some(WorkspaceCrate::new(p.name.to_string(), version, Some(dir)))
+        .map(|p| {
+            let dir = p
+                .manifest_path
+                .parent()
+                .map(PathBuf::from)
+                .ok_or_else(|| format!("manifest for `{}` has no parent", p.name))?;
+            Ok(WorkspaceCrate::new(package_resolution(p, true)?, Some(dir)))
         })
-        .collect();
+        .collect::<Result<_, String>>()?;
     member_crates.sort_by(|a, b| a.path.cmp(&b.path));
 
     Ok(LoadedWorkspace {
@@ -385,4 +379,125 @@ fn load_workspace(cwd: &Path, cargo_path: Option<&Path>) -> Result<LoadedWorkspa
         crates,
         member_crates,
     })
+}
+
+pub(crate) fn package_resolution(
+    package: &cargo_metadata::Package,
+    workspace_member: bool,
+) -> Result<PackageResolution, String> {
+    let source = classify_package_source(package.source.as_ref(), workspace_member);
+    let key = PackageKey::new(package.id.repr.clone()).map_err(|error| error.to_string())?;
+    Ok(PackageResolution::new(
+        PackageId::new(
+            CARGO_PM,
+            package.name.to_string(),
+            package.version.to_string(),
+        ),
+        source,
+        key,
+    ))
+}
+
+pub(crate) fn classify_package_source(
+    source: Option<&cargo_metadata::Source>,
+    workspace_member: bool,
+) -> PackageSourceClaim {
+    if workspace_member {
+        return PackageSourceClaim::Workspace;
+    }
+    let Some(source) = source else {
+        return PackageSourceClaim::Path;
+    };
+    if source.is_crates_io() || source.repr == "sparse+https://index.crates.io/" {
+        PackageSourceClaim::CratesIo
+    } else if source.repr.starts_with("git+") {
+        PackageSourceClaim::Git
+    } else if source.repr.starts_with("registry+") || source.repr.starts_with("sparse+") {
+        PackageSourceClaim::Registry
+    } else {
+        PackageSourceClaim::Unknown
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(repr: &str) -> cargo_metadata::Source {
+        cargo_metadata::Source {
+            repr: repr.to_string(),
+        }
+    }
+
+    #[test]
+    fn cargo_sources_are_classified_without_live_metadata() {
+        let cases = [
+            (None, false, PackageSourceClaim::Path),
+            (None, true, PackageSourceClaim::Workspace),
+            (
+                Some("registry+https://github.com/rust-lang/crates.io-index"),
+                false,
+                PackageSourceClaim::CratesIo,
+            ),
+            (
+                Some("sparse+https://index.crates.io/"),
+                false,
+                PackageSourceClaim::CratesIo,
+            ),
+            (
+                Some("registry+https://packages.example/index"),
+                false,
+                PackageSourceClaim::Registry,
+            ),
+            (
+                Some("sparse+https://packages.example/index/"),
+                false,
+                PackageSourceClaim::Registry,
+            ),
+            (
+                Some("git+https://example.com/repo?rev=abc#deadbeef"),
+                false,
+                PackageSourceClaim::Git,
+            ),
+            (
+                Some("future+private-representation"),
+                false,
+                PackageSourceClaim::Unknown,
+            ),
+        ];
+
+        for (repr, workspace_member, expected) in cases {
+            let source = repr.map(source);
+            assert_eq!(
+                classify_package_source(source.as_ref(), workspace_member),
+                expected,
+                "source representation {repr:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_members_override_their_cargo_source_representation() {
+        let crates_io = source("registry+https://github.com/rust-lang/crates.io-index");
+        assert_eq!(
+            classify_package_source(Some(&crates_io), true),
+            PackageSourceClaim::Workspace
+        );
+    }
+
+    #[test]
+    fn old_workspace_cache_entries_without_resolution_facts_are_rejected() {
+        let old = serde_json::json!({
+            "lock_mtime": 1,
+            "root": "workspace",
+            "crates": [{
+                "name": "serde",
+                "version": "1.0.0",
+                "source_dir": "source"
+            }],
+            "member_crates": []
+        });
+
+        assert!(serde_json::from_value::<DiskCache>(old).is_err());
+    }
 }

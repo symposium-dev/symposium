@@ -1238,6 +1238,7 @@ mod tests {
         let registry = PluginRegistry {
             plugins: vec![Plugin {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
+                resolved_package: None,
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
@@ -1249,7 +1250,7 @@ mod tests {
         };
 
         // Query for serde - should find no skills because plugin doesn't apply
-        let workspace_crates = vec![crate::pm::WorkspaceCrate::new(
+        let workspace_crates = vec![crate::test_utils::workspace_crate(
             "serde".to_string(),
             semver::Version::new(1, 0, 0),
             None,
@@ -1302,6 +1303,7 @@ mod tests {
         let registry = PluginRegistry {
             plugins: vec![Plugin {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
+                resolved_package: None,
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
@@ -1313,7 +1315,7 @@ mod tests {
         };
 
         // Query for serde - should find no skills because group doesn't match
-        let workspace_crates = vec![crate::pm::WorkspaceCrate::new(
+        let workspace_crates = vec![crate::test_utils::workspace_crate(
             "serde".to_string(),
             semver::Version::new(1, 0, 0),
             None,
@@ -1384,6 +1386,7 @@ mod tests {
         let registry = PluginRegistry {
             plugins: vec![Plugin {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
+                resolved_package: None,
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
@@ -1394,7 +1397,7 @@ mod tests {
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
-        let workspace_crates = vec![crate::pm::WorkspaceCrate::new(
+        let workspace_crates = vec![crate::test_utils::workspace_crate(
             "serde".to_string(),
             semver::Version::new(1, 0, 0),
             None,
@@ -1471,6 +1474,7 @@ mod tests {
         let registry = PluginRegistry {
             plugins: vec![Plugin {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
+                resolved_package: None,
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
@@ -1481,8 +1485,8 @@ mod tests {
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
-        let workspace = vec![crate::pm::WorkspaceCrate::new(
-            "serde".into(),
+        let workspace = vec![crate::test_utils::workspace_crate(
+            "serde",
             semver::Version::new(1, 0, 0),
             None,
         )];
@@ -1559,6 +1563,7 @@ mod tests {
         let registry = PluginRegistry {
             plugins: vec![Plugin {
                 canonical: PackageId::new("test", &plugin.name, ANY_VERSION),
+                resolved_package: None,
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
@@ -1569,8 +1574,8 @@ mod tests {
             custom_predicates: crate::plugins::CustomPredicateRegistry::default(),
         };
 
-        let workspace = vec![crate::pm::WorkspaceCrate::new(
-            "serde".into(),
+        let workspace = vec![crate::test_utils::workspace_crate(
+            "serde",
             semver::Version::new(1, 0, 0),
             None,
         )];
@@ -1692,6 +1697,7 @@ mod tests {
         let registry = PluginRegistry {
             plugins: vec![Plugin {
                 canonical: crate::pm::PackageId::any_version("recs", "my-skill"),
+                resolved_package: None,
                 manifest: plugin,
                 workspace_member: false,
                 agent_plugin_root: None,
@@ -1703,7 +1709,7 @@ mod tests {
         };
 
         let sym = crate::config::Symposium::from_dir(tmp.path());
-        let workspace = vec![crate::pm::WorkspaceCrate::new(
+        let workspace = vec![crate::test_utils::workspace_crate(
             "serde".to_string(),
             semver::Version::new(1, 0, 0),
             None,

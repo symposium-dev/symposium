@@ -39,19 +39,19 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
   case "$line" in
     *'"initialize"'*)
-      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":1,"name":"demo"}}}}\n' "$id"
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":2,"name":"demo"}}}}\n' "$id"
       ;;
     *'"active_plugins"'*)
-      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"plugins":[{{"id":{{"pm":"demo","name":"widget","version":"1.0.0"}},"root":"{root}","manifest":{{"name":"widget","depends-on":["serde"],"skills":[{{"source":{{"path":"skills"}}}}]}}}}]}}}}\n' "$id"
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"plugins":[{{"package":{{"id":{{"pm":"demo","name":"widget","version":"1.0.0"}},"source":"unknown","key":"demo:widget"}},"root":"{root}","manifest":{{"name":"widget","depends-on":["serde"],"skills":[{{"source":{{"path":"skills"}}}}]}}}}]}}}}\n' "$id"
       ;;
     *'"load_plugin"'*)
       printf '{{"jsonrpc":"2.0","id":%s,"result":{{"plugins":[]}}}}\n' "$id"
       ;;
     *'"list_deps"'*)
-      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"deps":[{{"pm":"demo","name":"widget","version":"1.0.0"}}]}}}}\n' "$id"
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"deps":[{{"id":{{"pm":"demo","name":"widget","version":"1.0.0"}},"source":"unknown","key":"demo:widget"}}]}}}}\n' "$id"
       ;;
     *'"fetch"'*)
-      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"id":{{"pm":"demo","name":"widget","version":"1.0.0"}},"root":"{root}"}}}}\n' "$id"
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"package":{{"id":{{"pm":"demo","name":"widget","version":"1.0.0"}},"source":"unknown","key":"demo:widget"}},"root":"{root}"}}}}\n' "$id"
       ;;
     *'"refresh"'*'"update":"check"'*)
       printf '{{"jsonrpc":"2.0","id":%s,"result":{{"refreshed":true}}}}\n' "$id"
@@ -93,7 +93,7 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
   case "$line" in
     *'"initialize"'*)
-      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":1,"name":"demo"}}}}\n' "$id" ;;
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":2,"name":"demo"}}}}\n' "$id" ;;
     *'"canonical_names"'*)
       names=$(printf '%s' "$line" | sed 's/.*"names":\(\[[^]]*\]\).*/\1/')
       echo "$names" >> "{asked}"
@@ -171,7 +171,7 @@ async fn a_subprocess_pm_offers_a_synthesized_manifest() {
     assert!(listing.is_complete());
     let unvalidated = listing.plugins;
     assert_eq!(unvalidated.len(), 1);
-    assert_eq!(unvalidated[0].id.name, "widget");
+    assert_eq!(unvalidated[0].id().name, "widget");
     assert_eq!(unvalidated[0].manifest.name.as_deref(), Some("widget"));
 
     // Through an instance, the same plugin is validated under symposium's
@@ -203,13 +203,14 @@ async fn list_deps_and_fetch_round_trip() {
     let pm = remote("demo", &synthesizing_pm(tmp.path(), &content));
 
     let deps = pm.list_deps().await.unwrap();
-    assert_eq!(deps, vec![PackageId::new("demo", "widget", "1.0.0")]);
+    assert_eq!(deps.len(), 1);
+    assert_eq!(deps[0].id(), &PackageId::new("demo", "widget", "1.0.0"));
 
     let fetched = pm
         .fetch(&PackageId::any_version("demo", "widget"), UpdateLevel::None)
         .await
         .unwrap();
-    assert_eq!(fetched.id.version, "1.0.0");
+    assert_eq!(fetched.id().version, "1.0.0");
     assert_eq!(fetched.root, content);
 }
 
@@ -238,10 +239,9 @@ async fn an_error_response_leaves_the_pm_usable() {
     // The fixture does not implement `search`, so it answers with an error.
     let err = pm.search("widget").await.unwrap_err();
     assert!(format!("{err:#}").contains("unknown method"), "{err:#}");
-    assert_eq!(
-        pm.list_deps().await.unwrap(),
-        vec![PackageId::new("demo", "widget", "1.0.0")]
-    );
+    let deps = pm.list_deps().await.unwrap();
+    assert_eq!(deps.len(), 1);
+    assert_eq!(deps[0].id(), &PackageId::new("demo", "widget", "1.0.0"));
 }
 
 /// A PM that cannot be reached answers every operation with an error, which
@@ -261,9 +261,14 @@ async fn a_pm_that_exits_immediately_fails_rather_than_answering_nothing() {
     let pm = dead();
     assert!(pm.active_plugins(&[]).await.is_err());
     assert!(
-        pm.load_plugin(&PackageId::any_version("demo", "widget"), UpdateLevel::None)
-            .await
-            .is_err()
+        pm.load_plugin(
+            &symposium::pm::PackageLoadTarget::coordinate(
+                PackageId::any_version("demo", "widget",)
+            ),
+            UpdateLevel::None,
+        )
+        .await
+        .is_err()
     );
     assert!(pm.list_deps().await.is_err());
 
@@ -325,7 +330,7 @@ async fn a_name_mismatch_is_refused() {
             r#"#!/bin/sh
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
-  printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":1,"name":"somethingelse"}}\n' "$id"
+  printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":2,"name":"somethingelse"}}\n' "$id"
 done
 "#,
         ),
@@ -437,8 +442,9 @@ async fn the_cargo_pm_answers_from_its_own_process() {
     // Cargo's names, read across the boundary.
     assert_eq!(pm.canonical_name("widget-lib").await.unwrap(), "widget_lib");
     assert!(
-        deps.iter().any(|d| d.name == "widget" && d.pm == "cargo"),
-        "got deps {deps:?}"
+        deps.iter()
+            .any(|d| d.id().name == "widget" && d.id().pm == "cargo"),
+        "cargo PM did not report widget"
     );
 
     // What it sees there: the workspace's root and member, and the lockfile
@@ -466,7 +472,7 @@ async fn the_cargo_pm_answers_from_its_own_process() {
     let plugins = pm.active_plugins(&deps).await.unwrap().plugins;
     let widget = plugins
         .iter()
-        .find(|o| o.id.name == "widget")
+        .find(|o| o.id().name == "widget")
         .expect("widget offered");
     assert!(widget.root.join("skills/usage/SKILL.md").is_file());
 }
@@ -480,7 +486,7 @@ async fn the_cargo_pm_reports_no_deps_outside_a_workspace() {
     let pm = cargo_pm(&empty, &tmp.path().join("cache"));
     // Absence is an ordinary answer, not an error: symposium runs outside
     // Cargo workspaces and must not treat that as a failure.
-    assert_eq!(pm.list_deps().await.unwrap(), vec![]);
+    assert!(pm.list_deps().await.unwrap().is_empty());
 }
 
 // --- `[[package-manager]]` config -------------------------------------------
@@ -578,13 +584,13 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
   case "$line" in
     *'"initialize"'*'"workspace"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":1,"name":"given-a-workspace"}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":2,"name":"given-a-workspace"}}\n' "$id"
       ;;
     *'"initialize"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":1,"name":"demo"}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":2,"name":"demo"}}\n' "$id"
       ;;
     *)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"deps":[{"pm":"demo","name":"widget","version":"1.0.0"}]}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"deps":[{"id":{"pm":"demo","name":"widget","version":"1.0.0"},"source":"unknown","key":"demo:widget"}]}}\n' "$id"
       ;;
   esac
 done
@@ -603,7 +609,13 @@ done
     let sym = symposium::config::Symposium::from_dir(&config_dir);
 
     let detached = sym.detached_managers();
-    assert!(detached.list_deps().await.iter().any(|d| d.pm == "demo"));
+    assert!(
+        detached
+            .list_deps()
+            .await
+            .iter()
+            .any(|d| d.id().pm == "demo")
+    );
     // The same PM, bound to a directory, is told about it.
     let bound = sym.workspace(tmp.path());
     assert!(!bound.dep_ids().await.iter().any(|d| d.pm == "demo"));
@@ -613,7 +625,7 @@ done
 /// content (at `content`) carries a `skills/` directory and no manifest.
 fn npm_workspace_pm(dir: &Path, ws: &Path, content: &Path) -> std::path::PathBuf {
     let plugin = format!(
-        r#"{{"id":{{"pm":"npm","name":"widget","version":"1.0.0"}},"root":"{}","manifest":{{}}}}"#,
+        r#"{{"package":{{"id":{{"pm":"npm","name":"widget","version":"1.0.0"}},"source":"unknown","key":"npm:widget"}},"root":"{}","manifest":{{}}}}"#,
         content.display()
     );
     script(
@@ -625,11 +637,11 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
   case "$line" in
     *'"initialize"'*)
-      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":1,"name":"npm"}}}}\n' "$id" ;;
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":2,"name":"npm"}}}}\n' "$id" ;;
     *'"project_info"'*)
       printf '{{"jsonrpc":"2.0","id":%s,"result":{{"project":{{"root":"{ws}"}}}}}}\n' "$id" ;;
     *'"list_deps"'*)
-      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"deps":[{{"pm":"npm","name":"widget","version":"1.0.0"}}]}}}}\n' "$id" ;;
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"deps":[{{"id":{{"pm":"npm","name":"widget","version":"1.0.0"}},"source":"unknown","key":"npm:widget"}}]}}}}\n' "$id" ;;
     *'"active_plugins"'*|*'"load_plugin"'*)
       printf '{{"jsonrpc":"2.0","id":%s,"result":{{"plugins":[{plugin}]}}}}\n' "$id" ;;
     *)
@@ -720,7 +732,7 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
   case "$line" in
     *'"initialize"'*)
-      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":1,"name":"npm"}}}}\n' "$id" ;;
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":2,"name":"npm"}}}}\n' "$id" ;;
     *'"project_info"'*)
       printf '{{"jsonrpc":"2.0","id":%s,"result":{{"project":{{"root":"{ws}","inputs":["{input}"]}}}}}}\n' "$id" ;;
     *'"list_deps"'*)
@@ -809,9 +821,9 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
   case "$line" in
     *'"initialize"'*)
-      printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":1,"name":"demo"}}\n' "$id" ;;
+      printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":2,"name":"demo"}}\n' "$id" ;;
     *'"list_deps"'*)
-      printf '{"id":%s,"jsonrpc":"2.0","result":{"deps":[{"pm":"demo","name":"widget-lib","version":"1"}]}}\n' "$id" ;;
+      printf '{"id":%s,"jsonrpc":"2.0","result":{"deps":[{"id":{"pm":"demo","name":"widget-lib","version":"1"},"source":"unknown","key":"demo:widget-lib"}]}}\n' "$id" ;;
     *'"canonical_names"'*)
       names=$(printf '%s' "$line" | sed 's/.*"names":\(\[[^]]*\]\).*/\1/' | tr '[:upper:]' '[:lower:]')
       printf '{"id":%s,"jsonrpc":"2.0","result":{"names":%s}}\n' "$id" "$names" ;;
@@ -868,7 +880,7 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
   case "$line" in
     *'"initialize"'*)
-      printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":1,"name":"demo"}}\n' "$id" ;;
+      printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":2,"name":"demo"}}\n' "$id" ;;
     *) printf '{"id":%s,"jsonrpc":"2.0","result":{"name":[]}}\n' "$id" ;;
   esac
 done

@@ -157,10 +157,18 @@ pub struct Names<'a> {
 type CanonicalSpellings =
     std::collections::BTreeMap<String, Option<std::collections::BTreeMap<String, String>>>;
 
+/// The configuration identity of a plugin offered by a registry.
+///
+/// Its canonical package id routes back to the registry entry, whose directory
+/// name need not equal the public plugin name that `use` and `disable` accept.
+pub(crate) fn registry_plugin_id(plugin: &Plugin) -> PackageId {
+    PackageId::any_version(&plugin.canonical.pm, &plugin.manifest.name)
+}
+
 impl<'a> Names<'a> {
     pub fn new(registry: &[Plugin], deps: &[PackageId], pms: &'a PmRegistry) -> Self {
         Self {
-            registry: registry.iter().map(|p| p.canonical.clone()).collect(),
+            registry: registry.iter().map(registry_plugin_id).collect(),
             deps: deps.to_vec(),
             pms,
         }
@@ -470,25 +478,26 @@ pub async fn discover(
 /// [`UpdateLevel::None`] only on disk, so a hook never searches; found by
 /// exactly one, it is that package; by several, it is ambiguous and enables
 /// nothing; by none, it is skipped.
-pub async fn enabled_dependencies(
+pub(crate) async fn enabled_dependencies(
     sym: &Symposium,
     pms: &PmRegistry,
     dep_ids: &[PackageId],
     used: &Used,
     spellings: &Spellings,
     update: UpdateLevel,
-) -> Vec<PackageId> {
+) -> Vec<crate::pm::PackageRequest> {
     let plugins = &sym.config.plugins;
     let found = find_unknown(pms, &used.unknown, update).await;
     let used: Vec<&PluginRef> = used.plugins.iter().chain(&found).collect();
-    let mut ids: Vec<PackageId> = dep_ids
+    let selected_dependencies: Vec<PackageId> = dep_ids
         .iter()
         .filter(|id| !plugins.is_disabled(id, spellings))
         .filter(|id| {
             plugins.is_auto_enabled(id, dep_ids, spellings) || used.iter().any(|u| u.matches(id))
         })
-        .map(|id| PackageId::any_version(&id.pm, &id.name))
+        .cloned()
         .collect();
+    let mut requests = pms.dependency_requests(&selected_dependencies).await;
 
     for used in used {
         // A wildcard names dependencies, which the first pass covered.
@@ -499,14 +508,14 @@ pub async fn enabled_dependencies(
             continue;
         }
         let id = PackageId::any_version(pm, &used.name);
-        let known =
-            plugins.is_disabled(&id, spellings) || ids.iter().any(|known| used.matches(known));
+        let known = plugins.is_disabled(&id, spellings)
+            || requests.iter().any(|known| used.matches(known.id()));
         if !known {
-            ids.push(id);
+            requests.push(crate::pm::PackageRequest::coordinate(id));
         }
     }
 
-    ids
+    requests
 }
 
 /// The packages the ecosystem package managers have under each of `unknown`'s
@@ -760,8 +769,10 @@ fn decide(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pm::WorkspaceCrate;
-    use crate::pm::{ANY_VERSION, CARGO_PM, PmRegistry};
+    use crate::pm::{
+        ANY_VERSION, CARGO_PM, PackageLoadTarget, PackageManager, PackageResolution, PluginKind,
+        PluginListing, PmInstance, PmRegistry,
+    };
     use indoc::indoc;
 
     /// A workspace with `widget-lib` as a path dependency carrying skills,
@@ -776,13 +787,17 @@ mod tests {
         Workspace::fixture(
             root.to_path_buf(),
             vec![
-                WorkspaceCrate::new(
+                crate::test_utils::workspace_crate(
                     "widget-lib".to_string(),
                     semver::Version::new(1, 0, 0),
                     Some(widget),
                 ),
-                WorkspaceCrate::new("serde".to_string(), semver::Version::new(1, 0, 210), None)
-                    .with_source_dir(Some(serde)),
+                crate::test_utils::workspace_crate(
+                    "serde".to_string(),
+                    semver::Version::new(1, 0, 210),
+                    None,
+                )
+                .with_source_dir(Some(serde)),
             ],
         )
     }
@@ -1061,12 +1076,56 @@ mod tests {
 
     /// The crates the tests below name, all cached: every dependency they
     /// list, plus `my-skills-crate`, which no workspace depends on.
-    fn cached_crates() -> PmRegistry {
-        let (cargo, _) = crate::test_utils::FakeCargo::instance(
+    fn cached_crates(deps: &[PackageId]) -> PmRegistry {
+        let (cargo, _) = crate::test_utils::FakeCargo::instance_with_dependencies(
             &["serde", "tokio", "clap", "anyhow", "my-skills-crate"],
             &[],
+            deps,
         );
         PmRegistry::new(vec![cargo])
+    }
+
+    struct DependencyPm {
+        name: &'static str,
+        dependencies: Vec<PackageResolution>,
+    }
+
+    #[async_trait::async_trait]
+    impl PackageManager for DependencyPm {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        async fn load_plugin(
+            &self,
+            _target: &PackageLoadTarget,
+            _update: UpdateLevel,
+        ) -> anyhow::Result<PluginListing> {
+            Ok(PluginListing::complete(Vec::new()))
+        }
+
+        async fn list_deps(&self) -> anyhow::Result<Vec<PackageResolution>> {
+            Ok(self.dependencies.clone())
+        }
+    }
+
+    fn dependency_pm(name: &'static str, ids: &[PackageId]) -> PmInstance {
+        let dependencies = ids
+            .iter()
+            .cloned()
+            .map(|id| {
+                let key =
+                    crate::pm::PackageKey::new(format!("{}:{}:{}", id.pm, id.name, id.version))
+                        .unwrap();
+                PackageResolution::new(id, crate::pm::PackageSourceClaim::Unknown, key)
+            })
+            .collect();
+        PmInstance::new(
+            name,
+            false,
+            PluginKind::Package,
+            Box::new(DependencyPm { name, dependencies }),
+        )
     }
 
     /// [`enabled_dependencies`] with the `use` entries resolved the way the
@@ -1080,12 +1139,16 @@ mod tests {
         let names = Names::new(&[], deps, pms);
         let used = used(sym, root, &names).await;
         let spellings = names.spellings(&sym.config.plugins).await;
-        enabled_dependencies(sym, pms, deps, &used, &spellings, UpdateLevel::None).await
+        enabled_dependencies(sym, pms, deps, &used, &spellings, UpdateLevel::None)
+            .await
+            .into_iter()
+            .map(|request| PackageId::any_version(&request.id().pm, &request.id().name))
+            .collect()
     }
 
     /// [`enabled_with`] against [`cached_crates`].
     async fn enabled(sym: &Symposium, deps: &[PackageId], root: &Path) -> Vec<PackageId> {
-        enabled_with(sym, &cached_crates(), deps, root).await
+        enabled_with(sym, &cached_crates(deps), deps, root).await
     }
 
     /// Hook dispatch, `--help` and subcommand dispatch build the active set at
@@ -1160,9 +1223,87 @@ mod tests {
         assert_eq!(enabled(&sym, &deps, tmp.path()).await, cargo(&["tokio"]));
     }
 
+    #[tokio::test]
+    async fn enabled_dependencies_retain_each_admitted_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sym = sym_with(
+            tmp.path(),
+            indoc! {r#"
+                [plugins]
+                auto-enable = ["shared"]
+            "#},
+        );
+        let id = PackageId::new(CARGO_PM, "shared", "1.0.0");
+        let package = |key: &str, source| {
+            crate::pm::WorkspaceCrate::new(
+                crate::pm::PackageResolution::new(
+                    id.clone(),
+                    source,
+                    crate::pm::PackageKey::new(key).unwrap(),
+                ),
+                None,
+            )
+            .with_source_dir(Some(tmp.path().to_path_buf()))
+        };
+        let workspace = crate::pm::WorkspaceDeps::fixture(
+            tmp.path(),
+            vec![
+                package("workspace:shared", crate::pm::PackageSourceClaim::Workspace),
+                package("registry:shared", crate::pm::PackageSourceClaim::CratesIo),
+            ],
+        );
+        let pms = PmRegistry::new(vec![crate::pm::builtin_cargo_instance(workspace)]);
+        let deps = pms.list_deps().await;
+        let names = Names::new(&[], &deps, &pms);
+        let spellings = names.spellings(&sym.config.plugins).await;
+
+        let requests = enabled_dependencies(
+            &sym,
+            &pms,
+            &deps,
+            &Used::default(),
+            &spellings,
+            UpdateLevel::None,
+        )
+        .await;
+
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|request| matches!(request, crate::pm::PackageRequest::Resolved(_)))
+        );
+
+        let registry = crate::plugins::PluginRegistry {
+            plugins: Vec::new(),
+            warnings: Vec::new(),
+            unreadable_registries: Vec::new(),
+            custom_predicates: Default::default(),
+        };
+        let mut context = crate::predicate::PredicateContext::new(&deps);
+        let active = crate::plugins::active_plugins(
+            &sym,
+            &registry,
+            &pms,
+            Some(tmp.path()),
+            &mut context,
+            UpdateLevel::None,
+        )
+        .await;
+        assert_eq!(
+            active
+                .iter()
+                .filter(|plugin| plugin.canonical == id)
+                .count(),
+            2,
+            "equal coordinates with distinct admitted keys must both activate"
+        );
+    }
+
     fn registry_plugin(pm: &str, name: &str, dormant: bool) -> crate::plugins::Plugin {
         crate::plugins::Plugin {
             canonical: PackageId::any_version(pm, name),
+            resolved_package: None,
             manifest: crate::plugins::PluginManifest {
                 name: name.to_string(),
                 version: None,
@@ -1314,25 +1455,21 @@ mod tests {
             PackageId::new("npm", "is-odd", "3.0.1"),
         ];
 
-        let sym = sym_with(
-            tmp.path(),
-            &format!(
-                "{config}\n[[package-manager]]\nname = \"npm\"\ncommand = \"/nonexistent/symposium-pm-npm\"\n"
-            ),
-        );
+        let sym = sym_with(tmp.path(), config);
+        let pms = PmRegistry::new(vec![dependency_pm("npm", &deps)]);
         assert_eq!(
-            enabled_with(&sym, &sym.detached_managers(), &deps, tmp.path()).await,
+            enabled_with(&sym, &pms, &deps, tmp.path()).await,
             vec![
                 PackageId::any_version("npm", "left-pad"),
                 PackageId::any_version("npm", "is-even"),
             ]
         );
 
-        // With no `npm` package manager, nothing could load `is-even`.
-        let sym = sym_with(tmp.path(), config);
+        // With no `npm` package manager there is neither an exact dependency
+        // handle nor a supplier that could resolve the coordinate.
         assert_eq!(
             enabled_with(&sym, &sym.detached_managers(), &deps, tmp.path()).await,
-            vec![PackageId::any_version("npm", "left-pad")]
+            Vec::<PackageId>::new()
         );
     }
 

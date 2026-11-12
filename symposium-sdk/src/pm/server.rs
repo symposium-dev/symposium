@@ -4,7 +4,7 @@
 //!
 //! ```no_run
 //! use symposium_sdk::pm::server::run;
-//! use symposium_sdk::pm::{PackageId, PackageManager, UnvalidatedPlugin, UpdateLevel};
+//! use symposium_sdk::pm::{PackageLoadTarget, PackageManager, PluginListing, UpdateLevel};
 //!
 //! struct MyPm;
 //!
@@ -13,10 +13,10 @@
 //!     fn name(&self) -> &str { "mypm" }
 //!     async fn load_plugin(
 //!         &self,
-//!         _id: &PackageId,
+//!         _target: &PackageLoadTarget,
 //!         _update: UpdateLevel,
-//!     ) -> anyhow::Result<Vec<UnvalidatedPlugin>> {
-//!         Ok(Vec::new())
+//!     ) -> anyhow::Result<PluginListing> {
+//!         Ok(PluginListing::complete(Vec::new()))
 //!     }
 //! }
 //!
@@ -166,9 +166,7 @@ async fn dispatch<P: PackageManager>(pm: &P, request: Request) -> Response {
         }
         protocol::LOAD_PLUGIN => {
             let p: LoadPluginParams = parse!(LoadPluginParams);
-            answer!(pm.load_plugin(&p.id, p.update).await, |plugins| {
-                PluginsResult { plugins }
-            })
+            answer!(pm.load_plugin(&p.target, p.update).await, |listing| listing)
         }
         protocol::LIST_DEPS => answer!(pm.list_deps().await, |deps| ListDepsResult { deps }),
         protocol::PROJECT_INFO => {

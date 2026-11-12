@@ -7,8 +7,8 @@ use anyhow::Result;
 use serde_json::Value;
 use symposium::UpdateLevel;
 use symposium::pm::{
-    PackageId, PackageManager, PluginKind, PmInstance, PmRegistry, ProjectInfo, UnvalidatedPlugin,
-    Workspace,
+    PackageId, PackageKey, PackageLoadTarget, PackageManager, PackageResolution,
+    PackageSourceClaim, PluginKind, PluginListing, PmInstance, PmRegistry, ProjectInfo, Workspace,
 };
 use symposium_testlib::{TestMode, with_fixture};
 
@@ -30,19 +30,23 @@ impl PackageManager for IntermittentPm {
         })
     }
 
-    async fn list_deps(&self) -> Result<Vec<PackageId>> {
+    async fn list_deps(&self) -> Result<Vec<PackageResolution>> {
         if self.fail_dependencies {
             anyhow::bail!("the package manager temporarily cannot list dependencies");
         }
-        Ok(vec![PackageId::new("cargo", "review-dep", "1.0.0")])
+        Ok(vec![PackageResolution::new(
+            PackageId::new("cargo", "review-dep", "1.0.0"),
+            PackageSourceClaim::CratesIo,
+            PackageKey::new("cargo:review-dep").unwrap(),
+        )])
     }
 
     async fn load_plugin(
         &self,
-        _id: &PackageId,
+        _target: &PackageLoadTarget,
         _update: UpdateLevel,
-    ) -> Result<Vec<UnvalidatedPlugin>> {
-        Ok(Vec::new())
+    ) -> Result<PluginListing> {
+        Ok(PluginListing::complete(Vec::new()))
     }
 }
 

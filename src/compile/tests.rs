@@ -8,17 +8,25 @@ use expect_test::expect;
 use symposium_sdk::manifest::RawPluginManifest;
 
 use crate::config::UseEntry;
-use crate::pm::{ANY_VERSION, PackageId, PluginKind, UnvalidatedPlugin};
+use crate::pm::{
+    ANY_VERSION, PackageId, PackageKey, PackageResolution, PackageSourceClaim, PluginKind,
+    UnvalidatedPlugin,
+};
 use crate::predicate::PredicateSet;
 use crate::skills::Skill;
 
 fn validated(kind: PluginKind, pm: &str, name: &str, manifest: &str) -> Plugin {
     crate::plugins::validate_plugin(
         UnvalidatedPlugin::new(
-            PackageId::new(pm, name, ANY_VERSION),
+            PackageResolution::new(
+                PackageId::new(pm, name, ANY_VERSION),
+                PackageSourceClaim::Unknown,
+                PackageKey::new(format!("{pm}:{name}")).unwrap(),
+            ),
             "/nonexistent",
             RawPluginManifest::parse(manifest).unwrap(),
         ),
+        None,
         kind,
     )
     .unwrap()

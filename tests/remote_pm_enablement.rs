@@ -26,14 +26,14 @@ while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed 's/.*"id":\([0-9]*\),"method".*/\1/')
   case "$line" in
     *'"initialize"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":1,"name":"%s"}}\n' "$id" "$name" ;;
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":2,"name":"%s"}}\n' "$id" "$name" ;;
     *'"canonical_names"'*)
       params=$(printf '%s' "$line" | sed 's/^.*"params"://; s/}$//')
       printf '{"jsonrpc":"2.0","id":%s,"result":%s}\n' "$id" "$params" ;;
     *'"project_info"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"project":{"root":"%s","inputs":[],"local_packages":[]}}}\n' "$id" "$root" ;;
     *'"list_deps"'*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"deps":[{"pm":"%s","name":"widget_lib","version":"1.0.0"}]}}\n' "$id" "$name" ;;
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"deps":[{"id":{"pm":"%s","name":"widget_lib","version":"1.0.0"},"source":"unknown","key":"%s:widget_lib"}]}}\n' "$id" "$name" "$name" ;;
     *'"load_plugin"'*|*'"active_plugins"'*)
       case "$line" in
         *'"load_plugin"'*)
@@ -45,7 +45,7 @@ while IFS= read -r line; do
               continue ;;
           esac ;;
       esac
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"plugins":[{"id":{"pm":"%s","name":"widget_lib","version":"1.0.0"},"root":"%s","manifest":{"name":"widget_lib","skills":[{"source":{"path":"skills"}}],"mcp_servers":[{"name":"widget-server","command":"/usr/bin/true","args":[],"env":[]}]}}]}}\n' "$id" "$name" "$content" ;;
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"plugins":[{"package":{"id":{"pm":"%s","name":"widget_lib","version":"1.0.0"},"source":"unknown","key":"%s:widget_lib"},"root":"%s","manifest":{"name":"widget_lib","skills":[{"source":{"path":"skills"}}],"mcp_servers":[{"name":"widget-server","command":"/usr/bin/true","args":[],"env":[]}]}}]}}\n' "$id" "$name" "$name" "$content" ;;
     *)
       printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"unknown method"}}\n' "$id" ;;
   esac
