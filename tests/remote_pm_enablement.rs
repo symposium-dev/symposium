@@ -100,7 +100,7 @@ async fn check_load_error_cleanup(mode: &str, preserve: bool) {
             let content = content(&root)?;
             let healthy = workspace(&root, &content, "ok", "cargo")?;
             symposium::sync::sync(&ctx.sym, &healthy, UpdateLevel::None).await?;
-            let skill = root.join(".claude/skills/widget-usage/SKILL.md");
+            let skill = root.join(".claude/skills/widget-lib/skills/widget-usage/SKILL.md");
             assert!(skill.is_file());
             let before = mcp_config(&root)?;
             assert!(
@@ -160,7 +160,7 @@ async fn auto_enabled_noncargo_dependencies_install_skills_and_mcp() {
             let root = ctx.workspace_root.clone().unwrap();
             let content = content(&root)?;
             let ws = workspace(&root, &content, "ok", "demo")?;
-            let skill = root.join(".claude/skills/widget-usage/SKILL.md");
+            let skill = root.join(".claude/skills/widget-lib/skills/widget-usage/SKILL.md");
             for entry in ["*", "widget_lib"] {
                 ctx.sym.config.plugins.auto_enable = vec![entry.to_string()];
                 ctx.sym.config.plugins.disable.clear();
@@ -222,7 +222,7 @@ async fn consent_preserves_distinct_noncargo_names_and_survives_reload() {
                     .is_empty()
             );
             symposium::sync::sync(&saved, &ws, UpdateLevel::None).await?;
-            let skill = root.join(".claude/skills/widget-usage/SKILL.md");
+            let skill = root.join(".claude/skills/widget-lib/skills/widget-usage/SKILL.md");
             assert!(skill.is_file());
 
             symposium::discovery::apply_consent(

@@ -121,7 +121,7 @@ async fn rejected_skill_warning_stays_off_hook_stdout() {
                 bad.join("SKILL.md"),
                 "---\nname: \"a/b\"\ndescription: An unsafe name.\n---\n",
             )?;
-            ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+            ctx.symposium(&["init", "--add-agent", "codex"]).await?;
 
             let output = run_session_start(&ctx, HookAgent::Claude, &workspace);
             assert!(output.status.success());
@@ -129,7 +129,7 @@ async fn rejected_skill_warning_stays_off_hook_stdout() {
             assert!(!stdout.contains("plain directory name"), "stdout: {stdout}");
             serde_json::from_slice::<Value>(&output.stdout)
                 .unwrap_or_else(|e| panic!("stdout is not JSON ({e}): {stdout}"));
-            assert!(workspace.join(".claude/skills/ws-hello").is_dir());
+            assert!(workspace.join(".agents/skills/ws-hello").is_dir());
             Ok(())
         },
     )

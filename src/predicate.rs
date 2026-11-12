@@ -62,7 +62,7 @@ impl PredicateEval for Predicate {
 impl PredicateEval for PredicateSet {
     /// True if every predicate holds (or the set is empty).
     fn evaluate(&self, ctx: &mut PredicateContext) -> bool {
-        self.predicates.iter().all(|p| p.evaluate(ctx))
+        ctx.conditions_met || self.predicates.iter().all(|p| p.evaluate(ctx))
     }
 }
 
@@ -80,6 +80,7 @@ pub struct PredicateContext<'a> {
     /// the loader stamps it per plugin (via `Plugin::applies`) before
     /// that plugin's predicate sets are evaluated.
     workspace_member: bool,
+    conditions_met: bool,
     /// Canonical ids of the plugins the applicable `[plugins] use` entries
     /// name ([`used_plugins`](crate::discovery::used_plugins)). A plugin with
     /// no gate of its own
@@ -101,6 +102,7 @@ impl<'a> PredicateContext<'a> {
         Self {
             deps,
             workspace_member: false,
+            conditions_met: false,
             used: std::collections::HashSet::new(),
             custom_entries: std::collections::HashMap::new(),
             custom_cache: std::collections::HashMap::new(),
@@ -162,6 +164,10 @@ impl<'a> PredicateContext<'a> {
     /// skills, hooks, MCP servers, subcommands).
     pub fn set_workspace_member(&mut self, workspace_member: bool) {
         self.workspace_member = workspace_member;
+    }
+
+    pub(crate) fn set_conditions_met(&mut self, met: bool) {
+        self.conditions_met = met;
     }
 
     /// Evaluate a custom predicate by name and argument, returning the cached

@@ -21,6 +21,7 @@ pub mod telemetry;
 pub mod use_command;
 pub mod workspace_state;
 
+pub(crate) mod compile;
 pub(crate) use symposium_sdk::dir_walk;
 pub(crate) mod init;
 pub mod sync;
