@@ -46,7 +46,9 @@
 //!
 //! [`Symposium::audits_dir`]: crate::config::Symposium::audits_dir
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use anyhow::Result;
 
@@ -215,12 +217,43 @@ async fn loaded_digest(pms: &PmRegistry, id: &PackageId) -> Option<Digest> {
             return None;
         }
     };
-    match digest::payload_digest(&fetched.root) {
+    match pms.payload_digests.digest(&fetched.id, &fetched.root) {
         Ok(digest) => Some(digest),
         Err(why) => {
             tracing::debug!(id = %id, %why, "no payload digest; digest entries cannot match");
             None
         }
+    }
+}
+
+/// The payload digests one invocation has computed, by the package and the
+/// directory it was loaded from. One `SessionStart` looks a package up on
+/// several routes (auto-sync, prewarm, the discovery and consent hints,
+/// dispatch), and a digest revocation would otherwise hash its payload on
+/// each. Never kept on disk: the next invocation hashes again, so a changed
+/// payload is never served a stale digest.
+#[derive(Debug, Default)]
+pub struct DigestMemo(Mutex<Digests>);
+
+type Digests = HashMap<(PackageId, PathBuf), Result<Digest, digest::Ineligible>>;
+
+impl DigestMemo {
+    /// The digest of the payload at `root`, loaded as `id`: computed the
+    /// first time, remembered after.
+    fn digest(&self, id: &PackageId, root: &Path) -> Result<Digest, digest::Ineligible> {
+        let key = (id.clone(), root.to_path_buf());
+        if let Some(known) = self.lock().get(&key) {
+            return known.clone();
+        }
+        let computed = digest::payload_digest(root);
+        self.lock().insert(key, computed.clone());
+        computed
+    }
+
+    /// The map; a panic while it was held cannot leave it half-written, so a
+    /// poisoned lock is still usable.
+    fn lock(&self) -> std::sync::MutexGuard<'_, Digests> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 

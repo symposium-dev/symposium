@@ -436,3 +436,36 @@ async fn a_failed_first_fetch_is_retried_at_most_once_a_minute() {
         .unwrap();
     assert!(!failed_recently(&marker));
 }
+
+/// Two lookups of one package through the same package-manager set hash its
+/// payload once: the second answers from the memo, even after the payload
+/// changed on disk, while a new set (the next invocation) hashes again.
+#[tokio::test]
+async fn one_invocation_digests_a_payload_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let krate = tmp.path().join("crate");
+    std::fs::create_dir_all(krate.join("skills/s")).unwrap();
+    std::fs::write(krate.join("skills/s/SKILL.md"), "---\nname: s\n---\n").unwrap();
+    let payload = digest::payload_digest(&krate).unwrap();
+    let list = tmp.path().join("list");
+    write_audits(
+        &list,
+        "widget-lib",
+        &format!("format = 1\n[[revoked]]\ndigest = \"{payload}\"\nreason = \"remote-exec\"\n"),
+    );
+    let index = AuditIndex::new(&list);
+    let id = PackageId::new(CARGO_PM, "widget-lib", "1.0.0");
+
+    let pms = package_at(Some(&krate));
+    assert!(index.revocation(&pms, &id).await.is_some());
+    std::fs::write(
+        krate.join("skills/s/SKILL.md"),
+        "---\nname: s\n---\nchanged\n",
+    )
+    .unwrap();
+    assert!(index.revocation(&pms, &id).await.is_some(), "hashed again");
+    assert!(matches!(index.answer(&pms, &id).await, Answer::Revoked(_)));
+
+    let next = package_at(Some(&krate));
+    assert!(index.revocation(&next, &id).await.is_none());
+}
