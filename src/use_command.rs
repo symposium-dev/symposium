@@ -300,6 +300,16 @@ async fn entry_names(
     name: &str,
     pm: Option<&str>,
 ) -> bool {
+    // Revoking an exact stored grant does not depend on its PM being available.
+    // A bare entry still needs resolution when the caller supplies `--pm`.
+    if entry.name() == name && pm.is_none_or(|pm| entry.plugin().pm.as_deref() == Some(pm)) {
+        return true;
+    }
+    if let (Some(wanted), Some(recorded)) = (pm, entry.plugin().pm.as_deref())
+        && wanted != recorded
+    {
+        return false;
+    }
     let resolved = resolved_entry(names, pms, entry).await.and_then(|r| r.pm);
     let same = match &resolved {
         Some(p) => {

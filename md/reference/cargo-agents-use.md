@@ -92,6 +92,10 @@ counts as the package manager its name resolves to. A scope mismatch (or no
 entry at all) is an error rather than a silent success. The sync that follows
 reaps the plugin's installed skills.
 
+An exact stored name can be removed even when its package manager is unavailable.
+With `--pm`, the stored PM must also match; resolving an alias or qualifying a bare
+entry still needs the normal name-resolution path.
+
 ## Example
 
 ```bash
