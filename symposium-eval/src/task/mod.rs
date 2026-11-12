@@ -69,10 +69,6 @@ pub(crate) struct Task {
 /// The four skill lists with `used` resolved; no skill is in two lists that contradict
 /// each other.
 #[derive(Debug, Clone)]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the runner reads these later in RFD step 4")
-)]
 pub(crate) struct SkillExpectations {
     installed: Vec<SkillName>,
     not_installed: Vec<SkillName>,
@@ -177,10 +173,6 @@ impl Task {
     }
 
     /// The plugin hooks that must leave a successful record, each with its event.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the runner decides these later in RFD step 4")
-    )]
     pub(crate) fn expected_hooks(&self) -> &[ExpectedHook] {
         &self.expected_hooks
     }
