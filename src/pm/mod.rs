@@ -225,10 +225,21 @@ impl PmInstance {
         }
         let wanted = self.canonical_name(name).await.ok()?;
         if let Ok(deps) = self.record_transport_failure("list_deps", self.pm.list_deps().await) {
-            for dep in deps {
-                if self.names(&dep, &wanted).await {
-                    return Some(dep);
-                }
+            let deps: Vec<_> = deps.into_iter().filter(|dep| dep.pm == self.name).collect();
+            if let Some(dep) = deps
+                .iter()
+                .find(|dep| dep.name == wanted || dep.name == name)
+            {
+                return Some(dep.clone());
+            }
+            let spellings: Vec<_> = deps.iter().map(|dep| dep.name.clone()).collect();
+            let canonical = self.canonical_names(&spellings).await.ok()?;
+            if let Some((dep, _)) = deps
+                .into_iter()
+                .zip(canonical)
+                .find(|(_, known)| *known == wanted)
+            {
+                return Some(dep);
             }
         }
         let named = PackageId::any_version(&self.name, name);
@@ -268,6 +279,21 @@ impl PmInstance {
         match self.pm.canonical_name(name).await {
             Ok(canonical) => Ok(canonical),
             Err(e) => self.failure("canonical_name", e),
+        }
+    }
+
+    /// Normalize related names together, recording incomplete answers as failures.
+    pub async fn canonical_names(&self, names: &[String]) -> Result<Vec<String>> {
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        match self.pm.canonical_names(names).await {
+            Ok(canonical) if canonical.len() == names.len() => Ok(canonical),
+            Ok(_) => self.failure(
+                "canonical_names",
+                anyhow::anyhow!("wrong number of canonical names"),
+            ),
+            Err(error) => self.failure("canonical_names", error),
         }
     }
 
@@ -410,6 +436,13 @@ impl PmRegistry {
         match self.instances.iter().find(|inst| inst.name == pm) {
             Some(inst) => inst.canonical_name(name).await,
             None => Ok(name.to_string()),
+        }
+    }
+
+    pub async fn canonical_names(&self, pm: &str, names: &[String]) -> Result<Vec<String>> {
+        match self.instances.iter().find(|inst| inst.name == pm) {
+            Some(inst) => inst.canonical_names(names).await,
+            None => Ok(names.to_vec()),
         }
     }
 

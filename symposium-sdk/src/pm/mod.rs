@@ -225,11 +225,22 @@ pub trait PackageManager: Send + Sync {
     /// compare equal. Exact unless the ecosystem says otherwise: cargo treats
     /// `widget-lib` and `widget_lib` as one crate.
     ///
-    /// Symposium asks only about a name someone typed: every id this PM
-    /// answers with must spell its package the same way, so ids compare as
-    /// they are.
+    /// PMs should return canonical names in their ids. Lookup compares exact
+    /// ids first, then normalizes user input. A PM returning a consistent
+    /// display spelling can still be matched through batched normalization.
     async fn canonical_name(&self, name: &str) -> Result<String> {
         Ok(name.to_string())
+    }
+
+    /// Normalize a batch in input order. Remote clients use the existing
+    /// `canonical_names` wire method so comparison does not need one round
+    /// trip per dependency. An implementation may override this for bulk work.
+    async fn canonical_names(&self, names: &[String]) -> Result<Vec<String>> {
+        let mut canonical = Vec::with_capacity(names.len());
+        for name in names {
+            canonical.push(self.canonical_name(name).await?);
+        }
+        Ok(canonical)
     }
 
     /// The plugins this PM activates for the workspace's dependency set. A

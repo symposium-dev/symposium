@@ -33,6 +33,7 @@ pub const SEARCH: &str = "search";
 pub const FETCH: &str = "fetch";
 pub const REFRESH: &str = "refresh";
 pub const CANONICAL_NAME: &str = "canonical_name";
+pub const CANONICAL_NAMES: &str = "canonical_names";
 
 /// Sent once, before any other method.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,7 +103,13 @@ pub struct RefreshResult {
     pub refreshed: bool,
 }
 
-/// The params and the result of `canonical_name`.
+/// Names to normalize and their canonical forms, in the same order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CanonicalNames {
+    pub names: Vec<String>,
+}
+
+/// The params and the result of the single-name convenience method.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CanonicalName {
     pub name: String,

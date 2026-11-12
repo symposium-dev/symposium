@@ -64,14 +64,14 @@ Plugin content must not decide where Symposium writes. A name it supplies, such 
 
 ## Names compare as package identities
 
-Whether two names are the same package is the package manager's rule, not a string comparison: cargo treats `widget-lib` and `widget_lib` as one crate, while a registry compares its plugin names exactly. Only the package manager can say, through `canonical_name`, which may be a request to another process, so it is asked where a name someone typed comes in and nowhere else. Ids compare as they are, since a package manager spells each of its packages one way. A name typed on the command line goes through `discovery::Names` and the package managers' `PmInstance::find`, never a string comparison or one ecosystem's normalization applied to every name. Nor is a name a crate by default: `use` fails with `no package named ...` when no package manager has it. A `[plugins]` entry is resolved once per invocation, `use` by `discovery::used` and `auto-enable` and `disable` by `Names::spellings`, and the `PluginsConfig` queries take the result: `disable = ["my_plugin"]` covers the crate `my-plugin` but not a registry plugin named `my-plugin`. A `"*"` entry is a pattern, not a name: the `PluginsConfig` queries treat it as matching everything, so code that lists entries skips it rather than reporting it as a plugin.
+Whether two names are the same package is the package manager's rule, not a string comparison: cargo treats `widget-lib` and `widget_lib` as one crate, while a registry compares its plugin names exactly. Only the package manager can say, through `canonical_name`, which may be a request to another process, so lookup first checks exact reported identities and normalizes names when needed. Group fallback comparisons through `canonical_names` rather than sending a request per dependency. Ids compare as they are, since a package manager spells each of its packages one way. A name typed on the command line goes through `discovery::Names` and the package managers' `PmInstance::find`, preserving lookup tiers and each PM's naming rules. Nor is a name a crate by default: `use` fails with `no package named ...` when no package manager has it. A `[plugins]` entry is resolved once per invocation, `use` by `discovery::used` and `auto-enable` and `disable` by `Names::spellings`, and the `PluginsConfig` queries take the result: `disable = ["my_plugin"]` covers the crate `my-plugin` but not a registry plugin named `my-plugin`. A `"*"` entry is a pattern, not a name: the `PluginsConfig` queries treat it as matching everything, so code that lists entries skips it rather than reporting it as a plugin.
 
 ## Remote package managers need identity and lifecycle boundaries
 
 A remote PM's naming rules do not come from its configured name. Every PM
-implements `canonical_name` to normalize names;
-lookup and config comparisons await that operation for both returned package
-names and user entries. Failed normalization marks the PM failed and cannot
+implements name normalization; the wire operation is the existing
+`canonical_names` batch. Lookup checks exact identities first, and configuration
+comparisons group reported spellings and user entries by PM. Failed normalization marks the PM failed and cannot
 bypass `disable` or authorize cleanup. Consent decisions retain the discovered
 package's canonical PM identity for both approvals and declines. Activation
 includes enabled dependencies from every ecosystem. Failed name resolution

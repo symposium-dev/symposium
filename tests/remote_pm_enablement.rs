@@ -27,7 +27,7 @@ while IFS= read -r line; do
   case "$line" in
     *'"initialize"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":1,"name":"%s"}}\n' "$id" "$name" ;;
-    *'"canonical_name"'*)
+    *'"canonical_names"'*)
       params=$(printf '%s' "$line" | sed 's/^.*"params"://; s/}$//')
       printf '{"jsonrpc":"2.0","id":%s,"result":%s}\n' "$id" "$params" ;;
     *'"project_info"'*)

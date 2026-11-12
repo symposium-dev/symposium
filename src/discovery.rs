@@ -153,6 +153,10 @@ pub struct Names<'a> {
     pms: &'a PmRegistry,
 }
 
+/// Per-PM spelling results; `None` records a failed normalization batch.
+type CanonicalSpellings =
+    std::collections::BTreeMap<String, Option<std::collections::BTreeMap<String, String>>>;
+
 impl<'a> Names<'a> {
     pub fn new(registry: &[Plugin], deps: &[PackageId], pms: &'a PmRegistry) -> Self {
         Self {
@@ -160,14 +164,6 @@ impl<'a> Names<'a> {
             deps: deps.to_vec(),
             pms,
         }
-    }
-
-    /// Whether `name` names `id`, as spelled or under `id`'s package
-    /// manager's canonical form. Only a name spelled another way asks it.
-    async fn same(&self, id: &PackageId, name: &str) -> Result<bool> {
-        Ok(id.name == name
-            || self.pms.canonical_name(&id.pm, &id.name).await?
-                == self.pms.canonical_name(&id.pm, name).await?)
     }
 
     /// The packages `name` could mean from the nearest of the registry
@@ -184,13 +180,41 @@ impl<'a> Names<'a> {
 
     async fn named(&self, ids: &[PackageId], name: &str, pm: Option<&str>) -> Vec<PackageId> {
         let mut found: Vec<PackageId> = Vec::new();
+        let mut examined = std::collections::HashSet::new();
         for id in ids {
-            let seen = found.iter().any(|f| f.pm == id.pm);
-            if !seen
-                && pm.is_none_or(|pm| id.pm == pm)
-                && self.same(id, name).await.unwrap_or(false)
+            if pm.is_some_and(|pm| id.pm != pm) || !examined.insert(&id.pm) {
+                continue;
+            }
+            let candidates: Vec<_> = ids
+                .iter()
+                .filter(|candidate| candidate.pm == id.pm)
+                .collect();
+            // PM-reported identities normally already have the wanted spelling.
+            // Preserve registry precedence by doing this within each lookup tier.
+            if let Some(exact) = candidates.iter().find(|candidate| candidate.name == name) {
+                found.push((*exact).clone());
+                continue;
+            }
+            let Ok(wanted) = self.pms.canonical_name(&id.pm, name).await else {
+                continue;
+            };
+            if let Some(exact) = candidates.iter().find(|candidate| candidate.name == wanted) {
+                found.push((*exact).clone());
+                continue;
+            }
+            // Older PMs may return a consistent display spelling instead of the
+            // normalized form. Resolve that fallback in one batch for this PM.
+            let spellings: Vec<_> = candidates
+                .iter()
+                .map(|candidate| candidate.name.clone())
+                .collect();
+            if let Ok(canonical) = self.pms.canonical_names(&id.pm, &spellings).await
+                && let Some((candidate, _)) = candidates
+                    .into_iter()
+                    .zip(canonical)
+                    .find(|(_, known)| *known == wanted)
             {
-                found.push(id.clone());
+                found.push(candidate.clone());
             }
         }
         found
@@ -200,10 +224,46 @@ impl<'a> Names<'a> {
     /// entry names here under another spelling than its own.
     pub async fn spellings(&self, plugins: &crate::config::PluginsConfig) -> Spellings {
         let mut spellings = Spellings::default();
+        let canonical = self
+            .resolve_spellings(plugins, self.registry.iter().chain(&self.deps))
+            .await;
         for id in self.registry.iter().chain(&self.deps) {
-            self.spell(plugins, id, &mut spellings).await;
+            self.spell_resolved(plugins, id, &canonical, &mut spellings);
         }
         spellings
+    }
+
+    async fn resolve_spellings<'b>(
+        &self,
+        plugins: &crate::config::PluginsConfig,
+        ids: impl Iterator<Item = &'b PackageId>,
+    ) -> CanonicalSpellings {
+        let mut batches: std::collections::BTreeMap<&str, std::collections::BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        for id in ids {
+            for entry in plugins.auto_enable.iter().chain(&plugins.disable) {
+                if entry.name != "*"
+                    && entry.name != id.name
+                    && entry.pm.as_ref().is_none_or(|pm| *pm == id.pm)
+                {
+                    let names = batches.entry(&id.pm).or_default();
+                    names.insert(id.name.clone());
+                    names.insert(entry.name.clone());
+                }
+            }
+        }
+        let mut resolved = CanonicalSpellings::new();
+        for (pm, names) in batches {
+            let names: Vec<_> = names.into_iter().collect();
+            let canonical = self
+                .pms
+                .canonical_names(pm, &names)
+                .await
+                .ok()
+                .map(|canonical| names.into_iter().zip(canonical).collect());
+            resolved.insert(pm.to_owned(), canonical);
+        }
+        resolved
     }
 
     /// Add to `spellings` the `auto-enable` and `disable` entries that name
@@ -216,15 +276,28 @@ impl<'a> Names<'a> {
         id: &PackageId,
         spellings: &mut Spellings,
     ) {
+        let canonical = self.resolve_spellings(plugins, std::iter::once(id)).await;
+        self.spell_resolved(plugins, id, &canonical, spellings);
+    }
+
+    fn spell_resolved(
+        &self,
+        plugins: &crate::config::PluginsConfig,
+        id: &PackageId,
+        canonical: &CanonicalSpellings,
+        spellings: &mut Spellings,
+    ) {
         for entry in plugins.auto_enable.iter().chain(&plugins.disable) {
             if entry.name != "*"
                 && entry.name != id.name
                 && entry.pm.as_ref().is_none_or(|pm| *pm == id.pm)
             {
-                match self.same(id, &entry.name).await {
-                    Ok(true) => spellings.add(entry.clone(), id.clone()),
-                    Ok(false) => {}
-                    Err(_) => spellings.mark_uncertain(entry.clone(), id.clone()),
+                match canonical.get(&id.pm).and_then(Option::as_ref) {
+                    Some(names) if names[&id.name] == names[&entry.name] => {
+                        spellings.add(entry.clone(), id.clone());
+                    }
+                    Some(_) => {}
+                    None => spellings.mark_uncertain(entry.clone(), id.clone()),
                 }
             }
         }

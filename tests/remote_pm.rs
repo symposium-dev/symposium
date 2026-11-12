@@ -7,7 +7,7 @@
 //! The fixture PMs are shell scripts. A script is enough to exercise the
 //! protocol from Symposium's side, and it keeps the test independent of build
 //! ordering: no PM binary has to exist before the test can run. They run
-//! through `/bin/sh` and splice paths into JSON unescaped, so these tests are
+//! through `sh` and splice paths into JSON unescaped, so these tests are
 //! Unix-only.
 #![cfg(unix)]
 
@@ -74,14 +74,14 @@ done
 fn remote(name: &str, script: &Path) -> RemotePm {
     RemotePm::new(
         name,
-        RemotePmCommand::new("/bin/sh").arg(script.display().to_string()),
+        RemotePmCommand::new("sh").arg(script.display().to_string()),
     )
 }
 
-/// A PM is asked to canonicalize each name once; its answer is kept for the
-/// connection.
+/// Batch normalization retains the established wire method and caches each
+/// answer for the connection, preserving input order and duplicates.
 #[tokio::test]
-async fn a_pm_canonicalizes_each_name_once() {
+async fn a_pm_batches_and_reuses_name_comparisons() {
     let tmp = tempfile::tempdir().unwrap();
     let asked = tmp.path().join("asked");
     let folding = script(
@@ -94,10 +94,10 @@ while IFS= read -r line; do
   case "$line" in
     *'"initialize"'*)
       printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol_version":1,"name":"demo"}}}}\n' "$id" ;;
-    *'"canonical_name"'*)
-      name=$(printf '%s' "$line" | sed 's/.*"name":"\([^"]*\)".*/\1/')
-      echo "$name" >> "{asked}"
-      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"name":"%s"}}}}\n' "$id" "$(printf '%s' "$name" | tr - _)" ;;
+    *'"canonical_names"'*)
+      names=$(printf '%s' "$line" | sed 's/.*"names":\(\[[^]]*\]\).*/\1/')
+      echo "$names" >> "{asked}"
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"names":%s}}}}\n' "$id" "$(printf '%s' "$names" | tr - _)" ;;
   esac
 done
 "#,
@@ -105,14 +105,51 @@ done
         ),
     );
     let pm = remote("demo", &folding);
+    assert_eq!(
+        pm.canonical_names(&["widget-lib".into(), "serde".into(), "widget-lib".into()])
+            .await
+            .unwrap(),
+        ["widget_lib", "serde", "widget_lib"]
+    );
     for name in ["widget-lib", "widget-lib", "serde"] {
         let expected = name.replace('-', "_");
         assert_eq!(pm.canonical_name(name).await.unwrap(), expected);
     }
     assert_eq!(
         std::fs::read_to_string(&asked).unwrap(),
-        "widget-lib\nserde\n"
+        "[\"serde\",\"widget-lib\"]\n"
     );
+
+    let pms = PmRegistry::new(vec![PmInstance::new(
+        "demo",
+        false,
+        PluginKind::Package,
+        Box::new(pm),
+    )]);
+    let deps: Vec<_> = (0..128)
+        .map(|n| PackageId::new("demo", format!("item-{n}"), "1.0.0"))
+        .collect();
+    let names = symposium::discovery::Names::new(&[], &deps, &pms);
+    assert_eq!(
+        names.nearest("item-127", Some("demo")).await,
+        [deps[127].clone()]
+    );
+    // Exact identities need no normalization, even after many other candidates.
+    assert_eq!(std::fs::read_to_string(&asked).unwrap().lines().count(), 1);
+
+    let config = symposium::config::PluginsConfig {
+        disable: vec![symposium::config::PluginRef::new("demo", "item_127")],
+        ..Default::default()
+    };
+    let spellings = names.spellings(&config).await;
+    assert!(config.is_disabled(&deps[127], &spellings));
+    assert!(!config.is_disabled(&deps[0], &spellings));
+    assert_eq!(
+        names.nearest("item_127", Some("demo")).await,
+        [deps[127].clone()]
+    );
+    // All fallback dependency/config comparisons share one additional request.
+    assert_eq!(std::fs::read_to_string(&asked).unwrap().lines().count(), 2);
 }
 
 #[tokio::test]
@@ -773,9 +810,9 @@ while IFS= read -r line; do
       printf '{"id":%s,"jsonrpc":"2.0","result":{"protocol_version":1,"name":"demo"}}\n' "$id" ;;
     *'"list_deps"'*)
       printf '{"id":%s,"jsonrpc":"2.0","result":{"deps":[{"pm":"demo","name":"widget-lib","version":"1"}]}}\n' "$id" ;;
-    *'"canonical_name"'*)
-      name=$(printf '%s' "$line" | sed 's/.*"name":"\([^"]*\)".*/\1/' | tr '[:upper:]' '[:lower:]')
-      printf '{"id":%s,"jsonrpc":"2.0","result":{"name":"%s"}}\n' "$id" "$name" ;;
+    *'"canonical_names"'*)
+      names=$(printf '%s' "$line" | sed 's/.*"names":\(\[[^]]*\]\).*/\1/' | tr '[:upper:]' '[:lower:]')
+      printf '{"id":%s,"jsonrpc":"2.0","result":{"names":%s}}\n' "$id" "$names" ;;
   esac
 done
 "#,
@@ -863,7 +900,7 @@ done
 #[tokio::test]
 async fn a_pm_without_normalization_cannot_compare_names() {
     let tmp = tempfile::tempdir().unwrap();
-    // This fixture answers initialize but rejects canonical_name as unknown.
+    // This fixture answers initialize but rejects canonical_names as unknown.
     let pm = remote("demo", &synthesizing_pm(tmp.path(), tmp.path()));
     let pms = PmRegistry::new(vec![PmInstance::new(
         "demo",

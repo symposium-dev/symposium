@@ -374,9 +374,9 @@ while IFS= read -r line; do
   case "$line" in
     *'"initialize"'*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol_version":1,"name":"other"}}\n' "$id" ;;
-    *'"canonical_name"'*)
-      name=$(printf '%s' "$line" | sed 's/.*"name":"\([^"]*\)".*/\1/')
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"name":"%s"}}\n' "$id" "$name" ;;
+    *'"canonical_names"'*)
+      names=$(printf '%s' "$line" | sed 's/.*"names":\(\[[^]]*\]\).*/\1/')
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"names":%s}}\n' "$id" "$names" ;;
     *'"search"'*)
       q=$(printf '%s' "$line" | sed 's/.*"query":"\([^"]*\)".*/\1/')
       printf '{"jsonrpc":"2.0","id":%s,"result":{"plugins":[{"id":{"pm":"other","name":"%s","version":"*"}}]}}\n' "$id" "$q" ;;

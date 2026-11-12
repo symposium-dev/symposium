@@ -174,7 +174,7 @@ pub struct RemotePm {
     /// in flight, so a request abandoned midway leaves the PM marked unusable
     /// rather than a connection whose next read is the abandoned answer.
     state: Mutex<Option<Result<Connection, String>>>,
-    /// The PM's answers to `canonical_name`, so each name costs one request.
+    /// The PM's answers to batched normalization requests, reused per connection.
     canonical: std::sync::Mutex<BTreeMap<String, String>>,
 }
 
@@ -448,21 +448,41 @@ impl PackageManager for RemotePm {
     }
 
     async fn canonical_name(&self, name: &str) -> Result<String> {
-        if let Some(known) = self.canonical.lock().unwrap().get(name) {
-            return Ok(known.clone());
+        Ok(self.canonical_names(&[name.to_string()]).await?.remove(0))
+    }
+
+    async fn canonical_names(&self, names: &[String]) -> Result<Vec<String>> {
+        let missing: Vec<String> = {
+            let known = self.canonical.lock().unwrap();
+            names
+                .iter()
+                .filter(|name| !known.contains_key(*name))
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect()
+        };
+        if !missing.is_empty() {
+            let params = serde_json::to_value(CanonicalNames {
+                names: missing.clone(),
+            })?;
+            let canonical = self
+                .call::<CanonicalNames>(protocol::CANONICAL_NAMES, Some(params))
+                .await?
+                .names;
+            anyhow::ensure!(
+                canonical.len() == missing.len(),
+                "canonical_names returned {} names for {} inputs",
+                canonical.len(),
+                missing.len()
+            );
+            self.canonical
+                .lock()
+                .unwrap()
+                .extend(missing.into_iter().zip(canonical));
         }
-        let params = serde_json::to_value(CanonicalName {
-            name: name.to_string(),
-        })?;
-        let canonical = self
-            .call::<CanonicalName>(protocol::CANONICAL_NAME, Some(params))
-            .await?
-            .name;
-        self.canonical
-            .lock()
-            .unwrap()
-            .insert(name.to_string(), canonical.clone());
-        Ok(canonical)
+        let known = self.canonical.lock().unwrap();
+        Ok(names.iter().map(|name| known[name].clone()).collect())
     }
 
     async fn active_plugins(&self, deps: &[PackageId]) -> Result<PluginListing> {
