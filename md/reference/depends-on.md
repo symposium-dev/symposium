@@ -31,6 +31,13 @@ Semantics:
 - `==1.0.219`: exact-version matching
 - `*`: wildcard — always matches, even a workspace with zero dependencies
 
+For ecosystem-specific guidance, qualify the dependency even if its name is
+currently unique. For example, `depends-on = ["uuid"]` also matches an npm
+dependency named `uuid`; `depends-on = ["cargo:uuid"]` matches only the Rust crate.
+The bare spelling deliberately retains its existing any-PM meaning. Predicate
+matching is separate from plugin lookup and does not choose a recommendation or
+grant consent to a dependency plugin.
+
 > **`=` is not Cargo's `=`.** In a dependency atom, `=1.0` means `^1.0` (1.0 or any later 1.x release), which is what a bare `1.0` means in Cargo. To pin an exact version, use `==`: `serde==1.0.219` matches only 1.0.219.
 
 Further rules:
