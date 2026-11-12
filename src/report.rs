@@ -5,6 +5,7 @@
 //! `ReportEvent`. A custom tracing layer picks these up and either
 //! pretty-prints them (`--verbose`) or accumulates JSON (`--json`).
 
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
@@ -140,6 +141,8 @@ pub enum ReportEvent {
         version: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        format: Option<String>,
     },
 
     /// A `[plugins] use` entry was recorded by `cargo agents use`.
@@ -158,6 +161,8 @@ pub enum ReportEvent {
         root: String,
         /// `active`, `dormant`, `candidate`, or `declined`.
         state: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        format: Option<String>,
     },
 
     /// A provider was listed with its plugins.
@@ -314,10 +319,14 @@ impl ReportEvent {
                 name,
                 version,
                 description,
+                format,
             } => {
                 let mut line = format!("  {name}");
                 if let Some(v) = version {
                     line.push_str(&format!(" {v}"));
+                }
+                if let Some(f) = format {
+                    line.push_str(&format!(" ({f})"));
                 }
                 if let Some(d) = description {
                     line.push_str(&format!("\n      {d}"));
@@ -345,6 +354,7 @@ impl ReportEvent {
                 version,
                 root,
                 state,
+                format,
             } => {
                 let marker = match state.as_str() {
                     "active" => "✅",
@@ -356,6 +366,10 @@ impl ReportEvent {
                     .as_deref()
                     .map(|v| format!(" {v}"))
                     .unwrap_or_default();
+                let version = match format {
+                    Some(label) => format!("{version} ({label})"),
+                    None => version,
+                };
                 format!("{marker} {name}{version} — {root}")
             }
 
@@ -400,6 +414,7 @@ pub struct ReportLayer {
     mode: ReportMode,
     buffer: Arc<Mutex<Vec<serde_json::Value>>>,
     max_level: tracing::Level,
+    warned: Mutex<HashSet<String>>,
 }
 
 impl ReportLayer {
@@ -413,6 +428,7 @@ impl ReportLayer {
                 mode,
                 buffer,
                 max_level,
+                warned: Mutex::default(),
             },
             handle,
         )
@@ -452,6 +468,13 @@ where
         let Some(json_str) = visitor.report_json else {
             return;
         };
+        if matches!(
+            serde_json::from_str(&json_str),
+            Ok(ReportEvent::Warning { .. })
+        ) && !self.warned.lock().unwrap().insert(json_str.clone())
+        {
+            return;
+        }
 
         match self.mode {
             ReportMode::Normal => {

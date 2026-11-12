@@ -7,7 +7,7 @@
 - Prefer the Agent Plugins format where an agent reads it, but do not treat it as the only way to register extensions: one compiled directory carries the Agent Plugins and Claude Code manifests at once, and the per-skill install path stays for the agents with no plugin unit, and for project-scoped plugins in version one.
 - Write each directory once and register its path with an agent where the agent then reads it in place, copying where it does not. Only the Copilot CLI reads it in place, so most agents get a copy.
 - Install through `cargo agents sync`, at the same scope as the enablement that selected the plugin. No new command.
-- Cover the format's skills component in version one. MCP servers are a follow-up that belongs to the meta-server design.
+- Read both of the format's components in version one: skills, and the MCP servers of a package's `mcp.json`.
 
 ## Motivation
 
@@ -41,7 +41,7 @@ Version one delivers:
 
 - a compiled plugin directory produced from an already-gated Symposium plugin, carrying its manifest and its resolved skills;
 - installation of that directory at user scope for the agents that have a plugin unit (Claude Code, Codex CLI, the Copilot CLI, Antigravity CLI and Goose), carrying every manifest dialect at once;
-- recognition of an externally authored `plugin.json` package wherever a plugin is already found, and resolution of its skills;
+- recognition of an externally authored `plugin.json` package wherever a plugin is already found, and resolution of its skills and MCP servers;
 - optional `version` and `description` fields in every plugin manifest, which the compiled manifests carry;
 - the `dev.symposium` extensions namespace, through which a portable package can carry Symposium gating; and
 - coverage of these packages by `plugin validate`, `search`, `status`, and `use`.
@@ -52,7 +52,7 @@ Version one does not change:
 - hook registration and dispatch, which remain Symposium's; or
 - how plugins are distributed or enabled.
 
-MCP servers are a follow-up rather than an omission. The format defines two component types and requires a conforming client to support at least one, naming a skills-only client as an example, so a directory with no `mcp.json` is valid and an incoming one is reported as unsupported. The reason to sequence it separately is that emitting an `mcp.json` makes each agent connect to every backing server itself and load all of their tool declarations at startup, which is the cost the [MCP meta-server](../mcp-meta-server/README.md) exists to avoid. That trade is a decision about the meta-server, and it is settled there before it is applied here. Skills raise no equivalent question, because a skill directory is the same content however it arrives.
+A package's MCP servers go through that existing path: Symposium checks its `mcp.json` against the format and registers each valid server like any plugin's, providing the format's `PLUGIN_ROOT` and a `PLUGIN_DATA` directory that survives updates.
 
 ## Change in a nutshell
 
@@ -216,12 +216,12 @@ Version 1.0.0 was published in August 2026 by a committee spanning Amazon, Curso
 2. Compile each plugin named by a `use --global` entry, with all its skills, into a directory under `~/.symposium/installed/` that carries both manifests and the ownership marker and is renamed on collision, and install it for every agent that can take a plugin: Claude Code, Codex CLI, the Copilot CLI, Antigravity CLI and Goose ([#332](https://github.com/symposium-dev/symposium/pull/332), on top of [#333](https://github.com/symposium-dev/symposium/pull/333), which resolves each agent's relocated configuration directory).
 3. Install workspace-scoped plugins for Claude Code at the workspace root and retire its per-skill copies ([#352](https://github.com/symposium-dev/symposium/pull/352), on top of [#332](https://github.com/symposium-dev/symposium/pull/332)). A session started in a subdirectory gets none of them, as [#353](https://github.com/symposium-dev/symposium/issues/353) records.
 4. Recognize a `plugin.json` directory as a plugin entry in every position a plugin is already found, including the nesting and source-root rules ([#348](https://github.com/symposium-dev/symposium/pull/348)).
-5. Resolve an external package's skills, reporting an `mcp.json` as unsupported, and contain malformed packages, skills, and escaping paths at their proper boundaries ([#348](https://github.com/symposium-dev/symposium/pull/348), and [#354](https://github.com/symposium-dev/symposium/pull/354) for links inside skill content).
+5. Resolve an external package's skills and MCP servers, and contain malformed packages, skills, servers, and escaping paths at their proper boundaries ([#348](https://github.com/symposium-dev/symposium/pull/348), and [#354](https://github.com/symposium-dev/symposium/pull/354) for links inside skill content).
 6. Honor the `dev.symposium` extensions namespace, and extend `plugin validate`, `search`, `status`, and `use` to cover these packages ([#348](https://github.com/symposium-dev/symposium/pull/348)).
 
 ### Future work
 
-Emitting and reading `mcp.json` removes the last per-agent configuration format Symposium maintains, and follows the meta-server decision described above. It also introduces the format's subprocess contract, a `PLUGIN_ROOT` and a `PLUGIN_DATA` directory that survives updates, and requires a rule separating Symposium's own `${VAR}` expansion from the format's two placeholders.
+Emitting `mcp.json` in a compiled directory would remove the last per-agent configuration format Symposium maintains.
 
 Project scope as a plugin for Codex CLI, the Copilot CLI, Antigravity CLI and Goose waits until the costs [Which agents can scope a plugin to a project](#which-agents-can-scope-a-plugin-to-a-project) records are settled, and Kiro until a running Kiro shows where installed powers live and whether it discovers one placed there.
 

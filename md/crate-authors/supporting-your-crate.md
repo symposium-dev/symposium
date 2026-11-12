@@ -9,6 +9,10 @@ The recommended approach is to ship skills directly in your crate's source tree.
 
 See [Authoring a plugin](./authoring-a-plugin.md) for the full walkthrough.
 
+## Ship an Agent Plugins package
+
+A crate whose root holds an [Agent Plugins](../reference/agent-plugins.md) `plugin.json` next to its `skills/` folder is read as that package, so skills you already ship for agents that read the format need nothing else.
+
 ## Skill layout metadata
 
 By default Symposium looks in your crate's `skills/` directory. To customize the layout (a different subdirectory, several skill groups, a git source, or delegating to another crate), you describe your crate's plugin inline under `[package.metadata.symposium]` in `Cargo.toml`. **This block uses the exact same schema as a [`Symposium.toml` plugin manifest](../reference/plugin-definition.md)**: it is just that manifest embedded in `Cargo.toml`:
@@ -29,6 +33,8 @@ If you ship *both* a `[package.metadata.symposium]` block and a `Symposium.toml`
 2. **Opt out of the default group**: `[package.metadata.symposium.defaults] skills = false` and declare no skill groups: no skills from this crate.
 3. **`source.path` groups**: look in that subdirectory of your crate's source, in addition to the default `skills/` group unless you opt out of it.
 4. **`[[package.metadata.symposium.plugins]]` chained references**: load another crate's plugin (see [Delegating to another crate](#delegating-to-another-crate)).
+
+Rule 1 does not apply to a crate with a `plugin.json` at its root: that crate is an [Agent Plugins package](#ship-an-agent-plugins-package).
 
 ### Delegating to another crate
 

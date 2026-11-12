@@ -119,7 +119,7 @@ fn copy(source: &Path, dest: &Path, debounce: Duration) -> Result<bool> {
     {
         return Ok(false);
     }
-    let (contents, _) = sync::collect_dir_contents(source)?;
+    let (contents, _) = sync::collect_dir_contents(source, None)?;
     let mut tree = vec![(version.to_path_buf(), None)];
     tree.extend(
         contents

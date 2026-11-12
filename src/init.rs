@@ -122,9 +122,7 @@ pub async fn init(
 
     if agents.is_empty() {
         // Uninstall: unregister all hooks and MCP servers for every agent.
-        crate::sync::register_hooks(sym, out)
-            .await
-            .context("failed to unregister hooks")?;
+        crate::sync::register_hooks(sym, out).context("failed to unregister hooks")?;
         out.done(format!(
             "{}: wrote user config (no agents — symposium uninstalled)",
             display_path(&config_path),
@@ -140,9 +138,7 @@ pub async fn init(
     ));
 
     if sym.config.hook_scope == crate::config::HookScope::Global {
-        crate::sync::register_hooks(sym, out)
-            .await
-            .context("failed to register global hooks")?;
+        crate::sync::register_hooks(sym, out).context("failed to register global hooks")?;
     }
 
     if removed_agent {

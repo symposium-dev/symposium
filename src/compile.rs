@@ -335,7 +335,7 @@ fn plugin_contents(
             .parent()
             .with_context(|| format!("skill {dir} has no source directory"))?;
         let base = Path::new(SKILLS_DIR).join(dir);
-        let (tree, skips) = sync::collect_dir_contents(source)?;
+        let (tree, skips) = sync::collect_dir_contents(source, skill.agent_plugin_root.as_deref())?;
         contents.push((base.clone(), None));
         contents.extend(tree.into_iter().map(|(rel, data)| (base.join(rel), data)));
         skipped.extend(skips);
