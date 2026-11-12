@@ -120,6 +120,28 @@ impl Agent {
         ]
     }
 
+    pub fn detect_installed(sym: &Symposium) -> Vec<Agent> {
+        Agent::all()
+            .iter()
+            .copied()
+            .filter(|agent| agent.user_config_dir(sym).is_dir())
+            .collect()
+    }
+
+    fn user_config_dir(&self, sym: &Symposium) -> PathBuf {
+        let home = sym.home_dir();
+        match self {
+            // Not `~/.gemini/` alone: Gemini CLI creates that one too.
+            Agent::Antigravity => home.join(".gemini").join("antigravity-cli"),
+            Agent::Claude => claude_config_dir(sym),
+            Agent::Codex => codex_dir(sym),
+            Agent::Copilot => copilot_config_dir(sym),
+            Agent::Goose => goose_config_dir(sym),
+            Agent::Kiro => home.join(".kiro"),
+            Agent::OpenCode => xdg_config_dir(sym).join("opencode"),
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Skill installation paths
     // -----------------------------------------------------------------------
@@ -269,10 +291,6 @@ impl Agent {
         sym: &Symposium,
     ) -> PathBuf {
         let home = sym.home_dir();
-        let xdg_config = || {
-            sym.env_dir("XDG_CONFIG_HOME")
-                .unwrap_or_else(|| home.join(".config"))
-        };
 
         match (self, scope) {
             // Project MCP is `.mcp.json`; the user-level file is `.claude.json`.
@@ -294,7 +312,7 @@ impl Agent {
 
             (Agent::OpenCode, McpScope::Project) => project_root.join("opencode.json"),
             (Agent::OpenCode, McpScope::User) => {
-                xdg_config().join("opencode").join("opencode.json")
+                xdg_config_dir(sym).join("opencode").join("opencode.json")
             }
 
             (Agent::Kiro, McpScope::Project) => {
@@ -309,10 +327,7 @@ impl Agent {
             // to a file nobody reads.
             (Agent::Codex, _) => codex_dir(sym).join("config.toml"),
             (Agent::Copilot, _) => copilot_config_dir(sym).join("mcp-config.json"),
-            (Agent::Goose, _) => goose_path_root(sym)
-                .map(|root| root.join("config"))
-                .unwrap_or_else(|| xdg_config().join("goose"))
-                .join("config.yaml"),
+            (Agent::Goose, _) => goose_config_dir(sym).join("config.yaml"),
         }
     }
 
@@ -1053,6 +1068,17 @@ fn goose_path_root(sym: &Symposium) -> Option<PathBuf> {
     sym.env_dir("GOOSE_PATH_ROOT")
 }
 
+fn xdg_config_dir(sym: &Symposium) -> PathBuf {
+    sym.env_dir("XDG_CONFIG_HOME")
+        .unwrap_or_else(|| sym.home_dir().join(".config"))
+}
+
+fn goose_config_dir(sym: &Symposium) -> PathBuf {
+    goose_path_root(sym)
+        .map(|root| root.join("config"))
+        .unwrap_or_else(|| xdg_config_dir(sym).join("goose"))
+}
+
 fn event_to_cli_arg(event: &str) -> &str {
     match event {
         "PreToolUse" | "preToolUse" => "pre-tool-use",
@@ -1185,6 +1211,110 @@ mod tests {
         assert_eq!(Agent::from_config_name("codex").unwrap(), Agent::Codex);
         assert_eq!(Agent::from_config_name("copilot").unwrap(), Agent::Copilot);
         assert!(Agent::from_config_name("unknown").is_err());
+    }
+
+    fn detect(home: &Path, vars: &[(&str, &Path)]) -> Vec<Agent> {
+        let vars: Vec<(String, std::ffi::OsString)> = vars
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.as_os_str().to_owned()))
+            .collect();
+        let mut sym = Symposium::from_dir(home);
+        sym.set_env(move |name| {
+            vars.iter()
+                .find(|(var, _)| var == name)
+                .map(|(_, value)| value.clone())
+        });
+        Agent::detect_installed(&sym)
+    }
+
+    #[test]
+    fn detects_nothing_on_a_bare_machine() {
+        let home = tempfile::tempdir().unwrap();
+        assert!(detect(home.path(), &[]).is_empty());
+    }
+
+    #[test]
+    fn detects_agent_by_config_dir() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir(home.path().join(".codex")).unwrap();
+        assert_eq!(detect(home.path(), &[]), vec![Agent::Codex]);
+    }
+
+    #[test]
+    fn a_file_is_not_a_config_dir() {
+        let home = tempfile::tempdir().unwrap();
+        fs::write(home.path().join(".codex"), "").unwrap();
+        assert!(detect(home.path(), &[]).is_empty());
+    }
+
+    #[test]
+    fn empty_relocation_falls_back_to_home() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir(home.path().join(".claude")).unwrap();
+        assert_eq!(
+            detect(home.path(), &[("CLAUDE_CONFIG_DIR", Path::new(""))]),
+            vec![Agent::Claude]
+        );
+    }
+
+    #[test]
+    fn gemini_dir_alone_is_not_antigravity() {
+        let home = tempfile::tempdir().unwrap();
+        fs::create_dir(home.path().join(".gemini")).unwrap();
+        assert!(detect(home.path(), &[]).is_empty());
+
+        fs::create_dir(home.path().join(".gemini").join("antigravity-cli")).unwrap();
+        assert_eq!(detect(home.path(), &[]), vec![Agent::Antigravity]);
+    }
+
+    #[test]
+    fn detection_honors_relocated_config_dirs() {
+        let home = tempfile::tempdir().unwrap();
+        let moved = tempfile::tempdir().unwrap();
+        let dir = |name: &str| moved.path().join(name);
+        for name in ["claude", "codex", "copilot", "goose/config", "xdg/opencode"] {
+            fs::create_dir_all(dir(name)).unwrap();
+        }
+        assert_eq!(
+            detect(
+                home.path(),
+                &[
+                    ("CLAUDE_CONFIG_DIR", &dir("claude")),
+                    ("CODEX_HOME", &dir("codex")),
+                    ("COPILOT_HOME", &dir("copilot")),
+                    ("GOOSE_PATH_ROOT", &dir("goose")),
+                    ("XDG_CONFIG_HOME", &dir("xdg")),
+                ]
+            ),
+            vec![
+                Agent::Claude,
+                Agent::Codex,
+                Agent::Copilot,
+                Agent::Goose,
+                Agent::OpenCode
+            ]
+        );
+    }
+
+    #[test]
+    fn a_relocated_agent_is_not_detected_in_its_default_dir() {
+        let home = tempfile::tempdir().unwrap();
+        let moved = tempfile::tempdir().unwrap();
+        for name in [".claude", ".codex", ".copilot", ".config/goose"] {
+            fs::create_dir_all(home.path().join(name)).unwrap();
+        }
+        assert!(
+            detect(
+                home.path(),
+                &[
+                    ("CLAUDE_CONFIG_DIR", &moved.path().join("claude")),
+                    ("CODEX_HOME", &moved.path().join("codex")),
+                    ("COPILOT_HOME", &moved.path().join("copilot")),
+                    ("GOOSE_PATH_ROOT", moved.path()),
+                ]
+            )
+            .is_empty()
+        );
     }
 
     /// Each path was confirmed by asking the tool itself, not read off docs: a
