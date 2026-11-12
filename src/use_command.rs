@@ -81,6 +81,18 @@ pub async fn use_plugin(
         return Ok(());
     }
 
+    // A revocation outranks `use` just as `disable` does: the entry would
+    // report success and load nothing. Checked against the release that would
+    // load, the same check every load route makes.
+    if registry_plugin.is_none() {
+        let audits = crate::audits::AuditIndex::configured(sym);
+        for plugin in pms.load_plugin(&id, UpdateLevel::Check).await {
+            if let Some(revocation) = audits.revocation(pms, &plugin.canonical).await {
+                bail!("`{name}` is {revocation}; it cannot be enabled");
+            }
+        }
+    }
+
     let workspace_root = deps.root().await.map(Path::to_path_buf);
     if !global && let Err(e) = deps.require_info().await {
         bail!("{e}; pass --global to enable `{name}` everywhere");

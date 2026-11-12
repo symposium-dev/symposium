@@ -201,6 +201,33 @@ async fn disable_outranks_a_revocation() {
     .unwrap();
 }
 
+/// `use` refuses a revoked crate, saying why, and writes nothing.
+#[tokio::test]
+async fn use_refuses_a_revoked_crate() {
+    with_fixture(TestMode::SimulationOnly, &["audits0"], async |mut ctx| {
+        ctx.symposium(&["init", "--add-agent", "claude"]).await?;
+        write_audits(
+            &mut ctx.sym,
+            "crate-d",
+            "format = 1\n[[revoked]]\nversions = \"*\"\nreason = \"remote-exec\"\n",
+        );
+        let config = ctx.sym.config_dir().join("config.toml");
+        let before = std::fs::read_to_string(&config)?;
+        for args in [&["use", "crate-d"][..], &["use", "crate-d", "--global"]] {
+            let err = ctx.symposium(args).await.unwrap_err();
+            assert!(
+                format!("{err:#}").contains("tells the agent to fetch and run remote code"),
+                "{err:#}"
+            );
+        }
+        assert!(ctx.sym.config.plugins.used.is_empty());
+        assert_eq!(std::fs::read_to_string(&config)?, before);
+        Ok(())
+    })
+    .await
+    .unwrap();
+}
+
 /// `chained-crate0`: a registry plugin vouches for `crate-w` through a
 /// `[[plugins]]` chained reference, so `crate-w` loads with no `[plugins]`
 /// entry of its own.
