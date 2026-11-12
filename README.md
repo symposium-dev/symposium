@@ -14,7 +14,7 @@
 
 Symposium scans a Rust workspace, matches plugins against its dependency graph, and installs the corresponding **skills**, **hooks**, and **MCP servers** into the AI coding agents you use. Extensions are authored by crate authors and distributed through plugin sources, so an agent working in your project sees guidance specific to the crates that project depends on.
 
-It ships as `cargo agents`, a Cargo subcommand. One agent-agnostic configuration is translated into the per-agent files each supported agent expects, so different people on the same project can use different agents.
+It ships as the `symposium` command. One agent-agnostic configuration is translated into the per-agent files each supported agent expects, so different people on the same project can use different agents.
 
 ## Contents
 
@@ -50,14 +50,14 @@ On Arch Linux, install the [`symposium`](https://archlinux.org/packages/extra/x8
 pacman -S symposium
 ```
 
-Both provide the `cargo-agents` binary, invoked as `cargo agents`.
+Both install the `symposium` binary.
 
 ## Quick start
 
 Run `init` once per machine to record which agents you use and register hooks:
 
 ```bash
-cargo agents init
+symposium init
 ```
 
 `init` prompts for your agents (select one or more) and for hook scope:
@@ -74,12 +74,12 @@ Which agents do you use? (space to select, enter to confirm):
 ```
 
 - **Global** hook scope (default) registers Symposium for the selected agents in your home directory, so it activates in every Rust project.
-- **Project** hook scope writes hooks into the current project only; run `cargo agents sync` once in each project to activate it there.
+- **Project** hook scope writes hooks into the current project only; run `symposium sync` once in each project to activate it there.
 
 After setup, start your agent inside a Rust workspace as usual. With `auto-sync` enabled (the default), Symposium re-scans dependencies on each hook invocation and keeps the installed skills current. You can also run a sync explicitly:
 
 ```bash
-cargo agents sync
+symposium sync
 ```
 
 ## Concepts
@@ -105,13 +105,13 @@ A crate can ship its own plugin, and a manifest can load it with a `[[plugins]] 
 
 | Command | Description |
 |---------|-------------|
-| `cargo agents init` | Record your agents and register hooks (writes `~/.symposium/config.toml`). |
-| `cargo agents sync` | Match plugins against workspace dependencies and install/refresh skills. |
-| `cargo agents plugin` | Inspect and manage plugin sources. |
-| `cargo agents self-update` | Install the latest published version. |
-| `cargo agents crate-info` | Resolve and fetch a crate's source (used by agents). |
+| `symposium init` | Record your agents and register hooks (writes `~/.symposium/config.toml`). |
+| `symposium sync` | Match plugins against workspace dependencies and install/refresh skills. |
+| `symposium plugin` | Inspect and manage plugin sources. |
+| `symposium self-update` | Install the latest published version. |
+| `symposium crate-info` | Resolve and fetch a crate's source (used by agents). |
 
-Global flags include `-v`/`--verbose` (decision trace), `--json` (structured output), and `-q`/`--quiet`. See the [command reference](https://symposium.dev/reference/cargo-agents.html).
+Global flags include `-v`/`--verbose` (decision trace), `--json` (structured output), and `-q`/`--quiet`. See the [command reference](https://symposium.dev/reference/symposium.html).
 
 ## Configuration
 
@@ -119,7 +119,7 @@ Configuration is a single user-wide file at `~/.symposium/config.toml`, created 
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `auto-sync` | `true` | Run `cargo agents sync` automatically during hook invocations. |
+| `auto-sync` | `true` | Run `symposium sync` automatically during hook invocations. |
 | `agents-syncing` | `true` | Mirror user-authored skills from `.agents/skills/` into agents that use their own skill directory. |
 | `hook-scope` | `"global"` | Install hooks in the home directory (`global`) or the project (`project`). |
 | `auto-update` | `"on"` | `off`, `warn` (notify when a newer version exists), or `on` (install and re-exec). |

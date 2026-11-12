@@ -1,6 +1,6 @@
 # Important flows
 
-This section describes the logic of each `cargo agents` command.
+This section describes the logic of each `symposium` command.
 
 ## Crate-sourced skill resolution
 
@@ -23,16 +23,16 @@ The key code paths are in `symposium-pm-cargo` (`CargoPm::load_plugin`, `plugin_
 A dependency's own plugin content — a `Symposium.toml`, `[package.metadata.symposium]`, or a `skills/` directory — is reachable without any manifest pointing at it, but only with the user's consent: dependencies are not a trust root.
 
 1. `discovery::discover` asks the **untrusted** cargo transport for its `active_plugins(dep_ids)`: the plugins embedded in the workspace's dependencies. `CargoPm::active_plugins` inspects each dependency in the source `cargo metadata` already extracted (`WorkspaceCrate::source_dir`), with no probe or network, so registry-dep embedded plugins are discoverable too. The trusted registries (including the recommendations repo) are skipped, because their plugins are trust roots and never need consent. Each candidate is classified against `[plugins]` on its crate name — enabled by `use`, auto-enabled, declined, or an undecided candidate. Nothing is prompted or written.
-2. At sync time, `plugins::active_plugins` asks `discovery::enabled_dependencies` which packages `[plugins] auto-enable` or an applicable `use` entry covers (workspace deps, plus the packages `use` entries name that aren't deps at all) and seeds each id on the same worklist a chained reference feeds, so `pms.load_plugin` honors the crate's manifest sources, skill groups, and its own `[[plugins]]` edges. Each `use` name is resolved by the package managers (`PmRegistry::identify`) at the level crate loading uses: a name a configured registry provides is left to that registry plugin, so it isn't double-loaded, and a name no package manager has is skipped. `sync` resolves at `Check`, reading the cargo cache first and searching crates.io only for a crate that is not cached; the per-invocation paths resolve at `None`, which reads only workspace dependencies and the cargo cache. This reads config rather than the offer list, so `cargo agents use <crate>` loads a crate from crates.io whether or not the workspace depends on it, and even before its source has been fetched.
+2. At sync time, `plugins::active_plugins` asks `discovery::enabled_dependencies` which packages `[plugins] auto-enable` or an applicable `use` entry covers (workspace deps, plus the packages `use` entries name that aren't deps at all) and seeds each id on the same worklist a chained reference feeds, so `pms.load_plugin` honors the crate's manifest sources, skill groups, and its own `[[plugins]]` edges. Each `use` name is resolved by the package managers (`PmRegistry::identify`) at the level crate loading uses: a name a configured registry provides is left to that registry plugin, so it isn't double-loaded, and a name no package manager has is skipped. `sync` resolves at `Check`, reading the cargo cache first and searching crates.io only for a crate that is not cached; the per-invocation paths resolve at `None`, which reads only workspace dependencies and the cargo cache. This reads config rather than the offer list, so `symposium use <crate>` loads a crate from crates.io whether or not the workspace depends on it, and even before its source has been fetched.
 3. Independently, a registry plugin with no dependency gate anywhere loads *dormant* (`PluginManifest::requires_use`) and activates only when a `use` entry names it. The gate rides the `PredicateContext` (`with_used` / `is_used`, holding the canonical ids `discovery::used_plugins` finds by matching each plugin's name under its own package manager's rule), so skill resolution, hook dispatch, subcommand lookup, help, and MCP filtering all agree.
 
-Decisions are recorded by the consent prompt in an interactive `cargo agents sync` (`discovery::prompt_for_consent`, which writes `auto-enable` and `disable`) and by `cargo agents use` (`use` entries); `cargo agents status` reports what `[plugins]` currently decides. A hook never prompts: `SessionStart` names the pending candidates as context instead.
+Decisions are recorded by the consent prompt in an interactive `symposium sync` (`discovery::prompt_for_consent`, which writes `auto-enable` and `disable`) and by `symposium use` (`use` entries); `symposium status` reports what `[plugins]` currently decides. A hook never prompts: `SessionStart` names the pending candidates as context instead.
 
 The key code paths are in `discovery.rs`, `config.rs` (`PluginsConfig`, `UseEntry`), `symposium-pm-cargo` (`CargoPm::active_plugins`, `CargoPm::load_plugin`), `plugins.rs` (`PluginManifest::requires_use`), `predicate.rs` (`PredicateContext::is_used`), and `skills.rs` (`active_plugins`, `record_active`).
 
 ## Help rendering
 
-`cargo agents --help` (and `-h`, the bare `help` keyword, or no subcommand) is rendered by `help_render`, not by clap's default help.
+`symposium --help` (and `-h`, the bare `help` keyword, or no subcommand) is rendered by `help_render`, not by clap's default help.
 
 1. The binary and the test harness parse argv with `Binary::parse`, then call `help_render::help_text(binary, parse, args, sym, cwd)`. The `Binary` (`symposium` or `cargo agents`) sets clap's `bin_name`, so usage lines name the command the user ran. Because the decision happens after parsing, argument order (`--help --quiet`) does not matter and there is no second argv parser to keep in sync.
 2. For no subcommand, `--help`/`-h`, or the bare `help` keyword, `help_text` returns the top-level grouped help: `render` slices clap's own rendered help (header + options block) and hand-renders "Commands for humans" / "Commands for agents" between them, mixing built-ins (`cli::builtin_audience`) with workspace-filtered plugin subcommands (`subcommand_dispatch::applicable_subcommands`).
@@ -43,7 +43,7 @@ clap's auto help flag and help subcommand are disabled in `cli::Cli`; `--help`/`
 
 ## Subcommand dispatch
 
-When the user runs `cargo agents <name>` for a name not built into the binary, clap's `allow_external_subcommands` routes it to `Commands::External(argv)`.
+When the user runs `symposium <name>` for a name not built into the binary, clap's `allow_external_subcommands` routes it to `Commands::External(argv)`.
 
 1. The binary (or library `cli::run`) calls `subcommand_dispatch::dispatch_external(sym, cwd, argv)`, which first resolves the **active plugin set** (`skills::active_plugins` — registry plugins plus crate-sourced ones) so a crate's subcommands are dispatchable too.
 2. `find_subcommand` walks that set. For each plugin it applies the plugin-level `depends-on` predicate against the workspace, then looks up `argv[0]` in `plugin.subcommands`. If the entry has its own `depends-on` predicate, that must also match. Two or more matches → error.

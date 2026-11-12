@@ -1,14 +1,14 @@
-# `cargo agents status`
+# `symposium status`
 
 Show which plugins are enabled for this workspace, and why.
 
 ## Usage
 
 ```bash
-cargo agents status
+symposium status
 ```
 
-Must be run from within a workspace, as [`cargo agents sync`](./cargo-agents-sync.md) is.
+Must be run from within a workspace, as [`symposium sync`](./symposium-sync.md) is.
 
 ## Behavior
 
@@ -22,8 +22,8 @@ Each line is in one of four states:
 | State | Meaning |
 |-------|---------|
 | `active` | Enabled and its predicates hold here. The root names the trust root: workspace membership, a configured registry, `[plugins] auto-enable`, or a `[plugins] use` entry. |
-| `dormant` | Loaded but contributing nothing: a registry plugin awaiting [`cargo agents use`](./cargo-agents-use.md), one whose predicates don't currently hold, a dependency named by `use` that offers no plugin, or a `use` entry naming no registry plugin, dependency or cached crate (a [`cargo agents sync`](./cargo-agents-sync.md) downloads a crate that is not cached yet). |
-| `candidate` | Discovered in a dependency and awaiting consent. These are exactly what an interactive [`cargo agents sync`](./cargo-agents-sync.md) asks about. |
+| `dormant` | Loaded but contributing nothing: a registry plugin awaiting [`symposium use`](./symposium-use.md), one whose predicates don't currently hold, a dependency named by `use` that offers no plugin, or a `use` entry naming no registry plugin, dependency or cached crate (a [`symposium sync`](./symposium-sync.md) downloads a crate that is not cached yet). |
+| `candidate` | Discovered in a dependency and awaiting consent. These are exactly what an interactive [`symposium sync`](./symposium-sync.md) asks about. |
 | `declined` | Recorded in `[plugins] disable` — the record of pruned plugins and declined discoveries. |
 
 Discovery is cache-only, so a dependency whose source has not been fetched yet
@@ -36,10 +36,10 @@ resolved `version`.
 ## Example
 
 ```bash
-$ cargo agents status
+$ symposium status
 ✅ my-tool — workspace member
 ✅ serde-skills 1.0.0 — `[plugins] use`
-💤 team-conventions — registry `user-plugins` (dormant: awaiting `cargo agents use`)
-❓ widget-lib 0.3.1 — found via dependency `widget-lib`, awaiting consent (`cargo agents use widget-lib`)
+💤 team-conventions — registry `user-plugins` (dormant: awaiting `symposium use`)
+❓ widget-lib 0.3.1 — found via dependency `widget-lib`, awaiting consent (`symposium use widget-lib`)
 ➖ noisy-crate — declined (`[plugins] disable`)
 ```

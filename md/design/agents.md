@@ -1,6 +1,6 @@
 # Agents
 
-`cargo agents` supports multiple AI agents. Each agent has its own hook protocol, file layout, and configuration locations. This page documents the agent-specific details that `cargo agents` needs to handle.
+`symposium` supports multiple AI agents. Each agent has its own hook protocol, file layout, and configuration locations. This page documents the agent-specific details that `symposium` needs to handle.
 
 ## Supported agents
 
@@ -18,7 +18,7 @@ The agent name is stored in `[agent] name` in either the user or project config.
 
 ## Agent responsibilities
 
-For each agent, `cargo agents` needs to know how to:
+For each agent, `symposium` needs to know how to:
 
 1. **Register hooks**: write the hook configuration so the agent calls `symposium hook` on the right events.
 2. **Install extensions** — place skill files (and eventually workflow/MCP definitions) where the agent expects them.
@@ -29,7 +29,7 @@ Unregistering takes symposium's entries out of a hooks file it shares with the u
 
 ## Extension locations
 
-When installing skills, `cargo agents` prefers vendor-neutral paths where possible:
+When installing skills, `symposium` prefers vendor-neutral paths where possible:
 
 | Scope | Path | Supported by |
 |-------|------|-------------|
@@ -38,7 +38,7 @@ When installing skills, `cargo agents` prefers vendor-neutral paths where possib
 | Project skills | `.kiro/skills/<skill-name>/SKILL.md` | Kiro (uses its own path) |
 | Project skills | `.opencode/skills/<skill-name>/SKILL.md` | OpenCode (also reads `.agents/skills/`) |
 
-At the project level, Claude Code requires `.claude/skills/`, Kiro requires `.kiro/skills/`, while Antigravity, Copilot, Codex, OpenCode, and Goose all support `.agents/skills/`. `cargo agents` uses the vendor-neutral `.agents/skills/` path whenever the agent supports it, except for OpenCode: an agent that reads `.agents/skills/` and takes a plugin enabled with `use --global` as a plugin would also find OpenCode's per-skill copies of its skills, so they go to `.opencode/skills/`, which only OpenCode reads. A skill authored in `.agents/skills/` gets no copy there, since OpenCode reads it where it is.
+At the project level, Claude Code requires `.claude/skills/`, Kiro requires `.kiro/skills/`, while Antigravity, Copilot, Codex, OpenCode, and Goose all support `.agents/skills/`. `symposium` uses the vendor-neutral `.agents/skills/` path whenever the agent supports it, except for OpenCode: an agent that reads `.agents/skills/` and takes a plugin enabled with `use --global` as a plugin would also find OpenCode's per-skill copies of its skills, so they go to `.opencode/skills/`, which only OpenCode reads. A skill authored in `.agents/skills/` gets no copy there, since OpenCode reads it where it is.
 
 At the global level, each agent has its own path:
 
@@ -400,7 +400,7 @@ OpenCode's plugin system supports these events, but Symposium does not currently
 
 **Symposium registers no hooks for Goose.** Goose has lifecycle hooks of its own (a plugin can carry them in `hooks/hooks.json`), but symposium does not use them.
 
-Goose is supported as a **skills-only** agent — `cargo agents sync` will install skill files in the vendor-neutral `.agents/skills/` path.
+Goose is supported as a **skills-only** agent: `symposium sync` will install skill files in the vendor-neutral `.agents/skills/` path.
 
 ---
 

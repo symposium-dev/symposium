@@ -57,9 +57,9 @@ cargo xtask agent-eval formatting --client claude --model <model>
 
 The task asks the agent to add a small function to a crate. Its plugin carries a `rust-formatting` skill and a `Stop` hook that runs `cargo fmt` when the agent finishes. Here is what the runner does.
 
-**1. Prepare a fresh trial.** The runner builds `cargo-agents` from your checkout (or uses `--symposium-bin <path>`). It creates a trial directory with an empty `home/`, a copy of the starter in `project/`, and a `bin/` holding `claude` and `cargo-agents`. Every process in the trial uses that `home/` as `HOME`, so your own Claude Code, Codex, and Symposium configuration never leaks in.
+**1. Prepare a fresh trial.** The runner builds `symposium` from your checkout (or uses `--symposium-bin <path>`). It creates a trial directory with an empty `home/`, a copy of the starter in `project/`, and a `bin/` holding `claude` and `symposium`. Every process in the trial uses that `home/` as `HOME`, so your own Claude Code, Codex, and Symposium configuration never leaks in.
 
-It then runs `cargo agents init` with global hooks and a registry holding only the task's plugins. It does **not** run `cargo agents sync`, so the skill directory starts empty. Installing the skill is Symposium's job during the session, and that is part of what the trial checks.
+It then runs `symposium init` with global hooks and a registry holding only the task's plugins. It does **not** run `symposium sync`, so the skill directory starts empty. Installing the skill is Symposium's job during the session, and that is part of what the trial checks.
 
 **2. Start the agent.** The runner launches `claude` inside `srt` with the task's prompt. The agent can write only inside its trial directory and can reach only the model API. It cannot see your home directory or `evals/`, where the hidden tests live; it can still read system and toolchain files. The [reference](./reference.md#isolation) gives the exact boundary.
 
@@ -92,7 +92,7 @@ The trial's result directory keeps the transcript, the submission as the agent l
 cargo xtask agent-eval store-durability --client claude --model <model> --trials 5
 ```
 
-Each round now runs two trials. The Symposium trial is the one above. The **baseline** trial is prepared the same way, except that `bin/` has no `cargo-agents`, `init` never runs, and `srt` makes the staged binary unreadable. Your own installed `cargo-agents` stays on your machine the whole time; no trial can reach it. The order alternates between rounds, so neither configuration always goes second.
+Each round now runs two trials. The Symposium trial is the one above. The **baseline** trial is prepared the same way, except that `bin/` has no `symposium`, `init` never runs, and `srt` makes the staged binary unreadable. Your own installed `symposium` stays on your machine the whole time; no trial can reach it. The order alternates between rounds, so neither configuration always goes second.
 
 For each configuration, the report shows:
 
@@ -321,7 +321,7 @@ Add the `evals/` layout, `task.toml` parsing and validation, the `fixture-store`
 
 Pin an `srt` version. Build the trial directories, tool staging, the cleared environment, both setup modes with their pre-launch checks, the generated `srt` policy, and the exploratory fallback. Results are written on every path, and each phase has a deadline.
 
-Add a no-model smoke test under the exact generated policy. It launches the real clients and `cargo-agents` with `--version`, builds and tests a project, and fails to read the developer's home (including `cargo-agents` by absolute path), another trial, and `evals/`; in a baseline trial, it also fails to run the staged `cargo-agents`. This is the first thing to build: it decides whether the runner can launch at all.
+Add a no-model smoke test under the exact generated policy. It launches the real clients and `symposium` with `--version`, builds and tests a project, and fails to read the developer's home (including `symposium` by absolute path), another trial, and `evals/`; in a baseline trial, it also fails to run the staged `symposium`. This is the first thing to build: it decides whether the runner can launch at all.
 
 - [x] Trial setup, `srt` boundary, and smoke test.
 

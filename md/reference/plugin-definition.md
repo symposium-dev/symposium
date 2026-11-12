@@ -41,12 +41,12 @@ source.path = "skills"
 | `predicate` | array of tables | no | Custom predicate definitions (`[[predicate]]`). See [Custom predicates](#predicate). |
 | `mcp_servers` | array of tables | no | MCP server registrations (`[[mcp_servers]]`). See [`[[mcp_servers]]`](#mcp_servers). |
 | `plugins` | array of tables | no | Chained plugin references (`[[plugins]]`): other plugins that load whenever this one is active. See [Chained plugins](#chained-plugins). |
-| `subcommand` | table of tables | no | Commands added to `cargo agents` (`[subcommand.<name>]`). See [Subcommands](#subcommandname). |
+| `subcommand` | table of tables | no | Commands added to `symposium` (`[subcommand.<name>]`). See [Subcommands](#subcommandname). |
 | `defaults` | table | no | `[defaults] skills = <bool>` (default `true`): whether to append the default skill groups: `source.path = "skills"`, plus the `.agents/skills` group in a workspace manifest. Accepted only in crate and workspace manifests; a registry manifest that contains `[defaults]` is rejected. |
 
 A registry plugin gets no default skill group: its skills load only through the `[[skills]]` groups it declares, so a registry plugin that ships a `skills/` directory needs `[[skills]] source.path = "skills"`. Crate and workspace plugins get the default `skills/` group unless `[defaults] skills = false` (workspace plugins also get a `.agents/skills` group by default, see [Workspace skills](../workspace-skills.md)).
 
-**Note**: A registry plugin that references no dependency anywhere is **dormant**: it loads, but it never activates until the user enables it by name in the [`[plugins] use`](./configuration.md#plugins) config (for example with [`cargo agents use`](./cargo-agents-use.md)). Use `depends-on = ["*"]` for a plugin that should always be active. These count as referencing a dependency:
+**Note**: A registry plugin that references no dependency anywhere is **dormant**: it loads, but it never activates until the user enables it by name in the [`[plugins] use`](./configuration.md#plugins) config (for example with [`symposium use`](./symposium-use.md)). Use `depends-on = ["*"]` for a plugin that should always be active. These count as referencing a dependency:
 
 - a `depends-on` field, or a `depends-on(...)` [predicate](./predicates.md) in a `predicates` list, on the plugin itself, a `[[skills]]` group, an `[[mcp_servers]]` entry, or a `[[plugins]]` edge;
 - a `depends-on(...)` predicate in a `[[hooks]]` entry's `predicates`;
@@ -441,11 +441,11 @@ Not every agent delivers every event, and agents name them differently. See [Age
 
 ### Testing hooks
 
-To exercise a hook end to end, pipe a real agent payload into [`cargo agents hook <agent> <event>`](./cargo-agents-hook.md), using the event's CLI name from the table above. For Claude Code:
+To exercise a hook end to end, pipe a real agent payload into [`symposium hook <agent> <event>`](./symposium-hook.md), using the event's CLI name from the table above. For Claude Code:
 
 ```bash
 echo '{"session_id":"s","cwd":"/path/to/project","hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test"}}' \
-  | cargo agents hook claude pre-tool-use
+  | symposium hook claude pre-tool-use
 ```
 
 This runs the full dispatch (including the automatic sync, when `auto-sync` is on) for the workspace at `cwd`, so the plugin must be installed and active there; the output is in the agent's own format. The payload must be the named agent's native JSON: you can also use `antigravity`, `copilot`, `codex`, or `kiro` as the agent name, each with that agent's payload. To test a symposium-format handler on its own, pipe canonical JSON straight into it (see [Testing](./hook-events.md#testing)).
@@ -525,7 +525,7 @@ In Rust, the [`symposium-sdk`](https://crates.io/crates/symposium-sdk) crate pri
 
 ## `[[mcp_servers]]`
 
-Each `[[mcp_servers]]` entry declares an MCP server that Symposium registers into the agent's configuration during `cargo agents sync` (and the automatic sync that hooks run).
+Each `[[mcp_servers]]` entry declares an MCP server that Symposium registers into the agent's configuration during `symposium sync` (and the automatic sync that hooks run).
 
 Symposium does not install MCP servers: unlike hooks and subcommands, they do not use `[[installations]]`. A stdio server's `command` is written into the agent's MCP configuration verbatim, so it must be an absolute path, or a command name the agent can find on the user's `PATH`.
 
@@ -592,9 +592,9 @@ headers = []
 
 ### How registration works
 
-During `cargo agents sync`, each MCP server entry is written into each configured agent's config file in the format that agent expects. Registration is idempotent — existing entries with correct values are left untouched, stale entries are updated in place.
+During `symposium sync`, each MCP server entry is written into each configured agent's config file in the format that agent expects. Registration is idempotent: existing entries with correct values are left untouched, stale entries are updated in place.
 
-When a user runs `cargo agents sync` (or the hook triggers it automatically), Symposium:
+When a user runs `symposium sync` (or the hook triggers it automatically), Symposium:
 
 1. Collects `[[mcp_servers]]` entries from all enabled plugins.
 2. Writes each server into the agent's MCP configuration file.
@@ -615,7 +615,7 @@ Servers are registered at the scope chosen by the `hook-scope` setting (see [Con
 
 ## `[subcommand.<name>]`
 
-A `[subcommand.<name>]` table adds a command that users and agents run as `cargo agents <name>`. By convention, `<name>` is the crate's name, so an agent can run `cargo agents <crate> --help` to discover the crate's own CLI. Symposium resolves `command` through the same [installation](#installations) pipeline hooks use, runs it with the installation's `args` followed by the arguments typed after `<name>`, passes its output through, and exits with its exit code. The command owns its own arguments, validation, and `--help`.
+A `[subcommand.<name>]` table adds a command that users and agents run as `symposium <name>`. By convention, `<name>` is the crate's name, so an agent can run `symposium <crate> --help` to discover the crate's own CLI. Symposium resolves `command` through the same [installation](#installations) pipeline hooks use, runs it with the installation's `args` followed by the arguments typed after `<name>`, passes its output through, and exits with its exit code. The command owns its own arguments, validation, and `--help`.
 
 ```toml
 # A recommendations entry; in a crate's own Symposium.toml, leave out name and depends-on.
@@ -628,7 +628,7 @@ source = "cargo"
 crate = "widgetlib-cli"
 executable = "widgetlib-cli"
 
-# `cargo agents widgetlib check --strict` runs `widgetlib-cli check --strict`
+# `symposium widgetlib check --strict` runs `widgetlib-cli check --strict`
 [subcommand.widgetlib]
 description = "Check and inspect the widget definitions in this workspace"
 audience = "agents"
@@ -637,15 +637,15 @@ command = "widgetlib-cli"
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `description` | string | yes | Shown next to the command in `cargo agents --help`. At most 1024 bytes. |
-| `audience` | string | no | `"agents"` (default) or `"humans"`. Only chooses the `cargo agents --help` section the command is listed under ("Commands for agents" or "Commands for humans"); it does not restrict who can run it. |
+| `description` | string | yes | Shown next to the command in `symposium --help`. At most 1024 bytes. |
+| `audience` | string | no | `"agents"` (default) or `"humans"`. Only chooses the `symposium --help` section the command is listed under ("Commands for agents" or "Commands for humans"); it does not restrict who can run it. |
 | `command` | string or table | yes | What to run. A string names an `[[installations]]` entry; a table is an inline installation (promoted to a synthetic entry named after the subcommand). A subcommand has no `executable`, `script`, or `args` fields of its own: set them on the installation. |
 | `depends-on` | string or array | no | Which crates this subcommand applies to. ANDed with the plugin's gate. |
 | `predicates` | array of strings | no | Predicates that must all hold for the subcommand to be available. See [Predicates](./predicates.md). |
 
-`<name>` is the word typed after `cargo agents`. It may contain only ASCII letters, digits, `-`, and `_`, and it must not be the name of a built-in command: `init`, `sync`, `search`, `use`, `status`, `hook`, `plugin`, `self-update`, `crate-info`, `telemetry`, or `help`.
+`<name>` is the word typed after `symposium`. It may contain only ASCII letters, digits, `-`, and `_`, and it must not be the name of a built-in command: `init`, `sync`, `search`, `use`, `status`, `hook`, `plugin`, `self-update`, `crate-info`, `telemetry`, or `help`.
 
-A subcommand is listed in `cargo agents --help`, and can be run, only while its plugin is active and its own `depends-on` and `predicates` hold. If two active plugins define the same name, running it fails with an error naming both plugins. A subcommand's gate does not keep its plugin out of [dormancy](#top-level-fields).
+A subcommand is listed in `symposium --help`, and can be run, only while its plugin is active and its own `depends-on` and `predicates` hold. If two active plugins define the same name, running it fails with an error naming both plugins. A subcommand's gate does not keep its plugin out of [dormancy](#top-level-fields).
 
 ## Example: full manifest
 
@@ -679,7 +679,7 @@ env = []
 ## Validation
 
 ```bash
-cargo agents plugin validate path/to/Symposium.toml
+symposium plugin validate path/to/Symposium.toml
 ```
 
 This parses the manifest and reports any errors. The file must be named `Symposium.toml` for Symposium to discover it; to validate every entry in a registry directory, pass the directory instead (see [Plugin sources](./plugin-source.md#validation)). Crate name checking against crates.io is on by default; use `--no-check-crates` to skip it.

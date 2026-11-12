@@ -1,12 +1,12 @@
-# `cargo agents use`
+# `symposium use`
 
 Enable a plugin by name, and sync it into the workspace immediately.
 
 ## Usage
 
 ```bash
-cargo agents use <NAME> [--global]
-cargo agents use <NAME> --remove [--global]
+symposium use <NAME> [--global]
+symposium use <NAME> --remove [--global]
 ```
 
 ## Options
@@ -33,7 +33,7 @@ use = [
 Then it runs a sync, so the plugin's skills install right away rather than
 waiting for the next one. A `--global` entry installs the plugin once for you
 on the agents that support it, and per project on the others; see
-[`cargo agents sync`](./cargo-agents-sync.md#plugins-enabled-for-every-workspace).
+[`symposium sync`](./symposium-sync.md#plugins-enabled-for-every-workspace).
 
 Two things a `use` entry can enable:
 
@@ -58,7 +58,7 @@ exactly), a workspace dependency, or a crate on crates.io (matched the way
 cargo matches crate names, so `widget-lib` and `widget_lib` are the same).
 When a registry plugin and a crate share the name, the registry plugin wins.
 Otherwise the command fails with `no package named <NAME>` and writes nothing.
-Use [`cargo agents search`](./cargo-agents-search.md) to find the right name.
+Use [`symposium search`](./symposium-search.md) to find the right name.
 
 ### `--remove`
 
@@ -70,8 +70,8 @@ reaps the plugin's installed skills.
 ## Example
 
 ```bash
-cargo agents search widget      # find it
-cargo agents use widget-skills  # enable it here
-cargo agents status             # confirm why it is on
-cargo agents use widget-skills --remove
+symposium search widget      # find it
+symposium use widget-skills  # enable it here
+symposium status             # confirm why it is on
+symposium use widget-skills --remove
 ```
